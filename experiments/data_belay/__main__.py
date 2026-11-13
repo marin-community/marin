@@ -20,7 +20,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.data_belay.datakit import MIN_TOP_RUNG, datakit_intake
 from experiments.data_belay.intake import MAX_EPOCHS, DatasetRequest, IntakeReport, LicenseVerdict, run_intake
-from experiments.data_belay.judge import HARM_LIMITS, RungResult, judge, ladder_step
+from experiments.data_belay.judge import RungResult, harm_limits, judge, ladder_step
 from experiments.data_belay.prepare import (
     CACHE_PATH,
     CachePlan,
@@ -52,6 +52,8 @@ from experiments.grug.fast_track.launch import (
 # Runs train the fast_track dense model (`launch.py --dense`) at its baseline budget, 20 tokens per parameter.
 # d512 screens a candidate; d768 and d1024 confirm a d512 result.
 DATA_BELAY_RUNGS = ("d512", "d768", "d1024")
+# The rung whose control seeds set the harm limits at every rung: it has the most seeds.
+HARM_LIMIT_RUNG = "d512"
 # The cluster and Iris band of the runs. prepare's tokenize job runs there too, beside the caches it writes.
 CLUSTER = "cw-us-east-02a"
 BAND = "batch"
@@ -346,7 +348,8 @@ def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
     baseline_name = against or "control"
     configure_coreweave_s3()
     choice_root = _choice_root()
-    result, against_dilution = _rung_result(choice_root, rung, candidate, seed_list, against)
+    limits = harm_limits(_control_values(choice_root, HARM_LIMIT_RUNG))
+    result, against_dilution = _rung_result(choice_root, rung, candidate, seed_list, against, limits)
     harm_name = "dilution" if against_dilution else baseline_name
     click.echo(f"{candidate} against {baseline_name} at {rung}: {result.verdict}")
     arms = (candidate,) if against is None else (candidate, against)
@@ -370,7 +373,7 @@ def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
         if not all(run_exists(run_id) and run_scored(choice_root, run_id) for run_id in compared):
             click.echo(f"ladder: no scored {lower} runs for {candidate}; score them, or apply the README's rule by hand")
             return
-        results.append(_rung_result(choice_root, lower, candidate, seed_list, against)[0])
+        results.append(_rung_result(choice_root, lower, candidate, seed_list, against, limits)[0])
     results.append(result)
     rungs = ", ".join(
         f"{r} {x.verdict}{_epochs_note(r, arms, seed_list)}" for r, x in zip(DATA_BELAY_RUNGS, results, strict=False)
@@ -410,7 +413,7 @@ def _tokens(tokens: int) -> str:
 
 
 def _rung_result(
-    choice_root: str, rung: str, candidate: str, seeds: list[int], against: str | None
+    choice_root: str, rung: str, candidate: str, seeds: list[int], against: str | None, limits: dict[str, float]
 ) -> tuple[RungResult, bool]:
     """The candidate's result at ``rung``, and whether its harm is against the dilution references."""
     baseline_ids, treatment_ids = _arm_run_ids(rung, candidate, seeds, against)
@@ -423,7 +426,7 @@ def _rung_result(
         )
     dilution = dilution_arm(choice_root, rung, candidate, share) if against is None else None
     baseline, treatment = arm_metrics(choice_root, rung, baseline_ids), arm_metrics(choice_root, rung, treatment_ids)
-    return judge(baseline, treatment, HARM_LIMITS, dilution), dilution is not None
+    return judge(baseline, treatment, limits, dilution), dilution is not None
 
 
 def _arm_run_ids(rung: str, candidate: str, seeds: list[int], against: str | None) -> tuple[list[str], list[str]]:
@@ -438,14 +441,21 @@ def _arm_run_ids(rung: str, candidate: str, seeds: list[int], against: str | Non
 @cli.command()
 @click.option("--rung", type=click.Choice(DATA_BELAY_RUNGS), required=True)
 def noise(rung: str) -> None:
-    """Seed spread of the control's group values: the input to the harm limits."""
-    control = arm_metrics(_choice_root(), rung, [control_run_id(rung, s) for s in CONTROL_SEEDS[rung]])
-    click.echo("| group | mean | seed SD | SD / mean |")
-    click.echo("|---|---:|---:|---:|")
+    """Seed spread of the control's group values, and the harm limits it sets; `report` uses those of the d512 rung."""
+    configure_coreweave_s3()
+    control = _control_values(_choice_root(), rung)
+    limits = harm_limits(control)
+    click.echo("| group | mean | seed SD | SD / mean | harm limit |")
+    click.echo("|---|---:|---:|---:|---:|")
     for group, values in control.items():
         mean = statistics.fmean(values)
         sd = statistics.stdev(values)
-        click.echo(f"| {group} | {mean:.4f} | {sd:.4f} | {sd / mean:.3%} |")
+        click.echo(f"| {group} | {mean:.4f} | {sd:.4f} | {sd / mean:.3%} | {limits[group]:.2%} |")
+
+
+def _control_values(choice_root: str, rung: str) -> dict[str, list[float]]:
+    """Each group's value on each of the shared control's seeds at ``rung``."""
+    return arm_metrics(choice_root, rung, [control_run_id(rung, s) for s in CONTROL_SEEDS[rung]])
 
 
 if __name__ == "__main__":

@@ -102,10 +102,9 @@ For each group, `Δ` is the treatment's mean over a baseline's, minus 1, with a 
 against the control. The harm is `Δ` against the dilution references at the share that the candidate's runs trained
 at (`results.DILUTION_REFERENCES`): four Datakit sources at 20% whose text no eval measures, in scripts the English
 evals do not share (ClimbLab Japanese, and FinePDFs Chinese, Thai and Arabic). Giving up 20% of the base mix costs
-every group 1.1% to 3.0% on its own, past the harm limits of Paloma, Uncheatable and commonsense, so the harm is
-what a candidate costs beyond that. The reference arm holds one value per reference, the mean of its seeds, because
-the references differ from each other by more than their seeds do. At a share without references, the harm is
-against the control.
+every group 1.3% to 3.6% on its own at d512 and d768, past every group's harm limit, so the harm is what a candidate
+costs beyond that. The reference arm holds one value per reference, the mean of its seeds, because the references
+differ from each other by more than their seeds do. At a share without references, the harm is against the control.
 
 Use `--against` when the question is A instead of B at one share: a filtered dataset against its source, or two
 candidates for one place in the mix. Both the gain and the harm are then against B's runs, since both arms give up
@@ -116,7 +115,8 @@ includes the cost of giving up the share, so a `worse` group there may be diluti
 
 A group is `better` (gain interval below 0, and a gain of at least 1%), `worse` (harm interval above its harm limit),
 `neutral` (harm interval below the limit) or `unresolved`. The harm limit is 1%, or 2.5 seed SDs of the d512 control
-where the seeds vary more; the SDs are the vanilla Track's (see Model). The 1% floor holds for gains too. With the
+where the seeds vary more. `report` computes the limits from the current d512 control seeds, so they follow a change
+of model or base mix, and `noise --rung d512` prints them. The 1% floor holds for gains too. With the
 interval alone, a null arm's d512 rung reads yes 13.8% of the time whatever the seeds' spread (4,000 simulated arms);
 with the floor, 1.2% at this model's seed spread and 5.7% at the vanilla Track's. This model's null arm had math at
 −0.56% [−1.09%, −0.03%] at d512, `helps` without the floor. On the vanilla Track the floor changed one of the Datakit
@@ -177,12 +177,12 @@ with seeds 0–2 on both models, so the 6-seed vanilla arms below count their fi
 
 The gains agree: across the 30 pairs of arm and group at each rung, the two models' `Δ`s against the control
 correlate at 0.99, and where their signs differ both are within 1%. The one rung that turns from no to yes, FineWeb
-at 20% at d512, has the gains that the vanilla model shows at d768 (Paloma −1.5%, commonsense −2.8%). The
-fast-track model's control seeds vary less. At d512, over seeds 0–5, the SDs are Paloma 0.11% (vanilla 0.38%),
-Uncheatable 0.19% (0.46%), knowledge 0.31% (0.65%), commonsense 0.34% (0.39%), math 0.48% (0.84%) and code 0.75%
-(1.04%). The harm limits stay the vanilla Track's: limits from the fast-track control by the same rule (1%, math
-1.2%, code 1.9%) change no verdict at d512 or d768. d1024 has no fast-track controls or dilution references yet; the
-first candidate to reach d1024 needs them trained (3 control seeds, and 3 seeds of each reference).
+at 20% at d512, has the gains that the vanilla model shows at d768 (Paloma −1.5%, commonsense −2.8%). The fast-track
+model's control seeds vary less. At d512, over seeds 0–5, the SDs are Paloma 0.11% (vanilla 0.38%), Uncheatable
+0.19% (0.46%), knowledge 0.31% (0.65%), commonsense 0.34% (0.39%), math 0.48% (0.84%) and code 0.75% (1.04%). The
+limits from these SDs are 1% for every group but math (1.19%) and code (1.88%), against the vanilla Track's 1.0% to
+3.0%, and change no verdict at d512 or d768. d1024 has no fast-track controls or dilution references yet; the first
+candidate to reach d1024 needs them trained (3 control seeds, and 3 seeds of each reference).
 
 ## Validation runs on the vanilla Track (2026-11-06 to 2026-11-10)
 

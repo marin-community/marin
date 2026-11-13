@@ -80,18 +80,9 @@ CONFIDENCE = 0.95
 # 5.7% at the vanilla Track's seed SDs and 1.2% at the fast-track dense model's. The fast-track model's null arm
 # (control seeds 6-8) came out math -0.56% [-1.09%, -0.03%] at d512.
 MIN_GAIN = 0.01
-# Relative increase past which a group counts as harmed: 1%, or 2.5 seed SDs where the seeds vary more, so that
-# 3 seeds per arm can call a group neutral. The SDs are from the vanilla Track's first four d512 control seeds
-# (dbelay-d512-control-s0..s3): Paloma 0.45%, Uncheatable 0.54%, knowledge 0.83%, commonsense 0.40%, math 1.06%,
-# code 1.22%.
-HARM_LIMITS = {
-    "paloma": 0.011,
-    "uncheatable": 0.013,
-    "knowledge": 0.0206,  # 2.5 x 0.826%, unrounded
-    "commonsense": 0.010,
-    "math": 0.027,
-    "code": 0.030,
-}
+# A group's harm limit, the relative increase past which it counts as harmed, is this many seed SDs of the control
+# over its mean, or MIN_GAIN where the seeds vary less, so that 3 seeds per arm can call a group neutral.
+HARM_LIMIT_SDS = 2.5
 
 
 class GroupCall(StrEnum):
@@ -178,6 +169,14 @@ def group_values(metrics: Mapping[str, float], control_means: Mapping[str, float
     return {
         group: statistics.fmean(metrics[k] / (control_means[k] if group in SCALED_GROUPS else 1.0) for k in keys)
         for group, keys in GROUP_METRICS.items()
+    }
+
+
+def harm_limits(control: Mapping[str, Sequence[float]]) -> dict[str, float]:
+    """Each group's harm limit from the control seeds' group values, keyed by group."""
+    return {
+        group: max(MIN_GAIN, HARM_LIMIT_SDS * statistics.stdev(values) / statistics.fmean(values))
+        for group, values in control.items()
     }
 
 

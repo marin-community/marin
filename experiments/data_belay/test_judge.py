@@ -6,11 +6,13 @@ import pytest
 from experiments.data_belay.judge import (
     GROUP_METRICS,
     Change,
+    GroupCall,
     GroupDelta,
     LadderStep,
     RungResult,
     Verdict,
     group_values,
+    harm_limits,
     judge,
     ladder_step,
     verdict,
@@ -74,6 +76,16 @@ def test_a_gain_with_a_possible_harm_is_a_trade_off():
     # Too noisy to rule out a harm beyond the limit, and not wholly above it.
     treatment["paloma"] = [0.97, 1.03, 1.01]
     assert judge(control, treatment, LIMITS, None).verdict is Verdict.TRADE_OFF
+
+
+def test_one_cost_is_a_harm_where_the_control_seeds_agree_and_not_where_they_vary():
+    # Paloma's control seeds vary 0.17%, so its limit is the 1% floor. Code's vary 2.5%, a limit of 6.2%, which the
+    # interval of a 2% cost clears.
+    control = {group: CONTROL for group in GROUP_METRICS} | {"code": [1.00, 1.03, 0.97, 1.01]}
+    treatment = {group: [v * 1.02 for v in CONTROL[:3]] for group in GROUP_METRICS}
+    calls = {d.group: d.call for d in judge(control, treatment, harm_limits(control), None).groups}
+    assert calls["paloma"] is GroupCall.WORSE
+    assert calls["code"] is GroupCall.NEUTRAL
 
 
 def test_knowledge_weighs_choice_loss_and_answer_bpb_by_their_change_not_their_size():
