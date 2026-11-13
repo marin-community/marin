@@ -44,8 +44,7 @@ from experiments.post_training.task_curation.sample_qc_artifacts import SamplePa
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt, bind_sample_result
 from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
-from infra.marina.apps.rl_data_catalog.load import review_completeness
-from infra.marina.apps.rl_data_catalog.server.quality import quality
+from infra.marina.apps.rl_data_catalog.server.quality import quality, review_completeness
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
