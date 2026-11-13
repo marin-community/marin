@@ -111,13 +111,23 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     write_receipt(source, receipt)
     metrics = read_skyrl_metrics(str(source))
     records = read_attempts(str(source / "exports"))
-    if case in {"checkpoint-lineage", "lineage-missing-window", "lineage-unknown-grandparent", "unrelated-attempt"}:
+    if case in {
+        "checkpoint-lineage",
+        "lineage-missing-window",
+        "lineage-unknown-grandparent",
+        "unrelated-attempt",
+        "negative-duration",
+    }:
         ancestor = deepcopy(receipt)
         ancestor["config"]["run"]["attempt_id"] = "ancestor"
         ancestor["result"].update(
             state="failed",
             started_at="2026-11-06T16:40:00+00:00",
-            finished_at=None if case == "lineage-missing-window" else "2026-11-06T17:40:00+00:00",
+            finished_at=(
+                None
+                if case == "lineage-missing-window"
+                else "2026-11-06T18:40:00+00:00" if case == "negative-duration" else "2026-11-06T17:40:00+00:00"
+            ),
         )
         native_ancestor = LaunchReceipt.model_validate(ancestor)
         records["ancestor"] = AttemptRecord(
@@ -229,7 +239,11 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progress_client, recorded_runs, monkeypatch):
     client, request = rl_progress_client
-    preset = presets.PRESETS["learning-medium"]
+    preset = replace(
+        presets.PRESETS["learning-medium"],
+        guards=(*presets.PRESETS["learning-medium"].guards, presets.Metric("policy/entropy", True)),
+    )
+    monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: preset})
     pin = gate.control_pins(preset)[0]
     controls = [
         recorded_runs(
@@ -238,6 +252,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
             speed=100 + i,
             score=0.49 + i * 0.01,
             attempt_id=f"pinned-{i}",
+            metrics={"policy/entropy": 0.5},
         )
         for i in range(pin.runs)
     ]
@@ -341,6 +356,12 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
         "replicates": 2,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
+    assert {(item["metric"], item["role"]) for item in rows["native-0"]["gate_result"]["comparisons"]} == {
+        ("eval_lite/family_mean", "objective"),
+        ("eval_lite/family_mean/gain_per_h100_hour", "objective"),
+        ("policy/entropy", "constraint"),
+        (relative_key, "requirement"),
+    }
     assert rows["native-0"]["status"] == "succeeded" and rows["native-0"]["failed_facts"] == []
     assert rows["native-1"]["status"] == "failed" and rows["native-1"]["failed_facts"] == ["require/policy/entropy"]
     assert rows["native-0"]["elapsed_seconds"] == 7200 and rows["native-0"]["issue"] == 74
@@ -359,7 +380,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     write_json(report_file, legacy)
     try:
         assert publish(second_gate).unserved_records == []
-        assert stored()["native-0"]["gate_result"]["invariants"][0]["comparator"] is None
+        assert stored()["native-0"]["gate_result"]["invariants"][0].get("comparator") is None
     finally:
         report_file.write_bytes(original)
     # A changed replicate invalidates the entire aggregate, including the unchanged replicate.

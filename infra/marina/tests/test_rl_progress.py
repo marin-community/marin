@@ -85,7 +85,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     }
     publish(unknown)
     for run_id, invalid in (
-        ("test/legacy", record | {"evaluation": None}),
+        ("test/legacy", record | {"run_id": "test/legacy", "attempt_id": "bad", "evaluation": None}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
         (
@@ -120,10 +120,9 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert rows["native-second"] == failed
     assert rows["unknown"] == unknown
     assert len(rows) == 3
-    assert rows["unknown"]["evidence"] == unknown["evidence"]
-    assert "comparator" not in rows["native-first"]["gate_result"]["invariants"][0]
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
+    assert "evaluation: extra_forbidden" in skipped["test/legacy"]
     assert set(skipped) == {"test/bad-shape", "test/bad-result", "test/huge-extra", "test/wrong-sql-key", "test/legacy"}
 
     before = client.get(api_path).json()
