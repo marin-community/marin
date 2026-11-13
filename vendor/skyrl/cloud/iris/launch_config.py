@@ -265,14 +265,14 @@ def load_launch_config(path: Path) -> DictConfig:
         probe.archive_uri = join_resource_path(artifact_root, "mismatch_probe")
     normalize_logging_backends(config.skyrl)
     validate_launch_config(config)
-    evaluation_profiles(config.skyrl)
+    profiles = evaluation_profiles(config.skyrl)
     if config.run.mode == RunMode.TRAIN:
         if config.runtime.entrypoint != RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
             validate_training_settings(config.skyrl)
             validate_batch_invariant_config(config.skyrl)
         validate_megatron_config(config.skyrl)
         validate_evaluation_schedule(
-            config.skyrl, generation=config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
+            config.skyrl, profiles, generation=config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
         )
     return config
 
