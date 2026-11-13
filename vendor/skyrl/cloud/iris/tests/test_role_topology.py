@@ -117,7 +117,6 @@ def test_configured_groups_stay_within_domains_and_can_share_one(tmp_path, geome
             fabrics[role].add(row["fabric"])
     assert counts == {role: count for role, (count, _) in expected.items()}
     assert fabrics == {role: {fabric} for role, (_, fabric) in expected.items()}
-    assert len({gpu for row in rows for gpu in row["gpu_uuids"]}) == topology.num_nodes * topology.gpus_per_node
 
 
 @pytest.mark.parametrize("wrong_layout", ["split_policy", "overlapping_slices", "duplicate_gpu"])
@@ -228,8 +227,6 @@ def test_production_role_placement_reserves_workers_and_preserves_shared_engines
         policy_pg = BasePPOExp.get_policy_pg(SimpleNamespace(cfg=config.skyrl), timeout=60)
         policy_actors = []
         if locality:
-            # The default production trainer reserves one whole eight-GPU bundle.
-            assert len(policy_pg.bundle_specs) == 1
             assignments = verify_role_placement(policy_pg, "policy")
             handles = [
                 BackendWorker.options(

@@ -145,7 +145,7 @@ def node_role_resources(*, topology: RoleTopology, rank: int, host: str, fabric_
 
 
 def validate_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTopology) -> list[dict[str, Any]]:
-    """Verify native slices and every group's real domain before model creation."""
+    """Verify physical identities and native Iris slice domains before model creation."""
     alive = [node for node in nodes if node["Alive"]]
     if len(alive) != topology.num_nodes:
         raise ValueError(f"Expected exactly {topology.num_nodes} Ray nodes, observed {len(alive)}")
