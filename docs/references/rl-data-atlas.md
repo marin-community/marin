@@ -152,8 +152,10 @@ where the release claims one, and a link to its pinned manifest — beside, and
 distinct from, the sampled quality. Open a source for
 pipeline details and links to its original dataset, assessment and curriculum
 coverage. The leading curriculum domain links directly to that source's coverage
-within the domain. On small screens, the table keeps name, count and quality
-visible; source details contain the remaining fields.
+within the domain. Columns size to their contents, and enum chips stay on one line
+without subtitles.
+On small screens, scroll the table horizontally to reach every column; its header
+and body scroll together without widening the page.
 
 ## Updating Atlas
 
