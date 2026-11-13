@@ -715,9 +715,6 @@ class LocalMachine:
     async def run(self, command: Command) -> Result:
         return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
 
-    async def run(self, command: Command) -> Result:
-        return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
-
     async def open_process_scope(self) -> LocalProcessScope:
         """Contain scoped commands and detached descendants outside the guest."""
         self._check_open()
