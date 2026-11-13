@@ -17,7 +17,8 @@ use std::time::Instant;
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
 use crate::maintenance::{
-    OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE, OBJECT_ORPHAN_SWEEP_INTERVAL, REWRITE_LAYOUT_BUDGET,
+    OBJECT_COMPACTION_BUDGET, OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE,
+    OBJECT_ORPHAN_SWEEP_INTERVAL, REWRITE_LAYOUT_BUDGET,
 };
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
 use crate::store::catalog::SpecLifecycle;
@@ -278,14 +279,12 @@ async fn cycle(
             run_one(runtime, TableWork::ObjectCollection).await?;
             return Ok(WorkOutcome::Complete);
         }
-        // Report pending while compaction keeps finding runs: an L0 backlog
-        // then drains at the fast re-poll cadence through the dedicated slot
-        // instead of one run per shared-queue visit, mirroring how a legacy
-        // table drains its whole backlog in one cycle.
+        // The prompt re-poll that pending work earns still queues behind every
+        // other table for a shared slot, so drain runs within this visit too.
         let bounds_pending = run_one(runtime, TableWork::KeyBounds)
             .await?
             .has_more_work();
-        let compacted = run_one(runtime, TableWork::Compaction { force_compact_l0 })
+        let compacted = drain_object_compaction(runtime, force_compact_l0)
             .await?
             .has_more_work();
         runtime.controller.gc_objects().await?;
@@ -387,6 +386,21 @@ async fn compact(
     })
     .await
     .map_err(|error| StatsError::Internal(format!("maintenance compact task panicked: {error}")))?
+}
+
+/// Compact an object-backed table's runs until none remain or
+/// [`OBJECT_COMPACTION_BUDGET`] elapses.
+async fn drain_object_compaction(
+    runtime: &Arc<TableRuntime>,
+    force_compact_l0: bool,
+) -> Result<WorkOutcome, StatsError> {
+    let started = Instant::now();
+    loop {
+        let outcome = compact(runtime, force_compact_l0).await?;
+        if !outcome.has_more_work() || started.elapsed() >= OBJECT_COMPACTION_BUDGET {
+            return Ok(outcome);
+        }
+    }
 }
 
 /// Make the legacy archive match the catalog.

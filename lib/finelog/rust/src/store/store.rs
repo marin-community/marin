@@ -4526,6 +4526,49 @@ mod tests {
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
+    /// Tables share two maintenance slots, so a table with an L0 backlog waits a
+    /// full round of every table between visits. One visit must therefore drain
+    /// more than one 32-input run, or flushes outpace compaction on a busy hub.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn object_backed_cycle_drains_more_than_one_l0_run() {
+        let data_dir = crate::test_support::unique_dir("object_drain_data");
+        let remote_dir = crate::test_support::unique_dir("object_drain_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+        let table = store.tables.require("iris.worker").unwrap();
+        let flushes = 3 * 32;
+        for index in 0..flushes {
+            let (_, ipc) = worker_ipc(&[("w", index, index)]);
+            store.write_rows("iris.worker", &ipc, None).unwrap();
+            table.flush().await.unwrap();
+        }
+        assert_eq!(
+            store.query_snapshot("iris.worker").unwrap().paths.len(),
+            flushes as usize
+        );
+
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+
+        assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 3);
+        assert_eq!(scan_table(&store, "iris.worker").await, flushes);
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn object_backed_compaction_replaces_inputs_in_one_catalog_generation() {
         let data_dir = crate::test_support::unique_dir("object_compaction_data");
