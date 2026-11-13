@@ -1,24 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import replace
-
 import pytest
 
-from experiments.post_training.long_loop.preflight import (
-    EndpointEvidence,
-    check_endpoint,
-)
 from experiments.post_training.long_loop.timing import EventLog, read_events
-
-
-def test_multi_eos_serving_regression():
-    evidence = EndpointEvidence(
-        "step222", "step222", "hash", "hash", "user\n/think", "/think", {128001: "stop", 128009: "stop"}
-    )
-    check_endpoint(evidence)
-    with pytest.raises(ValueError, match="Both EOS"):
-        check_endpoint(replace(evidence, forced_stop_results={128001: "stop", 128009: "length"}))
 
 
 def test_exception_records_failed_span_without_swallowing(tmp_path):

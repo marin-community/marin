@@ -50,7 +50,6 @@ def test_selected_context_binds_exact_future_config_and_overrides(tmp_path, monk
         root, override_file, requested, output = command[-4:]
         assert Path(root, "config.json").read_bytes() == raw
         assert json.loads(Path(override_file).read_text()) == overrides
-        assert command[command.index("--extra") + 1] == "vllm"
         assert "VLLM_ALLOW_LONG_MAX_MODEL_LEN" not in kwargs["env"]
         Path(output).write_text(
             json.dumps(

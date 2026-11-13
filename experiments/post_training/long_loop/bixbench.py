@@ -126,8 +126,7 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
     identity["original_prompt_is_prefix"] = (
         repaired_bix["prompt_token_ids"][: len(original_bix["prompt_token_ids"])] == original_bix["prompt_token_ids"]
     )
-    out_fs, out_root = filesystem_for(prefix_join(output, suffix))
-    out_fs.makedirs(out_root, exist_ok=True)
+    StoragePath(prefix_join(output, suffix)).mkdirs()
     provenance = []
     for row in before["benchmarks"]:
         name = row["file"]
