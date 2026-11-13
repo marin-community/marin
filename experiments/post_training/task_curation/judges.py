@@ -151,6 +151,7 @@ class LocalJudgeEndpoint:
     priority: int
     env_vars: Mapping[str, str] = field(default_factory=dict)
     worker_image: str | None = None
+    worker_setup_scripts: tuple[str, ...] = ()
     worker_timeout: Duration | None = None
     job_ids: list[str] = field(default_factory=list, repr=False, compare=False)
 
@@ -162,6 +163,7 @@ class LocalJudgeEndpoint:
             "model_config": str(self.model_config),
             "model_config_sha256": hashlib.sha256(self.model_config.read_bytes()).hexdigest(),
             "worker_image": self.worker_image,
+            "worker_setup_scripts": list(self.worker_setup_scripts),
         }
 
     @contextmanager
@@ -180,6 +182,7 @@ class LocalJudgeEndpoint:
             model, self.accelerator, env_vars=self.env_vars, priority=self.priority, api_model=definition.spec.model
         )
         engine = config.engine
+        environment = config.iris.worker_environment
         if self.worker_image is not None:
             if not isinstance(engine, VllmEngineConfig):
                 raise ValueError("A preinstalled judge image requires the vLLM engine")
@@ -195,6 +198,9 @@ class LocalJudgeEndpoint:
                     config.iris.worker_resources,
                     target_cluster=self.accelerator.target_cluster,
                     image=self.worker_image or config.iris.worker_resources.image,
+                ),
+                worker_environment=replace(
+                    environment, setup_scripts=(*self.worker_setup_scripts, *(environment.setup_scripts or ()))
                 ),
                 worker_timeout=self.worker_timeout,
                 endpoint_ready_timeout_seconds=(
