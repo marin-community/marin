@@ -133,6 +133,9 @@ iris --cluster=marin job run --no-wait --target-cluster=<cw-cluster> \
 Size this CPU coordinator separately from the accelerator child jobs launched
 through Fray. Use a unique `IRIS_PORT_JAX` per concurrent gang. The timeout
 includes queueing, and stopping the coordinator stops its children.
+JAX coordinator endpoints include the complete training job ID and task-attempt
+number. Sibling training jobs share an actor namespace; an unscoped
+`jax_coordinator-attempt-N` endpoint can connect ranks from different gangs.
 `SchedulingGated` means Kueue has not admitted the gang. See [CoreWeave](docs/coreweave.md).
 
 ### Sandbox prepared-image workdirs

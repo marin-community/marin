@@ -3,6 +3,7 @@
 
 """Bind the approved Snowflake mask grid to native SFTSpec configuration."""
 
+import gzip
 import hashlib
 import json
 import math
@@ -34,7 +35,7 @@ BATCH_SIZE = 8
 SCHEDULE_STEPS = 4750
 TASK_TIMEOUT = 259200
 PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/snowball-isoflop"
-VERSION = "2026.11.13.1"
+VERSION = "2026.11.13.2"
 BUDGETS = (3e18, 1e19, 3e19)
 SIZES = (512, 768, 1024)
 SPECIAL_IDS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
@@ -61,7 +62,8 @@ class Cell:
 
 
 def recipe() -> dict:
-    return json.loads((INPUTS / "exp1-recipe.json").read_text())
+    with gzip.open(INPUTS / "exp1-recipe.json.gz", "rt") as source:
+        return json.load(source)
 
 
 def model_receipt(size: int) -> dict:

@@ -292,6 +292,10 @@ def initialize_jax(
         return
 
     job_info = get_job_info()
+    if job_info is not None:
+        # Actor namespaces span the root job tree. Each training child needs
+        # its own coordinator, including when sibling jobs start together.
+        endpoint_name = f"{job_info.job_id.to_wire()}/{endpoint_name.lstrip('/')}"
     base_endpoint_name = endpoint_name
     if job_info is not None and job_info.task_index == 0:
         endpoint_name = _attempt_endpoint_name(endpoint_name, job_info.attempt_id)

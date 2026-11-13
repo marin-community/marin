@@ -26,9 +26,9 @@ from iris.env_resources import _read_iris_resource_proto
 from iris.jax.compile_cache import configure_jax_compilation_cache
 from iris.jax.init import initialize_jax, resolve_coordinator_port
 
-INITIAL_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-0"
-RETRY_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-3"
-COORDINATOR_ATTEMPT_ENDPOINT_NAME = "jax_coordinator-attempt-5"
+INITIAL_ATTEMPT_ENDPOINT_NAME = "/testuser/testjob/jax_coordinator-attempt-0"
+RETRY_ATTEMPT_ENDPOINT_NAME = "/testuser/testjob/jax_coordinator-attempt-3"
+COORDINATOR_ATTEMPT_ENDPOINT_NAME = "/testuser/testjob/jax_coordinator-attempt-5"
 
 
 @dataclass
@@ -65,13 +65,14 @@ class FakeContext:
     registry: FakeRegistry = field(default_factory=FakeRegistry)
     resolver: FakeResolver = field(default_factory=FakeResolver)
     coordinator_attempts: list[int] = field(default_factory=lambda: [0])
+    job_id: JobName = field(default_factory=lambda: JobName.from_string("/testuser/testjob"))
 
     @property
     def client(self) -> FakeContext:
         return self
 
     def task_status(self, task_id: JobName) -> FakeTaskStatus:
-        assert task_id == JobName.from_string("/testuser/testjob/0")
+        assert task_id == self.job_id.task(0)
         attempt = (
             self.coordinator_attempts.pop(0) if len(self.coordinator_attempts) > 1 else self.coordinator_attempts[0]
         )
@@ -263,6 +264,46 @@ def test_initialize_jax_maps_supervised_peer_global_rank_and_device(
     assert jax_args == ("10.0.0.9:8476", 16, 9)
     assert jax_options["local_device_ids"] == [1]
     assert fake_ctx.registry.registered == []
+
+
+@patch("jax.distributed.initialize")
+@patch("iris.jax.init.iris_ctx")
+@patch("iris.jax.init.get_job_info")
+def test_initialize_jax_sibling_training_jobs_discover_separate_coordinators(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contexts = []
+    infos = []
+    registry = FakeRegistry()
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "8")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
+    for child, port in (("full", 12345), ("assistant", 23456)):
+        info = _make_job_info()
+        info.task_id = JobName.from_string(f"/testuser/testjob/{child}/0")
+        info.ports = {"jax": port}
+        ctx = FakeContext(registry=registry, job_id=info.job_id)
+        infos.append(info)
+        contexts.append(ctx)
+        mock_get_job_info.return_value = info
+        mock_iris_ctx.return_value = ctx
+        initialize_jax()
+
+    registered = {
+        name: ResolveResult(name=name, endpoints=[ResolvedEndpoint(url=address, actor_id=name)])
+        for name, address in registry.registered
+    }
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "1")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "1")
+    for info, ctx, port in zip(infos, contexts, (12345, 23456), strict=True):
+        ctx.resolver = FakeResolver(results_by_name=registered)
+        mock_get_job_info.return_value = info
+        mock_iris_ctx.return_value = ctx
+        initialize_jax()
+        assert mock_jax_init.call_args.args == (f"10.0.0.1:{port}", 8, 1)
 
 
 @patch("jax.distributed.initialize")
