@@ -60,7 +60,7 @@ class ReadyChatReviewer:
 
     @property
     def identity(self) -> dict:
-        return {"mode": "chat", **self.spec.identity}
+        return self._reviewer(self.session).identity
 
     def _reviewer(self, session: RemoteInferenceSession) -> ChatReviewer:
         endpoint = session.model.endpoint
