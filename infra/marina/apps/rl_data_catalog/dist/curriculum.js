@@ -29,6 +29,10 @@ async function loadCoverage() {
     $('source').replaceChildren(node('option', 'All sources'));
     $('source').firstChild.value = '';
     for (const source of data.sources) { const option = node('option', source.name); option.value = source.source_id; $('source').append(option); }
+    if (selected && !data.sources.some(source => source.source_id === selected)) {
+      const option = node('option', `Source not covered: ${selected}`);
+      option.value = selected; $('source').append(option);
+    }
     $('source').value = selected;
     $('domain').replaceChildren(node('option', 'All domains'));
     $('domain').firstChild.value = '';

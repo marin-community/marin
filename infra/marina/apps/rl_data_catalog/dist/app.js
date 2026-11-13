@@ -164,7 +164,7 @@ function sourceRow(row, others, canonical) {
     result.append(badge);
     if (row.quality_result?.issue_rate != null) result.append(node('span', `${(100 * row.quality_result.issue_rate).toFixed(2)}% issues`, 'source-subtitle'));
     if (row.quality === 'FULL') quality.append(node('span', 'Content QA complete', 'source-subtitle'));
-    else if (row.quality_result) quality.append(node('span', 'Provisional / incomplete', 'source-subtitle'));
+    else quality.append(node('span', 'Content QA pending / incomplete', 'source-subtitle'));
     if (row.quality_result && row.quality !== 'FULL') result.append(node('span', `${number.format(row.quality_result.reviewed)} reviewed · provisional`, 'source-subtitle'));
     const area = node('td');
     if (row.coverage?.top_area) {

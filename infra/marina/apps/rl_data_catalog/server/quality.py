@@ -37,16 +37,15 @@ def result(declaration: dict[str, Any], review: dict[str, Any] | None) -> str | 
     if stored is not None:
         measured = SourceQualityResult.model_validate(stored)
     elif review is not None:
-        counts = review["verdict_counts"]
         measured = SourceQualityResult(
-            reviewed=sum(counts.get(key, 0) for key in ("good", "some_issues", "bad")),
-            issue_count=counts.get("some_issues", 0) + counts.get("bad", 0),
+            reviewed=review["result_reviewed"],
+            issue_count=review["issue_count"],
             issues=[],
             repair_recommendation="See the sampled assessment evidence",
         )
     else:
         return None
-    return measured.verdict.value.upper() if measured.reviewed else None
+    return measured.verdict.value.upper()
 
 
 def intended_use(declaration: dict[str, Any]) -> str:
