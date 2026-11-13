@@ -2097,6 +2097,52 @@ assessments into exact-input SHARED/SEPARATE evidence before declaration binding
 It reads only the assessment column and preserves unavailable and mismatched
 assessments; it does not filter tasks.
 
+For frozen populations without a stored census, `grading_census` applies the same
+`assess_grading_environment`, `count_grading_environment` and
+`grading_environment_census` functions to every serialized TaskSpec:
+
+```bash
+uv run iris --cluster marin job run --target-cluster cw-us-east-02a \
+  --cpu 8 --memory 32G --disk 64G --enable-extra-resources \
+  --sync-package marin-core --extra cpu --extra dedup \
+  --priority production --timeout 259200 --no-wait -- \
+  python -m experiments.post_training.task_curation.grading_census \
+  --inputs s3://BUCKET/frozen-grading-inputs.json \
+  --output-root s3://BUCKET/new-grading-version --workers 8
+```
+
+Each input contains a `SourceTextPopulation` and its matching `ActorCensusInput`.
+Run in the input bucket's region: `marin-us-east-02a` uses `cw-us-east-02a`,
+and `marin-rno2a` uses `cw-rno2a`, with outputs in the same bucket.
+The command checks the frozen population manifest and complete
+task count, then writes per-task IDs, content hashes, required/declared boundaries,
+statuses and reasons to `tasks.parquet`. Validation failures remain unassessable
+with their reasons. Unavailable graders and boundary mismatches retain their
+existing assessment statuses. The receipt keeps the original actor binding and
+adds an aggregate SHA-256 of serialized TaskSpec bytes, traversing sorted Parquet
+paths and each file's row order; older population
+digests used conversion order and cannot be compared to this scan digest.
+Existing output directories are refused; select a new version for reruns.
+
+Stage the downloaded regional `receipts.json` indexes into a new directory:
+
+```bash
+uv run python -m experiments.post_training.task_curation.grading_binding \
+  --censuses east-receipts.json rno2a-receipts.json \
+  --output-dir STAGE/experiments/post_training/task_curation/datasets/grading_census_receipts
+```
+
+Archive that stage with the [registry publication command](#updating-pinned-registry-receipts),
+then commit its returned references. `grading_census_receipts()` lazily verifies
+and loads them when building the source catalog.
+
+`bind_grading_census` attaches evidence only when the configured source pin,
+converter version and full actor input still match. This census measures grading
+boundaries without executing graders or qualifying integrity contracts.
+`SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` continues to require a failed grader trial's
+verdict and source-environment evidence in an `OracleTaskReceipt`; a static census cannot
+establish that failure.
+
 Combined training receipts use disjoint duplicate-first accounting:
 `measured_tasks = retained_tasks + duplicate_dropped_tasks + dropped_tasks`.
 `duplicate_dropped_tasks` counts all original exact duplicates; `dropped_tasks`
