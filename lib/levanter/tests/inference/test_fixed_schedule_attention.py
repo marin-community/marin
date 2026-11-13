@@ -53,7 +53,7 @@ def _dense_oracle(
     return jnp.einsum("hk,kd->hd", weights, values, preferred_element_type=jnp.float32)
 
 
-@pytest.mark.parametrize("position", [0, 127, 128])
+@pytest.mark.parametrize("position", [0, 127, 128, 255])
 @pytest.mark.parametrize("window", [None, 128])
 def test_fixed_schedule_public_forward_matches_oracle_and_decode(position: int, window: int | None) -> None:
     _require_four_tpu_devices()

@@ -161,8 +161,9 @@ it does not partition the rows.
 
 Snowball’s `shared_attention_implementation="fixed_schedule"` is a bounded
 forward selector for the H128/E2top1/I32/sharedI32/Q2/KV1/D128/V23 fixture:
-four 256-token slots with 128-token pages. The public boundary rejects
-noncausal, sliding-window, and segmented masks before per-layer normalization.
+four 256-token slots with 128-token pages. The public boundary accepts only
+unsegmented full-causal masks; external windowed, noncausal, and segmented masks
+are rejected. Each layer derives its window from the model schedule.
 Cached decode writes use the physical page map supplied by `PageBatchInfo`,
 with placement checks at positions 127 and 128. The selector is runtime-only;
 checkpoint fields and the native default remain unchanged.
@@ -173,9 +174,13 @@ reference over BF16-materialized K/V operands, with FP32 QK and output
 accumulation, causal positions, and reduction from two query heads to one KV
 head. This is a cast-aware mathematical gradient convention: it does not claim
 to differentiate discrete BF16 rounding or establish backward bitwise parity.
-The reverse rule is limited to the one-layer, two-expert, NoPE fixture; serving
-decode, normal attention dispatch, RoPE, paged-cache training gradients, and
-other layer/expert counts remain unchanged. Focused CPU reference checks cover
+The reverse rule supports the bounded one- or two-layer, two-expert fixture;
+short layers retain half-RoPE and a 128-token sliding window while long layers
+remain NoPE and full-causal. Serving decode follows the same per-layer
+schedule. The custom reverse rule applies only to the contiguous training
+adapter; paged-cache training gradients are not supported or qualified here.
+Other layer/expert counts remain unchanged.
+Focused CPU reference checks cover
 nontrivial cotangents at positions 127, 128, and 255 and all Q/K/V gradients.
 Native TPU gradient qualification, including sharding and full-model
 value-and-grad checks, remains pending and is owned by the parent validation

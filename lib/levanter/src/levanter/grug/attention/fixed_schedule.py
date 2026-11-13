@@ -5,8 +5,8 @@
 
 The public contract is deliberately narrow: four complete sequence slots are
 sharded over a data mesh axis, each local kernel sees one 256-row sequence,
-and all eight physical cache pages are replicated. This is a forward-only
-checkpoint and does not change normal Grug or Snowball dispatch.
+and all eight physical cache pages are replicated. This checkpoint does not
+change normal Grug or Snowball dispatch.
 """
 
 from dataclasses import dataclass

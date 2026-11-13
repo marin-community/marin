@@ -15,6 +15,7 @@ from levanter.models.snowball import (
     _fixed_shared_attention_forward,
     _fixed_shared_attention_with_vjp_bwd,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 def _config() -> SnowballConfig:
@@ -45,7 +46,9 @@ def _fixture(dtype: jnp.dtype) -> tuple[jax.Array, jax.Array, jax.Array, jax.Arr
     return q, k, v, jnp.asarray(cotangent)
 
 
-def _oracle(q: jax.Array, k: jax.Array, v: jax.Array) -> jax.Array:
+def _oracle(
+    q: jax.Array, k: jax.Array, v: jax.Array, sliding_window: int | None = None
+) -> jax.Array:
     # Expand in BF16 before promotion: the cast-aware adjoint rounds each query-head
     # contribution to BF16 before reducing contributions for the shared KV head.
     repeats = q.shape[2] // k.shape[2]
@@ -53,12 +56,23 @@ def _oracle(q: jax.Array, k: jax.Array, v: jax.Array) -> jax.Array:
     v = jnp.repeat(v.astype(jnp.bfloat16), repeats, axis=2).astype(jnp.float32)
     scale = jnp.asarray(q.shape[-1] ** -0.5, dtype=jnp.float32)
     return jax.nn.dot_product_attention(
-        q.astype(jnp.float32) * scale, k, v, scale=1.0, is_causal=True, implementation="xla"
+        q.astype(jnp.float32) * scale,
+        k,
+        v,
+        scale=1.0,
+        is_causal=True,
+        local_window_size=None if sliding_window is None else (sliding_window - 1, 0),
+        implementation="xla",
     )
 
 
-def _oracle_gradients(q: jax.Array, k: jax.Array, v: jax.Array, cotangent: jax.Array) -> tuple[jax.Array, ...]:
-    return jax.grad(lambda q_, k_, v_: jnp.sum(_oracle(q_, k_, v_) * cotangent), argnums=(0, 1, 2))(q, k, v)
+def _oracle_gradients(
+    q: jax.Array, k: jax.Array, v: jax.Array, cotangent: jax.Array, sliding_window: int | None = None
+) -> tuple[jax.Array, ...]:
+    return jax.grad(
+        lambda q_, k_, v_: jnp.sum(_oracle(q_, k_, v_, sliding_window) * cotangent),
+        argnums=(0, 1, 2),
+    )(q, k, v)
 
 
 def _assert_gradients(actual: tuple[jax.Array, ...], expected: tuple[jax.Array, ...]) -> None:
@@ -81,12 +95,74 @@ def _assert_gradients(actual: tuple[jax.Array, ...], expected: tuple[jax.Array, 
 
 
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
-def test_fixed_schedule_reverse_callback_matches_xla_attention(dtype: jnp.dtype) -> None:
+@pytest.mark.parametrize("sliding_window", [None, 128])
+def test_fixed_schedule_reverse_callback_matches_xla_attention(
+    dtype: jnp.dtype, sliding_window: int | None
+) -> None:
     q, k, v, cotangent = _fixture(dtype)
+    mask = AttentionMask.causal(sliding_window=sliding_window)
     with jax.default_matmul_precision("highest"):
-        actual = _fixed_shared_attention_with_vjp_bwd(AttentionMask.causal(), _config(), (q, k, v), cotangent)
-        expected = _oracle_gradients(q, k, v, cotangent)
+        actual = _fixed_shared_attention_with_vjp_bwd(mask, _config(), (q, k, v), cotangent)
+        expected = _oracle_gradients(q, k, v, cotangent, sliding_window)
     _assert_gradients(actual, expected)
+
+
+@pytest.mark.timeout(120)
+def test_fixed_schedule_public_training_traces_original_and_mixed_layer_schedules() -> None:
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh
+        from levanter.models.snowball import SnowballConfig, SnowballTransformer
+
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 4, 1, 1, 1),
+            axes,
+            axis_types=(AxisType.Explicit,) * len(axes),
+        )
+        for num_layers, window in ((1, 2048), (2, 128)):
+            cfg = SnowballConfig(
+                vocab_size=23,
+                hidden_dim=128,
+                intermediate_dim=32,
+                shared_expert_intermediate_dim=32,
+                num_experts=2,
+                num_experts_per_token=1,
+                num_layers=num_layers,
+                num_heads=2,
+                num_kv_heads=1,
+                head_dim=128,
+                max_seq_len=256,
+                sliding_window=window,
+                shared_attention_implementation="fixed_schedule",
+                attention_implementation="reference",
+                inference_attention_implementation="reference",
+                moe_implementation="scatter",
+            )
+            with jax.set_mesh(mesh):
+                model = SnowballTransformer.init(cfg, key=jax.random.key(765))
+                tokens = jnp.zeros((4, 256), dtype=jnp.int32)
+                # The sole layer must not trace its inactive 2048-token short
+                # window. The two-layer scan must still trace both arms.
+                output = eqx.filter_eval_shape(model, tokens)
+                _, gradients = eqx.filter_eval_shape(
+                    eqx.filter_value_and_grad(lambda model_: jnp.sum(model_(tokens))), model
+                )
+            assert output.shape == (4, 256, 128)
+            assert output.dtype == jnp.float32
+            parameters = jax.tree_util.tree_leaves(eqx.filter(model, eqx.is_inexact_array))
+            derivatives = jax.tree_util.tree_leaves(gradients)
+            assert len(parameters) == len(derivatives)
+            for parameter, derivative in zip(parameters, derivatives, strict=True):
+                assert derivative.shape == parameter.shape
+                assert derivative.dtype == parameter.dtype
+        """,
+        device_count=4,
+    )
 
 
 def test_fixed_schedule_reverse_callback_restores_training_sequence_layout() -> None:
