@@ -13,7 +13,7 @@
 //!   `next.run` and holds it across the handler (bounding the parquet working
 //!   set). One deadline bounds admission and the whole handler; expiry drops
 //!   queued requests and running reads with `deadline_exceeded`. The caps are
-//!   `{FetchLogs: 4}` and `{Query: 2}`, both living in one interceptor keyed by
+//!   `{FetchLogs: 1}` (temporarily; normally 4) and `{Query: 2}`, both living in one interceptor keyed by
 //!   method. Registered AFTER SlowRpc.
 //!
 //! Both read the dispatched method's short name from `ctx.spec().method()`. The
@@ -45,7 +45,8 @@ pub const DEFAULT_SLOW_RPC_THRESHOLD_MS: i64 = 7000;
 /// TEMPORARY: FetchLogs is held at 1 (normally 4) while the marin hub drains its
 /// L0 backlog (#11265). Each request scans every L0 of `log` and is cancelled at
 /// the read deadline, so more of them add load and return nothing. Restore 4
-/// once `log` reads succeed again.
+/// once `log` reads succeed again. Lowered on 2026-11-13; #11265 tracks the
+/// restore.
 pub const MAX_CONCURRENT_FETCH_LOGS: usize = 1;
 pub const MAX_CONCURRENT_QUERY: usize = 2;
 
