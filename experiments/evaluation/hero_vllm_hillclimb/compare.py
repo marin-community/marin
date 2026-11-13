@@ -31,7 +31,7 @@ MAX_NEAR_TIE_DIVERGENCES = 2
 
 
 def _load(run: str, phase: str) -> dict | None:
-    uri = run if "://" in run else f"{OUTPUT_ROOT}/{run}"
+    uri = run if "://" in run or run.startswith("/") else f"{OUTPUT_ROOT}/{run}"
     try:
         with open_url(f"{uri}/{phase}.json", "r") as handle:
             return json.load(handle)
@@ -179,6 +179,64 @@ def g1a(scores: dict, reference: dict) -> dict:
                     {"case": case_id, "position": position, "max_error": max_error, "missing_top5": missing, "gap": gap}
                 )
     return {"positions": positions, "worst": worst, "failures": len(failures), "first_failures": failures[:10], "pass": not failures}
+
+
+def position_errors(scores: dict, reference: dict) -> dict[str, np.ndarray]:
+    """Per case: max probability error over vLLM's returned tokens at each referenced position."""
+    out = {}
+    for case_id, result in scores.items():
+        errors = []
+        for position, returned in enumerate(result["positions"]):
+            key = (case_id, position)
+            if key not in reference or not returned:
+                continue
+            ids, logprobs = reference[key]
+            ref = dict(zip(ids.tolist(), logprobs.tolist(), strict=True))
+            floor = math.exp(float(logprobs[-1]))
+            errors.append(
+                max(abs(math.exp(lp) - (math.exp(ref[int(t)]) if int(t) in ref else floor)) for t, lp in returned)
+            )
+        if errors:
+            out[case_id] = np.asarray(errors)
+    return out
+
+
+GATE_STATS = {
+    "p50": lambda e: float(np.quantile(e, 0.5)),
+    "p90": lambda e: float(np.quantile(e, 0.9)),
+    "p99": lambda e: float(np.quantile(e, 0.99)),
+    "frac_gt_0.075": lambda e: float(np.mean(e > ABSOLUTE_PROBABILITY_BOUND)),
+}
+
+
+def distribution(errors: dict[str, np.ndarray], *, replicates: int = 2000, seed: int = 0) -> dict:
+    """Point statistics plus a 95% bootstrap interval that resamples whole histories."""
+    cases = sorted(errors)
+    pooled = np.concatenate([errors[c] for c in cases])
+    rng = np.random.default_rng(seed)
+    samples = {name: [] for name in GATE_STATS}
+    for _ in range(replicates):
+        draw = np.concatenate([errors[cases[i]] for i in rng.integers(0, len(cases), len(cases))])
+        for name, stat in GATE_STATS.items():
+            samples[name].append(stat(draw))
+    return {
+        name: {
+            "value": stat(pooled),
+            "ci95": [float(np.quantile(samples[name], 0.025)), float(np.quantile(samples[name], 0.975))],
+        }
+        for name, stat in GATE_STATS.items()
+    } | {"positions": int(pooled.size), "histories": len(cases)}
+
+
+def gate_v2_distributional(control: dict, candidate: dict) -> dict:
+    """Fail when a candidate statistic falls outside the control's 95% bootstrap band (worse side only)."""
+    verdict = {}
+    for name in GATE_STATS:
+        low, high = control[name]["ci95"]
+        value = candidate[name]["value"]
+        verdict[name] = {"candidate": value, "control_band": [low, high], "pass": value <= high}
+    verdict["pass"] = all(v["pass"] for v in verdict.values() if isinstance(v, dict))
+    return verdict
 
 
 def main() -> None:
