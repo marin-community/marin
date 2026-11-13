@@ -19,10 +19,8 @@ from finestore.rl.run_records import (
     LaunchResult,
     LaunchState,
     read_attempt,
-    run_records_root,
-    update_attempt,
+    write_attempt,
 )
-from finestore.store import DataStore
 from iris.client.client import JobFailedError
 from iris.cluster.client.job_info import get_job_info
 from iris.resources.state import JobState
@@ -220,16 +218,15 @@ def _record_failure(
 def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchReceipt:
     export_root = str(config.artifacts.export_root)
     receipt = LaunchReceipt(config=OmegaConf.to_container(config, resolve=True), result=result)
-    with DataStore.open(run_records_root(export_root)) as store:
-        update_attempt(
-            store,
-            AttemptRecord(
-                run_id=str(config.run.id),
-                attempt_id=str(config.run.attempt_id),
-                **({"iris_job_id": result.iris_job_id} if result.iris_job_id is not None else {}),
-                result=result,
-            ),
-        )
+    write_attempt(
+        export_root,
+        AttemptRecord(
+            run_id=str(config.run.id),
+            attempt_id=str(config.run.attempt_id),
+            **({"iris_job_id": result.iris_job_id} if result.iris_job_id is not None else {}),
+            result=result,
+        ),
+    )
     return receipt
 
 
@@ -258,15 +255,14 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         OmegaConf.save(config, resolved_file.name, resolve=False)
         record = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
         if record is None or record.config is None:
-            with DataStore.open(run_records_root(str(config.artifacts.export_root))) as store:
-                update_attempt(
-                    store,
-                    AttemptRecord(
-                        run_id=str(config.run.id),
-                        attempt_id=str(config.run.attempt_id),
-                        config=OmegaConf.to_container(config, resolve=True),
-                    ),
-                )
+            write_attempt(
+                str(config.artifacts.export_root),
+                AttemptRecord(
+                    run_id=str(config.run.id),
+                    attempt_id=str(config.run.attempt_id),
+                    config=OmegaConf.to_container(config, resolve=True),
+                ),
+            )
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:

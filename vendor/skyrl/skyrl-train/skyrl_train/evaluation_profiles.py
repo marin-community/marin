@@ -46,7 +46,7 @@ def validate_evaluation_data(config: DictConfig, *, source_recipe: bool) -> None
             raise ValueError(f"evaluation profile {name}: both data_files and evaluation_data")
 
 
-def evaluation_profiles(
+def resolve_evaluation_profiles(
     config: DictConfig, *, evaluation_data: tuple[tuple[str, tuple[str, ...]], ...] = ()
 ) -> dict[str, EvaluationProfile]:
     """Resolve and record named requests in one complete native SkyRL configuration."""

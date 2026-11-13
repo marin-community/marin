@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
-from skyrl_train.evaluation_profiles import evaluation_profiles, validate_evaluation_data, validate_evaluation_schedule
+from skyrl_train.evaluation_profiles import resolve_evaluation_profiles, validate_evaluation_data, validate_evaluation_schedule
 
 from skyrl_train.config.validation import (
     validate_training_settings,
@@ -269,7 +269,7 @@ def load_launch_config(path: Path) -> DictConfig:
         probe.archive_uri = join_resource_path(artifact_root, "mismatch_probe")
     normalize_logging_backends(config.skyrl)
     validate_launch_config(config)
-    profiles = evaluation_profiles(config.skyrl)
+    profiles = resolve_evaluation_profiles(config.skyrl)
     if config.run.mode == RunMode.TRAIN:
         if config.runtime.entrypoint != RL_ENTRYPOINTS[RLEntrypoint.GENERATE]:
             validate_training_settings(config.skyrl)

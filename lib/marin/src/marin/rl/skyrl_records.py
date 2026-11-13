@@ -130,7 +130,7 @@ def read_skyrl_launch_config(run_output: str) -> dict:
     return yaml.safe_load(fs.cat(key))["config"]
 
 
-def read_stored_skyrl_receipt(run_output: str) -> AttemptRecord | None:
+def read_stored_skyrl_attempt(run_output: str) -> AttemptRecord | None:
     """Read the current native attempt, including its receipt and startup facts."""
     try:
         config = read_skyrl_launch_config(run_output)
@@ -160,16 +160,20 @@ def read_stored_skyrl_receipt(run_output: str) -> AttemptRecord | None:
     return record.model_copy(update={"config": record.config if record.config is not None else config})
 
 
+def read_skyrl_attempt_config(run_output: str, record: AttemptRecord | None) -> dict | None:
+    """Read the stored attempt configuration or its resolved launch file."""
+    try:
+        return record.native.config if record is not None else read_skyrl_launch_config(run_output)
+    except FileNotFoundError:
+        return None
+
+
 def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, AttemptRecord]]:
     """Read the current ID and native training attempts without querying Iris."""
-    current = read_stored_skyrl_receipt(run_output)
-    if current is None:
-        try:
-            config = read_skyrl_launch_config(run_output)
-        except FileNotFoundError:
-            return None, {}
-    else:
-        config = current.native.config
+    current = read_stored_skyrl_attempt(run_output)
+    config = read_skyrl_attempt_config(run_output, current)
+    if config is None:
+        return None, {}
     attempts = {
         attempt_id: record
         for attempt_id, record in read_attempts(config["artifacts"]["export_root"]).items()

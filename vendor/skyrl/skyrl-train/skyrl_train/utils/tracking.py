@@ -33,6 +33,7 @@ import pprint
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from finestore.rl.run_records import (
+    METRIC_ATTEMPT_IDS,
     METRIC_METADATA_KEYS,
     AttemptRecord,
     CheckpointReference,
@@ -305,8 +306,8 @@ class _RecordsAdapter(_TrackingAdapter):
         rows = []
         for name, value in data.items():
             if name in METRIC_METADATA_KEYS:
-                if name == "metric_attempt_ids":
-                    raise ValueError("metric_attempt_ids is reserved for metric provenance")
+                if name == METRIC_ATTEMPT_IDS:
+                    raise ValueError(f"{METRIC_ATTEMPT_IDS} is reserved for metric provenance")
                 expected = step if name == "step" else self.attempt_id
                 if value != expected:
                     raise ValueError(f"Metric metadata {name} differs from the active execution")

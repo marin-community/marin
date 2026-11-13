@@ -40,6 +40,7 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.inference_engines import placement as inference_placement
+from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:
@@ -639,7 +640,6 @@ def test_named_evaluation_data_is_staged_and_bound_in_training_driver(
     assert observed["profile"] == ["task_set-only"]
     assert observed["count"] == (3 if case == "explicit" else 2)
     assert {key: observed["request"][key] for key in expected_sampling} == expected_sampling
-    from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 
     native_request = get_sampling_params_for_backend("vllm", OmegaConf.create(observed["request"]))
     assert native_request["skip_special_tokens"] is False

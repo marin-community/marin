@@ -29,7 +29,7 @@ def validate_megatron_config(cfg: DictConfig):
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:
-        # context, expert, and expert tensor parallel are not yet supported for megatron
+        # Context parallel requires sample packing.
         if config.megatron_config.context_parallel_size > 1:
             assert cfg.trainer.use_sample_packing, "context parallel is only supported with sample packing"
         # check that sequence parallel is not configured outside of megatron
