@@ -15,7 +15,8 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
 
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
-from marinskyrl.role_placement import inference_role, role_bundles, role_resources, verify_role_placement
+from marinskyrl.ray_role_placement import verify_role_placement
+from marinskyrl.role_placement import inference_role, role_bundles, role_resources
 from skyrl_train.inference_engines.base import (
     InferenceEngineInterface,
     InferenceEngineInput,

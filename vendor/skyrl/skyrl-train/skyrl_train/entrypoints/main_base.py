@@ -43,7 +43,8 @@ from marinskyrl.runtime_options import (
     static_preference_pairs_requested,
 )
 from marinskyrl.resource_locator import RolloutModelLoading
-from marinskyrl.role_placement import POLICY_ROLE, role_bundles, role_resources, verify_role_placement
+from marinskyrl.ray_role_placement import verify_role_placement
+from marinskyrl.role_placement import POLICY_ROLE, role_bundles, role_resources
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 
 if TYPE_CHECKING:

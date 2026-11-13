@@ -23,7 +23,7 @@ from cloud.iris.role_topology import (
 )
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.task_runtime import wait_for_nodes
-from marinskyrl.role_placement import verify_role_placement
+from marinskyrl.ray_role_placement import verify_role_placement
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.inference_engines.ray_wrapped_inference_engine import create_ray_wrapped_inference_engines
 
