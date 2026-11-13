@@ -131,6 +131,7 @@ class ArmConfig:
     iris: IrisConfig
     phases: tuple[str, ...]
     probes: ProbeConfig
+    env: tuple[tuple[str, str], ...] = ()
 
 
 def _write_json(uri: str, payload: object) -> None:
@@ -184,7 +185,8 @@ def run_arm(config: ArmConfig) -> None:
         data_parallel_size=geometry.global_data_parallel_size,
         data_parallel_size_local=geometry.data_parallel_size,
     ) as launch:
-        with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
+        subprocess_env = {**launch.subprocess_env, **dict(config.env)}
+        with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=subprocess_env) as environment:
             if launch.is_leader:
                 with iris_vllm_followers(launch):
                     started = time.time()
@@ -229,6 +231,7 @@ def _parse_args() -> argparse.Namespace:
         "--overlay-wheel",
         help="FILE:SHA256 - replace the release's aarch64 wheel with the URL stored in FILE (Python overlay)",
     )
+    parser.add_argument("--env", action="append", default=[], help="KEY=VALUE for every vLLM process")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -317,10 +320,11 @@ def main() -> None:
             long_lengths=tuple(int(n) for n in args.long_lengths.split(",")),
             data_parallel_size=geometry.global_data_parallel_size,
         ),
+        env=tuple(tuple(item.split("=", 1)) for item in args.env),
     )
     submission = replace(resources, target_cluster=TARGET_CLUSTER)
     coscheduling = resolve_coscheduling(submission, submission.replicas)
-    print(json.dumps({"name": name, "output": config.output_uri, "args": list(engine.extra_args)}, indent=1))
+    print(json.dumps({"name": name, "output": config.output_uri, "args": list(engine.extra_args), "env": args.env}, indent=1))
     print(f"replicas={submission.replicas} coscheduling={coscheduling}")
     if args.dry_run:
         return
