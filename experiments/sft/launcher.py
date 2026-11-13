@@ -585,6 +585,8 @@ class SFTSpec:
     seq_len: int = 4096
     pack: bool = True  # chat packs by default; a step count must count packed examples
     batch_size: int = 16
+    per_device_parallelism: int = -1
+    """Concurrent examples per batch-parallel device; -1 uses the full per-device batch."""
     # Training length is exactly one of these. ``num_train_epochs`` (single dataset only) resolves the
     # step count at run time from the chat cache's token total -- ``ceil(epochs * tokens / (seq_len *
     # batch))``, the packed-sequence count -- so it is not hand-calibrated; it routes the run through a
@@ -741,7 +743,7 @@ def _trainer(
         steps_per_eval=500,
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
-        per_device_parallelism=-1,  # auto microbatch; raise on OOM (math-equivalent)
+        per_device_parallelism=spec.per_device_parallelism,
         use_explicit_mesh_axes=use_explicit_mesh_axes,
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(

@@ -4,7 +4,7 @@ The [Snowball SFT recipe](https://github.com/marin-community/marin/blob/main/exp
 
 This is a 32,768-token, ten-step starting recipe on 32 H100s. A prior [Snowball training run](https://github.com/marin-community/marin/pull/9144) demonstrated the 67B model on 32 learner H100s at 4,096 tokens. That run used GRPO; this longer SFT recipe has not completed an end-to-end accelerator run. Do not assume the model's 262K position limit is a validated training length.
 
-The mesh splits each sequence over four H100s and shards experts across the other eight mesh ranks. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The recipe keeps conversations separate (`pack=False`) because Snowball does not yet consume Levanter's packed-document attention mask. Its scan layers are checkpointed during reverse mode to bound activation memory.
+The mesh splits each sequence over four H100s and shards experts across the other eight mesh ranks. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The recipe keeps conversations separate (`pack=False`); callers can explicitly enable Snowball's segment-aware packed-document attention. Its scan layers are checkpointed during reverse mode to bound activation memory.
 
 ## Prepare
 
@@ -35,6 +35,8 @@ uv run iris --cluster=marin job run --job-name snowball-sft-coord \
 ```
 
 The coordinator and workers need the same storage and Hugging Face credentials. The completed training artifact is recorded under `checkpoints/snowball-openthoughts-agent-sft` in `MARIN_PREFIX`. Change the `SFTSpec` fields in the recipe to choose a different step count, batch size, or context length; increasing context length requires a separate memory and attention validation.
+
+Set `SFTSpec.per_device_parallelism` to limit concurrent examples per batch-parallel rank while increasing `batch_size`. Levanter accumulates microbatch gradients before each optimizer update. For example, eight batch-parallel ranks with `per_device_parallelism=1` process eight sequences at once; `batch_size=256` accumulates 32 microbatches per update. The default `-1` processes the full per-device batch without accumulation.
 
 ## Checkpoints and recovery
 
