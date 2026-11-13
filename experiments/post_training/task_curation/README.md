@@ -21,29 +21,7 @@ fallback to a different revision or inline data. Catalog construction, admission
 selection and the source-overlap gate use this reader. Importing catalog modules
 does not download the registry; receipt accessors load it when called.
 
-When recording new measurements, stage raw JSON in a fresh directory using each
-file's repository-relative path. For example, census shards belong under
-`STAGED_ROOT/experiments/post_training/task_curation/datasets/daytona_census_receipts/`.
-Review the complete staged collection, then append it to the existing private
-registry and update its references:
-
-```bash
-uv run python -m experiments.post_training.task_curation.registry \
-  --staged-root /tmp/atlas-registry-YYYYMMDD-v1 --references-root . \
-  --repo open-athena/marin-rl-data-atlas-registry \
-  --parent-revision CURRENT_REGISTRY_COMMIT --message 'Record approved census receipts'
-```
-
-Use the registry's current 40-character commit as `--parent-revision`; a concurrent
-update fails rather than overwriting it. The command uses add operations only,
-reads every staged file back at the new immutable commit and verifies its hash
-before updating any Git reference. Earlier commits and artifacts remain intact.
-Stage the complete replacement shard collection; if shard filenames change,
-review the reference inventory explicitly so stale shards are not left active.
-Do not write generated bodies over pinned references. The overlap workflow reads
-through the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in
-that job. Local readers use the Hugging Face client's normal credentials; the
-archive command needs write access to this private registry only.
+For new measurements, follow the [registry update procedure](../../../docs/references/task-curation.md#updating-pinned-registry-receipts): stage raw JSON in a fresh tree, append to the private registry, verify readback, then update Git references. The overlap workflow uses the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in that job. Local readers use normal Hugging Face credentials; archive updates need write access to this private registry only.
 
 Unit tests inject small documents at the download boundary and reject registry
 downloads. Tests that inspect the complete private registry use the
