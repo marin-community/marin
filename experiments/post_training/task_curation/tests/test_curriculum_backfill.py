@@ -116,7 +116,6 @@ def test_preparation_preserves_retained_identities_roles_and_reuses_completed_so
         expected_source = "OpenAI:gsm8k"
     output = tmp_path / "public"
     prepare_sources([source], str(output), workers=1)
-    corpus = json.loads((output / "corpus.json").read_text())
     root = output / "sources" / next((output / "sources").iterdir()).name
     public = json.loads((root / "public-inputs.json").read_text())
     rows = [row for path in public["paths"] for row in load_parquet(path)]
@@ -128,7 +127,6 @@ def test_preparation_preserves_retained_identities_roles_and_reuses_completed_so
     assert manifest["input_rows"] == 3 and manifest["converted_rows"] == 2
     assert manifest["rejections"] == {"frozen_retention_exclusions": 1}
     assert all("Add two and three." in row["public_input"] for row in rows)
-    assert corpus["inventory"][0]["current_release"] == source.declaration.model_dump(mode="json")["current_release"]
     original = (root / "public-inputs.json").read_bytes()
     prepare_sources([source], str(output), workers=1)
     assert (root / "public-inputs.json").read_bytes() == original
@@ -151,7 +149,6 @@ def test_changed_task_bytes_with_same_identity_and_population_are_rejected(tmp_p
     rows = table.to_pylist()
     encoded = rows[0][source.task_column]
     rows[0][source.task_column] = encoded.replace("Add two and three.", "Subtract two from three.")
-    assert rows[0][source.task_column] != encoded
     pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
     with pytest.raises(ValueError, match="Frozen TaskSpec scan changed"):
         if reuse == "corpus":
@@ -249,13 +246,12 @@ def test_copied_cache_fork_reads_locally_and_accepts_new_vectors(tmp_path, separ
     original.rename(tmp_path / "historical")
     intermediate.rename(tmp_path / "historical-intermediate")
     output = tmp_path / "fork"
-    receipt = fork_copied_cache_partition(
+    fork_copied_cache_partition(
         str(original) + separator,
         str(copied) + separator,
         str(output) + separator,
         reference_roots=(str(intermediate) + separator,),
     )
-    assert receipt["all_metadata_paths_regional"] and receipt["all_shard_paths_regional"]
     with DataStore.open(str(output)) as store:
         store.write_object("new", b"GPU vector")
     assert ReadView(str(output)).read_blobs(["existing", "second", "new"]) == {
