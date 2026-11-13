@@ -70,10 +70,15 @@ assessment page shows the curation associated with its selected grade.
 
 **By source** lists individual sources with their catalog, converted example
 count, training/evaluation use, current sampled quality, any independent QC the
-pinned release performed, and the curriculum domain
+pinned release performed, whether the source is Daytona safe, and the curriculum domain
 with the most mapped examples. Search names, datasets or tags; filter by catalog,
 use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
 includes the filtered rows in the displayed order.
+
+**Daytona safe** marks sources whose execution needs at most ten unique Daytona
+snapshots. Every non-agentic source is safe because it never provisions a
+sandbox; an agentic source shows a dash until its unique snapshot count is
+assessed against that budget.
 
 Example counts describe successfully converted tasks before curation admission.
 A dash means no processed examples from that source are in the currently
@@ -145,7 +150,9 @@ Publication updates selected sources and preserves all other production entries,
 including their pinned declarations. Use `--source` to grade only new or changed
 sources; the other sources' assessments carry forward without executing their
 pipelines. Metadata-only edits to names, tags or URLs
-therefore reach production when that source is selected. Removing a declaration
+therefore reach production when that source is selected. Inventory-only sources
+have no pipeline to select, so every publication takes their declarations,
+including `independent_qc`, from the current code. Removing a declaration
 from code does not retire its production entry. Older attempts are ignored per
 source, so an out-of-order campaign can still publish its other sources. Failed
 attempts under a changed assessment key clear the old grade; exact-key retries
@@ -273,3 +280,4 @@ with Ctrl-C when finished.
 Historical reviews and raw artifacts remain in their original Postgres tables.
 They do not affect current grades. Atlas retains an archive reader; the previous
 manual review, source-verification and difficulty workflows are removed.
+

@@ -4,7 +4,7 @@ name: open-athena-Grug-67B-A2B-BFCL-Recovery
 location: open-athena/Grug-67B-A2B-BFCL-Recovery
 revision: 850a32627724d274004241dd10f6cb46fd3f6f83
 apply_chat_template: true
-evalchemy_num_concurrent: 128
+evaluation_num_concurrent: 128
 resource_hint:
   gpu:
     H100: 8

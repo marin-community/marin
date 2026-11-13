@@ -1,19 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+import json
 import math
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
 import optax
 import pytest
-from jax.sharding import AxisType, Mesh
+from jax.sharding import AxisType, Mesh, reshard
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample
+from levanter.testing.devices import use_test_devices
 
 from experiments.grug.moe_hero_ep import model
+from experiments.grug.moe_hero_ep.expert_placement import (
+    ExpertPlacement,
+    balanced_expert_order,
+    projected_drop_fraction,
+    source_order_loads,
+)
 from experiments.grug.moe_hero_ep.launch_hero_sft import (
     SFT_COMPONENT_PREFIX,
     SFT_POOLED_COMPONENT,
@@ -27,7 +37,9 @@ from experiments.grug.moe_hero_ep.train import (
     RouterBiasMode,
     SpecialTokenInit,
     _make_train_step,
+    _place_restored_experts,
     initial_state,
+    permute_experts,
     reseed_special_token_columns,
     scale_special_token_updates,
 )
@@ -192,3 +204,226 @@ def test_frozen_router_bias_keeps_the_restored_betas(mode):
         np.testing.assert_allclose(bias, expected_bias, rtol=0, atol=0)
     else:
         assert not np.array_equal(betas, restored_betas)
+
+
+def _placement(order) -> ExpertPlacement:
+    return ExpertPlacement(
+        source_checkpoint="s3://bucket/step-0",
+        expert_axis_size=1,
+        block_experts=len(order[0]),
+        order=tuple(tuple(layer) for layer in order),
+        loads_from="test",
+    )
+
+
+def test_balanced_order_spreads_hot_experts_so_capacity_stops_dropping():
+    # Two hot experts share the first block in expert-id order and overflow it.
+    loads = np.array([[10.0, 9.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.5]])
+    identity = np.arange(8)[None, :]
+
+    order = balanced_expert_order(loads, block_experts=4)
+
+    assert sorted(order[0]) == list(range(8))
+    assert projected_drop_fraction(loads, identity, block_experts=4, capacity_factor=1.5) > 0.1
+    assert projected_drop_fraction(loads, order, block_experts=4, capacity_factor=1.5) == 0.0
+
+
+def test_loads_logged_by_a_placed_run_map_back_to_source_order():
+    placement = _placement([[2, 0, 3, 1], [1, 3, 0, 2]])
+    source_loads = np.array([[4.0, 3.0, 2.0, 1.0], [8.0, 6.0, 7.0, 5.0]])
+    # A placed run logs slot i for the source expert order[layer][i].
+    logged = np.take_along_axis(source_loads, np.asarray(placement.order), axis=1)
+
+    np.testing.assert_array_equal(
+        source_order_loads(logged, placement, source_checkpoint=placement.source_checkpoint), source_loads
+    )
+    with pytest.raises(ValueError, match="placed relative to"):
+        source_order_loads(logged, placement, source_checkpoint="s3://bucket/other")
+
+
+def _trained_state(config, optimizer, mesh):
+    """A restored-looking state: nonzero optimizer moments and QB betas, as an SFT start checkpoint has."""
+    with jax.set_mesh(mesh):
+        state = initial_state(config, optimizer=optimizer, mp=_FP32, key=jax.random.key(0), ema_beta=None)
+        keys = iter(jax.random.split(jax.random.key(1), len(jax.tree.leaves(state.opt_state)) + 1))
+
+        def noise_like(x):
+            # Positive, so Adam's second moment stays valid.
+            noise = jax.random.uniform(next(keys), x.shape, x.dtype, minval=0.5, maxval=1.5)
+            return reshard(noise, jax.typeof(x).sharding.spec)
+
+        moments = jax.tree.map(lambda x: noise_like(x) if jnp.issubdtype(x.dtype, jnp.floating) else x, state.opt_state)
+        betas = noise_like(state.pending_qb_betas)
+        return state.__class__(**{**vars(state), "opt_state": moments, "pending_qb_betas": betas})
+
+
+def _assert_trees_close(a, b):
+    for (path, x), y in zip(jax.tree_util.tree_leaves_with_path(a), jax.tree.leaves(b), strict=True):
+        np.testing.assert_allclose(
+            np.asarray(x), np.asarray(y), rtol=1e-5, atol=1e-6, err_msg=jax.tree_util.keystr(path)
+        )
+
+
+def _expert_sharded_mesh(devices):
+    return Mesh(
+        np.asarray(devices).reshape(1, 2, 2, 1, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+
+
+@pytest.mark.multidevice
+def test_expert_placement_commutes_with_a_training_step():
+    # Placing then stepping equals stepping then placing only if every expert-indexed parameter and
+    # optimizer moment moved together; a missed leaf pairs an expert with another expert's state.
+    config = _tiny_config()
+    placement = _placement([[2, 0, 3, 1], [1, 3, 0, 2]])
+    tokens = jnp.asarray(np.random.default_rng(0).integers(0, config.vocab_size, size=(4, 8), dtype=np.int32))
+    batch = GrugLmExample(tokens=tokens, loss_weight=jnp.ones((4, 8), jnp.float32).at[:, -1].set(0.0))
+    optimizer = _optimizer()
+    step = _make_train_step(optimizer, _FP32, z_loss_weight=1e-4, ema_beta=None, router_bias_mode=RouterBiasMode.FROZEN)
+
+    with use_test_devices(4) as devices:
+        mesh = _expert_sharded_mesh(devices)
+        with jax.set_mesh(mesh):
+            placed_first, placed_metrics, _ = step(
+                permute_experts(_trained_state(config, optimizer, mesh), placement), batch
+            )
+            stepped, metrics, _ = step(_trained_state(config, optimizer, mesh), batch)
+            stepped_then_placed = permute_experts(stepped, placement)
+        np.testing.assert_allclose(float(placed_metrics["train/loss"]), float(metrics["train/loss"]), rtol=1e-6)
+        _assert_trees_close(placed_first.params, stepped_then_placed.params)
+        _assert_trees_close(placed_first.opt_state, stepped_then_placed.opt_state)
+        np.testing.assert_array_equal(
+            np.asarray(placed_first.pending_qb_betas), np.asarray(stepped_then_placed.pending_qb_betas)
+        )
+
+
+@pytest.mark.multidevice
+def test_expert_placement_moves_expert_sharded_leaves():
+    config = _tiny_config()
+    placement = _placement([[3, 2, 1, 0], [1, 0, 3, 2]])
+    order = np.asarray(placement.order)
+    with use_test_devices(4) as devices:
+        mesh = _expert_sharded_mesh(devices)
+        state = _trained_state(config, _optimizer(), mesh)
+        mlp = state.params.stacked_blocks.stacked.mlp
+        before = {
+            "w_gate": np.asarray(mlp.expert_mlp.w_gate),
+            "router": np.asarray(mlp.router),
+            "bias": np.asarray(mlp.router_bias),
+        }
+        with jax.set_mesh(mesh):
+            placed = permute_experts(state, placement).params.stacked_blocks.stacked.mlp
+        after = {
+            "w_gate": np.asarray(placed.expert_mlp.w_gate),
+            "router": np.asarray(placed.router),
+            "bias": np.asarray(placed.router_bias),
+        }
+
+    layers = np.arange(order.shape[0])[:, None]
+    np.testing.assert_array_equal(after["w_gate"], before["w_gate"][layers, order])
+    np.testing.assert_array_equal(after["bias"], before["bias"][layers, order])
+    expected_router = np.stack([router[:, o] for router, o in zip(before["router"], order, strict=True)])
+    np.testing.assert_array_equal(after["router"], expected_router)
+
+
+def test_expert_placement_round_trips_through_its_inverse():
+    config = _tiny_config()
+    placement = _placement([[2, 0, 3, 1], [1, 3, 0, 2]])
+    mesh = _one_device_mesh()
+    original = _trained_state(config, optax.adam(1e-2), mesh)
+    # Placement donates the leaves it moves, so compare against host copies.
+    expected = jax.tree.map(np.asarray, original)
+    with jax.set_mesh(mesh):
+        placed = permute_experts(original, placement)
+        moved = np.asarray(placed.params.stacked_blocks.stacked.mlp.expert_mlp.w_gate)
+        restored = permute_experts(placed, placement.inverse())
+
+    assert not np.array_equal(moved, expected.params.stacked_blocks.stacked.mlp.expert_mlp.w_gate)
+    for (path, want), have in zip(jax.tree_util.tree_leaves_with_path(expected), jax.tree.leaves(restored), strict=True):
+        np.testing.assert_array_equal(np.asarray(have), want, err_msg=jax.tree_util.keystr(path))
+
+
+def test_expert_placement_moves_host_offloaded_optimizer_state():
+    # The hero offloads optimizer state to pinned host memory; placement must move those leaves too.
+    config = _tiny_config()
+    placement = _placement([[2, 0, 3, 1], [1, 3, 0, 2]])
+    order = np.asarray(placement.order)
+    mesh = _one_device_mesh()
+    with jax.set_mesh(mesh):
+        # The trainer builds its state under jit, where the offload's memory-kind moves can trace.
+        state = jax.jit(
+            lambda key: initial_state(
+                config, optimizer=_optimizer(), mp=_FP32, key=key, ema_beta=None, offload_opt_state=True
+            )
+        )(jax.random.key(0))
+        # Fresh moments are zero, and permuted zeros equal zeros, so give the host leaves distinct values.
+        rng = np.random.default_rng(1)
+
+        def nonzero_on_host(leaf):
+            if not (eqx.is_array(leaf) and leaf.sharding.memory_kind == "pinned_host"):
+                return leaf
+            return jax.device_put(rng.uniform(0.5, 1.5, leaf.shape).astype(leaf.dtype), leaf.sharding)
+
+        state = eqx.tree_at(lambda s: s.opt_state, state, jax.tree.map(nonzero_on_host, state.opt_state))
+        host_leaves = {
+            jax.tree_util.keystr(path): np.asarray(leaf)
+            for path, leaf in jax.tree_util.tree_leaves_with_path(state.opt_state)
+            if eqx.is_array(leaf) and leaf.sharding.memory_kind == "pinned_host"
+        }
+        placed = permute_experts(state, placement)
+
+    gate_moments = 0
+    layers = np.arange(order.shape[0])[:, None]
+    for path, leaf in jax.tree_util.tree_leaves_with_path(placed.opt_state):
+        key = jax.tree_util.keystr(path)
+        if key not in host_leaves:
+            continue
+        assert leaf.sharding.memory_kind == "pinned_host"
+        if key.endswith(".expert_mlp.w_gate"):
+            gate_moments += 1
+            np.testing.assert_array_equal(np.asarray(leaf), host_leaves[key][layers, order])
+    assert gate_moments >= 1
+
+
+def _write_checkpoint_metadata(path, placement: ExpertPlacement | None) -> str:
+    path.mkdir(parents=True)
+    recorded = {} if placement is None else placement.checkpoint_metadata()
+    (path / "metadata.json").write_text(json.dumps({"step": 0, "timestamp": "2026-11-09T00:00:00", **recorded}))
+    return str(path)
+
+
+def test_restore_places_only_the_source_and_trusts_only_a_matching_record(tmp_path):
+    config = _tiny_config()
+    mesh = _one_device_mesh()
+    source = str(tmp_path / "source")
+    placement = dataclasses.replace(_placement([[2, 0, 3, 1], [1, 3, 0, 2]]), source_checkpoint=source)
+    other = dataclasses.replace(placement, order=((0, 1, 2, 3), (0, 1, 2, 3)))
+    _write_checkpoint_metadata(tmp_path / "source", None)
+    placed_save = _write_checkpoint_metadata(tmp_path / "placed" / "step-5", placement)
+    unrecorded_save = _write_checkpoint_metadata(tmp_path / "unrecorded" / "step-5", None)
+    other_save = _write_checkpoint_metadata(tmp_path / "other" / "step-5", other)
+
+    def gate(state):
+        return np.asarray(state.params.stacked_blocks.stacked.mlp.expert_mlp.w_gate)
+
+    with jax.set_mesh(mesh):
+        state = _trained_state(config, _optimizer(), mesh)
+        before = gate(state)
+        layers = np.arange(2)[:, None]
+        np.testing.assert_array_equal(
+            gate(_place_restored_experts(state, placement, loaded_checkpoint=source)),
+            before[layers, np.asarray(placement.order)],
+        )
+        state = _trained_state(config, _optimizer(), mesh)
+        np.testing.assert_array_equal(
+            gate(_place_restored_experts(state, placement, loaded_checkpoint=placed_save)), before
+        )
+        np.testing.assert_array_equal(gate(_place_restored_experts(state, None, loaded_checkpoint=source)), before)
+        with pytest.raises(ValueError, match="records no expert placement"):
+            _place_restored_experts(state, placement, loaded_checkpoint=unrecorded_save)
+        with pytest.raises(ValueError, match=f"this run uses expert placement {placement.fingerprint}"):
+            _place_restored_experts(state, placement, loaded_checkpoint=other_save)
+        with pytest.raises(ValueError, match="this run uses no expert placement"):
+            _place_restored_experts(state, None, loaded_checkpoint=placed_save)

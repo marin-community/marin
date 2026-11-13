@@ -49,6 +49,20 @@ MRCR_SAMPLE_METRIC = "accuracy"
 PASS_AT_ONE_METRICS = frozenset({"pass@1", "pass_at_1", "input_pass@1", "output_pass@1"})
 
 
+_CANONICAL_METRIC_NAMES = {
+    "acc": "accuracy",
+    "accuracy_avg": "accuracy",
+    "em": "accuracy",
+    "exact_match": "accuracy",
+    "exact-match": "accuracy",
+    "acc_norm": "normalized_accuracy",
+    "acc_norm_nospace": "normalized_accuracy",
+    "pass@1": "pass_at_1",
+    "mean_reward": "reward",
+}
+_CODE_BENCHMARKS = frozenset({"humaneval", "humaneval-10shot", "humanevalplus", "mbppplus", "cruxeval"})
+
+
 def primary_filter(filters: Iterable[str]) -> str | None:
     """Pick the extraction filter Evaldash should show by default."""
     names = {name for name in filters if name}
@@ -65,10 +79,27 @@ def base_metric(name: str) -> str:
     return name.split(",", 1)[0]
 
 
+def canonical_metric_name(name: str, benchmark: str) -> str:
+    """Normalize historical and native score names without changing their values.
+
+    Extraction filters remain available in the raw result. Single-attempt code pass rates and
+    MRCR's per-example mean use the native accuracy spelling; their metric kinds stay distinct.
+    """
+    metric = base_metric(name)
+    metric = _CANONICAL_METRIC_NAMES.get(metric, metric)
+    if benchmark in _CODE_BENCHMARKS and metric == "pass_at_1":
+        return "accuracy"
+    if benchmark == "mrcr" and metric == "mrcr_accuracy":
+        return "accuracy"
+    return metric
+
+
 def declared_metric(metrics: Mapping[str, float], declared: str | None) -> tuple[str, float] | None:
-    """Pick a declared base metric, applying the standard extraction-filter priority."""
+    """Resolve an exact filtered metric, or a base name under extraction-filter priority."""
     if declared is None:
         return primary_metric(metrics)
+    if "," in declared:
+        return (declared, metrics[declared]) if declared in metrics else None
     candidates = {name: value for name, value in metrics.items() if base_metric(name) == declared}
     for metric_filter in FILTER_PRIORITY:
         filtered = sorted(name for name in candidates if name.endswith(f",{metric_filter}"))
@@ -88,6 +119,8 @@ def declared_sample_metric(metrics: Mapping[str, float], declared: str | None) -
         return picked
     if declared == MRCR_RUN_METRIC:
         return declared_metric(metrics, MRCR_SAMPLE_METRIC)
+    if declared.endswith(REPEAT_MEAN_SUFFIX):
+        return declared_metric(metrics, declared.removesuffix(REPEAT_MEAN_SUFFIX))
     if declared in PASS_AT_ONE_METRICS:
         return declared_metric(metrics, "pass_rate")
     return None

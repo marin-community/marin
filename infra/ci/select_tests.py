@@ -44,6 +44,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "skyrlrecipe",
     "verifyit",
     "deploy",
     "iac",
@@ -101,6 +102,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "skyrlrecipe": "marin-skyrlrecipe",
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
@@ -183,6 +185,7 @@ DEFAULT_LEG_TIMEOUT = 15
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "skyrl-wheel": (
+        "lib/skyrlrecipe/",
         "vendor/skyrl/",
         "vendor/harbor/",
         "lib/finelog/",
@@ -196,24 +199,22 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),
-    "evalchemy-unit": (
-        "vendor/evalchemy/",
-        "lib/finestore/",
-        "lib/rigging/",
-        "lib/marin/src/marin/evaluation/evalchemy/",
-        "experiments/evaluation/",
-        "infra/ci/select_tests.py",
-        ".github/workflows/unified-unit.yaml",
-        *DEPENDENCY_MANIFESTS,
-    ),
     "harbor-unit": (
         "vendor/harbor/",
         "lib/shellbox/",
         "lib/finestore/",
         "lib/rigging/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
         "lib/marin/src/marin/evaluation/harbor/",
-        "experiments/evaluation/images/tau3/",
+        "experiments/post_training/task_curation/calibforge_rebuild.py",
+        "experiments/post_training/task_curation/calibforge_fixtures.py",
+        "experiments/post_training/task_curation/daytona_identity.py",
+        "experiments/post_training/task_curation/task_tars.py",
         "experiments/post_training/task_curation/harbor_hub.py",
+        "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
+        "experiments/post_training/task_curation/tests/test_daytona_identity.py",
+        "experiments/post_training/task_curation/tests/task_tar_fixtures.py",
         "experiments/post_training/task_curation/tests/test_harbor_hub.py",
         "infra/ci/select_tests.py",
         "infra/ci/run_harbor_tests.py",
@@ -763,6 +764,12 @@ def classify(
     forced: set[str] = set()
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
+
+    launch_census = "tests/rl/test_rl_launch_documents.py"
+    if (repo_root / launch_census).is_file() and any(
+        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
+    ):
+        direct_tests["marin"].append(launch_census)
 
     for filepath in changed_files:
         if filepath in broad_triggers:

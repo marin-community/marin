@@ -219,6 +219,16 @@ def test_router_never_publishes_an_endpoint_with_an_unavailable_worker(router_wo
         (("--data-parallel-size", "2", "--data-parallel-size=4"), 4),
         pytest.param(("--data-parallel-size", "2", "-dp", "4"), 4, id="short-alias"),
         pytest.param(("--data_parallel_size=4", "--data-parallel-size-local", "2"), 4, id="underscore-alias"),
+        pytest.param(
+            ("--data-parallel-size=4", "--data-parallel-size-local=4", "--data-parallel-start-rank=0"),
+            4,
+            id="all-local-internal-balancer",
+        ),
+        pytest.param(
+            ("--data-parallel-size=4", "--data-parallel-external-lb", "--no-data-parallel-external-lb"),
+            4,
+            id="explicit-internal-balancer",
+        ),
     ],
 )
 def test_local_inference_owns_router_and_worker_lifetimes_with_separate_metrics(
@@ -259,13 +269,28 @@ def test_environment_routes_native_ranks_without_a_backend_or_second_topology_se
         _assert_native_rank_affinity(environment.server_url, 4)
 
 
-@pytest.mark.parametrize("load_balancer", ["--data-parallel-external-lb", "--data-parallel-hybrid-lb"])
-def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_global_ranks(load_balancer):
+@pytest.mark.parametrize(
+    "native_args",
+    [
+        ("--data-parallel-external-lb",),
+        ("--data-parallel-hybrid-lb",),
+        ("--data_parallel_external_lb",),
+        ("-dpe",),
+        ("-dph",),
+        ("--data-parallel-multi-port-external-lb",),
+        ("-dpm",),
+        ("--data-parallel-rank=0",),
+        ("-dpn", "0"),
+        ("--data-parallel-size-local=2", "--data-parallel-start-rank=0"),
+        ("-dpl", "2", "-dpr", "0"),
+    ],
+)
+def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_global_ranks(native_args):
     with pytest.raises(ValueError):
         with VllmEnvironment(
             InferenceModelConfig("fake", None, {}),
             launcher=FakeVllmLauncher("serve"),
-            extra_args=[load_balancer],
+            extra_args=["--data-parallel-size", "4", *native_args],
             router=VllmRouterConfig(),
         ):
             pytest.fail("published a router without global native rank dispatch")

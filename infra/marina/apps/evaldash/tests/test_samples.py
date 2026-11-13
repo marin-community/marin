@@ -5,6 +5,7 @@ import json
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from evaldash.samples import fetch_artifact, fetch_samples, list_sample_tasks
 from finestore.eval import (
     SAMPLES_MERGE_KEY,
@@ -63,7 +64,8 @@ def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
     assert [row.doc_id for row in page.rows] == ["incorrect"]
 
 
-def test_sample_reader_uses_the_declared_primary_metric(tmp_path) -> None:
+@pytest.mark.parametrize("declared", ["f1", "f1,none"])
+def test_sample_reader_uses_the_declared_primary_metric(tmp_path, declared) -> None:
     fs, root = url_to_fs(str(tmp_path))
     sample = EvalSample(
         task="drop",
@@ -74,7 +76,7 @@ def test_sample_reader_uses_the_declared_primary_metric(tmp_path) -> None:
     )
     write_sample_parquet(fs, f"{root}/samples_drop_20260719.parquet", [sample])
 
-    page = fetch_samples(str(tmp_path), "drop", offset=0, limit=1, correct="all", primary_metric_name="f1")
+    page = fetch_samples(str(tmp_path), "drop", offset=0, limit=1, correct="all", primary_metric_name=declared)
 
     assert page.primary_metric == "f1,none"
 
@@ -544,6 +546,29 @@ def test_continuous_publication_samples_keep_scores_without_binary_verdicts(tmp_
     assert page.counts.model_dump() == {"all": 2, "correct": None, "incorrect": None, "ungraded": 0}
     assert [row.grading.score for row in page.rows] == [0.0, 1.0]
     assert all(row.correct is None and row.grading.passed is None for row in page.rows)
+
+
+def test_repeat_aggregate_sample_metric_selects_trial_accuracy(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    stored = [
+        EvalSample(task="aime24", doc_id=str(i), kind=SampleKind.GENERATION, metrics={"accuracy": score})
+        for i, score in enumerate((1.0, 0.0))
+    ]
+    write_sample_parquet(fs, f"{root}/samples_aime24_20261105.parquet", stored)
+
+    page = fetch_samples(
+        str(tmp_path),
+        "aime24",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="accuracy_avg",
+        primary_metric_kind=MetricKind.BINARY,
+    )
+
+    assert page.available is True
+    assert page.primary_metric == "accuracy"
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
 
 
 def test_missing_selected_sample_metric_is_reported_without_using_saved_verdict(tmp_path):
