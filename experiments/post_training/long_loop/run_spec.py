@@ -124,10 +124,6 @@ def resolve_spec(
         raise ValueError("Legacy SFT requires --i-know-i-am-using-a-deprecated-config-format")
     result["acknowledge_deprecated_config_format"] = acknowledge_deprecated_config_format
     bind_stage_timeouts(result)
-    result["gpu_peaks"] = allocation_peaks(result)
-    result["experimental_controls"] = experimental_controls(
-        result, acknowledge=acknowledge_experimental_controls, reason=experimental_controls_reason
-    )
     for stage in ("rl", "evaluation"):
         validate_stage_config(result[stage]["config"], stage)
         for field in ("rendezvous_timeout", "cluster_join_timeout", "driver_liveness_timeout"):
@@ -180,6 +176,9 @@ def resolve_spec(
     # Dataset manifests are the sole data authority, independent of stage files.
     result["sft"]["data"] = copy.deepcopy(result["datasets"]["sft"]["data"])
     result["gpu_peaks"] = allocation_peaks(result)
+    result["experimental_controls"] = experimental_controls(
+        result, acknowledge=acknowledge_experimental_controls, reason=experimental_controls_reason
+    )
     result["resolved_sha256"] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
     return result
 

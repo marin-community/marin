@@ -47,7 +47,7 @@ smoke_overrides:
   sft_steps: 5
   rl_steps: 5
   eval_tasks_per_benchmark: 1
-  eval_replicas: 1
+  eval_replicas: 16
 storage:
   output_prefix: s3://marin-us-east-08a/marin/users/benfeuer/long-loop
   temporary_prefix: s3://marin-us-east-08a/tmp

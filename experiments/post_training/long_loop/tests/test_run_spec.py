@@ -351,3 +351,22 @@ def test_changed_stage_controls_require_acknowledgement_and_archive_the_decision
     )
     config = terminal.build_config(replace(context, is_fingerprint=True))
     assert config["resolved_spec"]["experimental_controls"] == receipt
+
+
+def test_smoke_cannot_bypass_allocation_controls_by_scaling_eval(tmp_path):
+    root = tmp_path / "specs"
+    shutil.copytree(SPEC.parent, root)
+    path = root / "round1.yaml"
+    document = yaml.safe_load(path.read_text())
+    document["smoke_overrides"]["eval_replicas"] = 1
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match="i-know-i-am-breaking-experimental-controls"):
+        resolve_spec(path, smoke=True)
+    resolved = resolve_spec(
+        path,
+        smoke=True,
+        acknowledge_experimental_controls=True,
+        experimental_controls_reason="Deliberate reduced eval allocation",
+    )
+    assert resolved["gpu_peaks"]["evaluation"] == 16
+    assert resolved["experimental_controls"]["changes"] == [{"control": "gpus/evaluation", "default": 136, "actual": 16}]
