@@ -103,7 +103,7 @@ def task_blockers(task: TaskSpec) -> set[str]:
         blockers.add("requires_calibration_solution_and_empty_liveness")
     boundary = assess_grading_environment(task)
     if boundary.status != "matched":
-        blockers.add("grading_environment_mismatch")
+        blockers.add(f"grading_environment_{boundary.status}")
     return blockers
 
 

@@ -15,7 +15,7 @@ from marin.execution.artifact import ArtifactRecord, result_type_name, write_rec
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import NoGrader, Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
@@ -174,3 +174,11 @@ def test_inventory_accounts_for_frozen_drops_and_rejects_changed_source_bytes(tm
     pq.write_table(pa.Table.from_pylist(rows), shard)
     with pytest.raises(ValueError, match="Task or runtime differs from prepared contract"):
         inventory_source(plan, str(tmp_path / "changed-inventory"), inputs.path)
+
+
+def test_missing_grader_is_unavailable_without_claiming_a_boundary_mismatch():
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("preference")["lowered_task_spec"])["task"])
+    task = task.model_copy(update={"grader": NoGrader(reason="Preference pair has no executable grader")})
+    blockers = task_blockers(task)
+    assert "grading_environment_unavailable" in blockers
+    assert "grading_environment_mismatch" not in blockers
