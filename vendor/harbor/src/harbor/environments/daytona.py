@@ -32,7 +32,6 @@ from harbor.environments.model_relay import (
 )
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
-from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.environment import (
     DaytonaTaskEnvironment,
     DaytonaTaskEnvironmentSpec,
@@ -108,13 +107,12 @@ class DaytonaEnvironment(BaseEnvironment):
                 "host_capabilities", HostCapabilities()
             )
             connection = capabilities.daytona
-            if connection is None:
-                raise ValueError("Daytona requires an explicit host connection")
-            client_factory = DaytonaConnection(
-                api_key=connection.api_key or "",
-                api_url=connection.api_url,
-                target=connection.target or "",
-            ).client_factory()
+            # An absent connection keeps the environment constructible for
+            # callers that only inspect the task definition, such as snapshot
+            # preflight; the factory then fails when a sandbox is requested.
+            client_factory = (
+                connection.client_factory() if connection is not None else None
+            )
         self.factory = DaytonaMachineFactory(
             client_factory,
             ttl_minutes=ttl_minutes,

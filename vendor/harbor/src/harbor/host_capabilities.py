@@ -3,6 +3,8 @@
 
 """Resolve host credentials and project model access into guest environments."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -127,13 +129,6 @@ def task_model_environment(model: str) -> dict[str, str]:
 
 
 @dataclass(frozen=True)
-class DaytonaConnection:
-    api_key: str | None = field(repr=False)
-    api_url: str
-    target: str | None
-
-
-@dataclass(frozen=True)
 class HostCapabilities:
     """Host authority passed outside serialized job and task configuration."""
 
@@ -155,6 +150,11 @@ def host_capabilities_from_environment(
     model_authentication: Mapping[str, str],
 ) -> HostCapabilities:
     """Resolve backend and model authority from one executable-owned snapshot."""
+    # Shellbox is an optional Harbor extra; DaytonaConnection travels in its own
+    # module so a Harbor install without the Daytona extra can still import this
+    # core capability type.
+    from shellbox.backends.daytona.connection import DaytonaConnection
+
     return HostCapabilities(
         daytona=DaytonaConnection(
             api_key=environment.get("DAYTONA_API_KEY"),

@@ -483,7 +483,7 @@ class DaytonaMachineFactory:
 
     def __init__(
         self,
-        client_factory: Callable[[], AsyncDaytona] = AsyncDaytona,
+        client_factory: Callable[[], AsyncDaytona] | None = AsyncDaytona,
         *,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
@@ -493,6 +493,12 @@ class DaytonaMachineFactory:
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
         self.network_policy = network_policy
+
+    def _clients(self) -> Callable[[], AsyncDaytona]:
+        """Resolve the configured client factory for one provider session."""
+        if self.client_factory is None:
+            raise ValueError("Daytona requires an explicit host connection")
+        return self.client_factory
 
     def _check_spec(self, spec: MachineSpec) -> DockerfileSource | RegistryImage:
         source: DockerfileSource | RegistryImage
@@ -531,8 +537,9 @@ class DaytonaMachineFactory:
 
         Pin registry sources by digest to reuse immutable image content.
         """
+        client_factory = self._clients()
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
-        async with self.client_factory() as client, asyncio.timeout(timeout):
+        async with client_factory() as client, asyncio.timeout(timeout):
             return await self._prepare(client, spec)
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
@@ -542,7 +549,7 @@ class DaytonaMachineFactory:
             else self.network_policy.parameters()
         )
         async with AsyncExitStack() as lifetime:
-            client = await lifetime.enter_async_context(self.client_factory())
+            client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with asyncio.timeout(timeout):
                 snapshot = await self._prepare(client, spec)

@@ -35,7 +35,6 @@ from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
 from harbor.environments.resource_policies import validate_local_resources  # pyrefly: ignore[missing-import]
 from harbor.host_capabilities import (  # pyrefly: ignore[missing-import]
     CANDIDATE_MODEL_RELAY_PORT,
-    DaytonaConnection,
     HostCapabilities,
     endpoint_authentication,
     host_capabilities_from_environment,
@@ -725,13 +724,6 @@ async def _snapshot_specs(config: JobConfig) -> list[DaytonaTaskEnvironmentSpec]
     """Resolve a job's effective Daytona inputs without allocating sandboxes."""
     if config.environment.type is not EnvironmentType.DAYTONA:
         raise ValueError("Snapshot specs require the daytona environment")
-    static_capabilities = HostCapabilities(
-        daytona=DaytonaConnection(
-            api_key="snapshot-preflight",
-            api_url="https://snapshot.invalid/api",
-            target="snapshot-preflight",
-        )
-    )
     specs: dict[str, DaytonaTaskEnvironmentSpec] = {}
     with tempfile.TemporaryDirectory(prefix="marin-harbor-snapshot-specs-") as jobs_dir:
         trial_paths = TrialPaths(Path(jobs_dir) / "trial")
@@ -747,7 +739,9 @@ async def _snapshot_specs(config: JobConfig) -> list[DaytonaTaskEnvironmentSpec]
                 session_id="snapshot-specs",
                 trial_paths=trial_paths,
                 task_env_config=task.config.environment,
-                host_capabilities=static_capabilities,
+                # Preflight never allocates a sandbox, so it needs no provider
+                # credentials; the adapter builds its client lazily.
+                host_capabilities=HostCapabilities(),
                 guest_environment={},
             )
             assert isinstance(environment, DaytonaEnvironment)

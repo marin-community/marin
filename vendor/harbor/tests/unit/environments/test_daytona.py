@@ -21,9 +21,9 @@ from openai import (
 
 from harbor.host_capabilities import (
     HostCapabilities,
-    DaytonaConnection,
     DAYTONA_API_URL,
 )
+from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
