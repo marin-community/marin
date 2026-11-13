@@ -43,6 +43,7 @@ def clear_stale_full_content_result[ConfigT: CatalogConfig](source: RlDataSource
             quality_result=None,
             independent_qc=None,
             quality_result_finalization=None,
+            quality_result_waiver=None,
             full_content_result_binding=None,
         ),
     )
@@ -65,6 +66,7 @@ def bind_full_content_result[ConfigT: CatalogConfig](
             source.info,
             quality_result=result,
             quality_result_finalization=binding.finalization,
+            quality_result_waiver=binding.waiver,
             full_content_result_binding=binding,
             independent_qc=IndependentQC(
                 verdict=result.verdict,

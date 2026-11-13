@@ -12,6 +12,7 @@ from finestore.rl.curation import (
     AssessmentPopulation,
     CurationSummary,
     JudgmentStatus,
+    QualityResultFinalization,
     SourceDeclaration,
     SourceQualityResult,
     Verdict,
@@ -78,15 +79,34 @@ def review_completeness(
         return None
     return {
         **asdict(completeness),
-        "provisional": completeness.provisional if declaration.quality_result_finalization is None else False,
+        "provisional": (
+            completeness.provisional
+            and not (
+                declaration.quality_result_finalization is QualityResultFinalization.COMPLETE
+                or (
+                    declaration.quality_result_finalization is QualityResultFinalization.ACCEPTED_INCOMPLETE
+                    and declaration.quality_result_waiver is not None
+                )
+            )
+        ),
     }
 
 
 def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Quality:
-    """Reserve FULL for a separately verified complete content-review assembly."""
+    """Report whole-source review coverage, including explicitly accepted FULL waivers."""
     review = declaration.get("quality_result")
     qc = declaration.get("independent_qc")
     retained = declaration.get("within_source_dedup", {}).get("unique_count")
+    if (
+        retained
+        and qc is not None
+        and review is not None
+        and declaration.get("quality_result_finalization") == QualityResultFinalization.ACCEPTED_INCOMPLETE
+        and declaration.get("quality_result_waiver") is not None
+        and qc["reviewed"] == review["reviewed"] + review.get("uncertain_count", 0)
+        and qc["reviewed"] + review.get("unavailable_count", 0) == retained
+    ):
+        return Quality.FULL
     if (
         retained
         and qc is not None

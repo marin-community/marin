@@ -8,7 +8,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
-from finestore.rl.curation import ActorCensusInput, QualityResultFinalization
+from finestore.rl.curation import ActorCensusInput, ContentEvidenceReference, QualityResultFinalization
 from marin.execution.artifact import RECORD_FILENAME
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -20,7 +20,6 @@ from taskcompendium.pipeline.reviewer_spec import ReviewerSpec
 
 from experiments.post_training.task_curation.census_binding import receipt_from_census
 from experiments.post_training.task_curation.full_content_results import (
-    ContentEvidenceReference,
     FullContentResultBinding,
 )
 from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
@@ -110,6 +109,20 @@ def full_content_result_binding(
             review.records_sha256,
         ):
             raise ValueError("Finalization waiver belongs to another whole-source review")
+        unreviewed = {row.task_id for row in observations if row.status is not ReviewStatus.REVIEWED}
+        waived = evidence["qc_unreviewed"]
+        if (
+            len(waived) != len(unreviewed)
+            or {row["task_id"] for row in waived} != unreviewed
+            or any(not row["reason"].strip() for row in waived)
+        ):
+            raise ValueError("Finalization waiver must enumerate every unreviewed task with its reason")
+        approved_result = evidence["result"]
+        if any(
+            approved_result[name] != getattr(review.result, name)
+            for name in ("reviewed", "issue_count", "uncertain_count", "unavailable_count")
+        ):
+            raise ValueError("Finalization waiver differs from the recorded Result and uncertainty counts")
     return FullContentResultBinding(
         source_id=review.source_id,
         input=actor_input,

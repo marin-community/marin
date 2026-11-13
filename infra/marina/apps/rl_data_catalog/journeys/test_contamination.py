@@ -14,7 +14,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(17)
+    expect(page.locator("#rows tr")).to_have_count(18)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -110,4 +110,27 @@ def test_pending_review_is_quick_without_a_result(journey: Journey, theme: str) 
     expect(page.locator("#labels")).to_contain_text("Result not assessed")
     expect(page.locator("#sections")).to_contain_text("SAMPLE review in progress")
     expect(page.locator("#sections")).not_to_contain_text("Required content review complete")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_whole_source_waiver_is_full_final_with_incomplete_evidence(journey: Journey, theme: str) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.locator("#show-all").check()
+    row = page.locator('tr[data-source-id="Marin:full-waiver"]')
+    expect(row.locator(".level")).to_have_text("FULL")
+    expect(row.locator(".result-provisional")).to_have_count(0)
+    row.locator(".source-name").click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    expect(page.locator("#sections")).to_contain_text("Final with accepted whole-source waiver")
+    coverage = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Content review coverage"))
+    expect(coverage).to_contain_text("Strict coverage complete")
+    expect(coverage).to_contain_text("false")
+    expect(coverage).to_contain_text("Unreviewed tasks")
+    expect(coverage).to_contain_text("1")
+    expect(coverage.locator('a[href="https://example.org/waiver-with-exact-reasons.json"]')).to_be_visible()
+    expect(coverage).to_contain_text("a" * 64)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

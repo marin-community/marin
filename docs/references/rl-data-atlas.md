@@ -87,12 +87,17 @@ not declared*. Edit the rules in the reference first, then the page text in
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
 curriculum area. The levels define required content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
-and FULL requires a complete review of the whole retained population. Execution qualification is recorded separately. Result uses the
+and FULL requires a review of the whole retained population. An explicitly accepted
+whole-source waiver also displays FULL when its pinned evidence accounts for every
+unreviewed task and reason; strict coverage remains false. Execution qualification is recorded separately. Result uses the
 inclusive issue-rate boundaries above.
 
 The loader records required and conclusive reviewed counts plus coverage
 completeness. Result is provisional if coverage is incomplete or any required
-observation remains unreviewed or uncertain. A completed SAMPLE review is final
+observation remains unreviewed or uncertain, unless a verified whole-source
+finalization accepts those observations with pinned waiver evidence. Its Result is
+final while Evidence retains the incomplete coverage, unreviewed count and exact
+reasons. A completed SAMPLE review is final
 for its sample; the Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
@@ -123,7 +128,7 @@ not describe residual overlap in the retained release or semantic decontaminatio
 The source table legend and Getting started guide define the same five states.
 Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
 Result from incomplete content review carries a provisional variant within its
-chip. Review progress and lower bounds appear only on the source Evidence page.
+chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
 
 **Daytona safe** measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;

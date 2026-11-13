@@ -3,15 +3,13 @@
 
 """Exact-input final content Results and their immutable evidence references."""
 
-from finestore.rl.curation import ActorCensusInput, QualityResultFinalization, SourceQualityResult
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-
-class ContentEvidenceReference(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    uri: str = Field(min_length=1)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+from finestore.rl.curation import (
+    ActorCensusInput,
+    ContentEvidenceReference,
+    QualityResultFinalization,
+    SourceQualityResult,
+)
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class FullContentResultBinding(BaseModel):
