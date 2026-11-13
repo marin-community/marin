@@ -29,19 +29,23 @@ from harbor.environments.model_relay import (
     verifier_model_access,
 )
 from harbor.environments.docker_translate import import_prepared_task
-from harbor.environments.resource_policies import validate_local_resources
+from harbor.environments.resource_policies import (
+    LocalExecutionRoute,
+    local_resource_capabilities,
+    validate_local_resources,
+)
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
-from shellbox.machine import Command, CommandSemantics
+from shellbox.machine import Command, CommandSemantics, Machine
 from shellbox.process_session import (
     acquire_owned,
     await_cleanup,
     finish_owned,
     own_cleanup,
 )
-from shellbox.task import Task
+from shellbox.task import Task, TaskFactory
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,8 @@ class LocalEnvironment(BaseEnvironment):
     def __init__(
         self,
         *args,
+        iris_cluster: str | None = None,
+        iris_pool: str | None = None,
         bwrap: str | None = None,
         umoci: str = "umoci",
         image_cache: str | None = None,
@@ -74,6 +80,13 @@ class LocalEnvironment(BaseEnvironment):
         candidate_model_name: str | None = None,
         **kwargs,
     ):
+        if iris_pool and not iris_cluster:
+            raise ValueError("iris_pool requires iris_cluster")
+        self.route = LocalExecutionRoute.IRIS_TASK if iris_cluster else LocalExecutionRoute.SHARED_WORKER
+        if iris_cluster and any((bwrap, image_cache, cgroup_parent, registry_authfile, signature_policy)):
+            raise ValueError("Iris LOCAL does not use worker bubblewrap, image-cache or cgroup settings")
+        if iris_cluster and (model_endpoint or candidate_model_endpoint):
+            raise ValueError("Iris LOCAL does not support process-session model relays")
         self.cgroup_parent = Path(cgroup_parent) if cgroup_parent is not None else None
         unknown = kwargs.keys() - BASE_ENVIRONMENT_ARGUMENTS
         if unknown:
@@ -84,7 +97,7 @@ class LocalEnvironment(BaseEnvironment):
             raise ValueError(
                 "Prepared sandbox does not accept driver environment variables"
             )
-        self.machine: LocalMachine | None = None
+        self.machine: Machine | None = None
         self.execution: Task | None = None
         self._relay = AsyncExitStack()
         self._stopping: asyncio.Task[None] | None = None
@@ -96,6 +109,13 @@ class LocalEnvironment(BaseEnvironment):
         self.candidate_model_endpoint = candidate_model_endpoint
         self.candidate_model_name = candidate_model_name
         super().__init__(*args, **kwargs)
+        self.factory: TaskFactory
+        if iris_cluster:
+            # This backend is optional; shared-worker LOCAL has no Iris dependency.
+            from shellbox.backends.iris.machine import IrisMachineFactory  # noqa: PLC0415
+
+            self.factory = IrisMachineFactory(cluster=iris_cluster, pool=iris_pool, job_ttl=int(ttl))
+            return
         self.factory = LocalMachineFactory(
             bwrap=Path(bwrap) if bwrap is not None else None,
             umoci=Path(umoci),
@@ -116,7 +136,7 @@ class LocalEnvironment(BaseEnvironment):
 
     @classmethod
     def resource_capabilities(cls) -> EnvironmentResourceCapabilities:
-        return EnvironmentResourceCapabilities(cpu_limit=True, memory_limit=True)
+        return local_resource_capabilities(LocalExecutionRoute.SHARED_WORKER)
 
     def _validate_definition(self) -> None:
         self._prepared_task = import_prepared_task(
@@ -125,6 +145,8 @@ class LocalEnvironment(BaseEnvironment):
             guest_environment=self.guest_environment,
             protected_values=self.host_capabilities.protected_values,
         )
+        if self.route is LocalExecutionRoute.IRIS_TASK and len(self._prepared_task.task.containers) != 1:
+            raise ValueError("Iris LOCAL requires exactly one sandbox per Iris task")
         paths = EnvironmentPaths()
         log_targets = {
             str(path)
@@ -140,6 +162,7 @@ class LocalEnvironment(BaseEnvironment):
             self.task_env_config,
             cpu_enforcement_policy=self._cpu_resource_mode,
             memory_enforcement_policy=self._memory_resource_mode,
+            route=self.route,
         )
 
     def _command_user(self, user: str | int | None) -> str:
@@ -191,13 +214,18 @@ class LocalEnvironment(BaseEnvironment):
         self._judge = judge
         self._stopping = None
         self.factory.check_environment(
-            _TRIAL_EXECUTION_REQUIREMENTS, task_spec.primary_container.machine
+            (
+                _TRIAL_EXECUTION_REQUIREMENTS
+                if self.route is LocalExecutionRoute.SHARED_WORKER
+                else _TrialExecutionRequirements(capabilities=())
+            ),
+            task_spec.primary_container.machine,
         )
         execution = await acquire_owned(
             asyncio.create_task(self.factory.create_task(task_spec))
         )
         self.execution = execution
-        self.machine = cast(LocalMachine, execution.primary)
+        self.machine = execution.primary
         try:
             await start_model_relays(
                 self.machine,
@@ -268,7 +296,9 @@ class LocalEnvironment(BaseEnvironment):
 
     async def quiesce_agent_commands(self) -> None:
         if self.machine is not None:
-            await self.machine.quiesce_commands()
+            if self.route is LocalExecutionRoute.IRIS_TASK:
+                raise ValueError("Iris LOCAL does not support command quiescence for model relays")
+            await cast(LocalMachine, self.machine).quiesce_commands()
 
     @property
     def requires_agent_quiescence_for_verifier(self) -> bool:

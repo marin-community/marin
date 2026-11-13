@@ -1972,3 +1972,69 @@ def test_coreweave_retry_without_stored_keys_is_rejected() -> None:
     request = make_run_req("/user/queued-before-upgrade/0", attempt_id=1)
     update = _rejected_dispatch(request, pod_config(require_coreweave_credentials=True))
     assert "https://console.coreweave.com/object-storage/access-keys" in update.error
+
+
+@pytest.mark.parametrize("disk_bytes", [512 * 1024**2, 2305 * 1024**2])
+def test_sandbox_pod_enforces_exact_declared_disk_and_cpu(disk_bytes):
+    req = make_run_req("/storage/0", cpu_mc=1500)
+    req.resources.disk_bytes = disk_bytes
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    _, objects = _dispatch(req, pod_config())
+    pod = objects[K8sResource.PODS][0]
+    assert len(pod["spec"]["containers"]) == 1
+    resources = pod["spec"]["containers"][0]["resources"]
+    assert parse_k8s_quantity(resources["limits"]["ephemeral-storage"]) == disk_bytes
+    assert parse_k8s_quantity(resources["requests"]["ephemeral-storage"]) == disk_bytes
+    assert resources["limits"]["cpu"] == "1500m"
+    assert not any("hostPath" in volume for volume in pod["spec"].get("volumes", []))
+
+
+@pytest.mark.parametrize(
+    "message,expected_state",
+    [
+        ("Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.", job_pb2.TASK_STATE_FAILED),
+        ('Container task exceeded its local ephemeral storage limit "2Gi".', job_pb2.TASK_STATE_FAILED),
+        (
+            "The node was low on resource: ephemeral-storage. Threshold quantity: 100Gi, available: 5Gi.",
+            job_pb2.TASK_STATE_PREEMPTED,
+        ),
+    ],
+)
+def test_storage_eviction_classifies_task_limit_separately_from_node_pressure(message, expected_state):
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0
+    )
+    req = make_run_req("/storage/0", attempt_uid="disk-limit-test")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.resources.disk_bytes = 2 * 1024**3
+    try:
+        provider.sync(make_batch(tasks_to_run=[req]))
+        pod = deepcopy(k8s.list_json(K8sResource.PODS)[0])
+        pod["status"] = {
+            "phase": "Failed",
+            "reason": "Evicted",
+            "message": message,
+            "conditions": [{"type": "DisruptionTarget", "status": "True", "reason": "TerminationByKubelet"}],
+            "containerStatuses": [{"name": "task", "state": {"terminated": {"exitCode": 137, "reason": "Error"}}}],
+        }
+        k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
+        updates = provider.sync(
+            make_batch(
+                running_tasks=[
+                    RunningTaskEntry(
+                        task_id=JobName.from_wire("/storage/0"), attempt_id=0, attempt_uid="disk-limit-test"
+                    )
+                ]
+            )
+        )
+        update = next(update for update in updates if update.new_state == expected_state)
+        assert update.new_state == expected_state
+        if expected_state == job_pb2.TASK_STATE_FAILED:
+            assert update.error.startswith("RESOURCE_LIMIT_DISK:")
+            assert update.terminal_reason == update.error
+        else:
+            assert not update.terminal_reason.startswith("RESOURCE_LIMIT_DISK:")
+    finally:
+        provider.close()

@@ -135,6 +135,19 @@ through Fray. Use a unique `IRIS_PORT_JAX` per concurrent gang. The timeout
 includes queueing, and stopping the coordinator stops its children.
 `SchedulingGated` means Kueue has not admitted the gang. See [CoreWeave](docs/coreweave.md).
 
+### Sandbox disk limits
+
+Kubernetes sandbox tasks enforce CPU and memory with container limits and disk
+with `resources.limits.ephemeral-storage` in exact bytes. No writable hostPath
+is mounted. Disk accounting covers writable layers, logs and disk-backed
+emptyDir volumes; read-only image layers are excluded. Kubelet eviction is
+asynchronous. `RESOURCE_LIMIT_DISK` in the task error and attempt terminal reason
+identifies an eviction for exceeding the pod/container's own storage limit. It
+is a task failure charged to the failure retry budget, not a node-pressure
+preemption. Shellbox exposes it as a typed disk resource-limit exception.
+Inspect the pod's status reason/message as well as the container termination:
+exit 137 and the word `ephemeral-storage` alone do not establish a task limit.
+
 ### `job run` gotchas
 
 - The current working tree is bundled, including uncommitted code.

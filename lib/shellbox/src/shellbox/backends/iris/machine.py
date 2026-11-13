@@ -21,7 +21,9 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
 from iris.client import IrisClient, Job, Task
+from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.limits import SANDBOX_STORAGE_LIMIT_CAPABILITY, ResourceLimitReason
 from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -36,6 +38,7 @@ from shellbox.machine import (
     Backend,
     Command,
     CommandSemantics,
+    DiskLimitExceeded,
     ExecutionRequirements,
     ExitReason,
     MachineSpec,
@@ -45,6 +48,8 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.task import Task as SandboxTask
+from shellbox.task import TaskSpec
 
 # The worker runs `docker exec` or `kubectl exec` with the command as argv, and Linux caps one
 # argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
@@ -59,6 +64,7 @@ DEFAULT_JOB_TTL = 6 * 60 * 60
 RPC_PADDING_SECONDS = 60
 # How long ``close`` waits for admitted execs to end after it cancels the sandbox job.
 CLOSE_DRAIN_SECONDS = 60
+TERMINAL_STATUS_TIMEOUT = Duration.from_seconds(15)
 EXEC_SHED_BACKOFF = ExponentialBackoff(initial=0.5, maximum=10.0, factor=2.0)
 # How much of each stuck exec's command ``close`` quotes when the drain times out.
 STUCK_EXEC_PREVIEW_CHARS = 120
@@ -154,7 +160,18 @@ class IrisMachine:
     def _raise_if_terminated(self, cause: Exception) -> None:
         """Raise ``MachineTerminated`` from ``cause`` when the sandbox task is no longer running."""
         status = self.task.status()
+        if self.spec.storage_mb is not None and status.state == TaskState.RUNNING:
+            # Exec can fail before the controller observes kubelet eviction.
+            # Wait for that terminal evidence instead of losing the disk signal.
+            def terminal() -> bool:
+                nonlocal status
+                status = self.task.status()
+                return status.state != TaskState.RUNNING
+
+            ExponentialBackoff(initial=0.25, maximum=2).wait_until(terminal, TERMINAL_STATUS_TIMEOUT)
         if status.state != TaskState.RUNNING:
+            if status.error_message.startswith(f"{ResourceLimitReason.DISK}:"):
+                raise DiskLimitExceeded(status.error_message) from cause
             raise MachineTerminated(
                 f"Iris sandbox task {self.task.task_id} is {status.state}: {status.error_message or cause}"
             ) from cause
@@ -315,6 +332,7 @@ class IrisMachineFactory:
         scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
         job_ttl: int = DEFAULT_JOB_TTL,
         disk_mb: int = DEFAULT_DISK_MB,
+        pool: str | None = None,
         secret_env: Mapping[str, SecretSpec] | None = None,
     ):
         if (cluster is None) == (controller_url is None):
@@ -324,6 +342,7 @@ class IrisMachineFactory:
         self.scheduling_timeout = scheduling_timeout
         self.job_ttl = job_ttl
         self.disk_mb = disk_mb
+        self.pool = pool
         self.secret_env = dict(secret_env or {})
 
     def _check_spec(self, spec: MachineSpec) -> RegistryImage:
@@ -360,12 +379,26 @@ class IrisMachineFactory:
                             raise RuntimeError(f"Failed to create Iris workdir {spec.workdir}: {created.stderr}")
                         return machine
                     if status.state not in (TaskState.PENDING, TaskState.BUILDING, TaskState.ASSIGNED):
-                        raise RuntimeError(f"Iris sandbox task failed before running: {status.error_message}")
+                        machine._raise_if_terminated(RuntimeError(status.error_message))
                 await asyncio.sleep(2)
             raise TimeoutError(f"Iris sandbox did not start within {self.scheduling_timeout} seconds")
         except BaseException:
             await machine.close()
             raise
+
+    @staticmethod
+    def check_task(spec: TaskSpec) -> None:
+        """Only a singleton can use the task pod's resource limits."""
+        if len(spec.containers) != 1:
+            raise UnsupportedMachineSpec("Iris requires exactly one sandbox per task")
+        member = spec.primary_container
+        if member.entrypoint is not None or member.arguments is not None:
+            raise UnsupportedMachineSpec("Iris sandbox startup overrides are unsupported")
+
+    async def create_task(self, spec: TaskSpec) -> SandboxTask:
+        self.check_task(spec)
+        machine = await self.create(spec.primary_container.machine)
+        return SandboxTask({spec.primary: machine}, spec, machine.close)
 
     def _submit_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
         endpoint = connect_controller(cluster_name=self.cluster, controller_url=self.controller_url)
@@ -381,6 +414,17 @@ class IrisMachineFactory:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
+            if spec.storage_mb is not None:
+                backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
+                if (
+                    len(backends) != 1
+                    or backends[0].kind != "kubernetes"
+                    or SANDBOX_STORAGE_LIMIT_CAPABILITY not in backends[0].capabilities
+                ):
+                    raise UnsupportedMachineSpec(
+                        "Declared Iris storage limits require a direct Kubernetes controller "
+                        "advertising sandbox-storage-limit"
+                    )
             job = client.submit(
                 # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
                 # capacity for the whole termination grace period.
@@ -400,6 +444,9 @@ class IrisMachineFactory:
                 egress_policy=EGRESS_POLICIES[spec.network],
                 scheduling_timeout=Duration.from_seconds(self.scheduling_timeout),
                 timeout=Duration.from_seconds(self.job_ttl),
+                priority_band=job_pb2.PRIORITY_BAND_PRODUCTION,
+                replicas=1,
+                constraints=[Constraint.create(key="pool", op=ConstraintOp.EQ, value=self.pool)] if self.pool else [],
                 max_retries_failure=0,
                 max_retries_preemption=0,
             )

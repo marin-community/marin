@@ -1,6 +1,19 @@
+from enum import StrEnum
+
 from harbor.environments.capabilities import EnvironmentResourceCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode
+
+
+class LocalExecutionRoute(StrEnum):
+    SHARED_WORKER = "shared_worker"
+    IRIS_TASK = "iris_task"
+
+
+def local_resource_capabilities(route: LocalExecutionRoute) -> EnvironmentResourceCapabilities:
+    return EnvironmentResourceCapabilities(
+        cpu_limit=True, memory_limit=True, storage_limit=route is LocalExecutionRoute.IRIS_TASK
+    )
 
 
 def validate_local_resources(
@@ -8,6 +21,7 @@ def validate_local_resources(
     *,
     cpu_enforcement_policy: ResourceMode,
     memory_enforcement_policy: ResourceMode,
+    route: LocalExecutionRoute = LocalExecutionRoute.SHARED_WORKER,
 ) -> None:
     """Validate local resource declarations independently of worker controller availability."""
     if ResourceMode.IGNORE in (cpu_enforcement_policy, memory_enforcement_policy):
@@ -16,14 +30,12 @@ def validate_local_resources(
         )
     validate_resource_capabilities(
         environment_label="local",
-        resource_capabilities=EnvironmentResourceCapabilities(
-            cpu_limit=True, memory_limit=True
-        ),
+        resource_capabilities=local_resource_capabilities(route),
         cpu_enforcement_policy=cpu_enforcement_policy,
         memory_enforcement_policy=memory_enforcement_policy,
     )
     if (
-        task.storage_mb is not None
+        (task.storage_mb is not None and not local_resource_capabilities(route).storage_limit)
         or task.gpus
         or task.gpu_types
         or task.tpu is not None

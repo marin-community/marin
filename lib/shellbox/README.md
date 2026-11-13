@@ -110,8 +110,19 @@ UTS namespaces. Container names resolve to `127.0.0.1` inside the group.
 address. Concurrent groups may use the same ports. Every member must request
 `NetworkPolicy.DENY`; the group never falls back to host networking.
 
-The Iris adapter supports single-container machine commands and file transfer;
-it provides neither `create_task` nor process sessions.
+The Iris adapter supports singleton `create_task`, machine commands and file
+transfer. It rejects multi-container tasks and provides no process sessions.
+Declared storage requires a direct Kubernetes controller. Every sandbox is one
+pod with one task container: CPU and memory use pod cgroup limits, and disk uses
+an exact-byte ephemeral-storage limit with no harness allowance. Command files
+share that budget. Kubelet may evict asynchronously after usage exceeds the
+limit; an explicit limit eviction raises `DiskLimitExceeded` with resource `disk`.
+Node disk pressure remains an infrastructure failure.
+
+Harbor LOCAL selects this route with `iris_cluster="cw-us-east-02a"`; its
+`storage_mb` declaration is preserved. The shared-worker LOCAL route still rejects
+storage limits. Iris LOCAL supports only single-container offline tasks without
+process-session model relays.
 
 Creation starts the containers and returns handles without waiting for health.
 Start host capabilities before readiness when a container needs them:

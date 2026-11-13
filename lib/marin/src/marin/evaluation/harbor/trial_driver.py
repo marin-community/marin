@@ -31,7 +31,10 @@ from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
     JudgeAccess,
     task_model_relays,
 )
-from harbor.environments.resource_policies import validate_local_resources  # pyrefly: ignore[missing-import]
+from harbor.environments.resource_policies import (  # pyrefly: ignore[missing-import]
+    LocalExecutionRoute,
+    validate_local_resources,
+)
 from harbor.host_capabilities import (  # pyrefly: ignore[missing-import]
     CANDIDATE_MODEL_RELAY_PORT,
     HostCapabilities,
@@ -243,7 +246,14 @@ def _validate_job_tasks(job: Job) -> None:
                 task_environment_config,
                 cpu_enforcement_policy=environment.cpu_enforcement_policy,
                 memory_enforcement_policy=environment.memory_enforcement_policy,
+                route=(
+                    LocalExecutionRoute.IRIS_TASK
+                    if environment.kwargs.get("iris_cluster")
+                    else LocalExecutionRoute.SHARED_WORKER
+                ),
             )
+            if environment.kwargs.get("iris_cluster") and len(prepared.task.containers) != 1:
+                raise ValueError("Iris LOCAL requires exactly one sandbox per Iris task")
             if task.config.steps:
                 raise ValueError("Prepared Shellbox environments do not yet support multi-step tasks")
         elif any((task.paths.environment_dir / name).exists() for name in COMPOSE_FILENAMES):

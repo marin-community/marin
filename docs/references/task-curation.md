@@ -1243,8 +1243,8 @@ stage a new package at 1 CPU, 2 GiB memory, 2 GiB disk, a five-minute agent
 timeout and a one-minute verifier timeout. Preserve any limits already explicit
 in the native package; calibrate only missing dimensions. After a failed trial, double only the
 dimension identified by its failure: memory for an explicit OOM kill, disk for
-ENOSPC, agent timeout for an agent timeout, or verifier timeout for a verifier
-timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
+ENOSPC or a typed Iris `RESOURCE_LIMIT_DISK` eviction, agent timeout for an agent
+timeout, or verifier timeout for a verifier timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
 of its allocated capacity. A bare exit 137 does not establish OOM, and unavailable
 CPU counters do not establish CPU saturation.
 
@@ -1377,12 +1377,12 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
-# LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
-# on Iris CPU workers. This route supports only root commands.
+# LOCAL: one digest-pinned image sandbox per Iris Kubernetes task.
+# The Harbor harness stays outside the sandbox pod. Root commands only.
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
-  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness"}'
+  --environment-kwargs '{"iris_cluster":"cw-us-east-02a","iris_pool":"cpu-genoa","ttl":259200}'
 
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
@@ -1392,9 +1392,38 @@ uv run python -m experiments.post_training.task_curation.oracle_filter collect \
 
 DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
 when the cohort's snapshot identities fit the cap. Otherwise use LOCAL on Iris
-CPU workers, with the task's own prepared images. Concurrency does not waive
-snapshot or CPU capacity limits. LOCAL honors allow_internet and cannot run
-nonroot task commands; choose a supporting route when the task requires them.
+Kubernetes CPU tasks using `iris_cluster`, with the task's own prepared image
+references in `shellbox-images.json`. The existing Shellbox Iris backend submits
+exactly one sandbox container and one replica per job to the named controller;
+it accepts declared storage only when the direct Kubernetes controller
+advertises `sandbox-storage-limit`. Older and worker-daemon controllers are
+rejected. Each actor and each separate grader runs in its own Iris task and
+sandbox pod with its own declared resources. `ttl` is a lifetime in seconds;
+259200 gives each job a three-day timeout. `iris_pool` pins the job to a named
+Iris worker pool. On cw-us-east-02a, use the CPU pool `cpu-genoa`; H100 nodes can
+advertise gVisor while failing sandbox startup ([#10090](https://github.com/marin-community/marin/issues/10090)).
+Concurrency does not waive snapshot or CPU capacity limits.
+
+On this route Kubernetes enforces CPU and memory through the sandbox container's
+cgroup limits. Its ephemeral-storage limit is exactly `storage_mb * 1024**2`
+bytes, with no rounding and zero harness allowance. The harness runs outside the
+pod. Writable container layers, container logs and disk-backed emptyDir volumes,
+including Shellbox command files and task artifacts, share that disk budget.
+Read-only image layers are outside Kubernetes ephemeral-storage usage.
+Kubelet storage accounting and eviction are asynchronous, so writes can briefly
+exceed the limit before eviction. An eviction explicitly naming the pod or
+container's exceeded storage limit becomes `RESOURCE_LIMIT_DISK`, then a typed
+Shellbox `DiskLimitExceeded` and Harbor disk-full failure. Calibration doubles
+disk just as for ENOSPC, including when a verifier also reports an infrastructure
+verdict. Node disk-pressure evictions retain their infrastructure classification.
+
+The shared-worker bubblewrap LOCAL route uses delegated cgroups for CPU and
+memory and still rejects `storage_mb`; it advertises no storage-limit capability.
+The Iris LOCAL route honors `allow_internet`, supports root commands and a single
+container, and rejects Compose service groups and process-session model relays.
+Choose a supporting route for those requirements. Deploy the Iris controller
+changes and complete the [deployment checklist](rl-data-atlas.md#deployment-checklist)
+before qualifying tasks on this route.
 
 Use CPU Iris workers at production priority with a three-day job timeout.
 Run `collect` against the same calibrated run; there is no second oracle pass.

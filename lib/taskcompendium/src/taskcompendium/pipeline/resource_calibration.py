@@ -63,7 +63,7 @@ def failure_signal(exception: dict | None, log: str, usage: ResourceUsage) -> Fa
         or any(marker in message for marker in ("oomkilled", "oom-kill", "out of memory", "memory cgroup out of memory"))
     ):
         return FailureSignal.OOM
-    if kind in {"AgentDiskFullError", "SandboxDiskFullError"} or any(
+    if kind in {"AgentDiskFullError", "SandboxDiskFullError", "DiskLimitExceeded"} or any(
         marker in message for marker in ("no space left on device", "enospc")
     ):
         return FailureSignal.DISK_FULL

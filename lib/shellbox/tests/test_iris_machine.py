@@ -10,7 +10,7 @@ import pwd
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,18 +23,34 @@ from connectrpc.errors import ConnectError
 from iris.client.workload_codec import task_status_from_proto
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    MachineSpec,
+    MachineTerminated,
+    NetworkPolicy,
+    ResourceLimit,
+    ResourceLimitExceeded,
+    UnsupportedMachineSpec,
+)
+from shellbox.task import ContainerSpec, TaskSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
 
 
 class LocalRpc:
+    def list_backends(self, request):
+        return controller_pb2.Controller.ListBackendsResponse(
+            backends=[
+                controller_pb2.Controller.BackendSummary(kind="kubernetes", capabilities=["sandbox-storage-limit"])
+            ]
+        )
+
     def exec_in_container(self, request, timeout_ms):
         del timeout_ms
         if max(len(argument.encode()) + 1 for argument in request.command) > LINUX_ARGUMENT_LIMIT_BYTES:
@@ -443,3 +459,74 @@ def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> No
             await machine.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "backend,capabilities", [("kubernetes", ["sandbox-storage-limit"]), ("worker-daemon", []), ("kubernetes", [])]
+)
+def test_declared_storage_requires_kubernetes_before_submission(monkeypatch, backend, capabilities):
+    client = RecordingClient()
+    rpc = LocalRpc()
+    rpc.list_backends = lambda _: controller_pb2.Controller.ListBackendsResponse(
+        backends=[controller_pb2.Controller.BackendSummary(kind=backend, capabilities=capabilities)]
+    )
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    factory = IrisMachineFactory(controller_url="http://controller")
+    spec = MachineSpec(RegistryImage("fixture@sha256:" + "a" * 64), storage_mb=2305)
+    if backend == "kubernetes" and capabilities:
+        with pytest.raises(SubmissionRecorded):
+            asyncio.run(factory.create(spec))
+        assert client.submitted["resources"].disk == 2305 * 1024**2
+        assert client.submitted["replicas"] == 1
+        assert client.submitted["max_retries_failure"] == 0
+        assert client.submitted["max_retries_preemption"] == 0
+    else:
+        with pytest.raises(UnsupportedMachineSpec, match="Kubernetes"):
+            asyncio.run(factory.create(spec))
+        assert not client.submitted
+
+
+def test_iris_task_rejects_shared_sandbox_budget_before_submission():
+    factory = IrisMachineFactory(controller_url="http://controller.invalid")
+    spec = MachineSpec(RegistryImage("fixture"), storage_mb=2048)
+    task = TaskSpec((ContainerSpec("task", spec), ContainerSpec("peer", spec)))
+    with pytest.raises(UnsupportedMachineSpec, match="one sandbox"):
+        asyncio.run(factory.create_task(task))
+
+
+def test_disk_limit_terminal_reason_raises_typed_resource_limit(tmp_path):
+    status = task_status_from_proto(
+        job_pb2.TaskStatus(
+            task_id="/user/shellbox/0",
+            state=job_pb2.TASK_STATE_FAILED,
+            error="RESOURCE_LIMIT_DISK: Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+        )
+    )
+    task = LocalTask(TaskState.FAILED)
+    task.status = lambda: status
+    machine, _ = local_machine(tmp_path, FailingRpc(), task)
+    with pytest.raises(ResourceLimitExceeded) as raised:
+        asyncio.run(machine.run(Command(("true",))))
+    assert raised.value.resource is ResourceLimit.DISK
+
+
+def test_disk_eviction_waits_for_controller_terminal_evidence(tmp_path):
+    statuses = [
+        task_status_from_proto(job_pb2.TaskStatus(task_id="/user/shellbox/0", state=job_pb2.TASK_STATE_RUNNING)),
+        task_status_from_proto(
+            job_pb2.TaskStatus(
+                task_id="/user/shellbox/0",
+                state=job_pb2.TASK_STATE_FAILED,
+                error="RESOURCE_LIMIT_DISK: Container task exceeded its local ephemeral storage limit.",
+            )
+        ),
+    ]
+    task = LocalTask(TaskState.RUNNING)
+    task.status = lambda: statuses.pop(0) if len(statuses) > 1 else statuses[0]
+    machine, _ = local_machine(tmp_path, FailingRpc(), task)
+    machine.spec = replace(machine.spec, storage_mb=2048)
+    with pytest.raises(ResourceLimitExceeded) as raised:
+        asyncio.run(machine.run(Command(("true",))))
+    assert raised.value.resource is ResourceLimit.DISK

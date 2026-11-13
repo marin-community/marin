@@ -15,7 +15,11 @@ import httpx
 import pytest
 
 from harbor.environments import local, model_relay
+from harbor.environments.base import SandboxDiskFullError
+from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.local import LocalEnvironment
+from harbor.environments.factory import EnvironmentFactory
+from harbor.models.environment_type import EnvironmentType
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode
@@ -24,6 +28,7 @@ from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.image import ImageCache
 from shellbox.machine import (
     Command,
+    DiskLimitExceeded,
     ExitReason,
     MachineTerminated,
     NetworkPolicy,
@@ -528,3 +533,48 @@ async def test_local_interrupted_command_preserves_task_until_trial_cleanup(
             )
         finally:
             await machine.close()
+
+
+@pytest.mark.parametrize("iris_cluster", [None, "cw-fixture"])
+def test_storage_capability_and_admission_require_one_sandbox_per_iris_task(tmp_path, iris_cluster):
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    (environment_dir / "shellbox-images.json").write_text(json.dumps({
+        "main": {"image": "fixture@sha256:" + "a" * 64, "workdir": "/workspace"}
+    }))
+    capabilities = EnvironmentFactory.resource_capabilities(
+        EnvironmentType.LOCAL, kwargs={"iris_cluster": iris_cluster}
+    )
+    assert capabilities.storage_limit is (iris_cluster is not None)
+    kwargs = dict(
+        environment_dir=environment_dir, environment_name="storage", session_id="fixture",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(cpus=1, memory_mb=2048, storage_mb=2048),
+        iris_cluster=iris_cluster,
+    )
+    if iris_cluster is None:
+        with pytest.raises(ValueError, match="do not enforce storage"):
+            LocalEnvironment(**kwargs)
+        return
+    LocalEnvironment(**kwargs)
+    (environment_dir / "shellbox-images.json").write_text(json.dumps({
+        name: {"image": "fixture@sha256:" + "a" * 64, "workdir": "/workspace"}
+        for name in ("main", "peer")
+    }))
+    (environment_dir / "compose.yaml").write_text(json.dumps({
+        "services": {"main": {}, "peer": {}}
+    }))
+    with pytest.raises(ValueError, match="one sandbox"):
+        LocalEnvironment(**kwargs)
+
+
+async def test_iris_disk_resource_limit_remains_a_harbor_disk_failure():
+    class EvictedMachine:
+        async def run(self, command):
+            raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: exceeded ephemeral storage")
+
+    with pytest.raises(SandboxDiskFullError) as raised:
+        await execute_shellbox_command(
+            EvictedMachine(), "dd if=/dev/zero of=/tmp/full", cwd="/", env={}, timeout_sec=60, user="root"
+        )
+    assert isinstance(raised.value.__cause__, DiskLimitExceeded)

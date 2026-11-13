@@ -241,12 +241,15 @@ def survey_backend(backend: str, check: Checker) -> list[CapabilityCell]:
             if requirement in {Requirement.CPUS, Requirement.MEMORY, Requirement.STORAGE, Requirement.GPUS}:
                 support = Support.PARTIAL
                 note += " Numeric probe is not a capacity or enforcement measurement."
+                if backend == "iris" and requirement is Requirement.STORAGE:
+                    note += (
+                        " Enforcement requires one sandbox per task and a direct Kubernetes controller "
+                        "advertising sandbox-storage-limit."
+                    )
                 if backend == "docker" or backend == "gvisor":
                     note += " Disk quotas require a compatible Docker storage driver; GPUs require host/runtime support."
                 if backend == "local":
                     note += " CPU/memory enforcement depends on delegated cgroups; rolloutengine omits local memory."
-                if backend == "iris" and requirement == Requirement.STORAGE:
-                    note += " Iris disk is a scheduling request, not a filesystem quota."
             if requirement == Requirement.STARTUP_TIMEOUT and backend != "daytona":
                 support = Support.PARTIAL
                 note += " Factory ignores this field; rolloutengine supplies the outer startup deadline."
