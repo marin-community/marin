@@ -232,6 +232,7 @@ UNDECLARED = MappingProxyType(
         "generator.speculative_decoding.model.source_uri": ("str", Ellipsis),
         "generator.speculative_decoding.model.source_identity": ("str", Ellipsis),
         "generator.speculative_decoding.num_speculative_tokens": ("PositiveInt", Ellipsis),
+        "generator.speculative_decoding.training": ("SpeculatorTraining | None", None),
         "generator.speculative_decoding.training.interval_steps": ("PositiveInt", Ellipsis),
         "generator.speculative_decoding.training.max_tokens_per_update": ("PositiveInt", Ellipsis),
         "generator.speculative_decoding.training.max_window_tokens": ("PositiveInt", Ellipsis),

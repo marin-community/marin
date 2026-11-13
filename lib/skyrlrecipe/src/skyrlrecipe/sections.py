@@ -644,7 +644,7 @@ class SpeculativeDecoding(Section):
     method: Literal["eagle3"] = unset_field()
     model: SpeculatorModel = unset_field()
     num_speculative_tokens: PositiveInt = unset_field()
-    training: SpeculatorTraining = unset_field()
+    training: SpeculatorTraining | None = field(None)
 
 
 class SamplingParams(Section):
