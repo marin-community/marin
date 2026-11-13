@@ -3,10 +3,8 @@
 
 //! Per-segment min/max of the columns a table flags with `catalog_bounds`.
 //!
-//! Query planning drops a segment whose bounds miss a filter's range before it
-//! opens the file. The bounds are optional catalog metadata: a segment without
-//! them for a filtered column is always scanned, so absent or partial bounds
-//! never change a result.
+//! Flush, merge and spec migration record them; maintenance backfills them
+//! from Parquet footers for segments written before the column was flagged.
 //!
 //! An object segment's bounds are stored beside the `ObjectRef` keys in its
 //! `object_segments.source_json`, and in its checkpoint `CatalogSegment`. An
@@ -28,9 +26,9 @@ pub type ColumnBounds = BTreeMap<String, (i64, i64)>;
 
 /// Recorded for a column the segment's range cannot be known or used for: all
 /// null, absent from a file written before the column existed, or without
-/// footer statistics. Planning keeps a segment whose min exceeds its max, so
-/// such a segment is scanned as before; recording it still ends the segment's
-/// backfill, so it never holds a backfill slot again.
+/// footer statistics. Its min exceeds its max, so it excludes no range;
+/// recording it still ends the segment's backfill, so it never holds a backfill
+/// slot again.
 pub const ALWAYS_SCAN: (i64, i64) = (i64::MAX, i64::MIN);
 
 /// The `source_json` key that carries the bounds beside the `ObjectRef` fields.

@@ -149,9 +149,8 @@ pub fn log_registered_schema() -> Schema {
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
             // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
-            // Each segment covers a short time span, so per-segment bounds in
-            // the catalog drop most segments for a time-bounded search; the
-            // key column is `key`, so key bounds cannot.
+            // Each segment covers a short time span, but the key column is
+            // `key`, so key bounds say nothing about time.
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false).with_catalog_bounds(),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
             Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
