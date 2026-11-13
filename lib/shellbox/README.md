@@ -337,6 +337,18 @@ runtime. Daytona applies CPU, memory, storage, and GPU settings through its SDK.
 It rounds memory and storage up to whole GiB. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
 memory settings. Backends reject resource overrides that they cannot apply.
 
+LOCAL can enforce declared storage inside the existing privileged worker with
+`LocalMachineFactory(disk_pool=LocalDiskPool(Path("/cache/shellbox-disks")))`.
+Import `LocalDiskPool` from `shellbox.backends.local.disk`. Construction probes
+ext4 loop mounts, OverlayFS, ENOSPC and cleanup on that host; ordinary factories
+continue rejecting `storage_mb`. The exact-size filesystem charges writable
+image layers, scratch, workdirs, `/dev/shm` and command spools, while shared
+read-only image layers remain outside it. See the [LOCAL route](../../docs/references/task-curation.md#full-population-oracle-filter)
+for prerequisites, accounting, crash recovery and explicit correctness tests.
+Async callers can await `verified_local_disk_pool(root)` from the same module;
+it runs the probe off the event loop and reuses the pool within a worker process
+and mount namespace. Harbor uses this path before acquiring LOCAL sandboxes.
+
 `Command.user` selects the execution user for one command. Docker accepts a
 username or UID string. An omitted user retains the image's user. ShellSim and
 QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its

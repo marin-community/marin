@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import CurationCatalog
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
+from shellbox.backends.local.disk import LocalDiskPool
 from shellbox.machine import UnsupportedMachineSpec
 from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell, Checker, capability_matrix, production_checkers
@@ -37,6 +37,9 @@ from taskcompendium.backend_requirements import (
     task_demands,
 )
 from taskcompendium.models import EnvironmentRequirements
+
+from experiments.post_training.task_curation.catalog_identity import canonical_snapshot_source
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 SUPPORT_ORDER = (Support.SUPPORTED, Support.PARTIAL, Support.UNSUPPORTED)
 RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")
@@ -262,6 +265,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--local-disk-root", type=Path, help="Probe ext4 loop/OverlayFS enforcement on this privileged worker."
+    )
     parser.add_argument("--catalog-root", help="Bind to the current published catalog instead of an archived inventory.")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
@@ -269,7 +275,7 @@ def main() -> None:
         configure_coreweave_s3()
         catalog = CurationCatalog(args.catalog_root)
         snapshot = catalog.current()
-        sources = list(catalog.sources(snapshot.snapshot_id))
+        sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
         manifest = {
             **manifest,
             "catalog_root": catalog.root,
@@ -282,7 +288,8 @@ def main() -> None:
             },
         }
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    survey = build_survey(manifest, production_checkers(), revision)
+    disk_pool = LocalDiskPool(args.local_disk_root) if args.local_disk_root is not None else None
+    survey = build_survey(manifest, production_checkers(local_disk_pool=disk_pool), revision)
     args.output.write_text(survey.model_dump_json(indent=2) + "\n")
     print(
         json.dumps(

@@ -1,61 +1,66 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact-input evidence for admitting a nonempty population with executable graders."""
+"""Admission checks over the census evidence carried by each source."""
 
-from collections.abc import Mapping
+from finestore.rl.curation import (
+    ActorCensusInput,
+    CurationSummary,
+    GradingEnvironmentEvidence,
+    OversightLevel,
+    SourceDeclaration,
+)
 
-from finestore.rl.curation import ActorCensusInput, SourceDeclaration
-from finestore.rl.source_identity import SourceId
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-
-class AdmissionCensusReceipt(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    source_id: SourceId
-    input: ActorCensusInput
-    population_path: str
-    scanned_task_specs_sha256: str
-    retained_tasks: int = Field(ge=0)
-    runnable_grader_tasks: int = Field(ge=0)
-    no_grader_tasks: int = Field(ge=0)
-    grader_kinds: dict[str, int]
-    missing_grader_reasons: dict[str, int]
-    evidence_url: str
-
-    @model_validator(mode="after")
-    def _complete_counts(self) -> "AdmissionCensusReceipt":
-        if (
-            self.retained_tasks != self.input.measured_tasks
-            or self.runnable_grader_tasks + self.no_grader_tasks != self.retained_tasks
-            or sum(self.grader_kinds.values()) != self.retained_tasks
-            or self.grader_kinds.get("none", 0) != self.no_grader_tasks
-            or sum(self.missing_grader_reasons.values()) != self.no_grader_tasks
-            or any(count < 0 for count in (*self.grader_kinds.values(), *self.missing_grader_reasons.values()))
-        ):
-            raise ValueError("Admission census does not account for its complete input population")
-        return self
+MISSING_GRADER_REASON = "No executable grader is declared"
 
 
-def require_source_admission(
-    source_id: str, binding: ActorCensusInput, retained_tasks: int, receipt: AdmissionCensusReceipt
-) -> None:
-    """Reject empty, ungraded, incomplete or differently pinned admission evidence."""
-    if receipt.source_id != source_id or receipt.input != binding or receipt.retained_tasks != retained_tasks:
-        raise ValueError(f"Admission census belongs to another current population: {source_id}")
+def population_admission_blocker(
+    binding: ActorCensusInput | None, retained_tasks: int, grading: GradingEnvironmentEvidence | None
+) -> str | None:
     if retained_tasks <= 0:
-        raise ValueError(f"Admitted source requires a nonempty retained population: {source_id}")
-    if receipt.no_grader_tasks or receipt.runnable_grader_tasks != retained_tasks:
-        raise ValueError(f"Admitted source has tasks without runnable graders: {source_id}: {receipt.no_grader_tasks}")
+        return "admission requires a nonempty retained population"
+    if binding is None or binding.measured_tasks != retained_tasks:
+        return "actor census does not cover the retained population"
+    if grading is None or grading.assessed_tasks != retained_tasks:
+        return "grading census does not cover the complete retained population"
+    if any(
+        sum(getattr(grading, field).values()) != retained_tasks
+        for field in ("required_counts", "declared_counts", "status_counts", "reason_counts")
+    ):
+        return "grading census counts do not cover the complete retained population"
+    if grading.reason_counts.get(MISSING_GRADER_REASON, 0):
+        return "admitted source has tasks without runnable graders"
+    return None
 
 
-def require_declaration_admission(
-    declaration: SourceDeclaration, receipts: Mapping[str, AdmissionCensusReceipt]
+def require_declaration_admission(declaration: SourceDeclaration) -> None:
+    """Reject incomplete or differently pinned evidence before publication or loading."""
+    binding, pipeline = declaration.actor_census_input, declaration.pipeline
+    if (
+        binding is None
+        or pipeline is None
+        or (binding.dataset_id, binding.dataset_revision, binding.converter_version)
+        != (declaration.dataset_id, declaration.dataset_revision, pipeline.version)
+    ):
+        raise ValueError(f"Admission census belongs to another current population: {declaration.id}")
+    if blocker := population_admission_blocker(
+        binding, declaration.within_source_dedup.unique_count, declaration.grading_environment
+    ):
+        raise ValueError(f"Admission census blocked: {declaration.id}: {blocker}")
+
+
+def require_content_result(
+    declaration: SourceDeclaration, curation: CurationSummary | None, assessment_key: str | None
 ) -> None:
-    """Require complete current-input evidence before publication, loading or selection."""
-    receipt = receipts.get(declaration.id)
-    binding = declaration.actor_census_input
-    if receipt is None or binding is None:
-        raise ValueError(f"Admission census is missing for the current source: {declaration.id}")
-    require_source_admission(declaration.id, binding, declaration.within_source_dedup.unique_count, receipt)
+    """Require a computed Result for SAMPLE/FULL snapshots before selecting them."""
+    if assessment_key is not None or declaration.quality_result is not None:
+        return
+    controls = curation.verification if curation is not None else None
+    reviewed = declaration.oversight in {OversightLevel.SAMPLE, OversightLevel.FULL} or (
+        curation is not None
+        and curation.mode in {"sample", "full"}
+        and controls is not None
+        and controls.status in {"passed", "validated"}
+    )
+    if reviewed:
+        raise ValueError(f"SAMPLE/FULL quality requires a computed Result: {declaration.id}")

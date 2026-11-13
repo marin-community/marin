@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.curation import CurationCatalog
+from finestore.rl.curation import CurationCatalog, OversightEvidence, OversightLevel
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -22,12 +22,15 @@ from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Command, HostImage, Mount, NetworkPolicy
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
+from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation import pipeline as processor
+from experiments.post_training.task_curation import sources as source_catalog
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
@@ -117,6 +120,41 @@ def arguments(tmp_path) -> list[str]:
         "--report-path": str(tmp_path / "report.json"),
     }
     return [item for pair in options.items() for item in pair]
+
+
+def test_historical_corpus_inventory_keeps_the_current_embedding_plan(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "numbers")
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            id="HuggingFaceH4:math500",
+            origin=SourceOrigin.HUGGINGFACEH4,
+            upstream_dataset="math500",
+            upstream_name="math500",
+            title=None,
+        ),
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
+    options = ["--embed", "coverage", "--cache-dir", str(tmp_path / "cache")]
+    plans = []
+    for identifier in (source.info.id, "MarinSkyRL:math500"):
+        corpus = tmp_path / (identifier.replace(":", "-") + ".json")
+        corpus.write_text(
+            json.dumps(
+                {
+                    "population": "converted",
+                    "sources": [],
+                    "inventory": [{**source.declaration.model_dump(mode="json"), "id": identifier}],
+                }
+            )
+        )
+        frozen = corpus.read_bytes()
+        result = CliRunner().invoke(main, [*options, "--corpus", str(corpus)])
+        assert result.exit_code == 0, result.output
+        plans.append(json.loads(result.output))
+        assert corpus.read_bytes() == frozen
+    assert plans[0] == plans[1]
 
 
 def test_source_option_selects_catalog_order_without_changing_identity(tmp_path, catalog):
@@ -704,3 +742,20 @@ def test_quick_conversion_can_collect_actor_evidence_before_catalog_publication(
     output = tmp_path / "output" / source.name / "numbers.json"
     assert json.loads(output.read_text()) == [2, 4]
     assert source.catalog_declaration is None
+
+
+def test_quick_selection_does_not_require_admission_for_unrelated_sources(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "input")
+    unrelated = number_source(tmp_path / "other", "unqualified")
+    unrelated = replace(
+        unrelated,
+        info=replace(
+            unrelated.info,
+            oversight=OversightEvidence(level=OversightLevel.SAMPLE, verification="Executed fixture controls"),
+        ),
+    )
+    monkeypatch.setattr(driver, "all_sources", lambda: {source.info.id: source, unrelated.info.id: unrelated})
+
+    monkeypatch.setattr(source_catalog, "all_sources", driver.all_sources)
+    monkeypatch.setattr(driver, "runnable_sources", source_catalog.runnable_sources)
+    assert driver._selected_sources((source.name,), SourceProcessingMode.QUICK) == {source.name: source}

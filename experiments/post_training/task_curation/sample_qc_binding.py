@@ -6,11 +6,11 @@
 from dataclasses import replace
 
 from finestore.rl.curation import IndependentQC
-from finestore.rl.source_identity import SourceId
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleQCReview
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
+from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
 
 class SampleQCReceipt(BaseModel):

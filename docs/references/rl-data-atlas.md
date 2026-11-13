@@ -186,6 +186,10 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
+   For storage-enforcing LOCAL workers, run the survey on the actual PRIVILEGED
+   worker with `--local-disk-root /cache/shellbox-disks`. Require its ext4 loop,
+   OverlayFS, ENOSPC and cleanup probe to pass. Retain the overflow/neighbor and
+   post-teardown loop/mount evidence; a workstation survey cannot qualify the host.
 3. Require `sandbox-image-workdir` in the direct Kubernetes backend descriptor
    before submitting any prepared-image Iris task, even without declared disk.
    Older controllers hide `/app` and must be rejected before submission.
@@ -284,6 +288,13 @@ uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,
   --manifest survey-inputs.json --output backend-map.json
 ```
 
+Add `--local-disk-root /cache/shellbox-disks` only on a worker configured for
+[LOCAL disk enforcement](task-curation.md#full-population-oracle-filter).
+The survey constructs the same verified `LocalDiskPool` used by factory admission.
+Without it, LOCAL storage stays unsupported. A successful check records conditional
+support tied to that worker configuration; use the same `disk_root` in Harbor's
+environment kwargs when executing the surveyed tasks.
+
 The versioned artifact contains every backend/requirement cell, evidence and
 conditions, per-role requirement counts and resource ranges, and per-backend task
 outcomes. `supported` means the declared feature passes its check; `partial`
@@ -325,6 +336,16 @@ per-task Parquet records retain mismatches, unavailable graders and validation
 failures with their reasons. A changed source binding clears stale grading
 evidence before catalog export. See the
 [grading census procedure](task-curation.md#curation-modes-and-oversight-levels).
+Admission uses the grading evidence carried by each declaration. The actor input
+must match the configured dataset pin and converter version; every retained task
+must have a grading assessment, and the retained population must be nonempty.
+The `No executable grader is declared` assessment reason blocks admission. Other unavailable
+boundary assessments remain visible without being relabeled as missing graders.
+Native Harbor packages must pass package validation during import and grading
+census. QUICK conversion can run before admission evidence exists. Publication,
+metadata refresh and Atlas loading reject SAMPLE/FULL entries without a computed
+content Result before changing the selected snapshot.
+
 The offline `daytona_census` command measures registered converters' TaskSpec
 outputs before admission gates and records admission rejections separately.
 An all-rejected population retains its measured execution cost and a BAD

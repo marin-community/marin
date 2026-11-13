@@ -21,6 +21,7 @@ from taskcompendium.pipeline.models import ReviewStatus
 from taskcompendium.pipeline.review import Reviewer
 
 from experiments.post_training.task_curation.full_qc import (
+    REVIEW_REQUEST_TIMEOUTS,
     REVIEW_RUBRIC,
     ReadyChatReviewer,
     ReviewerVersion,
@@ -152,7 +153,13 @@ def main() -> None:
         return
     campaign = StoragePath(args.output_root) / "campaigns" / uuid4().hex
     with endpoint.serve() as session:
-        reviewer = ReadyChatReviewer(session, spec, args.review_cache, max_concurrent=32)
+        reviewer = ReadyChatReviewer(
+            session,
+            spec,
+            args.review_cache,
+            max_concurrent=32,
+            request_timeout=REVIEW_REQUEST_TIMEOUTS[ReviewerVersion.V3],
+        )
         for panel in panels:
             result = review_panel(panel, reviewer, args.output_root)
             (campaign / f"{canonical_sha256(panel.source_id)[:20]}.json").write_text(

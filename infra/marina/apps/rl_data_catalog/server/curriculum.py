@@ -10,9 +10,10 @@ from dataclasses import asdict, dataclass
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from finestore.rl.source_identity import canonical_source_id, original_source_id
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
+
+from .source_identity import canonical_source_id, original_source_id
 
 TOTAL_METRICS = ("denominator", "assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
 

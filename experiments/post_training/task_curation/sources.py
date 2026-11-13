@@ -6,7 +6,6 @@
 
 from pathlib import Path
 
-from experiments.post_training.task_curation.admission_binding import require_declaration_admission
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
@@ -14,7 +13,6 @@ from experiments.post_training.task_curation.datasets import (
     structure_closure,
     thoughtcrime,
 )
-from experiments.post_training.task_curation.datasets.admission_censuses import admission_census_receipts
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
@@ -168,7 +166,6 @@ def runnable_sources() -> dict[str, RlDataSource]:
         if not source.admission_blockers and source.declaration.status == "Available"
     ]
     for source in sources:
-        require_declaration_admission(source.declaration, admission_census_receipts())
         require_accepted_task_format(source)
     names = [source.name for source in sources]
     if len(set(names)) != len(names):
