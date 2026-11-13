@@ -15,6 +15,7 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.runtime.sandbox import SANDBOX_IMAGE_WORKDIR_CAPABILITY
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
 from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
@@ -32,6 +33,7 @@ def k8s_backend_descriptor(*, advertised_attributes: dict[str, set[str]] | None 
         display_name="kubernetes",
         kind=BackendKind.KUBERNETES,
         advertised_attributes=advertised_attributes or {},
+        task_capabilities=frozenset({SANDBOX_IMAGE_WORKDIR_CAPABILITY}),
     )
 
 

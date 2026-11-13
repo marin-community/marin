@@ -14,14 +14,19 @@ from harbor.environments import model_relay
 from harbor.environments.docker_translate import import_prepared_task
 from harbor.environments.model_relay import ModelRelay
 from harbor.models.task.task import Task
+from harbor.tasks.client import BatchDownloadResult, TaskClient, TaskDownloadResult
 from harbor.utils.env import resolve_env_vars
 from harbor_config import JobConfig
+from harbor_config.models.job.config import DatasetConfig
 from harbor_config.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from shellbox.backends.daytona.snapshot import SnapshotRequest
+from shellbox.image import RegistryImage
 from marin.evaluation.harbor.trial_driver import (
     RuntimeOverlay,
     _model_authentication,
     _model_environment,
     _preflight_one,
+    _snapshot_specs,
     _validate_environment,
     effective_job_config,
 )
@@ -618,3 +623,97 @@ def test_preflight_standalone_pi_requires_matching_prepared_main_image(
     )
     report = _preflight_one(path, kwargs, None, host_environment=host)
     assert report["benchmark_metadata"]["n_benchmark"] == 1
+
+
+async def test_snapshot_specs_apply_job_resource_overrides(prepared_task):
+    config = JobConfig.model_validate(
+        {
+            "environment": {
+                "type": "daytona",
+                "override_cpus": 1,
+                "override_memory_mb": 4096,
+                "override_storage_mb": 4096,
+            },
+            "agents": [{"name": "terminus-2"}],
+            "datasets": [{"path": str(prepared_task.parent)}],
+        }
+    )
+
+    specs = await _snapshot_specs(config, None)
+
+    request = SnapshotRequest.from_dict(specs[0])
+    assert specs == [request.as_dict()]
+    assert request.source == RegistryImage("example.test/task@sha256:" + "a" * 64)
+    assert (request.resources.cpu, request.resources.memory, request.resources.disk) == (1, 4, 4)
+    assert request.resources.gpu is None
+
+
+async def test_snapshot_specs_apply_runtime_overlay(tmp_path, prepared_task, overlay):
+    other = tmp_path / "other-dataset"
+    other_task = other / "task"
+    (other_task / "environment").mkdir(parents=True)
+    (other_task / "tests").mkdir()
+    (other_task / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
+    (other_task / "instruction.md").write_text("Write an answer in /workspace.\n")
+    (other_task / "task.toml").write_text(
+        '[task]\nname = "test/other"\n[environment]\n'
+        f'docker_image = "example.test/other@sha256:{"b" * 64}"\n'
+        "allow_internet = false\n"
+    )
+    policy = JobConfig.model_validate(
+        {
+            "environment": {"type": "daytona"},
+            "agents": [{"name": "terminus-2"}],
+            "datasets": [{"path": str(other)}],
+        }
+    )
+
+    baseline = await _snapshot_specs(policy, None)
+    assert SnapshotRequest.from_dict(baseline[0]).source == RegistryImage("example.test/other@sha256:" + "b" * 64)
+
+    relocated = overlay.model_copy(
+        update={"dataset_path": str(prepared_task.parent), "task_limit": 1}
+    )
+    specs = await _snapshot_specs(policy, relocated)
+    assert SnapshotRequest.from_dict(specs[0]).source == RegistryImage("example.test/task@sha256:" + "a" * 64)
+
+
+async def test_snapshot_specs_materialize_uncached_git_tasks(tmp_path, monkeypatch):
+    monkeypatch.setattr("harbor_config.models.task.id.TASK_CACHE_DIR", tmp_path / "cache")
+    git_task = TaskConfig(git_url="https://registry.example/org/task.git", path=Path("task"))
+
+    async def resolve_dataset(self, disable_verification=False):
+        return [git_task.model_copy(deep=True)], 1
+
+    monkeypatch.setattr(DatasetConfig, "get_task_configs_with_pre_cap_count", resolve_dataset)
+
+    async def download_tasks(self, task_ids, overwrite=False, output_dir=None, **kwargs):
+        results = []
+        for task_id in task_ids:
+            task_dir = task_id.get_local_path()
+            task_dir.mkdir(parents=True, exist_ok=True)
+            (task_dir / "instruction.md").write_text("Write an answer in /workspace.\n")
+            (task_dir / "tests").mkdir(exist_ok=True)
+            (task_dir / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
+            (task_dir / "task.toml").write_text(
+                '[task]\nname = "test/git-task"\n[environment]\n'
+                f'docker_image = "example.test/git@sha256:{"c" * 64}"\n'
+                "allow_internet = false\n"
+            )
+            results.append(TaskDownloadResult(path=task_dir, download_time_sec=0.0, cached=False))
+        return BatchDownloadResult(results=results, total_time_sec=0.0)
+
+    monkeypatch.setattr(TaskClient, "download_tasks", download_tasks)
+
+    config = JobConfig.model_validate(
+        {
+            "environment": {"type": "daytona"},
+            "agents": [{"name": "terminus-2"}],
+            "datasets": [{"path": "unused-local-path"}],
+        }
+    )
+
+    specs = await _snapshot_specs(config, None)
+
+    request = SnapshotRequest.from_dict(specs[0])
+    assert request.source == RegistryImage("example.test/git@sha256:" + "c" * 64)

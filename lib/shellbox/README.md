@@ -60,6 +60,24 @@ finally:
     await machine.close()
 ```
 
+### Daytona snapshots
+
+One snapshot corresponds to one image source and one CPU, memory, disk and GPU
+request. Registry images are identified by reference; Docker build contexts by
+their current contents. Memory and disk round up to whole GiB. The name is
+`shellbox-` plus the first 40 hex characters of
+`sha256(image_source_key(source) + json(resources))`.
+
+`snapshot_request_for_spec` derives the snapshot identity from a `MachineSpec`,
+and `SnapshotRequest.as_dict`/`from_dict` are the JSON interchange for preflight.
+Harbor builds that machine spec from its task configuration and does not select
+sources, round resources or name snapshots itself.
+
+`shellbox-daytona-snapshots` inventories an account, compares it with a required
+set, creates missing snapshots and reclaims stale ones. See the
+[Daytona operations runbook](../../.agents/ops/daytona.md#snapshot-preflight-and-reclamation)
+for the account-wide one-hour purge policy.
+
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
 Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
 for the existing Iris command and file-transfer backend. Host-side Terminus-2
@@ -354,6 +372,10 @@ With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable 
 ## Local backend
 
 `LocalMachineFactory` runs commands in a persistent [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox on the calling host. `HostImage()` uses host programs without a container image or VM; the dependency `bubblewrap-bin` supplies a `bwrap` binary. Use it for trusted commands, such as vendored grader scripts on an ephemeral worker: commands share the host's kernel, and the sandbox is not a boundary against hostile code.
+
+Host-program machines on NixOS expose `/nix/store` and the system program profile read-only.
+Host configuration stored there is also readable by its store path.
+Managed Python requires the host to enable `programs.nix-ld.enable = true` so generic Linux executables can run.
 
 Without a delegated cgroup, an external `SIGKILL` of the bwrap launcher during its internal startup handshake
 can strand a namespace init before Shellbox receives its identity. The local

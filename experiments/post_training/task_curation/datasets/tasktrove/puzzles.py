@@ -9,7 +9,6 @@ item, numbers and coordinates with the symbolic math comparator, and other answe
 
 import json
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.models import TaskSpec
@@ -25,7 +24,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 PUZZLES_CONFIG = "laion__all-puzzles-v2"
 
@@ -90,13 +89,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
                     "fine under the new grader."
                 ),
-                daytona_safety=DaytonaSafety.SAFE,
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-puzzles",
                 source=tasktrove_source(PUZZLES_CONFIG),
                 convert=TaskTroveConverter(PUZZLES_CONFIG, convert_puzzle),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=Controls(golden=reference_reply),

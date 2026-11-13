@@ -29,7 +29,7 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import cast
 
-from shellbox.backends.local import launch
+from shellbox.backends.local import launch, nix
 from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
 from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
@@ -275,7 +275,9 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     return (bwrap_path(), *(() if system is None else (Path(system),)))
 
 
-def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
+def _prepare_sandbox(
+    bwrap: Path, system_directories: SystemDirectories, mounts: tuple[Mount, ...], environment: dict[str, str]
+) -> str | None:
     """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
@@ -285,17 +287,23 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
             bwrap=bwrap,
             root=root,
             layers=layers,
-            mounts=(),
-            environment=CONTROL_ENVIRONMENT,
+            mounts=mounts,
+            environment=environment,
         )
         try:
-            async with asyncio.timeout(PROBE_TIMEOUT):
-                await machine._start_keeper()
-                result = await machine._control("exit 0", PurePosixPath("/"))
+            try:
+                async with asyncio.timeout(PROBE_TIMEOUT):
+                    await machine._start_keeper()
+                    result = await machine._control("exit 0", PurePosixPath("/"))
+            finally:
+                await machine.close()
         except (OSError, RuntimeError, TimeoutError) as error:
+            if machine._keeper is not None:
+                assert machine._keeper.stderr is not None
+                stderr = (await machine._keeper.stderr.read()).decode(errors="replace").strip()
+                if stderr:
+                    return stderr
             return str(error) or type(error).__name__
-        finally:
-            await machine.close()
         if result.exit_code == 0:
             return None
         return result.stderr.decode(errors="replace").strip() or f"exit status {result.exit_code}"
@@ -305,10 +313,15 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
         return executor.submit(asyncio.run, probe()).result()
 
 
-def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories) -> Path:
+def _working_bwrap(
+    candidates: Iterable[Path],
+    system_directories: SystemDirectories,
+    mounts: tuple[Mount, ...],
+    environment: dict[str, str],
+) -> Path:
     errors = []
     for candidate in candidates:
-        error = _prepare_sandbox(candidate, system_directories)
+        error = _prepare_sandbox(candidate, system_directories, mounts, environment)
         if error is None:
             return candidate
         errors.append(f"{candidate}: {error}")
@@ -584,7 +597,7 @@ class LocalMachine:
                 "--clearenv",
                 "--setenv",
                 "PATH",
-                DEFAULT_PATH,
+                self._environment["PATH"],
                 "/bin/sh",
                 "-c",
                 'read -r ready && [ "$ready" = shellbox-ready ] || exit 1; exec sleep 2147483647',
@@ -782,7 +795,7 @@ class LocalMachine:
             Command(
                 ("/bin/sh", "-c", script, "sh", str(path)), cwd="/", stdin=stdin, output_limit_bytes=output_limit_bytes
             ),
-            CONTROL_ENVIRONMENT,
+            {**CONTROL_ENVIRONMENT, "PATH": self._environment["PATH"]},
         )
 
     def _command_config(self, command: Command, environment: dict[str, str]) -> dict:
@@ -1182,7 +1195,13 @@ class LocalMachineFactory:
         self.package_cache = package_cache if package_cache is not None else Path.home() / ".cache/shellbox/python"
         self.python_version = python_version
         self.system_directories = system_directories
-        self.bwrap = _working_bwrap(_bwrap_candidates(bwrap), system_directories)
+        candidates = _bwrap_candidates(bwrap)
+        self._system_mounts, self._system_bin_dirs = nix.system_programs()
+        environment = {
+            **CONTROL_ENVIRONMENT,
+            "PATH": os.pathsep.join((DEFAULT_PATH, *map(str, self._system_bin_dirs))),
+        }
+        self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts, environment)
         logger.info("Local backend sandboxes commands with %s, system directories %s", self.bwrap, system_directories)
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
@@ -1274,6 +1293,7 @@ class LocalMachineFactory:
         mounts = tuple(
             dict.fromkeys(
                 (
+                    *self._system_mounts,
                     *(Mount(directory, PurePosixPath(directory)) for directory in read_only),
                     *(Mount(mount.host.absolute(), mount.guest) for mount in host.mounts),
                 )
@@ -1290,6 +1310,8 @@ class LocalMachineFactory:
         # A workdir in an overlaid directory is made by a command once the machine runs, so it lands in the layer.
         root, layers = _machine_directories(None if overlaid_workdir else workdir, copy_on_write=copy_on_write)
         if aliases is not None:
+            # The copied host file can be read-only, as on NixOS.
+            (root / "etc/hosts").unlink(missing_ok=True)
             (root / "etc/hosts").write_text(aliases)
         environment = {
             "PATH": os.pathsep.join(
@@ -1297,6 +1319,7 @@ class LocalMachineFactory:
                     *(str(directory.absolute()) for directory in host.bin_dirs),
                     *map(str, self.bin_dirs),
                     DEFAULT_PATH,
+                    *map(str, self._system_bin_dirs),
                 ]
             ),
             "HOME": str(HOME),
