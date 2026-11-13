@@ -6,21 +6,25 @@
 import argparse
 import json
 import logging
-from dataclasses import replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
 from fray.types import ANY_REGION
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewRubric
-from taskcompendium.pipeline.review import ChatReviewer
+from taskcompendium.pipeline.query_cache import CachedRequests
+from taskcompendium.pipeline.review import ChatReviewer, ReviewBatchResult
 from taskcompendium.pipeline.reviewer_spec import JudgeTier, ReviewerSpec
 
 from experiments.post_training.task_curation.full_qc_review import load_inputs, review_inputs
@@ -43,6 +47,43 @@ REVIEW_RUBRIC = ReviewRubric(
 class ReviewWork(BaseModel):
     inputs_path: str
     output_path: str
+
+
+@dataclass(frozen=True)
+class ReadyChatReviewer:
+    """Reconnect to a ready serving task before each uncached review batch."""
+
+    session: RemoteInferenceSession
+    spec: ReviewerSpec
+    query_cache_root: str
+    max_concurrent: int
+
+    @property
+    def identity(self) -> dict:
+        return {"mode": "chat", **self.spec.identity}
+
+    def _reviewer(self, session: RemoteInferenceSession) -> ChatReviewer:
+        endpoint = session.model.endpoint
+        return ChatReviewer(
+            OpenAIChatClient(endpoint.base_url, endpoint.api_key or "unused", timeout=300),
+            self.spec,
+            query_cache_root=self.query_cache_root,
+            max_concurrent=self.max_concurrent,
+        )
+
+    def read_cache(self, batches: Sequence[Sequence[TaskSpec]], rubric: ReviewRubric) -> list[CachedRequests | None]:
+        return self._reviewer(self.session).read_cache(batches, rubric)
+
+    def review(
+        self,
+        tasks: Sequence[TaskSpec],
+        rubric: ReviewRubric,
+        *,
+        originals: Mapping[str, TaskSpec] | None = None,
+        cached: CachedRequests | None = None,
+    ) -> ReviewBatchResult:
+        current = self.session.ready_direct_session()
+        return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
 
 
 def local_reviewer() -> ReviewerSpec:
@@ -92,9 +133,9 @@ def main() -> None:
     campaign_path = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
     endpoint = spec.endpoint
     assert isinstance(endpoint, LocalJudgeEndpoint)
-    with endpoint.connect() as connection:
-        reviewer = ChatReviewer(
-            OpenAIChatClient(connection.base_url, connection.api_key, timeout=300),
+    with endpoint.serve() as session:
+        reviewer = ReadyChatReviewer(
+            session,
             spec,
             query_cache_root=args.review_cache,
             max_concurrent=32,

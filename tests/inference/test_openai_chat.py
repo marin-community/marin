@@ -18,6 +18,10 @@ def chat_server(monkeypatch):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append((self.path, self.headers["x-priority"], body))
+            if body["model"] == "wrong_protocol":
+                self.wfile.write(b"\x00\x00\x18\x04\x00\x00\x00\x00\x00")
+                self.close_connection = True
+                return
             status = 503 if body["model"] == "unavailable" else 200
             payload = json.dumps({"choices": [{"message": {"content": None, "tool_calls": []}}]}).encode()
             self.send_response(status)
@@ -69,4 +73,12 @@ def test_interrupted_response_is_a_retryable_transport_failure(chat_server, mode
     client = OpenAIChatClient(url, "fixture-token", timeout=2)
     with pytest.raises(ConnectionError, match="response ended"):
         client.complete({"model": model})
+    assert len(requests) == 1
+
+
+def test_wrong_protocol_at_stale_port_is_a_retryable_transport_failure(chat_server):
+    url, requests = chat_server
+    client = OpenAIChatClient(url, "fixture-token", timeout=2)
+    with pytest.raises(ConnectionError):
+        client.complete({"model": "wrong_protocol"})
     assert len(requests) == 1

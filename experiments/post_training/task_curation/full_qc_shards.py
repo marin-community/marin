@@ -10,15 +10,13 @@ from collections import Counter
 from dataclasses import replace
 from uuid import uuid4
 
-from marin.inference.openai_chat import OpenAIChatClient
 from pydantic import BaseModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.review import ChatReviewer
 
-from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, local_reviewer
+from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReadyChatReviewer, local_reviewer
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCReviewShard
 from experiments.post_training.task_curation.full_qc_review import assemble_shards, load_inputs, review_shard
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint
@@ -56,12 +54,11 @@ def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
     endpoint = spec.endpoint
     assert isinstance(endpoint, LocalJudgeEndpoint)
     campaign = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
-    with endpoint.connect() as connection:
-        client = OpenAIChatClient(connection.base_url, connection.api_key, timeout=300)
+    with endpoint.serve() as session:
         for row in work:
             inputs = load_inputs(row.inputs_path)
             source_spec = replace(spec, prompt_budget=row.prompt_budget, retry_prompt_budget=row.prompt_budget)
-            reviewer = ChatReviewer(client, source_spec, query_cache_root=args.review_cache, max_concurrent=32)
+            reviewer = ReadyChatReviewer(session, source_spec, query_cache_root=args.review_cache, max_concurrent=32)
             output = StoragePath(row.shard_output_path) / f"{args.shard_index:03}"
             result = review_shard(
                 inputs,

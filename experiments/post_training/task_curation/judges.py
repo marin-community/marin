@@ -22,7 +22,7 @@ from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.config import VllmEngineConfig, VllmLauncherType
-from marin.inference.iris import remote_inference
+from marin.inference.iris import RemoteInferenceSession, remote_inference
 from rigging.timing import Duration
 from taskcompendium.pipeline.reviewer_spec import JudgeTier, ReviewerSpec
 from verifyit.modes.grade_judge import JudgeConnection
@@ -167,7 +167,7 @@ class LocalJudgeEndpoint:
         }
 
     @contextmanager
-    def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
+    def serve(self) -> Iterator[RemoteInferenceSession]:
         definition = JUDGE_TIERS[self.tier]
         model = load_model_config(self.model_config)
         if definition.model_revision is None:
@@ -220,7 +220,7 @@ class LocalJudgeEndpoint:
         with remote_inference(config) as session:
             self.job_ids.extend(str(job.job_id) for job in session.jobs)
             logger.info("Judge serving jobs: %s", self.job_ids)
-            session.wait_until_ready()
+            session = session.ready_direct_session()
             if (
                 session.effective_serving is None
                 or session.effective_serving.max_model_len != definition.context_window_tokens
@@ -229,10 +229,16 @@ class LocalJudgeEndpoint:
             endpoint = session.model.endpoint
             if endpoint.model != definition.spec.model:
                 raise ValueError(f"Serving endpoint returned an unexpected model {endpoint.model!r}")
-            with HostedJudgeEndpoint(
-                definition.spec.model, endpoint.base_url, endpoint.api_key or "unused"
-            ).connect() as connection:
-                yield connection
+            with HostedJudgeEndpoint(definition.spec.model, endpoint.base_url, endpoint.api_key or "unused").connect():
+                yield session
+
+    @contextmanager
+    def connect(self, api_key: str | None = None) -> Iterator[JudgeConnection]:
+        with self.serve() as session:
+            endpoint = session.model.endpoint
+            yield JudgeConnection(
+                endpoint.base_url, api_key or endpoint.api_key or "unused", default_model=endpoint.model
+            )
 
 
 def _heavy_tier() -> JudgeTierDefinition:

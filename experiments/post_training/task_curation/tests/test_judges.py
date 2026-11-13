@@ -143,8 +143,8 @@ def test_local_endpoint_releases_inference_after_identity_or_grading_failure(
         effective_serving: EffectiveServing
         jobs: tuple = ()
 
-        def wait_until_ready(self):
-            pass
+        def ready_direct_session(self):
+            return self
 
     @contextmanager
     def inference(config):
