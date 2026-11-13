@@ -8,6 +8,7 @@ from dataclasses import dataclass, fields, replace
 import click
 import yaml
 from iris.rpc import job_pb2
+from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
@@ -39,7 +40,15 @@ MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 DEFAULT_STEPS = 25
 DEFAULT_SFT_STEPS = 10
-SFT_ACCELERATOR = "8xH100"
+SFT_NODE_ACCELERATOR = "8xH100"
+SFT_NODES = 4
+# Experts shard across the eight GPUs of a node and context across nodes. With context inside a
+# node, the 67B weights and Adam moments shard over only eight GPUs and exhaust their memory.
+SFT_MESH = MeshConfig(
+    axes={"data": 1, "replica": 1, "model": 1, "expert": 8},
+    compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
+    dcn_axes={"replica_dcn": 1, "context": SFT_NODES},
+)
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 SFT_ARTIFACT_NAME = "checkpoints/snowball-inventory-sft"
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -176,7 +185,7 @@ def build_run(
     export_hf: bool = False,
     reproducible_serving: bool = False,
 ) -> QuickLoop:
-    """Bind selected canonical tasks, continued SFT weights and terminal outputs."""
+    """Bind selected canonical tasks, the SFT stage or pinned weights, and terminal outputs."""
     execution = IrisSkyRLExecution(
         cluster=CLUSTER,
         cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
@@ -208,11 +217,10 @@ def build_run(
                 version=version,
                 model=replace(SNOWBALL_SFT.model, model_ref=MODEL_URI, tokenizer_path=MODEL_ID),
                 num_train_steps=sft_steps,
+                mesh=SFT_MESH,
             ),
-            resources_from_accelerator(SFT_ACCELERATOR),
+            replace(resources_from_accelerator(SFT_NODE_ACCELERATOR), replicas=SFT_NODES),
         )
-        # The RL CLI routes its coordinator from this execution, so an SFT-only stage needs it too.
-        sft = replace(sft, runtime_args={**sft.runtime_args, "skyrl_execution": execution})
     plan = SNOWBALL_RECIPE.role_plan
     rl = skyrl_step(
         SkyRLSpec(
@@ -243,7 +251,8 @@ def build_run(
         execution,
         export_hf=export_hf,
     )
-    return QuickLoop(sft=sft, rl=rl)
+    # The RL CLI routes its coordinator from the RL step's execution, so an SFT-only stage carries it too.
+    return QuickLoop(sft=replace(sft, runtime_args={**sft.runtime_args, **rl.runtime_args}), rl=rl)
 
 
 @click.command(help=__doc__)

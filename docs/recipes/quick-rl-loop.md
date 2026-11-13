@@ -9,7 +9,7 @@ The current entry points are the
 and
 [`train_quick_loop.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/inventory/train_quick_loop.py).
 The selection defines the 100k training allocation. The launcher defaults to
-10 SFT updates on 8 H100s, initialized from Datakit SFT revision
+10 SFT updates on 32 H100s (four nodes), initialized from Datakit SFT revision
 `fe666478454e79fe6027a0bab0388d9abd68f51a`, followed by 25 synchronous RLOO-N
 updates on 40 H100s from the resulting export with the matching tokenizer. SFT
 uses the [Snowball H100 recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py);
