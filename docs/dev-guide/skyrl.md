@@ -119,6 +119,35 @@ tested batch shape, but both retained existing batch-shape sensitivity. This
 option does not establish exact batch invariance; see the
 [numerical checks](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-invariance-01a13c0f/reports/HERO-NCCL-BATCH-INVARIANCE.md).
 
+## Keep each model group within one NVLink domain
+
+Set `role_topology="nvlink.domain"` on `IrisSkyRLExecution`, or
+`iris.role_topology: nvlink.domain` in a resolved launch document, to keep the
+trainer and each inference engine within one NVLink domain. On H100, a domain
+is one eight-GPU host. On NVL72, a domain is one rack of four-GPU hosts.
+
+This option supports separate trainer and local vLLM inference GPUs, with
+TP=PP=1 and EP=DP for inference. A reference model may share the trainer's
+GPUs. Other independent local roles and colocated trainer/inference launches
+are outside this mode. Omitting the option keeps existing placement behavior.
+
+Iris allocates its usual single domain or balanced rack slices. The launcher
+places each complete group within one slice; smaller engines can share one.
+For example, 64 trainer GPUs and two 64-GPU engines use 48 four-GPU hosts in
+three 16-host rack slices. A 64-GPU trainer and two 32-GPU engines fit two
+16-host slices, with both engines in the second rack. Groups that cannot fit
+the allocated slices fail validation before submission. This option does not
+expand a slice or change Iris's rack availability policy.
+
+Before model actors start, every host reports its GPU UUIDs and NVIDIA fabric
+identity. The head checks that each native slice has one physical domain and
+that slices occupy distinct domains, then writes `role-topology.json` to its
+Iris task output. Ray reserves the trainer and each engine with their assigned
+role resources and checks the ready bundles' actual nodes against those domains.
+Wrong physical placement fails startup; a cluster join or placement timeout
+reports unavailable workers or GPU capacity. The option does not select or
+qualify the transport used between trainer and inference domains.
+
 ## Expert-block weight sync placement
 
 Expert-block sync publishes each Grug expert from the Megatron rank that owns it to the

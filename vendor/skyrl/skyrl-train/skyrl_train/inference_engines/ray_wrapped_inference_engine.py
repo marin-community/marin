@@ -15,7 +15,7 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 from transformers import AutoConfig, PretrainedConfig
 
 from marinskyrl.inference_placement import COLOCATED_EXPERT_BLOCK_GPU_COUNT, InferenceReplicaPlacement
-from marinskyrl.role_placement import inference_role, role_resources
+from marinskyrl.role_placement import inference_role, role_bundles, role_resources, verify_role_placement
 from skyrl_train.inference_engines.base import (
     InferenceEngineInterface,
     InferenceEngineInput,
@@ -609,14 +609,18 @@ def create_ray_wrapped_inference_engines(
         raise ValueError("Verified expert-block placements require local TP=1 vLLM workers")
     if require_verified_placements and inference_engine_enable_sleep and not use_hybrid_engine:
         raise ValueError("Sleeping expert-block receivers require a shared placement group")
-    if require_verified_placements and use_hybrid_engine and (
-        num_inference_engines != 1
-        or data_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
-        or expert_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
-        or pipeline_parallel_size != 1
-        or not inference_engine_enable_sleep
-        or sleep_level != 2
-        or enable_lora
+    if (
+        require_verified_placements
+        and use_hybrid_engine
+        and (
+            num_inference_engines != 1
+            or data_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            or expert_parallel_size != COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            or pipeline_parallel_size != 1
+            or not inference_engine_enable_sleep
+            or sleep_level != 2
+            or enable_lora
+        )
     ):
         raise ValueError("Colocated expert-block receivers require one TP=PP=1 DP=EP=4 engine with level-2 sleep")
     cross_node_ep = verify_workers and pipeline_parallel_size == 1 and expert_parallel_size == data_parallel_size > 1
@@ -662,6 +666,9 @@ def create_ray_wrapped_inference_engines(
     # Single-GPU engines share a PACK group to leave whole nodes available for training.
     per_engine_pgs: list = []
     owned_placement_groups: list = []
+    locality_resources = role_resources(inference_role(0), ray.cluster_resources())
+    if locality_resources and (use_hybrid_engine or tensor_parallel_size != 1 or pipeline_parallel_size != 1):
+        raise ValueError("NVLink role placement requires disaggregated TP1/PP1 inference engines")
     needs_per_engine_pg = (
         use_per_engine_pg(
             use_hybrid_engine=use_hybrid_engine,
@@ -671,6 +678,7 @@ def create_ray_wrapped_inference_engines(
             data_parallel_size=data_parallel_size,
         )
         or require_verified_placements
+        or bool(locality_resources)
     )
     if not use_hybrid_engine:
         if use_mp_backend:
@@ -694,15 +702,25 @@ def create_ray_wrapped_inference_engines(
             # Each engine owns a group. TP/PP and ordinary DP groups remain node-local.
             # PACK prefers fewer nodes but permits spanning them for verified TP=PP=1 EP replicas.
             for engine_index in range(num_inference_engines):
-                resources = role_resources(inference_role(engine_index), ray.cluster_resources())
+                bundles = role_bundles(
+                    inference_role(engine_index),
+                    [{"GPU": 1, "CPU": 1} for _ in range(per_engine_gpu_count)],
+                    ray.cluster_resources(),
+                )
                 pg = placement_group(
-                    [{"GPU": 1, "CPU": 1, **resources} for _ in range(per_engine_gpu_count)],
+                    bundles,
                     strategy="PACK" if cross_node_ep else "STRICT_PACK",
                 )
                 per_engine_pgs.append(pg)
                 owned_placement_groups.append(pg)
-            for pg in per_engine_pgs:
+            for engine_index, pg in enumerate(per_engine_pgs):
                 get_ray_pg_ready_with_timeout(pg, timeout=placement_group_timeout_seconds)
+                if locality_resources:
+                    try:
+                        verify_role_placement(pg, inference_role(engine_index))
+                    except Exception:
+                        _release_node_local_gang([], per_engine_pgs)
+                        raise
             # Keep `shared_pg` defined for downstream indexing; per-engine path
             # re-selects the engine's own PG in the loop.
             shared_pg = per_engine_pgs[0]
@@ -796,9 +814,7 @@ def create_ray_wrapped_inference_engines(
         for dp_rank in range(data_parallel_size):
             # TP*PP slice reserved for a single DP rank.
             base_dp_pg_index = dp_rank_bundle_indices[dp_rank]
-            dp_rank_bundles = (
-                list(range(base_dp_pg_index, base_dp_pg_index + tp_pp_size)) if tp_pp_size > 1 else None
-            )
+            dp_rank_bundles = list(range(base_dp_pg_index, base_dp_pg_index + tp_pp_size)) if tp_pp_size > 1 else None
             if use_mp_backend:
                 # The mp executor's single actor reserves the whole TP*PP GPU slice itself
                 # (vLLM forks its workers locally, no per-worker Ray actors). It must land

@@ -17,7 +17,7 @@ from skyrl_train.config.objective_spec import validate_objective
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
-from cloud.iris.role_topology import role_topology_groups
+from cloud.iris.role_topology import derive_role_topology
 from cloud.iris.rl_config_translation import (
     RL_ENTRYPOINTS,
     RLEntrypoint,
@@ -316,7 +316,7 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
             f"iris.allocation.gpus_per_node={allocation['gpus_per_node']} does not match SkyRL policy "
             f"placement ({policy.gpus_per_node})"
         )
-    role_topology_groups(config)
+    derive_role_topology(config)
     return IrisAllocationConfig(**allocation)
 
 

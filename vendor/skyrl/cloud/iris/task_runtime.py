@@ -98,7 +98,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import node_role_resources, role_topology_groups, validate_role_nodes
+from cloud.iris.role_topology import RoleTopology, derive_role_topology, node_role_resources, validate_role_nodes
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -1230,7 +1230,8 @@ def _ray_mem_flags() -> list[str]:
 def ray_start_head(
     head_ip: str,
     spill_target: RaySpillTarget,
-    *, resources: dict[str, float] | None = None,
+    *,
+    resources: dict[str, float] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1259,7 +1260,8 @@ def ray_start_worker(
     ray_port: int,
     node_ip: str,
     spill_target: RaySpillTarget,
-    *, resources: dict[str, float] | None = None,
+    *,
+    resources: dict[str, float] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1300,8 +1302,12 @@ def ray_stop() -> None:
 
 
 def wait_for_nodes(
-    ray_address: str, expected_nodes: int, timeout: int, rewrite_cb=None,
-    *, role_groups: tuple[str, ...] = (), gpus_per_node: int = 0,
+    ray_address: str,
+    expected_nodes: int,
+    timeout: int,
+    rewrite_cb=None,
+    *,
+    role_topology: RoleTopology | None = None,
 ) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
@@ -1333,10 +1339,8 @@ def wait_for_nodes(
                 _log(f"Ray nodes alive: {count}/{expected_nodes}")
                 last_count = count
             if count >= expected_nodes:
-                if role_groups:
-                    rows = validate_role_nodes(
-                        alive, groups=role_groups, num_nodes=expected_nodes, gpus_per_node=gpus_per_node,
-                    )
+                if role_topology is not None:
+                    rows = validate_role_nodes(alive, topology=role_topology)
                     report = json.dumps({"role_topology": "nvlink.domain", "nodes": rows}, sort_keys=True)
                     (Path(os.environ.get("IRIS_OUTPUT_DIR", "/tmp")) / "role-topology.json").write_text(report + "\n")
                     _log(f"Verified physical role placement before model actors: {report}")
@@ -2003,11 +2007,13 @@ def run_head(
             num_tasks,
             args.cluster_join_timeout,
             rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
-            role_groups=args.role_groups,
-            gpus_per_node=args.gpus_per_node,
+            role_topology=args.role_topology,
         )
     else:
-        _log("Single-node slice: skipping rendezvous and multi-node wait.")
+        if args.role_topology is not None:
+            wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout, role_topology=args.role_topology)
+        else:
+            _log("Single-node slice: skipping rendezvous and multi-node wait.")
 
     with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
@@ -2191,8 +2197,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
-        role_groups=role_topology_groups(_container(config)),
-        gpus_per_node=int(config.iris.allocation.gpus_per_node),
+        role_topology=derive_role_topology(_container(config)),
         ray_resources={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
@@ -2318,11 +2323,13 @@ def main() -> None:
     launch_config = load_launch_config(config_path)
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
-    if args.role_groups:
+    if args.role_topology is not None:
         fabric = subprocess.run(["nvidia-smi", "-q", "-x"], check=True, capture_output=True, text=True, timeout=30)
         args.ray_resources = node_role_resources(
-            groups=args.role_groups, rank=_rank(), num_nodes=_num_tasks(),
-            gpus_per_node=args.gpus_per_node, host=os.environ["IRIS_NODE_NAME"], fabric_xml=fabric.stdout,
+            topology=args.role_topology,
+            rank=_rank(),
+            host=os.environ["IRIS_NODE_NAME"],
+            fabric_xml=fabric.stdout,
         )
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
