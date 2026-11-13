@@ -13,9 +13,12 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from daytona import (
     AsyncDaytona,
@@ -50,6 +53,45 @@ class SnapshotRequest:
     @property
     def name(self) -> str:
         return snapshot_name(self.source, self.resources)
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the JSON interchange consumed by ``plan`` and ``ensure``."""
+        spec: dict[str, Any] = {"name": self.name, "resources": asdict(self.resources)}
+        if isinstance(self.source, RegistryImage):
+            spec["image"] = self.source.reference
+        else:
+            spec["dockerfile"] = str(self.source.dockerfile)
+        return spec
+
+    @classmethod
+    def from_dict(cls, spec: Mapping[str, object]) -> "SnapshotRequest":
+        """Parse the interchange emitted by :meth:`as_dict`."""
+        unknown = set(spec) - {"name", "resources", "image", "dockerfile"}
+        if unknown:
+            raise ValueError(f"Unknown snapshot spec fields: {sorted(unknown)}")
+        image = spec.get("image")
+        dockerfile = spec.get("dockerfile")
+        if (image is None) == (dockerfile is None):
+            raise ValueError("Snapshot spec requires exactly one of image or dockerfile")
+        if not isinstance(image, str | None) or not isinstance(dockerfile, str | None):
+            raise ValueError("Snapshot spec image and dockerfile must be strings")
+        source = (
+            RegistryImage(image) if image is not None else DockerfileSource(Path(dockerfile).parent, Path(dockerfile))
+        )
+        values = spec.get("resources")
+        if not isinstance(values, Mapping):
+            raise ValueError("Snapshot spec resources must be an object")
+        resources = {}
+        for field_name in ("cpu", "memory", "disk", "gpu"):
+            value = values.get(field_name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+                raise ValueError(f"Snapshot spec {field_name} must be an integer or null")
+            resources[field_name] = value
+        request = cls(source=source, resources=Resources(**resources))
+        recorded = spec.get("name")
+        if recorded is not None and recorded != request.name:
+            raise ValueError(f"Snapshot spec name {recorded} does not match the derived name {request.name}")
+        return request
 
 
 @dataclass(frozen=True)
@@ -187,40 +229,33 @@ def snapshot_last_used(snapshot: Snapshot) -> datetime | None:
     return used.astimezone(UTC)
 
 
-def snapshot_is_stale(
+class SnapshotClassification(StrEnum):
+    """Account-cleanup disposition of one provider snapshot."""
+
+    GENERAL = "general"
+    STALE = "stale"
+    FRESH = "fresh"
+    UNCLASSIFIED = "unclassified"
+
+
+def classify_snapshot(
     snapshot: Snapshot,
     *,
     now: datetime,
     minimum_idle: timedelta = SNAPSHOT_STALE_AFTER,
-) -> bool:
-    """Whether the snapshot's last use is older than ``minimum_idle``."""
+) -> SnapshotClassification:
+    """Classify one snapshot against the account-wide idle policy.
+
+    Provider-owned general snapshots are outside account cleanup scope, and a
+    snapshot without usable last-use evidence stays unclassified rather than
+    being treated as fresh or stale.
+    """
+    if snapshot.general:
+        return SnapshotClassification.GENERAL
     used = snapshot_last_used(snapshot)
     if used is None:
-        raise ValueError(f"{snapshot.name} has no last-use evidence")
-    return now - used > minimum_idle
-
-
-def stale_snapshots(
-    snapshots: list[Snapshot],
-    *,
-    now: datetime,
-    minimum_idle: timedelta = SNAPSHOT_STALE_AFTER,
-) -> tuple[list[Snapshot], list[Snapshot]]:
-    """Split account snapshots into stale and unclassified targets.
-
-    Provider-owned general snapshots are outside account cleanup scope.
-    """
-    stale: list[Snapshot] = []
-    unclassified: list[Snapshot] = []
-    for snapshot in snapshots:
-        if snapshot.general:
-            continue
-        used = snapshot_last_used(snapshot)
-        if used is None:
-            unclassified.append(snapshot)
-        elif now - used > minimum_idle:
-            stale.append(snapshot)
-    return stale, unclassified
+        return SnapshotClassification.UNCLASSIFIED
+    return SnapshotClassification.STALE if now - used > minimum_idle else SnapshotClassification.FRESH
 
 
 async def purge_stale_snapshots(
@@ -229,30 +264,48 @@ async def purge_stale_snapshots(
     now: datetime | None = None,
     minimum_idle: timedelta = SNAPSHOT_STALE_AFTER,
 ) -> SnapshotPurgeReport:
-    """Delete every stale account snapshot after revalidating its last use.
+    """Delete every stale snapshot in the account after revalidating its last use.
 
+    Every non-general account snapshot is a candidate, including names Shellbox
+    did not create; provider-owned general snapshots are outside cleanup scope.
     Revalidating each target preserves a snapshot that was used after the
-    inventory was taken. Removal is asynchronous, so the report lists deleted
-    names that a follow-up inventory still observes.
+    inventory was taken, and a target whose last-use evidence disappears between
+    the inventory and the revalidation is recorded as unclassified without
+    blocking the remaining deletions. Removal is asynchronous, so the report
+    lists deleted names that a follow-up inventory still observes.
     """
     observed_at = now or datetime.now(UTC)
-    stale, unclassified = stale_snapshots(await list_snapshots(client), now=observed_at, minimum_idle=minimum_idle)
+    inventory = await list_snapshots(client)
+    inventory_classes = {
+        snapshot.name: classify_snapshot(snapshot, now=observed_at, minimum_idle=minimum_idle) for snapshot in inventory
+    }
+    stale = [
+        name for name, classification in inventory_classes.items() if classification is SnapshotClassification.STALE
+    ]
+    unclassified = [
+        name
+        for name, classification in inventory_classes.items()
+        if classification is SnapshotClassification.UNCLASSIFIED
+    ]
     deleted: list[str] = []
     skipped: list[str] = []
-    for candidate in stale:
+    for name in stale:
         try:
-            current = await _snapshot_metadata(client, candidate.name)
+            current = await _snapshot_metadata(client, name)
         except DaytonaNotFoundError:
             continue
-        if not snapshot_is_stale(current, now=observed_at, minimum_idle=minimum_idle):
+        current_class = classify_snapshot(current, now=observed_at, minimum_idle=minimum_idle)
+        if current_class is SnapshotClassification.STALE:
+            await client.snapshot.delete(current)
+            deleted.append(current.name)
+        elif current_class is SnapshotClassification.UNCLASSIFIED:
+            unclassified.append(current.name)
+        else:
             skipped.append(current.name)
-            continue
-        await client.snapshot.delete(current)
-        deleted.append(current.name)
     present = {snapshot.name for snapshot in await list_snapshots(client)}
     return SnapshotPurgeReport(
         deleted=tuple(deleted),
         skipped=tuple(skipped),
-        unclassified=tuple(snapshot.name for snapshot in unclassified),
+        unclassified=tuple(unclassified),
         remaining=tuple(name for name in deleted if name in present),
     )

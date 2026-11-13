@@ -23,30 +23,27 @@ from shellbox.backends.daytona.connection import (
     DEFAULT_DAYTONA_API_URL,
     DaytonaConnection,
 )
-from shellbox.backends.daytona.environment import DaytonaTaskEnvironment
 from shellbox.backends.daytona.snapshot import (
     SNAPSHOT_STALE_AFTER,
+    SnapshotClassification,
+    SnapshotRequest,
+    classify_snapshot,
     ensure_snapshot,
     list_snapshots,
     purge_stale_snapshots,
     snapshot_last_used,
-    stale_snapshots,
 )
 
 
-def _load_specs(source: str) -> list[dict[str, Any]]:
-    if source == "-":
-        text = sys.stdin.read()
-    elif source.lstrip().startswith(("{", "[")):
-        text = source
-    else:
-        text = Path(source).read_text()
+def _load_specs(source: str) -> list[SnapshotRequest]:
+    """Read the snapshot-spec interchange emitted by ``trial_driver snapshot-specs``."""
+    text = sys.stdin.read() if source == "-" else Path(source).read_text()
     payload = json.loads(text)
     if isinstance(payload, dict):
         payload = [payload]
     if not isinstance(payload, list) or not all(isinstance(entry, dict) for entry in payload):
         raise SystemExit("Snapshot specs must be one JSON object or a list of objects")
-    return payload
+    return [SnapshotRequest.from_dict(entry) for entry in payload]
 
 
 def _connection(arguments: argparse.Namespace) -> DaytonaConnection:
@@ -83,24 +80,13 @@ def _inventory_entries(
     now: datetime,
     minimum_idle: timedelta,
 ) -> list[dict[str, Any]]:
-    stale, unclassified = stale_snapshots(snapshots, now=now, minimum_idle=minimum_idle)
-    stale_names = {snapshot.name for snapshot in stale}
-    unclassified_names = {snapshot.name for snapshot in unclassified}
     entries = []
     for snapshot in snapshots:
         last_used = snapshot_last_used(snapshot)
-        if snapshot.general:
-            classification = "general"
-        elif snapshot.name in stale_names:
-            classification = "stale"
-        elif snapshot.name in unclassified_names:
-            classification = "unclassified"
-        else:
-            classification = "fresh"
         entries.append(
             {
                 "name": snapshot.name,
-                "state": str(snapshot.state),
+                "state": snapshot.state.value,
                 "cpu": snapshot.cpu,
                 "memory_gib": snapshot.mem,
                 "disk_gib": snapshot.disk,
@@ -108,7 +94,7 @@ def _inventory_entries(
                 "general": snapshot.general,
                 "organization_id": snapshot.organization_id,
                 "last_used_at": None if last_used is None else last_used.isoformat(),
-                "classification": classification,
+                "classification": classify_snapshot(snapshot, now=now, minimum_idle=minimum_idle).value,
             }
         )
     return entries
@@ -138,16 +124,15 @@ async def _inventory(
     _print_rows(("NAME", "STATE", "CLASS", "LAST USED", "RESOURCES"), rows)
 
 
-async def _plan(client: AsyncDaytona, environments: list[DaytonaTaskEnvironment]) -> None:
+async def _plan(client: AsyncDaytona, requests: list[SnapshotRequest]) -> None:
     present = {snapshot.name: snapshot for snapshot in await list_snapshots(client)}
     rows = []
-    for environment in environments:
-        request = environment.snapshot_request()
+    for request in requests:
         snapshot = present.get(request.name)
         rows.append(
             _row(
                 request.name,
-                "missing" if snapshot is None else str(snapshot.state),
+                "missing" if snapshot is None else snapshot.state.value,
                 request.resources.cpu,
                 request.resources.memory,
                 request.resources.disk,
@@ -156,10 +141,9 @@ async def _plan(client: AsyncDaytona, environments: list[DaytonaTaskEnvironment]
     _print_rows(("NAME", "STATE", "CPU", "MEMORY_GIB", "DISK_GIB"), rows)
 
 
-async def _ensure(client: AsyncDaytona, environments: list[DaytonaTaskEnvironment]) -> None:
+async def _ensure(client: AsyncDaytona, requests: list[SnapshotRequest]) -> None:
     rows = []
-    for environment in environments:
-        request = environment.snapshot_request()
+    for request in requests:
         name = await ensure_snapshot(client, request)
         rows.append(
             _row(
@@ -181,7 +165,14 @@ async def _purge(
     apply: bool,
 ) -> None:
     if not apply:
-        stale, unclassified = stale_snapshots(await list_snapshots(client), now=now, minimum_idle=minimum_idle)
+        stale: list[Snapshot] = []
+        unclassified: list[Snapshot] = []
+        for snapshot in await list_snapshots(client):
+            match classify_snapshot(snapshot, now=now, minimum_idle=minimum_idle):
+                case SnapshotClassification.STALE:
+                    stale.append(snapshot)
+                case SnapshotClassification.UNCLASSIFIED:
+                    unclassified.append(snapshot)
         for snapshot in stale:
             print(f"would delete {snapshot.name}")
         for snapshot in unclassified:
@@ -244,11 +235,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--specs",
             required=True,
-            help=(
-                "JSON object or list of objects with environment_dir, "
-                "docker_image, cpus, memory_mb, storage_mb and gpus. Use - "
-                "to read stdin."
-            ),
+            help="Snapshot-spec JSON file emitted by 'trial_driver.py snapshot-specs'. Use - to read stdin.",
         )
 
     purge = commands.add_parser("purge", help="Delete every stale account snapshot.")
@@ -273,11 +260,11 @@ async def _run(arguments: argparse.Namespace) -> None:
                 as_json=arguments.json,
             )
         elif arguments.command in {"plan", "ensure"}:
-            environments = [DaytonaTaskEnvironment.from_spec(entry) for entry in _load_specs(arguments.specs)]
+            requests = _load_specs(arguments.specs)
             if arguments.command == "plan":
-                await _plan(client, environments)
+                await _plan(client, requests)
             else:
-                await _ensure(client, environments)
+                await _ensure(client, requests)
         else:
             await _purge(
                 client,
