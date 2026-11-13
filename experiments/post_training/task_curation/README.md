@@ -440,6 +440,34 @@ completion writes task-level observations, computed Result and repair guidance,
 and a campaign record identifying serving jobs and pending qualification. This
 command does not publish datasets or alter Atlas admission.
 
+### Audit reviewer errors
+
+`audit_harness` freezes a stratified sample of Prism issue-positive reviews and
+two differently ordered blinded review packets. It verifies native task/runtime
+hashes, separates original GLM verdicts from reviewer inputs, and records the
+sample seed, strata and packet hashes. `audit_analysis` reconciles the two review
+files with separately recorded claim causes and estimates the population-weighted
+harness false-discovery fraction. Its interval conditions on the human/model
+review labels; two model reviewers can share blind spots. It measures errors
+among issue verdicts, not overall reviewer accuracy.
+
+`audit_review` repeats the frozen 100 tasks through an existing owned local GLM
+endpoint. Supply its scoped capability URL as the `QA_ENDPOINT_URL` secret file;
+never put the URL in command arguments, artifacts or logs. Run the entrypoint in
+a CPU Iris job at batch priority with a 72-hour timeout and the data's target
+cluster. It starts no model worker. Each prompt version needs a distinct output
+prefix, including a fresh cache for an original-prompt rerun. Preserve baseline
+code before changing the rubric and compare the actual stored reviewer identities.
+The sample digest and native task hashes are checked before requests are sent.
+Exact batch receipts preserve valid observations across retries and preemption.
+
+Before relaunching a corrected campaign, compare original, fresh-baseline and
+revised observations against the frozen independent labels. Require valid paired
+coverage, lower harness error and retained detection of confirmed content defects.
+Keep uncertain or disputed labels separate. A factual transport correction does
+not establish that other types of reviewer error are resolved. Preserve all
+original task artifacts, review judgments, annotations and output prefixes.
+
 ### Parallel retained-batch review
 
 Use `full_qc_shards` when a source needs more than one model replica. A worker

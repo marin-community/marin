@@ -1191,6 +1191,12 @@ remains in audit hashes rather than the content rubric. Exact requests can be
 reused after changes confined to those fields. Images, grader settings,
 instructions and resource bytes remain model-visible; modifying them invalidates
 the request, including edits to resource settings embedded in native task.toml.
+The versioned base rubric describes TaskCompendium's answer transport: it extracts
+conversation answers using `answer_format` and stages them at a sandbox grader's
+configured answer path. That private path alone is not an actor file-writing
+obligation. File and workspace submissions still require their declared outputs.
+Changing these reviewer instructions changes `ReviewerSpec` and invalidates prior
+request-cache entries; preserve the old review artifacts when correcting a rubric.
 See the [campaign command](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#complete-retained-population-review).
 
 ### Full-population oracle filter
