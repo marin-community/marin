@@ -1751,6 +1751,7 @@ service_accounts:
     - principal: human-003
     - principal: human-075
     - principal: human-007
+    - principal: human-082
   - role: roles/iam.serviceAccountUser
     members:
     - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
@@ -1814,6 +1815,7 @@ service_accounts:
     - principal: human-060
     - principal: human-026
     - principal: human-003
+    - principal: human-082
 - email: iris-worker@hai-gcp-models.iam.gserviceaccount.com
   grants:
   - role: roles/iam.serviceAccountTokenCreator
