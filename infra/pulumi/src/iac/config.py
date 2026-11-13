@@ -146,6 +146,13 @@ class LoomSessionRbacSpec(BaseModel):
     usernames: tuple[str, ...] = Field(min_length=1)
 
 
+class SandboxRuntimeSpec(BaseModel):
+    """Operator-installed CRI handler and eligible nodes for an Iris RuntimeClass."""
+
+    handler: str = Field(min_length=1)
+    node_selector: dict[str, str] = Field(min_length=1)
+
+
 class CoreweaveProvisioning(BaseModel):
     cluster: CksClusterSpec
     kueue: KueueProvisioningSpec
@@ -154,6 +161,7 @@ class CoreweaveProvisioning(BaseModel):
     rbac: RbacSpec = RbacSpec()
     grafana_observer_rbac: GrafanaObserverRbacSpec | None = None
     loom_session_rbac: LoomSessionRbacSpec | None = None
+    sandbox_runtime: SandboxRuntimeSpec | None = None
 
 
 class GcpAddressSpec(BaseModel):

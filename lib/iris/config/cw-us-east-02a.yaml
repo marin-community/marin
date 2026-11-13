@@ -66,6 +66,11 @@ provisioning:
       usernames:
         - cwtoken-uhBSRqWXRtyV7WWciRtYr-loom-token
         - cwtoken-umHabiNiEWJbDFZqyTwbP-ops-loom-token
+    sandbox_runtime:
+      handler: cw-gvisor-cpu
+      node_selector:
+        iris-cw-use02a-scale-group: cpu-genoa
+        node.coreweave.cloud/gvisor: "true"
 
 platform:
   label_prefix: cw-use02a
@@ -122,6 +127,7 @@ auth:
 
 kubernetes_provider:
   namespace: iris
+  sandbox_runtime_class: iris-gvisor-cpu
   node_health:
     storage:
       scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-02a

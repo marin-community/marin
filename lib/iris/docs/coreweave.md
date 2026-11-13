@@ -218,10 +218,12 @@ flowchart TD
     admit --> schedule[Kubernetes schedules Pods]
 ```
 
-Accelerator-free jobs use any compatible node by default. Iris does not expose
-a CPU-only placement constraint; rare jobs that require hard CPU-node placement
-must use Kubernetes-native scheduling outside Iris. GPU and RDMA resource
-requests exclude CPU nodes without an additional selector.
+Accelerator-free jobs use any compatible node by default. A sandbox RuntimeClass
+can add a node selector to sandbox jobs; cw-us-east-02a uses one to select its
+CPU pool. Iris does not expose a general CPU-only placement constraint; other
+jobs that require hard CPU-node placement must use Kubernetes-native scheduling
+outside Iris. GPU and RDMA resource requests exclude CPU nodes without an
+additional selector.
 
 Kueue requires every node in a TAS flavor to carry every level in the referenced
 Topology. CoreWeave supplies the physical hierarchy on accelerator nodes. Iris
@@ -249,13 +251,14 @@ resource failure and Iris returns the attempt to `PENDING` for fresh admission.
 | Resource | Owner |
 | --- | --- |
 | CKS cluster and operator kubeconfig | CoreWeave and the cluster operator |
-| Namespace, RBAC, NodePools, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
+| Namespace, RBAC, NodePools, configured sandbox RuntimeClass, Kueue operator, ClusterQueue, ResourceFlavor, ingress, and DNS | `infra/pulumi` |
 | Pod and Workload priority classes, Kueue LocalQueue, controller ConfigMap, Deployment, Service, PDB, state volume, and Secrets | `K8sControllerProvider` |
 | Task Pods and their lifecycle | `K8sTaskProvider` |
 | Node scheduling and provisioning | Kubernetes and CoreWeave |
 
-`K8sControllerProvider.verify_prerequisites()` only checks that the
-Pulumi-owned resources exist. It does not create or repair them. Read the
+`K8sControllerProvider.verify_prerequisites()` checks selected Pulumi-owned
+resources, but does not check the configured sandbox RuntimeClass. It does not
+create or repair them. Read the
 [Pulumi guide](../../../infra/pulumi/README.md) before changing that substrate;
 a destructive NodePool plan can deprovision reserved hardware.
 
@@ -555,6 +558,29 @@ Use this page for CoreWeave architecture and config, the [federation
 reference](federation.md) for cross-cluster job semantics, the [Pulumi
 guide](../../../infra/pulumi/README.md) for infrastructure, and
 [`OPS.md`](../OPS.md) for live diagnosis.
+
+### cw-us-east-02a sandbox runtime
+
+The default CoreWeave `gvisor` RuntimeClass selects nodes marked
+`node.coreweave.cloud/gvisor=true`. On cw-us-east-02a it admits H100 nodes where
+the NVIDIA gVisor wrapper fails before the container starts. A CPU-pool sandbox
+probe also failed through that wrapper; changing only the node selector does not
+repair it. The 02a config selects the Pulumi-owned `iris-gvisor-cpu` RuntimeClass,
+which requests the direct `cw-gvisor-cpu` handler and restricts placement to
+`cpu-genoa` nodes marked gVisor-capable. The direct CPU
+handler started a bounded probe on cw-us-west-04a, but it has not yet been
+verified on 02a. See [incident 631](https://marina.oa.dev/echo/wiki/631) and
+[incident 976](https://marina.oa.dev/echo/wiki/976).
+
+Apply the `cw-us-east-02a` Pulumi stack before deploying a controller that
+reads the new RuntimeClass name. Check the RuntimeClass's handler and selector,
+then run one public-image `SANDBOX` canary on 02a. If it starts, measure
+available CPU and memory on the selected nodes and run a bounded batch at the
+expected Taskforge concurrency. Confirm all admitted pods reach Running within
+600 seconds, with no `FailedCreatePodSandBox` events, and that runtime shim and
+cgroup counts return to baseline after teardown. Do not route normal sandbox
+workloads to 02a until these checks pass. Node access or CoreWeave support is
+needed if the direct handler is absent or fails on the CPU nodes.
 
 ## Source map
 
