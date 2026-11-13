@@ -77,6 +77,13 @@ _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
 _TERMINAL_HANDOFF_CODES = frozenset({Code.ALREADY_EXISTS, Code.PERMISSION_DENIED, Code.INVALID_ARGUMENT})
 
 
+class _Delivery(StrEnum):
+    """What a sync pass delivers to a peer; the value tags its failure metric."""
+
+    HANDOFF = "handoff"
+    CANCEL = "cancel"
+
+
 class _PeerLoop(StrEnum):
     """The per-peer background loops; the value tags their failure metric."""
 
@@ -87,7 +94,7 @@ class _PeerLoop(StrEnum):
 # Failures the background loops log and retry rather than raise. A rising count for one
 # peer means its handoffs or sync are failing on every pass.
 _LOOP_STEP_FAILURES = telemetry.counter("iris_federation_loop_step_failures", unit="{failure}")
-_HANDOFF_DELIVERY_FAILURES = telemetry.counter("iris_federation_handoff_delivery_failures", unit="{failure}")
+_DELIVERY_FAILURES = telemetry.counter("iris_federation_delivery_failures", unit="{failure}")
 
 
 def _backend_availability(peer_id: str, backend: controller_pb2.Controller.BackendSummary) -> BackendAvailability:
@@ -152,6 +159,10 @@ class FederationManager:
         self._ledger = ReservationLedger()
         self._heartbeat_threads: dict[str, ManagedThread] = {}
         self._sync_threads: dict[str, ManagedThread] = {}
+        # Retryable delivery failures per pending handoff. Each pass tries the least-failed
+        # handoffs first, so handoffs that fail every time cannot hold the per-pass slots.
+        self._handoff_failures: dict[str, dict[JobName, int]] = {peer_id: {} for peer_id in self._peers}
+        self._handoff_failures_lock = threading.Lock()
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -342,12 +353,17 @@ class FederationManager:
                 target.peer_id,
                 exc,
             )
-        except (ConnectionError, OSError) as exc:
+        except Exception as exc:
+            # Like a handoff: keep it pending and let the rest of the pass, including the
+            # peer's status sync, run.
             logger.warning(
-                "Routed cancel of %s to peer %s failed (will retry): %s",
+                "Routed cancel of %s to peer %s failed (will retry): %r",
                 target.local_job_id,
                 target.peer_id,
                 exc,
+            )
+            _DELIVERY_FAILURES.add(
+                attributes={"delivery": _Delivery.CANCEL, "peer": target.peer_id, "error_type": type(exc).__name__}
             )
 
     # -- on-demand proxy (parent side) ---------------------------------------
@@ -411,9 +427,14 @@ class FederationManager:
 
     def _sync_peer_once(self, peer: FederationPeer) -> None:
         assert self._store is not None
-        handoffs = [spec for spec in self._store.pending_handoffs() if spec.peer_id == peer.peer_id][
-            : self._max_handoffs_per_cycle
-        ]
+        pending = [spec for spec in self._store.pending_handoffs() if spec.peer_id == peer.peer_id]
+        with self._handoff_failures_lock:
+            pending_ids = {spec.local_job_id for spec in pending}
+            failures = {job_id: n for job_id, n in self._handoff_failures[peer.peer_id].items() if job_id in pending_ids}
+            self._handoff_failures[peer.peer_id] = failures
+        # sorted is stable: equal failure counts keep the store's order.
+        pending.sort(key=lambda spec: failures.get(spec.local_job_id, 0))
+        handoffs = pending[: self._max_handoffs_per_cycle]
         if handoffs:
             with ThreadPoolExecutor(
                 max_workers=len(handoffs),
@@ -455,7 +476,7 @@ class FederationManager:
             # forever. Everything else (unreachable, unauthenticated, timed out) can
             # succeed on a later attempt and stays pending.
             if exc.code not in _TERMINAL_HANDOFF_CODES:
-                logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.local_job_id, spec.peer_id, exc)
+                self._record_handoff_failure(spec, exc)
                 return
             self._store.mark_handoff_rejected(
                 spec.local_job_id,
@@ -466,10 +487,19 @@ class FederationManager:
             # Anything else, e.g. a blob this cluster's bundle store could not read back,
             # may succeed on a later attempt. Keep it pending and deliver the rest of the
             # batch rather than failing the whole sync pass.
-            logger.exception("Handoff of %s to peer %s failed (will retry)", spec.local_job_id, spec.peer_id)
-            _HANDOFF_DELIVERY_FAILURES.add(attributes={"peer": spec.peer_id, "error_type": type(exc).__name__})
+            self._record_handoff_failure(spec, exc)
             return
         self._store.mark_handed_off(spec.local_job_id)
+
+    def _record_handoff_failure(self, spec: HandoffSpec, exc: Exception) -> None:
+        """Log, count, and deprioritize one retryable handoff failure."""
+        logger.warning("Handoff of %s to peer %s failed (will retry): %r", spec.local_job_id, spec.peer_id, exc)
+        _DELIVERY_FAILURES.add(
+            attributes={"delivery": _Delivery.HANDOFF, "peer": spec.peer_id, "error_type": type(exc).__name__}
+        )
+        with self._handoff_failures_lock:
+            failures = self._handoff_failures[spec.peer_id]
+            failures[spec.local_job_id] = failures.get(spec.local_job_id, 0) + 1
 
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None

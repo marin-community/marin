@@ -17,7 +17,7 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
-from iris.cluster.federation.manager import FederationManager
+from iris.cluster.federation.manager import DEFAULT_MAX_HANDOFFS_PER_CYCLE, FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.types import JobName, WellKnownAttribute
 from iris.managed_thread import get_thread_container
@@ -131,6 +131,8 @@ def make_service(
 def attach_federation(
     parent_service: ControllerServiceImpl,
     connection: InProcessPeerConnection,
+    *,
+    max_handoffs_per_cycle: int = DEFAULT_MAX_HANDOFFS_PER_CYCLE,
 ) -> FederationManager:
     """Attach a one-peer federation manager to ``parent_service``."""
     peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
@@ -142,6 +144,7 @@ def attach_federation(
         store=store,
         bundles=parent_service._bundle_store,
         cluster_id="parent",
+        max_handoffs_per_cycle=max_handoffs_per_cycle,
     )
     controller = parent_service._controller
     assert isinstance(controller, MockController)
