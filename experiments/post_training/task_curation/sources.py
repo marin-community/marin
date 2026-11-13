@@ -34,8 +34,17 @@ from experiments.post_training.task_curation.source import RlDataSource
 
 
 def all_sources() -> dict[str, RlDataSource]:
+    evaluation_sources = {}
+    for benchmark in evaluation_benchmarks().values():
+        # Shot/chat variants share invocation IDs. Keep their defaults, plus separately
+        # named populations such as MRCR's context bins.
+        for source in (
+            *benchmark.resolve(),
+            *(source for variant in benchmark.variants for source in benchmark.build(variant)),
+        ):
+            evaluation_sources.setdefault(source.info.id, source)
     sources = [
-        *(source for benchmark in evaluation_benchmarks().values() for source in benchmark.resolve()),
+        *evaluation_sources.values(),
         *skyrl_math.sources(),
         *skyrl_code.sources(),
         *skyrl_ifeval.sources(),

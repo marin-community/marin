@@ -431,10 +431,18 @@ def test_policy_snapshot_uses_project_python_and_preserves_judge_configuration(t
     }
 
 
-def test_policy_judge_startup_failure_preserves_infrastructure_evidence(tmp_path, submitted_batches, monkeypatch):
+@pytest.mark.parametrize(
+    "benchmark,label", [("financebench", "financebench-smoke"), ("olympiadbench", "olympiad-smoke")]
+)
+def test_policy_judge_startup_failure_preserves_infrastructure_evidence(
+    tmp_path, submitted_batches, monkeypatch, benchmark, label
+):
     campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
     command = _command(tmp_path)
-    command[command.index("--evals") + 1] = "financebench"
+    selection = tmp_path / "selection.yaml"
+    selection.write_text(f"evaluations:\n  {label}:\n    benchmark: {benchmark}\n")
+    command[command.index("--evals") + 1] = label
+    command.extend(["--evaluation-config", str(selection)])
     command.extend(["--policy-finalization-config", str(campaign / "finalization.yaml")])
     result = CliRunner().invoke(cli, command)
     assert result.exit_code == 0, result.output

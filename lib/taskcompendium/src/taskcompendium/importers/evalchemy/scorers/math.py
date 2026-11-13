@@ -37,7 +37,7 @@ def grade_gsm8k_cot(document: dict, response: str) -> Reward:
         f"exact_match,{name}": float(normalize_numeric_answer(value) == normalize_numeric_answer(expected))
         for name, value in extracted.items()
     }
-    return scored(metrics["exact_match,strict-match"], metrics=metrics, extracted=extracted)
+    return scored(metrics["exact_match,flexible-extract"], metrics=metrics, extracted=extracted)
 
 
 def grade_minerva_completion(document: dict, response: str) -> Reward:

@@ -34,7 +34,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
             shots=(5, 0),
             grader=MATH_GRADER,
             metrics=("exact_match,strict-match", "exact_match,flexible-extract"),
-            primary_metric="exact_match,strict-match",
+            primary_metric="exact_match,flexible-extract",
             stop=GSM8K_REQUEST_STOPS,
             chat_options={0: {"enable_thinking": False}, 5: {}},
         ),
@@ -46,7 +46,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     source=GSM8K_SOURCE,
                     population=1319,
                     template=gsm8k_cot_template(),
-                    metrics=("exact_match,strict-match", "exact_match,flexible-extract"),
+                    metrics=("exact_match,flexible-extract", "exact_match,strict-match"),
                     sampling=Sampling(
                         temperature=0,
                         top_p=None,

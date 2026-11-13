@@ -52,7 +52,7 @@ def instruction_following_evaluation(
     source: HfSource,
     population: int,
     profile: InstructionProfile,
-    max_tokens: int,
+    max_tokens: int | None,
     seed: int,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     names = IFEVAL_METRICS if profile is InstructionProfile.HARNESS else IFBENCH_METRICS
@@ -128,7 +128,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             ),
             population=300,
             profile=InstructionProfile.IFBENCH,
-            max_tokens=1024,
+            max_tokens=None,
             seed=42,
         ),
     ]

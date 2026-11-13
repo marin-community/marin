@@ -124,7 +124,10 @@ Harbor execution is independent of curated TaskSpec evaluation.
 - `--no-wait`: return after submitting the orchestrator.
 
 Model `generation.max_gen_toks` and each selection's `run.max_tokens` cap protocol
-budgets. Protocol context policies still determine eligibility. Model chat-template
+budgets. HumanEvalPlus, MBPPPlus, and IFBench have no fixed protocol output cap;
+without an override, their allowance comes from the served context minus the
+prompt. GSM8K retains both extraction metrics and uses `flexible-extract` for its
+headline accuracy. Protocol context policies still determine eligibility. Model chat-template
 arguments provide defaults; benchmark arguments take precedence. A benchmark that
 turns thinking off can use the model's `thinking_off_template_kwargs` translation.
 

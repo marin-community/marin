@@ -30,7 +30,7 @@ from marin.rollouts.evaluation_results import evaluation_coverage
 
 POLICY = "marin-10197"
 MIN_SCORED_FRACTION = 0.9
-POLICY_JUDGED_BENCHMARKS = frozenset({"financebench", "olympiadbench"})
+POLICY_JUDGED_PROTOCOLS = frozenset({("financebench", "evalchemy"), ("olympiadbench", "evalchemy")})
 
 
 @dataclass(frozen=True)
@@ -121,42 +121,42 @@ class PolicyJudge:
             ) from exc
 
 
+def requires_policy_judge(reference: EvalRef) -> bool:
+    selection = reference.curated.selection if reference.curated is not None else None
+    return selection is not None and (selection.benchmark, selection.protocol) in POLICY_JUDGED_PROTOCOLS
+
+
+def policy_reference(reference: EvalRef, config: PolicyFinalization) -> EvalRef:
+    """Record policy judging independently of display labels and physical corpus paths."""
+    if not requires_policy_judge(reference):
+        return reference
+    assert reference.curated is not None and config.judge.revision is not None
+    settings = reference.curated.settings.model_copy(
+        update={
+            "judge": JudgeIdentity(
+                deployment=config.judge.location,
+                models={config.judge.location: config.judge.revision},
+                default_model=config.judge.location,
+            )
+        }
+    )
+    return reference.model_copy(
+        update={
+            "curated": reference.curated.model_copy(update={"settings": settings}),
+            "postprocessing": {POLICY: json.dumps({"judge": asdict(config.judge)}, sort_keys=True)},
+        }
+    )
+
+
 def policy_executor(
-    source: EvalExecutor,
+    source: DatasetEvaluator,
     reference: EvalRef,
     config: PolicyFinalization,
     judge_accelerator: AcceleratorChoice | None,
     priority: int,
-) -> tuple[EvalExecutor, EvalRef]:
-    """Bind each policy benchmark to its own grading configuration."""
-    if reference.name in POLICY_JUDGED_BENCHMARKS:
-        assert judge_accelerator is not None
-        if not isinstance(source, DatasetEvaluator):
-            raise TypeError("policy answer-equivalence grading requires curated tasks")
-        assert config.judge.revision is not None
-        source = replace(
-            source,
-            settings=source.settings.model_copy(
-                update={
-                    "judge": JudgeIdentity(
-                        deployment=config.judge.location,
-                        models={config.judge.location: config.judge.revision},
-                        default_model=config.judge.location,
-                    )
-                }
-            ),
-        )
-        assert reference.curated is not None
-        reference = reference.model_copy(
-            update={"curated": reference.curated.model_copy(update={"settings": source.settings})}
-        )
-        executor = PolicyJudge(
-            source,
-            config.judge,
-            judge_accelerator,
-            priority,
-        )
-        configuration = {"judge": asdict(config.judge)}
-    else:
-        return source, reference
-    return executor, reference.model_copy(update={"postprocessing": {POLICY: json.dumps(configuration, sort_keys=True)}})
+) -> EvalExecutor:
+    """Wrap a path-bound evaluator with policy judging and coverage enforcement."""
+    if not requires_policy_judge(reference):
+        return source
+    assert judge_accelerator is not None
+    return PolicyJudge(source, config.judge, judge_accelerator, priority)

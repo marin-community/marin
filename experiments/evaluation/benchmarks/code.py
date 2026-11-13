@@ -41,7 +41,7 @@ def python_source(
     suite: str,
     source: HfSource,
     population: int,
-    max_tokens: int,
+    max_tokens: int | None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     completion = suite == "humaneval"
     sampled = suite == "cruxeval"
@@ -112,7 +112,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 SourceFormat.JSONL,
             ),
             population=164,
-            max_tokens=1024,
+            max_tokens=None,
         ),
         python_source(
             name="MBPPPlus",
@@ -125,7 +125,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 read=read_mbpp,
             ),
             population=378,
-            max_tokens=1024,
+            max_tokens=None,
         ),
         python_source(
             name="CruxEval",
