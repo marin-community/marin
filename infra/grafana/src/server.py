@@ -98,7 +98,7 @@ from accelerator_observability import accelerator_overview_dataset
 from b200_utilization_alert import (
     MAX_TELEMETRY_NODES,
     b200_utilization_alert_rows,
-    b200_utilization_query,
+    node_gpu_activity_query,
 )
 from cache import TtlCache
 from config import (
@@ -1222,7 +1222,7 @@ def create_app(
             return k8s_fleet.gb200_capacity(k8s_cache.get_or_compute(_K8S_NODES_CACHE_KEY, k8s_fleet.nodes))
 
         def project(target: ClusterTarget, now: datetime) -> list[dict]:
-            telemetry = finelog_sources[target.name].query(b200_utilization_query(now), max_rows=MAX_TELEMETRY_NODES)
+            telemetry = finelog_sources[target.name].query(node_gpu_activity_query(now), max_rows=MAX_TELEMETRY_NODES)
             return b200_utilization_alert_rows(capacity(), telemetry)
 
         return finelog_alert_endpoint(

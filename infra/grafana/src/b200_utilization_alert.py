@@ -4,6 +4,7 @@
 """B200 fleet activity alert from Kubernetes capacity and Finelog GPU telemetry."""
 
 from datetime import datetime, timedelta
+from enum import StrEnum
 
 import pyarrow as pa
 from k8s_source import Gb200Capacity
@@ -15,8 +16,16 @@ TELEMETRY_LOOKBACK = timedelta(minutes=5)
 MAX_TELEMETRY_NODES = 5000
 
 
-def b200_utilization_query(now: datetime) -> str:
-    """Return recent per-node GPU counts and activity from the hub's node-agent telemetry."""
+class ClusterState(StrEnum):
+    ACTIVE = "active"
+    IDLE = "idle"
+    TELEMETRY_INCOMPLETE = "telemetry_incomplete"
+    CAPACITY_UNAVAILABLE = "capacity_unavailable"
+    NO_READY_CAPACITY = "no_ready_capacity"
+
+
+def node_gpu_activity_query(now: datetime) -> str:
+    """Return recent per-node GPU counts and activity, for every GPU node, from the hub's node-agent telemetry."""
     start_ms = int((now - TELEMETRY_LOOKBACK).timestamp() * 1000)
     end_ms = int(now.timestamp() * 1000)
     return f"""
@@ -59,20 +68,20 @@ def b200_utilization_alert_rows(capacity: Gb200Capacity, telemetry: pa.Table) ->
             active += min(int(sample["active_gpus"]), node_observed)
 
         if cluster in capacity.unavailable:
-            state = "capacity_unavailable"
+            state = ClusterState.CAPACITY_UNAVAILABLE
         elif ready_gpus == 0:
-            state = "no_ready_capacity"
+            state = ClusterState.NO_READY_CAPACITY
         elif observed / ready_gpus < MIN_TELEMETRY_COVERAGE:
-            state = "telemetry_incomplete"
+            state = ClusterState.TELEMETRY_INCOMPLETE
         elif active / ready_gpus < MIN_ACTIVE_GPU_FRACTION:
-            state = "idle"
+            state = ClusterState.IDLE
         else:
-            state = "active"
+            state = ClusterState.ACTIVE
         results.append(
             {
                 "cluster": cluster,
                 "state": state,
-                "value": int(state == "idle"),
+                "value": int(state is ClusterState.IDLE),
                 "active_percent": round(100 * active / ready_gpus, 1) if ready_gpus else 0.0,
                 "ready_gpus": ready_gpus,
             }

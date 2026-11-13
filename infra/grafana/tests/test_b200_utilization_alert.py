@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import duckdb
 import pyarrow as pa
-from b200_utilization_alert import b200_utilization_alert_rows, b200_utilization_query
+from b200_utilization_alert import b200_utilization_alert_rows, node_gpu_activity_query
 from conftest import install_finelog_dialect_macros, k8s_api, make_k8s_source, node
 from k8s_source import Gb200Capacity, K8sFleet
 
@@ -106,4 +106,4 @@ def test_b200_query_counts_a_gpu_as_active_on_its_peak_recent_sample():
         ],
     )
 
-    assert database.execute(b200_utilization_query(NOW)).fetchall() == [(GB200_CLUSTER, "gb200-a", 2, 1)]
+    assert database.execute(node_gpu_activity_query(NOW)).fetchall() == [(GB200_CLUSTER, "gb200-a", 2, 1)]
