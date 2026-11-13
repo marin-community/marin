@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -161,3 +167,52 @@ def test_shared_ingestion_preamble_and_harness_share_the_published_contract():
     assert config["agent"]["user"] == str(contract.agent_uid)
     assert config["verifier"]["environment_mode"] == "shared"
     assert config["verifier"]["user"] == "root"
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or os.geteuid() != 0, reason="Generated bootstrap requires isolated Linux root"
+)
+@pytest.mark.parametrize("declared_home", [False, True])
+def test_shared_root_setup_keeps_source_compiler_home(tmp_path, declared_home):
+    workspace = Path("/testbed")
+    bootstrap = Path("/opt/taskcompendium-shared-bootstrap")
+    protected = Path("/opt/taskcompendium-shared")
+    assert not any(path.exists() for path in (workspace, bootstrap, protected))
+    source_home = tmp_path / "source-home"
+    source_home.mkdir()
+    compiler = source_home / ".cargo/bin/source-compiler"
+    marker = tmp_path / "compiler-result"
+    setup = (
+        'mkdir -p "$HOME/.cargo/bin"\n'
+        "printf '#!/bin/sh\\necho source-toolchain\\n' > \"$HOME/.cargo/bin/source-compiler\"\n"
+        'chmod +x "$HOME/.cargo/bin/source-compiler"\n'
+        f"export PATH={shlex.quote(str(compiler.parent))}:$PATH\n"
+        f"source-compiler > {shlex.quote(str(marker))}\n"
+    )
+    home_config = f'[environment.env]\nHOME="{source_home}"\n' if declared_home else ""
+    files = {
+        "instruction.md": (
+            ("## Environment Setup (complete these steps first)\n\n```bash\n" + setup + "\n```\nRepair.\n").encode()
+        ),
+        "environment/Dockerfile": b"FROM source-python\nUSER root\n",
+        "task.toml": ("[metadata]\n[environment]\n" + home_config + '[agent]\nuser="root"\n[verifier]\n').encode(),
+        "tests/test.sh": b"true\n",
+    }
+    harden_shared_swe(
+        files, spec=PytestSpec(paths=("test_case.py",)), dependency_state=SharedDependencyState.AGENT_MUTABLE
+    )
+    config = tomlkit.parse(files["task.toml"].decode()).unwrap()
+    try:
+        workspace.mkdir()
+        (workspace / "test_case.py").write_text("def test_source(): pass\n")
+        bootstrap.mkdir()
+        (bootstrap / "control.py").write_bytes(files["environment/taskcompendium-shared/control.py"])
+        (bootstrap / "python").symlink_to(sys.executable)
+        environment = {**os.environ, "HOME": str(source_home), **config["environment"]["env"]}
+        subprocess.run(["bash", "-c", config["environment"]["setup"]["command"]], env=environment, check=True)
+        assert marker.read_text() == "source-toolchain\n"
+        assert (protected / "contract.json").is_file()
+    finally:
+        for path in (workspace, bootstrap, protected):
+            if path.exists():
+                shutil.rmtree(path)

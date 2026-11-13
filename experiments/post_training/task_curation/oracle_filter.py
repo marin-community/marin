@@ -34,6 +34,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleTaskReceipt,
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
+    SourcePytestEnvironment,
     VerifierResourceProfile,
     has_oracle_solution,
     next_trial_requirements,
@@ -131,6 +132,7 @@ def trial_receipt(path: Path) -> OracleTrialReceipt:
     exit_path = path.parent / "agent/exit-code.txt"
     usage_path = path.parent / "agent/resource-usage.json"
     verifier_usage_path = path.parent / "verifier/resource-usage.json"
+    source_environment_path = path.parent / "verifier/source-environment.json"
     logs = []
     for name in ("agent/oracle.txt", "verifier/test-stdout.txt", "verifier/test-stderr.txt"):
         log = path.parent / name
@@ -154,6 +156,11 @@ def trial_receipt(path: Path) -> OracleTrialReceipt:
             else ResourceUsage()
         ),
         failure_log="\n".join(logs),
+        source_environment=(
+            SourcePytestEnvironment.model_validate_json(source_environment_path.read_text())
+            if source_environment_path.exists()
+            else None
+        ),
     )
 
 
@@ -200,6 +207,52 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
         receipt = trial_receipt(path)
         trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
+
+
+def require_retry_provenance(
+    task_id: str,
+    history: tuple[InfrastructureRetryTransition, ...],
+    parent_maps: dict[Path, tuple[str, dict[str, dict]]],
+    retry_plans: dict[Path, tuple[str, InfrastructureRetryPlan]],
+) -> None:
+    """Reject changed retry inputs, reusing previously verified parent maps and plans."""
+    for transition in history:
+        parent_path = Path(transition.parent_map_path)
+        if parent_path not in parent_maps:
+            parent_maps[parent_path] = (
+                file_sha256(StoragePath(str(parent_path))),
+                json.loads(parent_path.read_text()),
+            )
+        parent_hash, parent_document = parent_maps[parent_path]
+        if parent_hash != transition.parent_map_sha256:
+            raise ValueError(f"Infrastructure parent task map changed: {task_id}")
+        plan_path = Path(transition.plan_path)
+        if plan_path not in retry_plans:
+            checked_plan = InfrastructureRetryPlan.model_validate_json(plan_path.read_text())
+            for frozen_path, expected in (
+                (checked_plan.cohort_path, checked_plan.cohort_sha256),
+                (checked_plan.source_parent_map_path, checked_plan.source_parent_map_sha256),
+            ):
+                if file_sha256(StoragePath(frozen_path)) != expected:
+                    raise ValueError(f"Infrastructure retry input changed: {frozen_path}")
+            retry_plans[plan_path] = (
+                file_sha256(StoragePath(str(plan_path))),
+                checked_plan,
+            )
+        plan_hash, plan = retry_plans[plan_path]
+        if (
+            plan_hash != transition.plan_sha256
+            or plan.backend_fix != transition.backend_fix
+            or plan.approvals[task_id] != transition.approval
+            or plan.parent_map_path != str(parent_path)
+            or plan.parent_map_sha256 != transition.parent_map_sha256
+        ):
+            raise ValueError(f"Infrastructure retry plan changed: {task_id}")
+        parent = parent_document[task_id]
+        if canonical_sha256(parent) != transition.parent_mapping_sha256:
+            raise ValueError(f"Infrastructure parent mapping changed: {task_id}")
+        if ResourceCalibrationReceipt.model_validate(parent["calibration"]) != transition.parent_calibration:
+            raise ValueError(f"Infrastructure parent attempts changed: {task_id}")
 
 
 def filter_cohort(
@@ -288,43 +341,7 @@ def filter_cohort(
                     InfrastructureRetryTransition.model_validate(value)
                     for value in mapping.get("infrastructure_retries", [])
                 )
-                for transition in history:
-                    parent_path = Path(transition.parent_map_path)
-                    if parent_path not in parent_maps:
-                        parent_maps[parent_path] = (
-                            file_sha256(StoragePath(str(parent_path))),
-                            json.loads(parent_path.read_text()),
-                        )
-                    parent_hash, parent_document = parent_maps[parent_path]
-                    if parent_hash != transition.parent_map_sha256:
-                        raise ValueError(f"Infrastructure parent task map changed: {task.id}")
-                    plan_path = Path(transition.plan_path)
-                    if plan_path not in retry_plans:
-                        checked_plan = InfrastructureRetryPlan.model_validate_json(plan_path.read_text())
-                        for frozen_path, expected in (
-                            (checked_plan.cohort_path, checked_plan.cohort_sha256),
-                            (checked_plan.source_parent_map_path, checked_plan.source_parent_map_sha256),
-                        ):
-                            if file_sha256(StoragePath(frozen_path)) != expected:
-                                raise ValueError(f"Infrastructure retry input changed: {frozen_path}")
-                        retry_plans[plan_path] = (
-                            file_sha256(StoragePath(str(plan_path))),
-                            checked_plan,
-                        )
-                    plan_hash, plan = retry_plans[plan_path]
-                    if (
-                        plan_hash != transition.plan_sha256
-                        or plan.backend_fix != transition.backend_fix
-                        or plan.approvals[task.id] != transition.approval
-                        or plan.parent_map_path != str(parent_path)
-                        or plan.parent_map_sha256 != transition.parent_map_sha256
-                    ):
-                        raise ValueError(f"Infrastructure retry plan changed: {task.id}")
-                    parent = parent_document[task.id]
-                    if canonical_sha256(parent) != transition.parent_mapping_sha256:
-                        raise ValueError(f"Infrastructure parent mapping changed: {task.id}")
-                    if ResourceCalibrationReceipt.model_validate(parent["calibration"]) != transition.parent_calibration:
-                        raise ValueError(f"Infrastructure parent attempts changed: {task.id}")
+                require_retry_provenance(task.id, history, parent_maps, retry_plans)
                 phases = [*(transition.parent_calibration for transition in history), calibration]
                 for attempt in (attempt for phase in phases for attempt in phase.attempts):
                     key = (attempt.result["task_name"], attempt.result["task_checksum"])

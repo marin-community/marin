@@ -34,8 +34,8 @@ class SharedRuntime:
         return json.loads((Path(self.contract.report_directory) / "verdict.json").read_text())
 
 
-@pytest.fixture
-def shared_runtime():
+@pytest.fixture(params=["base"])
+def shared_runtime(request):
     with tempfile.TemporaryDirectory(prefix="taskcompendium-shared-test-") as temporary:
         base = Path(temporary)
         base.chmod(0o755)
@@ -48,6 +48,30 @@ def shared_runtime():
         (workspace / "test_case.py").write_text(
             "import candidate, dependency\ndef test_value(): assert candidate.VALUE + dependency.VALUE == 1\n"
         )
+        test_path = "test_case.py"
+        if request.param == "local-plugin":
+            plugin = workspace / "tests/local_fixture/plugin.py"
+            plugin.parent.mkdir(parents=True)
+            plugin.write_text("import pytest\n@pytest.fixture\ndef source_value(): return 1\n")
+            (workspace / "tests/conftest.py").write_text('pytest_plugins = ["local_fixture.plugin"]\n')
+            test_path = "tests/test_case.py"
+            (workspace / test_path).write_text(
+                "import candidate\ndef test_value(source_value): assert candidate.VALUE == source_value\n"
+            )
+        elif request.param != "base":
+            (workspace / "extras").mkdir()
+            (workspace / "extras/source_dependency.py").write_text("VALUE = 1\n")
+            (workspace / "test_case.py").write_text(
+                "import candidate, source_dependency\n"
+                "def test_value(): assert candidate.VALUE == source_dependency.VALUE\n"
+            )
+            if request.param == "pyproject.toml":
+                configuration = '[tool.pytest.ini_options]\npythonpath=["extras"]\n'
+            elif request.param == "setup.cfg":
+                configuration = "[tool:pytest]\npythonpath = extras\n"
+            else:
+                configuration = "[pytest]\npythonpath = extras\n"
+            (workspace / request.param).write_text(configuration)
         task_python = base / "task-python"
         subprocess.run([sys.executable, "-m", "venv", "--copies", "--without-pip", str(task_python)], check=True)
         site = Path(
@@ -82,9 +106,9 @@ def shared_runtime():
             protected_test_patterns=("**/test_*.py", "**/conftest.py", "extra_guard.py"),
         )
         spec = PytestSpec(
-            paths=("test_case.py",),
+            paths=(test_path,),
             candidate_modules=("candidate",),
-            must_pass=("test_case.py::test_value",),
+            must_pass=(f"{test_path}::test_value",),
             python=str(task_python / "bin/python"),
             workspace=str(workspace),
         )
@@ -187,3 +211,26 @@ def test_shared_controller_restores_contract_paths_and_preserves_other_files(sha
     assert runtime.grade()["reward"] == 1
     assert (workspace / "extra_guard.py").read_text() == "reference\n"
     assert (workspace / "editable.py").read_text() == "agent change\n"
+
+
+@pytest.mark.parametrize(
+    "shared_runtime", ["local-plugin", "pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"], indirect=True
+)
+def test_shared_grading_restores_source_plugin_and_config_semantics(shared_runtime):
+    runtime = shared_runtime
+    workspace = Path(runtime.contract.workspace)
+    # An agent cannot replace source-owned configuration or a local fixture plugin.
+    for name in ("pytest.ini", "pyproject.toml", "tox.ini", "setup.cfg"):
+        path = workspace / name
+        if path.exists():
+            path.write_text("[pytest]\naddopts = --deselect=test_case.py::test_value\n")
+    plugin = workspace / "tests/local_fixture/plugin.py"
+    if plugin.exists():
+        plugin.write_text("import pytest\n@pytest.fixture\ndef source_value(): return 0\n")
+        (plugin.parent / "__init__.py").write_text("raise RuntimeError('agent package initializer')\n")
+        (plugin.parent.with_suffix(".py")).write_text("raise RuntimeError('agent plugin shadow')\n")
+    assert runtime.grade()["reward"] == 0
+    (workspace / "candidate.py").write_text("VALUE = 1\n")
+    verdict = runtime.grade()
+    assert verdict["status"] == "scored"
+    assert verdict["reward"] == 1
