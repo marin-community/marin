@@ -162,6 +162,47 @@ Before selecting a new catalog load:
 5. Check `/backends`, `/source-duplicates`, `/sources`, an assessment and its evidence. Confirm the
    selected snapshot and survey revision agree with the deployment record.
 
+### Preview packaging before the shared runtime is updated
+
+The preview can carry the exact canonical catalog models in its own package.
+This avoids a shared Marina deployment while the integration branch is under
+review. The staging command copies the alias table and model definitions from the
+specified checkout, relocates their imports into the app namespace, and records
+source and packaged SHA-256 values in `dist/bundled-model-provenance.json`.
+It writes a new directory and fixes its manifest to the preview UUID.
+
+From the clean integrated build checkout:
+
+```bash
+uv run python infra/marina/apps/rl_data_catalog/prepare_preview.py \
+  --checkout "$PWD" --output /tmp/atlas-preview-package
+uv run marina validate /tmp/atlas-preview-package
+uv run marina apps versions c9742a15-fb46-4d56-bc88-aa916351ebd3 --json
+uv run marina release /tmp/atlas-preview-package --allow-dirty --base-version CURRENT_VERSION --json
+```
+
+Use a fresh output directory for each build. Replace `CURRENT_VERSION` with the
+versions response's top-level `current_version`.
+
+Before validation and release, optional frozen partial-review observations can
+replace `dist/measurements/content-progress.json`. Its JSON object contains
+`as_of` and a `sources` list. Each row contains `source_id`, `dataset_id`,
+`dataset_revision`, `retained_count`, `valid_reviews_lower_bound` and `evidence_uri`.
+The renderer requires an exact current ID, pin and unique-count match. Progress
+never determines FULL or Result.
+
+After the package release, load the complete catalog with the
+[catalog loader](#updating-atlas), using the explicit preview app ID above.
+Use the [curriculum loader](#curriculum-coverage) twice: first pass the deployment's
+pre-remediation `release.json` and `coverage.json`, then the retained pair.
+Each successful load selects its release and retains the previous selection,
+so this order makes retained coverage primary and pre-remediation coverage previous
+evidence. Keep the exact input URIs and hashes in the deployment record.
+
+Production remains on hold. Before a production release, the shared runtime must
+carry these canonical modules natively; this preview staging command always targets
+the separate preview app.
+
 ### Backend survey
 
 The enum in `shellbox.requirements` classifies TaskCompendium environments,

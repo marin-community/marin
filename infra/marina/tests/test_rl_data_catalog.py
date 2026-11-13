@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import builtins
+import importlib
 import json
 import shutil
 import uuid
@@ -9,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
+from types import ModuleType
 from typing import Any, cast
 
 import pyarrow as pa
@@ -36,7 +39,14 @@ from finestore.rl.curation import (
 )
 from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
-from marina.applets import AppletServices, validate_query
+from marina.applets import (
+    AppletServices,
+    load_backend_entrypoint,
+    package_applet,
+    read_applet_package,
+    remove_backend_revision,
+    validate_query,
+)
 from marina.client import AppletQuery
 from shellbox.machine import Backend
 from shellbox.requirements import Requirement, Support
@@ -50,6 +60,7 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
+from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -975,3 +986,46 @@ def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_p
     survey = BackendSurvey.model_validate(raw)
     assert survey.sources[0].source_id == "HuggingFaceH4:aime24"
     assert canonical_sha256(survey.identity_payload()) == canonical_sha256(raw)
+
+
+def test_preview_package_imports_canonical_models_without_new_shared_runtime_modules(tmp_path, monkeypatch):
+    checkout = Path(__file__).resolve().parents[3]
+    output = tmp_path / "preview"
+    prepare_preview(checkout, output)
+    package = read_applet_package(package_applet(output))
+    assert package.manifest.applet_id == PREVIEW_APP_ID
+    original_import = builtins.__import__
+
+    def old_runtime_import(name, global_namespace=None, local_namespace=None, fromlist=(), level=0):
+        if level == 0 and name in {
+            "finestore.rl.curation",
+            "finestore.rl.source_identity",
+            "taskcompendium.source_fingerprints",
+        }:
+            raise ModuleNotFoundError(name)
+        return original_import(name, global_namespace, local_namespace, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", old_runtime_import)
+    applet_id = uuid.uuid4()
+    try:
+        module, _ = load_backend_entrypoint(applet_id, 1, package)
+        backend = cast(ModuleType, module)
+        record = backend.canonical_source_record({"id": "MarinSkyRL:gsm8k", "declaration": {"id": "MarinSkyRL:gsm8k"}})
+        assert record["id"] == record["declaration"]["id"] == "OpenAI:gsm8k"
+        quality_module = importlib.import_module(backend.__name__.rsplit(".", 1)[0] + ".quality")
+        assert (
+            quality_module.result(
+                {
+                    "quality_result": {
+                        "reviewed": 10,
+                        "issue_count": 1,
+                        "issues": [],
+                        "repair_recommendation": "Review evidence",
+                    }
+                },
+                None,
+            )
+            == "GOOD"
+        )
+    finally:
+        remove_backend_revision(applet_id, 1, package.digest)
