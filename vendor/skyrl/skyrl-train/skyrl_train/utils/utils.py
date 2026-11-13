@@ -402,7 +402,6 @@ def validate_batch_sizes(cfg: DictConfig):
 def validate_megatron_cfg(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
-    assert cfg.generator.backend == "vllm", "only vllm is supported for with megatron"
 
     if cfg.trainer.flash_attn:
         importlib.import_module("flash_attn")
@@ -634,7 +633,10 @@ def validate_batch_invariant_config(cfg: DictConfig) -> None:
 
 
 def validate_generator_cfg(cfg: DictConfig):
-    """Validate generation limits, sampling and trajectory settings."""
+    """Validate generation settings before engine startup."""
+
+    if cfg.generator.backend != "vllm":
+        raise ValueError(f"generator.backend must be 'vllm', got {cfg.generator.backend!r}")
 
     parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     parse_trajectory_retention_config(cfg.generator.get("trajectory_retention"))

@@ -359,6 +359,8 @@ def dump_per_dataset_eval_results(
                     "response_token_ids": trajectory_batch["response_ids"][i],
                     "input_prompt": input_prompts[i],
                     "output_response": output_responses[i],
+                    # The parsed conversation the grader read: tool calls, observations and the final answer.
+                    "messages": (trajectory_batch.get("evidence_messages") or [None] * len(input_prompts))[i],
                     "score": trajectory_batch["rewards"][i],
                     "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
                     "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
