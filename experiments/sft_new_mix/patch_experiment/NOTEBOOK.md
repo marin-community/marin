@@ -93,3 +93,28 @@ The long-loop runner pins `cw-rno2a` at production priority. Reno had 3 of 504 H
 production work, so no band could place the gang there. `cw-us-east-02a` had 22 free and 224 held by batch
 jobs. The arms run there on 16 nodes (128 H100, the geometry of the original step 0-471 run) at the default
 interactive priority, through `patch_arm.py`, which calls the long-loop's `sft_run` directly.
+
+## 2026-11-13: launch attempts for the control arm
+
+| Attempt | Cluster, priority | Outcome |
+|---|---|---|
+| `/dml/sft-patch-11188-control` | `cw-us-east-02a`, interactive | Never accepted. The peer accepted no handoff submitted after 18:04 UTC (Echo wiki 984). Cancelled at 19:41 UTC. |
+| `...-control-cw-rno2a` | `cw-rno2a`, interactive | Gang started 19:44 UTC, evicted 19:57:58 UTC by the 256-H100 production gang `/benfeuer/long-loop-exp2-full-2026.11.13.11` before the first step. |
+| `...-control-cw-rno2a-r2` | `cw-rno2a`, interactive, resumable | Gang never admitted behind production work. Cancelled when production priority on Reno was approved. |
+| `...-control-cw-rno2a-r3` | `cw-rno2a`, production | Step 1 committed at 20:33 UTC, then `TypeError: wait_at_barrier(): incompatible function arguments` in the first-checkpoint restore check. Cancelled at 20:54 UTC. |
+| `...-control-cw-rno2a-r4` | `cw-rno2a`, production | Running from commit `ae0bc4fb54`, which has the checkpoint fix; resumes from the step-1 checkpoint. |
+
+**Changes made because of these attempts.**
+
+- `patch_arm.py train` restores from the arm's own checkpoints and carries a preemption retry budget, so an
+  eviction costs at most the time since the last half-hourly checkpoint.
+- `lib/levanter/src/levanter/checkpoint.py` rounds the async checkpoint timeout to an integer. The long-loop
+  branch made it a float config field; JAX multiplies it by 1000 and passes it to `wait_at_barrier`, which
+  rejects a float. Main passes an integer constant and does not have the bug.
+
+**Evaluation recipe.** The eval launcher on this branch caps OlympiadBench output at 32,768 tokens, below the
+baseline's average of 38.9k generated tokens. Evaluation therefore uses the baseline launcher at `e0cd563`
+with the campaign's six Evalchemy configs (AIME24 and OlympiadBench at temperature 0.7, seed 42, 10 repeats;
+MATH-500, GSM8K 0-shot, HumanEval+, IFBench at the server default), served DP8 on one 8xH100 node with
+`max_model_len` 73,728. The published step-222 checkpoint was evaluated without a `generation_config.json`;
+these exports write one with stop tokens, so comparison with the published numbers is looser than between arms.
