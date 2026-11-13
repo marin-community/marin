@@ -12,6 +12,7 @@ import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
+import optax
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
@@ -36,6 +37,8 @@ from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball_sft import SnowballSftConfig, reseed_snowball_head, snowball_update_transform
+from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -66,6 +69,12 @@ class TrainLmConfig:
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
     z_loss_weight: float = 0.0
+    optimizer_num_train_steps: int | None = None
+    """Optimizer schedule horizon, independent of the trainer's stopping step."""
+    snowball_sft: SnowballSftConfig | None = None
+    token_weighted_accumulation: bool = False
+    tensorstore_cache_bytes: int | None = None
+    evaluation_data: LmDataConfig | None = None
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -124,6 +133,7 @@ def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmC
         raise ValueError("HF reload changed the Snowball model type")
     return replace(
         reloaded,
+        attention_implementation=requested.attention_implementation,
         router_dot_fp32=requested.router_dot_fp32,
         moe_implementation=requested.moe_implementation,
         moe_capacity_factor=requested.moe_capacity_factor,
@@ -168,6 +178,9 @@ def _load_lm_model_from_configured_source(
     else:
         model = config.model.build(Vocab, key=model_key)
 
+    if config.snowball_sft is not None:
+        model = reseed_snowball_head(model, config.snowball_sft)
+
     if not isinstance(config.adapter, NoAdaptorConfig):
         model = config.adapter.apply(model, key=adapter_key, axis_mapping=parameter_axis_mapping)
 
@@ -175,6 +188,8 @@ def _load_lm_model_from_configured_source(
 
 
 def main(config: TrainLmConfig):
+    if config.tensorstore_cache_bytes is not None:
+        set_jagged_array_read_cache_bytes(config.tensorstore_cache_bytes)
     if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
         if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
             raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
@@ -232,17 +247,33 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
-    optimizer = config.optimizer.build(config.trainer.num_train_steps)
+    optimizer = config.optimizer.build(config.optimizer_num_train_steps or config.trainer.num_train_steps)
+    if config.snowball_sft is not None:
+        if not isinstance(config.model, SnowballConfig):
+            raise ValueError("Snowball SFT controls require a Snowball model")
+        optimizer = optax.chain(optimizer, snowball_update_transform(config.snowball_sft))
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+        reduction = hax.sum if config.token_weighted_accumulation else hax.mean
+        return model.compute_next_token_loss(
+            example, key=key, logsumexp_weight=config.z_loss_weight, reduction=reduction
+        )
+
+    def loss_weight(example: LmExample, *, key=None):
+        del key
+        return hax.sum(example.loss_weight).scalar()
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
     with (
-        Trainer(config.trainer, optimizer, loss_function) as trainer,
+        Trainer(
+            config.trainer,
+            optimizer,
+            loss_function,
+            loss_weight_fn=loss_weight if config.token_weighted_accumulation else None,
+        ) as trainer,
         TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
     ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
@@ -294,7 +325,8 @@ def main(config: TrainLmConfig):
         install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
-        tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
+        evaluation_data = config.evaluation_data or config.data
+        tagged_eval_datasets = evaluation_data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
         load_source_model = functools.partial(

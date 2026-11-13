@@ -62,6 +62,7 @@ from levanter.models.snowball import (
     validate_single_name_config,
 )
 from levanter.optim.config import AdamConfig
+from levanter.models.snowball_sft import SnowballSftConfig, reseed_snowball_head, snowball_update_transform
 from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import TrainerConfig
@@ -229,6 +230,33 @@ def test_snowball_state_dict_key_and_shape_manifest():
     ), f"missing={set(expected) - set(sd)} unexpected={set(sd) - set(expected)}"
     for key, shape in expected.items():
         assert tuple(sd[key].shape) == shape, f"{key}: {tuple(sd[key].shape)} != {shape}"
+
+
+def test_sft_reseed_and_update_scale_preserve_other_weights_and_freeze_router():
+    cfg = _tiny_config()
+    settings = SnowballSftConfig((30, 31), (2, 3), 4.0, True)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(0))
+        original = model.to_state_dict()
+        reseeded = reseed_snowball_head(model, settings)
+        after = reseeded.to_state_dict()
+        for name, value in original.items():
+            if name == "lm_head.weight":
+                expected = np.array(value)
+                expected[[30, 31]] = np.asarray(value)[[2, 3]]
+            else:
+                expected = value
+            np.testing.assert_array_equal(after[name], expected)
+        updates = jax.tree.map(jnp.ones_like, model)
+        transform = snowball_update_transform(settings)
+        scaled, _ = transform.update(updates, transform.init(model), model)
+        for name, value in scaled.to_state_dict().items():
+            expected = np.ones(value.shape)
+            if name in ("model.embed_tokens.weight", "lm_head.weight"):
+                expected[[30, 31]] = 4
+            elif name.endswith("mlp.router.bias"):
+                expected[:] = 0
+            np.testing.assert_array_equal(value, expected)
 
 
 def test_snowball_state_dict_roundtrip_is_exact():

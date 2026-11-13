@@ -486,7 +486,7 @@ class Checkpointer:
         keep_params: PyTree[FilterSpec] = True,
         dt_now_injection: Optional[Callable[[], datetime.datetime]] = None,
         delete_old_temp_checkpoints: bool = True,
-        keep_last_temporary_checkpoints: int = 1,
+        keep_last_temporary_checkpoints: int | None = 1,
         debug: CheckpointDebugConfig | None = None,
         write_config: TensorStoreWriteConfig | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -517,7 +517,7 @@ class Checkpointer:
             metadata: application metadata committed with every checkpoint this checkpointer saves
         """
         _check_application_metadata(metadata)
-        if keep_last_temporary_checkpoints < 0:
+        if keep_last_temporary_checkpoints is not None and keep_last_temporary_checkpoints < 0:
             raise ValueError("keep_last_temporary_checkpoints must be non-negative")
 
         self.base_path = str(base_path)
@@ -656,8 +656,9 @@ class Checkpointer:
                 if jax.process_index() == 0:
                     if not save_permanent_ckpt:
                         self._record_temporary_checkpoint(checkpoint_path)
-                        self._prune_temporary_checkpoints(self.keep_last_temporary_checkpoints)
-                    else:
+                        if self.keep_last_temporary_checkpoints is not None:
+                            self._prune_temporary_checkpoints(self.keep_last_temporary_checkpoints)
+                    elif self.keep_last_temporary_checkpoints is not None:
                         self._prune_temporary_checkpoints(0)
 
             self.save_checkpoint(
@@ -1290,8 +1291,8 @@ class CheckpointerConfig:
 
     This is useful if the run is being preempted and restarted, and you want to keep the old checkpoints.
     """
-    keep_last_temporary_checkpoints: int = 1
-    """Number of complete temporary checkpoints to retain after a successful temporary checkpoint commit."""
+    keep_last_temporary_checkpoints: int | None = 1
+    """Temporary checkpoints retained after a commit. None preserves all, including after permanent saves."""
     debug: CheckpointDebugConfig = field(default_factory=CheckpointDebugConfig)
     """Checkpoint-path diagnostics. Disabled by default."""
     write: TensorStoreWriteConfig = field(default_factory=TensorStoreWriteConfig)
@@ -1334,7 +1335,7 @@ class CheckpointerConfig:
             self.debug = CheckpointDebugConfig(**self.debug)
         if isinstance(self.write, dict):
             self.write = TensorStoreWriteConfig(**self.write)
-        if self.keep_last_temporary_checkpoints < 0:
+        if self.keep_last_temporary_checkpoints is not None and self.keep_last_temporary_checkpoints < 0:
             raise ValueError("keep_last_temporary_checkpoints must be non-negative")
 
         # validate the checkpoint intervals.

@@ -3,6 +3,7 @@
 
 import datetime
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -75,6 +76,27 @@ def _metadata(root):
     return {
         path.parent.name: json.loads(path.read_text()) for path in (StoragePath(root) / "step-*/metadata.json").glob()
     }
+
+
+def test_retain_all_keeps_temporary_payloads_after_permanent_save(sft_trainer, clock):
+    config = replace(
+        sft_trainer().checkpointer,
+        keep_last_temporary_checkpoints=None,
+        delete_old_temp_checkpoints=False,
+    )
+    checkpointer = config.create("retain-all")
+    for step in (1, 2):
+        clock.current += datetime.timedelta(minutes=30)
+        checkpointer.on_step(tree=_state(step), step=step)
+        checkpointer.wait_until_finished()
+    checkpointer.on_step(tree=_state(3), step=3, force=True)
+    checkpointer.wait_until_finished()
+    assert set(_metadata(config.temporary_base_path)) == {"step-1", "step-2"}
+    assert set(_metadata(config.base_path)) == {"step-3"}
+    with use_test_mesh():
+        restored = load_checkpoint_or_initialize(lambda: _state(0), [config.temporary_base_path])()
+    for name, expected in _state(2).items():
+        np.testing.assert_array_equal(restored[name], expected)
 
 
 def test_sft_default_rolls_temporary_checkpoints_resumes_and_keeps_final(sft_trainer, clock):

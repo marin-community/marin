@@ -3,6 +3,8 @@
 
 import atexit
 import copy
+import dataclasses
+import gc
 import functools
 import logging as pylogging
 import os
@@ -90,7 +92,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
-from levanter.utils.jax_utils import zeros_like_tree
+from levanter.utils.jax_utils import move_tree_to_memory_kind, zeros_like_tree
 from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
@@ -289,6 +291,7 @@ class Trainer:
         loss_fn: ComputeLossFunction,
         *,
         add_default_hooks: bool = True,
+        loss_weight_fn: Callable | None = None,
     ):
         """
         Args:
@@ -297,12 +300,15 @@ class Trainer:
             loss_fn (Callable): the loss function. This should be a function that takes a model and some inputs and returns
                 either a scalar loss, or a tuple of (scalar loss, metrics_dict). The metrics dict will be automatically
                 logged to the tracker with appropriate prefixes (e.g., "train/accuracy", "eval/perplexity").
+            loss_weight_fn: When supplied, loss_fn returns a summed loss. Normalize by this full-batch weight,
+                including during gradient accumulation. Summed losses also handle empty-label microbatches safely.
                 The function should be jit-able and should not have any side effects.
         """
         self.hooks = TrainerHooks()
         self.config = config
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
+        self.loss_weight_fn = loss_weight_fn
         self._checkpointer: Optional[Checkpointer] = None
         self._xla_dump_upload: Callable[[StepInfo], None] | None = None
 
@@ -548,6 +554,10 @@ class Trainer:
 
         self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
+            if self.config.offload_opt_state:
+                state = dataclasses.replace(
+                    state, opt_state=move_tree_to_memory_kind(state.opt_state, memory_kind="device")
+                )
             # Annotation scoped to the compiled step only (not hooks/logging below) so
             # that GPU host-side step_num timing matches TPU device-side "Steps" semantics.
             with jax.profiler.StepTraceAnnotation("train", step_num=int(state.step)):
@@ -559,6 +569,10 @@ class Trainer:
                     )
 
             loss = result.loss.item()
+            if self.config.offload_opt_state:
+                offloaded = move_tree_to_memory_kind(result.new_state.opt_state, memory_kind="pinned_host")
+                jax.block_until_ready(offloaded)
+                result.new_state = dataclasses.replace(result.new_state, opt_state=offloaded)
             self.hooks.emit_event(ProgressEvent.TRAIN_STEP_FINISHED)
 
             if self.config.crash_on_nan and jnp.isnan(loss):
@@ -607,6 +621,9 @@ class Trainer:
             if is_first_step:
                 logger.info("First train step completed in %.1fs (step %d)", info.step_duration, info.step)
                 is_first_step = False
+
+            if self.config.gc_interval is not None and int(state.step) % self.config.gc_interval == 0:
+                gc.collect()
 
             levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
 
@@ -726,10 +743,10 @@ class Trainer:
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            max_buffered_batches=128,
+            max_buffered_batches=self.config.loader_max_buffered_batches,
             mesh=self.device_mesh,
             axis_resources=self.compute_axis_mapping,
-            fetch_batch_size=32,
+            fetch_batch_size=self.config.loader_fetch_batch_size,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
         )
@@ -801,11 +818,21 @@ class Trainer:
         """
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
 
-        # loss_fn always returns (loss, metrics), so has_aux=True
-        # Only batch inputs should be split; raw model dimensions can match the batch size.
-        grad_fn = partial(eqx.filter_value_and_grad(loss_fn, has_aux=True), model)
-
         mbs = self.config.microbatch_size
+        if self.loss_weight_fn is not None:
+            denominator = jnp.maximum(self.loss_weight_fn(*batch, **batch_kwargs), 1.0)
+            num_microsteps = max(1, Batch.size // mbs) if mbs is not None else 1
+
+            def weighted_loss(model, *microbatch, **kwargs):
+                loss, metrics = loss_fn(model, *microbatch, **kwargs)
+                factor = num_microsteps / denominator
+                return loss * factor, metrics
+
+            differentiated_loss = weighted_loss
+        else:
+            differentiated_loss = loss_fn
+        grad_fn = partial(eqx.filter_value_and_grad(differentiated_loss, has_aux=True), model)
+
         if mbs is not None:
             grad_fn = microbatched(
                 grad_fn,
@@ -813,6 +840,11 @@ class Trainer:
                 mbs,
                 self.parameter_axis_mapping,
                 self.compute_axis_mapping,
+                accum_dtype=(
+                    jnp.dtype(self.config.gradient_accumulation_dtype)
+                    if self.config.gradient_accumulation_dtype is not None
+                    else None
+                ),
             )
 
         with hax.axis_mapping(self.compute_axis_mapping):
@@ -885,6 +917,12 @@ class TrainerConfig:
     """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
+    offload_opt_state: bool = False
+    """Keep optimizer state in pinned host memory between updates."""
+    loader_fetch_batch_size: int = 32
+    loader_max_buffered_batches: int = 128
+    gc_interval: int | None = None
+    gradient_accumulation_dtype: str | None = None
 
     wandb: Optional[WandbConfig] = None
     log_dir: Path = Path("logs/")
