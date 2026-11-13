@@ -123,8 +123,10 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
                 requires_judge=True,
                 version="2026.11.13",
                 operation=OperationKind.CHAT_GENERATION,
+                # Like the reference notebook, keep each model's own sampling defaults; greedy decoding
+                # sends reasoning models such as gpt-oss into repetition loops that exhaust the cap.
                 sampling=Sampling(
-                    temperature=0.0,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=16384 if thinking else 2048,
