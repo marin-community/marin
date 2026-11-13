@@ -70,7 +70,9 @@ def canonical_backend_survey(document: dict) -> BackendSurvey:
     return BackendSurvey.model_validate(
         {
             **document,
-            "sources": [{**source, "source_id": canonical_source_id(source["source_id"])} for source in document["sources"]],
+            "sources": [
+                {**source, "source_id": canonical_source_id(source["source_id"])} for source in document["sources"]
+            ],
         }
     )
 
