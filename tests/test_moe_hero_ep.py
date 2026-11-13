@@ -1079,6 +1079,34 @@ def _latent_config(latent_dim=None):
     )
 
 
+def test_local_attention_ignores_keys_outside_the_window():
+    # The model passes every layer a full-causal mask and carries the local window only in the fa4 bounds.
+    cfg = dataclasses.replace(_latent_config(), max_seq_len=12)
+    window = cfg.sliding_window
+    hidden = jax.random.normal(jax.random.key(71), (1, 12, cfg.hidden_dim))
+    moved_first_token = hidden.at[:, 0].add(1.0)
+    mask = AttentionMask.causal()
+    local_bounds, valid = fa4_cute.fa4_cute_segment_bounds(mask, batch_size=1, seq_len=12, sliding_window=window)
+    global_bounds, _ = fa4_cute.fa4_cute_segment_bounds(mask, batch_size=1, seq_len=12, sliding_window=None)
+
+    with set_mesh(_explicit_mesh(1, 1, 1, 1, 1)):
+        attn = model.CausalSelfAttention.init(cfg, key=jax.random.key(72))
+
+        def change(bounds, is_global):
+            layer_mask = mask.with_fa4_bounds(bounds, valid)
+            before = attn(hidden, layer_mask, is_global=is_global)
+            after = attn(moved_first_token, layer_mask, is_global=is_global)
+            return np.abs(np.asarray(after - before)).max(axis=(0, 2))
+
+        local_change = change(local_bounds, False)
+        global_change = change(global_bounds, True)
+
+    # Position 0 attends only to itself, and XSA removes that value's direction, so it starts at 1.
+    assert np.all(local_change[1:window] > 1e-4)
+    np.testing.assert_array_equal(local_change[window:], 0.0)
+    assert np.all(global_change[1:] > 1e-4)
+
+
 @pytest.mark.parametrize("context_size", [1, 2])
 def test_logits_preserves_context_sharding(context_size):
     mesh = AbstractMesh(
@@ -1174,7 +1202,7 @@ def test_latent_moe_hf_config_roundtrip_preserves_the_architecture():
     roundtripped = model.GrugModelConfig.from_hf_config(hf_config)
 
     assert hf_config.to_dict()["latent_dim"] == 16
-    assert hf_config.to_dict()[model.GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 2
+    assert hf_config.to_dict()[model.GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 3
     assert roundtripped.latent_dim == 16
 
 

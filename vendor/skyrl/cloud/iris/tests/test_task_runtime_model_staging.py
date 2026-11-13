@@ -1,8 +1,14 @@
 from argparse import Namespace
 import hashlib
+import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from dataclasses import asdict
 from pathlib import Path
 import shutil
 
+import huggingface_hub
+import huggingface_hub.constants
 import fsspec
 import numpy as np
 import pytest
@@ -22,7 +28,9 @@ from cloud.iris.task_runtime import (
     prepare_policy_model,
     prepare_policy_tokenizer,
 )
+from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
+from marinskyrl.hf_model import HuggingFaceModelCache
 from marinskyrl.resource_locator import RolloutModelLoading
 
 
@@ -39,27 +47,10 @@ def test_policy_chat_template_selects_materialized_model(
     assert policy_chat_template_model(prestage_model, model_local_path) == expected
 
 
-def _memory_model_snapshot(root: str) -> HuggingFaceSnapshot:
-    """Write a minimal Hugging Face model (metadata, tokenizer, one weight shard) to the memory filesystem."""
-    filesystem = fsspec.filesystem("memory")
-    payloads = {
-        "config.json": b"{}",
-        "tokenizer.json": b"{}",
-        "tokenizer_config.json": b"{}",
-        "model.safetensors": save({"weight": np.arange(4, dtype=np.float32)}),
-    }
-    files = []
-    for path, payload in payloads.items():
-        with filesystem.open(f"{root}/{path}", "wb") as destination:
-            destination.write(payload)
-        files.append(HuggingFaceSnapshotFile(path=path, size=len(payload), sha256=hashlib.sha256(payload).hexdigest()))
-    return HuggingFaceSnapshot(filesystem=filesystem, root=root, files=tuple(files))
-
-
 def test_manifest_policy_stages_metadata_without_materializing_weights(tmp_path, monkeypatch) -> None:
     policy_uri = str(tmp_path / "published-policy")
     manifest = publish_hugging_face_snapshot(
-        _memory_model_snapshot(f"policy-source/{tmp_path.name}"), policy_uri, model_id="org/policy", revision="a" * 40
+        memory_model_snapshot(f"policy-source/{tmp_path.name}"), policy_uri, model_id="org/policy", revision="a" * 40
     )
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
     args = Namespace(
@@ -84,7 +75,7 @@ def test_manifest_policy_stages_metadata_without_materializing_weights(tmp_path,
 @pytest.mark.parametrize("manifest_identity", [True, False])
 def test_local_rollout_staging_preserves_checkpoint_bytes_and_source(tmp_path, monkeypatch, manifest_identity) -> None:
     policy_uri = str(tmp_path / "published-policy")
-    snapshot = _memory_model_snapshot(f"local-policy-source/{tmp_path.name}")
+    snapshot = memory_model_snapshot(f"local-policy-source/{tmp_path.name}")
     manifest = publish_hugging_face_snapshot(snapshot, policy_uri, model_id="org/policy", revision="a" * 40)
     identity = manifest.identity if manifest_identity else "policy-export/step-57"
     monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(tmp_path / "node"))
@@ -113,27 +104,6 @@ def test_local_rollout_staging_preserves_checkpoint_bytes_and_source(tmp_path, m
     )
     assert repeated == prepared
     assert (local / "model.safetensors").read_bytes() == Path(policy_uri, "model.safetensors").read_bytes()
-
-
-def test_hugging_face_draft_mirror_uses_the_policy_tokenizer(tmp_path, monkeypatch) -> None:
-    revision = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
-    cache = tmp_path / "draft-cache"
-    monkeypatch.setattr(hf_model_cache, "marin_temp_bucket", lambda *_args, **_kwargs: str(cache))
-    monkeypatch.setattr(
-        hf_model_cache,
-        "_open_hugging_face_snapshot",
-        lambda _model_id, _revision: _memory_model_snapshot(f"draft-source/{tmp_path.name}"),
-    )
-
-    prepared = prepare_draft_model(
-        SpeculatorModelConfig(source_uri="hf://laion/draft", source_identity=revision),
-        cache_ttl_days=14,
-        cache_source_prefix="s3://region/run",
-    )
-
-    manifest = hf_model_cache.load_model_manifest(str(cache))
-    assert prepared == SpeculatorModelConfig(source_uri=str(cache), source_identity=manifest.identity)
-    assert manifest.tokenizer_mode == "policy"
 
 
 def test_requested_local_policy_tokenizer_is_staged_independently(tmp_path, monkeypatch) -> None:
@@ -281,3 +251,252 @@ def test_staged_policy_model_supplies_its_embedded_tokenizer(tmp_path, monkeypat
         assert model.path == "/tmp/policy-metadata"
         assert model.tokenizer_path == "/tmp/policy-metadata"
         assert model.tokenizer_revision is None
+
+
+@pytest.mark.parametrize("requested_revision", ["a" * 40, "main", "refs/pr/7"])
+def test_node_stages_bucket_mirror_with_hub_downloads_disabled(tmp_path, monkeypatch, requested_revision):
+    mirror = tmp_path / "mirror"
+    manifest = publish_hugging_face_snapshot(
+        memory_model_snapshot(f"staging-source/{tmp_path.name}"),
+        str(mirror),
+        model_id="org/policy",
+        revision="a" * 40,
+    )
+    cache = tmp_path / "hf-cache"
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+
+    def reject_hub_download(*_args, **_kwargs):
+        raise AssertionError("GPU node must not download from the Hub")
+
+    monkeypatch.setattr(hf_model_cache, "snapshot_download", reject_hub_download)
+    monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", reject_hub_download)
+    locator = HuggingFaceModelCache("org/policy", requested_revision, str(mirror), manifest.identity, manifest.revision)
+    node_path = task_runtime.stage_model(locator)
+    snapshot = huggingface_hub.snapshot_download(
+        "org/policy",
+        revision=requested_revision,
+        cache_dir=cache,
+        local_files_only=True,
+    )
+    assert Path(snapshot) == node_path
+    assert (node_path / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
+    assert (node_path / "tokenizer.json").read_bytes() == (mirror / "tokenizer.json").read_bytes()
+
+
+def test_export_stages_policy_without_requiring_old_teacher_mirrors(tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    manifest = publish_hugging_face_snapshot(
+        memory_model_snapshot(f"export-source/{tmp_path.name}"),
+        str(mirror),
+        model_id="org/policy",
+        revision="a" * 40,
+    )
+    cache = tmp_path / "hf-cache"
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    policy = HuggingFaceModelCache("org/policy", "a" * 40, str(mirror), manifest.identity, manifest.revision)
+    # The derived export config can retain locators for training-only teachers whose TTL expired.
+    teacher = HuggingFaceModelCache(
+        "org/teacher", "b" * 40, "memory://expired-teacher-mirror", "sha256:" + "c" * 64, "b" * 40
+    )
+    config = OmegaConf.create(
+        {
+            "run": {"mode": "checkpoint_export"},
+            "inputs": {"model": {"uri": "org/policy"}, "hugging_face_models": [asdict(policy), asdict(teacher)]},
+            "skyrl": {"trainer": {"policy": {"model": {"revision": "a" * 40}}}},
+        }
+    )
+    task_runtime.stage_hugging_face_models(config)
+    path = Path(
+        huggingface_hub.snapshot_download("org/policy", revision="a" * 40, cache_dir=cache, local_files_only=True)
+    )
+    assert (path / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
+    assert not (cache / "models--org--teacher").exists()
+
+
+@pytest.mark.parametrize("requested_revision", ["a" * 40, "main", "refs/pr/7"])
+@pytest.mark.parametrize("missing", ["model.safetensors", ".marinskyrl-model-manifest.json"])
+def test_expired_node_mirror_falls_back_to_the_pinned_hub_commit(tmp_path, monkeypatch, missing, requested_revision):
+    mirror = tmp_path / "mirror"
+    manifest = publish_hugging_face_snapshot(
+        memory_model_snapshot(f"expired-source/{tmp_path.name}"),
+        str(mirror),
+        model_id="org/policy",
+        revision="a" * 40,
+    )
+    (mirror / missing).unlink()
+    cache = tmp_path / "hf-cache"
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    locator = HuggingFaceModelCache("org/policy", requested_revision, str(mirror), manifest.identity, manifest.revision)
+    downloads = []
+    node_snapshot = cache / "models--org--policy" / "snapshots" / ("a" * 40)
+    node_snapshot.mkdir(parents=True)
+    weights = save({"weight": np.arange(4, dtype=np.float32)})
+
+    def download(model_id, *, revision, allow_patterns):
+        downloads.append((model_id, revision))
+        # The Hub branch has advanced, but the CPU-selected commit remains available.
+        selected = node_snapshot if revision == "a" * 40 else node_snapshot.parent / ("b" * 40)
+        selected.mkdir(parents=True, exist_ok=True)
+        (selected / "model.safetensors").write_bytes(weights)
+        return selected
+
+    monkeypatch.setattr(task_runtime, "download_hugging_face_snapshot", download)
+    assert task_runtime.stage_model(locator) == node_snapshot
+    assert (node_snapshot / "model.safetensors").read_bytes() == weights
+    assert downloads == [("org/policy", "a" * 40)]
+    assert (
+        Path(
+            huggingface_hub.snapshot_download(
+                "org/policy", revision=requested_revision, cache_dir=cache, local_files_only=True
+            )
+        )
+        == node_snapshot
+    )
+
+
+def test_concurrent_tasks_stage_the_same_node_snapshot(tmp_path, monkeypatch):
+    mirror = tmp_path / "mirror"
+    manifest = publish_hugging_face_snapshot(
+        memory_model_snapshot(f"concurrent-staging/{tmp_path.name}"),
+        str(mirror),
+        model_id="org/policy",
+        revision="a" * 40,
+    )
+    cache = tmp_path / "hf-cache"
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(cache))
+    locator = HuggingFaceModelCache("org/policy", "main", str(mirror), manifest.identity, manifest.revision)
+    ready = Barrier(8)
+
+    def stage():
+        ready.wait(timeout=10)
+        return task_runtime.stage_model(locator)
+
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        paths = list(workers.map(lambda _: stage(), range(8)))
+    assert len(set(paths)) == 1
+    assert (paths[0] / "model.safetensors").read_bytes() == (mirror / "model.safetensors").read_bytes()
+    assert Path(huggingface_hub.snapshot_download("org/policy", revision="main", local_files_only=True)) == paths[0]
+
+
+@pytest.mark.parametrize("missing", [None, "model.safetensors", ".marinskyrl-model-manifest.json"])
+def test_cpu_draft_mirror_avoids_the_hub_until_any_mirror_file_expires(tmp_path, monkeypatch, missing):
+    mirror = tmp_path / "draft"
+    snapshot = memory_model_snapshot(f"draft-fallback/{tmp_path.name}")
+    manifest = publish_hugging_face_snapshot(
+        snapshot, str(mirror), model_id="org/draft", revision="d" * 40, tokenizer_mode="policy"
+    )
+    if missing:
+        (mirror / missing).unlink()
+    opened = []
+
+    def open_snapshot(model_id, revision):
+        opened.append((model_id, revision))
+        return snapshot
+
+    monkeypatch.setattr(hf_model_cache, "marin_temp_bucket", lambda *_, **__: str(mirror))
+    monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", open_snapshot)
+    cache = HuggingFaceModelCache("org/draft", "d" * 40, str(mirror), manifest.identity, manifest.revision)
+    prepared = prepare_draft_model(
+        SpeculatorModelConfig(str(mirror), manifest.identity),
+        cache_ttl_days=14,
+        cache_source_prefix="s3://region/run",
+        model_caches=(cache,),
+    )
+    assert prepared == SpeculatorModelConfig(str(mirror), manifest.identity)
+    assert (mirror / "model.safetensors").is_file()
+    assert hf_model_cache.load_model_manifest(str(mirror)).identity == manifest.identity
+    assert opened == ([("org/draft", "d" * 40)] if missing else [])
+
+
+def test_shared_snapshot_keeps_tokenizers_and_templates_and_repairs_truncated_weights(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _write_tokenizer(source)
+    (source / "config.json").write_text("{}")
+    weights = save({"weight": np.arange(4, dtype=np.float32)})
+    (source / "model.safetensors").write_bytes(weights)
+    snapshot = HuggingFaceSnapshot(
+        fsspec.filesystem("file"),
+        str(source),
+        tuple(
+            HuggingFaceSnapshotFile(path.name, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in source.iterdir()
+        ),
+    )
+    embedded = tmp_path / "embedded"
+    embedded_manifest = publish_hugging_face_snapshot(snapshot, str(embedded), model_id="org/model", revision="a" * 40)
+    model_only = tmp_path / "model-only"
+    model_manifest = publish_hugging_face_snapshot(
+        HuggingFaceSnapshot(
+            snapshot.filesystem,
+            snapshot.root,
+            tuple(entry for entry in snapshot.files if not entry.path.startswith("tokenizer")),
+        ),
+        str(model_only),
+        model_id="org/model",
+        revision="a" * 40,
+        tokenizer_mode="policy",
+    )
+    monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path / "hf-cache"))
+    full = HuggingFaceModelCache(
+        "org/model", "a" * 40, str(embedded), embedded_manifest.identity, embedded_manifest.revision
+    )
+    partial = HuggingFaceModelCache(
+        "org/model", "a" * 40, str(model_only), model_manifest.identity, model_manifest.revision
+    )
+    node = task_runtime.stage_model(full)
+    shard = node / "model.safetensors"
+    inode = shard.stat().st_ino
+    template = tmp_path / "template.jinja"
+    template.write_text("{{ messages[0]['content'] }}")
+    task_runtime.apply_policy_chat_template(str(node), str(template))
+    tokenizer_bytes = (node / "tokenizer.json").read_bytes()
+    for locator in (partial, full):
+        assert task_runtime.stage_model(locator) == node
+        assert (node / "tokenizer.json").read_bytes() == tokenizer_bytes
+        assert json.loads((node / "tokenizer_config.json").read_text())["chat_template"] == template.read_text()
+        assert (node / "chat_template.jinja").read_text() == template.read_text()
+        assert (node / "tokenizer_config.json.plainbak").is_file()
+        assert shard.stat().st_ino == inode
+    assert AutoTokenizer.from_pretrained(node, local_files_only=True).encode("hello world") == [1, 2]
+    truncated = weights[:8]
+    shard.write_bytes(truncated)
+    original_get = snapshot.filesystem.get_file
+    copies = []
+
+    def copy_without_overwriting_live_file(remote, local, **kwargs):
+        copies.append(remote)
+        assert shard.read_bytes() == truncated
+        original_get(remote, local, **kwargs)
+        assert shard.read_bytes() == truncated
+
+    monkeypatch.setattr(snapshot.filesystem, "get_file", copy_without_overwriting_live_file)
+    assert task_runtime.stage_model(full) == node
+    assert shard.read_bytes() == weights
+    assert shard.stat().st_ino != inode
+    assert copies == [str(embedded / "model.safetensors")]
+
+
+def test_artifact_draft_staging_requires_matching_manifest_identity(tmp_path, monkeypatch) -> None:
+    manifest = publish_hugging_face_snapshot(
+        memory_model_snapshot(f"artifact-draft/{tmp_path.name}"),
+        str(tmp_path / "draft"),
+        model_id="org/draft",
+        revision="a" * 40,
+    )
+    monkeypatch.setattr(task_runtime, "load_model_manifest", lambda _uri: manifest)
+    artifact_uri = "s3://draft/artifact"
+    artifact = prepare_draft_model(
+        SpeculatorModelConfig(source_uri=artifact_uri, source_identity=manifest.identity),
+        cache_ttl_days=14,
+        cache_source_prefix="s3://region/run",
+    )
+    assert artifact.source_uri == artifact_uri and artifact.source_identity == manifest.identity
+    mismatched = SpeculatorModelConfig(
+        source_uri=artifact_uri, source_identity="sha256:" + ("1" if manifest.identity[-1] != "1" else "2") * 64
+    )
+    with pytest.raises(ValueError, match="identity mismatch"):
+        prepare_draft_model(
+            mismatched,
+            cache_ttl_days=14,
+            cache_source_prefix="s3://region/run",
+        )

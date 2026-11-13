@@ -118,9 +118,10 @@ auth:
     - principal:human-080
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
-    - contractor@hai-gcp-models.iam.gserviceaccount.com
+    - principal:human-076
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - morrisy@stanford.edu
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris

@@ -83,6 +83,7 @@ use crate::server::auth::FINELOG_AUDIENCE;
 use crate::server::telemetry::{counter_batch, telemetry_schema, CounterSample};
 use crate::server::MAX_MESSAGE_BYTES;
 use crate::store::ipc::encode_ipc;
+use crate::store::log_read::sql_literal;
 use crate::store::schema::{
     schema_to_proto_owned, Schema, IMPLICIT_CLUSTER_COLUMN, IMPLICIT_SEQ_COLUMN,
     MAX_WRITE_ROWS_BYTES,
@@ -565,8 +566,8 @@ where
         let turn_started = Instant::now();
         self.observe_lag(name, cursor, persisted);
         // The forwarder stamps this column with its own cluster on the way out and
-        // forwards only rows that do not already carry a foreign origin, so a hub's
-        // own relayed rows never loop back. A registered table always has it (added
+        // forwards only rows that are unnamed or already carry its own name, so rows
+        // relayed here from another cluster never loop back. A registered table always has it (added
         // implicitly at registration); a legacy namespace adopted from disk before
         // the column existed does not, and forwards unstamped until it is
         // re-registered.
@@ -991,10 +992,14 @@ where
         let mut sql =
             format!("SELECT * FROM {table} WHERE seq > {read_from} AND seq <= {scanned_through}");
         if has_origin {
-            // Only rows this store's own writers produced. A row that already carries an
-            // origin cluster arrived here by forwarding, and re-forwarding it would loop.
-            // Segments predating the column store NULL, which is a local row.
-            sql.push_str(" AND (cluster IS NULL OR cluster = '')");
+            // Only rows this store's own writers produced: unnamed, or named for this
+            // cluster. A row naming another cluster arrived here by forwarding, and
+            // re-forwarding it would loop. Segments predating the column store NULL,
+            // which is a local row.
+            sql.push_str(&format!(
+                " AND (cluster IS NULL OR cluster = '' OR cluster = {})",
+                sql_literal(&self.config.cluster)
+            ));
         }
         let batch_rows = if name == LOG_NAMESPACE_NAME {
             FORWARD_LOG_BATCH_ROWS

@@ -70,7 +70,9 @@ ones stay out of `final/`.
 | [arc/arc.py](arc/arc.py) | TaskTrove ARC-AGI tasks and the Ultra NVARC components' converter, graded by the vendored NVARC scorer through `arc_grade.py`. |
 | [reasoning_gym/tasks.py](reasoning_gym/tasks.py) | TaskTrove Reasoning Gym tasks, and entries generated from the pinned `reasoning_gym` wheel, which `reasoning_gym_grade.py` regenerates with the grader packages before scoring. |
 | [structure_closure.py](structure_closure.py) | Snowball v0.1 structural train and development-validation splits. Assistant text prefills use the serving model's tokenizer; verifyit grades the first completed outer region in process. |
+| [protocol_probes.py](protocol_probes.py) | Generated evaluation tasks for agent protocols (answer file, tool execution, URL loading). Each answer is a nonce, so the exact-match reward is the protocol result. |
 | [thoughtcrime.py](thoughtcrime.py) | Evaluation prefixes mined from Marin pi trajectories, one per benchmark task, before a reply that closed its reasoning span twice or opened a second span; one-turn tool-calling tasks that verifyit's `reasoning_markup` mode grades in process. |
+| [nemo_tool_calls.py](nemo_tool_calls.py) | Evaluation-only next actions from the pinned NeMo conversational tool-use source; verifyit matches function names and strict JSON arguments in process. |
 | [tasktrove/code.py](tasktrove/code.py) | TaskTrove competitive programming (Code Contests, Codeforces, Nemotron competitive coding, TACO), graded by stdio cases with `COMPILER_GRADER_PACKAGES`. |
 | [tasktrove/python_tests.py](tasktrove/python_tests.py) | TaskTrove Python unit-test sources as one table, graded by pytest. |
 | [tasktrove/nl2bash.py](tasktrove/nl2bash.py) | TaskTrove shell tasks, graded by an output checker. |

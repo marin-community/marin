@@ -11,7 +11,6 @@ from harbor_config.model_name import split_provider_model_name
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.model_api import ModelAPI
-from harbor.models.bridge import BridgeKind
 from harbor.models.task.config import MCPServerConfig
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.models.trial.result import AgentInfo, ModelInfo
@@ -92,7 +91,6 @@ class BaseAgent(ABC):
     # should keep the default False.  The trial runner checks this flag before
     # calling setup() and fails fast with a clear error on mismatch.
     SUPPORTS_WINDOWS: bool = False
-    SUPPORTED_BRIDGES: frozenset[BridgeKind] = frozenset()
 
     session_id: str | None = None
     context_id: UUID | None = None

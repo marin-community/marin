@@ -15,6 +15,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
@@ -54,6 +55,7 @@ from tqdm_loggable.auto import tqdm
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
+from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, sorted_field_dtypes
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -487,12 +489,18 @@ def _load_safetensor_shards(
 # but it means we get to benefit from dead code elimination and other goodness
 @eqx.filter_jit
 def _to_state_dict_with_dtype(
-    model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None
+    model: ModelWithHfSerializationMixin,
+    dtype,
+    subset: tuple[str, ...] | None,
+    field_dtypes: FieldDtypes = (),
 ) -> StateDict:
     """
     Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
-    and optionally subsetting to a given set of keys.
+    and optionally subsetting to a given set of keys. Fields in ``field_dtypes`` are exported in their own dtype.
     """
+    if field_dtypes:
+        model = cast_with_field_dtypes(model, dtype, field_dtypes)
+        dtype = None
     # We don't want to directly use to_torch_compatible_state_dict because it will convert everything to numpy.
     # we don't want to do that here because we want to keep things as jax arrays so we can eval_shape and control
     # sharding
@@ -1093,6 +1101,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
         chat_template: Optional[str] = None,
+        field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1116,6 +1125,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         generation_config.json from the pinned reference checkpoint, when present.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
+        :param field_dtype_overrides: model attribute name (matched at any depth) to the dtype it is exported in,
+            regardless of dtype
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
@@ -1148,7 +1159,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         else:
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
-        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None)
+        overridden = sorted_field_dtypes(field_dtype_overrides)
+        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None, overridden)
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
@@ -1219,7 +1231,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         save_hf_shards(
             shards,
-            lambda keys: _to_state_dict_with_dtype(model, dtype, keys),
+            lambda keys: _to_state_dict_with_dtype(model, dtype, keys, overridden),
             path,
             export_host_budget_bytes=export_host_budget_bytes,
             max_concurrent_shards=max_concurrent_shards,
@@ -1415,6 +1427,7 @@ def save_hf_checkpoint_callback(
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
+    field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1426,6 +1439,7 @@ def save_hf_checkpoint_callback(
     :param upload_to_hf:
     :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
     (written to both tokenizer_config.json and chat_template.jinja)
+    :param field_dtype_overrides: model attribute name to the dtype it is exported in, regardless of save_dtype
     :param hf_upload_kwargs:
     :return:
     """
@@ -1446,6 +1460,7 @@ def save_hf_checkpoint_callback(
             dtype=save_dtype,
             generation_config=generation_config,
             chat_template=chat_template,
+            field_dtype_overrides=field_dtype_overrides,
             **my_upload_kwargs,
         )
 

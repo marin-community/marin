@@ -9,7 +9,9 @@ import sys
 from dataclasses import replace
 
 import pytest
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source
+from taskcompendium.pipeline.inputs import ConversionContext
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
 from verifyit.grade import Status
 from verifyit.modes import grade_pytest
 from verifyit.spec import PytestSpec
@@ -28,6 +30,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.struc
     convert_nemotron_structured_outputs,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
+from experiments.post_training.task_curation.datasets.tasktrove.nl2bash import convert_nl2bash_task
 
 DOCKERFILE = b"FROM python:3.12-slim\n"
 SUM_PROMPT = b"Read two integers and print their sum to stdout in /app/solution.py."
@@ -186,3 +189,23 @@ def test_python_archive_does_not_infer_unstated_module_names():
     assert isinstance(converted.spec, PytestSpec)
     assert "calculator" not in converted.spec.candidate_modules
     assert "app.calculator" not in converted.spec.candidate_modules
+
+
+def test_a_conversion_lowers_the_archive_environment():
+    """The task runs in its own archived recipe on a pinned base, not a shared image."""
+    data = archive_data(verifier_data({"expected_output": "7\n"}))
+    row = RawRow(id="row", source=Source(dataset="d", revision="r", row="row", importer_revision="1"), data=data)
+    context = ConversionContext(
+        inputs={},
+        grader_environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="file:///lock"
+        ),
+    )
+    converted = convert_nl2bash_task(row, context)
+    assert isinstance(converted, NormalizedTask)
+    requirements = converted.task.environment_requirements
+    assert requirements.docker_image.startswith("python:3.12-slim@sha256:")
+    assert requirements.working_directory == "/"  # the fixture recipe declares no WORKDIR
+    # The fixture installs nothing; a recipe's RUN steps become setup commands, covered
+    # by the lowering tests in test_environment_fidelity.
+    assert requirements.setup_commands == ()

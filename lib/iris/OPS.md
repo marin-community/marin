@@ -135,6 +135,34 @@ through Fray. Use a unique `IRIS_PORT_JAX` per concurrent gang. The timeout
 includes queueing, and stopping the coordinator stops its children.
 `SchedulingGated` means Kueue has not admitted the gang. See [CoreWeave](docs/coreweave.md).
 
+### Sandbox prepared-image workdirs
+
+The Kubernetes backend advertises `sandbox-image-workdir` as a task capability.
+SANDBOX pods without a bundle, inline workdir files, or workdir file references
+preserve the prepared image's `/app`; an empty workdir volume would hide those
+files. Explicitly staged inputs and non-sandbox jobs retain their workdir mounts.
+Harbor requires this capability before submitting prepared-image tasks. Older
+controllers need a separately authorized rollout before submitting prepared-image tasks.
+
+### Sandbox disk limits
+
+Kubernetes sandbox pod manifests set CPU and memory container limits. A nonzero
+`ResourceSpec.disk` also sets the pod storage request and limit in exact bytes;
+omitting disk sets neither. Ordinary jobs retain their existing rounded storage
+requests and limits. Sandbox tasks mount no writable hostPath. Kubelet accounts
+for runtime-reported writable layers, logs and disk-backed emptyDir volumes;
+read-only image layers are excluded. Eviction is asynchronous.
+`RESOURCE_LIMIT_DISK` in the task error and attempt terminal reason identifies a
+newly launched sandbox pod evicted for exceeding its own storage limit. This
+charges the failure retry budget. Ordinary pods retain their existing eviction retry behavior.
+
+Disk accounting depends on the container runtime. gVisor writable-layer accounting
+has not been qualified with a sandbox overflow run, so Kubernetes backends do not
+advertise a `sandbox-storage-limit` capability.
+
+Inspect the pod's status reason/message as well as the container termination:
+exit 137 and the word `ephemeral-storage` alone do not establish a task limit.
+
 ### `job run` gotchas
 
 - The current working tree is bundled, including uncommitted code.
@@ -159,11 +187,32 @@ iris attempt events /user/job/0:2
 iris task exec /user/job/0 --timeout 300 -- python -c 'import jax; print(jax.devices())'
 ```
 
-Events retain backend observations and controller decisions across attempts for
-up to 30 days, including deleted Pods. Inspect output archives before repeating
-a workload whose runtime verdict disagrees with its application result; see
-[evaluation audit](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears).
-Exec buffers output, is non-interactive, and defaults to a 60-second timeout.
+`task events` is the first stop when a pod or Kubernetes Event has already been
+garbage-collected. It queries `iris.task_event` across every retained attempt in
+the task's current job incarnation in one call and shows both backend
+observations (`k8s/kueue`, `k8s/container`) and controller decisions
+(`iris/controller`) in chronological order. Events are retained for up to 30
+days. Kubernetes `DisruptionTarget` conditions are recorded as
+`k8s/disruption` events with the pod and node identity plus a snapshot of the
+node's taints, conditions, hardware/topology labels, and CoreWeave health
+annotations.
+
+For an evaluator that retries after a `Completed` container event and a later
+`PodDeleted` worker-failure verdict, inspect its durable result archive before
+rerunning or accepting the retry. The evaluator may already have written a
+complete, sealed result even though its parent lacks a canonical record. See
+[Auditing a curated run](../../docs/tutorials/run-lm-evals.md#audit-a-curated-run-before-its-record-appears)
+for the archive checks. The Iris verdict alone does not establish whether the
+application result is complete.
+
+Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
+
+The exec session is non-interactive and buffers output. To run a command that survives disconnect, wrap with `nohup` + `&`:
+
+```bash
+iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.log 2>&1' &"
+iris task exec /user/job/0 -- cat /tmp/out.log   # check later
+```
 
 ### Task with no logs or W&B progress
 

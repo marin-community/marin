@@ -58,6 +58,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_RAM,
     HERO_QB_HIST_BINS,
     HERO_RACK_GPUS,
+    HERO_SCHEDULE_STEPS,
     hero_rack_batch_size,
     with_transport_remat_mode,
 )
@@ -73,7 +74,6 @@ from experiments.grug.moe_hero_ep.train import (
 logger = logging.getLogger(__name__)
 
 # The hero's own schedule length, so this pytree matches the one a hero resume restores into.
-HERO_SCHEDULE_STEPS = 390_251
 CHECKPOINT_TTL_DAYS = 1
 GIB = 1024**3
 HERO_MODEL_SIZE = "hero"

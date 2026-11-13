@@ -72,10 +72,12 @@ Each attempt creates a fresh verifier machine from that selection.
 SkyRL accepts Parquet rows with a `task_spec` JSON column. Its dataset loader turns
 each canonical `TaskSpec` into a `TaskRolloutSpec` when it loads the data, using
 `environment.task_sessions.task_spec` from the training configuration for limits,
-harness selection and verifier machines. The curation
-[task-selection artifact](task-curation.md#final-task-selection) uses the
-assistant-prefix harness for `structure-closure` tasks and Shellbox for the other
-families. Image graders use the configured image verifier backend; package
+harness selection and verifier machines. A task whose context ends in an assistant
+message runs under the assistant-prefix harness. The `structure-closure` tasks of the
+curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
+Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
+`default_harness`, which defaults to Shellbox.
+Image graders use the configured image verifier backend; package
 graders use the configured local verifier. The inventory artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
@@ -152,8 +154,10 @@ Final tool schemas can condition the continuation. Interactive tools, tool provi
 capabilities are rejected during preflight. The grader can have its own verifier environment and private
 resources. The model must return the continuation as assistant text: parsed reasoning or tool-call
 channels make the attempt invalid, so parser behavior cannot silently turn a continuation into a normal
-zero reward. Structural-closure grading concatenates its fixed text prefix with this continuation and
-scores the first completed outer structure.
+zero reward. When the last token of a continuation is the tokenizer's EOS, `<|eot_id|>` or `<|im_end|>`,
+SkyRL's model client cuts that token from this text, except after a `length` stop. Response token IDs keep it.
+Structural-closure grading concatenates its fixed text prefix with this continuation and scores the first
+completed outer structure.
 
 The selected model tokenizes the conversation and prefill. Training records its actual prompt and sampled
 response tokens with their logprobs through the normal model session. Historical token IDs do not constrain

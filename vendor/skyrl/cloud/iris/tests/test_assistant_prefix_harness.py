@@ -51,6 +51,21 @@ class WorkerTokenizer:
     def apply_chat_template(self, messages, add_generation_prompt, **options):
         return [1, 2]
 
+    def encode(self, text, add_special_tokens):
+        return [3, 4]
+
+
+class TurnEndTokenizer(WorkerTokenizer):
+    """Spells the EOS and each chat-template turn terminator as one token."""
+
+    pieces = {7: ",2]\n```", 97: "<|im_end|>", 98: "<|eot_id|>", 99: "<|end_of_text|>"}
+
+    def encode(self, text, add_special_tokens):
+        return [token for token, piece in self.pieces.items() if piece == text] or [3, 4]
+
+    def decode(self, token_ids, skip_special_tokens):
+        return "".join(self.pieces[token] for token in token_ids)
+
 
 @pytest.fixture
 def task_inputs():
@@ -150,6 +165,63 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
     assert result.response_token_ids == (11, 12, 13)
     assert result.loss_mask == (1, 1, 1)
     assert result.logprobs == (-0.1, -0.2, -0.3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stop_token,stop_reason,content,reward",
+    [
+        (98, "stop", ",2]\n```", 1.0),
+        (97, "stop", ",2]\n```", 1.0),
+        (99, "stop", ",2]\n```", 1.0),
+        (98, "length", ",2]\n```<|eot_id|>", 0.0),
+    ],
+    ids=["llama-turn-end", "qwen-turn-end", "eos", "length-stop"],
+)
+async def test_assistant_prefix_worker_grades_a_code_fence_without_its_stop_token(
+    task_inputs, stop_token, stop_reason, content, reward
+):
+    config, request = task_inputs
+    prefix, expected = "```json\n[1", "```json\n[1,2]\n```"
+    task = request.rows[0].spec.task.model_copy(
+        update={
+            "context": ConversationInput(
+                events=(
+                    TextMessage(role="user", content="Close the fence"),
+                    TextMessage(role="assistant", content=prefix),
+                )
+            ),
+            "answer_type": AnswerType.TEXT,
+            "answer_format": PlainText(),
+            "grader": verifyit_package(StructureClosureSpec(prefix, expected, ClosureFormat.CODE_FENCE)).grader,
+        }
+    )
+    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
+
+    stop_piece = TurnEndTokenizer.pieces[stop_token]
+
+    class Engine:
+        tokenizer = TurnEndTokenizer()
+
+        async def generate(self, model_request):
+            return {
+                "responses": [",2]\n```" + stop_piece],
+                "prompt_ids": model_request["prompt_token_ids"],
+                "response_ids": [[7, stop_token]],
+                "response_logprobs": [[-0.1, -0.2]],
+                "stop_reasons": [stop_reason],
+            }
+
+    worker = TaskRolloutWorker(
+        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30
+    )
+    try:
+        (result,) = await worker.generate(request)
+    finally:
+        await worker.shutdown()
+    assert result.grade.reward == reward
+    assert result.messages[-1]["content"] == content
+    assert result.response_token_ids == (7, stop_token)
 
 
 @pytest.mark.asyncio

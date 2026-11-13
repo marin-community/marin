@@ -12,11 +12,13 @@ import {
   objectStoreUrl,
   shortSha,
 } from '@/utils/formatting'
-import { isPartialCoverage } from '@/utils/panel'
+import { UNVERSIONED_COHORT, isPartialCoverage, scoredItemsLabel } from '@/utils/panel'
+import { metricView, type MetricRow } from '@/utils/runMetrics'
 import { FLAG_NOTES, INTERVAL_KIND, type EvalRecord } from '@/types/api'
 import StatusChip from '@/components/shared/StatusChip.vue'
 import JobsPanel from '@/components/runs/JobsPanel.vue'
 import LogsPanel from '@/components/runs/LogsPanel.vue'
+import MetricTable from '@/components/runs/MetricTable.vue'
 import SamplesPanel from '@/components/runs/SamplesPanel.vue'
 import GroupLinks from '@/components/runs/GroupLinks.vue'
 
@@ -28,23 +30,10 @@ onMounted(refresh)
 watch(() => props.runId, refresh)
 onViewRefresh(refresh)
 
-interface MetricRow {
-  task: string
-  metric: string
-  value: number
-}
-
-const metricRows = computed<MetricRow[]>(() => {
-  const record = data.value
-  if (!record) return []
-  const rows: MetricRow[] = []
-  for (const [task, metrics] of Object.entries(record.metrics ?? {})) {
-    for (const [metric, value] of Object.entries(metrics)) {
-      rows.push({ task, metric, value })
-    }
-  }
-  return rows.sort((a, b) => a.task.localeCompare(b.task) || a.metric.localeCompare(b.metric))
-})
+const metrics = computed(() => (data.value ? metricView(data.value) : { rows: [], raw: [], hasDeclared: false }))
+const metricRows = computed<MetricRow[]>(() => metrics.value.rows)
+const rawRows = computed<MetricRow[]>(() => metrics.value.raw)
+const showRawMetrics = computed(() => metrics.value.hasDeclared && rawRows.value.length > 0)
 
 const jobRoles = computed(() => Object.keys(data.value?.jobs ?? {}))
 
@@ -54,11 +43,17 @@ const jobRoles = computed(() => Object.keys(data.value?.jobs ?? {}))
 const gradedNote = computed<{ label: string; warn: boolean }>(() => {
   const headline = data.value?.headline
   if (!headline) return { label: '', warn: false }
+  if (headline.repeat_aggregation?.coverage_basis === 'source') {
+    return { label: 'source coverage retained; item count uncertain', warn: true }
+  }
   if (headline.interval_kind !== INTERVAL_KIND.IDENTIFIED) {
     return { label: 'attempted count unreported', warn: false }
   }
   const attempted = `${headline.n_attempted ?? 'unknown'}${headline.n_benchmark === null ? '' : ` of ${headline.n_benchmark}`}`
-  const graded = `${headline.n_scored}${headline.n_attempted === null ? '' : ` of ${headline.n_attempted}`}`
+  const gradedCount = headline.repeat_aggregation?.coverage_basis === 'item_lower_bound'
+    ? `at least ${headline.n_scored}`
+    : `${headline.n_scored}`
+  const graded = `${gradedCount}${headline.n_attempted === null ? '' : ` of ${headline.n_attempted}`}`
   return {
     label: `attempted ${attempted} · graded ${graded}`,
     warn: isPartialCoverage(headline) || (headline.benchmark_rate !== null && headline.benchmark_rate < 1),
@@ -149,7 +144,7 @@ async function copyPath() {
         </div>
         <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-text-secondary">
           <RouterLink
-            :to="{ path: `/models/${encodeURIComponent(data.comparison_model)}`, query: { cohort: data.version ?? 'unversioned' } }"
+            :to="{ path: `/models/${encodeURIComponent(data.comparison_model)}`, query: { cohort: data.version ?? UNVERSIONED_COHORT } }"
             class="font-mono text-accent hover:underline"
           >{{ data.model.name }}</RouterLink>
           <span class="text-text-muted">·</span>
@@ -182,7 +177,16 @@ async function copyPath() {
               95% {{ formatInterval(data.headline.low, data.headline.high) }}
             </div>
             <div class="text-xs font-mono text-text-muted truncate max-w-[16rem]" :title="data.headline.metric">
-              {{ data.headline.metric }} · {{ data.headline.n_scored }} items
+              {{ data.headline.metric }} · {{ scoredItemsLabel(data.headline) }}
+            </div>
+            <div v-if="data.headline.repeat_aggregation" class="text-xs text-text-muted mt-0.5">
+              <template v-if="data.headline.repeat_aggregation.n_scored_trials === null">
+                {{ data.headline.repeat_aggregation.n_trials }} planned trials
+              </template>
+              <template v-else>
+                {{ data.headline.repeat_aggregation.n_scored_trials }} of {{ data.headline.repeat_aggregation.n_trials }} trials scored
+              </template>
+              · item-based standard error
             </div>
             <div class="text-xs font-mono mt-0.5" :class="gradedNote.warn ? 'text-status-warning' : 'text-text-muted'">
               {{ gradedNote.label }}
@@ -236,30 +240,20 @@ async function copyPath() {
         </div>
       </div>
 
-      <!-- Metrics -->
       <div>
         <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">Metrics</h3>
         <div v-if="metricRows.length" class="overflow-x-auto rounded-lg border border-surface-border">
-          <table class="w-full border-collapse text-sm">
-            <thead>
-              <tr class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                <th class="px-3 py-2 text-left">Task</th>
-                <th class="px-3 py-2 text-left">Metric</th>
-                <th class="px-3 py-2 text-right">Value</th>
-                <th class="px-3 py-2 text-right">Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="m in metricRows" :key="`${m.task}/${m.metric}`" class="border-b border-surface-border-subtle">
-                <td class="px-3 py-2 font-mono text-[13px]">{{ m.task }}</td>
-                <td class="px-3 py-2 font-mono text-[13px]">{{ m.metric }}</td>
-                <td class="px-3 py-2 text-right tabular-nums text-text-secondary">{{ m.value }}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ formatScore(m.value) }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <MetricTable :rows="metricRows" />
         </div>
         <p v-else class="text-sm text-text-muted">No metrics recorded.</p>
+        <details v-if="showRawMetrics" class="mt-2">
+          <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wider text-text-secondary">
+            All raw metrics ({{ rawRows.length }})
+          </summary>
+          <div class="mt-2 overflow-x-auto rounded-lg border border-surface-border">
+            <MetricTable :rows="rawRows" key-prefix="raw:" />
+          </div>
+        </details>
       </div>
 
       <!-- Per-question samples, when the run exported any. Rendered for every status: a failed eval

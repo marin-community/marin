@@ -101,7 +101,7 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 3
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -511,14 +511,12 @@ class GrugModelConfig:
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
             sconv_kernel=int(_hf_config_attr(hf_config, ("sconv_kernel",), 4)),
             sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "attn", "mlp"))),
+            log_scaling_n_floor=_hf_config_attr(hf_config, ("log_scaling_n_floor",)),
+            log_scaling_alpha=_hf_config_attr(hf_config, ("log_scaling_alpha",)),
+            log_scaling_power=_hf_config_attr(hf_config, ("log_scaling_power",)),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
-        if self.log_scaling_n_floor is not None:
-            raise ValueError(
-                "log_scaling_n_floor is set, but the vLLM and SkyRL Grug models apply only a fixed query scale per "
-                "layer; this model would be served at the wrong temperature past the floor"
-            )
         # One name per field: core fields take the universal transformers spelling, MoE fields the
         # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
         # stays tolerant of the older spellings so existing artifacts keep loading.
@@ -554,6 +552,9 @@ class GrugModelConfig:
             "sconv": self.sconv,
             "sconv_kernel": self.sconv_kernel,
             "sconv_sites": list(self.sconv_sites),
+            "log_scaling_n_floor": self.log_scaling_n_floor,
+            "log_scaling_alpha": self.log_scaling_alpha,
+            "log_scaling_power": self.log_scaling_power,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
         }

@@ -1,6 +1,7 @@
 # NUPA Loose grader replay
 
-Run from a Marin checkout with `vendor/evalchemy`. The replay uses the NUPA Loose
+This historical replay requires Marin revision `eac658e342` and its `vendor/evalchemy`
+environment. New runs use the curated launcher. The replay uses the NUPA Loose
 scorer imported by that checkout's evaluator environment. Each result and the
 run's `provenance.json` record `scorer_sha256`, the SHA-256 digest of the imported
 scorer's Python source. The replay refuses to resume an output prefix whose
@@ -10,7 +11,7 @@ The grader accepts final numbers in `$...$` and `**...**`. It does not split
 period-separated numeric text such as `1046.1046` into an answer, or repair
 concatenated repeats such as `1818` for target `18` or `486.612486.612` for
 target `486.612`. See the
-[grader contract](../../../../../../vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/README.md).
+[grader contract](https://github.com/marin-community/marin/blob/eac658e3423c984926f3335179d3fccf6d926beb/vendor/evalchemy/eval/chat_benchmarks/NUPA-Loose/README.md).
 
 The original completion archive remains the source of each trial, including
 when the tracker points to an earlier replay. Each result records

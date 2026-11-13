@@ -280,15 +280,6 @@ def start_env(
             show_default=False,
         ),
     ] = None,
-    agent_import_path: Annotated[
-        str | None,
-        Option(
-            "--agent-import-path",
-            help="Import path for custom agent (module.path:ClassName).",
-            rich_help_panel="Agent",
-            show_default=False,
-        ),
-    ] = None,
     model_name: Annotated[
         str | None,
         Option(
@@ -340,10 +331,9 @@ def start_env(
     # Create agent config if agent is specified
     agent = None
     agent_config = None
-    if agent_name is not None or agent_import_path is not None:
+    if agent_name is not None:
         agent_config = AgentConfig(
             name=agent_name,
-            import_path=agent_import_path,
             model_name=model_name,
             kwargs=parse_kwargs(agent_kwargs),
         )

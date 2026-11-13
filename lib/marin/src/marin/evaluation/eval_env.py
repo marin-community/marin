@@ -34,6 +34,7 @@ EVAL_ENV_KEYS: tuple[str, ...] = (
     "MODAL_API_KEY",
     "TPU_CI",
     "MARIN_PREFIX",
+    "MARIN_TEMP_PREFIX",
     # Evalchemy FinanceBench grades with an external judge endpoint (marin-community/marin#9070).
     "JUDGE_API_KEY",
     "JUDGE_BASE_URL",
@@ -47,3 +48,6 @@ EVAL_ENV_KEYS: tuple[str, ...] = (
 def env_vars_from_keys(keys: tuple[str, ...]) -> dict[str, str]:
     """The subset of ``keys`` present in the launch environment, as an env-var mapping."""
     return {key: os.environ[key] for key in keys if os.environ.get(key)}
+
+
+EVALUATION_REQUEST_TIMEOUT_SECONDS = 1800
