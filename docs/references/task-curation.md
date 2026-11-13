@@ -1186,6 +1186,55 @@ this exclusion does not establish an oracle score of zero. Unrecognized
 infrastructure failures remain unscored after the retry budget, while other
 population tasks continue. The summary counts exclusions by typed reason.
 
+#### Replaying our infrastructure failures
+
+A backend failure is pending evidence, not a source negative. Before replay,
+obtain an explicit per-task decision classifying the failure as our infrastructure.
+Each approval records `classification="our_infrastructure"`, the exact parent
+`parent_result_sha256`, a `failure_signature`, and a `decision_ref`. Source setup
+failures and scored source negatives do not authorize infrastructure replay.
+
+Freeze the fixed backend from a committed checkout:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter backend-fix \
+  --revision <40-hex-fixed-commit> --output backend-fix.json
+```
+
+The manifest hashes the locked Harbor runtime and its maintained dependencies.
+Include it with the approved task list on the CPU worker. Restore the original
+native packages, parent maps and trial artifacts at their exact absolute paths.
+Create a fresh partition and run one approved fixed-backend phase:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter retry-plan \
+  --cohort ORIGINAL_COHORT --task-map ORIGINAL_FULL_CALIBRATED_MAP \
+  --approvals APPROVED_TASKS.json --backend-fix backend-fix.json --output-dir NEW_PLAN
+uv run python -m experiments.post_training.task_curation.oracle_filter retry \
+  --plan NEW_PLAN/plan.json --output-dir NEW_PHASE --concurrency APPROVED_CONCURRENCY
+uv run python -m experiments.post_training.task_curation.oracle_filter merge-retries \
+  --task-map ORIGINAL_FULL_CALIBRATED_MAP --retry-map NEW_PHASE/task-map.json --output NEW_FULL_MAP
+```
+
+Use a fresh phase directory under the existing calibration root so `collect` can
+inspect both phases through one `--jobs-dir`. No prior file is overwritten.
+The runner verifies the task, native files, declared limits, original backend
+configuration and pinned backend source before dispatch. The existing budget of
+three infrastructure attempts applies independently to this approved phase.
+New attempts record that approved context; historical failure classifications
+remain unchanged, including old phases that stopped after one unknown error.
+Further phases require another explicit decision; the runner never schedules them
+automatically. A failed replay remains unscored for review even if its final raw
+verdict contains zero.
+
+Collect the original full cohort with `NEW_FULL_MAP`. Receipts retain every
+parent phase, its map and result hashes, the approved partition and backend-fix
+identity. Collection checks all original and replayed native packages and results,
+and rejects substituted parent files, input changes or reused attempts. Keep the
+plan, its cohort and parent map, all attempts and the backend manifest in the
+release's private evidence archive. `infrastructure_pending` counts unscored
+cases separately from source oracle failures.
+
 For tasks without original solutions, write calibration-only `solve.sh` scripts
 under `CALIBRATION_SOLUTIONS/TASK_ID/` and supply `--calibration-solutions`.
 These scripts run through the same production Trial path but remain outside the
