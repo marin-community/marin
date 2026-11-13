@@ -252,7 +252,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
             speed=100 + i,
             score=0.49 + i * 0.01,
             attempt_id=f"pinned-{i}",
-            metrics={"policy/entropy": 0.5},
+            metrics={"policy/entropy": 0.49 + i * 0.01},
         )
         for i in range(pin.runs)
     ]
@@ -320,7 +320,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "eval_lite/aaii_category/coding/mean"
     report, second_gate = saved_gate(("policy/entropy<=0", "policy/entropy>=0", f"{relative_key}>=control"))
-    assert report.verdict == "fail"
+    assert report.verdict == "fail", report.reason
     receipt = json.loads((sources[0] / "terminal.json").read_text())
     receipt["result"]["finished_at"] = (
         datetime.fromisoformat(receipt["result"]["started_at"]) + timedelta(hours=2)
