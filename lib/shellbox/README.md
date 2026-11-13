@@ -44,6 +44,11 @@ Iris commands and file transfer use the existing `ExecInContainer` RPC and requi
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer.
+It uploads each control wrapper into a private command directory before execution,
+so nested shell quoting does not enlarge the provider's command-line argument.
+The original argv, stdin, environment and working directory are preserved;
+Linux limits still apply to each original argument. The wrapper is removed with
+the command's other temporary files.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
