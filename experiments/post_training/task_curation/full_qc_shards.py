@@ -7,9 +7,11 @@ import argparse
 import json
 import logging
 from collections import Counter
-from dataclasses import replace
+from dataclasses import asdict, replace
 from uuid import uuid4
 
+from iris.client.client import iris_ctx
+from iris.cluster.types import JobName
 from pydantic import BaseModel
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -64,11 +66,34 @@ def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
     spec = local_reviewer(args.reviewer_version)
     endpoint = spec.endpoint
     assert isinstance(endpoint, (LocalJudgeEndpoint, PinnedLocalJudgeEndpoint))
+    current_root = iris_ctx().job_id
+    if current_root is None:
+        raise ValueError("Shard review requires a coordinator job identity")
+    completed_prefixes = tuple(f"{root}/inference-" for root in (current_root, *args.resume_roots))
+    pending = []
+    for row in work:
+        inputs = load_inputs(row.inputs_path)
+        source_spec = replace(spec, prompt_budget=row.prompt_budget, retry_prompt_budget=row.prompt_budget)
+        pointer = StoragePath(row.shard_output_path) / f"{args.shard_index:03}" / "latest.json"
+        if pointer.exists():
+            previous = read_shard(pointer)
+            if previous.worker_jobs and all(job.startswith(completed_prefixes) for job in previous.worker_jobs):
+                if (
+                    previous.inputs != inputs
+                    or canonical_sha256(previous.reviewer) != canonical_sha256({"mode": "chat", **source_spec.identity})
+                    or canonical_sha256(previous.rubric) != canonical_sha256(asdict(REVIEW_RUBRIC))
+                    or (previous.shard_index, previous.shard_count, previous.batch_offset)
+                    != (args.shard_index, args.shard_count, row.batch_offset)
+                ):
+                    raise ValueError("Completed shard differs from the requested source, reviewer or assignment")
+                logger.info("Reusing completed primary shard: %s", previous.path)
+                continue
+        pending.append((row, inputs, source_spec))
+    if not pending:
+        return
     campaign = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
     with endpoint.serve() as session:
-        for row in work:
-            inputs = load_inputs(row.inputs_path)
-            source_spec = replace(spec, prompt_budget=row.prompt_budget, retry_prompt_budget=row.prompt_budget)
+        for row, inputs, source_spec in pending:
             reviewer = ReadyChatReviewer(
                 session,
                 source_spec,
@@ -173,6 +198,9 @@ def main() -> None:
                 "--batch-workers", required=True, type=int, choices=range(1, SHARD_REQUEST_CONCURRENCY + 1)
             )
             command.add_argument("--review-cache", required=True)
+            command.add_argument(
+                "--resume-root", dest="resume_roots", type=JobName.from_string, action="append", default=[]
+            )
     args = parser.parse_args()
     configure_coreweave_s3()
     work = [ShardWork.model_validate(row) for row in json.loads(StoragePath(args.work).read_text())]

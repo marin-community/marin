@@ -654,6 +654,20 @@ finished batch immediately frees its slot for another assigned batch while
 slower batches continue. Shard receipts remain ordered by original batch index.
 Scheduling does not change reviewer or request identities.
 
+Retries reuse completed source-shard records from the current coordinator root
+before loading a model. To replace a coordinator, stop its writers, then pass
+`--resume-root /owner/retired-coordinator` to reuse its completed source shards.
+Repeat the option for multiple retired roots. Reuse verifies the immutable
+record digest, exact inputs, reviewer, rubric and batch assignment. A completed
+record with a digest or configuration mismatch raises an error before model
+loading. A completed
+primary shard remains frozen even when it contains invalid or uncertain
+observations. Invalid or unavailable observations use the separate repair
+procedure below; completed uncertain observations remain unchanged. Changing
+the pass count does not reopen a completed primary shard.
+If all assigned source shards are complete, the coordinator exits without
+loading a model.
+
 Each pass retries invalid or unavailable observations under the pinned review
 protocol. Valid observations in partially completed batches are retained,
 successful batches are reused, and every attempt remains available. Run exactly

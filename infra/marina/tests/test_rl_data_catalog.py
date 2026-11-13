@@ -109,6 +109,7 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
             BackendSourceMap(
                 source_id=source.id,
                 basis="unassessed",
+                reason="No converted population is bound to this source in the test fixture.",
                 task_count=0,
                 inputs={},
                 demands={},
