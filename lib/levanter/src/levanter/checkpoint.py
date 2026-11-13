@@ -7,6 +7,7 @@ import faulthandler
 import gc
 import json
 import logging
+import math
 import os
 import pathlib
 import queue
@@ -555,7 +556,8 @@ class Checkpointer:
                 raise ValueError("Step policies must be sorted by 'until' value")
 
         # The default of 5 minutes is too short even for modestly sized models for some reason
-        self._manager = GlobalAsyncCheckpointManager(timeout_secs=async_timeout_seconds)
+        # JAX multiplies this by 1000 and passes it to wait_at_barrier, which accepts only an int.
+        self._manager = GlobalAsyncCheckpointManager(timeout_secs=math.ceil(async_timeout_seconds))
 
         if jax.process_index() == 0:
             self._async_checkpoint_remover_queue: queue.Queue[str] = queue.Queue(maxsize=-1)
