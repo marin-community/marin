@@ -186,6 +186,9 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
+   The source map must census every current pinned source's complete converted
+   population; sources without converted inputs are listed `unassessed` with
+   their reason and never as fit.
    For storage-enforcing LOCAL workers, run the survey on the actual PRIVILEGED
    worker with `--local-disk-root /cache/shellbox-disks`. Require its ext4 loop,
    OverlayFS, ENOSPC and cleanup probe to pass. Retain the overflow/neighbor and
@@ -269,11 +272,26 @@ over generated specs, then validates each converted task's combined agent and
 grader machine demands through rolloutengine's machine mapping.
 
 Prepare `survey-inputs.json` with `inputs` entries containing `source_id`, local
-Parquet `paths`, JSON spec `column` and `expected_tasks`. Use complete converted
+Parquet `paths`, JSON spec `column` and `expected_tasks`. A `runtime_column`
+entry reads the published machine allocations from a second Parquet column and
+surveys each row as `{"task": …, "runtime": …}`; converted-spec shards store
+`task_spec` and `runtime` side by side, while published TaskCompendium
+`tasks.parquet` files embed both in `lowered_task_spec`. Use complete converted
 populations, not sampled assessment packets. Each entry must match the selected
-catalog's pinned source revision. Stage remote shards with `uv run fsutil cp`
-near their storage region. The survey streams rows and records input SHA-256s.
-Sources without converted inputs remain explicitly `unassessed`.
+catalog's pinned source revision. On a worker near the shards' storage region,
+stage remote inputs and rewrite their manifest paths with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.stage_survey_manifest \
+  --manifest survey-inputs.json --stage-dir survey-shards \
+  --output staged-survey-inputs.json
+```
+
+The survey streams staged rows and records input SHA-256s. Sources without
+converted inputs remain `unassessed`, and the manifest must declare a
+`unassessed_reasons` entry for each of them individually — a shared blanket
+reason cannot hide an accidentally omitted input, and an entry naming a source
+that has inputs is rejected.
 
 Set `runtime_defaults.agent` and `runtime_defaults.grader` to the deployment's
 explicit machine settings: `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`,
@@ -285,8 +303,34 @@ it never infers missing resource or network policy from backend choice.
 uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,iris]' python -m \
   experiments.post_training.task_curation.backend_capabilities \
   --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
-  --manifest survey-inputs.json --output backend-map.json
+  --manifest staged-survey-inputs.json --output backend-map.json
 ```
+
+On a worker workspace without git metadata, pass the code revision explicitly
+with `--revision`. Pass `--local-disk-root` to verify a LOCAL disk pool on a
+privileged Linux worker: the local checker is constructed with that pool and
+the artifact records the verified pool root from the checker itself, so a
+manifest can never claim a pool the checkers do not use. Without a verified
+pool the LOCAL storage cell stays unsupported with its deployment condition;
+never widen it by hand. Full
+population surveys of every current pinned source (millions of tasks) shard the
+manifest by source, stage each shard beside its storage region, and run one
+survey process per shard concurrently on a CPU worker at production priority.
+Combine the shard artifacts with the tracked merge, which rejects shards that
+disagree on the matrix, runtime profile, deployment limits, schema, revision or
+verified disk pool, rejects a source measured twice, and drops shard-level
+unassessed placeholders:
+
+```bash
+uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,iris]' python -m \
+  experiments.post_training.task_curation.backend_capabilities \
+  --merge partials/shard-01.json partials/shard-02.json \
+  --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
+  --snapshot-id <selected snapshot> --output backend-map.json
+```
+
+The merged artifact must then cover the selected snapshot's complete source
+set; the loader re-checks that coverage and the grading evidence at import.
 
 Add `--local-disk-root /cache/shellbox-disks` only on a worker configured for
 [LOCAL disk enforcement](task-curation.md#full-population-oracle-filter).

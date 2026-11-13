@@ -454,10 +454,11 @@ MarinSkyRL builds them.
 | `current_release` | Required exact `{repo, revision, url}` consumed for training. QUICK uses its pinned input; QA/repair uses its private open-athena release; decontamination uses the configured remediated pin after the pipeline is rebound. Release URLs must match their repository and revision. |
 | `quality_result` | Computed `reviewed`, `issue_count`, `issue_rate`, `verdict`, `issues`, and `repair_recommendation`. `sample_count`, `uncertain_count` and `unavailable_count` retain coverage. Mechanical exclusions remain in their own ledger. |
 
-Catalog publication, metadata refresh, Atlas loading and registered training selection require an
-exact-input `AdmissionCensusReceipt` from task curation. Its `ActorCensusInput` must match the
-current dataset pin, converter and population digest; the retained population must be nonempty,
-and every task must have a runnable grader. Missing or stale receipts fail validation. Native
+Catalog publication, metadata refresh, Atlas loading and registered training selection require
+the grading census carried by the source declaration. Its `ActorCensusInput` must match the
+current dataset pin, converter and retained population; that population must be nonempty, and
+the grading census must cover every task without missing-grader findings. Missing or stale
+evidence fails validation. Native
 Harbor packages are checked for their executable verifier and environment rather than treating
 their `NoGrader` transport wrapper as an absent grader. A population with no executable grader
 is retired into the historical ledger; aliases, previous snapshots and artifacts remain available.
