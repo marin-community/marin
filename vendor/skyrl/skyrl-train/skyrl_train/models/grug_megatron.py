@@ -480,9 +480,10 @@ class GrugSharedExperts(nn.Module):
             expert.backward_dw()
 
 
-# TE 2.19 BF16 FC1 changed fixed local rows when peer expert row counts changed.
-# A 1 KiB workspace passed the repro but was slower and needed a global allocator patch.
-# Revisit when native TE passes Grug's peer-batch parity and trainer checks without that cost.
+# TE 2.21 BF16 FC1 can change a fixed row when its expert's batch size changes.
+# Use this path only for explicitly requested batch invariance. Ordinary RL
+# checks scoring versus training at its existing tolerance instead of exact zero.
+# Remove once native BF16 grouped matmul passes the peer test with BI enabled.
 class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
     """Keep Blackwell BF16 expert rows independent of peer-rank token counts."""
 
@@ -498,11 +499,14 @@ class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
         ):
             return super().forward(x, m_splits)
 
+        # Torch autograd does not populate TE's delayed weight-gradient store.
+        if self.delay_wgrad_compute:
+            raise ValueError("Grug's Blackwell BF16 grouped matmul does not support delayed weight gradients")
         assert not self.use_bias, "Grug expert projections do not use bias"
         # Stack the existing parameters so autograd and checkpoint names stay intact.
         weights = torch.stack([getattr(self, f"weight{i}") for i in range(self.num_gemms)])
         offsets = torch.as_tensor(m_splits, dtype=torch.int32, device=x.device).cumsum(0, dtype=torch.int32)
-        return torch._grouped_mm(x, weights.transpose(1, 2), offs=offsets), None
+        return F.grouped_mm(x, weights.transpose(1, 2), offs=offsets), None
 
 
 class GrugMoELayer(MoELayer):
@@ -566,7 +570,8 @@ def grug_layer_spec(config: TransformerConfig) -> ModuleSpec:
 
     backend = TESpecProvider()
     moe = get_moe_module_spec_for_backend(backend, num_experts=config.num_moe_experts, moe_grouped_gemm=True)
-    moe.keywords["submodules"].experts.keywords["submodules"].linear_fc1 = GrugColumnParallelGroupedLinear
+    if config.grug_batch_invariant_experts:
+        moe.keywords["submodules"].experts.keywords["submodules"].linear_fc1 = GrugColumnParallelGroupedLinear
     moe.keywords["submodules"].router = GrugTopKRouter
     if config.grug_hero:
         shared = moe.keywords["submodules"].shared_experts

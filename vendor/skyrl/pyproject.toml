@@ -96,15 +96,15 @@ vllm = [
     "torch==2.14.1 ; sys_platform == 'linux'",
     "torchdata ; sys_platform == 'linux'",
     "torchvision==0.29.1 ; sys_platform == 'linux'",
-    "vllm==0.0.0.dev20261110+marin.3004cd8f1632.cu132 ; sys_platform == 'linux'",
+    "vllm==0.0.0.dev20261113+marin.0ac9dcb157ee.cu132 ; sys_platform == 'linux'",
 ]
 megatron = [
     "harbor ; sys_platform == 'linux'",
     "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
     "causal-conv1d==1.7.0+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    # Use FA2 without the optional bundled FA4 code; see scripts/wheels/FA2.md.
-    "flash-attn==2.8.3.post2+marin.fa2.cu132torch2141.1 ; sys_platform == 'linux'",
+    # Native FA2 source and compatibility checks: scripts/wheels/README.md.
+    "flash-attn==2.8.4+marin.cu132torch2141.1 ; sys_platform == 'linux'",
     "flash-linear-attention==0.4.2 ; sys_platform == 'linux'",
     "mamba-ssm==2.3.2.post1+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "megatron-bridge==0.6.0 ; sys_platform == 'linux'",
@@ -115,9 +115,9 @@ megatron = [
     "torch==2.14.1 ; sys_platform == 'linux'",
     "torchdata ; sys_platform == 'linux'",
     "torchvision==0.29.1 ; sys_platform == 'linux'",
-    "transformer-engine[pytorch]==2.19.0 ; sys_platform == 'linux'",
-    "transformer-engine-cu13==2.19.0 ; sys_platform == 'linux'",
-    "transformer-engine-torch==2.19.0 ; sys_platform == 'linux'",
+    "transformer-engine[pytorch]==2.21.0 ; sys_platform == 'linux'",
+    "transformer-engine-cu13==2.21.0 ; sys_platform == 'linux'",
+    "transformer-engine-torch==2.21.0 ; sys_platform == 'linux'",
 ]
 telemetry = [
     "marin-rigging[prometheus]",
@@ -233,15 +233,16 @@ langdetect = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu
 pycosat = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
 torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
 torchcodec = { index = "pytorch-cu132", extra = "vllm", marker = "sys_platform == 'linux'" }
-# Torch 2.14.1 wheels use pinned sources and checked-in patches:
-# https://github.com/marin-community/MarinSkyRL/tree/604f2c1463032ffc1f47da114f43cf1d550dd473/scripts/wheels
+# FA2 and TE use the unmodified sources and recipes in scripts/wheels/README.md.
 flash-attn = [
-    { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
-    { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
 harbor = { path = "../harbor", editable = true }
-hs-connectors = { git = "https://github.com/marin-community/speculators.git", rev = "ecac1b16278063e9640004135153882c02de5801", subdirectory = "hs_connectors" }
-speculators = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/speculators-0.9.0a16.post1-py3-none-any.whl" }
+# Matching packages built normally from source; recipe, hashes and checks accompany the release.
+# https://github.com/marin-community/speculators/releases/tag/v0.8.0%2Bmarin.1
+hs-connectors = { url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/hs_connectors-0.8.0%2Bmarin.1-py3-none-any.whl" }
+speculators = { url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/speculators-0.8.0%2Bmarin.1-py3-none-any.whl" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
     { index = "pytorch-cu132", extra = "cuda" },
@@ -255,13 +256,15 @@ torchvision = [
 ]
 flashinfer-cubin = { index = "flashinfer", marker = "sys_platform == 'linux'" }
 vllm = [
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
 ]
 transformer-engine-torch = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
+# These remaining native wheels use the frozen recipes and build patches:
+# https://github.com/marin-community/MarinSkyRL/tree/604f2c1463032ffc1f47da114f43cf1d550dd473/scripts/wheels
 causal-conv1d = [
     { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/causal_conv1d-1.7.0+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
