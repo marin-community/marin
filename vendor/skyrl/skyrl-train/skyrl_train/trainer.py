@@ -72,6 +72,7 @@ from marinskyrl.distillation import (
 )
 from skyrl_train.objective.teacher import teacher_advantages
 from skyrl_train.objective.correction import compute_correction
+from skyrl_train.config.validation import num_rollout_gpus
 from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
@@ -130,7 +131,6 @@ from skyrl_train.utils.utils import (
     moe_router_replay_requested,
     policy_per_gpu_bundles_enabled,
     policy_force_cvd_mask_enabled,
-    num_rollout_gpus,
 )
 
 from skyrl_train.config.objective_spec import rollout_logprobs_required

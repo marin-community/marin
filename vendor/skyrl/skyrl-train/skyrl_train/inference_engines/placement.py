@@ -11,7 +11,7 @@ from marinskyrl.inference_placement import (
     validate_inference_replica_topology,
 )
 from skyrl_train.utils import get_reordered_bundle_indices
-from skyrl_train.utils.placement_geometry import colocated_engine_bundle_indices
+from skyrl_train.config.placement_geometry import colocated_engine_bundle_indices
 
 
 def inference_worker_placement(

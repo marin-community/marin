@@ -72,10 +72,11 @@ Each attempt creates a fresh verifier machine from that selection.
 SkyRL accepts Parquet rows with a `task_spec` JSON column. Its dataset loader turns
 each canonical `TaskSpec` into a `TaskRolloutSpec` when it loads the data, using
 `environment.task_sessions.task_spec` from the training configuration for limits,
-harness selection and verifier machines. The curation
-[task-selection artifact](task-curation.md#final-task-selection) uses the
-assistant-prefix harness for `structure-closure` tasks and Shellbox for the other
-families. Image graders use the configured image verifier backend; package
+harness selection and verifier machines. A task whose context ends in an assistant
+message runs under the assistant-prefix harness. The `structure-closure` tasks of the
+curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
+Other tasks run under `default_harness`, which is Shellbox.
+Image graders use the configured image verifier backend; package
 graders use the configured local verifier. The task-selection artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.

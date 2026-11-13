@@ -63,7 +63,9 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
     changed = snowball.build_run(
         presets.PRESETS["learning-medium"],
         settings=(
-            'trainer={"policy_mini_batch_size": 64, "train_batch_size": 64}',
+            'trainer={"policy_mini_batch_size": 64, "train_batch_size": 64, '
+            '"bf16": false, "algorithm": {"batch_invariant": true}}',
+            "generator.model_dtype=float16",
             "generator.n_samples_per_prompt=8",
             "trainer.micro_train_batch_size_per_gpu=2",
             "trainer.policy.optimizer_config.lr=2.0e-6",
@@ -160,7 +162,7 @@ import asyncio, json, sys
 from types import SimpleNamespace
 from cloud.iris.launch_config import load_launch_config
 from omegaconf import OmegaConf
-from skyrl_train.inference_engines.sampling import get_vllm_sampling_params
+from skyrl_train.inference_engines.utils import get_vllm_sampling_params
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 from skyrl_train.evaluation_profiles import evaluation_profile_config, evaluation_profiles
@@ -233,6 +235,8 @@ print(json.dumps([{
     "export_hf": config.run.export_hf,
     "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
     "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
+    "numerics": [config.skyrl.trainer.bf16, config.skyrl.generator.model_dtype,
+                 config.skyrl.trainer.algorithm.batch_invariant],
     "learning_rate": config.skyrl.trainer.policy.optimizer_config.lr,
     "weight_decay": config.skyrl.trainer.policy.optimizer_config.weight_decay,
     "adam_betas": list(config.skyrl.trainer.policy.optimizer_config.adam_betas),
@@ -316,6 +320,8 @@ print(json.dumps([{
             2e-6,
         )
     assert rows[-4]["engine_kwargs"]["probe"] == {}
+    assert rows[-4]["numerics"] == [False, "float16", True]
+    assert all(row["numerics"] == [True, "bfloat16", False] for row in rows if row is not rows[-4])
     sampled = next(row for row in rows if row["path"] == str(tmp_path / "revisioned-speed.yaml"))
     assert sampled["validation_identity"].partition(":")[0].endswith("@2026.11.12.2")
     assert rows[0]["name"].endswith("2026.11.11.1")
@@ -360,11 +366,11 @@ def test_gated_presets_match_revisioned_native_configs(selection, tmp_path, monk
     for binding, summary in summaries.items():
         (StoragePath(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).write_text(summary)
     revisions = {
-        "speed-short": {"2026.11.11.1": ("24833f43", "3fcca3ec")},
-        "data-short": {"2026.11.11.1": ("ef67d131", "772595fa")},
-        "speed-medium": {"2026.11.12.1": ("c40e01fd", "9a13655e")},
-        "learning-medium": {"2026.11.12.1": ("1acfe060", "3438cc66")},
-        "speed-long": {"2026.11.11.1": ("66d435f5", "63c23ad2")},
+        "speed-short": {"2026.11.11.1": ("119a073c", "f5a95ebb")},
+        "data-short": {"2026.11.11.1": ("99dd7ee3", "41ef7eb9")},
+        "speed-medium": {"2026.11.12.1": ("31ba86e0", "6d3b03ab")},
+        "learning-medium": {"2026.11.12.1": ("f033a3c0", "56608c44")},
+        "speed-long": {"2026.11.11.1": ("41997e47", "4e98a4f5")},
     }
     expected = {name: versions.get(presets.PRESETS[name].revision) for name, versions in revisions.items()}
 

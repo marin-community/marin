@@ -556,6 +556,8 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         ("--replicates", "0"),
         ("--set", "trainer.resume_mode=latest"),
         ("--set", "generator.unrecognised_knob=1"),
+        ("--set", 'generator={"model_dtype":"complex64"}'),
+        ("--set", "generator.backend=sglang", "--set", "trainer.algorithm.batch_invariant=true"),
         ("--set", "trainer.policy.optimizer_config.lr=wrong"),
         ("--set", "+generator.engine_init_kwargs.probe={}"),
         ("--set", "trainer.rollout_buffer.max_staleness_steps=0"),

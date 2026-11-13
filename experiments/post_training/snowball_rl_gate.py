@@ -450,39 +450,14 @@ def _panel_identity(preset: presets.Preset, launch: dict, inputs: GateInputs) ->
         raise InvalidComparison(
             f"recorded panel differs from preset: expected {panel} ({expected}); recorded {recorded}"
         )
-    if evaluation.file != scoring.TRAIN_STEM and any(
-        source["relative_path"] != f"{evaluation.file}.parquet" for source in sources
-    ):
+    if evaluation.held_out and any(source["relative_path"] != f"{evaluation.file}.parquet" for source in sources):
         raise InvalidComparison(f"recorded panel file differs from preset {panel}: expected {evaluation.file}.parquet")
     return panel
 
 
 def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
     """Check planned update completion and finite training loss and gradient evidence."""
-    generating = isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
-    planned = {0} if generating else set(range(1, preset.updates + 1))
-    completed = planned.intersection(metrics)
-    training = [metrics[step] for step in sorted(completed)]
-    invariants = [
-        Invariant(
-            name="planned_updates", value=len(completed), limit=len(planned), comparator="==", holds=completed == planned
-        )
-    ]
-    if not generating:
-        finite = all(
-            all(
-                math.isfinite(row.get(key, math.nan))
-                for key in ("policy/raw_grad_norm", "policy/policy_loss", "policy/final_loss")
-            )
-            and any(key.startswith("loss/") for key in row)
-            and all(math.isfinite(row[key]) for key in row if key.startswith("loss/") or key == "policy/raw_grad_norm")
-            for row in training
-        )
-        invariants.append(
-            Invariant(name="finite_losses_and_gradients", value=finite, limit=True, comparator="==", holds=finite)
-        )
-
-    return tuple(invariants)
+    return preset.recipe.layout.workload.invariants(preset.updates, metrics)
 
 
 def _load_run(
@@ -499,10 +474,9 @@ def _load_run(
     if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
     metrics = read_skyrl_metrics(path)
-    generating = isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
-    training = [
-        row for step, row in sorted(metrics.items()) if (step == 0 if generating else 1 <= step <= preset.updates)
-    ]
+    workload = preset.recipe.layout.workload
+    planned = workload.planned_steps(preset.updates)
+    training = [row for step, row in sorted(metrics.items()) if step in planned]
     invariants = list(training_invariants(preset, metrics))
     answers = scoring.evaluation_answers(path) if preset.evaluations else []
     launch = terminal.native.config
@@ -513,7 +487,7 @@ def _load_run(
         }
         identities = {
             evaluation.name: (
-                (recorded_panels[evaluation.name].task_set_sha256 if evaluation.file != scoring.TRAIN_STEM else None),
+                (recorded_panels[evaluation.name].task_set_sha256 if evaluation.held_out else None),
                 scoring.evaluation_protocol(launch, evaluation.name),
             )
             for evaluation in preset.evaluations
@@ -525,19 +499,17 @@ def _load_run(
     default = presets.default_selection(preset)
     selection = presets.selection_artifact(inputs.tasks) if inputs.tasks else default
     for evaluation in preset.evaluations:
-        quality = evaluation.file != scoring.TRAIN_STEM and any(
-            metric.key.startswith(evaluation.name + "/") for metric in preset.guards
-        )
+        quality = evaluation.held_out and any(metric.key.startswith(evaluation.name + "/") for metric in preset.guards)
         expected = presets.evaluation_answer_count(evaluation, evaluation.tasks(selection, default, preset.eval_lite))
         table = scoring.panel_scores(evaluation, path, answers)
         initial = table.filter(pc.equal(table["step"], 0))
-        table = table.filter(pc.equal(table["step"], -1 if generating else preset.updates))
+        table = table.filter(pc.equal(table["step"], workload.scored_step(preset.updates)))
         scores.append(table)
         initial_scores.append(initial)
         ids = frozenset(table["item"].to_pylist())
-        if evaluation.file != scoring.TRAIN_STEM:
+        if evaluation.held_out:
             panel_ids[evaluation.name] = ids
-        sessions = [(evaluation.name, table, 0 if generating else preset.updates)]
+        sessions = [(evaluation.name, table, workload.metric_step(preset.updates))]
         if evaluation.at_start:
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final panel task IDs differ: {path}")
@@ -558,16 +530,11 @@ def _load_run(
                         answers=session.num_rows,
                     )
                 )
-    prefix = "eval/all/outcome/" if generating else OUTCOME_PREFIX
+    prefix = workload.outcome_prefix
     invariants.append(_grader_errors(training, prefix, "grader_error_fraction"))
     fixed = preset.recipe.fixed_reply_tokens
     if fixed is not None:
-        if generating:
-            holds = {len(row["response_token_ids"]) for _, _, row in answers} == {fixed}
-        else:
-            holds = all(
-                row.get("generate/min_num_tokens") == row.get("generate/max_num_tokens") == fixed for row in training
-            )
+        holds = workload.fixed_reply_holds(fixed, training, answers)
         invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=True, comparator="==", holds=holds))
     missing = any(
         metric.key.startswith("policy/mismatch/")

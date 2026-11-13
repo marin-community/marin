@@ -6,7 +6,7 @@ from skyrlrecipe import SkyRLRecipe
 
 from cloud.iris.launch_config import LaunchTopology
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
-from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
+from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 
 
 @pytest.mark.parametrize("field", ["sampling_params", "eval_sampling_params"])

@@ -17,7 +17,7 @@ from skyrl_train.evaluation_profiles import (
     named_evaluation_metrics,
     evaluation_profile_config,
     evaluation_profiles,
-    evaluation_profile_due,
+    validate_generation_profiles,
 )
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import (
@@ -30,7 +30,8 @@ from skyrl_train.inference_observability import trainer_metrics
 from skyrl_train.metric_names import (
     PROMPTS_DROPPED_TOO_LONG_METRIC,
 )
-from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray, num_rollout_gpus
+from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
+from skyrl_train.config.validation import num_rollout_gpus
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader
@@ -75,8 +76,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
 
     async def _evaluate(self) -> dict[str, Any]:
         profiles = evaluation_profiles(self.cfg)
-        if any(not evaluation_profile_due(profile, step=0, last_step=False) for profile in profiles.values()):
-            raise ValueError("final evaluation profiles require training updates")
+        validate_generation_profiles(profiles)
         datasets = self.get_named_eval_datasets()
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
 
@@ -95,7 +95,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
 
         trajectory_sink = make_trajectory_sink(self.cfg.generator, self.tokenizer)
         trajectory_runner.set_trajectory_sink(trajectory_sink)
-        local_vllm = self.cfg.generator.run_engines_locally and self.cfg.generator.backend == "vllm"
+        local_engines = self.cfg.generator.run_engines_locally
         try:
             await trajectory_runner.startup()
             started = time.perf_counter()
@@ -116,7 +116,7 @@ class EvalOnlyEntrypoint(BasePPOExp):
                     PROMPTS_DROPPED_TOO_LONG_METRIC: self.eval_dataset.prompts_dropped_too_long,
                 }
             )
-            if local_vllm:
+            if local_engines:
                 snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
                 generated_tokens = sum(engine.cumulative.generation_tokens for engine in snapshot.engines)
                 results.update(

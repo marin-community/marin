@@ -165,7 +165,7 @@ def panel_scores(
         if not item:
             raise InvalidComparison(f"evaluation answer lacks a TaskSpec id: {path}")
         metadata = manifest.get(item, {})
-        if evaluation.file != TRAIN_STEM and not metadata:
+        if evaluation.held_out and not metadata:
             raise InvalidComparison(f"panel task {item} is absent from its task manifest")
         verdict = row.get("verification")
         verified = bool(verdict and verdict["status"] == "verified")

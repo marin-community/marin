@@ -4,18 +4,20 @@ Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 import json
-from typing import Any
+from typing import Any, Protocol
 
 from marinskyrl.resource_locator import join_resource_path
 from omegaconf import DictConfig, OmegaConf
 from skyrlrecipe.declared import EvaluationSampling as EvaluationProfile
-from skyrlrecipe.sampling import EvalSamplingParams
+
+
+DEFAULT_EVALUATION_STEPS = 5
 
 
 def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile]:
     profiles = {}
-    allowed = EvaluationProfile.model_fields.keys()
     callbacks = config.get("trainer", {}).get("callbacks")
     if callbacks is None:
         callbacks = ()
@@ -36,18 +38,10 @@ def _declared_profiles(config: Mapping[str, Any]) -> dict[str, EvaluationProfile
                 raise ValueError(f"evaluation name must be an identifier: {name!r}")
             if name in profiles:
                 raise ValueError(f"duplicate evaluation profile: {name}")
-            if not isinstance(parameters, Mapping):
-                raise ValueError(f"evaluation profile {name} must be a mapping")
-            if parameters.get("sampling_params") is not None and not isinstance(parameters["sampling_params"], Mapping):
-                raise ValueError(f"evaluation profile {name}: sampling_params must be a mapping")
-            unknown = set(parameters) - allowed
-            if unknown:
-                raise ValueError(f"evaluation profile {name} has unknown fields: {sorted(unknown, key=str)}")
-            unknown_sampling = set(parameters.get("sampling_params") or {}) - EvalSamplingParams.model_fields.keys()
-            if unknown_sampling:
-                raise ValueError(f"evaluation profile {name} has unknown sampling keys: {sorted(unknown_sampling, key=str)}")
             try:
-                document = OmegaConf.to_container(parameters, resolve=True) if OmegaConf.is_config(parameters) else parameters
+                document = (
+                    OmegaConf.to_container(parameters, resolve=True) if OmegaConf.is_config(parameters) else parameters
+                )
                 profile = EvaluationProfile.model_validate_json(json.dumps(document))
             except (TypeError, ValueError) as error:
                 raise ValueError(f"evaluation profile {name}: {error}") from error
@@ -97,6 +91,66 @@ def evaluation_profiles(
 def evaluation_profile_due(profile: EvaluationProfile, *, step: int, last_step: bool) -> bool:
     """Whether a named request runs at this evaluation event."""
     return profile.schedule == "every_evaluation" or last_step and step > 0
+
+
+def validate_generation_profiles(profiles: Mapping[str, EvaluationProfile]) -> None:
+    if any(not evaluation_profile_due(profile, step=0, last_step=False) for profile in profiles.values()):
+        raise ValueError("final evaluation profiles require training updates")
+
+
+class PeriodicEvaluation(Protocol):
+    @property
+    def eval_steps(self) -> int: ...
+    @property
+    def additional_evaluations(self) -> Mapping[str, EvaluationProfile]: ...
+    @property
+    def metric_groups(self) -> Mapping[str, Sequence[str]]: ...
+    @property
+    def stop_when(self) -> Mapping[str, object]: ...
+
+
+@dataclass(frozen=True)
+class PeriodicEvaluationConfig:
+    eval_steps: int = DEFAULT_EVALUATION_STEPS
+    additional_evaluations: Mapping[str, EvaluationProfile] = field(default_factory=dict)
+    metric_groups: Mapping[str, Sequence[str]] = field(default_factory=dict)
+    stop_when: Mapping[str, object] = field(default_factory=dict)
+
+
+def validate_evaluation_schedule(config: DictConfig, *, generation: bool) -> None:
+    profiles = _declared_profiles(config)
+    if generation:
+        validate_generation_profiles(profiles)
+    evaluations = [
+        PeriodicEvaluationConfig(
+            eval_steps=callback.get("eval_steps", DEFAULT_EVALUATION_STEPS),
+            additional_evaluations={name: profiles[name] for name in callback.get("additional_evaluations") or {}},
+            metric_groups=callback.get("metric_groups") or {},
+            stop_when=callback.get("stop_when") or {},
+        )
+        for callback in config.trainer.get("callbacks") or ()
+        if callback.get("type") == "evaluation"
+    ]
+    validate_periodic_evaluation_inputs(evaluations)
+
+
+def validate_periodic_evaluation_inputs(evaluations: Sequence[PeriodicEvaluation]) -> None:
+    if any(callback.eval_steps > 0 for callback in evaluations):
+        final_prefixes = tuple(
+            f"eval/{name}/"
+            for callback in evaluations
+            for name, profile in callback.additional_evaluations.items()
+            if profile.schedule == "final"
+        )
+        for callback in evaluations:
+            inputs = set(callback.stop_when)
+            inputs.update(key for members in callback.metric_groups.values() for key in members)
+            final_inputs = sorted(key for key in inputs if key.startswith(final_prefixes))
+            if final_inputs:
+                raise ValueError(
+                    "final-only metrics in metric_groups or stop_when require eval_steps=0 on all evaluation callbacks "
+                    f"({', '.join(final_inputs)})"
+                )
 
 
 def named_evaluation_metrics(metrics: Mapping[str, float], name: str) -> dict[str, float]:

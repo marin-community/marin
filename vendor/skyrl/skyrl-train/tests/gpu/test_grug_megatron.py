@@ -35,7 +35,7 @@ from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, _offl
 from skyrl_train.distributed.megatron.megatron_utils import load_megatron_optimizer, offload_megatron_optimizer
 from skyrl_train.distributed.megatron.optimizer import HybridDeviceOptimizer
 from skyrl_train.inference_engines.base import InferenceEngineInput
-from skyrl_train.inference_engines.sampling import get_sampling_params_for_backend
+from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
 from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge_provider
 from skyrl_train.training_batch import TrainingInputBatch
@@ -525,7 +525,9 @@ def test_grug_megatron_four_gpu_disaggregated_rollout_train_sync_rollout(tmp_pat
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
     cfg = _config(
-        str(model_path), world_size=policy_world_size, pp=2 if transport == "broadcast" else 1,
+        str(model_path),
+        world_size=policy_world_size,
+        pp=2 if transport == "broadcast" else 1,
         ep=1 if transport == "broadcast" else 2,
     )
     cfg.generator.weight_sync_transport = transport
@@ -732,9 +734,7 @@ def test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_
         moe_backend="triton",
     )
     try:
-        policy = init_worker_with_type(
-            "policy", shared_pg=shared_pg, colocate_all=True, num_gpus_per_node=4, cfg=cfg
-        )
+        policy = init_worker_with_type("policy", shared_pg=shared_pg, colocate_all=True, num_gpus_per_node=4, cfg=cfg)
         sync = ExpertBlockSync(policy_model=policy, inference_engine_client=client, timeout_seconds=600, colocated=True)
         for step in range(3):
             if step:

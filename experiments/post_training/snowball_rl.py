@@ -223,14 +223,14 @@ def _grafana_links(receipt: AttemptRecord | None, cluster: str) -> dict[str, str
     )
 
 
-def _completed_update(path: str, *, generating: bool) -> int | None:
-    key = presets.GENERATE_WALL_SECONDS_METRIC if generating else "timing/step_wall/unaccounted"
+def _completed_update(path: str, workload: presets.Training | presets.Generation) -> int | None:
+    key = workload.completion_metric
     try:
         metrics = read_skyrl_metrics(path)
     except FileNotFoundError:
         return None
     for _, values in sorted(metrics.items(), reverse=True):
-        if key in values and (generating or values.get("trainer/global_step") == values["step"]):
+        if key in values and workload.completed_row(values):
             return values["step"]
     return None
 
@@ -287,9 +287,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
                     if tracking.get(key) is not None
                 },
                 **({"grafana_links": grafana} if grafana else {}),
-                "latest_completed_update": _completed_update(
-                    path, generating=isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
-                ),
+                "latest_completed_update": _completed_update(path, preset.recipe.layout.workload),
                 "cluster": execution.cluster,
                 "allocation": {
                     **planned[-1]["iris"]["allocation"],
@@ -369,11 +367,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
             },
         },
         "context_budget": planned[0]["skyrl"]["context_budget"],
-        "updates": (
-            0
-            if isinstance(preset.recipe.layout.role_plan, presets.SkyRLGenerationPlan)
-            else planned[0]["skyrl"]["trainer"]["max_steps"]
-        ),
+        "updates": preset.recipe.layout.workload.update_count(planned[0]["skyrl"]["trainer"]["max_steps"]),
         "measured_updates": list(preset.measured),
         "config_changes": list(report.run.config_changes) if report else [],
         "budget_estimate": preset.budget,
