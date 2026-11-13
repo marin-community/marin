@@ -24,7 +24,8 @@ from marin.testing.inference.snowball_repeat_determinism_jobs import (
     measure_vllm_repeat_determinism,
 )
 
-from tests.cluster.conftest import MARIN_GPU_CLUSTER
+# The same gd-8xh100ib-i128 nodes as cw-us-east-02a, which was fully held when this ran.
+H100_CLUSTER = "cw-rno2a"
 
 PENDING_TIMEOUT = 45 * 60.0
 RUNTIME_TIMEOUT = 45 * 60.0
@@ -52,7 +53,7 @@ def _job(label: str, attention_backend: str) -> JobRequest:
             args=[read_representative_goldens(), attention_backend, compile_mode],
         ),
         resources=ResourceConfig.with_gpu(
-            "H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g", target_cluster=MARIN_GPU_CLUSTER
+            "H100", count=GPU_COUNT, cpu=64, ram="512g", disk="128g", target_cluster=H100_CLUSTER
         ),
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
