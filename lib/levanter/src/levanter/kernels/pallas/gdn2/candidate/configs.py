@@ -100,11 +100,13 @@ def _stage_diag(tag: str, x, config: KernelConfig):
     return x
 
 
-def validate_inputs(q, k, v, w, b, g, scale, h0, config: KernelConfig):
+def validate_inputs(q, k, v, w, b, g, h0, config: KernelConfig):
     """Shape/dtype sanity checks shared by forward and backward entry points."""
     if q.ndim != 4:
         raise ValueError(f"q must be (batch, seq_len, heads, d_head); got shape {q.shape}")
     bsz, L, H, D = q.shape
+    if L == 0:
+        raise ValueError("seq_len must be positive")
     if D != 128:
         raise ValueError(f"Kernels assume d_head=128 (MXU tile); got D={D}.")
     if L % config.bt != 0:
@@ -120,6 +122,3 @@ def validate_inputs(q, k, v, w, b, g, scale, h0, config: KernelConfig):
             raise ValueError(f"h0.shape={h0.shape} must be {expected_h0}")
         if h0.dtype != jnp.float32:
             raise ValueError(f"h0 must have dtype float32; got {h0.dtype}")
-
-    n_chunks = L // config.bt
-    return bsz, L, H, D, n_chunks

@@ -51,6 +51,7 @@ def test_gdn2_output_state_and_all_input_gradients_match_recurrence(dtype, decay
     def reference(q, k, v, w, b, g, h0):
         return gdn2_reference(q, k, v, w, b, g, scale, h0)
 
+    actual_forward = candidate(*inputs)
     actual, actual_vjp = jax.vjp(candidate, *inputs)
     cotangents = (jax.random.normal(keys[7], shape), jax.random.normal(keys[8], h0.shape))
     actual_grads = actual_vjp(cotangents)
@@ -64,8 +65,10 @@ def test_gdn2_output_state_and_all_input_gradients_match_recurrence(dtype, decay
         expected, expected_vjp = jax.vjp(reference, *reference_inputs)
         expected_grads = expected_vjp(reference_cotangents)
     tolerance = 1e-4 if dtype == jnp.float32 else 1e-2
-    names = ("output", "final_state", "dq", "dk", "dv", "dw", "db", "dg", "dh0")
-    for name, result, oracle in zip(names, (*actual, *actual_grads), (*expected, *expected_grads), strict=True):
+    names = ("output", "final_state", "vjp_output", "vjp_final_state", "dq", "dk", "dv", "dw", "db", "dg", "dh0")
+    for name, result, oracle in zip(
+        names, (*actual_forward, *actual, *actual_grads), (*expected, *expected, *expected_grads), strict=True
+    ):
         result, oracle = np.asarray(result, dtype=np.float32), np.asarray(oracle, dtype=np.float32)
         assert np.isfinite(result).all(), name
         error = np.abs(result - oracle)

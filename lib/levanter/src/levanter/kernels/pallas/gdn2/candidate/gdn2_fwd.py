@@ -11,6 +11,7 @@ Forward kernels: A (scores) -> B (WY solve) -> C (recompute) -> D (inter-chunk s
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -26,7 +27,6 @@ from .configs import (
     _reshape_from_chunks,
     _reshape_to_chunks,
     _stage_diag,
-    validate_inputs,
 )
 
 _HIGHEST = jax.lax.Precision.HIGHEST
@@ -279,7 +279,6 @@ def _kernel_c_body(
     gc_last_ref,
     *,
     bt: int,
-    config: KernelConfig,
 ):
     q = q_ref[0, 0, 0].astype(jnp.float32)
     k = k_ref[0, 0, 0].astype(jnp.float32)
@@ -326,7 +325,7 @@ def recompute_wy_pallas(q, k, v, w, b, g, A, config: KernelConfig = DEFAULT_CONF
         jax.ShapeDtypeStruct((bsz, H, n_chunks, 1, D), jnp.float32)
     ]
     w_pseudo, u, kg, qg, gc_last = pl.pallas_call(
-        lambda *refs: _kernel_c_body(*refs, bt=config.bt, config=config),
+        lambda *refs: _kernel_c_body(*refs, bt=config.bt),
         name="gdn2_recompute",
         grid=grid,
         in_specs=[io_spec, io_spec, io_spec, io_spec, io_spec, io_spec, a_spec],
@@ -337,7 +336,6 @@ def recompute_wy_pallas(q, k, v, w, b, g, A, config: KernelConfig = DEFAULT_CONF
             (q_r, k_r, v_r, w_r, b_r, g_r, A),
             outputs,
             bt=config.bt,
-            config=config,
         ),
         compiler_params=pltpu.CompilerParams(),
         interpret=config.interpret,
@@ -348,14 +346,8 @@ def recompute_wy_pallas(q, k, v, w, b, g, A, config: KernelConfig = DEFAULT_CONF
 
 
 # ---------- Kernel D ----------
-def gdn2_inter_chunk_combine(
-    Aqk, w_pseudo, u, kg, qg, gc_last, scale, h0=None, config: KernelConfig = DEFAULT_CONFIG, debug_tag: str = ""
-):
-    bsz, H, n_chunks, _BT, D = w_pseudo.shape
-    if h0 is None:
-        h0 = jnp.zeros((bsz, H, D, D), dtype=jnp.float32)
-
-    to_scan = tuple(jnp.moveaxis(x, 2, 0) for x in (Aqk, w_pseudo, u, kg, qg, gc_last))
+def _inter_chunk_scan(chunks, scale, h0, *, retain_state):
+    to_scan = tuple(jnp.moveaxis(x, 2, 0) for x in chunks)
 
     def step(h_pre, inputs):
         Aqk_c, w_pseudo_c, u_c, kg_c, qg_c, gclast_c = inputs
@@ -368,103 +360,64 @@ def gdn2_inter_chunk_combine(
         decay_h = jnp.exp(gclast_c)[..., None]
         write = jnp.einsum("bhid,bhiv->bhdv", kg_c, v_new, precision=_HIGHEST)
         h_new = h_pre * decay_h + write
+        if retain_state:
+            return h_new, (o_c, h_pre, v_new)
         return h_new, o_c
 
-    h_final, o_scanned = jax.lax.scan(step, h0, to_scan)
-    h_final = _stage_diag(f"{debug_tag}:kernel_D_h_final", h_final, config)
-    o = jnp.moveaxis(o_scanned, 0, 2)
-    o = _stage_diag(f"{debug_tag}:kernel_D_o", o, config)
-    return o, h_final
+    return jax.lax.scan(step, h0, to_scan)
 
 
-def gdn2_inter_chunk_combine_with_state(
-    Aqk, w_pseudo, u, kg, qg, gc_last, scale, h0=None, config: KernelConfig = DEFAULT_CONFIG, debug_tag: str = ""
-):
-    bsz, H, n_chunks, _BT, D = w_pseudo.shape
-    if h0 is None:
-        h0 = jnp.zeros((bsz, H, D, D), dtype=jnp.float32)
-
-    to_scan = tuple(jnp.moveaxis(x, 2, 0) for x in (Aqk, w_pseudo, u, kg, qg, gc_last))
-
-    def step(h_pre, inputs):
-        Aqk_c, w_pseudo_c, u_c, kg_c, qg_c, gclast_c = inputs
-        wh = jnp.einsum("bhid,bhdv->bhiv", w_pseudo_c, h_pre, precision=_HIGHEST)
-        v_new = u_c - wh
-        qh = jnp.einsum("bhid,bhdv->bhiv", qg_c, h_pre, precision=_HIGHEST)
-        intra = jnp.einsum("bhij,bhjv->bhiv", Aqk_c, v_new, precision=_HIGHEST)
-        o_c = scale * qh + intra
-
-        decay_h = jnp.exp(gclast_c)[..., None]
-        write = jnp.einsum("bhid,bhiv->bhdv", kg_c, v_new, precision=_HIGHEST)
-        h_new = h_pre * decay_h + write
-        return h_new, (o_c, h_pre, v_new)
-
-    h_final, (o_scanned, h_pre_all, v_new_all) = jax.lax.scan(step, h0, to_scan)
-    h_final = _stage_diag(f"{debug_tag}:kernel_D_h_final", h_final, config)
-    o = jnp.moveaxis(o_scanned, 0, 2)
-    o = _stage_diag(f"{debug_tag}:kernel_D_o", o, config)
-    return o, h_final, h_pre_all, v_new_all
+class _ChunkOperands(NamedTuple):
+    Aqk: jax.Array
+    w_pseudo: jax.Array
+    u: jax.Array
+    kg: jax.Array
+    qg: jax.Array
+    gc_last: jax.Array
 
 
-def gdn2_pallas_forward(q, k, v, w, b, g, scale, h0=None, config: KernelConfig = DEFAULT_CONFIG, debug_tag: str = ""):
-    bsz, L, H, D, n_chunks = validate_inputs(q, k, v, w, b, g, scale, h0, config)
-
+def _prepare_chunks(q, k, v, w, b, g, scale, config) -> tuple[_ChunkOperands, jax.Array]:
     Aqk, Akk = build_chunk_scores_pallas(q, k, b, g, scale, config)
-    Aqk = _stage_diag(f"{debug_tag}:kernel_A_Aqk", Aqk, config)
-    Akk = _stage_diag(f"{debug_tag}:kernel_A_Akk", Akk, config)
+    Aqk = _stage_diag("kernel_A_Aqk", Aqk, config)
+    Akk = _stage_diag("kernel_A_Akk", Akk, config)
 
     A = wy_solve_pallas(Akk, config)
-    A = _stage_diag(f"{debug_tag}:kernel_B_wy_inverse_A", A, config)
+    A = _stage_diag("kernel_B_wy_inverse_A", A, config)
 
     w_pseudo, u, kg, qg, gc_last = recompute_wy_pallas(q, k, v, w, b, g, A, config)
-    w_pseudo = _stage_diag(f"{debug_tag}:kernel_C_w_pseudo", w_pseudo, config)
-    u = _stage_diag(f"{debug_tag}:kernel_C_u", u, config)
-    kg = _stage_diag(f"{debug_tag}:kernel_C_kg", kg, config)
-    qg = _stage_diag(f"{debug_tag}:kernel_C_qg", qg, config)
+    w_pseudo = _stage_diag("kernel_C_w_pseudo", w_pseudo, config)
+    u = _stage_diag("kernel_C_u", u, config)
+    kg = _stage_diag("kernel_C_kg", kg, config)
+    qg = _stage_diag("kernel_C_qg", qg, config)
 
-    o_chunks, h_final = gdn2_inter_chunk_combine(
-        Aqk, w_pseudo, u, kg, qg, gc_last, scale, h0=h0, config=config, debug_tag=debug_tag
-    )
-    o = _reshape_from_chunks(o_chunks, bsz, n_chunks, config.bt, H, D)
-    return o, h_final
+    return _ChunkOperands(Aqk, w_pseudo, u, kg, qg, gc_last), A
 
 
-def gdn2_pallas_forward_with_residuals(
-    q, k, v, w, b, g, scale, h0=None, config: KernelConfig = DEFAULT_CONFIG, debug_tag: str = ""
-):
-    bsz, L, H, D, n_chunks = validate_inputs(q, k, v, w, b, g, scale, h0, config)
+def _scan_output(o_scanned, h_final, shape, config):
+    bsz, length, heads, dim = shape
+    o_chunks = _stage_diag("kernel_D_o", jnp.moveaxis(o_scanned, 0, 2), config)
+    out = _reshape_from_chunks(o_chunks, bsz, length // config.bt, config.bt, heads, dim)
+    return out, _stage_diag("kernel_D_h_final", h_final, config)
 
-    Aqk, Akk = build_chunk_scores_pallas(q, k, b, g, scale, config)
-    Aqk = _stage_diag(f"{debug_tag}:kernel_A_Aqk", Aqk, config)
-    Akk = _stage_diag(f"{debug_tag}:kernel_A_Akk", Akk, config)
 
-    A = wy_solve_pallas(Akk, config)
-    A = _stage_diag(f"{debug_tag}:kernel_B_wy_inverse_A", A, config)
+def gdn2_pallas_forward(q, k, v, w, b, g, scale, h0, config):
+    chunks, _ = _prepare_chunks(q, k, v, w, b, g, scale, config)
+    h_final, o_scanned = _inter_chunk_scan(chunks, scale, h0, retain_state=False)
+    return _scan_output(o_scanned, h_final, q.shape, config)
 
-    w_pseudo, u, kg, qg, gc_last = recompute_wy_pallas(q, k, v, w, b, g, A, config)
-    w_pseudo = _stage_diag(f"{debug_tag}:kernel_C_w_pseudo", w_pseudo, config)
-    u = _stage_diag(f"{debug_tag}:kernel_C_u", u, config)
-    kg = _stage_diag(f"{debug_tag}:kernel_C_kg", kg, config)
-    qg = _stage_diag(f"{debug_tag}:kernel_C_qg", qg, config)
 
-    o_chunks, h_final, h_pre_all, v_new_all = gdn2_inter_chunk_combine_with_state(
-        Aqk, w_pseudo, u, kg, qg, gc_last, scale, h0=h0, config=config, debug_tag=debug_tag
-    )
-    h_pre_all = jnp.moveaxis(h_pre_all, 0, 2)
-    v_new_all = jnp.moveaxis(v_new_all, 0, 2)
-
-    o = _reshape_from_chunks(o_chunks, bsz, n_chunks, config.bt, H, D)
-
+def gdn2_pallas_forward_with_residuals(q, k, v, w, b, g, scale, h0, config):
+    chunks, A = _prepare_chunks(q, k, v, w, b, g, scale, config)
+    h_final, (o_scanned, h_pre_all, v_new_all) = _inter_chunk_scan(chunks, scale, h0, retain_state=True)
+    out, h_final = _scan_output(o_scanned, h_final, q.shape, config)
     residuals = {
-        "Aqk": Aqk,
-        "Akk": Akk,
+        "Aqk": chunks.Aqk,
         "A": A,
-        "h_pre_all": h_pre_all,
-        "v_new_all": v_new_all,
-        "w_pseudo": w_pseudo,
-        "u": u,
-        "kg": kg,
-        "qg": qg,
-        "gc_last": gc_last,
+        "h_pre_all": jnp.moveaxis(h_pre_all, 0, 2),
+        "v_new_all": jnp.moveaxis(v_new_all, 0, 2),
+        "w_pseudo": chunks.w_pseudo,
+        "kg": chunks.kg,
+        "qg": chunks.qg,
+        "gc_last": chunks.gc_last,
     }
-    return o, h_final, residuals
+    return out, h_final, residuals

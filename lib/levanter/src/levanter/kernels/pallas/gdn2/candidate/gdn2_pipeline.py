@@ -64,7 +64,6 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     g = residuals["g"]
     h0 = residuals["h0"]
     Aqk = residuals["Aqk"]
-    Akk = residuals["Akk"]
     A = residuals["A"]
     h_pre_all = residuals["h_pre_all"]
     v_new_all = residuals["v_new_all"]
@@ -89,9 +88,7 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     dAqk, dv_partial = dav_backward_pallas(Aqk, v_new_all, do_r, config)
 
     # B1
-    dh_all, dh0, dv_all = gdn2_dhu_backward(
-        do_r, dv_partial, w_pseudo, qg, kg, gc_last, scale, dht=dh_final, config=config
-    )
+    dh_all, dh0, dv_all = gdn2_dhu_backward(do_r, dv_partial, w_pseudo, qg, kg, gc_last, scale, dht=dh_final)
     dh_next_all = _build_dh_next_all(dh_all, dh_final)
 
     # B3
@@ -109,7 +106,6 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
         v_r,
         gc,
         A,
-        Akk,
         h_pre_all,
         v_new_all,
         do_r,
@@ -119,16 +115,16 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
         config,
     )
 
-    dq4, dk4, db4, dgc4 = intra_backward_pallas(dAqk, b3_out["dAkk"], q, k, b, g, scale, config)
+    dq4, dk4, db4, dgc4 = intra_backward_pallas(dAqk, b3_out.dAkk, q, k, b, g, scale, config)
     # B5
-    dgc_total = b3_out["dgc"] + dgc4
-    dg_raw = reverse_cumsum_bwd(dgc_total, chunk_size=config.bt, config=config)
+    dgc_total = b3_out.dgc + dgc4
+    dg_raw = reverse_cumsum_bwd(dgc_total, chunk_size=config.bt)
 
-    dq = _reshape_from_chunks(b3_out["dq"] + dq4, bsz, n_chunks, config.bt, H, D)
-    dk = _reshape_from_chunks(b3_out["dk"] + dk4, bsz, n_chunks, config.bt, H, D)
-    db = _reshape_from_chunks(b3_out["db"] + db4, bsz, n_chunks, config.bt, H, D)
-    dw = _reshape_from_chunks(b3_out["dw"], bsz, n_chunks, config.bt, H, D)
-    dv = _reshape_from_chunks(b3_out["dv_raw"], bsz, n_chunks, config.bt, H, D)
+    dq = _reshape_from_chunks(b3_out.dq + dq4, bsz, n_chunks, config.bt, H, D)
+    dk = _reshape_from_chunks(b3_out.dk + dk4, bsz, n_chunks, config.bt, H, D)
+    db = _reshape_from_chunks(b3_out.db + db4, bsz, n_chunks, config.bt, H, D)
+    dw = _reshape_from_chunks(b3_out.dw, bsz, n_chunks, config.bt, H, D)
+    dv = _reshape_from_chunks(b3_out.dv_raw, bsz, n_chunks, config.bt, H, D)
     dg = _reshape_from_chunks(dg_raw, bsz, n_chunks, config.bt, H, D)
 
     # Match cotangent dtypes without hiding non-finite arithmetic.
@@ -153,8 +149,8 @@ def gdn2_pallas_forward_trainable(q, k, v, w, b, g, scale, h0=None, config: Kern
     Outputs and final state are FP32. No clipping or non-finite replacement is
     performed, and callers must keep all inputs local to the same device.
     """
-    bsz, L, H, D = q.shape
+    validate_inputs(q, k, v, w, b, g, h0, config)
     if h0 is None:
-        h0 = jnp.zeros((bsz, H, D, D), dtype=jnp.float32)
-    validate_inputs(q, k, v, w, b, g, scale, h0, config)
+        bsz, _, heads, dim = q.shape
+        h0 = jnp.zeros((bsz, heads, dim, dim), dtype=jnp.float32)
     return _gdn2_core(q, k, v, w, b, g, scale, config, h0)

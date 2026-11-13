@@ -10,6 +10,8 @@ Backward kernels: B1 (state) -> B2 (dAqk/dv) -> B3 (WY/dqkg) -> B4 (intra) -> B5
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
@@ -27,7 +29,7 @@ _HIGHEST = jax.lax.Precision.HIGHEST
 
 
 # ---------- B5 ----------
-def reverse_cumsum_bwd(dgc, chunk_size: int, config: KernelConfig = DEFAULT_CONFIG):
+def reverse_cumsum_bwd(dgc, chunk_size: int):
     C = chunk_size
     idx = jnp.arange(C)
     triu_ones = (idx[:, None] <= idx[None, :]).astype(jnp.float32)
@@ -36,9 +38,7 @@ def reverse_cumsum_bwd(dgc, chunk_size: int, config: KernelConfig = DEFAULT_CONF
 
 
 # ---------- B1 ----------
-def gdn2_dhu_backward(
-    do, dv_partial, w_pseudo, qg, kg, gc_last, scale, dht=None, config: KernelConfig = DEFAULT_CONFIG
-):
+def gdn2_dhu_backward(do, dv_partial, w_pseudo, qg, kg, gc_last, scale, dht=None):
     bsz, H, n_chunks, BT, D = qg.shape
     if dht is None:
         dht = jnp.zeros((bsz, H, D, D), dtype=jnp.float32)
@@ -68,7 +68,7 @@ def gdn2_dhu_backward(
 
 
 # ---------- B2 ----------
-def _kernel_b2_body(aqk_ref, vnew_ref, do_ref, daqk_ref, dvnew_ref, *, bt: int, config: KernelConfig):
+def _kernel_b2_body(aqk_ref, vnew_ref, do_ref, daqk_ref, dvnew_ref, *, bt: int):
     Aqk = aqk_ref[0, 0, 0].astype(jnp.float32)
     v_new = vnew_ref[0, 0, 0].astype(jnp.float32)
     do = do_ref[0, 0, 0].astype(jnp.float32)
@@ -91,13 +91,13 @@ def dav_backward_pallas(Aqk, v_new, do, config: KernelConfig = DEFAULT_CONFIG):
 
     outputs = [jax.ShapeDtypeStruct(Aqk.shape, jnp.float32), jax.ShapeDtypeStruct(v_new.shape, jnp.float32)]
     dAqk, dv_new = pl.pallas_call(
-        lambda *refs: _kernel_b2_body(*refs, bt=config.bt, config=config),
+        lambda *refs: _kernel_b2_body(*refs, bt=config.bt),
         name="gdn2_backward_output",
         grid=grid,
         in_specs=[aqk_spec, io_spec, io_spec],
         out_specs=[aqk_spec, io_spec],
         out_shape=outputs,
-        cost_estimate=_kernel_cost(_kernel_b2_body, (Aqk, v_new, do), outputs, bt=config.bt, config=config),
+        cost_estimate=_kernel_cost(_kernel_b2_body, (Aqk, v_new, do), outputs, bt=config.bt),
         compiler_params=pltpu.CompilerParams(),
         interpret=config.interpret,
     )(Aqk, v_new, do)
@@ -113,7 +113,6 @@ def _kernel_b3_body(
     v_ref,
     gc_ref,
     a_ref,
-    akk_ref,
     hpre_ref,
     vnew_ref,
     do_ref,
@@ -215,8 +214,18 @@ def _kernel_b3_body(
     dgc_ref[0, 0, 0] = dgc
 
 
+class WyGradients(NamedTuple):
+    dq: jax.Array
+    dk: jax.Array
+    db: jax.Array
+    dw: jax.Array
+    dv_raw: jax.Array
+    dgc: jax.Array
+    dAkk: jax.Array
+
+
 def wy_dqkg_backward_pallas(
-    q, k, b, w, v, gc, A, Akk, h_pre_all, v_new_all, do, dv, dh_next_all, scale, config: KernelConfig = DEFAULT_CONFIG
+    q, k, b, w, v, gc, A, h_pre_all, v_new_all, do, dv, dh_next_all, scale, config: KernelConfig = DEFAULT_CONFIG
 ):
     bsz, H, n_chunks, _BT, D = q.shape
     grid = (bsz, H, n_chunks)
@@ -240,7 +249,6 @@ def wy_dqkg_backward_pallas(
             io_spec,
             io_spec,
             score_spec,
-            score_spec,
             h_spec,
             io_spec,
             io_spec,
@@ -251,7 +259,7 @@ def wy_dqkg_backward_pallas(
         out_shape=outputs,
         cost_estimate=_kernel_cost(
             _kernel_b3_body,
-            (q, k, b, w, v, gc, A, Akk, h_pre_all, v_new_all, do, dv, dh_next_all),
+            (q, k, b, w, v, gc, A, h_pre_all, v_new_all, do, dv, dh_next_all),
             outputs,
             scale=scale,
             bt=config.bt,
@@ -259,9 +267,9 @@ def wy_dqkg_backward_pallas(
         ),
         compiler_params=pltpu.CompilerParams(),
         interpret=config.interpret,
-    )(q, k, b, w, v, gc, A, Akk, h_pre_all, v_new_all, do, dv, dh_next_all)
+    )(q, k, b, w, v, gc, A, h_pre_all, v_new_all, do, dv, dh_next_all)
 
-    return dict(dq=dq, dk=dk, db=db, dw=dw, dv_raw=dv_raw, dgc=dgc, dAkk=dAkk)
+    return WyGradients(dq, dk, db, dw, dv_raw, dgc, dAkk)
 
 
 # ---------- B4 ----------

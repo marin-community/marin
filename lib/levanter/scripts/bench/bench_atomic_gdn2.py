@@ -19,6 +19,7 @@ accepted timing. Output rows use seconds and include the exact numerical gate.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import importlib
 from importlib.metadata import PackageNotFoundError, version
@@ -135,6 +136,14 @@ def deviations(actual, expected, names, atol, rtol):
     return passed, metrics
 
 
+@dataclass(frozen=True)
+class CompiledCall:
+    executable: jax.stages.Compiled
+    result: Any
+    compile_time: float
+    first_execution: float
+
+
 def compile_call(function, inputs):
     started = time.perf_counter()
     executable = jax.jit(function).lower(*inputs).compile()
@@ -142,7 +151,7 @@ def compile_call(function, inputs):
     started = time.perf_counter()
     result = jax.block_until_ready(executable(*inputs))
     first_execution = time.perf_counter() - started
-    return executable, result, compile_time, first_execution
+    return CompiledCall(executable, result, compile_time, first_execution)
 
 
 def measure(executable, inputs, warmup, repetitions):
@@ -258,7 +267,96 @@ def baseline_version(parser: argparse.ArgumentParser, implementations: list[str]
     return installed
 
 
-def main():
+def benchmark_tile(base, inputs, cotangents, ref_out, ref_grad, warmup, repetitions):
+    bt = base["block_sizes"]["bt"]
+    mb = base["block_sizes"]["mb"]
+    try:
+        if base["implementation"] == "candidate":
+            module_name = "levanter.kernels.pallas.gdn2.candidate"
+            layout = ScoreLayout.for_device_kind(base["device_type"])
+            config = KernelConfig(bt=bt, mb=mb, score_layout=layout, diagnostics=base["diagnostics"])
+            base["score_layout"] = layout.value
+        else:
+            module_name = "atomic_ops"
+            config_module = importlib.import_module("atomic_ops.configs")
+            config = config_module.KernelConfig(bt=bt, bc=bt // 2, mb=mb, wy_eps=0.0)
+            base["score_layout"] = "upstream"
+        kernel = importlib.import_module(module_name + ".gdn2_pipeline").gdn2_pallas_forward_trainable
+
+        def forward(q, k, v, w, b, g, h0):
+            return kernel(q, k, v, w, b, g, base["shape"][-1] ** -0.5, h0=h0, config=config)
+
+        backward = jax.value_and_grad(scalar_loss(forward, cotangents), argnums=tuple(range(7)))
+        checked = []
+        for mode, function, expected, names in (
+            ("forward", forward, ref_out, FORWARD_NAMES),
+            ("forward_backward", backward, ref_grad, GRADIENT_NAMES),
+        ):
+            row = dict(base, mode=mode)
+            executable = None
+            try:
+                compiled = compile_call(function, inputs)
+                executable = compiled.executable
+                row.update(
+                    compile_time=compiled.compile_time,
+                    first_execution_time=compiled.first_execution,
+                    time_to_first_result=compiled.compile_time + compiled.first_execution,
+                )
+                passed, errors = deviations(compiled.result, expected, names, base["atol"], base["rtol"])
+                row.update(correctness=errors, correctness_passed=passed)
+                if not passed:
+                    row["error"] = "correctness_failure"
+                del compiled
+            except Exception as exc:
+                row.update(error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
+            checked.append((row, executable))
+        eligible = all(row.get("correctness_passed", False) and row["error"] is None for row, _ in checked)
+        for row, executable in checked:
+            row["configuration_correctness_passed"] = eligible
+            row["timing_accepted"] = False
+            if eligible:
+                try:
+                    timings = measure(executable, inputs, warmup, repetitions)
+                    row.update(steady_state_time=statistics.median(timings), samples=timings, timing_accepted=True)
+                except Exception as exc:
+                    row.update(error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
+            elif row["error"] is None:
+                row["error"] = "paired_mode_correctness_failure"
+        return [row for row, _ in checked]
+    except Exception as exc:
+        row = dict(base, mode="setup", error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
+        return [row]
+
+
+def source_provenance() -> dict[str, Any]:
+    git_sha = os.environ.get("GDN2_GIT_SHA")
+    git_dirty = None
+    if git_sha is None:
+        revision = subprocess.run(["git", "rev-parse", "HEAD"], text=True, capture_output=True, check=False)
+        if revision.returncode == 0:
+            git_sha = revision.stdout.strip()
+            git_dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
+    source_digest = hashlib.sha256()
+    source_root = Path(gdn2.__file__).parent
+    for source in sorted(source_root.rglob("*.py")):
+        source_digest.update(str(source.relative_to(source_root)).encode())
+        source_digest.update(source.read_bytes())
+    source_digest.update(Path(__file__).read_bytes())
+    source_sha256 = source_digest.hexdigest()
+    environment = {
+        name: os.environ.get(name, "")
+        for name in ("LIBTPU_INIT_ARGS", "JAX_PLATFORMS", "JAX_DEFAULT_MATMUL_PRECISION", "GDN2_FWD_DIAG")
+    }
+    return {
+        "git_sha": git_sha,
+        "git_dirty": git_dirty,
+        "source_sha256": source_sha256,
+        "xla_flags": os.environ.get("XLA_FLAGS", ""),
+        "backend_env": environment,
+    }
+
+
+def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shape", type=parse_shape, action="append")
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), action="append")
@@ -290,36 +388,25 @@ def main():
         parser.error("Pallas benchmark requires TPU; CPU fallback timings are not kernel evidence")
     if args.device_type and args.device_type.lower() not in device.device_kind.lower():
         parser.error(f"Expected {args.device_type}, found {device.device_kind}")
+    args.implementation = args.implementation or ["upstream", "candidate"]
+    atomic_ops_version = baseline_version(parser, args.implementation)
+    if args.decay and any(not math.isfinite(decay) or decay < 0 for decay in args.decay):
+        parser.error("Decay must be finite and nonnegative")
+    return args, device, atomic_ops_version
+
+
+def main():
+    args, device, atomic_ops_version = parse_args()
     reference_device = jax.local_devices(backend="cpu")[0] if args.reference_device == "cpu" else device
     shapes = args.shape or [(1, 256, 1, 128)]
     dtypes = args.dtype or ["float32", "bfloat16"]
-    implementations = args.implementation or ["upstream", "candidate"]
-    atomic_ops_version = baseline_version(parser, implementations)
+    implementations = args.implementation
     configs = list(itertools.product(args.bt or [256], args.mb or [16]))
     seeds = args.seed or [0]
     decays = args.decay or [0.01]
-    if any(not math.isfinite(decay) or decay < 0 for decay in decays):
-        parser.error("Decay must be finite and nonnegative")
-    git_sha = os.environ.get("GDN2_GIT_SHA")
-    git_dirty = None
-    if git_sha is None:
-        revision = subprocess.run(["git", "rev-parse", "HEAD"], text=True, capture_output=True, check=False)
-        if revision.returncode == 0:
-            git_sha = revision.stdout.strip()
-            git_dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
-    source_digest = hashlib.sha256()
-    source_root = Path(gdn2.__file__).parent
-    for source in sorted(source_root.rglob("*.py")):
-        source_digest.update(str(source.relative_to(source_root)).encode())
-        source_digest.update(source.read_bytes())
-    source_digest.update(Path(__file__).read_bytes())
-    source_sha256 = source_digest.hexdigest()
+    provenance = source_provenance()
     output_path = args.output or Path(os.environ.get("IRIS_OUTPUT_DIR", "/tmp")) / f"gdn2-{time.time_ns()}.jsonl"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    environment = {
-        name: os.environ.get(name, "")
-        for name in ("LIBTPU_INIT_ARGS", "JAX_PLATFORMS", "JAX_DEFAULT_MATMUL_PRECISION", "GDN2_FWD_DIAG")
-    }
     tuning_cache = load_tuning_cache(args.tuning_cache) if args.tuning_cache else {}
     failures = 0
     # A new output file prevents accidental mixing of runs or duplicate keys.
@@ -345,7 +432,7 @@ def main():
                 }
             contexts = {
                 implementation: {
-                    "source_sha256": source_sha256,
+                    "source_sha256": provenance["source_sha256"],
                     "jax_version": jax.__version__,
                     "device_type": device.device_kind,
                     "device_count": 1,
@@ -354,8 +441,8 @@ def main():
                     "implementation": implementation,
                     "atomic_ops_version": atomic_ops_version if implementation == "upstream" else None,
                     "diagnostics": args.diagnostics if implementation == "candidate" else False,
-                    "backend_env": environment,
-                    "xla_flags": os.environ.get("XLA_FLAGS", ""),
+                    "backend_env": provenance["backend_env"],
+                    "xla_flags": provenance["xla_flags"],
                     "configs": sorted(configs),
                     "objective": "forward_backward",
                     "seed": seed,
@@ -391,11 +478,7 @@ def main():
                     "device_count": 1,
                     "available_device_count": jax.device_count(),
                     "block_sizes": {"bt": bt, "bc": bt // 2, "mb": mb},
-                    "git_sha": git_sha,
-                    "git_dirty": git_dirty,
-                    "source_sha256": source_sha256,
-                    "xla_flags": os.environ.get("XLA_FLAGS", ""),
-                    "backend_env": environment,
+                    **provenance,
                     "jax_version": jax.__version__,
                     "seed": seed,
                     "decay": decay,
@@ -413,76 +496,14 @@ def main():
                         if orders[implementation][1] == (bt, mb)
                         else "fallback_after_failed_hit" if orders[implementation][1] is not None else "miss"
                     )
-                try:
-                    if implementation == "candidate":
-                        module_name = "levanter.kernels.pallas.gdn2.candidate"
-                        layout = ScoreLayout.for_device_kind(device.device_kind)
-                        config = KernelConfig(bt=bt, mb=mb, score_layout=layout, diagnostics=args.diagnostics)
-                        base["score_layout"] = layout.value
-                    else:
-                        module_name = "atomic_ops"
-                        config_module = importlib.import_module("atomic_ops.configs")
-                        config = config_module.KernelConfig(bt=bt, bc=bt // 2, mb=mb, wy_eps=0.0)
-                        base["score_layout"] = "upstream"
-                    kernel = importlib.import_module(module_name + ".gdn2_pipeline").gdn2_pallas_forward_trainable
-
-                    def forward(q, k, v, w, b, g, h0):
-                        return kernel(q, k, v, w, b, g, shape[-1] ** -0.5, h0=h0, config=config)
-
-                    backward = jax.value_and_grad(scalar_loss(forward, cotangents), argnums=tuple(range(7)))
-                    checked = []
-                    for mode, function, expected, names in (
-                        ("forward", forward, ref_out, FORWARD_NAMES),
-                        ("forward_backward", backward, ref_grad, GRADIENT_NAMES),
-                    ):
-                        row = dict(base, mode=mode)
-                        executable = None
-                        try:
-                            executable, result, compile_time, first = compile_call(function, inputs)
-                            row.update(
-                                compile_time=compile_time,
-                                first_execution_time=first,
-                                time_to_first_result=compile_time + first,
-                            )
-                            passed, errors = deviations(result, expected, names, tolerance, tolerance)
-                            row.update(correctness=errors, correctness_passed=passed)
-                            if not passed:
-                                row["error"] = "correctness_failure"
-                                failures += 1
-                            del result
-                        except Exception as exc:
-                            row.update(error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
-                            failures += 1
-                        checked.append((row, executable))
-                    eligible = all(row.get("correctness_passed", False) and row["error"] is None for row, _ in checked)
-                    for row, executable in checked:
-                        row["configuration_correctness_passed"] = eligible
-                        row["timing_accepted"] = False
-                        if eligible:
-                            try:
-                                timings = measure(executable, inputs, args.warmup, args.repetitions)
-                                row.update(
-                                    steady_state_time=statistics.median(timings), samples=timings, timing_accepted=True
-                                )
-                            except Exception as exc:
-                                row.update(error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
-                                failures += 1
-                        elif row["error"] is None:
-                            row["error"] = "paired_mode_correctness_failure"
-                        output_file.write(json.dumps(row, allow_nan=False) + "\n")
-                        output_file.flush()
-                        print(json.dumps(row, allow_nan=False), flush=True)
-                        measured[implementation].append(row)
-                    del checked
-                except Exception as exc:
-                    row = dict(
-                        base, mode="setup", error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc()
-                    )
-                    output_file.write(json.dumps(row, allow_nan=False) + "\n")
+                rows = benchmark_tile(base, inputs, cotangents, ref_out, ref_grad, args.warmup, args.repetitions)
+                for row in rows:
+                    line = json.dumps(row, allow_nan=False)
+                    output_file.write(line + "\n")
                     output_file.flush()
-                    print(json.dumps(row, allow_nan=False), flush=True)
-                    measured[implementation].append(row)
-                    failures += 1
+                    print(line, flush=True)
+                measured[implementation].extend(rows)
+                failures += sum(row["error"] not in (None, "paired_mode_correctness_failure") for row in rows)
             if args.tuning_cache:
                 for implementation in implementations:
                     update_tuning_entry(tuning_cache, contexts[implementation], measured[implementation], output_path)

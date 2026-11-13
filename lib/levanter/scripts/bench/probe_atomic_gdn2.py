@@ -103,8 +103,9 @@ def stage_b2(module, config, aqk, v_new, do):
 
 
 def stage_b3(module, config, q, k, b, w, v, gc, a, akk, h_pre, v_new, do, dv, dh_next):
+    wy_inputs = (a, akk) if module.__name__.startswith("atomic_ops.") else (a,)
     return module.wy_dqkg_backward_pallas(
-        q, k, b, w, v, gc, a, akk, h_pre, v_new, do, dv, dh_next, 128**-0.5, config=config
+        q, k, b, w, v, gc, *wy_inputs, h_pre, v_new, do, dv, dh_next, 128**-0.5, config=config
     )
 
 
