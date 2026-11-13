@@ -66,16 +66,6 @@ class Data(Section):
     kind: Literal["tasks", "parquet"] = field("tasks")
 
 
-class CheckpointExport(Section):
-    step: NonNegativeInt | None = field(None)
-    checkpoint_path: str | None = field(None)
-    export_root: str | None = field(None)
-    hf_hub_repo_id: str | None = field(None)
-    hf_hub_private: bool = field(False)
-    hf_hub_revision: str = field("main")
-    hf_upload_mode: Literal["latest", "all"] = field("latest")
-
-
 class TrajectorySelector(Section):
     type: Literal["best_of_n"] | None = field(None)
     "null | best_of_n; selection runs after reward postprocessing and before teacher scoring"
@@ -719,6 +709,8 @@ class SamplingParams(Section):
     top_k: int = field(-1)
     logprobs: NonNegativeInt | None = field(None)
     stop: tuple[str, ...] | None = field(None)
+    stop_token_ids: tuple[int, ...] | None = field(None)
+    skip_special_tokens: bool = field(True)
     min_tokens: NonNegativeInt = unset_field()
 
 
@@ -792,7 +784,7 @@ class TrajectoryRetention(Section):
     model_path: str = unset_field()
     model_source_identity: str = unset_field()
     resume_path: str = unset_field()
-    inference_backend: Literal["vllm", "sglang"] = unset_field()
+    inference_backend: Literal["vllm"] = unset_field()
 
 
 class Generator(Section):
@@ -809,7 +801,7 @@ class Generator(Section):
     """TOPOLOGY-SENSITIVE: this is a replica count; local disaggregated launchers compile replica geometry into a
     packed whole-node rollout pool. Wrappers must not assume that changing replicas leaves the requested gang
     unchanged."""
-    backend: Literal["vllm", "sglang"] = field("vllm")
+    backend: Literal["vllm"] = field("vllm")
     vllm_attention_backend: str | None = field(None)
     weight_sync_backend: Literal["nccl", "gloo"] = field("nccl")
     weight_sync_pause: WeightSyncPause = Field(default_factory=WeightSyncPause)
@@ -817,8 +809,9 @@ class Generator(Section):
     weight_sync_transport: Literal["broadcast", "expert_block"] = field("broadcast")
     """How weights reach the engines. "broadcast": trainer rank 0 sends every tensor to every engine. "expert_block":
     each MoE expert matrix is broadcast from a Megatron rank that holds it to the vLLM workers that serve it.
-    Needs engines that are not colocated with training, a Grug MoE on the megatron strategy at TP=1 and ETP=1,
-    local vLLM engines at TP=1 with EP=DP>=1, the NCCL weight-sync backend and vLLM's TRITON MoE backend."""
+    Needs a Grug MoE on Megatron at TP=ETP=1, local vLLM engines at TP=1 with EP=DP>=1, NCCL, and vLLM's TRITON
+    MoE backend. Colocation is limited to one four-GPU node with policy PP=1 EP=4, one TP=PP=1 DP=EP=4 engine, and
+    expert_block_sync.verify=true."""
     expert_block_sync: ExpertBlockSync = Field(default_factory=ExpertBlockSync)
     fuse_weights: bool = field(False)
     r3_transport: Literal["by_value", "resident", "decentral"] = field("decentral")
@@ -908,7 +901,6 @@ class TrajectoryRunner(Section):
 
 class RecipeSections(Section):
     data: Data = Field(default_factory=Data)
-    checkpoint_export: CheckpointExport = Field(default_factory=CheckpointExport)
     trainer: Trainer = Field(default_factory=Trainer)
     generator: Generator = Field(default_factory=Generator)
     environment: Environment = Field(default_factory=Environment)

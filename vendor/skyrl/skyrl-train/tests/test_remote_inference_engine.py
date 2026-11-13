@@ -5,7 +5,7 @@ from httpx import AsyncClient, ASGITransport
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from skyrl_train.inference_engines.remote_inference_engine import RemoteInferenceEngine
+from skyrl_train.inference_engines.remote_inference_engine import RemoteInferenceEngine, create_remote_inference_engines
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
 
 
@@ -40,7 +40,10 @@ async def test_remote_completion_keeps_sampled_ids_and_aligned_behavior_logprobs
     app = web.Application()
     app.router.add_post("/v1/completions", generate)
     async with TestServer(app) as server:
-        engine = RemoteInferenceEngine(str(server.make_url("")).removeprefix("http://").rstrip("/"), "test", "vllm")
+        (engine,) = create_remote_inference_engines(
+            urls=[str(server.make_url("")).removeprefix("http://").rstrip("/")],
+            model_name="test",
+        )
         result = await engine.generate({"prompt_token_ids": [[0, 1], [0, 2]], "sampling_params": {"temperature": 1.0}})
         # An abort retry extends the original prompt with served IDs, never encoded response text.
         retry_ids = [[0, 1] + result["response_ids"][0], [0, 2] + result["response_ids"][1]]
@@ -74,7 +77,7 @@ async def test_remote_weight_publication_and_lifecycle_use_vllm_wire_protocol():
     ):
         app.router.add_post(f"/{path}", receive)
     async with TestServer(app) as server:
-        engine = RemoteInferenceEngine(str(server.make_url("")).removeprefix("http://").rstrip("/"), "test", "vllm")
+        engine = RemoteInferenceEngine(str(server.make_url("")).removeprefix("http://").rstrip("/"), "test")
         await engine.init_weight_update_communicator("trainer", 29500, 1, 3, "policy", "nccl", True)
         result = await engine.update_named_weights(
             {"names": ["model.norm.weight"], "dtypes": ["bfloat16"], "shapes": [[128]], "extras": None}
@@ -129,9 +132,7 @@ async def test_openai_bridge_preserves_requests_and_maps_both_error_shapes_to_ht
     else:
         body["messages"] = [{"role": "user", "content": "hello"}]
     async with TestServer(app) as server:
-        engine = RemoteInferenceEngine(
-            str(server.make_url("")).removeprefix("http://").rstrip("/"), "external-model", "vllm"
-        )
+        engine = RemoteInferenceEngine(str(server.make_url("")).removeprefix("http://").rstrip("/"), "external-model")
         set_global_state(engine, None)
         try:
             async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://bridge") as client:

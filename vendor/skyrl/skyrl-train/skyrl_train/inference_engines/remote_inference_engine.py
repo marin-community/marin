@@ -17,15 +17,13 @@ class RemoteWeightLoader(WeightLoader):
     through vLLM's HTTP API.
     """
 
-    def __init__(self, url: str, engine_backend: str) -> None:
+    def __init__(self, url: str) -> None:
         """Initialize the loader.
 
         Args:
             url: Base URL of the remote inference server.
-            engine_backend: Inference backend ("vllm").
         """
         self._url = url
-        self._engine_backend = engine_backend
 
     async def init_communicator(
         self,
@@ -79,18 +77,13 @@ class RemoteWeightLoader(WeightLoader):
         Returns:
             Response from the remote server.
         """
-        if self._engine_backend == "vllm":
-            weight_update_method = "update_weights"
-        else:
-            raise ValueError(f"Invalid engine backend: {self._engine_backend}")
-
         async with aiohttp.ClientSession() as session:
             name = request["names"][0]
             dtype = request["dtypes"][0]
             shape = request["shapes"][0]
 
             resp = await session.post(
-                f"{self._url}/{weight_update_method}",
+                f"{self._url}/update_weights",
                 json={
                     "name": name,
                     "dtype": dtype,
@@ -112,14 +105,13 @@ class RemoteWeightLoader(WeightLoader):
 
 class RemoteInferenceEngine(InferenceEngineInterface):
     """
-    Lightweight client to call into an OpenAI-compatible server over HTTP with a customizable backend.
+    HTTP client for OpenAI-compatible inference and vLLM management endpoints.
     """
 
     def __init__(
         self,
         url: str,
         model_name: str,
-        engine_backend: str,
         tp_size: Optional[int] = None,
         pp_size: Optional[int] = None,
         dp_size: Optional[int] = None,
@@ -136,7 +128,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         """
         self.url = f"http://{url}"
         self.model_name = model_name
-        self.engine_backend = engine_backend
         self._tp_size = tp_size
         self._pp_size = pp_size
         self._dp_size = dp_size
@@ -144,7 +135,7 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         self._dcp_size = dcp_size
 
         # Create weight loader for coordinating weight updates
-        self._weight_loader = RemoteWeightLoader(self.url, engine_backend)
+        self._weight_loader = RemoteWeightLoader(self.url)
 
     def tp_size(self) -> int:
         return self._tp_size
@@ -182,18 +173,13 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         response = None
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None)) as session:
             headers = {"Content-Type": "application/json"}
-            payload = {}
-            request_url = ""
-            if self.engine_backend == "vllm":
-                # vLLM does not support /generate, use /completions instead. It supports batch generation.
-                payload = sampling_params.copy()
-                payload["model"] = self.model_name
-                payload["prompt"] = prompt_token_ids
-                payload["return_token_ids"] = True
-                payload.setdefault("logprobs", 0)
-                request_url = f"{self.url}/v1/completions"
-            else:
-                raise ValueError(f"Invalid engine backend: {self.engine_backend}")
+            # vLLM does not support /generate, use /completions instead. It supports batch generation.
+            payload = sampling_params.copy()
+            payload["model"] = self.model_name
+            payload["prompt"] = prompt_token_ids
+            payload["return_token_ids"] = True
+            payload.setdefault("logprobs", 0)
+            request_url = f"{self.url}/v1/completions"
             async with session.post(request_url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
                 response = await resp.json()
@@ -204,26 +190,23 @@ class RemoteInferenceEngine(InferenceEngineInterface):
         finish_reasons = []
         response_logprobs = None
 
-        if self.engine_backend == "vllm":
-            if len(response["choices"]) != len(prompt_token_ids):
-                raise ValueError("Remote completion count does not match the prompt batch")
-            if payload["logprobs"] is not None:
-                response_logprobs = []
-            for i, choice in enumerate(response.get("choices", [])):
-                # Since n=1, index i represents the output for `prompt[i]`
-                assert choice["index"] == i, "Expect the choices to be ordered by index."
-                text = choice["text"]
-                outputs.append(text)
-                finish_reasons.append(choice["finish_reason"])
-                token_ids = choice["token_ids"]
-                output_ids.append(token_ids)
-                if response_logprobs is not None:
-                    logprobs = choice["logprobs"]["token_logprobs"]
-                    if len(logprobs) != len(token_ids) or any(value is None for value in logprobs):
-                        raise ValueError("Remote sampled-token logprobs must align with the returned token IDs")
-                    response_logprobs.append(logprobs)
-        else:
-            raise ValueError(f"Invalid engine backend: {self.engine_backend}")
+        if len(response["choices"]) != len(prompt_token_ids):
+            raise ValueError("Remote completion count does not match the prompt batch")
+        if payload["logprobs"] is not None:
+            response_logprobs = []
+        for i, choice in enumerate(response.get("choices", [])):
+            # Since n=1, index i represents the output for `prompt[i]`
+            assert choice["index"] == i, "Expect the choices to be ordered by index."
+            text = choice["text"]
+            outputs.append(text)
+            finish_reasons.append(choice["finish_reason"])
+            token_ids = choice["token_ids"]
+            output_ids.append(token_ids)
+            if response_logprobs is not None:
+                logprobs = choice["logprobs"]["token_logprobs"]
+                if len(logprobs) != len(token_ids) or any(value is None for value in logprobs):
+                    raise ValueError("Remote sampled-token logprobs must align with the returned token IDs")
+                response_logprobs.append(logprobs)
 
         return InferenceEngineOutput(
             responses=outputs, stop_reasons=finish_reasons, response_ids=output_ids, response_logprobs=response_logprobs
@@ -288,13 +271,8 @@ class RemoteInferenceEngine(InferenceEngineInterface):
 
     # TODO(tgriggs): Come up with a (more) elegant way to handle text or json responses, and test it and handle errors.
     async def reset_prefix_cache(self):
-        if self.engine_backend == "vllm":
-            reset_prefix_cache_method = "reset_prefix_cache"
-        else:
-            raise ValueError(f"Invalid engine backend: {self.engine_backend}")
-
         async with aiohttp.ClientSession() as session:
-            resp = await session.post(f"{self.url}/{reset_prefix_cache_method}")
+            resp = await session.post(f"{self.url}/reset_prefix_cache")
             text = await resp.text()
 
         # First try to parse it as JSON
@@ -320,7 +298,6 @@ class RemoteInferenceEngine(InferenceEngineInterface):
 def create_remote_inference_engines(
     urls: List[str],
     model_name: str,
-    engine_backend: str,
     tensor_parallel_size: Optional[int] = None,
     pipeline_parallel_size: Optional[int] = None,
     data_parallel_size: Optional[int] = None,
@@ -335,7 +312,6 @@ def create_remote_inference_engines(
         RemoteInferenceEngine(
             url=url,
             model_name=model_name,
-            engine_backend=engine_backend,
             tp_size=tensor_parallel_size,
             pp_size=pipeline_parallel_size,
             dp_size=data_parallel_size,

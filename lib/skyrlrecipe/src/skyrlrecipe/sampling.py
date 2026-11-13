@@ -11,6 +11,7 @@ from .model import Section, field, unset_field
 
 
 class EvalSamplingParams(Section):
+    seed: NonNegativeInt | None = field(None)
     max_generate_length: int = unset_field()
     repetition_penalty: int | float = field(1.0)
     temperature: int | float = field(0.0)
@@ -19,4 +20,6 @@ class EvalSamplingParams(Section):
     top_k: int = field(-1)
     logprobs: NonNegativeInt | None = field(None)
     stop: tuple[str, ...] | None = field(None)
+    stop_token_ids: tuple[int, ...] | None = field(None)
+    skip_special_tokens: bool = field(True)
     min_tokens: NonNegativeInt = unset_field()

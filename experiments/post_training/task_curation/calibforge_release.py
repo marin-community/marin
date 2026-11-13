@@ -19,9 +19,8 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_files,
     unpack_task_binary,
 )
+from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
 from experiments.post_training.task_curation.tasktrove.harbor_export import archive_bytes
-
-ENVIRONMENT_PREFIX = "environment/"
 
 
 def transformed_task(row: dict, record: dict, bundles: Path, source: Path, timeout: float) -> bytes:

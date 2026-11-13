@@ -63,6 +63,7 @@ marin-serve = "marin.inference.serve_cli:main"
 
 [dependency-groups]
 test = [
+    "marin-skyrlrecipe",
     "cloud-sql-python-connector[pg8000]>=1.9",
     "pytest>=8.3.2",
     "pytest-asyncio",
@@ -178,9 +179,6 @@ cpu = [
 
 # AMD GPUs: Levanter's ROCm JAX stack.
 rocm = ["marin-levanter[rocm]"]
-
-# Vendored Evalchemy runs against a served OpenAI URL from its own locked uv project.
-# See vendor/evalchemy and marin.evaluation.evalchemy.runtime.
 
 vizier = [
     "google-vizier[jax]",

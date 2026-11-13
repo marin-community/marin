@@ -407,6 +407,7 @@ def init_inference_engines(
         seed=42,
         vllm_v1_disable_multiproc=True,
         enable_prefix_caching=True,
+        enable_chunked_prefill=cfg.generator.enable_chunked_prefill,
         enforce_eager=False,
         shared_pg=pg,
         engine_init_timeout_seconds=cfg.generator.engine_init_timeout_seconds,
@@ -498,7 +499,6 @@ def init_remote_inference_servers(
     engines = create_remote_inference_engines(
         urls=[f"localhost:{engine_port}"],
         model_name=model,
-        engine_backend=backend,
         tensor_parallel_size=tp_size,
         data_parallel_size=1,
         expert_parallel_size=1,
