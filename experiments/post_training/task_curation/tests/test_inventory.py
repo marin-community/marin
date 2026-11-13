@@ -42,6 +42,7 @@ from experiments.post_training.task_curation.inventory import (
     validation_task,
     write_training,
 )
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -296,6 +297,7 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
             within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
         ),
     )
+    source = with_admission_census(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     staged = tmp_path / "input"
     staged.mkdir()

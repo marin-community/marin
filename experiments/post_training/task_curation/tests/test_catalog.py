@@ -16,6 +16,7 @@ from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.task_curation.count_inputs import parquet_counts
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -60,6 +61,7 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
             daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
         ),
     )
+    source = with_admission_census(source)
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.runnable_sources",
         lambda declared_source=source: {declared_source.name: declared_source},

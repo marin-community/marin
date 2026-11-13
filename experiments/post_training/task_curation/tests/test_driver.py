@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
 )
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -61,13 +62,15 @@ def math500() -> CurationRecipe:
 def source_with_input_evidence[ConfigT: CatalogConfig](source: RlDataSource[ConfigT]) -> RlDataSource[ConfigT]:
     dataset = source.dataset
     assert dataset is not None and dataset.revision is not None
-    return replace(
-        source,
-        info=replace(
-            source.info,
-            lexical_contamination=decontamination_evidence(dataset.name, dataset.revision, 1),
-            within_source_dedup=deduplication_evidence(dataset.name, dataset.revision, source.version),
-        ),
+    return with_admission_census(
+        replace(
+            source,
+            info=replace(
+                source.info,
+                lexical_contamination=decontamination_evidence(dataset.name, dataset.revision, 1),
+                within_source_dedup=deduplication_evidence(dataset.name, dataset.revision, source.version),
+            ),
+        )
     )
 
 
@@ -364,6 +367,7 @@ def test_recipe_cli_plans_pinned_review_and_requires_credentials_only_for_execut
             within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
         ),
     )
+    source = with_admission_census(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     report = tmp_path / "report.json"
     options = [
