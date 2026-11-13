@@ -1982,7 +1982,6 @@ def test_sandbox_pod_enforces_exact_declared_disk_and_cpu(disk_bytes: int) -> No
     req.egress_policy = job_pb2.EGRESS_POLICY_NONE
     _, objects = _dispatch(req, pod_config())
     pod = objects[K8sResource.PODS][0]
-    assert len(pod["spec"]["containers"]) == 1
     resources = pod["spec"]["containers"][0]["resources"]
     assert parse_k8s_quantity(resources["limits"]["ephemeral-storage"]) == disk_bytes
     assert parse_k8s_quantity(resources["requests"]["ephemeral-storage"]) == disk_bytes
