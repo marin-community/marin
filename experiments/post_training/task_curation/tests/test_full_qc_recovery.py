@@ -76,7 +76,7 @@ def test_review_reconnects_after_serving_moves_and_preserves_valid_cache(review_
 
     with running_review_server() as replacement:
         directory.address = f"http://127.0.0.1:{replacement.server_port}"
-        recovered = ReadyChatReviewer(session, spec, cache, max_concurrent=1)
+        recovered = ReadyChatReviewer(session, spec, cache, max_concurrent=1, request_timeout=2)
         result = recovered.review([first, second], rubric)
 
     assert result.reviews[0] == saved

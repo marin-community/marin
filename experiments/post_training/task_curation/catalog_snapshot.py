@@ -284,15 +284,10 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                         and prior.declaration.dataset_id == declaration.dataset_id
                         and prior.declaration.dataset_revision == declaration.dataset_revision
                     ):
-                        update["declaration"] = declaration.model_copy(
-                            update={
-                                "quality_result": (
-                                    assessment_quality_result(catalog.items(prior.assessment_key))
-                                    if prior.assessment_key
-                                    else declaration.quality_result
-                                )
-                            }
-                        )
+                        result = declaration.quality_result
+                        if result is None and prior.assessment_key:
+                            result = assessment_quality_result(catalog.items(prior.assessment_key))
+                        update["declaration"] = declaration.model_copy(update={"quality_result": result})
                     rows.append(prior.model_copy(update=update))
                     continue
                 unchanged = (
@@ -328,7 +323,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                                 f"attempts/{run_id}/{attempt.name}",
                                 ("grades/*.parquet", "requests/*.jsonl", "responses/*.jsonl"),
                             )
-                if key is not None:
+                if key is not None and declaration.quality_result is None:
                     declaration = declaration.model_copy(
                         update={"quality_result": assessment_quality_result(catalog.items(key))}
                     )
@@ -455,7 +450,7 @@ def refresh_catalog(
             declaration = declarations.get(source_id)
             if declaration is None:
                 raise ValueError(f"Live catalog source has no registered declaration: {source_id}")
-            if record["assessment_key"] is not None:
+            if record["assessment_key"] is not None and declaration.quality_result is None:
                 declaration = declaration.model_copy(
                     update={"quality_result": assessment_quality_result(catalog.items(record["assessment_key"]))}
                 )
