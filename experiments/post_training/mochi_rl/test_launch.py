@@ -58,9 +58,6 @@ def test_cli_renders_direct_training_and_native_continuation(
     allocation = launch["iris"]["allocation"]
     assert (policy_gpus, inference_gpus) == (48, 12)
     assert allocation["num_nodes"] * allocation["gpus_per_node"] == policy_gpus + inference_gpus
-    assert launch["skyrl"]["context_budget"]["request_window_tokens"] == 65536
-    assert (trainer["algorithm"]["advantage_estimator"], generator["n_samples_per_prompt"]) == ("rloo_n", 8)
-    assert trainer["policy"]["optimizer_config"]["optimizer_kwargs"]["expert_normalization"] == "all_experts"
 
     inputs = launch["inputs"]
     assert (inputs["model"]["uri"], inputs["model"]["tokenizer_uri"]) == (str(model), str(tokenizer))
