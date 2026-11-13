@@ -223,6 +223,7 @@ class SubprocessSession(StreamProcessSession):
         *,
         stop: Callable[[], Awaitable[None]],
         stderr_limit: int = 65536,
+        wait: Callable[[], Awaitable[int]] | None = None,
     ):
         assert process.stdout is not None and process.stderr is not None
         self.process = process
@@ -230,7 +231,7 @@ class SubprocessSession(StreamProcessSession):
         super().__init__(
             process.stdout,
             write=self._write_pipe,
-            wait=process.wait,
+            wait=process.wait if wait is None else wait,
             stop=self._stop_subprocess,
             stderr=process.stderr,
             stderr_limit=stderr_limit,
