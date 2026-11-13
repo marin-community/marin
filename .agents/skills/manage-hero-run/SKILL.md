@@ -11,6 +11,12 @@ workflow, about 1e22 model FLOPs (using a 6ND estimate) is the normal threshold
 for classifying a run as production rather than bounded diagnostic work; it is
 not an activation trigger by itself.
 
+For an explicitly requested significant code deployment to a live hero, read
+[code cutovers](references/code-cutover.md) before planning the transition.
+Its trial gates and rollback rules override ordinary recovery during the trial.
+`use-iris` owns execution mechanics; the experiment's domain skill owns its
+recipe. This skill owns production identity, retention, recovery, and closure.
+
 ## Operating Model
 
 - If the user asks to launch a run, arrange babysitting unless they explicitly decline.
@@ -27,8 +33,8 @@ Classify the run before loading supporting workflows:
   conversation or durable session channel. Do not create a separate repository artifact solely to
   submit it.
 
-Do not load publication workflows for a bounded diagnostic. Use `research` only when the user asks
-for a research program or prior-work brief.
+Do not load publication workflows for a bounded diagnostic. Use
+`docs/dev-guide/experiment-records.md` for research evidence and reporting.
 
 ## Launch
 
@@ -130,7 +136,7 @@ Many failures can be recoverable just by relaunching using the same id. These in
 ### Launching with a new run id
 
 - Use a new run id and W&B id only when the old lineage is unsafe or semantically different, such as W&B corruption or a nontrivial code change. Nontrivial code changes should have a new W&B id. Document the reason, old and new identities, source checkpoint, output root, and code SHA in the durable run record.
-- For code cutovers, follow `deploy-hero-change` and the
+- For code cutovers, follow [the cutover procedure](references/code-cutover.md) and the
   [hero launcher procedure](../../../experiments/grug/moe_hero_ep/README.md#hero-cutovers-and-wb-lineage).
   Keep the W&B entity/project, fork once at a verified checkpoint boundary, and
   resume the child on retries. Verify new progress in Finelog; inherited W&B
@@ -173,6 +179,6 @@ When a hero run finishes or reaches a handoff milestone:
 
 ## References
 
-- change-grug skill
-- research skill
-- use-iris skill
+- `change-grug` skill
+- `docs/dev-guide/experiment-records.md`
+- `use-iris` skill

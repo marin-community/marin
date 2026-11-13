@@ -18,6 +18,8 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
     cluster_role_name,
     namespace_manifest,
     service_account_manifest,
+    task_secret_binding_manifest,
+    task_secret_role_manifest,
 )
 
 from iac.config import RbacSpec
@@ -108,6 +110,27 @@ class IrisRbac(pulumi.ComponentResource):
             opts=child_opts(depends_on=[cluster_role, service_account]),
         )
         imports.register(cluster_role_binding, parent=self, provider_id=role_name)
+        secret_role = task_secret_role_manifest(args.namespace)
+        task_secret_role = k8s.rbac.v1.Role(
+            "task-secret-role",
+            metadata=secret_role["metadata"],
+            rules=secret_role["rules"],
+            opts=child_opts(depends_on=[namespace]),
+        )
+        imports.register(
+            task_secret_role, parent=self, provider_id=f"{args.namespace}/{secret_role['metadata']['name']}"
+        )
+        secret_binding = task_secret_binding_manifest(args.namespace, args.spec.service_account)
+        task_secret_binding = k8s.rbac.v1.RoleBinding(
+            "task-secret-binding",
+            metadata=secret_binding["metadata"],
+            role_ref=secret_binding["roleRef"],
+            subjects=secret_binding["subjects"],
+            opts=child_opts(depends_on=[task_secret_role, service_account]),
+        )
+        imports.register(
+            task_secret_binding, parent=self, provider_id=f"{args.namespace}/{secret_binding['metadata']['name']}"
+        )
         self.register_outputs({})
 
 

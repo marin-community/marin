@@ -19,6 +19,7 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
 from levanter.kernels.pallas.fused_cross_entropy_loss import tuned_block_sizes
 from levanter.kernels.pallas.fused_cross_entropy_loss import xla as fused_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss.config import BlockSizes
+from levanter.kernels.pallas.fused_cross_entropy_loss.grad_in_forward import linear_softmax_cross_entropy_weighted_sum
 from levanter.kernels.pallas.fused_cross_entropy_loss.reference import (
     linear_softmax_cross_entropy_loss_reference,
     linear_softmax_cross_entropy_loss_streaming,
@@ -151,6 +152,53 @@ def test_fused_cross_entropy_grad_matches_reference():
 
     assert jnp.allclose(gx_api, gx_ref, atol=grad_tol, rtol=grad_tol)
     assert jnp.allclose(gw_api, gw_ref, atol=grad_tol, rtol=grad_tol)
+
+
+# 6 rows: three full blocks of 2, or two blocks of 4 with two zero-weight padding rows.
+@pytest.mark.parametrize("token_block_size", [2, 4])
+def test_weighted_sum_grad_in_forward_matches_reference(token_block_size):
+    x, w, y = _make_toy_inputs()
+    x, y = x.reshape(6, 4), y.reshape(6)
+    weight = jnp.array([1.0, 0.0, 0.5, 2.0, 1.0, 0.0], dtype=jnp.float32)
+    logsumexp_weight = 0.2
+
+    def weighted_sum(x, w, weight):
+        return linear_softmax_cross_entropy_weighted_sum(
+            x, y, w, weight, logsumexp_weight=logsumexp_weight, token_block_size=token_block_size
+        )
+
+    def reference(x, w, weight):
+        loss, lse = linear_softmax_cross_entropy_loss_reference(x, y, w)
+        return jnp.sum(weight * (loss + logsumexp_weight * lse**2))
+
+    value, grads = jax.value_and_grad(weighted_sum, argnums=(0, 1, 2))(x, w, weight)
+    ref_value, ref_grads = jax.value_and_grad(reference, argnums=(0, 1, 2))(x, w, weight)
+
+    tol = 3e-5 if jax.default_backend() == "tpu" else 1e-5
+    # The undifferentiated call takes the loss-only primal; value_and_grad takes the gradient forward.
+    np.testing.assert_allclose(weighted_sum(x, w, weight), ref_value, atol=tol, rtol=tol)
+    np.testing.assert_allclose(value, ref_value, atol=tol, rtol=tol)
+    for actual, expected in zip(grads, ref_grads, strict=True):
+        np.testing.assert_allclose(actual, expected, atol=tol, rtol=tol)
+
+
+def test_weighted_sum_grad_in_forward_without_z_loss_stays_finite_for_huge_logits():
+    # lse**2 overflows float32 at these logits; a disabled z-loss must not turn 0 * inf into NaN.
+    x = jnp.ones((1, 1), dtype=jnp.float32)
+    w = jnp.array([[2e19, 0.0]], dtype=jnp.float32)
+    y = jnp.array([1], dtype=jnp.int32)
+    weight = jnp.ones((1,), dtype=jnp.float32)
+
+    def weighted_sum(x, w):
+        return linear_softmax_cross_entropy_weighted_sum(x, y, w, weight, logsumexp_weight=None, token_block_size=1)
+
+    value, grads = jax.value_and_grad(weighted_sum, argnums=(0, 1))(x, w)
+    ref_loss, _ = linear_softmax_cross_entropy_loss_reference(x, y, w)
+
+    np.testing.assert_allclose(weighted_sum(x, w), ref_loss[0], rtol=1e-6)
+    np.testing.assert_allclose(value, ref_loss[0], rtol=1e-6)
+    for grad in grads:
+        assert np.all(np.isfinite(np.asarray(grad)))
 
 
 def test_bwd_delta_supertile_soft_cap_scales_label_term():

@@ -3,16 +3,9 @@
 import json
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 import httpx
-from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
-    AnthropicAdapter,
-)
-from litellm.responses.litellm_completion_transformation.transformation import (
-    LiteLLMCompletionResponsesConfig,
-)
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
 CHAT_ENDPOINT = "/v1/chat/completions"
 CORRELATION_ID_HEADER = "x-ot-trial-id"
@@ -110,26 +103,118 @@ class RecordingCompletionTransport(httpx.AsyncBaseTransport):
         return httpx.Response(status, json=response, request=request)
 
 
+def _text_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list) and all(
+        part.get("type") in ("text", "input_text", "output_text") for part in content
+    ):
+        return "".join(part["text"] for part in content)
+    raise ValueError("This content requires text blocks")
+
+
 def anthropic_chat_request(
     body: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, str]]:
-    """Translate Messages requests while retaining native tool-name mappings."""
-    body = dict(body)
-    context_management = body.pop("context_management", None)
-    if context_management is not None and context_management != {
+) -> dict[str, Any]:
+    """Translate Messages histories and function tools to chat completions."""
+    context = body.get("context_management")
+    if context is not None and context != {
         "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
     }:
         raise ValueError("Native capture supports only retaining all thinking history")
-    # Keeping all thinking requires no server-side history edits.
-    request, names = (
-        AnthropicAdapter().translate_completion_input_params_with_tool_mapping(body)
-    )
-    if request is None:
-        raise ValueError("Anthropic Messages request could not be translated")
-    thinking = body.get("thinking")
-    if thinking is not None and thinking["type"] == "disabled":
-        request["reasoning_effort"] = "none"
-    return dict(cast(dict[str, Any], request)), names
+    messages = []
+    if body.get("system"):
+        messages.append({"role": "system", "content": _text_content(body["system"])})
+    for message in body["messages"]:
+        content = message["content"]
+        if isinstance(content, str):
+            messages.append({"role": message["role"], "content": content})
+            continue
+        translated: dict[str, Any] = {"role": message["role"], "content": []}
+        for part in content:
+            match part["type"]:
+                case "text":
+                    translated["content"].append({"type": "text", "text": part["text"]})
+                case "image":
+                    source = part["source"]
+                    url = (
+                        source["url"]
+                        if source["type"] == "url"
+                        else f"data:{source['media_type']};base64,{source['data']}"
+                    )
+                    translated["content"].append(
+                        {"type": "image_url", "image_url": {"url": url}}
+                    )
+                case "thinking":
+                    translated["reasoning_content"] = (
+                        translated.get("reasoning_content", "") + part["thinking"]
+                    )
+                case "tool_use":
+                    translated.setdefault("tool_calls", []).append(
+                        {
+                            "id": part["id"],
+                            "type": "function",
+                            "function": {
+                                "name": part["name"],
+                                "arguments": json.dumps(part["input"]),
+                            },
+                        }
+                    )
+                case "tool_result":
+                    # Flush text before a tool result to preserve the source order.
+                    if translated["content"]:
+                        messages.append(translated)
+                        translated = {"role": message["role"], "content": []}
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": part["tool_use_id"],
+                            "content": _text_content(part["content"]),
+                        }
+                    )
+                case _:
+                    raise ValueError(f"Unsupported Messages content: {part['type']}")
+        if (
+            translated["content"]
+            or translated.get("tool_calls")
+            or translated.get("reasoning_content")
+        ):
+            if not translated["content"]:
+                translated["content"] = None
+            messages.append(translated)
+    chat = {
+        key: body[key]
+        for key in ("model", "max_tokens", "temperature", "top_p", "stream")
+        if key in body
+    }
+    chat["messages"] = messages
+    if body.get("stop_sequences"):
+        chat["stop"] = body["stop_sequences"]
+    if body.get("tools"):
+        chat["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool["input_schema"],
+                },
+            }
+            for tool in body["tools"]
+        ]
+    choice = body.get("tool_choice")
+    if choice:
+        chat["tool_choice"] = (
+            {"type": "function", "function": {"name": choice["name"]}}
+            if choice["type"] == "tool"
+            else {"any": "required"}.get(choice["type"], choice["type"])
+        )
+    effort = body.get("output_config", {}).get("effort")
+    if body.get("thinking", {}).get("type") == "disabled":
+        effort = "none"
+    if effort:
+        chat["reasoning_effort"] = effort
+    return chat
 
 
 def responses_chat_request(body: dict[str, Any]) -> dict[str, Any]:
@@ -138,40 +223,130 @@ def responses_chat_request(body: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "Literal agent capture requires the complete Responses input history"
         )
-    chat = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-        model=body["model"],
-        input=body["input"],
-        responses_api_request=cast(ResponsesAPIOptionalRequestParams, body),
-        custom_llm_provider="openai",
-        stream=body.get("stream", False),
-    )
-    messages = chat["messages"]
+    messages = []
+    if body.get("instructions"):
+        messages.append({"role": "system", "content": body["instructions"]})
+    inputs = body["input"]
+    if isinstance(inputs, str):
+        inputs = [{"role": "user", "content": inputs}]
+    for item in inputs:
+        match item.get("type", "message"):
+            case "message":
+                content = item["content"]
+                if isinstance(content, list):
+                    content = [
+                        (
+                            {"type": "text", "text": part["text"]}
+                            if part["type"] in ("input_text", "output_text")
+                            else (
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": part["image_url"]},
+                                }
+                                if part["type"] == "input_image"
+                                else part
+                            )
+                        )
+                        for part in content
+                    ]
+                messages.append(
+                    {
+                        "role": (
+                            "system" if item["role"] == "developer" else item["role"]
+                        ),
+                        "content": content,
+                    }
+                )
+            case "function_call":
+                call = {
+                    "id": item["call_id"],
+                    "type": "function",
+                    "function": {"name": item["name"], "arguments": item["arguments"]},
+                }
+                if messages and messages[-1]["role"] == "assistant":
+                    messages[-1].setdefault("tool_calls", []).append(call)
+                else:
+                    messages.append(
+                        {"role": "assistant", "content": None, "tool_calls": [call]}
+                    )
+            case "function_call_output":
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": item["call_id"],
+                        "content": item["output"],
+                    }
+                )
+            case "reasoning":
+                # Encrypted provider state cannot be replayed to a local chat endpoint.
+                if item.get("summary"):
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": _text_content(
+                                [{**part, "type": "text"} for part in item["summary"]]
+                            ),
+                        }
+                    )
+            case _:
+                raise ValueError(f"Unsupported Responses input: {item.get('type')}")
     prefix_end = next(
-        (
-            index
-            for index, message in enumerate(messages)
-            if message["role"] not in ("system", "developer")
-        ),
+        (i for i, message in enumerate(messages) if message["role"] != "system"),
         len(messages),
     )
-    if prefix_end > 1 or (prefix_end == 1 and messages[0]["role"] == "developer"):
-        instructions = []
-        for message in messages[:prefix_end]:
-            content = message["content"]
-            if isinstance(content, str):
-                instructions.append(content)
-                continue
-            if not isinstance(content, list) or any(
-                part["type"] != "text" or not isinstance(part["text"], str)
-                for part in content
-            ):
-                raise ValueError("Initial Responses instructions require text content")
-            instructions.append("".join(part["text"] for part in content))
-        # LiteLLM maps developer turns to system; system-only templates need one prefix.
-        chat["messages"] = [
-            {"role": "system", "content": "\n\n".join(instructions)},
+    if prefix_end:
+        messages = [
+            {
+                "role": "system",
+                "content": "\n\n".join(
+                    _text_content(message["content"])
+                    for message in messages[:prefix_end]
+                ),
+            },
             *messages[prefix_end:],
         ]
-    if chat.get("tools") == []:
-        chat.pop("tools")
+    chat = {
+        key: body[key]
+        for key in (
+            "model",
+            "temperature",
+            "top_p",
+            "stream",
+            "tool_choice",
+            "parallel_tool_calls",
+        )
+        if key in body
+    }
+    chat["messages"] = messages
+    if "max_output_tokens" in body:
+        chat["max_tokens"] = body["max_output_tokens"]
+    choice = chat.get("tool_choice")
+    if isinstance(choice, dict) and choice.get("type") == "function":
+        chat["tool_choice"] = {"type": "function", "function": {"name": choice["name"]}}
+    if body.get("text", {}).get("format"):
+        format_config = body["text"]["format"]
+        if format_config["type"] == "json_schema":
+            chat["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    key: value for key, value in format_config.items() if key != "type"
+                },
+            }
+        elif format_config["type"] == "json_object":
+            chat["response_format"] = format_config
+    if body.get("reasoning", {}).get("effort"):
+        chat["reasoning_effort"] = body["reasoning"]["effort"]
+    if body.get("tools"):
+        if any(tool["type"] != "function" for tool in body["tools"]):
+            raise ValueError("Native capture supports function tools")
+        chat["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    key: value for key, value in tool.items() if key != "type"
+                },
+            }
+            for tool in body["tools"]
+        ]
     return chat

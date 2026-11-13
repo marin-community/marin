@@ -273,4 +273,8 @@ async def test_native_script_grades_captured_workspace_and_preserves_components(
         pytest.skip(str(error))
     result = await grade_in_sandbox(task, attempt, factory, MachineSpec(HostImage(), network=NetworkPolicy.DENY))
     assert result.status == Outcome.GRADED, result
-    assert (result.reward, result.passed, result.detail) == (score, None, {"native_rewards": components})
+    assert (result.reward, result.passed, result.detail) == (
+        score,
+        None,
+        {"native_rewards": components, "native_exit_code": 1},
+    )

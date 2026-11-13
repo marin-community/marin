@@ -39,12 +39,15 @@ TIER1_SCALE = PipelineScale(
     ),
     fuzzy=FuzzyClusterConfig(
         text=ClusterTextParams(output_shards=256),
-        worker=ResourceConfig(cpu=8, ram="64g", disk="64g"),
-        map_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
-        reduce_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
+        # Four tasks per worker fit the measured sub-10 GiB fuzzy-stage peak.
+        worker=ResourceConfig(cpu=4, ram="16g", disk="64g"),
+        map_task=ResourceConfig(cpu=1, ram="4g", disk="8g"),
+        reduce_task=ResourceConfig(cpu=1, ram="4g", disk="8g"),
         max_workers=16,
     ),
-    store=StoreConfig(task_count=None, worker=ResourceConfig(cpu=4, ram="32g", disk="64g")),
+    # One normalized shard per store task peaks below 2 GiB RAM and spills below
+    # 1 GiB. A 32g/64g worker fits only on a near-empty TPU host and starved at 1 worker.
+    store=StoreConfig(task_count=None, worker=ResourceConfig(cpu=2, ram="8g", disk="16g")),
     dedup_max_parallelism=128,
     train_centroids_resources=ResourceConfig.with_cpu(cpu=4, ram="16g"),
 )

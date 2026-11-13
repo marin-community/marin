@@ -108,6 +108,7 @@ from marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
+    selected_export_step,
 )
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
@@ -575,7 +576,7 @@ class RayPPOTrainer:
         """Kill all managed Ray actors (models + inference engines).
 
         Terminates policy, critic, and ref-model actor groups as well as
-        inference engine actors (vLLM / SGLang workers) that would otherwise
+        inference engine actors (vLLM workers) that would otherwise
         keep running until the node dies.
         """
         for model_name, model in [
@@ -884,22 +885,25 @@ class RayPPOTrainer:
             await self._save_intermediate_checkpoint(state)
             self._control.should_save = False
 
-        if self._control.should_save_hf_model:
-            if step_wall is not None:
-                step_wall.start("checkpoint_work")
-            # HF export reads the committed checkpoint. When checkpoint and HF
-            # export share a cadence, wait for the background shard uploads and
-            # marker publication before asking the exporter to consume it.
-            if await self._drain_checkpoint_upload():
-                await asyncio.to_thread(self.handle_hf_export)
-            self._control.should_save_hf_model = False
-
         if self._control.should_evaluate and self.eval_dataset is not None:
             if step_wall is not None:
                 step_wall.start("evaluation")
             with Timer("eval", self.all_timings):
                 await self._evaluate_and_log(state, commit=False)
             self._control.should_evaluate = False
+
+        if self._control.should_save_hf_model:
+            if step_wall is not None:
+                step_wall.start("checkpoint_work")
+            # HF export reads the committed checkpoint. When checkpoint and HF
+            # export share a cadence, wait for the background shard uploads and
+            # marker publication before asking the exporter to consume it.
+            # Best selection is resolved only at train end: before an eligible
+            # evaluation, metadata can be absent or still point at the initializer.
+            if self.cfg.trainer.hf_export_checkpoint != "best" and await self._drain_checkpoint_upload():
+                await asyncio.to_thread(self.handle_hf_export)
+            self._control.should_save_hf_model = False
+
         if step_wall is not None:
             step_wall.start("step_end_bookkeeping")
 
@@ -1201,9 +1205,21 @@ class RayPPOTrainer:
             if self.colocate_all:
                 await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=True, offload_model=False)
                 await self.inference_engine_client.wake_up(tags=["weights"])
-                await self.sync_policy_weights_to_inference_engines()
+                if self._expert_block_sync is not None:
+                    if not self.inference_engine_client.generation_paused_event.is_set():
+                        await self.inference_engine_client.pause_generation()
+                    try:
+                        for phase, seconds in (await self._expert_block_sync.prepare()).items():
+                            timings[f"expert_block_sync/{phase}"] = seconds
+                        await self.sync_policy_weights_to_inference_engines()
+                    finally:
+                        await self._expert_block_sync.close()
+                else:
+                    await self.sync_policy_weights_to_inference_engines()
                 await asyncio.to_thread(self.policy_model.offload_to_cpu, offload_optimizer=False, offload_model=True)
                 await self.inference_engine_client.wake_up(tags=["kv_cache"])
+                if self._expert_block_sync is not None:
+                    await self.inference_engine_client.resume_generation(policy_step=self.global_step + 1)
             else:
                 await self.inference_engine_client.pause_generation()
                 # Training backloads the optimizer before every step. Offload it after every update, including
@@ -1444,9 +1460,11 @@ class RayPPOTrainer:
                 policy_model=self.policy_model,
                 inference_engine_client=self.inference_engine_client,
                 timeout_seconds=self.cfg.generator.expert_block_sync.timeout_seconds,
+                colocated=self.colocate_all,
             )
-            for phase, seconds in (await self._expert_block_sync.prepare()).items():
-                self.all_startup_timings[f"expert_block_sync/{phase}"] = seconds
+            if not self.colocate_all:
+                for phase, seconds in (await self._expert_block_sync.prepare()).items():
+                    self.all_startup_timings[f"expert_block_sync/{phase}"] = seconds
 
     def _record_run_configuration(self) -> None:
         if not self._training_metrics_enabled:
@@ -1528,6 +1546,8 @@ class RayPPOTrainer:
         await self._start_speculator_update()
         if self.colocate_all:
             # Colocation runs at staleness 0, where no rollout is in flight once the batch is complete.
+            if self._expert_block_sync is not None:
+                await self.inference_engine_client.pause_generation()
             await self.inference_engine_client.sleep()
 
         scored_distillation = None
@@ -1626,7 +1646,9 @@ class RayPPOTrainer:
             async with asyncio.TaskGroup() as tasks:
                 native = tasks.create_task(self.eval(evaluation_pool=pool))
                 additional = [
-                    tasks.create_task(callback.collect_evaluation(state, trainer=self, pool=pool))
+                    tasks.create_task(
+                        self.callback_handler.collect_evaluation(callback, state, trainer=self, pool=pool)
+                    )
                     for callback in self.callback_handler.callbacks
                 ]
             eval_metrics = native.result()
@@ -3144,7 +3166,8 @@ class RayPPOTrainer:
         return actor_info.rank
 
     async def save_checkpoints(self) -> None:
-        """Save and publish a complete checkpoint before returning."""
+        """Wait for prior uploads, then save and publish a complete checkpoint."""
+        await self._drain_checkpoint_upload()
         snapshot = await asyncio.to_thread(self._snapshot_checkpoint, await self._rollout_state())
         upload_duration, cleanup_duration = await self._finish_checkpoint_upload(snapshot, commit=True)
         self.all_timings["checkpoint_upload"] = self.all_timings.get("checkpoint_upload", 0.0) + upload_duration
@@ -3234,7 +3257,7 @@ class RayPPOTrainer:
 
     def _cleanup_old_checkpoints(self):
         max_ckpts = self.cfg.trainer.max_ckpts_to_keep
-        # Disabled (the default): keep all checkpoints. The payload is a no-op at
+        # A negative limit keeps all checkpoints. The payload is a no-op at
         # this value, so skip the per-node Ray lease entirely. Leasing a fresh
         # worker on every node with hard affinity can fail on a CPU-saturated
         # cluster for no benefit.
@@ -3416,18 +3439,21 @@ class RayPPOTrainer:
             self._handle_hf_export()
 
     def _handle_hf_export(self) -> None:
-        checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{self.global_step}")
-        trainer_state_path = os.path.join(checkpoint_path, TRAINER_STATE_FILENAME)
+        export_step = selected_export_step(
+            self.cfg.trainer.ckpt_path, self.cfg.trainer.hf_export_checkpoint, self.global_step
+        )
+        checkpoint_path = join_resource_path(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{export_step}")
+        trainer_state_path = join_resource_path(checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):
             raise RuntimeError(
-                f"Cannot request HF export for global_step_{self.global_step}: "
+                f"Cannot request HF export for global_step_{export_step}: "
                 f"completed checkpoint marker is missing at {trainer_state_path}"
             )
 
         placement = self.cfg.trainer.placement
         model = self.cfg.trainer.policy.model
         request = HFExportRequest(
-            step=self.global_step,
+            step=export_step,
             checkpoint_base_path=self.cfg.trainer.ckpt_path,
             checkpoint_path=checkpoint_path,
             export_path=self.cfg.trainer.export_path,
@@ -3444,10 +3470,10 @@ class RayPPOTrainer:
         existing = read_hf_export_request(checkpoint_path)
         if existing is not None:
             if existing.status is HFExportStatus.COMPLETE:
-                logger.info(f"HF export for global_step_{self.global_step} is already complete")
+                logger.info(f"HF export for global_step_{export_step} is already complete")
                 return
             if existing.status is HFExportStatus.IN_PROGRESS:
-                logger.info(f"HF export for global_step_{self.global_step} is already in progress")
+                logger.info(f"HF export for global_step_{export_step} is already in progress")
                 return
             request = replace(
                 request,
@@ -3455,9 +3481,9 @@ class RayPPOTrainer:
                 timeout=existing.timeout,
                 last_exit_code=existing.last_exit_code,
             )
-            logger.info(f"Refreshing pending HF export request for global_step_{self.global_step}")
+            logger.info(f"Refreshing pending HF export request for global_step_{export_step}")
         request_path = write_hf_export_request(request)
-        logger.info(f"Queued out-of-band HF export for global_step_{self.global_step}: {request_path}")
+        logger.info(f"Queued out-of-band HF export for global_step_{export_step}: {request_path}")
 
     def _log_startup_timings(self) -> None:
         publish_startup_timings(

@@ -31,10 +31,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{MigrationPhase, NamespaceCatalog, ObjectRef};
 use crate::store::catalog::projection::{floor_persisted_high_water, namespace_catalog};
-use crate::store::catalog::{Catalog, ObjectSegmentRecord, SpecLifecycle};
+use crate::store::catalog::{Catalog, SpecLifecycle};
 use crate::store::object_store::OBJECTS_PREFIX;
 use crate::store::object_store::{
-    ObjectId, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion,
+    ObjectId, ObjectPrefix, ObjectReference, ObjectStore, ObjectVersion, ScanSource,
 };
 use crate::store::state_store::object::{ObjectTableStateStore, StateGcPolicy};
 use crate::store::state_store::tree::{catalogs_equal, referenced_objects};
@@ -764,11 +764,7 @@ impl TableController {
         let objects = self.require_objects()?;
         let id = ObjectId::table(&self.table, relative_key)?;
         let version = objects.store.write(&id, bytes).await?;
-        let reference = ObjectReference {
-            id: id.clone(),
-            version: version.clone(),
-        };
-        let path = objects.store.local_path(&reference).await?;
+        let path = objects.store.planned_local_path(&id)?;
         Ok(WrittenObject {
             path,
             source: object_ref(&id, &version),
@@ -776,39 +772,14 @@ impl TableController {
         })
     }
 
-    /// Return the local file for one immutable object this table
-    /// references. The reference, not adjacency to any other file, decides which
-    /// bytes the caller reads.
-    pub async fn localize(&self, reference: &ObjectRef) -> Result<PathBuf, StatsError> {
+    /// Resolve a version-0 migration input without restoring it into the cache.
+    /// Missing local files are checked against the legacy archive before the
+    /// migration decides their rows are unrecoverable.
+    pub async fn legacy_source(&self, row: &SegmentRow) -> Result<Option<ScanSource>, StatsError> {
         let objects = self.require_objects()?;
-        let reference = ObjectReference::try_from(reference)?;
-        objects.store.local_path(&reference).await
-    }
-
-    /// The local file holding the rows a migration rewrites, or `None` when
-    /// nothing holds them.
-    ///
-    /// An object-backed source resolves by exact reference. A version-0 source
-    /// is the Parquet file the table's own directory holds. Callers select
-    /// sources the catalog reports as locally present, so the archive read below
-    /// repairs a torn eviction — the file was unlinked but the catalog row still
-    /// claims it, and the rows it holds are still query-visible and owed a
-    /// rewrite. A segment the catalog itself reports as archived is never a
-    /// migration source and never reaches this path. `None` means the row's
-    /// bytes exist neither locally nor in the archive: no reader can serve them
-    /// and no source can supply them.
-    pub async fn localize_source(
-        &self,
-        row: &SegmentRow,
-        object_record: Option<&ObjectSegmentRecord>,
-    ) -> Result<Option<PathBuf>, StatsError> {
-        let objects = self.require_objects()?;
-        if let Some(record) = object_record {
-            return self.localize(&record.source).await.map(Some);
-        }
         let path = PathBuf::from(&row.path);
         if path.exists() {
-            return Ok(Some(path));
+            return Ok(Some(ScanSource::Local(path)));
         }
         let key = segment_relative_key(&objects.table_dir, &row.path).ok_or_else(|| {
             StatsError::Internal(format!(
@@ -817,30 +788,17 @@ impl TableController {
                 objects.table_dir.display()
             ))
         })?;
-        let Some(object) = objects
-            .legacy_store
-            .read(&ObjectId::table(&self.table, &key)?)
-            .await?
-        else {
+        let id = ObjectId::table(&self.table, &key)?;
+        if !objects.legacy_store.exists(&id).await? {
             return Ok(None);
-        };
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                StatsError::Internal(format!(
-                    "create legacy migration source directory {}: {error}",
-                    parent.display()
-                ))
-            })?;
         }
-        tokio::fs::write(&path, &object.bytes)
-            .await
-            .map_err(|error| {
-                StatsError::Internal(format!(
-                    "restore legacy migration source {}: {error}",
-                    path.display()
-                ))
-            })?;
-        Ok(Some(path))
+        let url = objects.legacy_store.remote_scan_url(&id).ok_or_else(|| {
+            StatsError::Internal(format!(
+                "legacy migration source {} has no scan URL",
+                row.path
+            ))
+        })?;
+        Ok(Some(ScanSource::Remote(url)))
     }
 
     /// Collect whatever the object store's own retention allows.

@@ -25,10 +25,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator
 from taskcompendium.models import TaskSpec
+from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import pretty_json
 from taskforge.llm.policy import Message
-
-from experiments.post_training.capability_driven_envs.catalog import CapabilityIdea, capability_idea_record
 
 EXAMPLE_PROGRAM_FILE = "example_program.py"
 

@@ -60,6 +60,9 @@ tests and reference solutions are excluded from agent resources. It retains
 native components in grading details and reports their arithmetic mean, following
 the outcome-reward method in [the paper, section 3.2.2](https://www.alphaxiv.org/abs/2609.reinforcing-agents-collective-skills.pdf#page=6).
 It uses the existing scalar reward interface without a separate pass/fail verdict.
+Grading details retain the native verifier exit code, including nonzero exits that
+write rewards. A written reward alone does not establish verifier liveness or
+successful execution; qualification must inspect the native execution evidence.
 The optional written LLM rubric is preserved but not executed.
 
 The default capture directory is `/workspace`. Digest-pinned exceptions capture
@@ -75,3 +78,17 @@ files and deletions. It does not reproduce file modes, symlinks, empty
 directories, running processes, or changes outside the configured capture directories. Tasks that
 depend on these properties need another execution contract. A passing reference
 solution alone does not establish grader equivalence.
+
+## Admission and publication
+
+The source declares Harbor as its input format and retains its existing Atlas ID.
+Snapshot requirements remain unassessed. Measure actor and verifier requirements
+with the shared `daytona_identity.count_lowered_spec_identities` helper after
+configuring the native runtime machines; an input sample is not a whole-release
+snapshot count. Unresolved build contexts are not executable environments.
+
+Before admission, run reference solutions and negative controls using the resolved
+native environments and retain their execution evidence. Publish converted releases
+according to the [curation publication contract](../../../../../docs/references/task-curation.md#declarations):
+a private, pinned HF repository with upstream provenance, license information,
+and deferred/excluded counts. QUICK inspection outputs are not a qualified release.

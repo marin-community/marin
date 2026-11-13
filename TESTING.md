@@ -26,11 +26,14 @@ partial marker expression such as `-m "not slow"`; pytest replaces the default
 expression and may select live-cluster tests. Run excluded markers only when
 requested or directed by the relevant module guide.
 
-Tests run from the repository root have a 60-second per-test timeout, including
-fixture setup and teardown. On POSIX, pytest-timeout first interrupts the test
-with `SIGALRM`; if the test suppresses that failure, the test process exits five
+The root and standalone Levanter pytest configurations use a 60-second per-test
+timeout, including fixture setup and teardown. On POSIX, pytest-timeout first
+interrupts the test with `SIGALRM`; if the test suppresses that failure, the test process exits five
 seconds later. Give a legitimately longer test an explicit
 `@pytest.mark.timeout(...)` value instead of increasing the repository default.
+Both configurations also stop the session between tests once its 600-second
+budget has elapsed. Levanter retains its `src` and `tests` Python paths and adds
+the repository root to load the shared guard without a Marin package dependency.
 
 A formatter-only mechanical edit does not require another test run. Rerun the
 repository formatting and lint checks after the edit; rerun tests only when the
@@ -46,10 +49,9 @@ When adding a new `lib/<name>/` package, run its unit tests through
 These registrations include the library in pull request, push, and full-suite
 runs.
 
-`vendor/evalchemy` is excluded from the workspace and uses its own `uv.lock`.
-Its dedicated `evalchemy-unit` lane checks that lock and runs the retained tests
-in the independent evaluator environment. Run them locally with
-`uv run --directory vendor/evalchemy --frozen --all-extras --group test pytest`.
+Harbor's isolated test environment includes TaskCompendium for task-curation
+rebuild and snapshot-identity checks; rebuild tests skip in environments without
+Harbor.
 
 Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
 Levanter TPU lane runs for those changes when the resolved dependencies of
@@ -59,17 +61,19 @@ lockfiles, it runs the TPU lane. Levanter or Haliax source changes also select
 the lane. The Levanter Torch lane retains its root manifest trigger. Scheduled
 or manual runs without a base ref run every suite.
 
-The Levanter TPU lane selects affected files containing `pytest.mark.tpu`,
-then runs only marked cases, including scheduled and full-suite runs. Mark
-tests when they exercise real accelerator kernels, TPU numerical behavior, or
-device transfers and collectives that CPU coverage cannot validate. Use
-`@pytest.mark.tpu` on individual tests, `pytest.param(..., marks=pytest.mark.tpu)`
-for selected parameters, or `pytestmark = pytest.mark.tpu` for an entire module.
+The Levanter TPU lane selects affected Levanter test files containing
+`pytest.mark.tpu` or `pytest.mark.multidevice`, then runs matching marked cases,
+including scheduled and full-suite runs. Tests outside Levanter stay in their
+existing CI scopes. Mark tests `tpu` when they exercise accelerator-specific
+kernels or TPU numerical behavior. Mark topology tests `multidevice` when they
+need several devices and also run on CPU. Use literal `@pytest.mark` decorators,
+`pytest.param(..., marks=...)` for selected parameters, or a module-level marker.
 Keep markers literal so [select_tests.py](infra/ci/select_tests.py) can find them
-without importing test dependencies. The marker also works on test classes.
-CPU CI continues to run these tests when supported; `tpu` opts into hardware
-coverage and does not imply a CPU skip. The TPU lane retains all default safety
-exclusions and excludes Torch tests.
+without importing test dependencies. Both markers also work on test classes.
+CPU CI runs marked tests too; these markers select additional TPU coverage and
+do not imply a CPU skip. On the current four-device TPU runner, tests whose
+topology specifically requires eight devices run only in CPU CI. The TPU lane
+retains its safety exclusions and excludes Torch tests.
 
 ## Core Rule
 

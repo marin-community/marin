@@ -76,6 +76,7 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.endpoints import ProxyMappingDelta, ProxyRegistryReset
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
@@ -358,6 +359,12 @@ class ControllerConfig:
     a minted capability URL is then tagged with ``cluster_id`` and points at the parent,
     which relays it back here."""
 
+    budget_parent: str = ""
+    """Trusted parent that owns budget policy; empty makes this controller the authority."""
+
+    budget_peers: tuple[str, ...] = ()
+    """Routing peers whose locally executed usage belongs to this budget authority."""
+
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
     no peer connections, no heartbeat, an empty ListPeers view."""
@@ -456,6 +463,13 @@ class Controller:
             if federation_peers is not None
             else build_peers(config.peers, federation_token_provider=federation_token_provider)
         )
+        self._budgets = FederationBudgets(
+            self._db,
+            config.user_budget_defaults,
+            cluster_id=config.cluster_id,
+            parent_id=config.budget_parent,
+            peers=config.budget_peers,
+        )
         self._federation = FederationManager(
             peers,
             threads=self._threads,
@@ -464,6 +478,7 @@ class Controller:
             ),
             bundles=self._bundle_store,
             cluster_id=config.cluster_id,
+            budgets=self._budgets,
             heartbeat_interval=config.federation_heartbeat_interval,
             max_handoffs_per_cycle=config.max_federation_handoffs_per_cycle,
         )
@@ -501,6 +516,7 @@ class Controller:
             endpoint_service=self._endpoint_service,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
+            budgets=self._budgets,
             capability_url_config=CapabilityUrlConfig(
                 cluster_name=config.cluster_id,
                 local_origin=config.dashboard_url,
@@ -1139,16 +1155,18 @@ class Controller:
         return DirectReconcileRequest(tasks_to_run=tasks_to_run, running_tasks=drain.running_tasks)
 
     def _scheduling_inputs(self, snap: Tx, now: Timestamp) -> _SchedulingInputs:
+        budget_context = self._budgets.context(snap)
         context = build_scheduling_context(
             snap,
             self._worker_health,
             snap.caches[WorkerAttrsProjection],
             self._config.user_budget_defaults,
+            budget_context=budget_context,
         )
         queued: list[QueuedCandidate] = []
         expired: list[JobName] = []
         if self._config.peers:
-            queued = build_queued_candidates(snap)
+            queued = build_queued_candidates(snap, budget_context=budget_context)
             expired = reads.expired_queued_handoffs(snap, now.epoch_ms())
         return _SchedulingInputs(
             context=context if context.pending_task_rows else None,
@@ -1492,10 +1510,11 @@ class Controller:
         """
         max_promotions = self._promotion_bucket.available
         with self._db.transaction() as cur:
+            budget_context = self._budgets.context(cur)
             batch = dispatch.drain_for_dispatch(
                 cur,
                 max_promotions=max_promotions,
-                defaults=self._config.user_budget_defaults,
+                budget_context=budget_context,
             )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))

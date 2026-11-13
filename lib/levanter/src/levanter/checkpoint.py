@@ -434,7 +434,7 @@ def _temporary_checkpoint_sort_key(record: _TemporaryCheckpointRecord) -> tuple[
 
 def _temporary_checkpoint_record(checkpoint_path: str) -> _TemporaryCheckpointRecord | None:
     try:
-        metadata = _load_metadata(checkpoint_path)
+        metadata = load_checkpoint_metadata(checkpoint_path)
     except FileNotFoundError:
         logger.warning("Could not load metadata for checkpoint %s.", checkpoint_path)
         return None
@@ -489,6 +489,7 @@ class Checkpointer:
         keep_last_temporary_checkpoints: int = 1,
         debug: CheckpointDebugConfig | None = None,
         write_config: TensorStoreWriteConfig | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -513,7 +514,9 @@ class Checkpointer:
                 checkpoint commits successfully. Set to 0 to delete temporary checkpoints after they commit. Permanent
                 checkpoints still clean up temporary checkpoints because they supersede them for recovery.
             write_config: how a save divides work across the processes holding the state
+            metadata: application metadata committed with every checkpoint this checkpointer saves
         """
+        _check_application_metadata(metadata)
         if keep_last_temporary_checkpoints < 0:
             raise ValueError("keep_last_temporary_checkpoints must be non-negative")
 
@@ -525,9 +528,11 @@ class Checkpointer:
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
+        self._last_save_permanent = False
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self.write_config = write_config or TensorStoreWriteConfig()
+        self.metadata = metadata
         self._temporary_checkpoints = []
         self._checkpoint_request_lock = threading.Lock()
         self._requested_retention: CheckpointRetention | None = None
@@ -716,7 +721,7 @@ class Checkpointer:
 
         for record in to_delete:
             try:
-                metadata = _load_metadata(record.path)
+                metadata = load_checkpoint_metadata(record.path)
             except FileNotFoundError:
                 logger.warning("Could not load metadata for temporary checkpoint %s.", record.path)
                 continue
@@ -743,6 +748,13 @@ class Checkpointer:
         if jax.process_index() == 0:
             while self._checkpoint_being_removed is not None or not self._async_checkpoint_remover_queue.empty():
                 time.sleep(0.2)
+
+    def save_final_checkpoint(self, *, tree: PyTree, step: int) -> None:
+        """Commit the final completed step without waiting for background pruning."""
+        self._manager.wait_until_finished()
+        if self._last_save_step != step or not self._last_save_permanent:
+            self.on_step(tree=tree, step=step, force=True)
+            self._manager.wait_until_finished()
 
     def _rm_checkpoint(self, checkpoint):
         if jax.process_index() == 0:
@@ -785,8 +797,10 @@ class Checkpointer:
             is_temporary=is_temporary,
             debug=self.debug,
             write_config=self.write_config,
+            metadata=self.metadata,
         )
         self._last_save_step = step
+        self._last_save_permanent = not is_temporary
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):
@@ -827,8 +841,7 @@ def save_checkpoint(
         metadata: Additional application metadata committed with the completion marker.
         write_config: how the save divides work across the processes holding the state
     """
-    if metadata is not None and {"step", "timestamp", "is_temporary"}.intersection(metadata):
-        raise ValueError("Checkpoint metadata must not override step, timestamp, or is_temporary")
+    _check_application_metadata(metadata)
     step = int(step)
     checkpoint_path = str(checkpoint_path)
     checkpoint_debug = debug or CheckpointDebugConfig()
@@ -908,6 +921,11 @@ def save_checkpoint(
         raise
 
     return checkpoint_path
+
+
+def _check_application_metadata(metadata: Mapping[str, Any] | None) -> None:
+    if metadata is not None and {"step", "timestamp", "is_temporary"}.intersection(metadata):
+        raise ValueError("Checkpoint metadata must not override step, timestamp, or is_temporary")
 
 
 def _save_metadata(checkpoint_path, step, is_temporary, extra_metadata=None):
@@ -1097,7 +1115,8 @@ def load_checkpoint_or_initialize(
     return load_or_init
 
 
-def _load_metadata(checkpoint_path, fs=None):
+def load_checkpoint_metadata(checkpoint_path, fs=None) -> dict[str, Any]:
+    """Read a concrete checkpoint's ``metadata.json``: step, timestamp, retention, and application metadata."""
     if fs is None:
         fs, _, _ = fsspec.get_fs_token_paths(str(checkpoint_path))
     with fs.open(os.path.join(checkpoint_path, "metadata.json")) as metadata_in:
@@ -1201,7 +1220,7 @@ def _discover_checkpoint_candidates_single(
 
     for ckpt_dir in _discover_checkpoint_paths_single(checkpoint_path, fs=fs):
         try:
-            metadata = _load_metadata(ckpt_dir, fs=fs)
+            metadata = load_checkpoint_metadata(ckpt_dir, fs=fs)
             step = int(metadata["step"])
             timestamp = datetime.datetime.fromisoformat(metadata["timestamp"])
         except Exception:
@@ -1290,7 +1309,8 @@ class CheckpointerConfig:
             return os.path.expanduser(os.path.join(self.temporary_base_path, run_id))
         return os.path.expanduser(self.temporary_base_path)
 
-    def create(self, run_id) -> Checkpointer:
+    def create(self, run_id, *, metadata: Mapping[str, Any] | None = None) -> Checkpointer:
+        """Build the run's checkpointer; ``metadata`` is committed with every checkpoint it saves."""
         keeps = [CheckpointInterval(**k) for k in self.keep or []]
         return Checkpointer(
             base_path=self.expanded_path(run_id),
@@ -1301,6 +1321,7 @@ class CheckpointerConfig:
             keep_last_temporary_checkpoints=self.keep_last_temporary_checkpoints,
             debug=self.debug,
             write_config=self.write,
+            metadata=metadata,
         )
 
     def __post_init__(self):

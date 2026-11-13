@@ -4,7 +4,7 @@ Keep a goals document and its GitHub project board in sync with the current
 goals and the work in the repositories that the watch prompt names. The
 document's Goals section is the source of truth for the goals and their dates;
 people change it as plans change. Read the repository's `AGENTS.md`
-and the `writing-style` skill before you write.
+and `docs/dev-guide/writing-style/index.md` before you write.
 
 ```bash
 python3 scripts/pm/goals_doc.py board --org ORG --project N

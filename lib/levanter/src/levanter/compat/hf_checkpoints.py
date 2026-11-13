@@ -4,6 +4,7 @@
 import abc
 import contextlib
 import dataclasses
+import fnmatch
 import functools
 import json
 import logging
@@ -14,6 +15,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
@@ -38,7 +40,7 @@ from haliax.jax_utils import is_jax_array_like, sync_global_devices
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
-from huggingface_hub.errors import HfHubHTTPError
+from huggingface_hub.errors import HfHubHTTPError, RemoteEntryNotFoundError
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
@@ -53,6 +55,7 @@ from tqdm_loggable.auto import tqdm
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
+from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, sorted_field_dtypes
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -486,12 +489,18 @@ def _load_safetensor_shards(
 # but it means we get to benefit from dead code elimination and other goodness
 @eqx.filter_jit
 def _to_state_dict_with_dtype(
-    model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None
+    model: ModelWithHfSerializationMixin,
+    dtype,
+    subset: tuple[str, ...] | None,
+    field_dtypes: FieldDtypes = (),
 ) -> StateDict:
     """
     Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
-    and optionally subsetting to a given set of keys.
+    and optionally subsetting to a given set of keys. Fields in ``field_dtypes`` are exported in their own dtype.
     """
+    if field_dtypes:
+        model = cast_with_field_dtypes(model, dtype, field_dtypes)
+        dtype = None
     # We don't want to directly use to_torch_compatible_state_dict because it will convert everything to numpy.
     # we don't want to do that here because we want to keep things as jax arrays so we can eval_shape and control
     # sharding
@@ -1037,7 +1046,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # The reference config could not be read: the repo is gated, or the Hub is unreachable
             # (HF outage, or HF_HUB_OFFLINE in CI). Every HF/transformers "can't fetch" error is an
             # OSError subclass. We can still save: `to_hf_config()` already produced a complete config,
-            # so an HF outage never blocks a save. Record `architectures` from the model type (torch-free)
+            # so an HF outage never blocks model config construction. Record `architectures` from the model type (torch-free)
             # so the checkpoint stays loadable.
             warnings.warn(
                 f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
@@ -1092,6 +1101,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
         chat_template: Optional[str] = None,
+        field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1111,8 +1121,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
         This is useful when using custom architectures, as it will allow the model to be loaded without the custom
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
+        :param generation_config: explicit generation settings. Otherwise, preserves
+        generation_config.json from the pinned reference checkpoint, when present.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
+        :param field_dtype_overrides: model attribute name (matched at any depth) to the dtype it is exported in,
+            regardless of dtype
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
@@ -1145,7 +1159,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         else:
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
-        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None)
+        overridden = sorted_field_dtypes(field_dtype_overrides)
+        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None, overridden)
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
@@ -1216,7 +1231,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         save_hf_shards(
             shards,
-            lambda keys: _to_state_dict_with_dtype(model, dtype, keys),
+            lambda keys: _to_state_dict_with_dtype(model, dtype, keys, overridden),
             path,
             export_host_budget_bytes=export_host_budget_bytes,
             max_concurrent_shards=max_concurrent_shards,
@@ -1252,7 +1267,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 with open(os.path.join(local_path, "config.json"), "w") as f:
                     json.dump(dict_config, f)
 
-                if generation_config is not None:
+                if generation_config is None:
+                    self._save_reference_generation_config(local_path)
+                else:
                     logger.info(
                         "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
                     )
@@ -1277,6 +1294,26 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
+    def _save_reference_generation_config(self, local_path: str) -> None:
+        if self.reference_checkpoint is None:
+            return
+        repo, revision = self._get_ref(self.reference_checkpoint)
+        if _is_url_like(repo) or os.path.isdir(repo):
+            source = StoragePath(repo) / "generation_config.json"
+            try:
+                contents = source.read_bytes()
+            except FileNotFoundError:
+                return
+        else:
+            try:
+                source_path = hf_hub_download(repo_id=repo, filename="generation_config.json", revision=revision)
+            except RemoteEntryNotFoundError:
+                return
+            with open(source_path, "rb") as source_file:
+                contents = source_file.read()
+        with open(os.path.join(local_path, "generation_config.json"), "wb") as destination:
+            destination.write(contents)
+
     def _save_code_local(self, path):
         if self.reference_checkpoint is None:
             warnings.warn("No reference checkpoint provided, so no code will be saved")
@@ -1288,7 +1325,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # as a heuristic, we'll use .gitattributes to decide what to save: anything not in LFS will be saved
         # need to also save the .gitattributes file itself
         # TODO: .gitignore too? it's not used a lot with the hub
-        if os.path.exists(repo):
+        if _is_url_like(repo):
+            remote_attributes = StoragePath(repo) / ".gitattributes"
+            attributes_path = str(remote_attributes) if remote_attributes.exists() else None
+        elif os.path.exists(repo):
             # local path
             if revision is not None:
                 warnings.warn("Ignoring revision because this is a local path. We don't handle this case well yet")
@@ -1321,7 +1361,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             ]
         else:
             # read the attributes file and get the globs
-            with open(attributes_path) as f:
+            with StoragePath(attributes_path).open("r") as f:
                 attributes = f.read()
             ignore_files = [".git"]
             for line in attributes.split("\n"):
@@ -1332,6 +1372,36 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 if "filter=lfs" in line:
                     ignore_files.append(line.split()[0])
 
+        # Reference weights must never overwrite the newly trained export.
+        ignore_files.extend(
+            [
+                "*.safetensors",
+                "*.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model-*.bin",
+                "pytorch_model.bin.index.json",
+            ]
+        )
+        if _is_url_like(repo):
+            reference_root = StoragePath(repo)
+            walked_root = None
+            for directory, _, filenames in reference_root.walk():
+                # The filesystem may canonicalize the URI authority (for example memory://).
+                if walked_root is None:
+                    walked_root = directory
+                for filename in filenames:
+                    source = directory / filename
+                    relative = source.relative_to(walked_root)
+                    if any(
+                        fnmatch.fnmatch(relative, pattern)
+                        or any(fnmatch.fnmatch(part, pattern) for part in relative.split("/"))
+                        for pattern in ignore_files
+                    ):
+                        continue
+                    destination = os.path.join(path, relative)
+                    os.makedirs(os.path.dirname(destination), exist_ok=True)
+                    source.download_to(destination)
+            return
         if os.path.exists(repo):
             local_code_path = repo
         else:
@@ -1357,6 +1427,7 @@ def save_hf_checkpoint_callback(
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
+    field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1368,6 +1439,7 @@ def save_hf_checkpoint_callback(
     :param upload_to_hf:
     :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
     (written to both tokenizer_config.json and chat_template.jinja)
+    :param field_dtype_overrides: model attribute name to the dtype it is exported in, regardless of save_dtype
     :param hf_upload_kwargs:
     :return:
     """
@@ -1388,6 +1460,7 @@ def save_hf_checkpoint_callback(
             dtype=save_dtype,
             generation_config=generation_config,
             chat_template=chat_template,
+            field_dtype_overrides=field_dtype_overrides,
             **my_upload_kwargs,
         )
 

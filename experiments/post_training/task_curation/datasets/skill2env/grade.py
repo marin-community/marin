@@ -32,8 +32,10 @@ def main() -> None:
     NATIVE_REWARD.unlink(missing_ok=True)
     ADAPTED_REWARD.unlink(missing_ok=True)
     # Harbor reads a written reward even when the test command exits nonzero.
-    subprocess.run(["bash", "/tests/test.sh"], check=False)
-    ADAPTED_REWARD.write_text(json.dumps(component_reward(json.loads(NATIVE_REWARD.read_text()))) + "\n")
+    result = subprocess.run(["bash", "/tests/test.sh"], check=False)
+    reward = component_reward(json.loads(NATIVE_REWARD.read_text()))
+    reward["detail"]["native_exit_code"] = result.returncode
+    ADAPTED_REWARD.write_text(json.dumps(reward) + "\n")
 
 
 if __name__ == "__main__":

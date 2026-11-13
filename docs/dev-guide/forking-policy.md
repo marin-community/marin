@@ -4,11 +4,11 @@ When Marin needs a modified version of an upstream package, we maintain a fork
 under the `marin-community` GitHub organization. Each fork carries Marin's
 patches on top of an upstream base, and an automated weekly process keeps it
 close to upstream. SkyRL is maintained under `vendor/skyrl` with an independent
-lock and executable boundary; see the [SkyRL migration guide](skyrl-migration.md).
+lock and executable boundary; see the [SkyRL runtime guide](skyrl.md).
 This page describes
 how Marin pins the remaining forks and how the refresh runs.
 
-Evalchemy and Harbor are maintained in `vendor/evalchemy` and `vendor/harbor`,
+Harbor is maintained in `vendor/harbor`,
 each with an independent uv lock and local FineStore and Rigging sources. Both
 are excluded from the workspace and this fork-refresh process; evaluator changes
 land in the same Marin pull request as their callers.

@@ -6,11 +6,13 @@
 import base64
 import binascii
 import shutil
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from glob import has_magic
 from typing import Any, cast
 
 from fsspec import AbstractFileSystem
+from huggingface_hub import parse_hf_uri
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.hashing import file_md5_for_path
@@ -52,7 +54,7 @@ class TransferLocation:
     def relative_to(self, root: "TransferLocation") -> str:
         if _backend(self) != _backend(root):
             raise ValueError(f"{self.url} is not under {root.url}")
-        return _relative_path(self.path, root.path)
+        return _relative_path(_location_path(self), _location_path(root))
 
 
 @dataclass(frozen=True)
@@ -164,19 +166,21 @@ def copy_plan(
     return CopyPlan(sources, tuple(directories), tuple(copies), tuple(skipped))
 
 
-def execute_copy_plan(plan: CopyPlan) -> None:
+def execute_copy_plan(plan: CopyPlan, *, progress: Callable[[CopyAction, int], None] | None = None) -> None:
     """Create real directories and execute every file copy in a validated plan."""
     for action in plan.directories:
         action.destination.filesystem.makedirs(action.destination.path, exist_ok=True)
-    execute_copies(plan.copies)
+    execute_copies(plan.copies, progress=progress)
 
 
-def execute_copies(actions: tuple[CopyAction, ...]) -> None:
+def execute_copies(
+    actions: tuple[CopyAction, ...], *, progress: Callable[[CopyAction, int], None] | None = None
+) -> None:
     """Execute a validated sequence of copies."""
     for action in actions:
         if _same_location(action.source, action.destination):
             raise TransferError(f"source and destination are the same: {action.source.url}")
-        _copy_file(action.source, action.destination)
+        _copy_file(action, progress=progress)
 
 
 def remove_sources(sources: tuple[TransferSource, ...]) -> None:
@@ -380,7 +384,8 @@ def _md5(location: TransferLocation) -> bytes:
     return file_md5_for_path(location.filesystem, location.path)
 
 
-def _copy_file(source: TransferLocation, destination: TransferLocation) -> None:
+def _copy_file(action: CopyAction, *, progress: Callable[[CopyAction, int], None] | None = None) -> None:
+    source, destination = action.source, action.destination
     parent, separator, _ = destination.path.rpartition("/")
     if separator:
         destination.filesystem.makedirs(parent, exist_ok=True)
@@ -388,7 +393,15 @@ def _copy_file(source: TransferLocation, destination: TransferLocation) -> None:
         source.filesystem.open(source.path, "rb") as source_file,
         destination.filesystem.open(destination.path, "wb") as destination_file,
     ):
-        shutil.copyfileobj(source_file, destination_file, COPY_CHUNK_BYTES)
+        if progress is None:
+            shutil.copyfileobj(source_file, destination_file, COPY_CHUNK_BYTES)
+            return
+        copied_bytes = 0
+        progress(action, copied_bytes)
+        while chunk := source_file.read(COPY_CHUNK_BYTES):
+            destination_file.write(chunk)
+            copied_bytes += len(chunk)
+            progress(action, copied_bytes)
 
 
 def _backend(location: TransferLocation) -> str:
@@ -400,15 +413,26 @@ def _backend(location: TransferLocation) -> str:
     return scheme
 
 
+def _location_path(location: TransferLocation) -> str:
+    # HF model paths may omit models/ and repository revisions default to main.
+    # Normalize both to prevent copying a file onto itself through another URL.
+    if StoragePath(location.url).scheme == "hf":
+        uri = parse_hf_uri(location.url)
+        if uri.is_repo and uri.revision is None:
+            uri = replace(uri, revision="main")
+        return str(StoragePath(uri.to_uri()))
+    return location.path
+
+
 def _same_location(left: TransferLocation, right: TransferLocation) -> bool:
-    return _backend(left) == _backend(right) and left.path == right.path
+    return _backend(left) == _backend(right) and _location_path(left) == _location_path(right)
 
 
 def _strictly_contains(parent: TransferLocation, child: TransferLocation) -> bool:
     if _backend(parent) != _backend(child):
         return False
-    parent_path = parent.path.rstrip("/")
-    child_path = child.path.rstrip("/")
+    parent_path = _location_path(parent).rstrip("/")
+    child_path = _location_path(child).rstrip("/")
     if parent_path == child_path:
         return False
     prefix = f"{parent_path}/" if parent_path else "/" if parent.path.startswith("/") else ""

@@ -32,19 +32,22 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_DOCKERFILE, archive_environment
+
 TASKS_FILE = "tasks.parquet"
 TASKTROVE_REPO = "open-thoughts/TaskTrove"
 
 INSTRUCTION = "instruction.md"
 TASK_TOML = "task.toml"
-DOCKERFILE = "environment/Dockerfile"
+DOCKERFILE = ENVIRONMENT_DOCKERFILE
+"""The archive-relative Dockerfile path; ``environment_fidelity`` owns the layout."""
 TEST_SH = "tests/test.sh"
 VERIFIER_DATA = "tests/verifier_data.json"
 SOLUTION_DIR = "solution/"
 SOLVE_SH = "solution/solve.sh"
 TESTS_MOUNT = "/tests"
 """Where Harbor mounts a task's ``tests/`` directory, and only at grading time."""
-UV_IMAGE = "ghcr.io/astral-sh/uv:0.8"
+UV_IMAGE = "ghcr.io/astral-sh/uv:0.13.5"
 TEST_SH_REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
 """The numeric reward file a Harbor ``tests/test.sh`` writes."""
 
@@ -105,6 +108,11 @@ def archive_file(data: Mapping[str, Any], path: str) -> bytes | None:
     files = data.get("files")
     value = files.get(path) if isinstance(files, dict) else None
     return base64.b64decode(value, validate=True) if isinstance(value, str) else None
+
+
+def archive_requirements(data: Mapping[str, Any]) -> EnvironmentRequirements:
+    """The unpacked archive row's own environment, lowered onto its pinned base."""
+    return archive_environment(archive_file(data, DOCKERFILE))
 
 
 def archive_resource(data: Mapping[str, Any], path: str) -> TaskResource:

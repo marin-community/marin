@@ -3,6 +3,7 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
+import traceback
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -14,12 +15,27 @@ from iris.cluster.platforms.k8s.types import K8sResource, KubectlError
 
 
 class _FakeExecStream:
-    def __init__(self, *, returncode: int, stdout: str = "", stderr: str = "", stream_open: bool = False):
-        self.returncode = returncode
+    def __init__(
+        self,
+        *,
+        returncode: int,
+        stdout: str = "",
+        stderr: str = "",
+        stream_open: bool = False,
+        exit_error: ValueError | None = None,
+    ):
+        self._returncode = returncode
+        self.exit_error = exit_error
         self.stdout = stdout
         self.stderr = stderr
         self.open = stream_open
         self.closed = False
+
+    @property
+    def returncode(self) -> int:
+        if self.exit_error is not None:
+            raise self.exit_error
+        return self._returncode
 
     def run_forever(self, timeout: float | None = None) -> None:
         pass
@@ -71,6 +87,20 @@ def test_exec_timeout_reads_open_stream_without_blocking(monkeypatch):
 
     assert result.returncode == 124
     assert result.stderr == "Command timed out after 1 seconds"
+    assert stream.closed
+
+
+def test_exec_malformed_runtime_exit_code_reports_failure(monkeypatch):
+    stream = _FakeExecStream(
+        returncode=0,
+        exit_error=ValueError("invalid literal for int() with base 10: 'OCI runtime exec failed'"),
+    )
+    svc = _service_with_exec_stream(monkeypatch, stream)
+
+    result = svc.exec("task-pod", ["touch", "/tmp/release"], container="output-uploader")
+
+    assert result.returncode != 0
+    assert "OCI runtime exec failed" in result.stderr
     assert stream.closed
 
 
@@ -145,6 +175,22 @@ def _service_with_api(pages: list[list[str]]) -> tuple[CloudK8sService, _FakeApi
     # Seed the cached_property so no real kubernetes client is built.
     svc.__dict__["_dyn"] = SimpleNamespace(resources=SimpleNamespace(get=lambda **kwargs: api))
     return svc, api
+
+
+def test_secret_apply_failure_does_not_expose_api_echoed_values():
+    def reject_manifest(**_kwargs):
+        error = k8s_service.ApiException(status=422, reason="invalid submitted-sensitive-value")
+        error.body = "data: submitted-sensitive-value"
+        raise error
+
+    svc = CloudK8sService(namespace="iris")
+    svc.__dict__["_dyn"] = SimpleNamespace(
+        resources=SimpleNamespace(get=lambda **kwargs: object()),
+        server_side_apply=reject_manifest,
+    )
+    with pytest.raises(KubectlError) as captured:
+        svc.apply_json({"kind": "Secret", "metadata": {"name": "attempt-credentials"}, "data": {"API_KEY": "value"}})
+    assert "submitted-sensitive-value" not in "".join(traceback.format_exception(captured.value))
 
 
 def test_list_json_walks_all_pages():

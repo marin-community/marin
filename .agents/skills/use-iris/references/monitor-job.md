@@ -1,6 +1,6 @@
 # Monitor an Iris job
 
-Use `babysit-zephyr` for a Zephyr pipeline.
+Use [Zephyr monitoring](monitor-zephyr.md) for a Zephyr pipeline.
 
 Before monitoring, require:
 

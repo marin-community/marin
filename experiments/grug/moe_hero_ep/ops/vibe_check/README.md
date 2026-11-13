@@ -10,6 +10,9 @@ They include a final end-of-sequence (EOS) token, which measures the probability
 of stopping after the reference. The report shows EOS and includes it in the totals.
 Token colors show model probabilities. Hover, focus, or tap a token for its
 probability and the five most likely alternatives.
+Completions containing valid SVG have an image preview, including when prose
+follows the image markup. Expand **Full generated text** to inspect the SVG
+source and any continuation. Incomplete or malformed SVG remains visible as text.
 Each prompt in [prompts.json](prompts.json) includes an expected answer, which
 is scored separately. Open-ended expected answers are examples, and probability
 does not measure answer correctness. Probabilities use the model distribution
@@ -35,7 +38,10 @@ concurrently when 128 GPUs and the corresponding node resources are available.
 With `submission=all`, the backfill submits every unfinished request. It skips
 completed results, active jobs, and requests that exhausted their retries. The
 checkpoint selection comes from [`hero_checkpoint_paths()`](../../checkpoints.py),
-which reads the current hero run and its ancestors.
+which reads the current hero run and its ancestors. Discovery skips checkpoints
+before `FIRST_SAMPLED_STEP` in [config.py](config.py).
+The drawing prompt expansion starts at step 386,001, after the retained
+checkpoints through step 386,000, so it does not backfill those checkpoints.
 
 The workflow runs hourly. With its default, `submission=next`, it keeps at most two
 jobs for the current sampling specification active. It submits unfinished requests
@@ -68,4 +74,6 @@ All attempts use that commit for the sampler code, so
 merging a fix does not change existing requests.
 To rerun checkpoints with corrected sampler code, change `release` in
 [config.py](config.py) through a PR, then invoke the workflow. A new release
-creates new requests for all retained checkpoints, including prior successes.
+creates new requests for all retained checkpoints from `FIRST_SAMPLED_STEP` on,
+including prior successes. Lower `FIRST_SAMPLED_STEP` in the same PR to backfill
+older checkpoints.

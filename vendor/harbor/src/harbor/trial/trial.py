@@ -5,17 +5,19 @@ import logging
 import math
 import traceback
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from harbor_config.errors import ErrorCategory, error_category
+from harbor_config.models.trial.config import TaskConfig
+
 from harbor.agents.factory import AgentFactory
-from harbor.bridges.base import BaseBridge
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.agent.context import AgentContext
-from harbor.models.agent.name import AgentName
 from harbor.models.task.config import (
     EnvironmentConfig,
     StepConfig,
@@ -38,6 +40,7 @@ from harbor.models.trial.result import (
     StepResult,
     TimingInfo,
     TrialResult,
+    TrialCompletion,
 )
 from harbor.models.verifier.result import VerifierResult
 from harbor.skills import ResolvedSkill, resolve_skills
@@ -49,23 +52,21 @@ from harbor.trial.errors import (
     AgentSetupTimeoutError,
     AgentTimeoutError,
     EnvironmentStartTimeoutError,
+    EnvironmentStopError,
     PhaseCancellationError,
+    RuntimeLogCollectionError,
+    RuntimeServiceError,
     TrialNotScoredError,
     VerifierTimeoutError,
     VerificationNotCompletedError,
 )
 from harbor.trial.hooks import TrialEvent, TrialHookEvent, emit_trial_hooks
-from harbor.trial.simulated_user import (
-    load_user_persona,
-    load_user_prompt_template,
-    render_user_prompt,
-    validate_user_agent_version_pin,
-)
-from harbor.utils.artifact_writer import get_artifact_writer
+from harbor.utils.artifact_writer import ArtifactPersistenceError, get_artifact_writer
 from harbor.utils.artifact_authority import validate_artifact_authority
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 from harbor.verifier.factory import VerifierFactory
+from harbor.verifier.base import BaseVerifier
 
 TrialHookCallback = Callable[[TrialHookEvent], Awaitable[None]]
 
@@ -117,6 +118,44 @@ def _log_abandoned_phase_failure(
     phase_task.add_done_callback(_log)
 
 
+async def load_task(
+    task: TaskConfig,
+    *,
+    extra_instruction_paths: Sequence[Any] | None = None,
+    disable_verification: bool = False,
+) -> Task:
+    """Materialize one task, downloading remote descriptors as a trial would.
+
+    Git and package tasks are fetched through the task client's cache, which
+    honors the descriptor's ``download_dir`` and returns the cached path on
+    repeat calls. Callers that only inspect task definitions, such as snapshot
+    preflight, use the same acquisition path as trial execution.
+    """
+    if task.is_git_task() or task.is_package_task():
+        client = TaskClient()
+        task_id = task.get_task_id()
+        task_dir = (
+            await client.download_tasks(
+                task_ids=[task_id],
+                overwrite=task.overwrite,
+                output_dir=task.download_dir,
+            )
+        ).paths[0]
+        return Task(
+            task_dir=task_dir,
+            extra_instruction_paths=extra_instruction_paths,
+            disable_verification=disable_verification,
+        )
+
+    if task.path is None:
+        raise ValueError("Task path must be set for a local task.")
+    return Task(
+        task_dir=task.path,
+        extra_instruction_paths=extra_instruction_paths,
+        disable_verification=disable_verification,
+    )
+
+
 class Trial(ABC):
     """Base trial lifecycle.
 
@@ -132,6 +171,8 @@ class Trial(ABC):
         *,
         _task: Task | None = None,
         _attempt_index: int | None = None,
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
     ):
         if _task is None:
             raise ValueError(
@@ -140,6 +181,9 @@ class Trial(ABC):
             )
 
         self.config = config
+        self.host_capabilities = host_capabilities
+        self.guest_environment = dict(guest_environment)
+        self._service_tasks: asyncio.TaskGroup | None = None
         validate_artifact_authority(
             config.trials_dir,
             config.artifact_authority,
@@ -162,21 +206,17 @@ class Trial(ABC):
 
         self._are_agent_logs_downloaded = False
         self._is_agent_environment_stopped = False
+        self._environment_cleanup_failed = False
+        self._artifact_persistence_failure: ArtifactPersistenceError | None = None
         self._reached_verifier = False
         self._result: TrialResult | None = None
         self._log_handler: logging.Handler | None = None
         self._first_phase_timeout: asyncio.TimeoutError | None = None
         self._pending_cleanup_tasks: set[asyncio.Task[Any]] = set()
-        self.bridge: BaseBridge | None = None
-        self._bridge_setup_started = False
-        self._bridge_ready = False
-        self._bridge_closed = False
-        self._bridge_cleanup_task: asyncio.Task[None] | None = None
 
         self._init_logger()
         self._init_timeouts()
         self._init_agent()
-        self._init_user_agent()
         self._init_agent_environment()
         self._init_artifact_handler()
 
@@ -196,27 +236,35 @@ class Trial(ABC):
 
     @classmethod
     async def create(
-        cls, config: TrialConfig, *, attempt_index: int | None = None
+        cls,
+        config: TrialConfig,
+        *,
+        attempt_index: int | None = None,
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
     ) -> "Trial":
         task = await cls._load_task(config)
         if task.has_steps:
             from harbor.trial.multi_step import MultiStepTrial
 
             trial: Trial = MultiStepTrial(
-                config, _task=task, _attempt_index=attempt_index
+                config,
+                _task=task,
+                _attempt_index=attempt_index,
+                host_capabilities=host_capabilities,
+                guest_environment=guest_environment,
             )
         else:
             from harbor.trial.single_step import SingleStepTrial
 
-            trial = SingleStepTrial(config, _task=task, _attempt_index=attempt_index)
-        await trial._create_bridge()
-        return trial
-
-    async def _create_bridge(self) -> None:
-        if self.config.user_agent is not None:
-            self.bridge = await BaseBridge.create(
-                self.config.user_agent.bridge, self.agent
+            trial = SingleStepTrial(
+                config,
+                _task=task,
+                _attempt_index=attempt_index,
+                host_capabilities=host_capabilities,
+                guest_environment=guest_environment,
             )
+        return trial
 
     @property
     def first_phase_timeout(self) -> asyncio.TimeoutError | None:
@@ -227,33 +275,23 @@ class Trial(ABC):
 
     def _track_cleanup_task(self, task: asyncio.Task[Any]) -> None:
         self._pending_cleanup_tasks.add(task)
-        task.add_done_callback(self._pending_cleanup_tasks.discard)
+
+        def finished(task: asyncio.Task[Any]) -> None:
+            self._pending_cleanup_tasks.discard(task)
+            if not task.cancelled():
+                error = task.exception()
+                if isinstance(error, ArtifactPersistenceError):
+                    self._artifact_persistence_failure = error
+
+        task.add_done_callback(finished)
 
     @staticmethod
     async def _load_task(config: TrialConfig) -> Task:
         script_not_required = (
             config.verifier.disable or config.verifier.import_path is not None
         )
-        if config.task.is_git_task() or config.task.is_package_task():
-            client = TaskClient()
-            task_id = config.task.get_task_id()
-            task_dir = (
-                await client.download_tasks(
-                    task_ids=[task_id],
-                    overwrite=config.task.overwrite,
-                    output_dir=config.task.download_dir,
-                )
-            ).paths[0]
-            return Task(
-                task_dir=task_dir,
-                extra_instruction_paths=config.extra_instruction_paths,
-                disable_verification=script_not_required,
-            )
-
-        if config.task.path is None:
-            raise ValueError("Task path must be set for a local task.")
-        return Task(
-            task_dir=config.task.path,
+        return await load_task(
+            config.task,
             extra_instruction_paths=config.extra_instruction_paths,
             disable_verification=script_not_required,
         )
@@ -276,26 +314,66 @@ class Trial(ABC):
         await self._emit(TrialEvent.START)
 
         try:
-            await self._prepare()
-            await self._run()
+            async with asyncio.TaskGroup() as service_tasks:
+                self._service_tasks = service_tasks
+                primary: BaseException | None = None
+                try:
+                    await self._prepare()
+                    await self._run()
+                except PhaseCancellationError as exc:
+                    primary = exc
+                    await self._record_exception(exc)
+                except asyncio.CancelledError as exc:
+                    primary = exc
+                    await self._recover_outputs_safely()
+                    raise
+                except Exception as exc:
+                    primary = exc
+                    self.logger.exception("Trial %s failed", self.config.trial_name)
+                    await self._record_exception(exc)
+                    await self._recover_outputs_safely()
+                finally:
+                    cleanup_failure: BaseException | None = None
+                    for cleanup in (
+                        self._cleanup_agents,
+                        self._stop_agent_environment,
+                    ):
+                        try:
+                            await cleanup()
+                        except BaseException as cleanup_error:
+                            if not isinstance(cleanup_error, asyncio.CancelledError):
+                                self._environment_cleanup_failed = True
+                            if primary is None and cleanup_failure is None:
+                                cleanup_failure = cleanup_error
+                            else:
+                                self.result.secondary_exception_info.append(
+                                    ExceptionInfo.from_exception(cleanup_error)
+                                )
+                    if cleanup_failure is not None:
+                        raise cleanup_failure
         except asyncio.CancelledError as exc:
             self.logger.debug(f"Trial {self.config.trial_name} cancelled")
             await self._record_exception(exc)
-            await self._close_bridge()
-            await self._recover_outputs_safely()
             await self._emit(TrialEvent.CANCEL)
             raise
-        except PhaseCancellationError as exc:
-            self.logger.exception(
-                "Trial %s phase ignored cancellation", self.config.trial_name
+        except Exception as exc:
+            # TaskGroup reports a lost required service here, after the active
+            # phase has been cancelled and all owned services have finished.
+            self.result.verifier_result = None
+            while isinstance(exc, ExceptionGroup) and len(exc.exceptions) == 1:
+                exc = exc.exceptions[0]
+            if error_category(type(exc).__name__) is not ErrorCategory.INFRASTRUCTURE:
+                failure = RuntimeServiceError("Required trial service failed")
+                failure.__cause__ = exc
+                exc = failure
+            self.logger.error(
+                "Trial %s failed",
+                self.config.trial_name,
+                exc_info=(type(exc), exc, exc.__traceback__),
             )
             await self._record_exception(exc)
-        except Exception as exc:
-            self.logger.exception("Trial %s failed", self.config.trial_name)
-            await self._record_exception(exc)
-            await self._close_bridge()
-            await self._recover_outputs_safely()
         finally:
+            self._service_tasks = None
             await self._finalize()
             self._close_logger_handler()
 
@@ -311,7 +389,12 @@ class Trial(ABC):
 
     async def _recover_outputs_safely(self) -> None:
         try:
-            await self._recover_outputs()
+            await self._collect_runtime_logs()
+            await self._await_phase(
+                self._recover_outputs(),
+                timeout_sec=self.config.trial_cleanup_grace_sec,
+                timeout_error=TimeoutError("Trial output recovery timed out"),
+            )
         except Exception as exc:
             self.logger.exception(
                 "Trial %s output recovery failed", self.config.trial_name
@@ -320,33 +403,78 @@ class Trial(ABC):
                 ExceptionInfo.from_exception(exc)
             )
 
+    async def _collect_runtime_logs(self) -> None:
+        try:
+            await self._await_phase(
+                self.agent_environment.collect_runtime_logs(),
+                timeout_sec=self.config.trial_cleanup_grace_sec,
+                timeout_error=TimeoutError("Runtime log collection timed out"),
+            )
+        except PhaseCancellationError:
+            raise
+        except Exception as exc:
+            raise RuntimeLogCollectionError("Runtime log collection failed") from exc
+
     async def _prepare(self) -> None:
         await self._setup_agent_environment()
         await self.agent_environment.run_healthcheck()
         await self._upload_injected_skills()
         await self._upload_setup_files()
         with self.agent_environment.with_default_user(self.task.config.agent.user):
-            if self.user_agent is not None:
-                await self._setup_user_agent()
             await self._setup_agent()
-            if self.user_agent is not None:
-                await self._setup_bridge()
         self.result.agent_info = self.agent.to_agent_info()
 
     async def _finalize(self) -> None:
-        try:
-            await self._close_bridge()
-        finally:
-            await self._stop_agent_environment()
+        writer = get_artifact_writer()
+        # Done tasks stay gated until their callbacks retain any persistence failure.
+        if (
+            self._artifact_persistence_failure is not None
+            or self._pending_cleanup_tasks
+        ):
+            self.result.completion = None
+            self.result.verifier_result = None
+            prior = self.result.exception_info
+            if prior is None or error_category(prior.exception_type) in (
+                ErrorCategory.AGENT,
+                ErrorCategory.PASSTHROUGH,
+            ):
+                await self._record_exception(
+                    self._artifact_persistence_failure
+                    or PhaseCancellationError(
+                        "A cancelled trial phase did not finish before finalization"
+                    )
+                )
+        elif (
+            self._is_agent_environment_stopped and not self._environment_cleanup_failed
+        ):
+            try:
+                # Final agent trajectories can still be queued after teardown.
+                # Establish their durability before recording authoritative absence.
+                failed = await writer.flush_async(
+                    prefix=str(self.paths.agent_dir / "trajectory.json"),
+                    timeout=self.config.trial_cleanup_grace_sec,
+                )
+                if failed:
+                    raise ArtifactPersistenceError(
+                        f"{failed} agent artifact write(s) failed before finalization"
+                    )
+            except ArtifactPersistenceError as exc:
+                self.result.completion = None
+                self.result.verifier_result = None
+                await self._record_exception(exc)
+            else:
+                self.result.completion = TrialCompletion(
+                    trajectory_present=await asyncio.to_thread(
+                        (self.paths.agent_dir / "trajectory.json").exists
+                    )
+                )
         await self._enforce_verifier_result_invariant()
         self.result.finished_at = self._now()
         # The lifecycle result is written to the (remote, s3://) trials_dir. Route it
         # through the required artifact lane (NOT asyncio.to_thread: the
         # default executor fills up under concurrent trials and starves every
-        # other to_thread user). Optional diagnostics drain independently and
-        # cannot hold the trial open.
+        # other to_thread user). Other optional diagnostics drain independently.
         result_json = self.result.model_dump_json(indent=4)
-        writer = get_artifact_writer()
         result_path = (
             self.paths.result_path
             if self._attempt_index is None
@@ -429,6 +557,8 @@ class Trial(ABC):
         )
 
     async def _record_exception(self, exc: BaseException) -> None:
+        if isinstance(exc, ArtifactPersistenceError):
+            self._artifact_persistence_failure = exc
         # Last error chronologically wins. An earlier exception is frequently a
         # benign / non-terminal condition — most importantly an
         # ``AgentTimeoutError``, which is EXPECTED and is meant to fall through
@@ -496,22 +626,7 @@ class Trial(ABC):
         target.agent_result = AgentContext()
         target.agent_execution = TimingInfo(started_at=self._now())
 
-        running_agent = self.agent
-        exec_env_context = contextlib.nullcontext()
-        if self.user_agent is not None:
-            if self.bridge is None or self.config.user_agent is None:
-                raise RuntimeError("User-agent trial requires an initialized bridge")
-            running_agent = self.user_agent
-            instruction = render_user_prompt(
-                instruction,
-                self.bridge.prompt(),
-                template_path=self.config.user_agent.user_prompt_template_path,
-                persona_path=self.config.user_agent.user_persona_path,
-            )
-            exec_env_context = self.agent_environment.scoped_exec_env(
-                self._bridge_exec_env()
-            )
-
+        primary: BaseException | None = None
         try:
             # Record the phase deadline on the environment so an installed agent
             # that launches a DETACHED sandbox command (e.g. opencode) can apply a
@@ -520,13 +635,12 @@ class Trial(ABC):
             with (
                 self.agent_environment.with_default_user(user),
                 self.agent_environment.with_agent_timeout(timeout_sec),
-                exec_env_context,
             ):
                 error = AgentTimeoutError(
                     f"Agent execution timed out after {timeout_sec} seconds"
                 )
                 await self._await_phase(
-                    running_agent.run(
+                    self.agent.run(
                         instruction=instruction,
                         environment=self.agent_environment,
                         context=target.agent_result,
@@ -535,11 +649,46 @@ class Trial(ABC):
                     timeout_error=error,
                 )
         except SandboxDiskFullError as exc:
+            primary = exc
             raise AgentDiskFullError(str(exc)) from exc
+        except BaseException as exc:
+            primary = exc
+            raise
         finally:
-            if self.user_agent is not None:
-                await self._close_bridge(user=user)
-            target.agent_execution.finished_at = self._now()
+            try:
+                if self.agent_environment.requires_agent_quiescence_for_verifier:
+                    await self._cleanup_agents()
+                    await self._await_phase(
+                        self.agent_environment.quiesce_agent_commands(),
+                        timeout_sec=self.config.trial_cleanup_grace_sec,
+                        timeout_error=TimeoutError(
+                            "Agent commands did not stop before verifier model access"
+                        ),
+                    )
+            except Exception as exc:
+                if isinstance(primary, asyncio.CancelledError):
+                    primary.add_note(f"Agent cleanup failed: {exc}")
+                    self.result.secondary_exception_info.append(
+                        ExceptionInfo.from_exception(exc)
+                    )
+                else:
+                    raise PhaseCancellationError(
+                        "Could not confirm agent commands stopped"
+                    ) from exc
+            finally:
+                target.agent_execution.finished_at = self._now()
+
+    async def _cleanup_agents(self) -> None:
+        try:
+            await self._await_phase(
+                self.agent.cleanup(self.agent_environment),
+                timeout_sec=self.config.trial_cleanup_grace_sec,
+                timeout_error=TimeoutError("Agent session cleanup timed out"),
+            )
+        except Exception as exc:
+            raise PhaseCancellationError(
+                "Could not confirm agent session cleanup"
+            ) from exc
 
     async def _await_phase(
         self,
@@ -548,23 +697,43 @@ class Trial(ABC):
         timeout_sec: float | None,
         timeout_error: asyncio.TimeoutError,
     ) -> Any:
-        if timeout_sec is None:
-            return await awaitable
-
+        """Bound a phase while preserving persistence failures and caller cancellation."""
         task = asyncio.ensure_future(awaitable)
         try:
             done, _ = await asyncio.wait({task}, timeout=timeout_sec)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
             task.cancel()
+            self._track_cleanup_task(task)
             try:
-                await task
+                done, _ = await asyncio.wait(
+                    {task}, timeout=self.config.trial_cleanup_grace_sec
+                )
+            except asyncio.CancelledError:
+                _log_abandoned_phase_failure(task, self.logger)
+                raise cancellation
+            if task not in done:
+                _log_abandoned_phase_failure(task, self.logger)
+                cancellation.add_note(
+                    "Trial phase cancellation did not finish before the cleanup deadline"
+                )
+                raise cancellation
+            try:
+                task.result()
             except asyncio.CancelledError:
                 pass
-            except Exception:
+            except Exception as cleanup_error:
+                if isinstance(cleanup_error, ArtifactPersistenceError):
+                    self._artifact_persistence_failure = cleanup_error
+                    self.result.secondary_exception_info.append(
+                        ExceptionInfo.from_exception(cleanup_error)
+                    )
+                cancellation.add_note(
+                    f"Trial phase cancellation failed: {cleanup_error}"
+                )
                 self.logger.exception(
                     "Trial phase failed while handling attempt cancellation"
                 )
-            raise
+            raise cancellation
         if task in done:
             return await task
 
@@ -589,8 +758,13 @@ class Trial(ABC):
             await task
         except asyncio.CancelledError:
             raise timeout_error from None
+        except ArtifactPersistenceError as error:
+            self._artifact_persistence_failure = error
+            raise
         except Exception as error:
-            raise timeout_error from error
+            raise PhaseCancellationError(
+                "Trial phase failed while stopping its commands"
+            ) from error
         raise timeout_error
 
     async def _download_agent_logs(self) -> None:
@@ -612,15 +786,6 @@ class Trial(ABC):
             source_dir=self.agent_env_paths.agent_dir,
             target_dir=self.paths.agent_dir,
         )
-        if getattr(self, "user_agent", None) is not None:
-            succeeded = (
-                await Trial._download_role_logs(
-                    self,
-                    source_dir=self.agent_env_paths.user_agent_dir,
-                    target_dir=self.paths.user_agent_dir,
-                )
-                and succeeded
-            )
         self._are_agent_logs_downloaded = succeeded
 
     async def _download_role_logs(
@@ -686,16 +851,6 @@ class Trial(ABC):
                 source_dir=self.paths.agent_dir,
                 target_dir=self.agent_env_paths.agent_dir,
             )
-        if (
-            getattr(self, "user_agent", None) is not None
-            and self.config.user_agent is not None
-            and self.config.user_agent.upload_agent_logs
-        ):
-            await Trial._upload_role_logs(
-                self,
-                source_dir=self.paths.user_agent_dir,
-                target_dir=self.agent_env_paths.user_agent_dir,
-            )
 
     async def _upload_role_logs(
         self, *, source_dir: Path, target_dir: PurePosixPath
@@ -732,13 +887,45 @@ class Trial(ABC):
                 step_name=step_name,
                 timeout_sec=timeout_sec,
             )
-            return await self._await_phase(
-                verifier.verify(),
-                timeout_sec=timeout_sec,
-                timeout_error=VerifierTimeoutError(
-                    f"Verifier execution timed out after {timeout_sec} seconds"
-                ),
-            )
+            return await self._verify(verifier, self.agent_environment, timeout_sec)
+
+    async def _verify(
+        self,
+        verifier: BaseVerifier,
+        environment: BaseEnvironment,
+        timeout_sec: float | None,
+    ) -> VerifierResult:
+        assert self._service_tasks is not None
+
+        async def verify() -> VerifierResult:
+            services = contextlib.AsyncExitStack()
+            try:
+                try:
+                    await services.enter_async_context(
+                        environment.verifier_model_access(self._service_tasks)
+                    )
+                except RuntimeServiceError:
+                    raise
+                except Exception as exc:
+                    raise RuntimeServiceError(
+                        "Verifier model services failed to start"
+                    ) from exc
+                return await verifier.verify()
+            finally:
+                try:
+                    await services.aclose()
+                except Exception as exc:
+                    raise RuntimeServiceError(
+                        "Verifier model services failed to close"
+                    ) from exc
+
+        return await self._await_phase(
+            verify(),
+            timeout_sec=timeout_sec,
+            timeout_error=VerifierTimeoutError(
+                f"Verifier execution timed out after {timeout_sec} seconds"
+            ),
+        )
 
     async def _run_separate_verifier(
         self,
@@ -804,13 +991,7 @@ class Trial(ABC):
                     timeout_sec=timeout_sec,
                 )
 
-                return await self._await_phase(
-                    verifier.verify(),
-                    timeout_sec=timeout_sec,
-                    timeout_error=VerifierTimeoutError(
-                        f"Verifier execution timed out after {timeout_sec} seconds"
-                    ),
-                )
+                return await self._verify(verifier, target_env, timeout_sec)
 
     @contextlib.asynccontextmanager
     async def _separate_verifier_env(
@@ -820,11 +1001,8 @@ class Trial(ABC):
         key: str,
         step_cfg: StepConfig | None = None,
     ) -> AsyncGenerator[BaseEnvironment, None]:
-        verifier_runtime_config = self.config.environment.model_copy(
-            update={"extra_docker_compose": []}
-        )
         env = EnvironmentFactory.create_environment_from_config(
-            config=verifier_runtime_config,
+            config=self.config.environment,
             environment_dir=self._verifier_env_build_context(step_cfg),
             environment_name=self.task.short_name,
             session_id=self._separate_verifier_session_id(key),
@@ -832,34 +1010,35 @@ class Trial(ABC):
             task_env_config=env_config,
             logger=self.logger,
             mounts=self._verifier_env_mounts(env_config),
+            host_capabilities=self.host_capabilities,
+            guest_environment=self.guest_environment,
         )
+        primary: BaseException | None = None
         try:
-            await asyncio.wait_for(
-                env.start(force_build=False),
-                timeout=self._environment_build_timeout_sec,
+            assert self._service_tasks is not None
+            await self._await_phase(
+                env.start(force_build=False, service_tasks=self._service_tasks),
+                timeout_sec=self._environment_build_timeout_sec,
+                timeout_error=EnvironmentStartTimeoutError(
+                    "Verifier environment startup timed out"
+                ),
             )
             yield env
+        except BaseException as exc:
+            primary = exc
+            raise
         finally:
-            stop_task = asyncio.ensure_future(
-                env.stop(delete=self.config.environment.delete)
-            )
             try:
-                await asyncio.wait_for(
-                    asyncio.shield(stop_task), timeout=ENVIRONMENT_STOP_TIMEOUT_SEC
+                await self._stop_environment(env, key)
+            except BaseException as cleanup_error:
+                if primary is None:
+                    raise
+                primary.add_note(
+                    f"Verifier environment cleanup failed: {cleanup_error}"
                 )
-            except asyncio.TimeoutError:
-                self.logger.exception(
-                    f"Abandoning stop of verifier env '{key}' after "
-                    f"{ENVIRONMENT_STOP_TIMEOUT_SEC}s"
+                self.result.secondary_exception_info.append(
+                    ExceptionInfo.from_exception(cleanup_error)
                 )
-                _log_abandoned_stop_failure(stop_task, self.logger, key)
-                self._track_cleanup_task(stop_task)
-            except asyncio.CancelledError:
-                _log_abandoned_stop_failure(stop_task, self.logger, key)
-                self._track_cleanup_task(stop_task)
-                raise
-            except Exception:
-                self.logger.exception("Failed to stop verifier env '%s'", key)
 
     def _verifier_env_mounts(
         self,
@@ -899,19 +1078,11 @@ class Trial(ABC):
         if agent_result is None or not agent_result.is_empty():
             return
 
-        (self.user_agent or self.agent).populate_context_post_run(agent_result)
+        self.agent.populate_context_post_run(agent_result)
 
     async def _sync_agent_output(self, target: TrialResult | StepResult) -> None:
         await self._download_agent_logs()
         self._populate_agent_context(target.agent_result)
-        if (
-            self.user_agent is not None
-            and self.bridge is not None
-            and target.agent_result is not None
-        ):
-            self.bridge.enrich_context(
-                target.agent_result, self._bridge_trajectory_path
-            )
 
     async def _init_result(self) -> None:
         # Reset per-attempt so the verifier-reached signal tracks THIS run,
@@ -979,12 +1150,6 @@ class Trial(ABC):
 
     def _init_agent(self) -> None:
         extra_kwargs = {}
-        if self.config.agent.name == AgentName.ORACLE.value:
-            extra_kwargs = {
-                "task_dir": self.task.task_dir,
-                "trial_paths": self.paths,
-                "agent_timeout_sec": self._agent_timeout_sec,
-            }
         mcp_servers = {
             server.name: server
             for server in [
@@ -999,6 +1164,8 @@ class Trial(ABC):
 
         self.agent = AgentFactory.create_agent_from_config(
             self.config.agent,
+            guest_environment=self.guest_environment,
+            host_capabilities=self.host_capabilities,
             logs_dir=self.paths.agent_dir,
             environment_logs_dir=getattr(
                 self, "agent_env_paths", EnvironmentPaths()
@@ -1009,39 +1176,6 @@ class Trial(ABC):
         if hasattr(self.agent, "session_id"):
             self.agent.session_id = f"{getattr(self.config, 'trial_name', '')}__agent"
             self.agent.context_id = getattr(self.config, "job_id", None)
-
-    def _init_user_agent(self) -> None:
-        self.user_agent = None
-        if self.config.user_agent is None:
-            return
-
-        load_user_prompt_template(
-            self.config.user_agent.user_prompt_template_path,
-            persona_path=self.config.user_agent.user_persona_path,
-        )
-        load_user_persona(self.config.user_agent.user_persona_path)
-        if self.paths._is_local():
-            self.paths.user_agent_dir.mkdir(parents=True, exist_ok=True)
-
-        kwargs: dict[str, Any] = {}
-        if self.config.user_agent.mcp_servers:
-            kwargs["mcp_servers"] = list(self.config.user_agent.mcp_servers)
-        self.user_agent = AgentFactory.create_agent_from_config(
-            self.config.user_agent,
-            logs_dir=self.paths.user_agent_dir,
-            environment_logs_dir=self.agent_env_paths.user_agent_dir,
-            logger=self.logger,
-            **kwargs,
-        )
-        self.user_agent.session_id = f"{self.config.trial_name}__user"
-        self.user_agent.context_id = self.config.job_id
-
-        validate_user_agent_version_pin(
-            self.agent.name(),
-            self.agent.version(),
-            self.user_agent.name(),
-            self.user_agent.version(),
-        )
 
     def _init_agent_environment(self) -> None:
         session_id = self.config.trial_name
@@ -1057,6 +1191,8 @@ class Trial(ABC):
             task_env_config=self.task.config.environment,
             logger=self.logger,
             mounts=self._agent_env_mounts,
+            host_capabilities=self.host_capabilities,
+            guest_environment=self.guest_environment,
         )
         if self.agent_environment.capabilities.mounted:
             self.paths.chmod_dir()
@@ -1196,13 +1332,15 @@ class Trial(ABC):
             self.result.environment_setup.finished_at = self._now()
 
     async def _start_agent_environment(self) -> None:
+        assert self._service_tasks is not None
         error = EnvironmentStartTimeoutError(
             "Environment start timed out after "
             f"{self._environment_build_timeout_sec} seconds"
         )
         await self._await_phase(
             self.agent_environment.start(
-                force_build=self.config.environment.force_build
+                force_build=self.config.environment.force_build,
+                service_tasks=self._service_tasks,
             ),
             timeout_sec=self._environment_build_timeout_sec,
             timeout_error=error,
@@ -1215,8 +1353,7 @@ class Trial(ABC):
         ):
             raise RuntimeError(
                 f"Agent '{self.agent.name()}' does not support Windows containers. "
-                "Only agents with SUPPORTS_WINDOWS = True can run Windows tasks "
-                "(currently: oracle, nop)."
+                "Only agents with SUPPORTS_WINDOWS = True can run Windows tasks."
             )
 
         self.result.agent_setup = TimingInfo(started_at=self._now())
@@ -1232,176 +1369,47 @@ class Trial(ABC):
         finally:
             self.result.agent_setup.finished_at = self._now()
 
-    async def _setup_user_agent(self) -> None:
-        if self.user_agent is None:
-            raise RuntimeError("_setup_user_agent requires a user agent")
-        error = AgentSetupTimeoutError(
-            "Simulated-user setup timed out after "
-            f"{self._agent_setup_timeout_sec} seconds"
-        )
-        with self.agent_environment.scoped_exec_env(self.user_agent.extra_env):
-            await self._await_phase(
-                self.user_agent.setup(environment=self.agent_environment),
-                timeout_sec=self._agent_setup_timeout_sec,
-                timeout_error=error,
-            )
-
-    @property
-    def _bridge_trajectory_path(self):
-        filename = (
-            self.bridge.trajectory_filename
-            if self.bridge is not None
-            else BaseBridge.trajectory_filename
-        )
-        return self.paths.agent_dir / filename
-
-    def _bridge_exec_env(self) -> dict[str, str]:
-        if self.bridge is None or self.user_agent is None:
-            return {}
-        return {
-            **self.user_agent.extra_env,
-            **self.bridge.env(),
-            **self.agent.extra_env,
-        }
-
-    async def _setup_bridge(self) -> None:
-        if self.bridge is None:
-            raise RuntimeError("_setup_bridge requires an initialized bridge")
-        self._bridge_setup_started = True
-        error = AgentSetupTimeoutError(
-            f"Bridge setup timed out after {self._agent_setup_timeout_sec} seconds"
-        )
-        with self.agent_environment.scoped_exec_env(self._bridge_exec_env()):
-            await self._await_phase(
-                self.bridge.setup(self.agent_environment),
-                timeout_sec=self._agent_setup_timeout_sec,
-                timeout_error=error,
-            )
-        self._bridge_ready = True
-
-    async def _cleanup_bridge(self, user: str | int | None) -> None:
-        bridge = self.bridge
-        if bridge is None:
+    async def _stop_agent_environment(self) -> None:
+        if self._is_agent_environment_stopped:
             return
-
         try:
-            exec_env = self._bridge_exec_env()
-        except Exception as exc:
-            self.logger.warning("Could not resolve bridge cleanup environment: %s", exc)
-            exec_env = {
-                **(self.user_agent.extra_env if self.user_agent is not None else {}),
-                **self.agent.extra_env,
-            }
-
-        teardown_attempted = False
-
-        async def teardown() -> None:
-            nonlocal teardown_attempted
-            teardown_attempted = True
-            try:
-                await asyncio.wait_for(
-                    bridge.teardown(self.agent_environment),
-                    timeout=self._agent_setup_timeout_sec,
-                )
-            except Exception:
-                self.logger.warning("Bridge teardown failed", exc_info=True)
-
-        try:
-            try:
-                with (
-                    self.agent_environment.with_default_user(user),
-                    self.agent_environment.scoped_exec_env(exec_env),
-                ):
-                    if self._bridge_ready:
-                        try:
-                            await bridge.export_trajectory(
-                                self.agent_environment,
-                                self._bridge_trajectory_path,
-                            )
-                        except Exception:
-                            self.logger.warning(
-                                "Bridge trajectory export failed", exc_info=True
-                            )
-                    await teardown()
-            finally:
-                if not teardown_attempted:
-                    await teardown()
+            await self._stop_environment(self.agent_environment, self.config.trial_name)
         except asyncio.CancelledError:
+            if not self._environment_cleanup_failed:
+                self._is_agent_environment_stopped = True
             raise
-        except Exception:
-            self.logger.warning("Bridge cleanup failed", exc_info=True)
+        self._is_agent_environment_stopped = True
 
-    async def _close_bridge(self, user: str | int | None = None) -> None:
-        if (
-            getattr(self, "bridge", None) is None
-            or not getattr(self, "_bridge_setup_started", False)
-            or getattr(self, "_bridge_closed", False)
-        ):
-            return
-        effective_user = self.task.config.agent.user if user is None else user
-        if self._bridge_cleanup_task is None:
-            self._bridge_cleanup_task = asyncio.create_task(
-                self._cleanup_bridge(effective_user),
-                name=f"bridge-cleanup-{self.config.trial_name}",
-            )
-
+    async def _stop_environment(self, environment: BaseEnvironment, label: str) -> None:
+        stop_task = asyncio.create_task(
+            environment.stop(delete=self.config.environment.delete)
+        )
+        deadline = asyncio.get_running_loop().time() + ENVIRONMENT_STOP_TIMEOUT_SEC
         cancellation: asyncio.CancelledError | None = None
-        while not self._bridge_cleanup_task.done():
+        while not stop_task.done():
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                self._environment_cleanup_failed = True
+                _log_abandoned_stop_failure(stop_task, self.logger, label)
+                self._track_cleanup_task(stop_task)
+                raise EnvironmentStopError(
+                    "Environment teardown did not complete before its deadline"
+                ) from TimeoutError("Environment stop deadline exceeded")
             try:
-                await asyncio.shield(self._bridge_cleanup_task)
+                await asyncio.wait({stop_task}, timeout=remaining)
             except asyncio.CancelledError as exc:
                 cancellation = exc
 
         try:
-            self._bridge_cleanup_task.result()
-        except asyncio.CancelledError as exc:
-            cancellation = cancellation or exc
-        except Exception:
-            self.logger.warning("Bridge cleanup failed", exc_info=True)
-        finally:
-            self._bridge_closed = True
-
+            stop_task.result()
+        except asyncio.CancelledError:
+            self._environment_cleanup_failed = True
+            raise
+        except Exception as exc:
+            self._environment_cleanup_failed = True
+            raise EnvironmentStopError("Environment teardown failed") from exc
         if cancellation is not None:
             raise cancellation
-
-    async def _stop_agent_environment(self) -> None:
-        if self._is_agent_environment_stopped:
-            return
-
-        stop_task = asyncio.ensure_future(
-            self.agent_environment.stop(delete=self.config.environment.delete)
-        )
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(stop_task), timeout=ENVIRONMENT_STOP_TIMEOUT_SEC
-            )
-            self._is_agent_environment_stopped = True
-        except asyncio.TimeoutError:
-            # The stop is stuck (e.g. on a severed provider connection).
-            # Abandon it so trial finalize — and the trial's concurrency slot —
-            # is not held hostage; see ENVIRONMENT_STOP_TIMEOUT_SEC.
-            self._is_agent_environment_stopped = True
-            self.logger.exception(
-                f"Abandoning agent environment stop for {self.config.trial_name} "
-                f"after {ENVIRONMENT_STOP_TIMEOUT_SEC}s"
-            )
-            _log_abandoned_stop_failure(stop_task, self.logger, self.config.trial_name)
-            self._track_cleanup_task(stop_task)
-        except asyncio.CancelledError:
-            self._is_agent_environment_stopped = True
-            self.logger.debug(
-                f"Cleanup interrupted for {self.config.trial_name}, "
-                "but agent environment stop is shielded and will complete"
-            )
-            _log_abandoned_stop_failure(stop_task, self.logger, self.config.trial_name)
-            self._track_cleanup_task(stop_task)
-        except Exception as exc:
-            self._is_agent_environment_stopped = True
-            self.logger.exception(
-                "Agent environment cleanup failed for %s",
-                self.config.trial_name,
-            )
-            await self._record_exception(exc)
 
     @property
     def _agent_env_mounts(self) -> list[ServiceVolumeConfig]:
@@ -1422,14 +1430,6 @@ class Trial(ABC):
                 target=str(self.agent_env_paths.artifacts_dir),
             ),
         ]
-        if self.user_agent is not None:
-            base.append(
-                ServiceVolumeConfig(
-                    type="bind",
-                    source=self.paths.user_agent_dir.resolve().absolute().as_posix(),
-                    target=str(self.agent_env_paths.user_agent_dir),
-                )
-            )
         return base + list(self.config.environment.mounts or [])
 
     def __repr__(self) -> str:

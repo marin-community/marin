@@ -9,6 +9,9 @@ The interface name is taken from the [HuggingFace Accelerate](https://github.com
 framework.
 
 Levanter ships with trackers for W&B, TensorBoard, and a lightweight JSON logger that emits structured log lines. The interface is designed to look similar to W&B's API.
+The JSON logger configured with `type: json_logger` emits records only on JAX process 0,
+so distributed training does not repeat metrics on every host. Directly constructing
+`JsonLoggerTracker` emits records on the calling process.
 The methods currently exposed are:
 
 * [levanter.tracker.current_tracker][]: returns the current tracker instance or sets it.

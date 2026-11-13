@@ -20,7 +20,7 @@ from haliax.state_dict import ModuleWithStateDictSerialization
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.layers import LayerNormConfigBase, RmsNormConfig
+from levanter.layers.normalization import LayerNormConfigBase, RmsNormConfig
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig

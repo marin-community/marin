@@ -36,6 +36,7 @@ from harbor.models.trajectories import (
 )
 from harbor.trial.errors import AgentTimeoutError
 from harbor.utils.artifact_writer import get_artifact_writer
+from harbor.utils.env import validate_task_environment
 from harbor.utils.trajectory_utils import format_trajectory_json
 
 
@@ -847,12 +848,12 @@ class OpenCode(BaseInstalledAgent):
                     or os.environ.get("HARBOR_MODEL_ENDPOINT")
                     or os.environ.get("OPENAI_BASE_URL")
                 )
-            # Prefer the inert OPENCODE_DUMMY_KEY placeholder so the real host
-            # OPENAI_API_KEY (needed by the LLM-judge verifiers on the worker) never
-            # enters the sandbox. The capability token rides in the URL path, so the
-            # header value is inert and any non-empty string works.
-            api_key = os.environ.get("OPENCODE_DUMMY_KEY") or os.environ.get(
-                "OPENAI_API_KEY"
+            # The config file enters the guest too; read only granted task
+            # capabilities, never the host's provider authentication.
+            api_key = (
+                self._get_env("OPENCODE_DUMMY_KEY")
+                or self._get_env("OPENAI_API_KEY")
+                or "EMPTY"
             )
             if provider in ("vllm", "hosted_vllm"):
                 # Route a self-hosted vLLM through ai-sdk's openai-compatible
@@ -902,6 +903,16 @@ class OpenCode(BaseInstalledAgent):
         # Deep-merge preserves sibling keys within nested dicts (e.g. provider, experimental).
         config = self._deep_merge(copy.deepcopy(self._DEFAULT_CONFIG), config)
         config = self._deep_merge(config, self._opencode_config)
+
+        for configured_provider in config.get("provider", {}).values():
+            options = configured_provider.get("options", {})
+            if "apiKey" in options:
+                validate_task_environment({"API_KEY": options["apiKey"]})
+            for name, value in options.get("headers", {}).items():
+                if name.lower() in {"authorization", "x-api-key", "api-key"}:
+                    validate_task_environment(
+                        {"API_KEY": value.removeprefix("Bearer ")}
+                    )
 
         if not config:
             return None
@@ -979,15 +990,16 @@ class OpenCode(BaseInstalledAgent):
             keys.append("OPENROUTER_API_KEY")
 
         for key in keys:
-            if key in os.environ:
-                env[key] = os.environ[key]
+            value = self._get_env(key)
+            if value is not None:
+                env[key] = value
 
         # The OpenAI-compatible sandbox api key must be the inert OPENCODE_DUMMY_KEY
         # placeholder, NOT the real host OPENAI_API_KEY — that stays on the worker for
         # the LLM-judge verifiers, and must not leak into the sandbox. The capability
         # token is in the URL path, so the header value is inert.
         if provider in ("openai", "vllm", "hosted_vllm"):
-            dummy_key = os.environ.get("OPENCODE_DUMMY_KEY")
+            dummy_key = self._get_env("OPENCODE_DUMMY_KEY")
             if dummy_key:
                 env["OPENAI_API_KEY"] = dummy_key
 

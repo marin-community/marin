@@ -321,6 +321,7 @@ class Worker(DistributedTorchRayActor):
         if telemetry_config.endpoint is not None:
             self._telemetry.enter_context(ProcessTelemetry(telemetry_config, WORKER_ROLE))
         enable_trainer_batch_invariance(cfg.trainer.algorithm.batch_invariant)
+        self._weight_sync_pg_options = None
 
     @property
     def device(self) -> torch.device:
@@ -455,6 +456,7 @@ class Worker(DistributedTorchRayActor):
                     world_size=world_size,
                     rank=0,
                     group_name=group_name,
+                    pg_options=self._weight_sync_pg_options,
                 )
             )
             results = await asyncio.gather(*tasks)

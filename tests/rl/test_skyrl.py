@@ -6,6 +6,9 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
+import os
+import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -23,20 +26,20 @@ from marin.rl.skyrl import (
     MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
-    SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
     run_skyrl,
-    skyrl_runtime_digest,
+    skyrl_cpu_command,
     skyrl_step,
     skyrl_temporary_run_path,
     validate_megatron_geometry,
 )
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import cluster_config
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -48,6 +51,42 @@ def _model_step() -> ArtifactStep[LevanterCheckpoint]:
     )
 
 
+@pytest.mark.parametrize("relative_path", [".", "hf/.", "hf/../policy"])
+def test_artifact_hf_model_rejects_literal_object_store_dot_segments(relative_path: str) -> None:
+    # A trailing '/.' caused a real export to appear empty during GPU startup.
+    with pytest.raises(ValueError, match="dot segments"):
+        ArtifactHfModel(_model_step(), "test/model", "revision", relative_path=relative_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_path"),
+    [("", ""), ("hf/checkpoint-10", "hf/checkpoint-10"), (None, "hf/checkpoint-20")],
+)
+def test_artifact_hf_model_resolves_root_explicit_path_and_discovery(
+    tmp_path: Path, relative_path: str | None, expected_path: str
+) -> None:
+    root = tmp_path / "model"
+    for name, modified in (("checkpoint-10", 10), ("checkpoint-20", 20)):
+        export = root / "hf" / name
+        export.mkdir(parents=True)
+        (export / "config.json").write_text("{}")
+        (export / "tokenizer_config.json").write_text("{}")
+        os.utime(export / "config.json", (modified, modified))
+    # A config without tokenizer metadata is not a discoverable HF export.
+    (root / "config.json").write_text("{}")
+    model = ArtifactHfModel(
+        ArtifactStep.adopt("tests/model", "2026.08.01", str(root), kind=LevanterCheckpoint),
+        "test/tokenizer",
+        "revision",
+        relative_path=relative_path,
+    )
+    ctx = StepContext.for_run(str(tmp_path / "output"), str(tmp_path), deps=model.deps())
+
+    resolved = model.resolve(ctx)
+
+    assert resolved.uri == str(root / expected_path)
+
+
 def _data_step() -> ArtifactStep[Artifact]:
     return ArtifactStep.adopt(
         "tests/iceball-gsm8k",
@@ -56,18 +95,77 @@ def _data_step() -> ArtifactStep[Artifact]:
     )
 
 
-def test_nested_launcher_does_not_inherit_parent_python_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", "/parent/workspace")
-    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/parent/environment")
-    command = [
-        sys.executable,
-        "-c",
-        "import json, os; print(json.dumps({key: os.environ.get(key) for key in "
-        "['PYTHONPATH', 'UV_PROJECT_ENVIRONMENT']}))",
-    ]
-    result = run_launcher_for_test(command)
+def test_nested_launcher_does_not_inherit_parent_python_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    real_uv = str(Path(real_uv).resolve())
+    python_version = list(sys.version_info[:2])
+    workspace = tmp_path / "workspace"
+    project = workspace / "vendor" / "skyrl"
+    project.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=[]\nexclude=["vendor/skyrl"]\n')
+    (project / "pyproject.toml").write_text(
+        '[project]\nname="launcher-environment-test"\nversion="0.0.0"\n'
+        f'requires-python="=={python_version[0]}.{python_version[1]}.*"\ndependencies=[]\n'
+        "[project.optional-dependencies]\ncpu=[]\n[dependency-groups]\ndev=[]\n[tool.uv]\npackage=false\n"
+    )
+    (project / ".uv-version").write_bytes(
+        (Path(__file__).resolve().parents[2] / "vendor/skyrl/.uv-version").read_bytes()
+    )
+    (workspace / ".python-version").write_text("3.12.999\n")
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    monkeypatch.setenv("UV_NO_INDEX", "1")
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "cache"))
+    subprocess.run(
+        [real_uv, "lock", "--project", str(project), "--python", sys.executable, "--no-python-downloads"],
+        check=True,
+        capture_output=True,
+    )
+    # Isolate tool installation; real UV still selects both interpreters and
+    # executes the frozen project, with no index or Python downloads.
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    dispatcher = binaries / "uv"
+    dispatcher.write_text(
+        "#!/bin/sh\nset -eu\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        f'    --python) {shlex.quote(real_uv)} python find "$2" --no-python-downloads >/dev/null; shift 2 ;;\n'
+        f'    uv) shift; exec {shlex.quote(real_uv)} "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    dispatcher.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr("marin.rl.skyrl.__file__", str(workspace / "lib/marin/src/marin/rl/skyrl.py"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "incompatible-parent-python"))
+    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        monkeypatch.setenv(key, "/parent/environment")
+    monkeypatch.chdir(workspace)
+    result = run_launcher_for_test(
+        skyrl_cpu_command(
+            "python",
+            "-c",
+            "import json, os, sys; from pathlib import Path; "
+            "print(json.dumps({'python': list(sys.version_info[:2]), 'cwd': str(Path.cwd()), "
+            "'environment': {key: os.environ.get(key) for key in "
+            "['PYTHONPATH', 'PYTHONHOME', 'UV_PROJECT_ENVIRONMENT', 'VIRTUAL_ENV']}}))",
+        )
+    )
     assert result.returncode == 0
-    assert json.loads(result.stdout) == {"PYTHONPATH": None, "UV_PROJECT_ENVIRONMENT": None}
+    assert json.loads(result.stdout) == {
+        "python": python_version,
+        "cwd": str(workspace),
+        "environment": {
+            "PYTHONPATH": None,
+            "PYTHONHOME": None,
+            "UV_PROJECT_ENVIRONMENT": None,
+            "VIRTUAL_ENV": str(project / ".venv"),
+        },
+    }
 
 
 class _FakeLauncherProcess:
@@ -127,7 +225,6 @@ def _spec() -> SkyRLSpec:
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -173,12 +270,13 @@ def test_skyrl_spec_rejects_retired_transport_options_before_submission(key: str
         dataclasses.replace(_spec(), config_yaml=yaml.safe_dump(recipe))
 
 
-def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
-    policy = SkyRLRetentionPolicy(resume_checkpoint_count=5)
+def test_skyrl_retention_allows_ten_checkpoint_recovery_window() -> None:
+    # The Smartie continuation failed preflight despite its requested ten-checkpoint window.
+    policy = SkyRLRetentionPolicy(resume_checkpoint_count=10)
 
-    assert policy.resume_checkpoint_count == 5
-    with pytest.raises(ValueError, match="between one and five"):
-        SkyRLRetentionPolicy(resume_checkpoint_count=6)
+    assert policy.resume_checkpoint_count == 10
+    with pytest.raises(ValueError, match="between one and ten"):
+        SkyRLRetentionPolicy(resume_checkpoint_count=11)
 
 
 def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> None:
@@ -204,7 +302,6 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     spec = dataclasses.replace(
         _spec(),
         config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(),
         topology=SkyRLTopology(
             num_nodes=6,
             gpus_per_node=8,
@@ -246,6 +343,32 @@ def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
         SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
+@pytest.mark.parametrize(("reference_nodes", "allocated_nodes"), [(None, 2), (1, 3)])
+def test_static_preference_launch_reserves_policy_and_reference_without_rollout_nodes(reference_nodes, allocated_nodes):
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=2,
+        num_inference_engines=0,
+        reference_num_nodes=reference_nodes,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["evaluation_runner"] = "training"
+    recipe["trainer"]["algorithm"].update(policy_loss_type="dpo", loss_reduction="pair_mean")
+    recipe["environment"] = {"env_class": "preference_pair"}
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=allocated_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["iris"]["allocation"]["num_nodes"] == allocated_nodes
+    assert launch["skyrl"]["generator"]["num_inference_engines"] == 0
+    assert plan.num_nodes == allocated_nodes
+
+
 def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
     with pytest.raises(ValueError, match=r"trainer\.train_batch_size=32"):
         dataclasses.replace(
@@ -274,13 +397,12 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
         "megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 8}
     }
     recipe["trainer"]["ref"] = {"megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 16}}
-    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*data-parallel size by EP"):
+    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*ETP\*EP\*PP"):
         dataclasses.replace(_spec(), topology=topology, config_yaml=yaml.safe_dump(recipe))
     recipe["trainer"]["ref"]["megatron_config"]["expert_model_parallel_size"] = 8
     spec = dataclasses.replace(
         _spec(),
         config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(),
         topology=topology,
     )
     step = skyrl_step(spec, _execution())
@@ -295,6 +417,54 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
         "ref_num_nodes": 2,
         "ref_num_gpus_per_node": 8,
     }
+
+
+def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
+    plan = dataclasses.replace(
+        _role_plan(),
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        inference_engine_expert_parallel_size=4,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+            "expert_model_parallel_size": 4,
+        }
+    }
+    recipe["generator"].update(
+        weight_sync_transport="expert_block",
+        weight_sync_backend="nccl",
+        expert_block_sync={"verify": True},
+        engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
+    )
+    if entrypoint is not None:
+        recipe["entrypoint"] = entrypoint
+
+    return dataclasses.replace(
+        _spec(),
+        topology=dataclasses.replace(_spec().topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
+
+
+@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium", "terminal_bench_generate"])
+def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
+    with pytest.raises(ValueError, match="colocated expert_block requires entrypoint=standard"):
+        _colocated_expert_block_spec(entrypoint)
+
+
+def test_expert_block_colocated_four_gpu_recipe_passes_preflight() -> None:
+    spec = _colocated_expert_block_spec()
+    step = skyrl_step(spec, _execution())
+    launch = yaml.safe_load(
+        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).launch_config_yaml
+    )
+    assert launch["iris"]["allocation"]["num_nodes"] == 1
+    assert launch["skyrl"]["generator"]["inference_engine_data_parallel_size"] == 4
 
 
 def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
@@ -364,18 +534,24 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
 
 def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
-
-    assert (
-        skyrl_temporary_run_path(
-            "s3://marin-us-east-02a/marin/users/alice/run",
-            ttl_days=14,
-        )
-        == "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run"
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
+    monkeypatch.setattr(
+        cluster_config, "MARIN_CLUSTER_CONFIG_DIRS", (str(Path(__file__).resolve().parents[2] / "config"),)
     )
+    cluster_config.reset_data_config_cache()
+    try:
+        assert (
+            skyrl_temporary_run_path(
+                "s3://marin-us-east-02a/marin/users/alice/run",
+                ttl_days=14,
+            )
+            == "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/alice/run"
+        )
+    finally:
+        cluster_config.reset_data_config_cache()
 
 
 def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
-    expected_source_digest = skyrl_runtime_digest()
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -423,7 +599,6 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert launch["iris"]["timeout"] == 1800
     assert launch["schema_version"] == 1
     assert launch["run"]["export_hf"] is True
-    assert launch["runtime"]["source_digest"] == expected_source_digest
     assert launch["iris"]["allocation"] == {
         "num_nodes": 1,
         "gpus_per_node": 4,
@@ -615,7 +790,6 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
     with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
         dataclasses.replace(
             base,
-            runtime=SkyRLRuntime(),
             topology=dataclasses.replace(base.topology, role_plan=plan),
             config_yaml=yaml.safe_dump(recipe),
         )
@@ -623,7 +797,6 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
     recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 2
     dataclasses.replace(
         base,
-        runtime=SkyRLRuntime(),
         topology=dataclasses.replace(base.topology, role_plan=plan),
         config_yaml=yaml.safe_dump(recipe),
     )
@@ -631,10 +804,39 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
 
 def test_megatron_geometry_rejects_incomplete_expert_groups() -> None:
     geometry = MegatronGeometry(1, 2, 1, 8, 1)
-    with pytest.raises(
-        ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*data-parallel size by EP"
-    ):
+    with pytest.raises(ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*ETP\*EP\*PP"):
         validate_megatron_geometry(geometry, role="policy", num_gpus=8)
+
+
+def test_megatron_geometry_uses_separate_dense_context_and_expert_grids() -> None:
+    # This 192-GPU layout has dense DP=2 and EP=8: CP ranks also join expert groups.
+    geometry = MegatronGeometry(1, 24, 4, 8, 1)
+    validate_megatron_geometry(geometry, role="policy", num_gpus=192)
+
+    # Increasing ETP requires a larger expert grid even though the dense grid still fits.
+    with pytest.raises(ValueError):
+        validate_megatron_geometry(
+            dataclasses.replace(geometry, expert_tensor_parallel_size=2), role="policy", num_gpus=192
+        )
+
+
+@pytest.mark.parametrize("role", ["policy", "ref"])
+@pytest.mark.parametrize("explicit_null", [False, True], ids=["omitted", "null"])
+def test_skyrl_spec_inherits_expert_tensor_parallelism_from_role_tp(role: str, explicit_null: bool) -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    geometry: dict[str, int | None] = {"tensor_model_parallel_size": 2, "expert_model_parallel_size": 2}
+    if explicit_null:
+        geometry["expert_tensor_parallel_size"] = None
+    recipe["trainer"][role] = {"megatron_config": geometry}
+    base = _spec()
+    dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
+
+    geometry["expert_model_parallel_size"] = 4
+    with pytest.raises(ValueError):
+        dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
+
+    geometry["expert_tensor_parallel_size"] = 1
+    dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
 
 
 def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:

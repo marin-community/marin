@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The verifier contract: ``tests/verifier.toml`` is one flat table, ``mode`` plus that mode's fields.
+"""The verifier contract: ``tests/verifier.toml`` contains ``mode`` plus that mode's fields.
 
 Structured references and predicted-action arguments use JSON strings in TOML to preserve JSON null and nested values.
 
@@ -29,6 +29,7 @@ DEFAULT_WORKSPACE = "/app"
 
 
 class Mode(StrEnum):
+    UNSOLVABLE = "unsolvable"
     STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     MCQ = "mcq"
@@ -36,6 +37,7 @@ class Mode(StrEnum):
     NUMERIC = "numeric"
     EXACT = "exact"
     STRUCTURE_CLOSURE = "structure_closure"
+    REASONING_MARKUP = "reasoning_markup"
     JSON_SCHEMA = "json-schema"
     XML_ELEMENTS = "xml-elements"
     CSV_COLUMNS = "csv-columns"
@@ -95,6 +97,22 @@ class FunctionCall:
 
     name: str
     arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class UnsolvableSpec:
+    """A private task label requiring a validated terminal ejection for credit."""
+
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
+
+
+@dataclass(frozen=True)
+class ReasoningMarkupSpec:
+    """Grade decoded reply markers, assuming the prompt opened no span. Length stops excuse open spans."""
+
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -287,6 +305,11 @@ RUBRIC_LABELS = "labels"
 RUBRICS = frozenset({RUBRIC_REFERENCE, RUBRIC_CHECKLIST, RUBRIC_LABELS})
 
 
+class JudgeCompletionPolicy(StrEnum):
+    COMPLETED_TEXT = "completed_text"
+    CONTENT = "content"
+
+
 @dataclass(frozen=True)
 class JudgeSpec:
     """An LLM judge over the answer file.
@@ -307,11 +330,15 @@ class JudgeSpec:
     model: str = ""
     exact_gate: bool = True
     request_timeout: float = 120.0
+    transport_attempts: int = field(default=1, kw_only=True)
+    transport_budget: float = field(default=180.0, kw_only=True)
     output: str = DEFAULT_OUTPUT
     empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
     system_prompt: str = ""
     prompt_template: str = ""
     label_scores: dict[str, float] = field(default_factory=dict)
+    label_metrics: dict[str, dict[str, float]] = field(default_factory=dict, kw_only=True)
+    completion_policy: JudgeCompletionPolicy = field(default=JudgeCompletionPolicy.COMPLETED_TEXT, kw_only=True)
     exact_gate_answers: tuple[str, ...] = ()
     exact_gate_label: str = ""
     strip_reasoning_blocks: bool = False
@@ -341,13 +368,15 @@ class ScriptSpec:
 
 
 Spec = (
-    StructuredExactSpec
+    UnsolvableSpec
+    | StructuredExactSpec
     | PredictedActionSpec
     | McqSpec
     | MathSpec
     | NumericSpec
     | ExactSpec
     | StructureClosureSpec
+    | ReasoningMarkupSpec
     | JsonSchemaSpec
     | XmlElementsSpec
     | CsvColumnsSpec
@@ -378,6 +407,9 @@ class ModeDescriptor:
 
 
 MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
+    Mode.UNSOLVABLE: ModeDescriptor(
+        UnsolvableSpec, "grade_unsolvable", CandidateEntrypoints("validate_unsolvable", "grade_unsolvable_candidate")
+    ),
     Mode.STRUCTURED_EXACT: ModeDescriptor(
         StructuredExactSpec,
         "grade_structured_exact",
@@ -402,6 +434,11 @@ MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
         StructureClosureSpec,
         "grade_structure_closure",
         CandidateEntrypoints("validate_structure_closure", "grade_structure_closure_candidate"),
+    ),
+    Mode.REASONING_MARKUP: ModeDescriptor(
+        ReasoningMarkupSpec,
+        "grade_reasoning_markup",
+        CandidateEntrypoints("validate_reasoning_markup", "grade_reasoning_markup_candidate"),
     ),
     Mode.JSON_SCHEMA: ModeDescriptor(
         JsonSchemaSpec,

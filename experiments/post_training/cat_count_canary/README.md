@@ -30,9 +30,9 @@ uv run python -m experiments.post_training.cat_count_canary \
   --version 2026.09.30 --preset dry
 ```
 
-Inspect the model, dataset and training artifact versions and the vendored
-SkyRL `runtime.source_digest`. Use a fresh calendar version and owned
-job name for every measured run and after any runtime repin.
+Inspect the model, dataset and training artifact versions and the Marin
+revision. Use a fresh calendar version and owned job name for every measured
+run and after runtime changes.
 
 Check live capacity before submitting:
 
@@ -119,7 +119,7 @@ in a [seed-17 run](https://wandb.ai/marin-community/rav_moe/runs/yzukrdt2).
 Sampled evaluation reward on the training split increased from 0.2389 at step 0 to 0.6728 at step 10.
 Only the W&B project differs from the default recipe.
 This single run does not establish calibration across seeds.
-The [TaskSession validation](../task_sessions/validation.py) separately checks multi-turn training and HF exports.
+The [TaskSession validation](../task_sessions/validation.py) separately checks multi-turn training.
 Megatron logs `policy/dp_weight_checksum_mismatch` after every optimizer step;
 any mismatch fails the spec. The grouped step metric keeps the maximum across
 optimizer windows. Greedy, held-out and extrapolation scores are reported only.
@@ -173,8 +173,8 @@ Check that the log includes step 0, every completed training step, final
 evaluation and the training-completion marker. Use the actual child duration
 for `CHILD_DURATION_SECONDS`.
 
-Use the run's exact Marin revision and confirm its vendored provenance matches
-`runtime.source_digest`. From `vendor/skyrl/skyrl-train`, select
+Use the run's Marin checkout recorded by `rigging.provenance`.
+From `vendor/skyrl/skyrl-train`, select
 `ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json`, then run:
 
 ```bash

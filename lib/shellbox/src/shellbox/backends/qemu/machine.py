@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import shlex
+import stat
 import tarfile
 import tempfile
 from enum import StrEnum
@@ -31,6 +32,7 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     QemuBundle,
     Result,
     ShellStatus,
@@ -322,6 +324,9 @@ class QemuMachine:
         self._shell = QemuShellSession(reader, writer)
         return self._shell
 
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("QEMU does not provide an independent scope control channel")
+
     async def run(self, command: Command) -> Result:
         if not command.argv:
             raise ValueError("Command argv is empty")
@@ -402,13 +407,15 @@ class QemuMachine:
             unpack = (
                 f"/harbor/busybox mkdir -p {shlex.quote(target)} && "
                 f"/harbor/busybox gzip -d < {staged} | "
-                f"/harbor/busybox tar xf - -C {shlex.quote(target)}"
+                f"/harbor/busybox tar xf - -C {shlex.quote(target)} && "
+                f"/harbor/busybox chmod {stat.S_IMODE(source.stat().st_mode):o} {shlex.quote(target)}"
             )
         else:
             compressed = gzip.compress(source.read_bytes(), compresslevel=1, mtime=0)
             unpack = (
                 f"/harbor/busybox mkdir -p {shlex.quote(str(Path(target).parent))} && "
-                f"/harbor/busybox gzip -d < {staged} > {shlex.quote(target)}"
+                f"/harbor/busybox gzip -d < {staged} > {shlex.quote(target)} && "
+                f"/harbor/busybox chmod {stat.S_IMODE(source.stat().st_mode):o} {shlex.quote(target)}"
             )
         workdir = self.spec.workdir or self.image_workdir
         # A completion acknowledgement between bounded scripts prevents large

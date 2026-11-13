@@ -9,8 +9,7 @@ from dataclasses import dataclass
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from experiments.post_training.capability_driven_envs.catalog import FILE_SAFE_ID
+from taskforge.capability import FILE_SAFE_ID
 
 IDEAS_PER_ROLLOUT = 3
 

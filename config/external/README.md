@@ -4,11 +4,11 @@ This directory records promoted vLLM GPU releases and paired vLLM/TPU source
 revisions. Runtime code reads the generated
 `lib/marin/src/marin/external_dependencies.py` module.
 
-Evalchemy and Harbor live in `vendor/evalchemy` and `vendor/harbor`, each with its
-own lock and local FineStore and Rigging sources. Both are excluded from workspace
-membership and default installs, including `uv sync --all-packages`. Evaluator
-changes land with Marin. Historical commit metadata validates saved cohort
-records; reproducing those runs requires their recorded Marin checkout.
+Harbor lives in `vendor/harbor` with its own lock and local FineStore and Rigging
+sources. It is excluded from workspace membership and default installs. Standard
+evaluations use curated TaskSpec corpora and the Marin driver. Historical Evalchemy
+commit metadata validates saved cohort records; reproducing those runs requires
+their recorded Marin checkout.
 
 `vllm/gpu.toml` records the published CUDA release, Torch backend, wheel URLs and
 SHA-256 for each architecture. The
@@ -33,9 +33,8 @@ these descriptors for the weekly fork ferry.
 
 SkyRL lives in `vendor/skyrl` with its own `pyproject.toml` and `uv.lock`.
 Marin invokes its `marinskyrl` executable in an isolated child environment.
-GPU workers receive source, assets and the lock in a hash-verified Iris bundle.
-The [SkyRL migration guide](../../docs/dev-guide/skyrl-migration.md) covers
-refreshing the pruned source and reconciling active fork work before archival.
-`uv run config/update-external.py --skyrl-marin-packages` advances published
-Marin libraries within the nested project's version constraints. It checks the
-isolated import and constructor contract and restores the lock on failure.
+GPU workers receive the Marin repository through Iris's workspace bundle.
+SkyRL source updates land directly in Marin; see the
+[SkyRL runtime guide](../../docs/dev-guide/skyrl.md).
+SkyRL installs Marin libraries and Harbor from editable paths in the checkout.
+After dependency changes, refresh its lock with `uv lock --project vendor/skyrl`.

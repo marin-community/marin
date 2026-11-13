@@ -18,7 +18,6 @@ from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
 
 EVALCHEMY_COMMIT = "c131e5ab84d3014490549ec06d45deb13b5673c2"
-HARBOR_COMMIT = "21e0ea6a0cc1a0b617aebd86988ea93e1795f84a"
 NUPA_SEED = 20222943
 DEFAULT_SEED = 42
 AIME24_REPEATS = 10
@@ -142,8 +141,8 @@ POLICIES: Mapping[str, Mapping[str, PolicyEval]] = MappingProxyType(
 )
 RUNTIME_COMMITS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
-        SEPTEMBER_16_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
-        SEPTEMBER_24_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT, "harbor": HARBOR_COMMIT}),
+        SEPTEMBER_16_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT}),
+        SEPTEMBER_24_VERSION: MappingProxyType({"evalchemy": EVALCHEMY_COMMIT}),
     }
 )
 
@@ -240,9 +239,9 @@ def policy_violations(version: str | None, model: ModelRef, evaluation: EvalRef)
     return tuple(problems)
 
 
-def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -> tuple[str, ...]:
-    """Keep evaluator versions fixed within a verified cohort."""
-    if version not in POLICIES:
+def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str | None) -> tuple[str, ...]:
+    """Keep external Evalchemy versions fixed within a verified cohort."""
+    if version not in POLICIES or evaluation.mechanism != "evalchemy":
         return ()
     commits = RUNTIME_COMMITS.get(version)
     if commits is None:
@@ -250,14 +249,8 @@ def runtime_violations(version: str | None, evaluation: EvalRef, runtime: str) -
     commit = commits.get(evaluation.mechanism)
     if commit is None:
         return (f"missing {evaluation.mechanism} evaluator pin for {version}",)
-    if commit not in runtime:
+    if runtime is None or commit not in runtime:
         return (f"evaluator runtime must use commit {commit}",)
-    if evaluation.harbor is not None:
-        harbor_commit = commits.get("harbor")
-        if harbor_commit is None:
-            return (f"missing harbor evaluator pin for {version}",)
-        if evaluation.harbor.harbor_config_commit != harbor_commit:
-            return (f"Harbor preflight must use commit {harbor_commit}",)
     return ()
 
 

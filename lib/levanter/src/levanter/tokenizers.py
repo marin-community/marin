@@ -23,7 +23,6 @@ import os
 import re
 import shutil
 import tempfile
-import threading
 import time
 from enum import StrEnum
 from fnmatch import fnmatchcase
@@ -32,6 +31,7 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 import jinja2
 import jinja2.ext
 import jinja2.sandbox
+from filelock import FileLock
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
@@ -896,17 +896,6 @@ def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
         _populate_mirror_file(dest, f"{mirror_base}/{filename}")
 
 
-# Serializes tokenizer staging across threads. ``lru_cache`` deduplicates
-# *repeat* calls but does not serialize concurrent *first* calls for the same
-# key, so without this lock N threads (e.g. one per dataset component in
-# ``build_caches``) race to write the same staging directory. That race
-# corrupts the tokenizer.json a sibling is mid-read of and forces a fatal HF
-# fall-through for mirror-only refs. A single process-wide lock is sufficient:
-# staging is I/O-bound and an app rarely fetches more than one tokenizer, so
-# serializing all staging costs nothing in practice.
-_STAGE_LOCK = threading.Lock()
-
-
 @functools.lru_cache(maxsize=32)
 def _stage_tokenizer(name_or_path: str) -> str:
     """Download the full set of tokenizer files to a stable local directory.
@@ -925,8 +914,8 @@ def _stage_tokenizer(name_or_path: str) -> str:
     Once staged, downstream loaders operate purely on local files — no
     HF Hub network calls (HEAD revalidation, etc.) are made.
 
-    Safe to call concurrently for the same ref: staging is serialized so only
-    one thread downloads while the others reuse the staged files.
+    Safe across threads and processes sharing the local directory: one caller
+    stages all files while the others wait and reuse them.
 
     Returns the local directory path. ``lru_cache`` makes subsequent calls free.
     """
@@ -938,7 +927,7 @@ def _stage_tokenizer(name_or_path: str) -> str:
     )
     os.makedirs(local_dir, exist_ok=True)
 
-    with _STAGE_LOCK:
+    with FileLock(local_dir + ".lock"):
         # 1. Local cache hit (also the double-checked fast path for threads that
         #    waited on the lock while another thread staged this same ref).
         if _try_load_tokenizer_from_dir(local_dir):

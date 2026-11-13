@@ -5,9 +5,9 @@ from pathlib import Path, PurePosixPath
 from time import monotonic
 from typing import Any, Literal
 
-from upath import UPath
-
+from harbor.models.agent.model_api import ModelAPI
 from harbor.agents.installed.base import (
+    REQUIRED_MODEL_PRICE_FIELDS,
     BaseInstalledAgent,
     CliFlag,
     NonZeroAgentExitCodeError,
@@ -33,14 +33,16 @@ from harbor.models.trajectories import (
 )
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.trial.errors import AgentTimeoutError
-from harbor.utils.env import parse_bool_env_value
 from harbor.utils.trajectory_utils import format_trajectory_json
+from upath import UPath
 
 
 class Codex(BaseInstalledAgent):
     """
     The Codex agent uses OpenAI's Codex CLI tool to solve tasks.
     """
+
+    MODEL_API = ModelAPI.OPENAI_RESPONSES
 
     SUPPORTS_ATIF: bool = True
     _OUTPUT_FILENAME = "codex.txt"
@@ -231,12 +233,12 @@ class Codex(BaseInstalledAgent):
                 timestamp=timestamp,
                 source=source,
                 message=text,
-                reasoning_content=reasoning
-                if source == "agent" and reasoning
-                else None,
-                model_name=self.model_alias
-                if source == "agent" and self.model_alias
-                else None,
+                reasoning_content=(
+                    reasoning if source == "agent" and reasoning else None
+                ),
+                model_name=(
+                    self.model_alias if source == "agent" and self.model_alias else None
+                ),
                 extra=extra if extra else None,
             )
 
@@ -311,32 +313,20 @@ class Codex(BaseInstalledAgent):
         completion_tokens: int | None,
         cached_tokens: int | None,
     ) -> float | None:
-        """Compute total cost in USD from token counts via LiteLLM's pricing table.
+        """Compute total cost in USD from token counts via explicit model_info prices.
 
         Codex CLI's session JSONL never includes a cost field, so we apply
-        LiteLLM's per-token rates to the aggregated counts ourselves. Returns
-        None when the model is missing from the table — caller should leave
-        cost_usd unset rather than report a misleading $0.
+        configured per-token rates to the aggregated counts ourselves. Returns
+        None when model_info omits either input or output token prices.
         """
         if not self.model_alias:
             return None
 
-        try:
-            import litellm
-        except ImportError:
-            self.logger.debug("litellm not available; leaving codex cost_usd as None")
-            return None
+        pricing = self._model_info
 
-        pricing: dict[str, Any] | None = None
-        for key in (self.model_alias, self.model_alias.split("/", 1)[-1]):
-            entry = litellm.model_cost.get(key)
-            if entry:
-                pricing = entry
-                break
-
-        if pricing is None:
+        if pricing is None or not REQUIRED_MODEL_PRICE_FIELDS <= pricing.keys():
             self.logger.debug(
-                "No LiteLLM pricing entry for model '%s'; leaving codex "
+                "No model_info pricing entry for model '%s'; leaving codex "
                 "cost_usd as None",
                 self.model_alias,
             )
@@ -462,9 +452,11 @@ class Codex(BaseInstalledAgent):
                         "timestamp": timestamp,
                         "role": payload.get("role", "user"),
                         "text": text,
-                        "reasoning": pending_reasoning
-                        if payload.get("role") == "assistant"
-                        else None,
+                        "reasoning": (
+                            pending_reasoning
+                            if payload.get("role") == "assistant"
+                            else None
+                        ),
                     }
                 )
                 pending_reasoning = None
@@ -598,7 +590,7 @@ class Codex(BaseInstalledAgent):
             overall_tokens = total_usage.get("total_tokens")
 
             # Codex CLI does not include cost in token_count events, so fall
-            # back to LiteLLM's pricing table when the field is absent. Use
+            # back to explicit model_info prices when the field is absent. Use
             # explicit `is None` checks so a legitimate $0 cost reported by
             # the CLI isn't mistaken for a missing field.
             total_cost_usd = info.get("total_cost")
@@ -711,36 +703,6 @@ class Codex(BaseInstalledAgent):
         escaped_config = shlex.quote("\n".join(lines))
         return f'echo {escaped_config} >> "$CODEX_HOME/config.toml"'
 
-    def _resolve_auth_json_path(self) -> Path | None:
-        """Resolve which auth.json to inject, if any.
-
-        Defaults to None (OPENAI_API_KEY auth). Opt into auth.json auth via:
-          - CODEX_AUTH_JSON_PATH=<path> → use that specific file
-          - CODEX_FORCE_AUTH_JSON=<truthy> → use ~/.codex/auth.json
-        """
-        explicit = self._get_env("CODEX_AUTH_JSON_PATH")
-        if explicit:
-            p = Path(explicit)
-            if not p.is_file():
-                raise ValueError(
-                    f"CODEX_AUTH_JSON_PATH points to non-existent file: {explicit}"
-                )
-            return p
-
-        if parse_bool_env_value(
-            self._get_env("CODEX_FORCE_AUTH_JSON"),
-            name="CODEX_FORCE_AUTH_JSON",
-            default=False,
-        ):
-            default = Path.home() / ".codex" / "auth.json"
-            if not default.is_file():
-                raise ValueError(
-                    f"CODEX_FORCE_AUTH_JSON is set but {default} does not exist"
-                )
-            return default
-
-        return None
-
     @with_prompt_template
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
@@ -761,12 +723,6 @@ class Codex(BaseInstalledAgent):
         cli_flags = self.build_cli_flags()
         cli_flags_arg = (cli_flags + " ") if cli_flags else ""
 
-        # Auth resolution:
-        #   1. CODEX_AUTH_JSON_PATH=<path> → use that specific auth.json file
-        #   2. CODEX_FORCE_AUTH_JSON=<truthy> → use ~/.codex/auth.json
-        #   3. Default: use OPENAI_API_KEY
-        auth_json_path = None if self._api_base else self._resolve_auth_json_path()
-
         remote_codex_home = self._REMOTE_CODEX_HOME.as_posix()
         remote_secrets_dir = self._REMOTE_CODEX_SECRETS_DIR.as_posix()
         remote_auth_path = (self._REMOTE_CODEX_SECRETS_DIR / "auth.json").as_posix()
@@ -784,29 +740,15 @@ class Codex(BaseInstalledAgent):
             env=env,
         )
 
-        if auth_json_path:
-            self.logger.debug("Codex auth: using auth.json from %s", auth_json_path)
-            await environment.upload_file(auth_json_path, remote_auth_path)
-            # upload_file copies as root; fix ownership so the agent user can read it
-            if environment.default_user is not None:
-                await self.exec_as_root(
-                    environment,
-                    command=f"chown {environment.default_user} {remote_auth_path}",
-                )
-            setup_command = (
-                f'ln -sf {shlex.quote(remote_auth_path)} "$CODEX_HOME/auth.json"\n'
-            )
-        else:
-            self.logger.debug("Codex auth: using OPENAI_API_KEY")
-            env["OPENAI_API_KEY"] = (
-                "EMPTY" if self._api_base else self._get_env("OPENAI_API_KEY") or ""
-            )
-            setup_command = (
-                f"cat >{shlex.quote(remote_auth_path)} <<EOF\n"
-                '{\n  "OPENAI_API_KEY": "${OPENAI_API_KEY}"\n}\nEOF\n'
-                f"ln -sf {shlex.quote(remote_auth_path)} "
-                '"$CODEX_HOME/auth.json"\n'
-            )
+        env["OPENAI_API_KEY"] = (
+            "EMPTY" if self._api_base else self._get_env("OPENAI_API_KEY") or "EMPTY"
+        )
+        setup_command = (
+            f"cat >{shlex.quote(remote_auth_path)} <<EOF\n"
+            '{\n  "OPENAI_API_KEY": "${OPENAI_API_KEY}"\n}\nEOF\n'
+            f"ln -sf {shlex.quote(remote_auth_path)} "
+            '"$CODEX_HOME/auth.json"\n'
+        )
 
         config_toml_block = ""
         if self._api_base:

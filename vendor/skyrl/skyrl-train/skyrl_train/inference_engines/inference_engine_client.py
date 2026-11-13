@@ -504,6 +504,7 @@ class InferenceEngineClient(InferenceEngineInterface):
         - Adjust remaining max tokens if `max_tokens` or `max_completion_tokens` is present.
 
         For the final response, we return `InferenceEngineOutput` with:
+        - `prompt_ids`: the original submitted tokens, before any retry continuation
         - `responses`: decoded at the end from `response_ids` if generation is completed in > 1 turns, otherwise the text response of the first turn.
         - `response_ids`: the accumulated output tokens
         - `stop_reasons`: the stop reason of the final response
@@ -638,13 +639,16 @@ class InferenceEngineClient(InferenceEngineInterface):
         if num_turns == 1:
             final_text_response = text_response
         else:
-            final_text_response = self.tokenizer.decode(accum_response_ids, skip_special_tokens=True)
+            final_text_response = self.tokenizer.decode(
+                accum_response_ids, skip_special_tokens=sampling_params.get("skip_special_tokens", True)
+            )
 
         # Propagate prompt_logprobs from the last partial response (only meaningful
         # for teacher scoring where max_tokens=1 and num_turns=1).
         final_prompt_logprobs = partial_response.get("prompt_logprobs") if partial_response else None
 
         output = InferenceEngineOutput(
+            prompt_ids=[original_prompt_ids],
             responses=[final_text_response],
             stop_reasons=[stop_reason],
             response_ids=[accum_response_ids],
@@ -732,8 +736,7 @@ class InferenceEngineClient(InferenceEngineInterface):
                 finish_reason = ABORT_FINISH_REASON
                 continue
 
-            # 1.2.1. Check for error response from vLLM/sglang.
-            # Error responses have "error" key (vLLM) or "object"="error" (sglang), not "choices".
+            # Error responses have an "error" field or object="error", rather than "choices".
             if is_engine_error_response(partial_response):
                 error_info = partial_response.get("error", partial_response)
                 error_msg = (
@@ -1348,8 +1351,7 @@ def _completion_response_was_aborted(response: Dict[str, Any]) -> bool:
 def _completion_engine_error_response(results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Wrap the first engine-side `/completions` error as a client-level error, else None.
 
-    There is no partial success: if any sub-request errored, the whole request errors, following
-    vLLM's and SGLang's behavior.
+    If any sub-request errors, the whole request returns that error.
     """
     for result in results:
         if is_engine_error_response(result):

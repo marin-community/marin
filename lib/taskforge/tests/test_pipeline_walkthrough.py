@@ -9,7 +9,7 @@ module text, as an author writing Python would return it.
 
 import base64
 import inspect
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, NoReturn
@@ -74,7 +74,9 @@ class UnusedModel:
 
     model = "unused"
 
-    async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ) -> Completion:
         raise AssertionError("no step calls the model")
 
     async def complete_structured[T: BaseModel](

@@ -4,18 +4,48 @@ import argparse
 import asyncio
 import json
 import math
+import os
 import signal
 import socket
+import subprocess
 import traceback
+from collections.abc import Mapping
+from pathlib import Path
 
+from harbor.cli.utils import cli_guest_environment, cli_host_capabilities
 from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
+from harbor.models.trial.config import TaskConfig
+from harbor_config.errors import ErrorCategory, error_category
 from skyrl_train.inline_harbor_client import CONTROL_MESSAGE_LIMIT
 
 
+class HarborTaskCache:
+    """Prepare each immutable cohort before its concurrent trials start."""
+
+    def __init__(self):
+        self._lock = asyncio.Lock()
+        self._prepared: set[tuple[str, ...]] = set()
+
+    async def prepare(self, config: JobConfig) -> JobConfig:
+        key = tuple(task.model_dump_json() for task in config.tasks)
+        async with self._lock:
+            if key not in self._prepared:
+                groups: dict[tuple[bool, Path | None], list[TaskConfig]] = {}
+                for task in config.tasks:
+                    groups.setdefault((task.overwrite, task.download_dir), []).append(task)
+                for tasks in groups.values():
+                    await Job._cache_tasks(tasks)
+                self._prepared.add(key)
+        # Honor overwrite once for the cohort, then reuse the prepared inputs.
+        return config.model_copy(
+            update={"tasks": [task.model_copy(update={"overwrite": False}) for task in config.tasks]}
+        )
+
+
 def validation_metrics(result: JobResult, config: JobConfig, reward_key: str) -> dict[str, float]:
-    """Count only completed, verified trials; expose missing scores separately."""
+    """Count verified outcomes, including agent failures; keep infrastructure failures unscored."""
     expected = {str(task.get_task_id()) for task in config.tasks}
     observed = [str(trial.task_id) for trial in result.trial_results]
     if len(expected) != len(config.tasks) or config.n_attempts != 1:
@@ -24,7 +54,10 @@ def validation_metrics(result: JobResult, config: JobConfig, reward_key: str) ->
         raise ValueError("Harbor validation returned missing, duplicate, or unexpected tasks")
     scores = []
     for trial in result.trial_results:
-        if trial.exception_info is not None and trial.exception_info.exception_type != "AgentTimeoutError":
+        if trial.exception_info is not None and error_category(trial.exception_info.exception_type) not in {
+            ErrorCategory.AGENT,
+            ErrorCategory.PASSTHROUGH,
+        }:
             continue
         verifier = trial.verifier_result
         if verifier is None or verifier.rewards is None or reward_key not in verifier.rewards:
@@ -41,7 +74,7 @@ def validation_metrics(result: JobResult, config: JobConfig, reward_key: str) ->
     }
 
 
-async def serve_trials(control_fd: int) -> None:
+async def serve_trials(control_fd: int, *, host_environment: Mapping[str, str]) -> None:
     """Execute only trials admitted by the parent; stdout remains available for Harbor logs."""
     connection = socket.socket(fileno=control_fd)
     connection.setblocking(False)
@@ -49,6 +82,7 @@ async def serve_trials(control_fd: int) -> None:
     current = asyncio.current_task()
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, current.cancel)
+    task_cache = HarborTaskCache()
 
     async def execute(message):
         try:
@@ -61,6 +95,7 @@ async def serve_trials(control_fd: int) -> None:
                 raise ValueError("duplicate validation tasks")
             if any(not task.git_url or not task.git_commit_id for task in config.tasks):
                 raise ValueError("Inline validation task sources must have immutable Git revisions")
+            config = await task_cache.prepare(config)
             index = message["index"]
             config = config.model_copy(
                 update={
@@ -69,10 +104,18 @@ async def serve_trials(control_fd: int) -> None:
                     "job_name": f"{config.job_name}-task-{index:05d}",
                 }
             )
-            job = await Job.create(config)
+            job = await Job.create(
+                config,
+                host_capabilities=cli_host_capabilities(
+                    host_environment, environment_kwargs=config.environment.kwargs, agents=config.agents
+                ),
+                guest_environment=cli_guest_environment(config.environment.kwargs),
+            )
             result = await job.run()
             response = {"id": message["id"], "metrics": validation_metrics(result, config, cohort["reward_key"])}
-        except Exception:
+        except Exception as error:
+            if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+                error.add_note(f"Subprocess stderr: {error.stderr!r}")
             response = {"id": message["id"], "error": traceback.format_exc()}
         writer.write((json.dumps(response) + "\n").encode())
         await writer.drain()
@@ -91,7 +134,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control-fd", type=int, required=True)
     args = parser.parse_args()
-    asyncio.run(serve_trials(args.control_fd))
+    host_environment = dict(os.environ)
+    asyncio.run(serve_trials(args.control_fd, host_environment=host_environment))
 
 
 if __name__ == "__main__":

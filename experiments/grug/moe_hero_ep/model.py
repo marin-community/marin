@@ -19,10 +19,10 @@ import jax.numpy as jnp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call, tree_checkpoint_name
-from haliax.nn import ArrayStacked
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
+from levanter.layers.stacked import ArrayStacked
 
 try:
     from jax.shard_map import shard_map
@@ -30,10 +30,16 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.common import (
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
+    _zero_dropped_assignments,
+    padding_skipped_assignments,
+)
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
+    DEFAULT_CONTEXT_ATTENTION_LAYOUT,
     AttentionMask,
+    ContextAttentionLayout,
     GrugAttentionImplementation,
     RotaryConfig,
     align_kv_heads,
@@ -64,6 +70,7 @@ from levanter.grug.sharding import unshard
 from levanter.kernels.triton.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
+from levanter.utils.jax_utils import leaf_key_paths
 from transformers import PretrainedConfig as HfConfig
 
 _GATED_NORM_RANK = 128
@@ -94,7 +101,7 @@ _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
-GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 2
+GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 3
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -105,7 +112,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
     if mesh is None or mesh.empty:
         raise ValueError("grug/moe_hero_ep requires a non-empty abstract mesh")
     if axis_name not in mesh.shape:
-        # compact_grug_mesh standardizes on (replica_dcn, data, context, expert, model) with length-1
+        # compact_grug_mesh standardizes on (replica_dcn, data, expert, context, model) with length-1
         # axes kept, so any missing axis is a caller bug rather than a "size 1" shortcut.
         raise ValueError(f"grug/moe_hero_ep requires an abstract mesh with axis '{axis_name}'")
     return int(mesh.shape[axis_name])
@@ -234,6 +241,38 @@ def _sequence_axis_of(x: jax.Array) -> str | None:
     return spec[1] if spec is not None and len(spec) > 1 else None
 
 
+def log_scaling_factor(visible_keys: Int[Array, "B S"], n_floor: int, alpha: float, power: float) -> Float[Array, "B S"]:
+    """Return the fixed Q multiplier ``(1 + alpha * ln(max(n / n_floor, 1))) ** power``.
+
+    This is Inkling's log scaling, except that ``n`` counts the keys in the query's own document, not its
+    absolute position, because a packed row holds several documents. The floor keeps every query within
+    ``n_floor`` keys at the temperature the model trained with up to that context.
+    """
+    factor = 1.0 + alpha * jnp.log(jnp.maximum(visible_keys.astype(jnp.float32) / n_floor, 1.0))
+    # Skip the pow at 1 so the program, and with it every float, stays as it was without a power.
+    return factor if power == 1.0 else factor**power
+
+
+def _visible_full_causal_keys(lower_bounds: Int[Array, "B S"], valid: Bool[Array, "B S"]) -> Int[Array, "B S"]:
+    """Count the keys each query sees from its FA4 full-causal bounds, itself included; 1 on padding.
+
+    Padding carries a neighbor's bound or a sentinel, not a key range of its own.
+    """
+    positions = reshard(jnp.arange(lower_bounds.shape[1], dtype=jnp.int32)[None, :], P(None, _sequence_axis_of(valid)))
+    return jnp.where(valid, positions - lower_bounds + 1, 1)
+
+
+def _global_query_scale(
+    cfg: "GrugModelConfig", long_lower_bounds: Int[Array, "B S"], valid: Bool[Array, "B S"]
+) -> Float[Array, "B S"] | None:
+    """Return the per-query scale for the global layers, or None with log scaling off."""
+    if cfg.log_scaling_n_floor is None:
+        return None
+    assert cfg.log_scaling_alpha is not None and cfg.log_scaling_power is not None
+    visible_keys = _visible_full_causal_keys(long_lower_bounds, valid)
+    return log_scaling_factor(visible_keys, cfg.log_scaling_n_floor, cfg.log_scaling_alpha, cfg.log_scaling_power)
+
+
 def _reshard_sequence_axis(x: Float[Array, "B S ..."], axis: str | None) -> jax.Array:
     """Move ``x``'s sequence axis onto ``axis`` (None replicates it), keeping its other axes."""
     spec = _partition_spec_of(x)
@@ -300,10 +339,22 @@ class GrugModelConfig:
     qk_mult: float = 1.3
     qk_mult_long_scale: float = 1.0
     """Extra Q multiplier on the global (full-causal) layers; local layers use ``qk_mult`` alone."""
+    log_scaling_n_floor: int | None = None
+    """Fixed log scaling of queries on the global layers, on top of ``qk_mult`` and ``qk_mult_long_scale``.
+    A query that sees ``n`` keys in its document is multiplied by ``log_scaling_factor``, which is 1 up to
+    this many keys. None disables it."""
+    log_scaling_alpha: float | None = None
+    """Slope of ``log_scaling_factor``, required exactly when ``log_scaling_n_floor`` is set."""
+    log_scaling_power: float | None = None
+    """Exponent of ``log_scaling_factor``, required exactly when ``log_scaling_n_floor`` is set."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
+    attention_context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT
+    """Query-row layout for FA4 under context parallelism. "zigzag" balances causal work across
+    context shards at the cost of a query swap and a second kernel launch per call; it pays off at 262K
+    but costs 0.7% at 65K, where the hero should use "contiguous". See README "Context-length switches"."""
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     pooled_transport_capacity_factor: float | None = None
@@ -317,6 +368,10 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    ce_grad_in_forward_token_block_size: int | None = None
+    """Rows per scan step of a reduced training loss whose forward also computes its gradients:
+    3 GEMMs instead of the "xla_fast_bwd" kernel's 4, holding the [B, D] and [D, V] gradients
+    from the forward to the backward. None keeps "xla_fast_bwd"."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -333,6 +388,15 @@ class GrugModelConfig:
                 raise ValueError("num_kv_heads must equal the stored maximum of local/global KV heads")
         if self.global_every <= 0:
             raise ValueError("global_every must be positive")
+        if self.log_scaling_n_floor is not None and self.log_scaling_n_floor <= 0:
+            raise ValueError("log_scaling_n_floor must be positive")
+        log_scaling_fields = (self.log_scaling_n_floor, self.log_scaling_alpha, self.log_scaling_power)
+        if len({field is None for field in log_scaling_fields}) != 1:
+            raise ValueError("log_scaling_n_floor, log_scaling_alpha and log_scaling_power must be set together")
+        if self.log_scaling_alpha is not None and self.log_scaling_alpha <= 0:
+            raise ValueError("log_scaling_alpha must be positive")
+        if self.log_scaling_power is not None and self.log_scaling_power <= 0:
+            raise ValueError("log_scaling_power must be positive")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -358,9 +422,11 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.pooled_transport_capacity_factor is not None and self.pooled_transport_capacity_factor <= 0:
             raise ValueError("pooled_transport_capacity_factor must be positive")
-        if self.moe_implementation == "fixed_pooled_wave_all_to_all":
-            if self.pooled_transport_capacity_factor is None:
-                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+        if (
+            self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+            and self.pooled_transport_capacity_factor is None
+        ):
+            raise ValueError(f"{self.moe_implementation} requires pooled_transport_capacity_factor")
         if self.num_expert_waves <= 0:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
@@ -445,6 +511,9 @@ class GrugModelConfig:
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
             sconv_kernel=int(_hf_config_attr(hf_config, ("sconv_kernel",), 4)),
             sconv_sites=tuple(_hf_config_attr(hf_config, ("sconv_sites",), ("k", "attn", "mlp"))),
+            log_scaling_n_floor=_hf_config_attr(hf_config, ("log_scaling_n_floor",)),
+            log_scaling_alpha=_hf_config_attr(hf_config, ("log_scaling_alpha",)),
+            log_scaling_power=_hf_config_attr(hf_config, ("log_scaling_power",)),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
@@ -483,6 +552,9 @@ class GrugModelConfig:
             "sconv": self.sconv,
             "sconv_kernel": self.sconv_kernel,
             "sconv_sites": list(self.sconv_sites),
+            "log_scaling_n_floor": self.log_scaling_n_floor,
+            "log_scaling_alpha": self.log_scaling_alpha,
+            "log_scaling_power": self.log_scaling_power,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
         }
@@ -601,6 +673,7 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        global_query_scale: Float[Array, "B S"] | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -701,6 +774,9 @@ class CausalSelfAttention(eqx.Module):
         q = q * self.cfg.qk_mult
         if self.cfg.qk_mult_long_scale != 1.0:
             q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
+        # Q holds this row's position-dependent scale from here on, so FA4's zigzag query swap carries it.
+        if global_query_scale is not None:
+            q = q * jnp.where(is_global, global_query_scale, 1.0)[..., None, None].astype(q.dtype)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
         # shard attends its own queries against the whole key sequence. The backends reject a
         # sharded K/V sequence, and the output returns to the residual stream's layout, which
@@ -712,7 +788,14 @@ class CausalSelfAttention(eqx.Module):
             q = _reshard_sequence_axis(q, seq_axis)
             k = _reshard_sequence_axis(k, None)
             v = _reshard_sequence_axis(v, None)
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        attn_out = attention(
+            q,
+            k,
+            v,
+            mask,
+            implementation=self.cfg.attention_implementation,
+            context_layout=self.cfg.attention_context_layout,
+        )
         if seq_axis is not None:
             attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
@@ -1227,6 +1310,7 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        global_query_scale: Float[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         # A remat policy acts on named intermediates, and a block argument is not one. This
         # reassignment routes every use below through the name, which lets the policy offload it.
@@ -1236,7 +1320,9 @@ class Block(eqx.Module):
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+        attn_out = self.attn(
+            attn_in, mask, disable_rope=disable_rope, is_global=is_global, global_query_scale=global_query_scale
+        )
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
@@ -1374,6 +1460,7 @@ class Transformer(eqx.Module):
         long_lower_bounds = reshard(long_lower_bounds, bounds_spec)
         short_lower_bounds = reshard(short_lower_bounds, bounds_spec)
         valid = reshard(valid, bounds_spec)
+        global_query_scale = _global_query_scale(cfg, long_lower_bounds, valid)
 
         def _scan_layers(
             carry_hidden: Float[Array, "B S D"],
@@ -1388,6 +1475,7 @@ class Transformer(eqx.Module):
                 layer_mask,
                 use_long,
                 use_long,
+                global_query_scale,
             )
 
         hidden, stacked_router_stats = jax.lax.scan(
@@ -1455,6 +1543,11 @@ class Transformer(eqx.Module):
         # against an older run, this is why. Set LEVANTER_CE_XLA_FAST_BWD=0 to
         # force the old backward back on without editing code, or swap this to
         # implementation="xla" for a code-level A/B.
+        # A per-token loss has no fixed row cotangents, so it keeps "xla_fast_bwd".
+        grad_in_forward_token_block_size = (
+            self.config.ce_grad_in_forward_token_block_size if reduction != "none" else None
+        )
+        grad_in_forward = grad_in_forward_token_block_size is not None
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
@@ -1463,8 +1556,9 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            implementation="xla_fast_bwd",
-            block_sizes=_CE_BLOCK_SIZES,
+            implementation=None if grad_in_forward else "xla_fast_bwd",
+            block_sizes=None if grad_in_forward else _CE_BLOCK_SIZES,
+            grad_in_forward_token_block_size=grad_in_forward_token_block_size,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
@@ -1507,9 +1601,9 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
         raise ValueError(f"num_devices must be positive, got {num_devices}")
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
-    axis_names = ("replica_dcn", "data", "context", "expert", "model")
+    axis_names = ("replica_dcn", "data", "expert", "context", "model")
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, data, 1, expert, 1),
+        axis_sizes=(1, data, expert, 1, 1),
         axis_names=axis_names,
         axis_types=(jax.sharding.AxisType.Explicit,) * len(axis_names),
     )
@@ -1523,82 +1617,102 @@ def apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
-def _with_state_dict_prefix(prefix: str | None, name: str) -> str:
-    return name if prefix is None else f"{prefix}.{name}"
+class InferenceWeightLayout(StrEnum):
+    DIRECT = "direct"
+    LINEAR = "linear"
 
 
-def _linear_inference_tensor(value: jax.Array) -> jax.Array:
-    return jnp.swapaxes(value, -1, -2)
+@dataclass(frozen=True)
+class InferenceWeightSpec:
+    """An inference tensor's native checkpoint leaf, layer, and matrix layout."""
+
+    name: str
+    path: str
+    layout: InferenceWeightLayout = InferenceWeightLayout.DIRECT
+    layer_index: int | None = None
+
+    def output_shape(self, native_shape: tuple[int, ...]) -> tuple[int, ...]:
+        shape = native_shape if self.layer_index is None else native_shape[1:]
+        if self.layout == InferenceWeightLayout.LINEAR:
+            return (*shape[:-2], shape[-1], shape[-2])
+        return shape
 
 
-def _unstacked_blocks(model: Transformer) -> tuple[Block, ...]:
-    return tuple(model.stacked_blocks.unstacked())
+def grugmoe_inference_weight_specs(config: GrugModelConfig) -> tuple[InferenceWeightSpec, ...]:
+    """The shared native-to-inference mapping for device and streaming exports."""
+    direct = InferenceWeightLayout.DIRECT
+    linear = InferenceWeightLayout.LINEAR
+    specs = [
+        InferenceWeightSpec("model.embed_tokens.weight", "token_embed"),
+        InferenceWeightSpec("model.embed_norm.weight", "embed_norm/weight"),
+        InferenceWeightSpec("model.embed_gated_norm.down_proj.weight", "embed_gated_norm/w_down", linear),
+        InferenceWeightSpec("model.embed_gated_norm.up_proj.weight", "embed_gated_norm/w_up", linear),
+        InferenceWeightSpec("model.norm.weight", "final_norm/weight"),
+        InferenceWeightSpec("model.final_gated_norm.down_proj.weight", "final_gated_norm/w_down", linear),
+        InferenceWeightSpec("model.final_gated_norm.up_proj.weight", "final_gated_norm/w_up", linear),
+        InferenceWeightSpec("lm_head.weight", "output_proj", linear),
+    ]
+    block_weights = [
+        ("input_layernorm.weight", "rms_attn/weight", direct),
+        ("attn_gated_norm.down_proj.weight", "attn_gated_norm/w_down", linear),
+        ("attn_gated_norm.up_proj.weight", "attn_gated_norm/w_up", linear),
+        ("self_attn.q_proj.weight", "attn/w_q", linear),
+        ("self_attn.k_proj.weight", "attn/w_k", linear),
+        ("self_attn.v_proj.weight", "attn/w_v", linear),
+        ("self_attn.o_proj.weight", "attn/w_o", linear),
+        ("self_attn.attn_gate.weight", "attn/attn_gate", linear),
+        ("post_attention_layernorm.weight", "rms_mlp/weight", direct),
+        ("mlp_gated_norm.down_proj.weight", "mlp_gated_norm/w_down", linear),
+        ("mlp_gated_norm.up_proj.weight", "mlp_gated_norm/w_up", linear),
+        ("mlp.router.weight", "mlp/router", linear),
+        ("mlp.router.bias", "mlp/router_bias", direct),
+        ("mlp.experts.gate_proj.weight", "mlp/expert_mlp/w_gate", linear),
+        ("mlp.experts.up_proj.weight", "mlp/expert_mlp/w_up", linear),
+        ("mlp.experts.down_proj.weight", "mlp/expert_mlp/w_down", linear),
+    ]
+    if config.latent_dim is not None:
+        block_weights.extend(
+            [
+                ("mlp.latent_down_proj.weight", "mlp/w_latent_down", linear),
+                ("mlp.latent_norm.weight", "mlp/latent_norm/weight", direct),
+                ("mlp.latent_up_proj.weight", "mlp/w_latent_up", linear),
+            ]
+        )
+    if config.sconv:
+        for site, name, path in (
+            ("k", "self_attn.sconv_k", "attn/sconv_k"),
+            ("attn", "sconv_attn", "sconv_attn"),
+            ("mlp", "sconv_mlp", "sconv_mlp"),
+        ):
+            if site in config.sconv_sites:
+                block_weights.append((f"{name}.weight", f"{path}/weight", direct))
+    if config.shared_expert_intermediate_dim > 0:
+        for expert in range(config.num_shared_experts):
+            for projection in ("gate", "up", "down"):
+                block_weights.append(
+                    (f"shared_experts.{expert}.{projection}_proj.weight", f"shared/{expert}/w_{projection}", linear)
+                )
+    for layer in range(config.num_layers):
+        specs.extend(
+            InferenceWeightSpec(f"model.layers.{layer}.{name}", f"stacked_blocks/stacked/{path}", layout, layer)
+            for name, path, layout in block_weights
+        )
+    return tuple(specs)
 
 
 def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
-    tensors: dict[str, jax.Array] = {
-        "model.embed_tokens.weight": model.token_embed,
-        "model.embed_norm.weight": model.embed_norm.weight,
-        "model.embed_gated_norm.down_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_down),
-        "model.embed_gated_norm.up_proj.weight": _linear_inference_tensor(model.embed_gated_norm.w_up),
-        "model.norm.weight": model.final_norm.weight,
-        "model.final_gated_norm.down_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_down),
-        "model.final_gated_norm.up_proj.weight": _linear_inference_tensor(model.final_gated_norm.w_up),
-        "lm_head.weight": _linear_inference_tensor(model.output_proj),
-    }
-
-    for layer_index, block in enumerate(_unstacked_blocks(model)):
-        layer_prefix = f"model.layers.{layer_index}"
-        tensors.update(
-            {
-                f"{layer_prefix}.input_layernorm.weight": block.rms_attn.weight,
-                f"{layer_prefix}.attn_gated_norm.down_proj.weight": _linear_inference_tensor(
-                    block.attn_gated_norm.w_down
-                ),
-                f"{layer_prefix}.attn_gated_norm.up_proj.weight": _linear_inference_tensor(block.attn_gated_norm.w_up),
-                f"{layer_prefix}.self_attn.q_proj.weight": _linear_inference_tensor(block.attn.w_q),
-                f"{layer_prefix}.self_attn.k_proj.weight": _linear_inference_tensor(block.attn.w_k),
-                f"{layer_prefix}.self_attn.v_proj.weight": _linear_inference_tensor(block.attn.w_v),
-                f"{layer_prefix}.self_attn.o_proj.weight": _linear_inference_tensor(block.attn.w_o),
-                f"{layer_prefix}.self_attn.attn_gate.weight": _linear_inference_tensor(block.attn.attn_gate),
-                f"{layer_prefix}.post_attention_layernorm.weight": block.rms_mlp.weight,
-                f"{layer_prefix}.mlp_gated_norm.down_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_down),
-                f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
-                f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
-                f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
-                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_gate),
-                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_up),
-                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
-            }
-        )
-        if block.mlp.w_latent_down is not None:
-            assert block.mlp.latent_norm is not None
-            assert block.mlp.w_latent_up is not None
-            tensors.update(
-                {
-                    f"{layer_prefix}.mlp.latent_down_proj.weight": _linear_inference_tensor(block.mlp.w_latent_down),
-                    f"{layer_prefix}.mlp.latent_norm.weight": block.mlp.latent_norm.weight,
-                    f"{layer_prefix}.mlp.latent_up_proj.weight": _linear_inference_tensor(block.mlp.w_latent_up),
-                }
-            )
-        # SConv weights are learned; export them per site so the checkpoint reconstructs an sconv model.
-        for site_name, conv in (
-            ("self_attn.sconv_k", block.attn.sconv_k),
-            ("sconv_attn", block.sconv_attn),
-            ("sconv_mlp", block.sconv_mlp),
-        ):
-            if conv is not None:
-                tensors[f"{layer_prefix}.{site_name}.weight"] = conv.weight
-        # One tensor per shared expert (num_shared_experts x shared_expert_intermediate_dim), matching
-        # the config, rather than concatenating them into a single joined width.
-        if block.shared is not None:
-            for shared_index, expert in enumerate(block.shared):
-                shared_prefix = f"{layer_prefix}.shared_experts.{shared_index}"
-                tensors[f"{shared_prefix}.gate_proj.weight"] = _linear_inference_tensor(expert.w_gate)
-                tensors[f"{shared_prefix}.up_proj.weight"] = _linear_inference_tensor(expert.w_up)
-                tensors[f"{shared_prefix}.down_proj.weight"] = _linear_inference_tensor(expert.w_down)
-
-    return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
+    paths = jax.tree.leaves(leaf_key_paths(model))
+    native = {path.replace(".", "/"): value for path, value in zip(paths, jax.tree.leaves(model), strict=True)}
+    tensors = {}
+    for spec in grugmoe_inference_weight_specs(model.config):
+        value = native[spec.path]
+        if spec.layer_index is not None:
+            value = value[spec.layer_index]
+        if spec.layout == InferenceWeightLayout.LINEAR:
+            value = jnp.swapaxes(value, -1, -2)
+        name = spec.name if prefix is None else f"{prefix}.{spec.name}"
+        tensors[name] = value
+    return tensors
 
 
 __all__ = [

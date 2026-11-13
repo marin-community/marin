@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from marin.evaluation.eval_stats import (
     BINARY_METRICS,
@@ -29,12 +29,14 @@ from marin.evaluation.evaluation_config import eval_task_directory
 from marin.evaluation.lm_eval_samples import is_scratch_artifact
 from marin.evaluation.metric_selection import (
     LM_EVAL_STDERR_SUFFIX,
+    PUBLICATION_METRICS,
     REPEAT_MEAN_SUFFIX,
     REPEAT_STDERR_SUFFIX,
     base_metric,
+    canonical_metric_name,
     declared_metric,
 )
-from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
+from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, EvalTaskRef, MetricKind
 from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
@@ -53,6 +55,7 @@ class _TaskScore:
     kind: MetricKind | None = None
     declared: bool = False
     protocol_metric: str | None = None
+    protocol_identity: str | None = None
 
 
 def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
@@ -109,6 +112,7 @@ def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], boo
     """Read evaluator-canonical scores under their recorded benchmark protocols."""
     scores: dict[str, _TaskScore] = {}
     missing_primary = False
+    selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
     task_keys = dict.fromkeys((*record.metrics, *record.canonical_metrics))
     for task_key in task_keys:
         if _is_scratch_task_key(task_key):
@@ -118,7 +122,9 @@ def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], boo
         if benchmark is None:
             continue
         metrics = record.canonical_metrics.get(task_key, {})
-        value = metrics.get(benchmark.primary_metric)
+        name = selected.name if selected is not None else benchmark.primary_metric
+        kind = selected.kind if selected is not None else benchmark.metric_kind
+        value = metrics.get(name)
         if value is None:
             missing_primary |= bool(metrics) or bool(record.metrics.get(task_key))
             continue
@@ -128,34 +134,16 @@ def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], boo
             _TaskScore(
                 leaf=leaf,
                 value=value,
-                metric=benchmark.primary_metric,
-                stderr=metrics.get(f"{benchmark.primary_metric}_stderr"),
+                metric=name,
+                stderr=metrics.get(f"{name}_stderr"),
                 n_scored=None,
-                kind=benchmark.metric_kind,
+                kind=kind,
                 declared=True,
-                protocol_metric=benchmark.primary_metric,
+                protocol_metric=canonical_metric_name(name, record.evaluation.name),
+                protocol_identity=benchmark.identity,
             ),
         )
     return list(scores.values()), missing_primary
-
-
-_LEGACY_METRIC_ALIASES = {
-    "acc": "accuracy",
-    "accuracy": "accuracy",
-    "accuracy_avg": "accuracy",
-    "em": "accuracy",
-    "exact_match": "accuracy",
-    "exact-match": "accuracy",
-    "acc_norm": "normalized_accuracy",
-    "acc_norm_nospace": "normalized_accuracy",
-    "pass@1": "pass_at_1",
-    "mean_reward": "reward",
-}
-
-
-def _legacy_canonical_metric_name(name: str) -> str:
-    """Canonicalize old record metric names so they remain comparable with evaluator metadata."""
-    return _LEGACY_METRIC_ALIASES.get(name, name)
 
 
 def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False) -> tuple[list[_TaskScore], bool]:
@@ -165,14 +153,17 @@ def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False)
     ``tmp...`` entries are excluded; the first remaining score wins for duplicate task leaves.
     """
     scores: dict[str, _TaskScore] = {}
+    selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
+    missing = False
     for task_key, metrics in (record.metrics or {}).items():
         if _is_scratch_task_key(task_key):
             continue
         task = _task_ref(record, task_key)
         if undeclared_only and task is not None and task.benchmark is not None:
             continue
-        picked = declared_metric(metrics, None)
+        picked = declared_metric(metrics, selected.source_name if selected is not None else None)
         if picked is None:
+            missing |= selected is not None and bool(metrics)
             continue
         name, value = picked
         leaf = task_key.rsplit("/", 1)[-1]
@@ -181,18 +172,21 @@ def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False)
         scores[leaf] = _TaskScore(
             leaf=leaf,
             value=value,
-            metric=_legacy_canonical_metric_name(base_metric(name)),
+            metric=selected.name if selected is not None else canonical_metric_name(name, record.evaluation.name),
             stderr=stderr_for(metrics, name),
             n_scored=task_item_count(metrics),
+            kind=selected.kind if selected is not None else None,
+            declared=selected is not None,
+            protocol_metric=selected.name if selected is not None else None,
         )
-    return list(scores.values()), False
+    return list(scores.values()), missing
 
 
 def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
     if any(task.benchmark is not None for task in record.evaluation.tasks):
         canonical, missing_primary = _canonical_task_scores(record)
-        legacy, _ = _legacy_task_scores(record, undeclared_only=True)
-        return canonical + legacy, missing_primary
+        legacy, missing_legacy = _legacy_task_scores(record, undeclared_only=True)
+        return canonical + legacy, missing_primary or missing_legacy
     return _legacy_task_scores(record)
 
 
@@ -244,6 +238,8 @@ def _mechanism_coverage(record: EvalRunRecord, n_scored: int | None) -> Coverage
 
 def _item_cap(record: EvalRunRecord) -> int | None:
     """The per-run item cap the launcher declared, if any."""
+    if record.evaluation.curated is not None:
+        return record.evaluation.curated.settings.source_limit
     if record.evaluation.evalchemy is not None:
         return record.evaluation.evalchemy.max_eval_instances
     if record.evaluation.harbor is not None:
@@ -269,31 +265,51 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     n_scored = sum(counts) if len(counts) == len(scores) else None
 
     coverage = _mechanism_coverage(record, n_scored)
+    repeated = tuple(record.repeat_aggregates.values())
+    if len(repeated) > 1:
+        raise ValueError(f"{record.run_id}: cannot combine several repeated task aggregates")
+    repeat_aggregation = repeated[0] if repeated else None
+    selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
+    if selected is not None:
+        # These policy metrics share their benchmark's scored-item denominator.
+        # A saved numerator belongs to the evaluator's original headline metric.
+        coverage = replace(coverage, n_correct=None)
     declared = all(score.declared for score in scores)
     declared_kinds = {score.kind for score in scores if score.kind is not None}
     declared_metrics = {score.protocol_metric for score in scores if score.protocol_metric is not None}
-    kind = (
-        next(iter(declared_kinds))
-        if declared and len(declared_kinds) == 1
-        else MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    identities = {score.protocol_identity for score in scores}
+    if repeat_aggregation is not None:
+        kind = MetricKind.CONTINUOUS
+    elif declared and len(declared_kinds) == 1:
+        kind = next(iter(declared_kinds))
+    else:
+        kind = MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    stderr = (
+        repeat_aggregation.stderr
+        if repeat_aggregation is not None
+        else _combined_stderr([score.stderr for score in scores])
     )
-    stderr = _combined_stderr([score.stderr for score in scores])
+    if record.evaluation.name == "mrcr" and not declared:
+        kind = MetricKind.CONTINUOUS
     n_correct = _successes(value, coverage) if kind is MetricKind.BINARY else None
     if n_correct is None and kind is MetricKind.BINARY:
         # A binary metric whose value is not k/n (an unweighted rollup across subtasks) has no
         # Bernoulli count behind it, so it takes the recorded-dispersion path instead.
         kind = MetricKind.CONTINUOUS
 
+    if selected is not None:
+        coverage = replace(coverage, n_correct=n_correct)
     item_cap = _item_cap(record)
     fewshot_values = {task.num_fewshot for task in record.evaluation.tasks}
     return Measurement(
         benchmark=record.evaluation.name,
-        metric=metric,
+        metric=canonical_metric_name(metric, record.evaluation.name),
         kind=kind,
         value=value,
         coverage=coverage,
         n_correct=n_correct,
         recorded_stderr=stderr,
+        repeat_aggregation=repeat_aggregation,
         item_cap=item_cap,
         flags=_flags(coverage, kind, stderr, item_cap),
         num_fewshot=next(iter(fewshot_values)) if len(fewshot_values) == 1 else None,
@@ -306,7 +322,12 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         status=record.status,
         declared=declared,
         protocol_metric=next(iter(declared_metrics)) if declared and len(declared_metrics) == 1 else None,
-        protocol_kind=next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None,
+        protocol_kind=(
+            MetricKind.CONTINUOUS
+            if repeat_aggregation is not None
+            else next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None
+        ),
+        protocol_identity=next(iter(identities)) if declared and len(identities) == 1 else None,
     )
 
 
@@ -323,9 +344,82 @@ def declared_metric_gap(record: EvalRunRecord) -> str | None:
         if benchmark is None or not source_metrics:
             continue
         metrics = record.canonical_metrics.get(task_key, {})
-        if benchmark.primary_metric not in metrics:
-            return f"declared metric {benchmark.primary_metric} not in canonical results"
+        selected = PUBLICATION_METRICS.get(record.evaluation.name) if record.evaluation.curated is None else None
+        name = selected.name if selected is not None else benchmark.primary_metric
+        if name not in metrics:
+            return f"declared metric {name} not in canonical results"
     return None
+
+
+@dataclass(frozen=True)
+class MetricRow:
+    """One metric a record reports for a task: protocol name, value, and whether it was declared."""
+
+    task: str
+    metric: str
+    value: float
+    declared: bool
+
+
+def _metric_task_keys(record: EvalRunRecord) -> list[str]:
+    """Every distinct non-scratch metrics key, from either the raw or the canonical map."""
+    return [key for key in dict.fromkeys((*record.metrics, *record.canonical_metrics)) if not _is_scratch_task_key(key)]
+
+
+def _declared_metric_value(record: EvalRunRecord, task_keys: Sequence[str], metric: BenchmarkMetricRef) -> float | None:
+    """A declared metric's canonical value, or its raw source value under filter priority."""
+    for task_key in task_keys:
+        canonical = record.canonical_metrics.get(task_key, {})
+        if metric.name in canonical:
+            return canonical[metric.name]
+    for task_key in task_keys:
+        picked = declared_metric(record.metrics.get(task_key, {}), metric.source_name)
+        if picked is not None:
+            return picked[1]
+    return None
+
+
+def declared_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
+    """Every declared benchmark metric for each recorded task, the primary metric first.
+
+    A declared metric reports its protocol name and takes the canonical value when the producer
+    wrote one; otherwise the raw source metric supplies it under the same extraction-filter priority
+    the statistics engine ranks with. Metrics with no recorded value are left out.
+    """
+    rows: list[MetricRow] = []
+    task_keys = _metric_task_keys(record)
+    for task in record.evaluation.tasks:
+        benchmark = task.benchmark
+        if benchmark is None:
+            continue
+        keys = [task_key for task_key in task_keys if _task_ref(record, task_key) is task]
+        ordered = [metric for metric in benchmark.metrics if metric.name == benchmark.primary_metric]
+        ordered += [metric for metric in benchmark.metrics if metric.name != benchmark.primary_metric]
+        for metric in ordered:
+            value = _declared_metric_value(record, keys, metric)
+            if value is not None:
+                rows.append(MetricRow(task=task.name, metric=metric.name, value=value, declared=True))
+    return rows
+
+
+def undeclared_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
+    """Raw metric rows for task keys that no declared benchmark covers.
+
+    A record can mix tasks with benchmark metadata and tasks without it. The declared rows describe
+    only the former, so the latter keep their raw rows; a record with no declarations at all returns
+    its whole raw metric map, in stable task then metric order.
+    """
+    rows: list[MetricRow] = []
+    for task_key, metrics in record.metrics.items():
+        if _is_scratch_task_key(task_key):
+            continue
+        task = _task_ref(record, task_key)
+        if task is not None and task.benchmark is not None:
+            continue
+        rows.extend(
+            MetricRow(task=task_key, metric=name, value=value, declared=False) for name, value in metrics.items()
+        )
+    return sorted(rows, key=lambda row: (row.task, row.metric))
 
 
 def _successes(value: float, coverage: Coverage) -> int | None:

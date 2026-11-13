@@ -25,7 +25,7 @@ name: qwen3-32b                 # slash-free launch identity; catalog entries mu
 location: Qwen/Qwen3-32B        # HF repo id, or gs://|s3:// HF-format export dir
 revision: null                  # pin an immutable checkpoint (base models); optional
 tokenizer: null                 # required only when location is an object-store path
-apply_chat_template: true       # whether Evalchemy formats requests with the tokenizer chat template
+apply_chat_template: true       # select curated chat or completion corpus variants
 
 resource_hint:                  # ResourceHint -> experiment fleet placement
   hbm_gb: 84                    # serving HBM budget the hardware selector sizes a slice from
@@ -56,10 +56,10 @@ serve:                          # ServeConfig -> model-server behavior
   auto_overrides: true          # derive remaining flags + clamp max_model_len from config.json
 
 generation:                     # per-model generation behavior
-  max_gen_toks: null            # Evalchemy generation limit and Harbor agent output budget
-  extra_gen_kwargs:             # forwarded to Evalchemy, e.g. for a thinking model
+  max_gen_toks: null            # Curated generation limit and Harbor agent output budget
+  extra_gen_kwargs:             # forwarded to curated requests, e.g. for a thinking model
     skip_special_tokens: "false"
-  chat_template_kwargs:         # boolean or string template arguments on Evalchemy chat requests
+  chat_template_kwargs:         # boolean or string template arguments on curated chat requests
     enable_thinking: false
 
 agent:                          # AgentConfig -> the Harbor/agentic agent
@@ -83,20 +83,20 @@ graphs. In a controlled Snowball Grug-67B run on eight H100s, eager execution to
 decode token, versus 6.523 ms with the vLLM default (6.75x faster). See [issue #9339](https://github.com/marin-community/marin/issues/9339)
 for the setup, startup costs, and limits of that measurement.
 
-Use eager execution when a specific model needs it for compatibility or correctness, or during
-development when shorter startup matters more than steady-state throughput. Record that reason next
-to the model configuration. Marin requires a separate acknowledgement in `vllm_extra_args`:
+Keep compilation and CUDA graphs enabled for serving, evaluation, and inference smoke tests.
+Do not copy eager-mode flags from debugging runs or historical ablations into a launch configuration.
+Shorter startup alone does not justify disabling these optimizations.
 
-```yaml
-serve:
-  vllm_extra_args:
-    - --enforce-eager
-    - --i-know-i-am-making-vllm-slow
-```
+Agents must not add `--enforce-eager` or `--i-know-i-am-making-vllm-slow` unless the user explicitly
+requests eager execution. If an observed compilation or CUDA-graph failure suggests eager execution
+is needed, report the failure and performance cost and obtain that instruction before launching.
+Record the failure and the user's requested exception in a configuration or launch-file comment,
+or in the task's durable launch record for a CLI-only invocation.
 
-Marin removes the acknowledgement before launching vLLM. `--no-enforce-eager` keeps the vLLM default
-and needs no acknowledgement. Pass the full flag spelling in `vllm_extra_args`; Marin rejects vLLM
-`--config` files and abbreviated eager flags so eager mode cannot be hidden from this check.
+The launch guard rejects `--enforce-eager` without the acknowledgement flag
+`--i-know-i-am-making-vllm-slow`. Treat that error as a reason to investigate the configuration;
+do not satisfy it automatically. Marin removes the acknowledgement flag before launching vLLM
+and rejects `--config` files and abbreviated eager flags.
 
 ## Multi-node GPU serving
 

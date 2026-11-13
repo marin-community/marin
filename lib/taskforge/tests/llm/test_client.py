@@ -3,9 +3,12 @@
 
 import asyncio
 import json
+import pickle
 import socket
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -17,7 +20,13 @@ from taskforge.llm.client import (
     ModelRequestRejected,
     ModelUnavailable,
 )
-from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import (
+    EndpointSource,
+    FixedEndpoint,
+    GlmClient,
+    GlmEndpoint,
+    Pool,
+)
 from taskforge.llm.policy import (
     CONTINUE_PROMPT,
     GLM_MAX_OUTPUT_TOKENS,
@@ -149,14 +158,25 @@ def test_retry_after_sets_the_minimum_delay(fake_glm, run):
     assert second.started - (first.started + first.duration) >= 0.3
 
 
+# A tool-call delta for index 1 with no earlier delta, which the SDK accumulator cannot place.
+ORPHAN_TOOL_DELTA = json.dumps(
+    {
+        "choices": [
+            {"index": 0, "delta": {"tool_calls": [{"index": 1, "function": {"arguments": "x"}}]}, "finish_reason": None}
+        ]
+    }
+)
+
+
 @pytest.mark.parametrize(
     "stream",
     [
         {"content": "partial", "finish": "abort"},
         {"content": "partial", "raw_payload": "{not json"},
         {"content": "partial", "raw_payload": '{"error": {"message": "engine died", "code": 500}}'},
+        {"content": "partial", "raw_payload": ORPHAN_TOOL_DELTA},
     ],
-    ids=["abort", "malformed", "error-event"],
+    ids=["abort", "malformed", "error-event", "orphan-tool-delta"],
 )
 def test_aborted_malformed_or_errored_stream_is_retried(fake_glm, run, stream):
     fake_glm.stream(**stream)
@@ -334,3 +354,87 @@ def test_continuations_stop_at_policy_limit(fake_glm, run):
     assert completion.content == "abc"
     assert completion.finish_reason is FinishReason.LENGTH
     assert len(fake_glm.requests) == 3
+
+
+def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_provider):
+    """A silently dead keep-alive socket reads nothing until the stall timeout, and so would
+    every other idle connection the pool holds on that path, so the retry goes through a new pool. (The fake server
+    speaks HTTP/1.0 and never keeps a connection alive, so the test checks the pool, not the socket.)"""
+    fake_glm.stream(content="never finishes", stall_after_first=True)
+    fake_glm.stream(content="second try")
+
+    async def call() -> tuple[Completion, bool]:
+        provider = replace(fast_provider, stall_timeout=0.3)
+        async with GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), provider) as client:
+            before = client.http
+            completion = await client.complete(MESSAGES, LLMPolicy())
+            return completion, client.http is not before and before.is_closed
+
+    completion, replaced_and_closed = asyncio.run(call())
+    assert completion.content == "second try"
+    assert outcomes(completion) == [AttemptOutcome.STALLED, AttemptOutcome.COMPLETED]
+    assert replaced_and_closed
+
+
+def test_a_replaced_pool_closes_once_the_calls_still_streaming_on_it_finish(fake_glm, fast_provider):
+    """A pool replaced after a stall must not hold its sockets until the client exits, nor cut a call streaming on it."""
+    fake_glm.stream(reasoning="slow but steady", content="first", interval=0.2)
+    fake_glm.stream(content="never finishes", stall_after_first=True)
+    fake_glm.stream(content="second try")
+
+    async def call() -> tuple[str, bool, bool, Completion]:
+        provider = replace(fast_provider, stall_timeout=0.4)
+        async with GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), provider) as client:
+            before = client.http
+            streaming = asyncio.create_task(client.complete(MESSAGES, LLMPolicy()))
+            while not fake_glm.requests:
+                await asyncio.sleep(0.01)
+            retried = await client.complete(MESSAGES, LLMPolicy())
+            open_while_streaming = not streaming.done() and not before.is_closed
+            slow = await streaming
+            return retried.content, open_while_streaming, before.is_closed, slow
+
+    retried, open_while_streaming, closed_after, slow = asyncio.run(call())
+    assert retried == "second try"
+    assert open_while_streaming
+    assert (slow.content, outcomes(slow)) == ("first", [AttemptOutcome.COMPLETED])
+    assert closed_after
+
+
+def test_a_pickled_client_completes_in_each_new_event_loop(fake_glm, fast_provider):
+    fake_glm.stream(content="first")
+    fake_glm.stream(content="second")
+    client = pickle.loads(pickle.dumps(GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)))
+
+    # Each asyncio.run is a new event loop.
+    replies = [asyncio.run(client.complete(MESSAGES, LLMPolicy())).content for _ in range(2)]
+
+    assert replies == ["first", "second"]
+
+
+class KeepAliveHealth(BaseHTTPRequestHandler):
+    """Answers ``/health`` and keeps the connection open, as the router does."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 (the base class names it format)
+        pass
+
+
+def test_the_connection_pool_of_one_client_works_in_each_new_event_loop(fast_provider):
+    with ThreadingHTTPServer(("127.0.0.1", 0), KeepAliveHealth) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+        client = GlmClient(FixedEndpoint(endpoint(f"{base_url}/v1")), fast_provider)
+
+        async def health() -> int:
+            return (await client.http.get(f"{base_url}/health")).status_code
+
+        # A pool that a closed loop opened fails on its kept-alive connection with "Event loop is closed".
+        assert [asyncio.run(health()) for _ in range(2)] == [200, 200]
+        server.shutdown()

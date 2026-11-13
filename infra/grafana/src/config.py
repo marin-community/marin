@@ -162,6 +162,7 @@ class FerryGroup:
 FERRY_GROUPS: tuple[FerryGroup, ...] = (
     FerryGroup("Canary ferry", (FerryTier(None, "marin-canary-ferry.yaml"),)),
     FerryGroup("CW ferry", (FerryTier(None, "marin-canary-ferry-coreweave.yaml"),)),
+    FerryGroup("Hero canary", (FerryTier(None, "marin-canary-hero-gb200.yaml"),)),
     FerryGroup(
         "Datakit ferry",
         (

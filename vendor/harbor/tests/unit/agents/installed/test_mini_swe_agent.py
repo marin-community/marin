@@ -11,11 +11,14 @@ Tests cover:
 
 import json
 import os
+import shlex
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from harbor.agents.installed.mini_swe_agent import (
     MiniSweAgent,
     _normalize_content,
@@ -86,7 +89,9 @@ V2_TOOL_CALLING_TRAJECTORY = {
                     "type": "function",
                     "function": {
                         "name": "bash",
-                        "arguments": '{"command": "sed -i \'s/OrderedDcit/OrderedDict/\' baz.py"}',
+                        "arguments": (
+                            '{"command": "sed -i \'s/OrderedDcit/OrderedDict/\' baz.py"}'
+                        ),
                     },
                 }
             ],
@@ -256,7 +261,9 @@ V2_WITH_EXIT_MESSAGE = {
                     "type": "function",
                     "function": {
                         "name": "bash",
-                        "arguments": '{"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}',
+                        "arguments": (
+                            '{"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}'
+                        ),
                     },
                 }
             ],
@@ -273,7 +280,9 @@ V2_WITH_EXIT_MESSAGE = {
         },
         {
             "role": "tool",
-            "content": '{"returncode": -1, "output": "", "exception_info": "action was not executed"}',
+            "content": (
+                '{"returncode": -1, "output": "", "exception_info": "action was not executed"}'
+            ),
             "tool_call_id": "call_1",
             "extra": {},
         },
@@ -702,13 +711,14 @@ class TestPopulateContextPostRun:
 class TestCreateRunAgentCommands:
     @pytest.mark.asyncio
     async def test_uses_mini_command(self, temp_dir):
-        with patch.dict(os.environ, {"MSWEA_API_KEY": "test-key"}, clear=False):
-            agent = MiniSweAgent(
-                logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
-            )
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Fix the bug", mock_env, AsyncMock())
+        agent = MiniSweAgent(
+            extra_env={"MSWEA_API_KEY": "EMPTY"},
+            logs_dir=temp_dir,
+            model_name="anthropic/claude-sonnet-4-5-20250929",
+        )
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("Fix the bug", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         assert len(exec_calls) == 1
@@ -721,27 +731,58 @@ class TestCreateRunAgentCommands:
 
     @pytest.mark.asyncio
     async def test_mswea_configured_env(self, temp_dir):
-        with patch.dict(os.environ, {"MSWEA_API_KEY": "test-key"}, clear=False):
+        agent = MiniSweAgent(
+            extra_env={"MSWEA_API_KEY": "EMPTY"},
+            logs_dir=temp_dir,
+            model_name="anthropic/claude-sonnet-4-5-20250929",
+        )
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("task", mock_env, AsyncMock())
+
+        exec_calls = mock_env.exec.call_args_list
+        assert exec_calls[-1].kwargs["env"]["MSWEA_CONFIGURED"] == "true"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "key_name, base_name",
+        [
+            ("MSWEA_API_KEY", "OPENAI_BASE_URL"),
+            ("OPENAI_API_KEY", "OPENAI_API_BASE"),
+        ],
+    )
+    async def test_explicit_capability_excludes_ambient_credentials(
+        self, temp_dir, key_name, base_name
+    ):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MSWEA_API_KEY": "host-mini-canary",
+                    "OPENAI_API_KEY": "host-provider-canary",
+                    "OPENAI_BASE_URL": "https://ambient-provider.invalid/v1",
+                    "OPENAI_API_BASE": "https://ambient-provider.invalid/v1",
+                },
+                clear=False,
+            ),
+        ):
             agent = MiniSweAgent(
-                logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
+                extra_env={key_name: "EMPTY", base_name: "http://127.0.0.1:8787/v1"},
+                logs_dir=temp_dir,
+                model_name="openai/gpt-4o",
             )
             mock_env = AsyncMock()
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("task", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
-        assert exec_calls[-1].kwargs["env"]["MSWEA_CONFIGURED"] == "true"
-
-    @pytest.mark.asyncio
-    async def test_mswea_api_key_passthrough(self, temp_dir):
-        with patch.dict(os.environ, {"MSWEA_API_KEY": "sk-test"}, clear=False):
-            agent = MiniSweAgent(logs_dir=temp_dir, model_name="openai/gpt-4o")
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("task", mock_env, AsyncMock())
-
-        exec_calls = mock_env.exec.call_args_list
-        assert exec_calls[-1].kwargs["env"]["MSWEA_API_KEY"] == "sk-test"
+        assert exec_calls[-1].kwargs["env"]["MSWEA_API_KEY"] == "EMPTY"
+        for private in (
+            "host-mini-canary",
+            "host-provider-canary",
+            "ambient-provider.invalid",
+        ):
+            assert private not in str(exec_calls)
 
     @pytest.mark.asyncio
     async def test_hosted_vllm_runs_without_external_api_key(self, temp_dir):
@@ -757,8 +798,6 @@ class TestCreateRunAgentCommands:
 
         agent_env = mock_env.exec.call_args.kwargs["env"]
         assert agent_env["MSWEA_API_KEY"] == "EMPTY"
-        assert agent_env["OPENAI_API_BASE"] == "https://hosted-vllm.invalid/v1"
-        assert agent_env["HOSTED_VLLM_API_BASE"] == "https://hosted-vllm.invalid/v1"
 
     @pytest.mark.asyncio
     async def test_invalid_model_raises(self, temp_dir):
@@ -770,13 +809,14 @@ class TestCreateRunAgentCommands:
 
     @pytest.mark.asyncio
     async def test_instruction_shell_escaped(self, temp_dir):
-        with patch.dict(os.environ, {"MSWEA_API_KEY": "test-key"}, clear=False):
-            agent = MiniSweAgent(
-                logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
-            )
-            mock_env = AsyncMock()
-            mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            await agent.run("Fix the bug; rm -rf /", mock_env, AsyncMock())
+        agent = MiniSweAgent(
+            extra_env={"MSWEA_API_KEY": "EMPTY"},
+            logs_dir=temp_dir,
+            model_name="anthropic/claude-sonnet-4-5-20250929",
+        )
+        mock_env = AsyncMock()
+        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+        await agent.run("Fix the bug; rm -rf /", mock_env, AsyncMock())
 
         exec_calls = mock_env.exec.call_args_list
         cmd = exec_calls[-1].kwargs["command"]
@@ -801,3 +841,50 @@ class TestInstallMethod:
         install_command = environment.exec.call_args_list[1].kwargs["command"]
         assert "uv tool install mini-swe-agent --with mcp==2.3.0" in install_command
         assert "from mcp.types import CacheableResult" in install_command
+
+
+@pytest.mark.asyncio
+async def test_install_model_import_ignores_task_repository_packages(tmp_path):
+    agent = MiniSweAgent(logs_dir=tmp_path / "logs")
+    environment = AsyncMock()
+    environment.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
+    await agent.install(environment)
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    for upload in environment.upload_file.call_args_list:
+        source, destination = upload.args
+        shutil.copyfile(source, model_dir / Path(destination).name)
+
+    task_dir = tmp_path / "testbed"
+    task_dir.mkdir()
+    (task_dir / "requests.py").write_text(
+        "raise RuntimeError('task repository shadowed the agent dependency')\n"
+    )
+    bin_dir = tmp_path / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "env").write_text("")
+    tool_bin = tmp_path / "tools" / "mini-swe-agent" / "bin"
+    tool_bin.mkdir(parents=True)
+    python = tool_bin / "python"
+    python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    python.chmod(0o755)
+    uv = bin_dir / "uv"
+    uv.write_text(f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(str(tmp_path / 'tools'))}\n")
+    uv.chmod(0o755)
+
+    result = subprocess.run(
+        environment.exec.call_args_list[-1].kwargs["command"],
+        shell=True,
+        executable="/bin/bash",
+        cwd=task_dir,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path),
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "PYTHONPATH": str(model_dir),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

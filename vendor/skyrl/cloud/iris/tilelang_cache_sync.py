@@ -47,10 +47,9 @@ r4f-lineage ``gdn-flashqla/qwen3-next-80b-a3b-sm90-tilelang018``. Components:
   - tilelang: ``importlib.metadata.version("tilelang")`` with dots stripped
               (``0.1.8`` -> ``tilelang018``).
 
-Credentials/endpoint are read from the pod env (NEVER hardcoded): the cluster
-projects ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` / ``AWS_ENDPOINT_URL``
-(= ``http://cwlota.com``, the CoreWeave LOTA object store, NOT AWS) /
-``AWS_REGION`` into every task pod via the ``iris-task-env`` Secret. LOTA rejects
+Submitted personal credentials are read from the task's secret files through
+``AWS_SHARED_CREDENTIALS_FILE``. Endpoint and region remain ordinary pod
+configuration; ``http://cwlota.com`` names CoreWeave LOTA. LOTA rejects
 path-style addressing, so boto3 MUST use virtual addressing
 (``Config(s3={"addressing_style":"virtual"})``) — matching the pod's ``FSSPEC_S3``
 setting and the coreweave_gpu_ops.md in-pod one-liner.

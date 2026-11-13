@@ -8,22 +8,12 @@ import io
 import json
 import tarfile
 from dataclasses import replace
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
 import pytest
 from shellbox.machine import Mount
 
 from taskcompendium.runtime.local import EnvironmentManifest, LocalRuntime, extract_files, local_runtime
-
-
-@pytest.mark.parametrize(
-    ("cache_mounted", "expected_parent"), [(True, Path("/cache/task-curation")), (False, Path("/tmp"))]
-)
-def test_runtime_parent_matches_executable_mounts(monkeypatch, cache_mounted, expected_parent):
-    monkeypatch.setattr(Path, "is_mount", lambda self: cache_mounted and self == Path("/cache"))
-
-    runtime = LocalRuntime("fixture.lock", "0" * 64)
-    assert runtime.root.parent == expected_parent
 
 
 def files_tar(files: dict[str, bytes]) -> bytes:

@@ -9,7 +9,7 @@ from harbor.models.metric import UsageInfo
 class LLMBackend(str, Enum):
     """Enum for available LLM backends."""
 
-    LITELLM = "litellm"
+    OPENAI = "openai"
     TINKER = "tinker"
 
 

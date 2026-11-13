@@ -12,3 +12,10 @@ def test_main_recipe_rejects_adamw_before_training(optimizer_args):
     with pytest.raises(SystemExit) as error:
         parse_args(["--main-hero-recipe", "--processes-per-task", "4", *optimizer_args])
     assert error.value.code == 2
+
+
+def test_data_schedule_without_real_data_is_rejected():
+    # A fresh-data horizon previously allowed an accidental synthetic trial.
+    with pytest.raises(SystemExit) as error:
+        parse_args(["--data-schedule-steps", "390251", "--steps", "20"])
+    assert error.value.code == 2

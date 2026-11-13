@@ -17,8 +17,8 @@ through the SAME live mechanism the RL path uses:
 
 which ``parse_kwargs`` JSON-decodes into a dict, ``AgentConfig.kwargs`` carries
 to terminus-2's ``extra_body`` parameter, terminus-2 merges into
-``_llm_call_kwargs["extra_body"]``, and ``LiteLLM.call`` deep-merges into the
-outgoing ``litellm.acompletion`` request body.
+``_llm_call_kwargs["extra_body"]``, and ``OpenAILLM.call`` deep-merges into the
+outgoing ``OpenAI Chat Completions`` request body.
 
 These tests pin that the value survives end-to-end into the request, and that
 the merge does not clobber a pre-existing ``extra_body`` key.
@@ -33,10 +33,9 @@ field.
 from typing import Any
 
 import pytest
-
 from harbor.agents.terminus_2.terminus_2 import Terminus2
 from harbor.cli.utils import parse_kwargs
-from harbor.llms.lite_llm import LiteLLM
+from harbor.llms.openai_llm import OpenAILLM
 from harbor.models.trial.config import AgentConfig
 
 # The exact agent-kwarg string the eval path emits when thinking is gated ON.
@@ -63,7 +62,7 @@ FAKE_MODEL_INFO = {
 
 
 def _fake_acompletion_response():
-    """Minimal litellm-acompletion-shaped response for LiteLLM.call()."""
+    """Minimal chat-completion-shaped response for OpenAILLM.call()."""
     return {
         "choices": [
             {
@@ -160,12 +159,12 @@ def test_terminus_2_extra_body_bad_string_raises_naming_the_field(
 
 
 @pytest.mark.asyncio
-async def test_extra_body_reaches_litellm_acompletion_request(monkeypatch):
+async def test_extra_body_reaches_openai_request(monkeypatch):
     """End-to-end: the eval thinking kwarg arrives in the outgoing
-    ``litellm.acompletion`` request body as
+    ``OpenAI Chat Completions`` request body as
     ``extra_body.chat_template_kwargs.enable_thinking == True``.
 
-    Mocks ``litellm.acompletion`` and asserts the captured call kwargs.
+    Mocks ``OpenAI Chat Completions`` and asserts the captured call kwargs.
     """
     captured: dict[str, Any] = {}
 
@@ -177,7 +176,7 @@ async def test_extra_body_reaches_litellm_acompletion_request(monkeypatch):
     agent_kwargs = parse_kwargs([EVAL_THINKING_KWARG])
     llm_call_kwargs = dict(agent_kwargs)  # {"extra_body": {...}}
 
-    llm = LiteLLM(
+    llm = OpenAILLM(
         model_name="hosted_vllm/fake/model",
         api_base="http://localhost:8000/v1",
         model_info=FAKE_MODEL_INFO,
@@ -192,7 +191,7 @@ async def test_extra_body_reaches_litellm_acompletion_request(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_extra_body_merge_preserves_internal_keys_in_request(monkeypatch):
-    """The deep-merge in LiteLLM.call preserves internally-set ``extra_body``
+    """The deep-merge in OpenAILLM.call preserves internally-set ``extra_body``
     keys (e.g. ``return_token_ids`` from collect_rollout_details) alongside the
     caller-supplied ``chat_template_kwargs`` — neither clobbers the other in the
     outgoing request body."""
@@ -202,9 +201,9 @@ async def test_extra_body_merge_preserves_internal_keys_in_request(monkeypatch):
         captured.update(completion_kwargs)
         return _fake_acompletion_response()
 
-    # collect_rollout_details=True makes LiteLLM.call inject return_token_ids
+    # collect_rollout_details=True makes OpenAILLM.call inject return_token_ids
     # into completion_kwargs["extra_body"] internally.
-    llm = LiteLLM(
+    llm = OpenAILLM(
         model_name="hosted_vllm/fake/model",
         api_base="http://localhost:8000/v1",
         collect_rollout_details=True,

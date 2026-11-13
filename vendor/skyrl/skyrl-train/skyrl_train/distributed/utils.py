@@ -188,7 +188,7 @@ def init_custom_process_group(
     # before the engines ``store->get`` it. The default group is restored immediately afterward and
     # is otherwise unchanged; the new group is created device-unbound (as before), so no other path
     # is affected.
-    default_pg = _get_default_group() if torch.distributed.is_initialized() else None
+    default_pg = _get_default_group() if backend == Backend.NCCL and torch.distributed.is_initialized() else None
     saved_bound_device_id = default_pg.bound_device_id if default_pg is not None else None
     if default_pg is not None and saved_bound_device_id is not None:
         default_pg.bound_device_id = None

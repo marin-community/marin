@@ -3,12 +3,35 @@
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from jinja2 import TemplateError
+from transformers import PreTrainedTokenizerBase
 
 
 SINGLE_TOOL_CALL_TEMPLATE_ERROR = "This template expects exactly one tool call per assistant turn."
+
+
+def assistant_prefix_token_ids(
+    tokenizer: PreTrainedTokenizerBase, messages: list[dict[str, Any]], options: dict[str, Any]
+) -> list[int]:
+    """Render an unfinished assistant message with the serving chat template."""
+    template = dict(options["extra_body"])
+    if template.pop("continue_final_message") is not True or template.pop("add_generation_prompt") is not False:
+        raise ValueError("Assistant prefix rendering requires continuation without a new generation prompt")
+    template_kwargs = {**options.get("chat_template_kwargs", {}), **template.pop("chat_template_kwargs", {})}
+    if template:
+        raise ValueError(f"Unsupported assistant prefix rendering fields: {sorted(template)}")
+    rendered = tokenizer.apply_chat_template(
+        messages,
+        tools=options.get("tools"),
+        tokenize=True,
+        return_dict=False,
+        add_generation_prompt=False,
+        continue_final_message=True,
+        **template_kwargs,
+    )
+    return cast(list[int], rendered)
 
 
 def template_error_from_exception(error: BaseException) -> TemplateError | None:

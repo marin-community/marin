@@ -3,11 +3,8 @@ import json
 
 import httpx
 import httpx2
-import litellm
 import pytest
 from anthropic import AsyncAnthropic
-from openai import AsyncOpenAI
-
 from harbor.literal.native_api import (
     NativeAPILimits,
     RecordingCompletionTransport,
@@ -15,6 +12,7 @@ from harbor.literal.native_api import (
     responses_chat_request,
 )
 from harbor.literal.proxy import CORRELATION_ID_HEADER, TASK_AGENT_HEADER, RecordProxy
+from openai import AsyncOpenAI
 
 
 @pytest.mark.asyncio
@@ -142,18 +140,20 @@ async def test_native_tool_history_uses_recorded_sdk_completions(tmp_path, proto
                         "message": {
                             "role": "assistant",
                             "content": "Done" if followup else "Calling bash",
-                            "tool_calls": []
-                            if followup
-                            else [
-                                {
-                                    "id": "call-one",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "bash",
-                                        "arguments": '{"command":"echo ok"}',
-                                    },
-                                }
-                            ],
+                            "tool_calls": (
+                                []
+                                if followup
+                                else [
+                                    {
+                                        "id": "call-one",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "bash",
+                                            "arguments": '{"command":"echo ok"}',
+                                        },
+                                    }
+                                ]
+                            ),
                         },
                         "provider_specific_fields": {
                             "token_ids": [11] if followup else [10]
@@ -186,14 +186,12 @@ async def test_native_tool_history_uses_recorded_sdk_completions(tmp_path, proto
             for followup in (False, True):
                 body = native_request(protocol, followup=followup)
                 chat = (
-                    anthropic_chat_request(body)[0]
+                    anthropic_chat_request(body)
                     if protocol == "anthropic"
                     else responses_chat_request(body)
                 )
-                chat["model"] = "openai/bfcl-test"
-                result = await litellm.acompletion(
-                    **chat, client=client, api_base="http://literal/v1", api_key="EMPTY"
-                )
+                chat["model"] = "bfcl-test"
+                result = await client.chat.completions.create(**chat)
                 if followup:
                     assert result.choices[0].message.content == "Done"
                 else:
@@ -252,9 +250,11 @@ async def test_sdk_stream_yields_before_completion_and_retains_exact_tokens(tmp_
                                         ),
                                         "function": {
                                             **({"name": "bash"} if index == 0 else {}),
-                                            "arguments": '{"command":'
-                                            if index == 0
-                                            else '"pwd"}',
+                                            "arguments": (
+                                                '{"command":'
+                                                if index == 0
+                                                else '"pwd"}'
+                                            ),
                                         },
                                     }
                                 ],
@@ -328,8 +328,14 @@ async def test_sdk_stream_yields_before_completion_and_retains_exact_tokens(tmp_
 
 
 @pytest.mark.asyncio
-async def test_anthropic_stream_preserves_fragmented_tool_arguments(tmp_path):
+@pytest.mark.parametrize("protocol", ["anthropic", "responses"])
+@pytest.mark.parametrize("reasoning_field", ["reasoning_content", "reasoning"])
+@pytest.mark.parametrize("text_before_tool", [True, False])
+async def test_native_stream_preserves_fragmented_tool_arguments(
+    tmp_path, protocol, reasoning_field, text_before_tool
+):
     deltas = [
+        {reasoning_field: "Choose bash."},
         {"content": "Writing the answer"},
         {
             "tool_calls": [
@@ -353,6 +359,9 @@ async def test_anthropic_stream_preserves_fragmented_tool_arguments(tmp_path):
         {"tool_calls": [{"index": 0, "function": {"arguments": '"}'}}]},
     ]
 
+    if not text_before_tool:
+        deltas.append(deltas.pop(1))
+
     class ToolStream(httpx.AsyncByteStream):
         async def __aiter__(self):
             for index, delta in enumerate([*deltas, {}]):
@@ -371,9 +380,9 @@ async def test_anthropic_stream_preserves_fragmented_tool_arguments(tmp_path):
                             "logprobs": {
                                 "content": [{"token": "token", "logprob": -0.25}]
                             },
-                            "finish_reason": "tool_calls"
-                            if index == len(deltas)
-                            else None,
+                            "finish_reason": (
+                                "tool_calls" if index == len(deltas) else None
+                            ),
                         }
                     ],
                 }
@@ -392,27 +401,44 @@ async def test_anthropic_stream_preserves_fragmented_tool_arguments(tmp_path):
     proxy = RecordProxy("http://vllm", tmp_path / "literal.jsonl")
     async with httpx.AsyncClient(transport=httpx.MockTransport(backend)) as upstream:
         proxy._client = upstream
-        async with AsyncAnthropic(
+        http_module = httpx2 if protocol == "anthropic" else httpx
+        client_type = AsyncAnthropic if protocol == "anthropic" else AsyncOpenAI
+        async with client_type(
             api_key="EMPTY",
-            base_url="http://literal",
+            base_url=(
+                "http://literal" if protocol == "anthropic" else "http://literal/v1"
+            ),
             max_retries=0,
-            http_client=httpx2.AsyncClient(
-                transport=httpx2.ASGITransport(
+            http_client=http_module.AsyncClient(
+                transport=http_module.ASGITransport(
                     app=proxy.app(NativeAPILimits("bfcl-test", 8, 8192))
                 )
             ),
         ) as client:
-            async with client.messages.stream(
-                **native_request("anthropic", followup=False)
-            ) as stream:
-                message = await stream.get_final_message()
-    calls = [block for block in message.content if block.type == "tool_use"]
-    assert len(calls) == 1
-    assert (calls[0].id, calls[0].name, calls[0].input) == (
-        "call-one",
-        "bash",
-        {"command": "echo '[]' > /app/result.json"},
-    )
+            body = native_request(protocol, followup=False)
+            if protocol == "anthropic":
+                async with client.messages.stream(**body) as stream:
+                    message = await stream.get_final_message()
+                assert message.content[0].thinking == "Choose bash."
+                assert message.usage.input_tokens == 2
+                calls = [block for block in message.content if block.type == "tool_use"]
+                assert len(calls) == 1
+                result = (calls[0].id, calls[0].name, calls[0].input)
+            else:
+                async with client.responses.stream(**body) as stream:
+                    response = await stream.get_final_response()
+                assert response.output[0].summary[0].text == "Choose bash."
+                assert response.usage.input_tokens == 2
+                calls = [
+                    item for item in response.output if item.type == "function_call"
+                ]
+                assert len(calls) == 1
+                result = (
+                    calls[0].call_id,
+                    calls[0].name,
+                    json.loads(calls[0].arguments),
+                )
+    assert result == ("call-one", "bash", {"command": "echo '[]' > /app/result.json"})
     record = json.loads((tmp_path / "literal.jsonl").read_text())
     assert record["literal"]["completion_token_ids"] == list(
         range(10, 10 + len(deltas) + 1)
@@ -472,18 +498,20 @@ async def test_native_http_tool_roundtrip_preserves_recording_and_total_budget(
                         "message": {
                             "role": "assistant",
                             "content": "Done" if followup else None,
-                            "tool_calls": []
-                            if followup
-                            else [
-                                {
-                                    "id": "call-one",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "bash",
-                                        "arguments": '{"command":"echo ok"}',
-                                    },
-                                }
-                            ],
+                            "tool_calls": (
+                                []
+                                if followup
+                                else [
+                                    {
+                                        "id": "call-one",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "bash",
+                                            "arguments": '{"command":"echo ok"}',
+                                        },
+                                    }
+                                ]
+                            ),
                         },
                         "provider_specific_fields": {
                             "token_ids": [11] if followup else [10]

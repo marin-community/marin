@@ -196,6 +196,13 @@ ENV_VAR_SPECS = (
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.INFERENCE_WORKER}),
     ),
     EnvVarSpec(
+        "NCCL_MAX_NCHANNELS",
+        "trainer.policy.megatron_config.nccl_max_channels",
+        EnvVarSource.CONFIG,
+        frozenset({EnvVarScope.RAY_WORKER}),
+        frozenset({EnvVarWriter.PYTHON_ASSIGNMENT}),
+    ),
+    EnvVarSpec(
         VLLM_ALLOW_INSECURE_SERIALIZATION_ENV,
         "generator.fuse_weights",
         EnvVarSource.CONFIG,
@@ -348,6 +355,7 @@ _BUILD_BOUNDARIES = {
     "WHEEL_VENV",
 }
 _RUNTIME_BOUNDARIES = {
+    "RIGGING_SECRETS_DIR",
     "AWS_CONFIG_FILE",
     "AWS_DEFAULT_REGION",
     "AWS_ENDPOINT_URL",

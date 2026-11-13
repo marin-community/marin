@@ -13,20 +13,22 @@ dependencies = [
     # zstd codec on Python < 3.14; required for reading/writing zstd via fsspec.
     "backports-zstd>=1.0.0; python_version < '3.14'",
     "braceexpand",
-    "datasets<5.0.0",
+    "datasets>=5.0.1,<6",
     "draccus>=0.11.6",
     "fasttext-wheel>=0.9.2",
     "marin-fray",
     "marin-finestore",
     "marin-iris",
     "marin-rigging[prometheus]",
+    "marin-rolloutengine",
+    "marin-taskcompendium[pipeline]",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "huggingface-hub",
     "marin-haliax",
-    "jax>=0.9.2,<0.12",
+    "jax>=0.9.2,<0.13",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
     "transformers>=5.5.3,<6.0",
@@ -43,7 +45,7 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
-    "shellsim>=0.1.38",
+    "shellsim>=0.1.39",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",
@@ -61,6 +63,7 @@ marin-serve = "marin.inference.serve_cli:main"
 
 [dependency-groups]
 test = [
+    "marin-skyrlrecipe",
     "cloud-sql-python-connector[pg8000]>=1.9",
     "pytest>=8.3.2",
     "pytest-asyncio",
@@ -68,7 +71,6 @@ test = [
     "pytest-xdist",
     "pytest-timeout",
     "marin-verifyit[math,reasoning-gym,schema]",
-    "marin-taskcompendium[pipeline]",
     "universal-pathlib",
     # for scaling law plotting tests
     "plotly",
@@ -77,7 +79,6 @@ test = [
 ]
 lint = [
     "ruff==0.14.3",
-    "black>=26.3.1",
     "pyrefly>=1.0.0,<1.1.0",
     "types-PyYAML",
     "types-requests",
@@ -86,7 +87,7 @@ lint = [
 ]
 docs = [
     "mkdocs>=1.5.0",
-    "mkdocs-material>=9.5.0",
+    "mkdocs-material>=9.7.7",
     "mkdocstrings>=0.24.0",
     "mkdocstrings-python>=1.7.0",
     "pymdown-extensions>=10.0.0",
@@ -110,6 +111,18 @@ conflicts = [
     ],
     [
         { extra = "gpu" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "rocm" },
+        { extra = "gpu" },
+    ],
+    [
+        { extra = "rocm" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "rocm" },
         { extra = "cpu" },
     ],
 ]
@@ -164,8 +177,8 @@ cpu = [
   "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
-# Vendored Evalchemy runs against a served OpenAI URL from its own locked uv project.
-# See vendor/evalchemy and marin.evaluation.evalchemy.runtime.
+# AMD GPUs: Levanter's ROCm JAX stack.
+rocm = ["marin-levanter[rocm]"]
 
 vizier = [
     "google-vizier[jax]",

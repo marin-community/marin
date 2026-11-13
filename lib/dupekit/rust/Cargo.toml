@@ -21,7 +21,7 @@ pyo3 = { version = "0.29", features = [
 ] } # stable ABI with minimum Python version 3.12
 rand = "0.8"
 rand_pcg = "0.3"
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
+xxhash-rust = { version = "0.8.16", features = ["xxh3"] }
 
 # thin-LTO: within ~1% of fat-LTO runtime at a fraction of the link time.
 [profile.release]

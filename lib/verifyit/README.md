@@ -22,6 +22,7 @@ process exit after a verdict has been written.
 
 | mode | contract |
 |---|---|
+| `unsolvable` | private classification: normal answers score zero; a validated terminal ejection scores one |
 | `predicted_action` | unordered function calls with exact JSON types and optional float tolerance |
 | `mcq` | expected option letter |
 | `math` | expression equality through math-verify |
@@ -46,8 +47,11 @@ Callers with generation stop metadata remove configured terminal markers before 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
 Missing imports of those modules score zero, including an empty submission.
+Only the modules the spec names in ``candidate_modules`` (and their submodules) count as
+candidate code; imports are never guessed from distribution metadata.
+Missing modules with an installed provider remain invalid tasks.
 Workspace-qualified candidate packages add the workspace parent to Python's import path.
-Unlisted missing dependencies, errors in restored task files, and genuine interruptions remain unscored.
+Missing dependencies imported by implementation code, errors in restored task files, and genuine interruptions remain unscored.
 `protected_paths_files` lists tests-directory manifests of trusted workspace paths restored by setup.
 Every batch is checked before returning a candidate startup or collection failure.
 
@@ -83,7 +87,7 @@ text to the mode's contract; missing files still score zero. Rewards must be fin
 in `[0, 1]`. Malformed verdicts, incomplete judge replies, and failed structured script producers
 become unscored infrastructure errors. Interrupted test runs cannot retain positive credit.
 
-Pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
+Candidate-attributed pytest collection errors score zero. When pytest fails before producing a report, VerifyIT
 checks the interpreter and JSON-report plugin from a temporary directory isolated from task
 imports. A healthy baseline makes the failed task run a scored startup error; an unavailable
 baseline remains an infrastructure error. The task's original import paths and tests still
@@ -116,22 +120,33 @@ repeated records and rejecting unexpected errors.
 `structure_closure` classifies partial JSON, delimited JSON, paired markers, and required code
 fences. `closure_scoring` compares a completed outer region with a known reference and reports
 syntax, content preservation, and trailing output separately. `tool_call_markup` classifies
-completed `<tool_call>` markup in decoded assistant text. These helpers inspect text; the caller
-retains the sampled tokens, supplies any generation stop markers, and decides when a completed
-attempt can be scored.
+completed `<tool_call>` markup in decoded assistant text. `reasoning_markup` classifies the
+reasoning span of a decoded reply; the caller states whether the prompt opened a span that a
+leading closer may close. The `reasoning_markup` grading mode scores one when the reply holds at
+most one closed span and no stray closer, taking the prompt to open no span and excusing a span
+left open by a length stop; its verdict names the violation otherwise.
+These helpers inspect text; the caller retains the sampled tokens, supplies any generation stop
+markers, and decides when a completed attempt can be scored.
 
 `candidate_spec(mode, parameters)` builds and validates the specification of an in-process mode
 from a JSON table. `grade_candidate(spec, candidate, resources)` scores an answer the caller
 already extracted, with no filesystem or harness operations. `IN_PROCESS_MODES` lists the modes it
-accepts: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
-`structured_exact` and `predicted_action`. Text modes take a string, `structured_exact` takes a
-decoded JSON value, and `predicted_action` takes a tuple of `FunctionCall`. A file the specification
+accepts: `unsolvable`, `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`,
+`structured_exact`, `structure_closure`, `reasoning_markup` and `predicted_action`. Text modes take a string, `structured_exact` takes a
+decoded JSON value, `predicted_action` takes a tuple of `FunctionCall`, and `reasoning_markup`
+takes a `ReasoningReply` of the reply text and its stop reason. A file the specification
 names, such as the `json-schema` schema, comes from `resources`, keyed by its path relative to the
 tests directory. A specification the mode rejects yields an `invalid_task` reward; a candidate of
 the wrong type raises `TypeError`. Judge, Reasoning Gym, execution and script modes run only
 through the file grader. Predicted-action matching preserves duplicate calls and requires all calls
 to match one to one. Argument objects stay decoded in JSON tables; `render_spec` encodes each
 argument object as a JSON string in TOML so nested JSON null values survive `parse_spec`.
+
+`grade_ejection_candidate(spec)` scores a validated terminal ejection using the private
+classification: `unsolvable` earns one and every other mode earns zero. Callers validate the
+terminal action and its provenance before invoking this function. Refusal text and answer strings
+never count as ejections. In-process task validation retains invalid-task and infrastructure-error
+verdicts. File grading of `unsolvable` always scores zero because a file cannot establish an ejection.
 
 ## Install and use
 

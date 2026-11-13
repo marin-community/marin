@@ -26,6 +26,29 @@ flowchart LR
     G --> R[Typed grade result]
 ```
 
+## Evaluation corpora
+
+`taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 3),
+`EvaluationItem`, operation kinds, and consumer summary semantics.
+`taskcompendium.evaluation.corpus` verifies and reads published corpora;
+`taskcompendium.evaluation.selection` selects cohorts using projected task tags
+and labels, ordered groups, and tokenizer-dependent context budgets. Dataset
+declarations supply source-specific groups and budget parameters.
+`taskcompendium.pipeline.evaluation` publishes the full pinned population with
+conversion provenance and shard hashes. These metadata schemas are independent
+of the TaskSpec schema below.
+
+Evaluation adapters live under `taskcompendium.importers` and
+`taskcompendium.convert`. Reusable Evalchemy benchmark modules and source graders
+live in `taskcompendium.importers.evalchemy`. Experiment-owned `EvaluationCorpusRecipe` declarations
+bind them to acquisition and environment recipes. Verifyit supplies shared
+scoring and judge transport; Shellbox isolates executable graders.
+
+`marin.rollouts.evaluation` executes generation and likelihood operations and
+writes raw FineStore attempts. Evaldash summary computation and raw-archive
+ingestion remain separate work. See [evaluation tasks](../../docs/references/evaluation-tasks.md)
+for publication, execution, and retry/resume contracts.
+
 ## What is a task spec?
 
 `TaskSpec` defines one source task, including its grader and expected values. An importer or author creates it before choosing an execution runtime.
@@ -42,10 +65,12 @@ flowchart LR
 | `answer_type` | The semantic result: `text`, `number`, `json`, `file`, `state`, `workspace_state`, or `native_action`. |
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
+| `reasoning_markup` | `grade` (default) scores an attempt as usual. `reject` grades an attempt whose model reply has a malformed reasoning span (unclosed, repeated, or a stray closer) as a reward-0 `submission_failure`. Applied by the SkyRL rollout worker before grading results are grouped. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `schema_version` | Version of the serialized spec: `0.27`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.30`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
+| `labels` | String-valued annotations for queries and cohort selection. Tags and labels are also projected into normalized Parquet. |
 
 A task has one final result. TaskSpec does not define ordered task stages or stage-reward aggregation.
 
@@ -58,7 +83,7 @@ budget. Overflow fails the whole transfer. Selections cannot overlap `/tests`,
 
 `ConversationInput.events` is the model-visible conversation prefix. A text event retains its role and content. Historical assistant calls and tool results retain their call IDs and order; a runtime preserves this history when presenting the task to the model. `answer_type` does not prescribe a wrapper such as JSON; `answer_format` does.
 
-Conversation events preserve their declared roles. A runtime harness determines how to use them: ordinary chat requests include completed assistant turns, while an explicitly selected `PrefillHarness` continues the final assistant text. The serving model chooses its tokenizer; historical token IDs are source provenance.
+Conversation events preserve their declared roles. A runtime harness determines how to use them: ordinary chat requests include completed assistant turns, while an explicitly selected `AssistantPrefixHarness` continues the final assistant text. The serving model chooses its tokenizer; historical token IDs are source provenance.
 
 `ConversationInput` is not a lossless Responses API transcript. It excludes provider reasoning items. The NeMo importer omits an unencrypted historical reasoning summary only when a visible assistant message or function call follows it. It rejects encrypted reasoning and reasoning left at the decision point. Exact provider continuation from reasoning state is outside this contract.
 
@@ -207,7 +232,7 @@ The runtime presents the source turns and function definitions and retains the f
 | `script` | `ScriptGrader` | A command run after the attempt in a fresh machine built from a pinned image. |
 | `none` | `NoGrader` | The task cannot be graded here. `reason` says why; `contract` optionally keeps the source's grading terms. |
 
-A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, or `predicted_action`. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
+A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, `structure_closure`, `reasoning_markup`, or `predicted_action`. `reasoning_markup` grades the final assistant message's text, including the text before its function calls, and scores one when its reasoning markup is well formed; the attempt's stop reason excuses a span left open by a length stop. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
 
 A `ScriptGrader` declares:
 
@@ -220,9 +245,21 @@ A `ScriptGrader` declares:
 | `answer_path` | Where the extracted answer is written (default `/app/answer.txt`): text as text, JSON as JSON, and a final action as the final assistant message's JSON. |
 | `conversation_path` | Where the conversation is written as OpenAI-style chat messages in JSON (default `/tests/conversation.json`). |
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
+| `empty_output` | `ZERO` rejects an empty extracted answer; `GRADE` passes it to the script. |
+| `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
 | `timeout` | Deadline in seconds for each grading command (default 600). |
 
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
+
+`RewardFileFormat.VERDICT_JSON` reads Verifyit's structured `reward`, `status`
+and `detail` fields. It preserves unscored infrastructure failures and invalid
+tasks, including their diagnostic details. The command must exit successfully.
+This format retains named metrics and reduction inputs in `detail`.
+
+A scripted judge receives its declared specification at `/tests/judge.toml`.
+The caller supplies `JudgeConnection` separately; the runtime puts credentials
+only in the verifier machine's environment. Task serialization and staged
+archives exclude those credentials. The machine must permit network access.
 
 TaskSpec validation ties the grader to the answer:
 
@@ -267,6 +304,51 @@ A `text`, `number`, `json`, or `native_action` task must use a format that carri
 Answer formats preserve the task's advertised functions. `AnswerCall` adds `submit_answer` with an answer string. `FinalAction(require_call=True)` requires a call, and `FinalAction(max_calls=1)` limits the submission to one call. Missing required calls and excessive call counts are `submission_failure` with reward `0.0`.
 
 `taskcompendium.submission` builds model requests from the task alone. `submission_instruction(answer_format)` returns the format's final-answer instruction, and `answer_call_tool()` returns the `submit_answer` tool definition. `chat_request(task)` and `render_instruction(task)` combine them with the public conversation and final tools. These helpers perform no execution.
+
+## Optional terminal ejection
+
+`enable_ejection(task)` adds the reserved `eject_button(reason)` final tool. Use it on
+both solvable and unsolvable tasks. Ejection instructions live only in the tool description;
+normal answer instructions and parallel-call constraints are preserved.
+
+`mark_unsolvable(task)` privately classifies a confirmed unsolvable direct-chat task. It
+returns a new task with the same context and final tools as `enable_ejection(task)`, an
+`unsolvable` verifyit grader, and a `FinalAction` answer format. For text and JSON formats,
+`FinalAction.normal_submission` retains the original model-facing answer instructions and
+tools. Native-action tasks retain their required-call and maximum-call constraints.
+Callers must establish unsolvability; unsupported runtimes and missing evidence do not
+establish it. The helper rejects tasks that cannot already run and be graded in direct chat.
+
+```python
+from taskcompendium.ejection import enable_ejection, mark_unsolvable
+
+solvable = enable_ejection(task)
+confirmed_unsolvable = mark_unsolvable(task)
+```
+
+Both tasks produce identical `chat_request` and `render_instruction` output. The grader and
+expected answers remain private. A valid ejection is one terminal call with a nonempty string
+`reason`. Its call ID and reason remain in an `ActionSubmission`; the reason's prose is not
+scored. Ejection earns reward `1.0` only for the private `unsolvable` mode and `0.0` otherwise.
+Normal answers to unsolvable tasks earn `0.0`. Malformed reasons, mixed ejection/answer calls,
+unadvertised ejections, and continuation after ejection are `submission_failure` with reward
+`0.0`. Completed ejection calls in the source conversation are historical input.
+
+`answer_submission` dispatches ejection before the normal answer-format extractor, without
+passing expected answers or solvability labels into extraction. The episode runtime preserves
+the terminal call and stops before executing it or any other call in its batch. Runtime
+failures remain infrastructure errors without a reward.
+
+Generate paired missing-information, contradictory-constraint, and guideline examples as
+serialized TaskSpecs:
+
+```bash
+uv run --package marin-taskcompendium python -m taskcompendium.examples.ejection \
+  /tmp/ejection-tasks --pairs-per-family 32
+```
+
+This produces 192 tasks. The example generates task definitions; no model performance
+evaluation is included.
 
 ## Grading
 
@@ -348,5 +430,5 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.27` adds explicit task-owned shell tool bindings. Reconvert
+Schema `0.30` adds queryable task labels. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.

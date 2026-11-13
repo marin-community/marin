@@ -5,7 +5,9 @@ requires-python = "==3.12.*"
 dependencies = ["evalchemy"]
 
 [tool.uv]
+constraint-dependencies = ["nltk>=3.10.4"]
 package = false
+exclude-dependencies = ["litellm"]
 
 [tool.uv.sources]
 # Includes the merged empty-answer and symbol-free-equation fixes plus the ablation's judge request constraint.

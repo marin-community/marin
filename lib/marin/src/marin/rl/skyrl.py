@@ -10,16 +10,17 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 import fsspec
 import yaml
-from iris.cluster.client.job_info import get_job_info
+from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -41,13 +42,8 @@ _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 SKYRL_PROJECT = Path("vendor/skyrl")
-
-
-def skyrl_runtime_digest() -> str:
-    """Ask the isolated executable to identify its checked-out source and lock."""
-    completed = _run_launcher(_project_command("source-digest"))
-    completed.check_returncode()
-    return completed.stdout.strip()
+# The SkyRL runtime is packaged separately, so its matching limit is checked there too.
+_COLOCATED_EXPERT_BLOCK_GPU_COUNT = 4
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -73,22 +69,17 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
     pp = geometry.pipeline_model_parallel_size
     cp = geometry.context_parallel_size
     ep = geometry.expert_model_parallel_size
-    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}"
-    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep)):
+    etp = geometry.expert_tensor_parallel_size
+    sizes = f"TP={tp}, PP={pp}, CP={cp}, EP={ep}, ETP={etp}"
+    if any(not isinstance(size, int) or isinstance(size, bool) or size <= 0 for size in (tp, pp, cp, ep, etp)):
         raise ValueError(f"Megatron {role} has {num_gpus} GPUs with {sizes}; parallel sizes must be positive integers")
-    model_parallel = tp * pp * cp
-    if num_gpus % model_parallel or (num_gpus // model_parallel) % ep:
+    # Megatron builds separate dense (TP, CP, DP, PP) and expert
+    # (ETP, EP, expert-DP, PP) grids. CP ranks also participate in the expert grid.
+    if num_gpus % (tp * pp * cp) or num_gpus % (etp * ep * pp):
         raise ValueError(
             f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
-            "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
+            "GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
         )
-
-
-@dataclass(frozen=True)
-class SkyRLRuntime:
-    """Digest of the current SkyRL source, assets, and independent lock."""
-
-    source_digest: str = field(init=False, default_factory=skyrl_runtime_digest)
 
 
 @dataclass(frozen=True)
@@ -152,7 +143,6 @@ class SkyRLTopology:
         positive_fields = (
             "policy_num_nodes",
             "policy_num_gpus_per_node",
-            "num_inference_engines",
             "inference_engine_tensor_parallel_size",
             "inference_engine_pipeline_parallel_size",
             "inference_engine_data_parallel_size",
@@ -166,6 +156,10 @@ class SkyRLTopology:
             if getattr(plan, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
 
+        if plan.num_inference_engines < 0:
+            raise ValueError("SkyRL role plan num_inference_engines cannot be negative")
+        if plan.num_inference_engines == 0 and plan.colocate_all:
+            raise ValueError("a SkyRL role plan without inference engines cannot colocate policy and rollout roles")
         if plan.policy_num_nodes > self.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
         if plan.policy_num_gpus_per_node > self.gpus_per_node:
@@ -227,16 +221,16 @@ class SkyRLTopology:
 class SkyRLRetentionPolicy:
     """Temporary storage lifetime and rolling resume depth for one SkyRL run.
 
-    Every successful run produces one durable canonical export from its terminal
-    checkpoint.
+    When HF export is requested, a successful run produces a durable canonical
+    export from its terminal checkpoint.
     """
 
     resume_checkpoint_count: int = 2
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
 
     def __post_init__(self) -> None:
-        if not 1 <= self.resume_checkpoint_count <= 5:
-            raise ValueError("SkyRL resume_checkpoint_count must be between one and five")
+        if not 1 <= self.resume_checkpoint_count <= 10:
+            raise ValueError("SkyRL resume_checkpoint_count must be between one and ten")
         if self.temporary_storage_ttl_days <= 0:
             raise ValueError("SkyRL temporary_storage_ttl_days must be positive")
 
@@ -319,12 +313,16 @@ def _validate_relative_file_path(name: str, value: str) -> None:
 
 @dataclass(frozen=True)
 class ArtifactHfModel:
-    """An exact HF export produced by another Marin artifact step."""
+    """An exact HF export; an empty relative path selects the artifact root."""
 
     step: ArtifactStep[LevanterCheckpoint]
     tokenizer_uri: str
     tokenizer_revision: str
     relative_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.relative_path is not None and any(part in (".", "..") for part in self.relative_path.split("/")):
+            raise ValueError("HF model relative_path must not contain dot segments; use '' for the artifact root")
 
     def deps(self) -> tuple[ArtifactStep, ...]:
         return (self.step,)
@@ -414,7 +412,6 @@ class SkyRLSpec:
     name: str
     version: str
     config_yaml: str
-    runtime: SkyRLRuntime
     model: ArtifactHfModel
     train_data: tuple[SkyRLDataSource, ...]
     validation_data: tuple[SkyRLDataSource, ...]
@@ -442,6 +439,8 @@ class IrisSkyRLExecution:
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
+    required_env_vars: tuple[str, ...] = ()
+    container_profile: job_pb2.ContainerProfile | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -597,6 +596,40 @@ def _validate_skyrl_recipe(
     if _declared_config_value(config, "trainer.strategy") != "megatron":
         raise ValueError("SkyRL requires trainer.strategy=megatron")
     _validate_role_plan_config(config, topology.role_plan)
+    if (
+        _declared_config_value(config, "generator.weight_sync_transport") == "expert_block"
+        and topology.role_plan.colocate_all
+    ):
+        plan = topology.role_plan
+        supported = (
+            _declared_config_value(config, "entrypoint") in ("standard", _MISSING_CONFIG_VALUE)
+            and plan.policy_num_nodes == 1
+            and plan.policy_num_gpus_per_node == _COLOCATED_EXPERT_BLOCK_GPU_COUNT
+            and plan.num_inference_engines == 1
+            and plan.inference_engine_tensor_parallel_size == 1
+            and plan.inference_engine_pipeline_parallel_size == 1
+            and plan.inference_engine_data_parallel_size == plan.policy_num_gpus_per_node
+            and plan.inference_engine_expert_parallel_size == plan.policy_num_gpus_per_node
+            and _declared_config_value(config, "trainer.policy.megatron_config.tensor_model_parallel_size") == 1
+            and _declared_config_value(config, "trainer.policy.megatron_config.pipeline_model_parallel_size") == 1
+            and _declared_config_value(config, "trainer.policy.megatron_config.expert_tensor_parallel_size") in (1, None)
+            and _declared_config_value(config, "trainer.policy.megatron_config.expert_model_parallel_size")
+            == plan.policy_num_gpus_per_node
+            and _declared_config_value(config, "trainer.policy.megatron_config.nccl_max_channels")
+            in (None, 1, _MISSING_CONFIG_VALUE)
+            and _declared_config_value(config, "generator.backend") == "vllm"
+            and _declared_config_value(config, "generator.run_engines_locally") is True
+            and _declared_config_value(config, "generator.weight_sync_backend") == "nccl"
+            and _declared_config_value(config, "generator.expert_block_sync.verify") is True
+            and _declared_config_value(config, "generator.engine_init_kwargs.kernel_config.moe_backend") == "triton"
+            and _declared_config_value(config, "trainer.policy.model.lora.rank") in (0, _MISSING_CONFIG_VALUE)
+            and _declared_config_value(config, "generator.enforce_eager") in (False, _MISSING_CONFIG_VALUE)
+        )
+        if not supported:
+            raise ValueError(
+                "SkyRL colocated expert_block requires entrypoint=standard, one four-GPU node, policy TP=PP=ETP=1 EP=4, "
+                "one local vLLM TP=PP=1 DP=EP=4 TRITON engine, NCCL, verification, and no LoRA or eager mode"
+            )
     forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
     if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != topology.role_plan.micro_train_batch_size_per_gpu:
         raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")
@@ -606,6 +639,9 @@ def _validate_skyrl_recipe(
         for dimension in fields(MegatronGeometry):
             value = _declared_config_value(config, f"trainer.{role}.megatron_config.{dimension.name}")
             dimensions[dimension.name] = 1 if value is _MISSING_CONFIG_VALUE else cast(int, value)
+        etp = _declared_config_value(config, f"trainer.{role}.megatron_config.expert_tensor_parallel_size")
+        if etp is _MISSING_CONFIG_VALUE or etp is None:
+            dimensions["expert_tensor_parallel_size"] = dimensions["tensor_model_parallel_size"]
         validate_megatron_geometry(
             MegatronGeometry(**dimensions), role=role, num_gpus=nodes * plan.policy_num_gpus_per_node
         )
@@ -652,25 +688,41 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _project_command(*arguments: str) -> list[str]:
+def skyrl_cpu_command(*arguments: str) -> list[str]:
+    """Return argv for SkyRL's frozen CPU environment using its declared Python requirement."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
+    project_root = workspace_root / SKYRL_PROJECT
+    uv_version = (project_root / ".uv-version").read_text().strip()
+    python_requirement = tomllib.loads((project_root / "pyproject.toml").read_text())["project"]["requires-python"]
     return [
+        "uv",
+        "tool",
+        "run",
+        "--from",
+        f"uv=={uv_version}",
+        "--python",
+        python_requirement,
+        "--no-python-downloads",
         "uv",
         "run",
         "--project",
-        str(workspace_root / SKYRL_PROJECT),
+        str(project_root),
+        "--python",
+        python_requirement,
+        "--no-python-downloads",
         "--frozen",
+        "--extra",
+        "cpu",
         "--no-group",
         "dev",
-        "marinskyrl",
         *arguments,
     ]
 
 
 def _launcher_command(config_path: str) -> list[str]:
-    return _project_command("iris", "launch", "--config", config_path)
+    return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -785,9 +837,6 @@ def _launch_config_yaml(
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
-    submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
-    target_cluster = None if submit_through_ambient_controller else execution.target_cluster
-    parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
     launch = {
         "schema_version": 1,
         "run": {
@@ -799,7 +848,6 @@ def _launch_config_yaml(
             "export_hf": export_hf,
         },
         "runtime": {
-            "source_digest": spec.runtime.source_digest,
             "profile": _declared_config_value(recipe, "trainer.strategy"),
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
@@ -821,8 +869,8 @@ def _launch_config_yaml(
             "priority": execution.priority,
             "max_retries": execution.max_retries,
             "timeout": execution.job_timeout_seconds,
-            "target_cluster": target_cluster,
-            "parent_cluster_config": parent_cluster_config,
+            "target_cluster": execution.target_cluster,
+            "parent_cluster_config": execution.parent_cluster_config,
         },
         "ray": {
             "spill_backend": "local",
@@ -849,6 +897,8 @@ def _launch_config_yaml(
         },
         "skyrl": recipe,
     }
+    if execution.container_profile is not None:
+        launch["iris"]["container_profile"] = job_pb2.ContainerProfile.Name(execution.container_profile)
     return yaml.safe_dump(launch, sort_keys=False)
 
 

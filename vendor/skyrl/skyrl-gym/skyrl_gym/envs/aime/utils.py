@@ -16,9 +16,10 @@
 
 from math_verify import parse
 from sympy import Basic, MatrixBase, Set, Tuple
-from verifyit.adapters.skyrl import grade_aime_extracted, grade_literal_candidate
+from verifyit.adapters.skyrl import grade_aime_extracted
 from verifyit.execution.worker import call_bounded
 from verifyit.grade import Reward
+from verifyit.modes.grade_exact import grade_literal_candidate
 from verifyit.modes.grade_math import grade_math_candidate
 from verifyit.spec import MathProfile, MathSpec, MathType
 
@@ -167,6 +168,7 @@ def normalize_final_answer(final_answer: str) -> str:
         final_answer = final_answer.replace(before, after)
     for expr in REMOVED_EXPRESSIONS:
         final_answer = final_answer.replace(expr, "")
+    final_answer = final_answer.replace(r"\dfrac", r"\frac").replace(r"\tfrac", r"\frac")
 
     # Extract and normalize LaTeX math
     final_answer = re.sub(r"(.*?)(\$)(.*?)(\$)(.*)", "$\\3$", final_answer)
@@ -193,9 +195,9 @@ def normalize_final_answer(final_answer: str) -> str:
     return final_answer.strip()
 
 
-_TEX_FRACTION = re.compile(r"\\[dt]?frac\{(-?\d+(?:\.\d+)?)\}\{(-?\d+(?:\.\d+)?)\}")
-_SLASH_FRACTION = re.compile(r"(-?\d+(?:\.\d+)?)/(-?\d+(?:\.\d+)?)")
-_RATIO = re.compile(r"(-?\d+):(-?\d+)")
+_TEX_FRACTION = re.compile(r"(-?)\\frac\{(-?\d+(?:\.\d+)?)\}\{(-?\d+(?:\.\d+)?)\}")
+_SLASH_FRACTION = re.compile(r"(-?)(\d+(?:\.\d+)?)/(-?\d+(?:\.\d+)?)")
+_RATIO = re.compile(r"(-?)(\d+):(-?\d+)")
 _PLAIN_DECIMAL = re.compile(r"-?\d+(?:\.\d+)?")
 
 
@@ -207,7 +209,8 @@ def rational_value(answer: str) -> Optional[Fraction]:
         if match is None:
             continue
         try:
-            return Fraction(match.group(1)) / Fraction(match.group(2))
+            sign = -1 if match.group(1) else 1
+            return sign * Fraction(match.group(2)) / Fraction(match.group(3))
         except ZeroDivisionError:
             return None
     if _PLAIN_DECIMAL.fullmatch(candidate):

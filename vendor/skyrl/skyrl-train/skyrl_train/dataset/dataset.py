@@ -37,12 +37,14 @@ class PromptDataset:
         num_workers: int = 8,
         prompt_key: str = "prompt",
         env_class_key: str = "env_class",
+        chat_template_kwargs: dict | None = None,
     ):
         self.tokenizer = tokenizer
         self.max_prompt_length = max_prompt_length
         self.prompt_key = prompt_key
         self.env_class_key = env_class_key
         self.num_workers = num_workers
+        self.chat_template_kwargs = dict(chat_template_kwargs or {})
 
         self.datasets = datasets
         if isinstance(self.datasets, str):
@@ -61,8 +63,10 @@ class PromptDataset:
         prompt_key = self.prompt_key
         max_prompt_length = self.max_prompt_length
         token_count = type(self).prompt_token_count
+        template_kwargs = self.chat_template_kwargs
         self.dataframe = self.dataframe.filter(
-            lambda doc: token_count(tokenizer, doc, prompt_key) <= max_prompt_length,
+            lambda doc: token_count(tokenizer, doc, prompt_key, chat_template_kwargs=template_kwargs)
+            <= max_prompt_length,
             num_proc=self.num_workers,
             desc=f"Filtering prompts longer than {self.max_prompt_length} tokens",
         )
@@ -73,8 +77,10 @@ class PromptDataset:
         return dataset
 
     @staticmethod
-    def prompt_token_count(tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str) -> int:
-        return _prompt_token_count(tokenizer, row[prompt_key])
+    def prompt_token_count(
+        tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
+    ) -> int:
+        return _prompt_token_count(tokenizer, row[prompt_key], **(chat_template_kwargs or {}))
 
     def __getitem__(self, item):
         row_dict: dict = self.dataframe[item]

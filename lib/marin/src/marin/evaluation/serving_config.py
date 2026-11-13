@@ -15,10 +15,11 @@ from types import MappingProxyType
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
+from iris.cluster.tpu_topology import get_tpu_topology
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
@@ -107,7 +108,7 @@ def _auto_serve_overrides_from_config(
             merged.extend((option, value))
 
     native_max_model_len = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
-    if isinstance(native_max_model_len, int | float) and max_model_len is not None:
+    if max_model_len is not None and isinstance(native_max_model_len, int | float):
         max_model_len = min(max_model_len, int(native_max_model_len))
     return tuple(merged), max_model_len
 
@@ -264,13 +265,17 @@ def inference_config_for_model(
     api_model: str | None = None,
     instances: int | None = None,
     broker: BrokerConfig | None = None,
-    request_timeout_seconds: float = EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
+    request_timeout_seconds: float = EVALUATION_REQUEST_TIMEOUT_SECONDS,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)
     resolved_instances = serve.instances if instances is None else instances
     geometry = serving_geometry(serve, accelerator)
-    if broker is None and (geometry is None or geometry.task_count == 1):
+    # Multi-host TPU and multi-node GPU servers are one Iris job with one task per host,
+    # while a broker worker runs one single-task server. Serve those directly; a failed
+    # host stops the whole server, and the evaluator's retries are the recovery.
+    multihost_tpu = accelerator.tpu_type is not None and get_tpu_topology(accelerator.tpu_type).vm_count > 1
+    if broker is None and not multihost_tpu and (geometry is None or geometry.task_count == 1):
         # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
         broker = BrokerConfig(
             worker=InferenceWorkerConfig(

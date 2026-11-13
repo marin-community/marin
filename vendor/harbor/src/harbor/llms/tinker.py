@@ -1,7 +1,7 @@
 """Tinker LLM implementation for sampling with Terminus 2.
 
 This module provides a TinkerLLM class that integrates with Thinking Machines Lab's
-Tinker API for inference/sampling. It can be used as a drop-in replacement for LiteLLM
+Tinker API for inference/sampling. It can be used as a drop-in replacement for OpenAILLM
 when running Terminus 2 agent evaluations.
 
 Requirements:

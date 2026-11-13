@@ -22,6 +22,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, List, Self, Union
 from loguru import logger
+from rigging.secrets import require_secret
 from omegaconf import DictConfig, OmegaConf
 import pprint
 import ray
@@ -51,6 +52,7 @@ class WandbNodeLogger:
             group=group_name,
             job_type="worker_monitor",
             settings=wandb.Settings(
+                api_key=require_secret("WANDB_API_KEY"),
                 mode="shared",
                 x_primary=False,
                 x_update_finish_state=False,
@@ -94,6 +96,7 @@ class Tracking:
                 group=experiment_name,
                 resume="allow",
                 settings=wandb.Settings(
+                    api_key=require_secret("WANDB_API_KEY"),
                     mode="shared",  # mainly for multi-node training's systems metrics aggregation
                     x_primary=True,
                     x_label=f"node-{current_node_ip}",

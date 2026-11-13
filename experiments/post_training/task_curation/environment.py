@@ -92,7 +92,7 @@ class Environment:
     URL requirement whose URL names a commit; the build compiles them to a hash lock. ``apt`` names
     Debian packages. ``files`` places pinned archive members at absolute paths: the same path in a built
     image and in the worker, where bubblewrap binds each read-only, so a path cannot lie under the host
-    system directories (``/usr``, ``/etc``, ``/opt`` and the rest of ``SYSTEM_DIRECTORIES``), which are
+    system directories (``/usr``, ``/etc`` and the rest of ``SYSTEM_DIRECTORIES``), which are
     already bound read-only. ``env`` sets environment variables for graders in both placements. ``image``
     is a digest-pinned image used as-is and excludes every other field. ``dockerfile`` is a checked-in,
     self-contained Dockerfile fragment that installs a toolchain the packages cannot provide, such as
@@ -153,16 +153,28 @@ class Environment:
 
 def dockerfile_instructions(text: str) -> list[str]:
     """The instruction keyword of each logical line of a Dockerfile, skipping comments and blank lines."""
-    instructions = []
-    continued = False
-    for raw in text.splitlines():
+    return [line.split(maxsplit=1)[0].upper() for line in dockerfile_lines(text)]
+
+
+def dockerfile_lines(dockerfile: str) -> list[str]:
+    """Recipe lines with backslash continuations joined, comments and blanks dropped."""
+    lines: list[str] = []
+    buffer: str | None = None
+    for raw in dockerfile.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
-            continue  # Docker drops comment lines even inside a continued instruction.
-        if not continued:
-            instructions.append(line.split(maxsplit=1)[0].upper())
-        continued = line.endswith("\\")
-    return instructions
+            continue
+        if buffer is None:
+            buffer = ""
+        if line.endswith("\\"):
+            buffer += line[:-1].rstrip() + " "
+            continue
+        buffer += line
+        lines.append(buffer.strip())
+        buffer = None
+    if buffer:
+        raise ValueError("unterminated Dockerfile continuation")
+    return lines
 
 
 class Placement(StrEnum):

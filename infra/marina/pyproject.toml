@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "marin-rigging",
     "fastapi>=0.115",
-    "fastmcp-slim[server]>=4",
+    "fastmcp-slim[server]>=4.1.2",
     "httpx2>=2.5",
     "uvicorn>=0.30",
     "click>=8.3.1",

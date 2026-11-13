@@ -10,33 +10,64 @@ harness lives on the marin side (``tests/test_snowball_grug_parity.py``) to resp
 levanter -> experiments dependency direction.
 """
 
+import collections
 import json
+import math
 import subprocess
 import sys
+import tempfile
 import textwrap
+from dataclasses import replace
+from pathlib import Path
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
+import jax.random as random
+import jmp
 import numpy as np
 import pytest
-
-import haliax as hax
-from haliax import Axis
+from haliax import Axis, named_jit
+from haliax.partitioning import set_mesh
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
+from jax.extend import core as jax_core
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from safetensors.numpy import load_file
+from tokenizers import Tokenizer, models, pre_tokenizers
+from transformers import PreTrainedTokenizerFast
 
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.field_dtype_overrides import with_field_dtype_overrides
+from levanter.data.dataset import ListAsyncDataset
+from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
+from levanter.data.text.examples import GrugLmExample
+from levanter.distributed import DistributedConfig
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.attention import AttentionMask
+from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
+from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
+    DenseMLP,
+    GatedNorm,
     GrugMoeHfConfig,
     SnowballConfig,
     SnowballLMHeadModel,
+    SnowballMoEMLP,
+    _activation_spec,
     validate_single_name_config,
 )
-from levanter.testing.cpu_devices import run_on_cpu_devices
+from levanter.optim.config import AdamConfig
+from levanter.testing.devices import use_test_devices
+from levanter.tracker.json_file import JsonFileTrackerConfig
+from levanter.trainer import TrainerConfig
+from levanter.trainer_state import TrainerState
+from levanter.utils.jax_utils import local_cpu_mesh
+from levanter.utils.mesh import MeshConfig
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -290,6 +321,120 @@ def test_snowball_load_pretrained_machinery_is_exact():
     assert np.array_equal(src_logits, loaded_logits), "load_pretrained machinery changed logits"
 
 
+def test_snowball_moe_capacity_is_a_runtime_setting():
+    """The capacity reaches every expert MLP, is not exported to HF metadata, and survives an HF reload."""
+    cfg = _tiny_config(moe_capacity_factor=4.0)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+    assert {block.mlp.expert_mlp.capacity_factor for block in model.transformer.blocks} == {4.0}
+    hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
+    assert "moe_capacity_factor" not in hf and "capacity_factor" not in hf
+    reloaded = SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size))
+    assert preserve_hf_runtime_settings(reloaded, cfg).moe_capacity_factor == 4.0
+
+
+def test_snowball_fp32_activations_is_a_runtime_setting():
+    """The runtime flag stays out of HF metadata and rejects the BF16-only fused backend."""
+    cfg = _tiny_config(fp32_activations=True)
+    hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
+    assert "fp32_activations" not in hf
+    with pytest.raises(ValueError, match="fp32_activations"):
+        _tiny_config(fp32_activations=True, moe_implementation="sonic_cute")
+
+
+def _bf16(key, shape, scale):
+    return (scale * jax.random.normal(key, shape)).astype(jnp.bfloat16)
+
+
+def _walk_eqns(jaxpr, path: tuple = ()):
+    """Yield (enclosing primitive names, eqn) for every eqn, walking nested jaxprs (pjit, custom_jvp, scan, remat,
+    cond, shard_map)."""
+    for eqn in jaxpr.eqns:
+        yield path, eqn
+        for value in eqn.params.values():
+            for sub in value if isinstance(value, (list, tuple)) else (value,):
+                inner = sub.jaxpr if isinstance(sub, jax_core.ClosedJaxpr) else sub
+                if isinstance(inner, jax_core.Jaxpr):
+                    yield from _walk_eqns(inner, (*path, eqn.primitive.name))
+
+
+def test_snowball_fp32_activations_round_once():
+    """On, GatedNorm and the shared MLP equal their activations computed in FP32 by hand and cast to BF16 once; off,
+    they equal the BF16 activations, with no FP32 cast in the program."""
+    k = iter(jax.random.split(jax.random.key(0), 8))
+    x = _bf16(next(k), (3, 5, 32), 2.0)
+    w_down, w_up = _bf16(next(k), (32, 16), 0.5), _bf16(next(k), (16, 32), 0.5)
+    w_gate, w_up2, w_down2 = (
+        _bf16(next(k), (32, 24), 0.5),
+        _bf16(next(k), (32, 24), 0.5),
+        _bf16(next(k), (24, 32), 0.5),
+    )
+
+    def by_hand(fp32):
+        def act(fn, h):
+            return fn(h.astype(jnp.float32)).astype(h.dtype) if fp32 else fn(h)
+
+        hidden = act(jax.nn.silu, jnp.einsum("...d,dr->...r", x, w_down))
+        gated = x * act(jax.nn.sigmoid, jnp.einsum("...r,rd->...d", hidden, w_up))
+        flat = x.reshape(15, 32)
+        mlp = jnp.einsum("tm,md->td", act(jax.nn.silu, flat @ w_gate) * (flat @ w_up2), w_down2)
+        return gated, mlp.reshape(3, 5, 32)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        outputs = {}
+        for flag in (False, True):
+            norm = GatedNorm(w_down=w_down, w_up=w_up, fp32_activations=flag)
+            mlp = DenseMLP(w_gate=w_gate, w_up=w_up2, w_down=w_down2, fp32_activations=flag)
+            outputs[flag] = (norm(x), mlp(x))
+            for got, want in zip(outputs[flag], by_hand(flag)):
+                assert got.dtype == jnp.bfloat16
+                assert np.array_equal(np.asarray(got, np.float32), np.asarray(want, np.float32))
+            program = [eqn for _, eqn in _walk_eqns(jax.make_jaxpr(lambda v: norm(v))(x).jaxpr)]
+            assert any(e.primitive.name == "convert_element_type" for e in program) == flag
+    assert not np.array_equal(np.asarray(outputs[False][0], np.float32), np.asarray(outputs[True][0], np.float32))
+
+
+def _logistic_sites(jaxpr) -> collections.Counter:
+    """Count ``logistic`` eqns (sigmoid; SiLU is ``x * logistic(x)``) by (enclosing primitives, input dtype)."""
+    return collections.Counter(
+        (path, eqn.invars[0].aval.dtype.name) for path, eqn in _walk_eqns(jaxpr) if eqn.primitive.name == "logistic"
+    )
+
+
+def test_snowball_fp32_activations_cover_every_sigmoid():
+    """Traced BF16 forward: with the flag on, every sigmoid and SiLU takes an FP32 input -- the embed/final and block
+    GatedNorms, the attention head gate (both ``cond`` branches), the shared MLP and the routed experts
+    (``shard_map``). Off, all of them take BF16 and only the router combine (always FP32) does not."""
+    sites = {}
+    for flag in (False, True):
+        cfg = _tiny_config(fp32_activations=flag)
+        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+            model = jax.tree.map(lambda a: a.astype(jnp.bfloat16) if a.dtype == jnp.float32 else a, model)
+            ids = _device_batched_ids(cfg.vocab_size, 8)
+            jaxpr = jax.make_jaxpr(lambda m, i: m(i).array)(model, ids)
+        found = _logistic_sites(jaxpr.jaxpr)
+        sites[flag] = {
+            "top": sum(n for (path, _), n in found.items() if "scan" not in path),
+            "head_gate": sum(n for (path, _), n in found.items() if "cond" in path),
+            "experts": sum(n for (path, _), n in found.items() if "shard_map" in path),
+            "fp32": sum(n for (_, dtype), n in found.items() if dtype == "float32"),
+            "total": sum(found.values()),
+            "dtypes_by_path": found,
+        }
+    on, off = sites[True], sites[False]
+    # Embed + final GatedNorm (2 SiLU, 2 sigmoid); one scanned block: 2 GatedNorms (4), the head gate in both
+    # branches (2), the shared MLP (1), the routed experts (1) and the router combine (1).
+    assert (off["top"], off["head_gate"], off["experts"], off["total"]) == (4, 2, 1, 13)
+    assert {k: on[k] for k in ("top", "head_gate", "experts", "total")} == {
+        k: off[k] for k in ("top", "head_gate", "experts", "total")
+    }
+    assert on["fp32"] == on["total"]
+    assert off["fp32"] == 1, "flag off: only the router combine sigmoid is FP32"
+    router = [(path, dtype) for (path, dtype) in off["dtypes_by_path"] if dtype == "float32"]
+    assert router and all("scan" in path and "cond" not in path and "shard_map" not in path for path, _ in router)
+
+
 def test_snowball_forward_shapes_and_finite():
     cfg = _tiny_config()
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
@@ -298,6 +443,54 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_route_observer_is_output_identical():
+    cfg = _tiny_config()
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+        ids = _device_batched_ids(cfg.vocab_size, 8)
+        plain = hax.named_jit(lambda m, x: m.activations(x))(model, ids)
+        observed, routes = hax.named_jit(lambda m, x: m.activations_with_routes(x))(model, ids)
+
+        # Layer 0's routes, recomputed by hand from the block's own pieces.
+        tf = model.transformer
+        tokens = ids.array
+        hidden = tf.embed_gated_norm(tf.embed_norm(tf.token_embed.at[tokens].get(out_sharding=_activation_spec())))
+        block = tf.blocks[0]
+        short_mask = GrugAttentionMask(is_causal=True, sliding_window=cfg.sliding_window)
+        x = hidden + block.attn(block.attn_gated_norm(block.rms_attn(hidden)), short_mask, disable_rope=False)
+        mlp_in = block.mlp_gated_norm(block.rms_mlp(x))
+        logits = jnp.einsum("bsd,de->bse", mlp_in, block.mlp.router).astype(jnp.float32) + block.mlp.router_bias
+        expected = jax.lax.top_k(logits, cfg.num_experts_per_token + 1)[1][..., :-1]
+
+    routes, expected = np.asarray(jax.device_get(routes)), np.asarray(jax.device_get(expected))
+    assert np.array_equal(np.asarray(jax.device_get(plain.array)), np.asarray(jax.device_get(observed.array)))
+    assert routes.shape == (cfg.num_layers, tokens.shape[0], tokens.shape[1], cfg.num_experts_per_token)
+    assert ((routes >= 0) & (routes < cfg.num_experts)).all()
+    np.testing.assert_array_equal(routes[0], expected)
+
+
+def test_fp32_router_dot_preserves_a_route_lost_to_bfloat16_rounding():
+    cfg = _tiny_config(router_dot_fp32=True, num_experts=4, num_experts_per_token=1)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballMoEMLP.init(cfg, key=jax.random.key(23))
+        # BF16 rounds 1 + 1/256 to 1 before bias is added. Native FP32
+        # router bias then makes expert 1 win; the FP32 dot must retain expert 0.
+        router = jnp.zeros((cfg.hidden_dim, cfg.num_experts), jnp.float32)
+        router = router.at[0, :2].set(1).at[1, 0].set(1 / 256)
+        model = replace(model, router=router, router_bias=jnp.array([0, 0.001, -10, -10], jnp.float32))
+        compute = with_field_dtype_overrides(
+            jmp.get_policy("p=f32,c=bf16"), {"router_bias": jnp.dtype("float32")}
+        ).cast_to_compute(model)
+        inputs = jnp.zeros((1, 1, cfg.hidden_dim), jnp.bfloat16).at[0, 0, :2].set(1)
+        # Keep primitive boundaries explicit: XLA may fuse the BF16 dot's
+        # following FP32 conversion into a CPU dot with an FP32 accumulator.
+        routes = lambda value: value.with_routes(inputs)[1]
+        high = routes(compute)
+        low = routes(replace(compute, cfg=replace(cfg, router_dot_fp32=False)))
+    np.testing.assert_array_equal(high, [[[0]]])
+    np.testing.assert_array_equal(low, [[[1]]])
 
 
 @pytest.mark.parametrize(
@@ -319,44 +512,43 @@ def test_snowball_rejects_off_recipe(overrides, message):
         SnowballConfig.from_hf_config(hf)
 
 
+@pytest.mark.multidevice
 def test_snowball_load_path_multidevice_sharding():
     """The load-path forward must survive a data-sharded mesh (regression for the 67B router_bias).
 
     ``g()``-loaded leaves (norm weights, router_bias) inherit the sharding of the incoming state
     dict, and a safetensors load auto-shards ``[E]``/``[D]`` tensors over ``data`` when the size
-    divides the axis. On a single device this is invisible; with 8 devices, ``router_logits +
-    router_bias`` was illegally sharded. Runs in a fresh 8-CPU-device interpreter (XLA device count
-    is process-global) and force-shards the state dict like safetensors to reproduce the condition.
+    divides the axis. On a single device this is invisible; with multiple devices,
+    ``router_logits + router_bias`` was illegally sharded. Force-shards the state dict like
+    safetensors on a data-parallel mesh to reproduce the condition.
     """
-    script = textwrap.dedent(
-        """
-        import os
-        os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
-        os.environ["JAX_PLATFORMS"] = "cpu"
-        import equinox as eqx
-        import haliax as hax
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from haliax import Axis
-        from haliax.partitioning import set_mesh
-        from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
-        from jax.random import PRNGKey
-        from jax.sharding import NamedSharding, PartitionSpec as P
-        from levanter.grug.sharding import compact_grug_mesh
-        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
-
-        assert jax.device_count() == 8
-        # All parallel dims divide 8 so they actually shard on data=8 (E=16 => router_bias shards).
+    with use_test_devices(4) as devices:
+        # Four data shards are enough to reproduce the sharded router_bias placement (E=16).
         cfg = SnowballConfig(
-            vocab_size=128, hidden_dim=64, intermediate_dim=64, shared_expert_intermediate_dim=64,
-            num_experts=16, num_experts_per_token=4, num_layers=3, num_heads=8, num_kv_heads=4,
-            head_dim=16, max_seq_len=32, sliding_window=4, qk_mult=1.37, layer_norm_eps=1e-5,
+            vocab_size=128,
+            hidden_dim=64,
+            intermediate_dim=64,
+            shared_expert_intermediate_dim=64,
+            num_experts=16,
+            num_experts_per_token=4,
+            num_layers=3,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=16,
+            max_seq_len=32,
+            sliding_window=4,
+            qk_mult=1.37,
+            layer_norm_eps=1e-5,
             initializer_std=0.02,
+            attention_implementation="reference",
         )
         Vocab = Axis("vocab", cfg.vocab_size)
-        mesh = compact_grug_mesh(expert_axis_size=1)  # (replica_dcn=1, data=8, expert=1, model=1)
-        Batch = Axis("batch", jax.device_count())
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 4, 1, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        Batch = Axis("batch", len(devices))
         Pos = Axis("position", 8)
         ids = hax.named(
             (jnp.arange(Batch.size * Pos.size, dtype=jnp.int32) % cfg.vocab_size).reshape(Batch.size, Pos.size),
@@ -364,26 +556,20 @@ def test_snowball_load_path_multidevice_sharding():
         )
 
         def like_safetensors(v):
-            # Auto-shard the leading axis on data when it divides 8, else replicate (mimics the
+            # Auto-shard the leading axis on data when it divides 4, else replicate (mimics the
             # placement of freshly-read safetensors that broke the 67B).
             v = jnp.asarray(v)
-            spec = P("data") if v.ndim >= 1 and v.shape[0] % jax.device_count() == 0 else P()
+            spec = P("data") if v.ndim >= 1 and v.shape[0] % len(devices) == 0 else P()
             return jax.device_put(v, NamedSharding(mesh, spec))
 
         with set_mesh(mesh):
-            src = SnowballLMHeadModel.init(Vocab, cfg, key=PRNGKey(1))
+            src = SnowballLMHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(1))
             sd = {k: like_safetensors(v) for k, v in to_torch_compatible_state_dict(src).items()}
             ref = np.asarray(hax.named_jit(lambda m, x: m(x))(src, ids).array)
-            template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Vocab, cfg, key=PRNGKey(0))
+            template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Vocab, cfg, key=jax.random.PRNGKey(0))
             loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
             got = np.asarray(hax.named_jit(lambda m, x: m(x))(loaded, ids).array)
         assert np.array_equal(ref, got), "data-sharded load-path logits differ from the reference"
-        print("OK")
-        """
-    )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
-    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
-    assert "OK" in result.stdout
 
 
 def test_snowball_hf_config_loading_allows_distributed_initialization(tmp_path):
@@ -428,113 +614,96 @@ def test_snowball_hf_config_loading_allows_distributed_initialization(tmp_path):
 
 
 @pytest.mark.timeout(120)
+@pytest.mark.multidevice
 def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
-    run_on_cpu_devices(
-        """
-        import equinox as eqx
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        import haliax as hax
-        from haliax import Axis
-        from jax.sharding import AxisType, Mesh
-        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
-
+    with use_test_devices(8) as devices:
         cfg = SnowballConfig(
-            vocab_size=32, hidden_dim=16, intermediate_dim=16,
-            shared_expert_intermediate_dim=16, num_experts=4,
-            num_experts_per_token=2, num_layers=2, num_heads=2,
-            num_kv_heads=1, head_dim=8, max_seq_len=8, sliding_window=4,
-            attention_implementation="reference", moe_implementation="ring",
+            vocab_size=32,
+            hidden_dim=16,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_experts=4,
+            num_experts_per_token=2,
+            num_layers=2,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=8,
+            max_seq_len=8,
+            sliding_window=4,
+            attention_implementation="reference",
+            moe_implementation="ring",
         )
         ids = hax.named(
             jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
             (Axis("batch", 4), Axis("position", 8)),
         )
-        axes = ("replica_dcn", "data", "context", "expert", "model")
+        axes = ("replica_dcn", "data", "expert", "context", "model")
 
         def run(shape):
             mesh = Mesh(
-                np.asarray(jax.devices()).reshape(shape), axes,
+                np.asarray(devices[: int(np.prod(shape))]).reshape(shape),
+                axes,
                 axis_types=(AxisType.Explicit,) * len(axes),
             )
             with jax.set_mesh(mesh):
                 model = SnowballLMHeadModel.init(Axis("vocab", 32), cfg, key=jax.random.key(0))
                 activations = eqx.filter_jit(lambda m: m.activations(ids).array)(model)
-                value, grad = eqx.filter_jit(
-                    eqx.filter_value_and_grad(lambda m: jnp.mean(m(ids).array))
-                )(model)
+                value, grad = eqx.filter_jit(eqx.filter_value_and_grad(lambda m: jnp.mean(m(ids).array)))(model)
             block = grad.transformer.blocks[0]
             return activations.sharding.spec[1], (
-                np.asarray(value), np.asarray(grad.transformer.token_embed),
-                np.asarray(block.attn.w_q), np.asarray(block.mlp.expert_mlp.w_gate),
-                np.asarray(block.shared.w_gate), np.asarray(grad.transformer.output_proj),
+                np.asarray(value),
+                np.asarray(grad.transformer.token_embed),
+                np.asarray(block.attn.w_q),
+                np.asarray(block.mlp.expert_mlp.w_gate),
+                np.asarray(block.shared.w_gate),
+                np.asarray(grad.transformer.output_proj),
             )
 
-        data_axis, reference = run((1, 2, 1, 2, 1))
-        context_axis, sharded = run((1, 1, 2, 2, 1))
+        data_axis, reference = run((1, 2, 2, 1, 1))
         assert data_axis is None
-        assert context_axis == "context"
-        for expected, actual in zip(reference, sharded, strict=True):
-            np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
-        """,
-        device_count=4,
-    )
+        # Four context shards make the flattened token sharding larger than the batch.
+        for shape in [(1, 1, 2, 2, 1), (1, 1, 2, 4, 1)]:
+            context_axis, sharded = run(shape)
+            assert context_axis == "context"
+            for expected, actual in zip(reference, sharded, strict=True):
+                np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
 
 
 @pytest.mark.timeout(120)
+@pytest.mark.multidevice
 def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
-    run_on_cpu_devices(
-        """
-        import json
-        import math
-        import tempfile
-        from dataclasses import replace
-        from pathlib import Path
-
-        import jax.numpy as jnp
-        import jax.random as random
-        import jax
-        from jax import P
-        import equinox as eqx
-        from haliax import Axis, named_jit
-        from haliax.partitioning import set_mesh
-        from tokenizers import Tokenizer, models, pre_tokenizers
-        from transformers import PreTrainedTokenizerFast
-
-        from levanter.checkpoint import CheckpointerConfig, load_checkpoint
-        from levanter.data.dataset import ListAsyncDataset
-        from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
-        from levanter.data.text.examples import GrugLmExample
-        from levanter.distributed import DistributedConfig
-        from levanter.main.train_lm import TrainLmConfig, main
-        from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
-        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
-        from levanter.optim.config import AdamConfig
-        from levanter.tracker.json_file import JsonFileTrackerConfig
-        from levanter.trainer import TrainerConfig
-        from levanter.trainer_state import TrainerState
-        from levanter.utils.mesh import MeshConfig
-
+    with use_test_devices(4):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
             hf_path = root / "hf"
             hf_path.mkdir()
-            tokenizer = Tokenizer(models.WordLevel(
-                vocab={"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}},
-                unk_token="<pad>",
-            ))
+            tokenizer = Tokenizer(
+                models.WordLevel(
+                    vocab={"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}},
+                    unk_token="<pad>",
+                )
+            )
             tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
             fast = PreTrainedTokenizerFast(tokenizer_object=tokenizer, pad_token="<pad>", eos_token="<eos>")
             fast.save_pretrained(hf_path)
             model_cfg = SnowballConfig(
-                vocab_size=64, hidden_dim=32, intermediate_dim=32, shared_expert_intermediate_dim=32,
-                num_experts=8, num_experts_per_token=2, num_layers=1, num_heads=4, num_kv_heads=2,
-                head_dim=8, max_seq_len=8, sliding_window=4, attention_implementation="reference",
+                vocab_size=64,
+                hidden_dim=32,
+                intermediate_dim=32,
+                shared_expert_intermediate_dim=32,
+                num_experts=8,
+                num_experts_per_token=2,
+                num_layers=1,
+                num_heads=4,
+                num_kv_heads=2,
+                head_dim=8,
+                max_seq_len=8,
+                sliding_window=4,
+                attention_implementation="reference",
                 tokenizer=str(hf_path),
             )
             mesh = MeshConfig(
-                axes={"data": 1, "replica": 1, "model": 1, "context": 2, "expert": -1},
+                axes={"data": -1, "replica": 1, "model": 1, "context": 2, "expert": 2},
                 compute_mapping={
                     "batch": ["replica_dcn", "data", "expert"],
                     "position": "context",
@@ -542,28 +711,49 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 },
             )
             trainer_cfg = TrainerConfig(
-                id="local-snowball-sft", mesh=mesh, use_explicit_mesh_axes=True,
-                train_batch_size=8, num_train_steps=1, max_eval_batches=0,
+                id="local-snowball-sft",
+                mesh=mesh,
+                use_explicit_mesh_axes=True,
+                train_batch_size=max(8, jax.device_count()),
+                per_device_parallelism=1,
+                num_train_steps=1,
+                max_eval_batches=1,
                 tracker=JsonFileTrackerConfig(output_path=str(root)),
                 checkpointer=CheckpointerConfig(base_path=str(root / "ckpts")),
                 require_accelerator=False,
                 distributed=DistributedConfig(initialize_jax_distributed=False),
-                log_jaxprs=False, log_xla_hlo=False,
+                log_jaxprs=False,
+                log_xla_hlo=False,
             )
             with set_mesh(trainer_cfg.device_mesh):
                 model = SnowballLMHeadModel.init(Axis("vocab", 64), model_cfg, key=random.key(0))
                 model_cfg.hf_checkpoint_converter().replaced(tokenizer=fast).save_pretrained(
-                    model, str(hf_path), save_tokenizer=False, save_reference_code=False,
+                    model,
+                    str(hf_path),
+                    save_tokenizer=False,
+                    save_reference_code=False,
                 )
-            import_hf(ImportHfConfig(
-                hf_checkpoint=str(hf_path), output_path=str(root / "native-checkpoint"),
-                model=model_cfg, use_hf_model_config=False, tokenizer=str(hf_path),
-                dtype="bfloat16", subpath="model", emit_padded_tokenizer=True,
-            ))
+            import_hf(
+                ImportHfConfig(
+                    hf_checkpoint=str(hf_path),
+                    output_path=str(root / "native-checkpoint"),
+                    model=model_cfg,
+                    use_hf_model_config=False,
+                    tokenizer=str(hf_path),
+                    dtype="bfloat16",
+                    subpath="model",
+                    emit_padded_tokenizer=True,
+                )
+            )
             with set_mesh(trainer_cfg.device_mesh):
-                template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Axis("vocab", 64), model_cfg, key=random.key(0))
+                template = eqx.filter_eval_shape(
+                    SnowballLMHeadModel.init, Axis("vocab", 64), model_cfg, key=random.key(0)
+                )
                 restored = load_checkpoint(
-                    template, str(root / "native-checkpoint"), subpath="model", mesh=trainer_cfg.device_mesh,
+                    template,
+                    str(root / "native-checkpoint"),
+                    subpath="model",
+                    mesh=trainer_cfg.device_mesh,
                 )
                 expert_spec = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.sharding.spec
                 assert expert_spec == P("expert", ("data", "context"), "model"), expert_spec
@@ -575,36 +765,195 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 )(restored)
                 expert_shape = restored.transformer.blocks[0].mlp.expert_mlp.w_gate.shape
                 moment_specs = [
-                    leaf.sharding.spec for leaf in jax.tree.leaves(state.opt_state)
+                    leaf.sharding.spec
+                    for leaf in jax.tree.leaves(state.opt_state)
                     if isinstance(leaf, jax.Array) and leaf.shape == expert_shape
                 ]
                 assert moment_specs and all(
                     "expert" in spec and ("data", "context") in spec for spec in moment_specs
                 ), moment_specs
-            examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
+            with local_cpu_mesh():
+                examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
             data = LmDataConfig(
-                components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
+                components={
+                    "direct": DirectDatasetComponent(
+                        datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)}
+                    )
+                },
                 tokenizer=str(hf_path),
             )
-            main(TrainLmConfig(
-                data=data, model=model_cfg, initialize_from_hf=str(hf_path),
-                optimizer=AdamConfig(learning_rate=5e-5), trainer=trainer_cfg,
-            ))
+            main(
+                TrainLmConfig(
+                    data=data,
+                    model=model_cfg,
+                    initialize_from_hf=str(hf_path),
+                    optimizer=AdamConfig(learning_rate=5e-5),
+                    trainer=trainer_cfg,
+                )
+            )
             with (root / "eval_results.json").open() as handle:
                 metrics = json.load(handle)
             assert math.isfinite(metrics["train/loss"])
+            assert math.isfinite(metrics["eval/loss"])
             native_trainer = replace(
-                trainer_cfg, id="local-snowball-native-sft",
+                trainer_cfg,
+                id="local-snowball-native-sft",
                 tracker=JsonFileTrackerConfig(output_path=str(root / "native")),
                 checkpointer=CheckpointerConfig(base_path=str(root / "native-ckpts")),
             )
-            main(TrainLmConfig(
-                data=data, model=model_cfg, initialize_model_from_checkpoint_path=str(root / "native-checkpoint"),
-                optimizer=AdamConfig(learning_rate=5e-5), trainer=native_trainer,
-            ))
+            main(
+                TrainLmConfig(
+                    data=data,
+                    model=model_cfg,
+                    initialize_model_from_checkpoint_path=str(root / "native-checkpoint"),
+                    optimizer=AdamConfig(learning_rate=5e-5),
+                    trainer=native_trainer,
+                )
+            )
             with (root / "native" / "eval_results.json").open() as handle:
                 native_metrics = json.load(handle)
             assert math.isfinite(native_metrics["train/loss"])
-        """,
-        device_count=8,
+            assert math.isfinite(native_metrics["eval/loss"])
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.multidevice
+def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
+    with use_test_devices(4):
+        hf_path = tmp_path / "hf"
+        tokenizer = Tokenizer(
+            models.WordLevel(vocab={"<pad>": 0, "<eos>": 1, **{f"t{i}": i for i in range(2, 64)}}, unk_token="<pad>")
+        )
+        tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+        fast = PreTrainedTokenizerFast(tokenizer_object=tokenizer, pad_token="<pad>", eos_token="<eos>")
+        fast.save_pretrained(hf_path)
+        config = _tiny_config(
+            vocab_size=64,
+            hidden_dim=32,
+            intermediate_dim=32,
+            shared_expert_intermediate_dim=32,
+            num_layers=1,
+            head_dim=8,
+            max_seq_len=128,
+            router_dot_fp32=True,
+            tokenizer=str(hf_path),
+        )
+        # HF metadata chooses the platform kernel; test reload separately from
+        # context sharding, which has its unchanged reference-backend test above.
+        trainer = TrainerConfig(
+            id="hf-config-override-regression",
+            mesh=MeshConfig(
+                axes={"data": -1, "replica": 1, "model": 1, "context": 1, "expert": 2},
+                compute_mapping={"batch": ["replica_dcn", "data", "expert"], "vocab": "model"},
+            ),
+            field_dtype_overrides={"router_bias": jnp.dtype("float32")},
+            use_explicit_mesh_axes=True,
+            train_batch_size=max(8, jax.device_count()),
+            per_device_parallelism=1,
+            num_train_steps=1,
+            max_eval_batches=1,
+            require_accelerator=False,
+            tracker=JsonFileTrackerConfig(output_path=str(tmp_path)),
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "ckpts")),
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_jaxprs=False,
+            log_xla_hlo=False,
+        )
+        with set_mesh(trainer.device_mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", 64), config, key=random.key(0))
+            config.hf_checkpoint_converter().replaced(tokenizer=fast).save_pretrained(
+                model,
+                str(hf_path),
+                save_tokenizer=False,
+                save_reference_code=False,
+            )
+        with local_cpu_mesh():
+            examples = [GrugLmExample.causal(jnp.arange(128, dtype=jnp.int32) % 62 + 2) for _ in range(16)]
+        main(
+            TrainLmConfig(
+                data=LmDataConfig(
+                    tokenizer=str(hf_path),
+                    components={
+                        "direct": DirectDatasetComponent(
+                            datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)},
+                        )
+                    },
+                ),
+                model=config,
+                initialize_from_hf=str(hf_path),
+                use_hf_model_config=True,
+                trainer=trainer,
+                optimizer=AdamConfig(learning_rate=5e-5),
+            )
+        )
+        metrics = json.loads((tmp_path / "eval_results.json").read_text())
+        assert math.isfinite(metrics["train/loss"])
+        assert math.isfinite(metrics["eval/loss"])
+
+
+def test_fp32_router_training_rejects_missing_fp32_bias_before_loading(tmp_path):
+    config = TrainLmConfig(
+        model=_tiny_config(router_dot_fp32=True),
+        data=LmDataConfig(tokenizer=str(tmp_path)),
     )
+    with pytest.raises(ValueError, match="field_dtype_overrides to map router_bias to float32"):
+        main(config)
+
+
+@pytest.mark.parametrize("separate_key_axis", [False, True])
+def test_snowball_packed_conversations_are_isolated(separate_key_axis):
+    cfg = _tiny_config()
+    ids = _device_batched_ids(cfg.vocab_size, 8)
+    segments = hax.named(jnp.broadcast_to(jnp.array([0, 0, 0, 0, 1, 1, 1, 1]), ids.array.shape), ids.axes)
+    key_segments = segments.rename({"position": "key_position"}) if separate_key_axis else segments
+    mask = AttentionMask.causal().with_segment_ids(segments, key_segments)
+    changed = hax.named(ids.array.at[:, :4].set((ids.array[:, :4] + 13) % cfg.vocab_size), ids.axes)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(9))
+        forward = eqx.filter_jit(lambda m, tokens: m.activations(tokens, mask).array)
+        before = np.array(forward(model, ids))
+        after = np.array(forward(model, changed))
+        observe = eqx.filter_jit(lambda m, tokens: m.activations_with_routes(tokens, mask)[0].array)
+        np.testing.assert_array_equal(observe(model, ids), before)
+        np.testing.assert_array_equal(observe(model, changed), after)
+    assert not np.allclose(before[:, :4], after[:, :4])
+    np.testing.assert_allclose(before[:, 4:], after[:, 4:], atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.multidevice
+def test_snowball_capacity_preserves_imbalanced_outputs_and_gradients():
+    with use_test_devices(2):
+
+        def run(expert_axis, capacity):
+            with jax.set_mesh(compact_grug_mesh(expert_axis_size=expert_axis)):
+                cfg = SnowballConfig(
+                    hidden_dim=8,
+                    intermediate_dim=16,
+                    num_experts=4,
+                    num_experts_per_token=2,
+                    initializer_std=0.2,
+                    moe_implementation="ring",
+                    moe_capacity_factor=capacity,
+                )
+                model = SnowballMoEMLP.init(cfg, key=jax.random.key(19))
+                # All tokens choose experts on the same destination shard.
+                model = eqx.tree_at(lambda m: m.router_bias, model, jnp.array([10.0, 9.0, -10.0, -10.0]))
+                inputs = jnp.arange(256, dtype=jnp.float32).reshape(4, 8, 8) / 256
+                outputs = eqx.filter_jit(lambda m: m(inputs))(model)
+                _, grad = eqx.filter_jit(eqx.filter_value_and_grad(lambda m: jnp.sum(m(inputs) ** 2)))(model)
+                return [
+                    np.asarray(outputs),
+                    np.asarray(grad.router),
+                    np.asarray(grad.expert_mlp.w_gate),
+                    np.asarray(grad.expert_mlp.w_up),
+                    np.asarray(grad.expert_mlp.w_down),
+                ]
+
+        reference = run(1, 2)
+        preserved = run(2, 2)
+        dropped = run(2, 1)
+        for actual, expected in zip(preserved, reference, strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        assert not np.allclose(dropped[0], reference[0], rtol=1e-5, atol=1e-5)
+        assert not np.allclose(dropped[2], reference[2], rtol=1e-5, atol=1e-5)

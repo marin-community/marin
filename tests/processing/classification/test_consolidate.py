@@ -4,48 +4,61 @@
 import os
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from marin.processing.classification.consolidate import (
     FilterConfig,
     FilterType,
     consolidate,
 )
-from marin.processing.classification.deduplication.dedup_commons import DedupMode
-from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
 from zephyr.readers import load_parquet
 
+_SPAN_ATTR_SCHEMA = pa.schema([pa.field("id", pa.string()), pa.field("dup_spans", pa.list_(pa.list_(pa.int64())))])
 
-def test_dedupe_consolidate_integration(fox_corpus):
-    """Integration test: dedupe generates attributes, consolidate filters based on them.
 
-    This test verifies that:
-    1. Dedupe outputs files with names matching input files (using rebase_file_path)
-    2. Consolidate can find and use those attribute files
-    3. The end-to-end workflow removes duplicate content
-    """
-    dedupe_output_dir = fox_corpus["output_dir"]
+def _line_spans(text: str) -> list[list[int]]:
+    """Return ``[start, end)`` character spans for each newline-separated line of ``text``."""
+    spans = []
+    start = 0
+    for line in text.split("\n"):
+        spans.append([start, start + len(line)])
+        start += len(line) + 1
+    return spans
+
+
+def test_consolidate_remove_spans(fox_corpus):
+    """REMOVE_SPANS cuts the attributed spans out of matching documents and leaves the rest alone."""
+    test_docs = {doc["id"]: doc["text"] for doc in fox_corpus["test"]}
+    input_dir = os.path.join(fox_corpus["output_dir"], "input")
+    attr_dir = os.path.join(fox_corpus["output_dir"], "spans")
     consolidated_dir = os.path.join(fox_corpus["output_dir"], "consolidation")
 
-    # Run deduplication to generate attributes using fixture's test data
-    result = dedup_exact_paragraph(
-        input_paths=fox_corpus["test_dir"],
-        output_path=dedupe_output_dir,
+    # consolidate merge-joins each input shard with its attribute shard, so both
+    # must be sorted by id. Every input shard needs an attribute file, empty
+    # where nothing is removed.
+    os.makedirs(input_dir)
+    os.makedirs(attr_dir)
+    sorted_docs = sorted(fox_corpus["test"], key=lambda doc: doc["id"])
+    pq.write_table(pa.Table.from_pylist(sorted_docs[:6]), os.path.join(input_dir, "test_shard_0.parquet"))
+    pq.write_table(pa.Table.from_pylist(sorted_docs[6:]), os.path.join(input_dir, "test_shard_1.parquet"))
+    shard_0_rows = [
+        {"id": "test_gray_dup_2", "dup_spans": _line_spans(test_docs["test_gray_dup_2"])},
+        {"id": "test_gray_dup_3", "dup_spans": _line_spans(test_docs["test_gray_dup_3"])},
+        {"id": "test_gray_partial", "dup_spans": _line_spans(test_docs["test_gray_partial"])[:1]},
+    ]
+    pq.write_table(
+        pa.Table.from_pylist(shard_0_rows, schema=_SPAN_ATTR_SCHEMA), os.path.join(attr_dir, "test_shard_0.parquet")
     )
-    assert result["success"]
-    assert result["mode"] == DedupMode.EXACT_PARAGRAPH
+    pq.write_table(_SPAN_ATTR_SCHEMA.empty_table(), os.path.join(attr_dir, "test_shard_1.parquet"))
 
-    # Verify dedupe output exists and has same structure as input
-    dedupe_output_files = list(Path(dedupe_output_dir).glob("data/*.parquet"))
-    assert len(dedupe_output_files) > 0
-
-    # Now run consolidate using the dedupe attributes
     consolidate(
-        input_path=fox_corpus["test_dir"],
+        input_path=input_dir,
         output_path=consolidated_dir,
         filetype="parquet",
         filters=[
             FilterConfig(
                 type=FilterType.REMOVE_SPANS,
-                attribute_path=f"{dedupe_output_dir}/data",
+                attribute_path=attr_dir,
                 name="dup_spans",
                 attribute_filetype="parquet",
                 keep_if_missing=True,
@@ -53,34 +66,21 @@ def test_dedupe_consolidate_integration(fox_corpus):
         ],
     )
 
-    # Read consolidated output from all parquet shards
     consolidated_rows = []
     for pq_file in sorted(Path(consolidated_dir).glob("*.parquet")):
         consolidated_rows.extend(load_parquet(str(pq_file)))
-    consolidated_by_id = {row["id"]: row for row in consolidated_rows}
-    assert len(consolidated_by_id) > 0
+    consolidated_by_id = {row["id"]: row["text"] for row in consolidated_rows}
+    assert consolidated_by_id.keys() == test_docs.keys()
 
-    # Verify that duplicate spans have been removed
-    test_docs = fox_corpus["test"]
-    assert len(consolidated_by_id) == len(test_docs)
+    # The first copy has no attribute row and stays unchanged.
+    assert consolidated_by_id["test_gray_dup_1"] == test_docs["test_gray_dup_1"]
 
-    # test_gray_dup_1 is canonical (first occurrence), should be unchanged
-    original_dup_1 = next(d["text"] for d in test_docs if d["id"] == "test_gray_dup_1")
-    assert consolidated_by_id["test_gray_dup_1"]["text"] == original_dup_1
+    # Later copies lose every attributed span; only the line separator is left.
+    assert consolidated_by_id["test_gray_dup_2"] == "\n"
+    assert consolidated_by_id["test_gray_dup_3"] == "\n"
+    partial_lines = test_docs["test_gray_partial"].split("\n")
+    assert consolidated_by_id["test_gray_partial"] == "\n" + partial_lines[1]
 
-    # test_gray_dup_2 and test_gray_dup_3 had all content marked as duplicate
-    # text should be empty or nearly empty
-    dup_2_text = consolidated_by_id["test_gray_dup_2"]["text"].strip()
-    dup_3_text = consolidated_by_id["test_gray_dup_3"]["text"].strip()
-    original_text = next(d["text"] for d in test_docs if d["id"] == "test_gray_dup_2")
-    assert (
-        len(dup_2_text) < len(original_text) / 2
-    ), f"Expected test_gray_dup_2 to have most content removed, but got: {dup_2_text}"
-    assert (
-        len(dup_3_text) < len(original_text) / 2
-    ), f"Expected test_gray_dup_3 to have most content removed, but got: {dup_3_text}"
-
-    # Unique documents should be unchanged
+    # Documents without spans stay intact.
     for doc_id in ["test_unique_1", "test_unique_2", "test_unique_3"]:
-        original = next(d["text"] for d in test_docs if d["id"] == doc_id)
-        assert consolidated_by_id[doc_id]["text"] == original
+        assert consolidated_by_id[doc_id] == test_docs[doc_id]

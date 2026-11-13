@@ -137,6 +137,7 @@ class ExpertBlockReceiver:
             plan,
             Rendezvous(**init_info["rendezvous"]),
             self.device,
+            backend=init_info["backend"],
             parameters=self.parameters,
             expert_maps=self.expert_maps,
         )

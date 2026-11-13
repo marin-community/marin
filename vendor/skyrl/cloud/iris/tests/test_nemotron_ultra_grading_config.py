@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from omegaconf import OmegaConf
+
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +17,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config  # noqa: E402
 
-_BASE_CONFIG = _REPO_ROOT / "cloud/iris/configs/nemotron_ultra_rlvr_acceptance.yaml"
+_BASE_CONFIG = _REPO_ROOT / "cloud/iris/configs/qwen_megatron_smoke.yaml"
 
 
 @dataclass
@@ -25,6 +27,7 @@ class _HPCStub:
 
 def _skipped_grading_config(tmp_path: Path, *, eval_interval: int) -> Path:
     raw = yaml.safe_load(_BASE_CONFIG.read_text())
+    raw["environment"]["env_class"] = "nemotron_ultra"
     trainer = raw["trainer"]
     trainer["eval_before_train"] = False
     trainer["eval_interval"] = eval_interval
@@ -59,7 +62,7 @@ def _skipped_grading_config(tmp_path: Path, *, eval_interval: int) -> Path:
 
 
 def test_launcher_composes_skipped_grading_for_pure_distillation(tmp_path):
-    parsed = parse_rl_config(str(_skipped_grading_config(tmp_path, eval_interval=-1)))
+    parsed = parse_rl_config(OmegaConf.load(_skipped_grading_config(tmp_path, eval_interval=-1)))
 
     cfg = compose_skyrl_config(parsed, {"job_name": "grading-test", "num_nodes": 1}, _HPCStub()).config
 
@@ -67,7 +70,7 @@ def test_launcher_composes_skipped_grading_for_pure_distillation(tmp_path):
 
 
 def test_launcher_rejects_skipped_grading_with_eval_before_submission(tmp_path):
-    parsed = parse_rl_config(str(_skipped_grading_config(tmp_path, eval_interval=5)))
+    parsed = parse_rl_config(OmegaConf.load(_skipped_grading_config(tmp_path, eval_interval=5)))
 
     with pytest.raises(ValueError, match="eval_interval<=0"):
         compose_skyrl_config(parsed, {"job_name": "grading-test", "num_nodes": 1}, _HPCStub())

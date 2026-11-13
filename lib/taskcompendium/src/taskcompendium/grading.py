@@ -12,17 +12,20 @@ import json
 import math
 
 from openai import APIError
-from verifyit.candidate import Candidate, grade_candidate
+from verifyit.candidate import Candidate, grade_candidate, grade_ejection_candidate
 from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
+from verifyit.reasoning_markup import COMPLETED_STOP_REASON, ReasoningReply
 from verifyit.spec import (
     EmptyOutputPolicy,
     ExactSpec,
     JudgeSpec,
     NumericSpec,
     PredictedActionSpec,
+    ReasoningMarkupSpec,
     Spec,
     StructuredExactSpec,
+    UnsolvableSpec,
 )
 from verifyit.spec import FunctionCall as CandidateCall
 
@@ -35,6 +38,7 @@ from taskcompendium.models import (
     GradingAttempt,
     JsonSubmission,
     PlainText,
+    ScriptGrader,
     StateSubmission,
     Submission,
     SubmissionFailure,
@@ -45,10 +49,17 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.runtime.resources import resource_bytes
-from taskcompendium.submission import native_action_text, require_submission_compatibility
+from taskcompendium.submission import (
+    EJECT_CALL_NAME,
+    extract_submission,
+    has_ejection,
+    is_ejection,
+    native_action_text,
+    require_submission_compatibility,
+)
 
 
-def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
+def grade_result(verifier: Spec | None, verdict: Reward) -> GradeResult:
     """Normalize verifyit outcomes independently of where the verifier ran."""
     if (
         not isinstance(verdict.status, Status)
@@ -70,8 +81,8 @@ def grade_result(verifier: Spec, verdict: Reward) -> GradeResult:
     return GradeResult(status, None, verdict.detail.get("error"), verdict.detail)
 
 
-def parse_grade_result(verifier: Spec, data: bytes) -> GradeResult:
-    """Decode a verdict file written by the verifyit command."""
+def parse_grade_result(verifier: Spec | None, data: bytes) -> GradeResult:
+    """Decode a Verifyit verdict from a mode or a task-owned script."""
     try:
         verdict = json.loads(data)
         if not isinstance(verdict, dict):
@@ -87,12 +98,24 @@ def answer_submission(task: TaskSpec, attempt: GradingAttempt) -> Submission:
     Raises ``SubmissionFailure`` when the attempt carries no valid submission.
     """
     if task.answer_type in CONVERSATION_ANSWERS:
-        return task.answer_format.extract(attempt)
+        submission = extract_submission(task.answer_format, attempt, context_length=len(task.context.events))
+        if is_ejection(submission) and not any(tool.name == EJECT_CALL_NAME for tool in task.final_tools):
+            raise SubmissionFailure("Ejection was not advertised for this task")
+        return submission
     if task.answer_type == AnswerType.STATE:
         if attempt.state is None:
             raise SubmissionFailure("State submission requires captured state")
         return attempt.state
     raise TypeError(f"A {task.answer_type} answer is not extracted from the attempt")
+
+
+def terminal_grade(verifier: Spec, submission: Submission) -> GradeResult | None:
+    """Score ejection or a normal answer to a privately unsolvable task."""
+    if is_ejection(submission):
+        return grade_result(verifier, grade_ejection_candidate(verifier))
+    if isinstance(verifier, UnsolvableSpec):
+        return GradeResult(Outcome.GRADED, 0.0)
+    return None
 
 
 def _candidate(verifier: Spec, submission: Submission) -> Candidate:
@@ -103,6 +126,8 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
             if not isinstance(final, AssistantToolCalls):
                 return ()
             return tuple(CandidateCall(call.name, call.object_arguments()) for call in final.calls)
+        case ReasoningMarkupSpec(), ActionSubmission(message=final):
+            return final.content if isinstance(final, TextMessage) else final.content or ""
         case ExactSpec(), JsonSubmission(value=value) | StateSubmission(value=value):
             if not isinstance(value, str):
                 raise SubmissionFailure("Text verifier requires a string JSON value")
@@ -114,11 +139,17 @@ def _candidate(verifier: Spec, submission: Submission) -> Candidate:
     raise TypeError(f"{type(verifier).__name__} cannot grade a {type(submission).__name__}")
 
 
-def _gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec) -> bool:
+def gradeable_empty_text(task: TaskSpec, attempt: GradingAttempt, verifier: Spec | None) -> bool:
     """Whether a blank final text is a candidate under the verifier's explicit policy."""
     if not isinstance(task.answer_format, PlainText):
         return False
-    policy = empty_output_policy(verifier)
+    if any(has_ejection(event) for event in attempt.conversation.events[len(task.context.events) :]):
+        return False
+    if isinstance(task.grader, ScriptGrader):
+        policy = task.grader.empty_output
+    else:
+        assert verifier is not None
+        policy = empty_output_policy(verifier)
     if policy is not EmptyOutputPolicy.GRADE:
         return False
     final = attempt.conversation.events[-1]
@@ -134,11 +165,19 @@ def grade_answer(task: TaskSpec, attempt: GradingAttempt) -> GradeResult:
     if task.answer_type in CONVERSATION_ANSWERS:
         require_submission_compatibility(task)
     try:
-        candidate = _candidate(verifier, answer_submission(task, attempt))
+        submission = answer_submission(task, attempt)
+        terminal = terminal_grade(verifier, submission)
+        if terminal is not None:
+            return terminal
+        candidate = _candidate(verifier, submission)
     except SubmissionFailure as error:
-        if not _gradeable_empty_text(task, attempt, verifier):
+        if not gradeable_empty_text(task, attempt, verifier):
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         candidate = ""
+    if isinstance(verifier, ReasoningMarkupSpec):
+        assert isinstance(candidate, str)
+        # An attempt without a stop reason is a complete reply, such as a golden or control reply.
+        candidate = ReasoningReply(candidate, attempt.stop_reason or COMPLETED_STOP_REASON)
     resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     return grade_result(verifier, grade_candidate(verifier, candidate, resources))
 
@@ -157,10 +196,13 @@ def grade_remote_judge_answer(
     try:
         submission = answer_submission(task, attempt)
     except SubmissionFailure as error:
-        if not _gradeable_empty_text(task, attempt, verifier):
+        if not gradeable_empty_text(task, attempt, verifier):
             return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
         candidate = ""
     else:
+        terminal = terminal_grade(verifier, submission)
+        if terminal is not None:
+            return terminal
         if isinstance(submission, TextSubmission):
             candidate = submission.value
         elif isinstance(submission, ActionSubmission):
@@ -172,13 +214,18 @@ def grade_remote_judge_answer(
     if not candidate.strip() and verifier.empty_output is EmptyOutputPolicy.ZERO:
         return GradeResult(Outcome.GRADED, 0.0, detail={"reason": "empty_candidate"})
     resources = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
-    if verifier.context and verifier.context not in resources:
-        return GradeResult(Outcome.INVALID_TASK, None, f"judge context {verifier.context!r} is not in task resources")
-    context = resources.get(verifier.context, b"").decode(errors="replace")
+    judge = verifier
+    if judge.context and judge.context not in resources:
+        return GradeResult(Outcome.INVALID_TASK, None, f"judge context {judge.context!r} is not in task resources")
+    context = resources.get(judge.context, b"").decode(errors="replace")
     try:
         verdict = grade_judge_candidate(verifier, candidate, connection=connection, runtime=None, context=context)
     except InvalidTask as error:
         return GradeResult(Outcome.INVALID_TASK, None, str(error))
-    except (APIError, GradingInfraError, RuntimeError, OSError) as error:
+    except GradingInfraError as error:
+        return GradeResult(Outcome.INFRA_ERROR, None, str(error), detail=error.detail)
+    except APIError as error:
+        return GradeResult(Outcome.INFRA_ERROR, None, str(error), detail={"provider_error": error.body})
+    except (RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))
     return grade_result(verifier, verdict)

@@ -14,7 +14,7 @@ from experiments.post_training.task_curation.datasets.skill2env.conversion impor
     read_task,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HarborHubSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 RUBRIC = """
 Compare the original task instructions with the unchanged programmatic verifier and private reference solution.
@@ -40,16 +40,19 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 family="terminal-agent",
                 tags=("agentic", "multi-turn"),
                 count=7496,
+                task_format=TaskFormat.HARBOR,
                 notes=(
                     "Native Harbor training tasks with reference solutions and programmatic component-reward verifiers. "
                     "The paper's private S2EBench is a separate evaluation set. "
-                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms."
+                    "Project-owned source is Apache-2.0; third-party skills and assets retain their own terms. "
+                    "Snapshot requirement is unassessed: a registry sample found a distinct environment for "
+                    "every sampled task; a full actor and grader count is pending."
                 ),
             ),
             config=CurationRecipe(
                 name="skill2env",
                 source=HarborHubSource(name, revision, read=read_task),
-                version="10",
+                version="11",
                 convert=convert_task,
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
