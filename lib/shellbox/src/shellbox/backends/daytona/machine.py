@@ -120,12 +120,7 @@ async def _delete_named_sandbox(
         await client.delete(sandbox)
 
     async with wait_policy.timeout(INTERRUPT_TIMEOUT):
-        if wait_policy is ProviderWaitPolicy.JOB:
-            await retry_provider_call(
-                "sandbox.delete", delete, wait_policy=wait_policy, request_timeout=PROVIDER_REQUEST_TIMEOUT
-            )
-        else:
-            await delete()
+        await wait_policy.request("sandbox.delete", delete, request_timeout=PROVIDER_REQUEST_TIMEOUT)
 
 
 class DaytonaNetworkMode(StrEnum):
@@ -185,14 +180,12 @@ class DaytonaMachine:
         self._closing: _Closing | None = None
 
     async def _provider_request[T](self, operation: str, request: Callable[[], Awaitable[T]]) -> T:
-        if self.provider_wait_policy is ProviderWaitPolicy.PHASE:
-            return await request()
-        return await retry_provider_call(
-            operation, request, wait_policy=self.provider_wait_policy, request_timeout=PROVIDER_REQUEST_TIMEOUT
-        )
+        # Transfers use the SDK's size-appropriate timeout, including healthy large artifacts.
+        timeout = None if operation.startswith("artifact.") else PROVIDER_REQUEST_TIMEOUT
+        return await self.provider_wait_policy.request(operation, request, request_timeout=timeout)
 
     async def _control_exec(self, command: str, *, cwd: str = CONTROL_CWD, timeout: float | None = None):
-        timeout = PROVIDER_REQUEST_TIMEOUT if self.provider_wait_policy is ProviderWaitPolicy.JOB else timeout
+        timeout = self.provider_wait_policy.control_timeout(timeout)
         return await self._provider_request(
             "sandbox.control", partial(self.sandbox.process.exec, command, cwd=cwd, timeout=timeout)
         )
@@ -644,9 +637,7 @@ class DaytonaMachineFactory:
         client_factory = self._clients()
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
         async with client_factory() as client, self.provider_wait_policy.timeout(timeout) as deadline:
-            return await self._prepare(
-                client, spec, deadline.when() if self.provider_wait_policy is ProviderWaitPolicy.PHASE else None
-            )
+            return await self._prepare(client, spec, self.provider_wait_policy.startup_deadline(deadline))
 
     @provider_wait_scope()
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
@@ -659,9 +650,7 @@ class DaytonaMachineFactory:
             client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
             async with self.provider_wait_policy.timeout(timeout) as deadline:
-                snapshot = await self._prepare(
-                    client, spec, deadline.when() if self.provider_wait_policy is ProviderWaitPolicy.PHASE else None
-                )
+                snapshot = await self._prepare(client, spec, self.provider_wait_policy.startup_deadline(deadline))
                 name = f"shellbox-{uuid.uuid4().hex}"
 
                 async def delete_sandbox(_error_type, error, _traceback):
@@ -684,7 +673,7 @@ class DaytonaMachineFactory:
                         ttl_minutes=self.ttl_minutes,
                     ),
                     timeout=timeout,
-                    deadline=deadline.when() if self.provider_wait_policy is ProviderWaitPolicy.PHASE else None,
+                    deadline=self.provider_wait_policy.startup_deadline(deadline),
                     wait_policy=self.provider_wait_policy,
                 )
             machine = DaytonaMachine(sandbox, spec, lifetime, self.provider_wait_policy)

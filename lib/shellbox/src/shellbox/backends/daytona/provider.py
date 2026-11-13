@@ -62,6 +62,19 @@ class ProviderWaitPolicy(StrEnum):
     def timeout(self, seconds: float | None) -> AbstractAsyncContextManager[asyncio.Timeout]:
         return active_timeout(seconds) if self is ProviderWaitPolicy.JOB else asyncio.timeout(seconds)
 
+    def startup_deadline(self, timer: asyncio.Timeout) -> float | None:
+        return timer.when() if self is ProviderWaitPolicy.PHASE else None
+
+    def control_timeout(self, seconds: float | None) -> float | None:
+        return PROVIDER_REQUEST_TIMEOUT if self is ProviderWaitPolicy.JOB else seconds
+
+    async def request[T](
+        self, operation: str, request: Callable[[], Awaitable[T]], *, request_timeout: float | None
+    ) -> T:
+        if self is ProviderWaitPolicy.PHASE:
+            return await request()
+        return await retry_provider_call(operation, request, wait_policy=self, request_timeout=request_timeout)
+
     def wait(self) -> AbstractContextManager[None]:
         return suspend_active_time() if self is ProviderWaitPolicy.JOB else nullcontext()
 

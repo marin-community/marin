@@ -1628,6 +1628,7 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
         "command_cleanup",
         "sandbox_cleanup",
         "slow_read",
+        "slow_write",
         "source_ambiguous",
     ],
 )
@@ -1666,6 +1667,11 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
         class Files(LocalFiles):
             async def upload_file_stream(self, data, target):
                 staged.add(Path(target).parent)
+                if failure == "slow_write":
+                    failed.add(failure)
+                    offset[0] += 90
+                    for _ in range(3):
+                        await asyncio.sleep(0)
                 if failure == "upload_pending_ip" and failure not in failed:
                     failed.add(failure)
                     # SDK multipart uploads expose this response as the base exception class.
@@ -1676,12 +1682,14 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
                 await super().upload_file_stream(data, target)
 
             async def download_file(self, source):
-                if failure in {"output_read", "slow_read"} and failure not in failed:
+                if failure == "output_read" and failure not in failed:
                     failed.add(failure)
-                    if failure == "output_read":
-                        raise DaytonaError("Transient read failure", status_code=502)
-                    offset[0] += 10
-                    await asyncio.sleep(0)
+                    raise DaytonaError("Transient read failure", status_code=502)
+                if failure == "slow_read":
+                    failed.add(failure)
+                    offset[0] += 90
+                    for _ in range(3):
+                        await asyncio.sleep(0)
                 return await super().download_file(source)
 
         class Client(LocalDaytona):

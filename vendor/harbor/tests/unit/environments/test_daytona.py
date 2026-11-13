@@ -32,6 +32,7 @@ from daytona import (
 )
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
+from shellbox.backends.daytona.provider import ProviderWaitPolicy, retry_provider_call
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
@@ -51,6 +52,7 @@ from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.config import EnvironmentConfig as TrialEnvironmentConfig
 from harbor.models.environment_type import EnvironmentType
 from harbor.trial.trial import Trial
+from harbor.trial.queue import TrialQueue
 import harbor.environments.factory as environment_factory
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
@@ -795,7 +797,8 @@ def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_daytona_trial_resource_probe_wait_preserves_source_budget_and_verdict(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("attempt_timeout", "cleanup_recovery"), [(None, False), (60.0, False), (5.0, False), (600.0, True)])
+async def test_daytona_trial_resource_probe_wait_preserves_source_budget_and_verdict(tmp_path, monkeypatch, attempt_timeout, cleanup_recovery):
     loop = asyncio.get_running_loop()
     now = loop.time
     offset = [0.0]
@@ -823,6 +826,18 @@ async def test_daytona_trial_resource_probe_wait_preserves_source_budget_and_ver
                 raise DaytonaTimeoutError("Provider resource probe timed out", headers={"Retry-After": "17"})
             return await super().run(command)
 
+        async def close(self):
+            failures = 0
+
+            async def delete():
+                nonlocal failures
+                if cleanup_recovery and failures < 3:
+                    failures += 1
+                    raise DaytonaTimeoutError("Provider deletion timed out", headers={"Retry-After": "120"})
+                await super(ProbeTransport, self).close()
+
+            await retry_provider_call("sandbox.delete", delete, wait_policy=ProviderWaitPolicy.JOB)
+
     class ProbeFactory:
         async def create(self, spec):
             return ProbeTransport(tmp_path / "guest", spec)
@@ -845,14 +860,26 @@ async def test_daytona_trial_resource_probe_wait_preserves_source_budget_and_ver
     (task / "tests/test.sh").write_text(
         f'test "$(cat answer.txt)" = done && printf 1 > {tmp_path / "guest/logs/verifier/reward.txt"}\n'
     )
-    trial = await Trial.create(TrialConfig(
+    config = TrialConfig(
         task=TaskConfig(path=task), trials_dir=tmp_path / "trials",
+        trial_attempt_timeout_sec=attempt_timeout,
         environment=TrialEnvironmentConfig(type=EnvironmentType.DAYTONA),
         agent=AgentConfig(name="oracle", kwargs={"resource_usage_filename": "resource-usage.json"}),
-    ))
-    result = await trial.run()
+    )
+    # Queue supervision is the real, non-pausable overall attempt boundary.
+    queue = TrialQueue(n_concurrent=1)
+    result = await queue.submit(config)
+    if attempt_timeout == 5.0:
+        assert result.exception_info.exception_type == "TrialTimeoutError"
+        assert result.verifier_result is None
+        return
+    if attempt_timeout is None:
+        assert result.exception_info is not None
+        assert result.verifier_result is None
+        return
     assert result.exception_info is None
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert (tmp_path / "guest/workspace/runs").read_text().splitlines() == ["once"]
-    assert (trial.paths.agent_dir / "exit-code.txt").read_text() == "0"
-    assert json.loads((trial.paths.agent_dir / "resource-usage.json").read_text())["oom_kills"] == 0
+    exit_code, = (tmp_path / "trials").rglob("agent/exit-code.txt")
+    assert exit_code.read_text() == "0"
+    assert json.loads((exit_code.parent / "resource-usage.json").read_text())["oom_kills"] == 0

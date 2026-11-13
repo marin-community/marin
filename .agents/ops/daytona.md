@@ -306,17 +306,20 @@ delay fields. Count these events separately from task outcomes. Provider errors
 remain infrastructure evidence and receive no oracle score. Command
 execution is not replayed after an ambiguous response.
 
-Harbor's Daytona adapter selects `ProviderWaitPolicy.JOB`: safe harness controls,
-artifact reads/writes and resource probes retry within the enclosing job's
-overall timeout. Safe in-sandbox controls, artifact calls and named sandbox deletion
-have a 60-second per-call timeout. Snapshot operations and sandbox acquisition
-retain their SDK operation settings within the enclosing job bound. Request duration
-and retry backoff pause Harbor phase clocks and Shellbox command clocks; the declared
-source-command limits remain active during source execution. Run qualification
-under a bounded job whose overall clock continues advancing during provider
-waits, and retain retry events separately from task verdicts.
-Direct Shellbox callers retain phase-bound behavior unless they explicitly select
-the job policy.
+Harbor selects `ProviderWaitPolicy.JOB` only when the trial has an explicit
+`trial_attempt_timeout_sec`. Queue supervision enforces that overall bound on
+wall-clock time; standalone trials without it retain phase-bound behavior.
+Task-curation calibration and approved retries set a 72-hour overall attempt
+bound without changing the native task or environment kwargs.
+
+Under JOB, safe harness controls, artifact reads/writes and resource probes retry
+within the overall bound. Controls and named sandbox deletion use a 60-second
+per-call timeout; artifact transfers, snapshot operations and sandbox acquisition
+retain SDK operation settings, allowing healthy large transfers to complete.
+Request duration and retry backoff pause phase and command clocks; source-command
+limits remain active during source execution. Normal cleanup also permits these
+provider waits. Cancellation cleanup and grace use wall-clock bounds and disable
+recovery retries. Retain retry events separately from task verdicts.
 
 Retryable controls include read-only metadata/resource probes, private staging-file
 operations, fixed-content artifact transfers and named sandbox deletion.
