@@ -31,7 +31,7 @@ _RETRY_SCOPE: ContextVar[_RetryScope | None] = ContextVar("provider_retry_scope"
 
 
 def cancel_provider_waits() -> None:
-    """Keep cancellation cleanup bounded by its existing deadline."""
+    """Disable retries in the current provider wait scope."""
     scope = _RETRY_SCOPE.get()
     if scope is not None:
         scope.cancelled = True
@@ -39,7 +39,7 @@ def cancel_provider_waits() -> None:
 
 @asynccontextmanager
 async def provider_wait_scope() -> AsyncIterator[None]:
-    """Bound cancellation cleanup without retrying after its caller has stopped."""
+    """Share cancellation state across an operation's provider calls."""
     if _RETRY_SCOPE.get() is not None:
         yield
         return
@@ -71,10 +71,9 @@ async def retry_provider_call[T](
 ) -> T:
     """Retry transient failures until success or the caller cancels the operation.
 
-    Use only for reads or creates whose stable provider name prevents duplicates.
-    Command execution must not be replayed after an ambiguous response. An
-    absolute loop-time deadline preserves the last SDK error when another
-    retry would exceed the startup budget.
+    Use only for idempotent provider operations. Source command execution must
+    not be replayed after an ambiguous response. An absolute loop-time deadline
+    preserves the last SDK error when another retry would exceed the budget.
     """
     scope = _RETRY_SCOPE.get()
     if scope is not None and scope.cancelled:

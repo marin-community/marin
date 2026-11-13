@@ -286,7 +286,7 @@ class DaytonaMachine:
             await self._stop_command_once(pidfile, completed_path)
 
     async def _stop_command_once(self, pidfile: str, completed_path: str) -> None:
-        # An ambiguous kill response must fall back to sandbox teardown, not a replay against a reused PID.
+        # An ambiguous kill response requires sandbox teardown because the PID may be reused.
         async with asyncio.timeout(INTERRUPT_TIMEOUT):
             stopped = await self.sandbox.process.exec(
                 _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path))),
