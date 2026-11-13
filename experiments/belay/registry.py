@@ -154,6 +154,10 @@ class Experiment:
     code_commits: tuple[str, ...] = ()
     """The idea's code-change commits (``X####: <flag> (default off)``), so a weekly rollover or a retest can
     cherry-pick them onto a new base. Empty for a settings-only idea."""
+    projection: dict[str, object] | None = None
+    """A complete ladder carried to hero compute (``delta``, ``multiplier``, ``alpha``, ``recipe_alpha``,
+    ``hero_flops``, ``extrapolation``, ``protocol``, ``trials``, ``basis``), written only by
+    ``python -m experiments.belay`` when the ladder's last rung is recorded."""
     """A session's 0-10 estimate of how promising the idea is (``score``, ``rationale``, ``model``, ``date``,
     ``inputs_digest``), written only by ``python -m experiments.belay score``."""
 
