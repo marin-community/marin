@@ -10,11 +10,14 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from omegaconf import OmegaConf
 
-from cloud.iris.iris_backend import BundledLaunchConfig, RLStoragePaths, launch
+from cloud.iris.iris_backend import BundledLaunchConfig, RLStoragePaths, _iris_submission_state, launch
+from cloud.iris.launch_config import load_launch_config
 from cloud.iris.ray_storage import RaySpillBackend
 from cloud.iris.runtime_environment import RuntimeProfile
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 
 
+@pytest.mark.parametrize("preemption_retries", [0, 2])
 @pytest.mark.parametrize(
     "target_cluster,parent_cluster_config,interface",
     [
@@ -25,7 +28,7 @@ from cloud.iris.runtime_environment import RuntimeProfile
     ],
 )
 def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
-    tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface
+    tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface, preemption_retries
 ):
     requests = []
 
@@ -82,6 +85,12 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         max_retries=0,
         timeout=600,
     )
+    raw = raw_launch_config()
+    raw["iris"]["max_retries_preemption"] = preemption_retries
+    config_path = tmp_path / "launch.yaml"
+    OmegaConf.save(OmegaConf.create(raw), config_path)
+    compiled = load_launch_config(config_path)
+    args.max_retries_preemption = _iris_submission_state(config_path, compiled).max_retries_preemption
     previous = get_job_info()
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/coordinator/0")))
     try:
@@ -92,6 +101,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert result.job_id == "/alice/coordinator/train"
     [(address, request)] = requests
     assert address == "http://parent-controller:8080"
+    assert request.max_retries_preemption == preemption_retries
     assert request.name == result.job_id
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)
     assert request.environment.env_vars["NCCL_SOCKET_IFNAME"] == (

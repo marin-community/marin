@@ -447,6 +447,7 @@ class IrisSkyRLExecution:
     target_cluster: str | None
     parent_cluster_config: str | None
     coordinator_timeout_hours: int
+    max_retries_preemption: int = 0
     coordinator_name: str | None = None
     coordinator_gpu: GpuConfig | None = None
     wandb_entity: str | None = None
@@ -896,6 +897,7 @@ def _launch_config_yaml(
             },
             "priority": execution.priority,
             "max_retries": execution.max_retries,
+            "max_retries_preemption": execution.max_retries_preemption,
             "timeout": execution.job_timeout_seconds,
             "target_cluster": execution.target_cluster,
             "parent_cluster_config": execution.parent_cluster_config,
