@@ -170,7 +170,7 @@ from omegaconf import OmegaConf
 from skyrl_train.inference_engines.utils import get_vllm_sampling_params
 from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
-from skyrl_train.evaluation_profiles import evaluation_profile_config, evaluation_profiles
+from skyrl_train.evaluation_profiles import evaluation_profile_config, resolve_evaluation_profiles
 
 class InferenceService:
     model_name = "fixture"
@@ -213,7 +213,7 @@ configs = [load_launch_config(path) for path in sys.argv[1:]]
 def quality_request(config):
     if not config.inputs.get("evaluation_data"):
         return None
-    profile = evaluation_profiles(config.skyrl)["eval_lite"]
+    profile = resolve_evaluation_profiles(config.skyrl)["eval_lite"]
     merged = evaluation_profile_config(config.skyrl, profile, "eval_lite")
     return asyncio.run(native_request(
         get_vllm_sampling_params(merged.generator.eval_sampling_params),

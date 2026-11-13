@@ -58,14 +58,14 @@ from marin.rl.skyrl import (
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLRunConfig,
-    read_skyrl_launch_receipt,
+    read_skyrl_attempt,
     run_skyrl,
 )
 from marin.rl.skyrl_records import (
     RecordedLaunch,
     attempt_tracking,
     read_skyrl_metrics,
-    read_stored_skyrl_receipt,
+    read_stored_skyrl_attempt,
     recorded_launch,
 )
 from rigging.filesystem.storage_path import StoragePath
@@ -259,7 +259,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
         config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
         planned.append(yaml.safe_load(config.launch_config_yaml))
         try:
-            receipt = read_stored_skyrl_receipt(path) if stored_only else read_skyrl_launch_receipt(path)
+            receipt = read_stored_skyrl_attempt(path) if stored_only else read_skyrl_attempt(path)
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.native.result if receipt is not None else None
@@ -306,14 +306,11 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
     verdict = {}
     report = None
     if run.gate is not None:
-        path = (
-            StoragePath(run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster)))
-            / snowball_rl_gate.GATE_REPORT_FILENAME
-        )
-        if path.exists():
-            report = snowball_rl_gate.GateReport.model_validate_json(path.read_text())
+        path = run.gate.path(prefix=presets.artifact_prefix(preset.recipe.layout.cluster))
+        report = snowball_rl_gate.read_gate_report(path)
+        if report is not None:
             verdict = {
-                "report": str(path),
+                "report": str(StoragePath(path) / snowball_rl_gate.GATE_REPORT_FILENAME),
                 **report.model_dump(mode="json", include={"verdict", "label", "reason"}),
             }
             changes, reason = _changed_paths(

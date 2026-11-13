@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import click
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.experiment.namespacing import user_owned_name
@@ -37,10 +37,10 @@ from marin.rl.rl_progress import Change, Comparison, ComparisonRole, Invariant, 
 from marin.rl.skyrl import (
     SkyRLReceiptLookupError,
     SkyRLRun,
-    read_skyrl_launch_receipt,
+    read_skyrl_attempt,
     skyrl_cpu_command,
 )
-from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_receipt, recorded_launch
+from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt, recorded_launch
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
@@ -119,7 +119,7 @@ def validate_candidate(preset: presets.Preset, inputs: GateInputs, *, control: b
     for pin in pins:
         for index in range(pin.runs):
             path = control_path(preset, pin, index)
-            receipt = read_stored_skyrl_receipt(path)
+            receipt = read_stored_skyrl_attempt(path)
             if receipt is None:
                 raise InvalidComparison(f"control receipt is unavailable: {path}")
             try:
@@ -179,6 +179,16 @@ class GateReport(Artifact):
 
     def rows(self, *roles: ComparisonRole) -> tuple[Comparison, ...]:
         return tuple(row for row in self.comparisons if row.role in roles)
+
+
+def read_gate_report(path: str | None) -> GateReport | None:
+    """Read a completed gate report, or None while its artifact is unavailable."""
+    if path is None:
+        return None
+    try:
+        return read_artifact(path, GateReport)
+    except FileNotFoundError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -769,7 +779,7 @@ def _gate_with_evidence(step: ArtifactStep[GateReport]) -> ArtifactStep[GateRepo
     attempts = []
     for identity, path in zip(candidates, run_paths, strict=True):
         try:
-            receipt = read_skyrl_launch_receipt(path)
+            receipt = read_skyrl_attempt(path)
         except (FileNotFoundError, SkyRLReceiptLookupError):
             state, attempt = "unresolved", None
         else:

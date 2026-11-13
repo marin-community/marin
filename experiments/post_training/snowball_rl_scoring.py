@@ -22,7 +22,7 @@ import pyarrow.parquet as pq
 from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep
 from marin.rl.rl_progress import Invariant
-from marin.rl.skyrl import read_skyrl_launch_receipt
+from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
     RecordedSource,
@@ -488,7 +488,7 @@ def load_run(
     inputs: GateInputs | None = None,
 ) -> RunData:
     inputs = inputs or GateInputs(preset_name=preset.name)
-    terminal = read_skyrl_launch_receipt(path)
+    terminal = read_skyrl_attempt(path)
     if terminal is None:
         raise FileNotFoundError(f"no launch receipt at {path}")
     if terminal.native.result.state != "succeeded":
