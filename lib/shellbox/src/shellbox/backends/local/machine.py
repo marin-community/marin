@@ -43,7 +43,6 @@ from shellbox.machine import (
     Backend,
     Command,
     CommandSemantics,
-    DiskLimitExceeded,
     ExecutionRequirements,
     ExitReason,
     HostImage,
@@ -664,15 +663,13 @@ class LocalMachine:
         try:
             return await self._execute_command(command, environment)
         except OSError as error:
-            if self._disk is not None and error.errno == errno.ENOSPC:
+            if self._disk is not None and error.errno in (errno.ENOSPC, errno.EDQUOT):
                 # Configuration files live on the host, outside the sandbox's
                 # quota. A host ENOSPC alone must not become a task disk failure.
                 if error.filename is None or not Path(error.filename).is_relative_to(self._disk.data):
                     self._disk.check_limit()
                     raise
-                raise DiskLimitExceeded(
-                    "RESOURCE_LIMIT_DISK: LOCAL command spool exhausted its filesystem (ENOSPC)"
-                ) from error
+                self._disk.check_limit(allocation_errno=error.errno)
             raise
 
     async def open_process(self, command: Command) -> SubprocessSession:
@@ -861,8 +858,13 @@ class LocalMachine:
             # Reports are written before the launcher exits. A nonblocking read
             # cannot be held open by a process that inherited another pipe end.
             os.set_blocking(status_read, False)
-            stdin_file.write(command.stdin)
-            stdin_file.seek(0)
+            try:
+                stdin_file.write(command.stdin)
+                stdin_file.seek(0)
+            except OSError as error:
+                if self._disk is not None:
+                    self._disk.check_limit(allocation_errno=error.errno)
+                raise
             assert self._root_fd is not None
             group = self._new_command_cgroup()
             config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")

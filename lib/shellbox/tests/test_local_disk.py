@@ -99,6 +99,48 @@ async def test_local_disk_run_overflow_raises_disk_limit_and_preserves_image(tmp
     assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
 
 
+async def test_local_disk_final_inode_succeeds_until_an_allocation_fails(tmp_path, executable_oci_image):
+    pool = LocalDiskPool(tmp_path / "disks")
+    factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
+    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+    fill_inodes = (
+        "free=$(/bin/busybox stat -f -c %d /app); i=0; "
+        'while [ "$i" -lt "$free" ]; do : > "/app/inode$i" || exit; i=$((i+1)); done; '
+        'test "$(/bin/busybox stat -f -c %d /app)" = 0 || exit 99; '
+        "printf full-success"
+    )
+    try:
+        session = await machine.open_process(Command(("/bin/sh", "-c", fill_inodes)))
+        try:
+            assert await session.read() == b"full-success"
+            assert await session.wait() == 0
+        finally:
+            await session.close()
+        # A command using pipes needs no new inode on the task disk. Fullness
+        # must not terminate it or retroactively fail the successful allocation.
+        reader = await machine.open_process(Command(("/bin/busybox", "stat", "-f", "-c", "%d", "/app")))
+        try:
+            assert await reader.read() == b"0\n"
+            assert await reader.wait() == 0
+        finally:
+            await reader.close()
+        overflow = await machine.open_process(Command(("/bin/busybox", "touch", "/app/overflow")))
+        try:
+            await overflow.drain_output()
+            assert b"No space left on device" in overflow.stderr
+            with pytest.raises(DiskLimitExceeded) as failure:
+                await overflow.wait()
+            assert failure.value.resource is ResourceLimit.DISK
+        finally:
+            await overflow.close()
+        with pytest.raises(DiskLimitExceeded):
+            await machine.run(Command(("/bin/sh", "-c", "true")))
+        print(json.dumps({"final_inode": "success", "subsequent_allocation": "typed_disk_failure"}), flush=True)
+    finally:
+        await machine.close()
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
 async def test_local_disk_startup_reclaims_crashed_guardian_and_keeps_live_neighbor(tmp_path):
     pool = LocalDiskPool(tmp_path / "disks")
     crashed = pool.create(64)

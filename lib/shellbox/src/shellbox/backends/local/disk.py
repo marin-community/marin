@@ -56,20 +56,19 @@ class LocalDisk:
         )
         return root
 
-    def check_limit(self, stderr: bytes = b"") -> None:
-        stats = os.statvfs(self.data)
-        # Include inode exhaustion and an explicit ENOSPC returned by the guest.
-        # The latter covers an allocation that failed before consuming the final
-        # blocks, or a command which removed its partial file before exiting.
+    def check_limit(self, stderr: bytes = b"", *, allocation_errno: int | None = None) -> None:
+        """Raise a sticky disk limit after an observed failed allocation."""
+        # Consuming the final block or inode is within the budget. Latch only a
+        # failed allocation, including guest diagnostics after partial cleanup.
         self._exhausted = self._exhausted or (
-            stats.f_bavail == 0
-            or stats.f_favail == 0
-            or any(marker in stderr.lower() for marker in (b"no space left on device", b"enospc"))
+            allocation_errno in (errno.ENOSPC, errno.EDQUOT)
+            or any(
+                marker in stderr.lower()
+                for marker in (b"no space left on device", b"enospc", b"disk quota exceeded", b"edquot")
+            )
         )
         if self._exhausted:
-            raise DiskLimitExceeded(
-                "RESOURCE_LIMIT_DISK: LOCAL sandbox exhausted its fixed-size ext4 filesystem (ENOSPC)"
-            )
+            raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: LOCAL sandbox filesystem allocation failed (ENOSPC/EDQUOT)")
 
     def close(self) -> None:
         """Release the filesystem and surface any guardian cleanup failure."""

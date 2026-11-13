@@ -1448,12 +1448,14 @@ This accounting differs by backend: Daytona requests whole GiB rounded up throug
 its service API, whose image/filesystem accounting is provider-controlled. Docker
 passes `--storage-opt size` to a supporting storage driver for the writable layer;
 its separate tmpfs and bind/volume mounts are outside that layer. LOCAL's ext4
-filesystem includes its scratch and shared-memory directories. ENOSPC or exhausted
-blocks/inodes produces Shellbox `DiskLimitExceeded` with `ResourceLimit.DISK`,
+filesystem includes its scratch and shared-memory directories. A failed allocation
+with ENOSPC or EDQUOT produces Shellbox `DiskLimitExceeded` with `ResourceLimit.DISK`,
 translated by Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during
 the agent phase). Calibration classifies the explicit disk signal before
 infrastructure verdicts and doubles only missing disk limits. A declared fixed
 disk limit remains fixed and records a resource exclusion when exceeded.
+Successfully using the final block or inode remains within the declared quota;
+fullness alone does not mark a sandbox terminal.
 
 A guardian owns each filesystem until task teardown unmounts OverlayFS and ext4
 and releases the autoclear loop device. Closing the owner pipe on driver death
