@@ -50,7 +50,7 @@ def _probe_step(artifact_root: Path, **settings: Any) -> ArtifactStep[SkyRLRun]:
 
 def _inventory_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
     selection = ArtifactStep.adopt("rl-data/task-selection/census", VERSION, str(artifact_root / "selection"))
-    return inventory.build_run(VERSION, selection=selection).rl
+    return inventory.build_run(VERSION, selection=selection)
 
 
 def _port_smoke_step(stage: str) -> ArtifactStep[SkyRLRun]:

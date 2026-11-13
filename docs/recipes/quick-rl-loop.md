@@ -1,7 +1,7 @@
 # Quick RL loop
 
 Use this loop to improve task selection and the RL recipe: curate tasks, publish
-a fixed selection, continue the pinned SFT model for a few updates, train RL from
+a fixed selection, run a short SFT from the pre-trained base model, train RL from
 that export, and compare evaluation before and after training.
 
 The current entry points are the
@@ -9,11 +9,12 @@ The current entry points are the
 and
 [`train_quick_loop.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/inventory/train_quick_loop.py).
 The selection defines the 100k training allocation. The launcher defaults to
-10 SFT updates on 32 H100s (four nodes), initialized from Datakit SFT revision
-`fe666478454e79fe6027a0bab0388d9abd68f51a`, followed by 25 synchronous RLOO-N
-updates on 40 H100s from the resulting export with the matching tokenizer. SFT
-uses the [Snowball H100 recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py);
-set its length with `--sft-steps`. RL uses
+10 SFT updates on 32 H100s (four nodes), initialized from the pre-trained
+Snowball base model, followed by 25 synchronous RLOO-N updates on 40 H100s from
+the resulting export. SFT uses the
+[Snowball H100 recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py).
+RL uses the tokenizer of Datakit SFT revision
+`fe666478454e79fe6027a0bab0388d9abd68f51a`,
 128 prompt groups per update, four samples per group, a 24,576-token context
 and an 8,192-token response limit.
 
@@ -105,17 +106,25 @@ to print a three-update plan:
 
 ```bash
 uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version "$RUN_VERSION" --steps 3
+  --selection-uri "$SELECTION_URI" --version "$RUN_VERSION" --sft-steps 3 --rl-steps 3
 ```
 
 Set `SELECTION_URI` to the printed artifact root, including its selection name
 and version. Add `--run` to submit the graph through the maintained artifact
 entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
-`--steps 25` for the normal iteration. Each run version trains its own SFT
-continuation from the pinned SFT model before RL starts. Add `--stage sft` to
-plan or run only the SFT continuation; a later `--stage rl` run with the same
-version reuses it. Use `--sft-steps 0` to skip SFT and start RL directly from
-the pinned SFT model.
+`--rl-steps 25` for the normal iteration.
+
+`--stage` selects what runs:
+
+| Stage | Runs | RL starts from |
+| --- | --- | --- |
+| `all` (default) | SFT, then RL | this run's SFT export |
+| `sft` | SFT only | |
+| `rl` | RL only | the frozen Datakit SFT checkpoint |
+
+Each `all` or `sft` version trains its own SFT from the base model; a later
+`all` run with the same version reuses a committed SFT. Use `--stage rl` as the
+fixed reference when comparing a new SFT against the Datakit SFT checkpoint.
 The selected data stays cached; training does not curate or resample it.
 
 The launcher binds `train.parquet` and `validation.parquet` from that artifact.
