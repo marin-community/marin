@@ -18,6 +18,9 @@ from rigging.filesystem.cluster_config import load_cluster_config
 from experiments.post_training.long_loop.execution_policy import bind_stage_timeouts, experimental_controls
 from experiments.post_training.long_loop.stage_config import validate_stage_config
 
+H100_EXECUTION_CLUSTERS = {"cw-rno2a", "cw-us-east-02a"}
+EXECUTION_PRIORITIES = {"interactive", "production"}
+
 
 @dataclass(frozen=True)
 class FilePin:
@@ -211,8 +214,9 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
     """Count serialized stage allocations, including the co-hosted eval judge."""
     execution = resolved["execution"]
     for runtime in (execution["coordinator"], resolved["rl"]["execution"], resolved["evaluation"]["execution"]):
-        if runtime["priority"] != "production" or runtime["cluster"] != "cw-rno2a":
-            raise ValueError("This experiment is authorized only on RNO2A at production priority")
+        cluster = runtime.get("target_cluster") or runtime["cluster"]
+        if cluster not in H100_EXECUTION_CLUSTERS or runtime["priority"] not in EXECUTION_PRIORITIES:
+            raise ValueError("Long-loop execution requires an admitted H100 cluster and interactive/production priority")
     if resolved["endpoint"]["priority"] != "production":
         raise ValueError("Endpoint priority must remain production")
     coordinator_gpu = execution["coordinator"]["coordinator_gpu"]

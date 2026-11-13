@@ -104,6 +104,9 @@ route pools; the emitted launch contains only their training inputs and source
 classifications. Set `rl.export_hf: false` to omit the terminal HF export in
 a training-only qualification; full loops export by default. Disable checkpoint
 callbacks separately when the qualification only needs an optimizer update.
+H100 stages admit `cw-rno2a` or `cw-us-east-02a` at interactive or production
+priority. Output buckets must match the execution region; RNO2A outputs must
+use a supported temporary TTL prefix.
 
 After SFT commits, pin its selection, checkpoint metadata/manifest, consumed config,
 source lineage, and payload inventory in an `adopted_sft` file. Reference that file

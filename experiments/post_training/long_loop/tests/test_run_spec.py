@@ -435,3 +435,35 @@ def test_rno2a_spec_rejects_cross_region_and_non_ttl_outputs(tmp_path, prefix, e
     resolved = resolve_spec(path, smoke=True)
     assert resolved["storage"] == document["storage"]
     assert resolved["execution"]["coordinator"]["target_cluster"] == "cw-rno2a"
+
+
+@pytest.mark.parametrize(
+    "cluster,bucket,priority",
+    [
+        ("cw-rno2a", "marin-rno2a", "interactive"),
+        ("cw-us-east-02a", "marin-us-east-02a", "interactive"),
+        ("cw-us-east-02a", "marin-us-east-02a", "production"),
+    ],
+)
+def test_regional_h100_spec_preserves_placement_and_priority(tmp_path, cluster, bucket, priority):
+    root = tmp_path / "specs"
+    shutil.copytree(SPEC.parent, root)
+    path = root / SPEC.name
+    document = yaml.safe_load(path.read_text())
+    prefix = f"s3://{bucket}/tmp/ttl=7d/regional-test"
+    document["storage"] = {"output_prefix": prefix, "temporary_prefix": prefix}
+    for key, nested in (("execution", "coordinator"), ("rl", "execution"), ("evaluation", "execution")):
+        pin = document[key]
+        leaf = root / pin["path"]
+        config = yaml.safe_load(leaf.read_text())
+        config[nested].update(cluster=cluster, target_cluster=cluster, priority=priority)
+        leaf.write_text(yaml.safe_dump(config))
+        pin["sha256"] = hashlib.sha256(leaf.read_bytes()).hexdigest()
+    path.write_text(yaml.safe_dump(document))
+    resolved = resolve_spec(path, smoke=True)
+    resolved["adopted_sft"] = yaml.safe_load((root / "adopted-sft-20261005.yaml").read_text())
+    resolved["adopted_sft"]["uri"] = f"s3://{bucket}/tmp/ttl=7d/regional-model"
+    terminal = build_spec_graph(resolved, "2026.11.13.43606", through="rl")
+    execution = terminal.runtime_args["skyrl_execution"]
+    assert execution.target_cluster == cluster
+    assert execution.priority == priority
