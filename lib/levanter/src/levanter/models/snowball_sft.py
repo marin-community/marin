@@ -6,11 +6,16 @@
 from dataclasses import dataclass
 
 import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import optax
+from jax.sharding import PartitionSpec as P
 
 from levanter.models.snowball import SnowballLMHeadModel
+from levanter.models.lm_model import LmExample
+from levanter.models.loss import maybe_fused_next_token_loss
+from levanter.metrics import Metric, ReductionType
 from levanter.sharding import partition_spec_of
 from levanter.utils.jax_utils import leaf_key_paths
 
@@ -21,6 +26,7 @@ class SnowballSftConfig:
     anchor_token_ids: tuple[int, ...] = ()
     special_token_lr_multiplier: float = 1.0
     freeze_router_bias: bool = True
+    record_dispatch_counts: bool = False
 
     def __post_init__(self):
         if len(self.special_token_ids) != len(self.anchor_token_ids):
@@ -40,9 +46,41 @@ def reseed_snowball_head(model: SnowballLMHeadModel, config: SnowballSftConfig) 
         raise ValueError("Special-token or anchor ID is outside the model vocabulary")
     head = model.transformer.output_proj
     source = head
+    source_spec = partition_spec_of(source)
+    column_spec = P(source_spec[0]) if source_spec else P()
     for token, anchor in zip(config.special_token_ids, config.anchor_token_ids, strict=True):
-        head = head.at[:, token].set(source[:, anchor], out_sharding=partition_spec_of(head))
+        column = source.at[:, anchor].get(out_sharding=column_spec)
+        head = head.at[:, token].set(column, out_sharding=partition_spec_of(head))
     return eqx.tree_at(lambda m: m.transformer.output_proj, model, head)
+
+
+def snowball_loss_with_dispatch_counts(
+    model: SnowballLMHeadModel,
+    example: LmExample,
+    *,
+    z_loss_weight: float,
+    reduction: hax.ReductionFunction,
+) -> tuple[hax.NamedArray, dict[str, Metric]]:
+    """Measure dispatch on the same unmasked-token forward used for training."""
+    # All positions consume dispatch capacity in the regular training forward,
+    # including padding. A supervision mask here would change that forward.
+    valid = hax.ones(example.tokens.axes, dtype=jnp.bool_)
+    hidden, stats = model.activations_with_stats(example.tokens, valid, attn_mask=example.attn_mask)
+    loss = maybe_fused_next_token_loss(
+        model.Pos,
+        model.Embed,
+        model.Vocab,
+        hidden,
+        model.get_lm_head(),
+        example.tokens,
+        loss_weight=example.loss_weight,
+        reduction=reduction,
+        logsumexp_weight=z_loss_weight,
+    )
+    return loss, {
+        "moe/sender_dropped": Metric.from_value(jnp.sum(stats.sender_dropped), ReductionType.SUM),
+        "moe/receiver_dropped": Metric.from_value(jnp.sum(stats.receiver_dropped), ReductionType.SUM),
+    }
 
 
 def snowball_update_transform(config: SnowballSftConfig) -> optax.GradientTransformation:

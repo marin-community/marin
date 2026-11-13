@@ -622,10 +622,13 @@ class Trainer:
                 logger.info("First train step completed in %.1fs (step %d)", info.step_duration, info.step)
                 is_first_step = False
 
-            if self.config.gc_interval is not None and int(state.step) % self.config.gc_interval == 0:
-                gc.collect()
+            with capture_time() as gc_time:
+                if self.config.gc_interval is not None and int(state.step) % self.config.gc_interval == 0:
+                    gc.collect()
 
-            levanter.tracker.log({"throughput/loading_time": loading_time()}, step=info.step)
+            levanter.tracker.log(
+                {"throughput/loading_time": loading_time(), "throughput/gc_time": gc_time()}, step=info.step
+            )
 
             yield info
 
@@ -668,7 +671,8 @@ class Trainer:
         self.add_hook(
             levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
         )
-        # engine.add_hook(callbacks.log_memory_usage(), every=1)
+        if self.config.record_device_memory:
+            self.add_hook(levanter.callbacks._metrics.log_device_memory, every=1)
         checkpointer = self.config.checkpointer.create(self.run_id)
         self._checkpointer = checkpointer
 
@@ -923,6 +927,7 @@ class TrainerConfig:
     loader_max_buffered_batches: int = 128
     gc_interval: int | None = None
     gradient_accumulation_dtype: str | None = None
+    record_device_memory: bool = False
 
     wandb: Optional[WandbConfig] = None
     log_dir: Path = Path("logs/")

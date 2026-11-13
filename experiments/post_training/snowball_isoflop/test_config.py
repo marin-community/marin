@@ -13,7 +13,7 @@ import pytest
 from levanter.main.train_lm import TrainLmConfig, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmExample
 from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig, SnowballLMHeadModel
-from levanter.models.snowball_sft import SnowballSftConfig, snowball_update_transform
+from levanter.models.snowball_sft import SnowballSftConfig, snowball_loss_with_dispatch_counts, snowball_update_transform
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -26,6 +26,7 @@ from experiments.post_training.snowball_isoflop.config import (
     build_pod,
     calibration_cells,
     data_config,
+    evaluation_data_config,
     model_receipt,
     primary_cells,
     recipe,
@@ -72,10 +73,15 @@ def test_native_muonh_update_changes_weights_and_keeps_router_bias(tmp_path):
     )
 
     def loss(model, example, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=1e-4)
+        return snowball_loss_with_dispatch_counts(model, example, z_loss_weight=1e-4, reduction=hax.mean)
 
     with Trainer(trainer_config, optimizer, loss, add_default_hooks=False) as trainer:
         model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), config, key=jax.random.key(0))
+        measured, metrics = loss(model, example)
+        expected = model.compute_next_token_loss(example, logsumexp_weight=1e-4)
+        np.testing.assert_allclose(measured.scalar(), expected.scalar(), rtol=1e-5)
+        assert float(metrics["moe/sender_dropped"]) == 0
+        assert float(metrics["moe/receiver_dropped"]) == 0
         before = {k: np.array(v) for k, v in model.to_state_dict().items()}
         state = TrainerState.init(optimizer, model, key=jax.random.key(1), mp=trainer_config.mp)
         info = trainer.train_step(state, example)
@@ -139,6 +145,15 @@ def test_both_masks_keep_every_cache_and_pack_boundary_including_concat_children
             assert leaf == original
     assert count == 216
     assert assistant == full
+
+
+def test_validation_selection_preserves_reserved_sources_and_packing():
+    full = data_config(Mask.ASSISTANT)
+    selected = evaluation_data_config()
+    assert selected.num_validation_sequences == full.num_validation_sequences
+    assert set(selected.components) == set(full.num_validation_sequences)
+    for name, component in selected.components.items():
+        assert draccus.encode(component) == draccus.encode(full.components[name])
 
 
 def test_saved_prefixes_cover_all_approved_budget_endpoints_without_entering_decay():

@@ -35,7 +35,7 @@ BATCH_SIZE = 8
 SCHEDULE_STEPS = 4750
 TASK_TIMEOUT = 259200
 PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/snowball-isoflop"
-VERSION = "2026.11.13.2"
+VERSION = "2026.11.13.3"
 BUDGETS = (3e18, 1e19, 3e19)
 SIZES = (512, 768, 1024)
 SPECIAL_IDS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
@@ -127,6 +127,15 @@ def data_config(mask: Mask) -> LmDataConfig:
     return draccus.decode(LmDataConfig, data)
 
 
+def evaluation_data_config() -> LmDataConfig:
+    data = data_config(Mask.ASSISTANT)
+    assert data.num_validation_sequences is not None
+    selected = {name: data.components[name] for name in data.num_validation_sequences}
+    # Validation reserves the same packed sequences, but need not construct
+    # training pack indices for every unrelated corpus component a second time.
+    return replace(data, components=selected, train_weights={name: 1.0 for name in selected})
+
+
 def build_spec(cell: Cell) -> SFTSpec:
     e1 = recipe()
     receipt = model_receipt(cell.size)
@@ -158,6 +167,7 @@ def build_spec(cell: Cell) -> SFTSpec:
         loader_max_buffered_batches=512,
         gc_interval=1,
         gradient_accumulation_dtype="float32",
+        record_device_memory=True,
         steps_per_eval=15,
         # Preserve the original eight held-out sequences/source while scoring one
         # at a time on this single-node CP mesh.
@@ -195,7 +205,7 @@ def build_spec(cell: Cell) -> SFTSpec:
         chat_template=(INPUTS / "chat-template.jinja").read_text(),
         datasets=(),
         prepared_data=data_config(cell.mask),
-        evaluation_data=data_config(Mask.ASSISTANT),
+        evaluation_data=evaluation_data_config(),
         optimizer=draccus.decode(OptimizerConfig, e1["optimizer"]),
         optimizer_num_train_steps=SCHEDULE_STEPS,
         mesh=mesh,

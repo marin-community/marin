@@ -36,8 +36,13 @@ from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
-from levanter.models.snowball import SnowballConfig
-from levanter.models.snowball_sft import SnowballSftConfig, reseed_snowball_head, snowball_update_transform
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.models.snowball_sft import (
+    SnowballSftConfig,
+    reseed_snowball_head,
+    snowball_update_transform,
+    snowball_loss_with_dispatch_counts,
+)
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -255,6 +260,12 @@ def main(config: TrainLmConfig):
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
         reduction = hax.sum if config.token_weighted_accumulation else hax.mean
+        if config.snowball_sft is not None and config.snowball_sft.record_dispatch_counts:
+            if not isinstance(model, SnowballLMHeadModel):
+                raise ValueError("Dispatch counts require a Snowball model")
+            return snowball_loss_with_dispatch_counts(
+                model, example, z_loss_weight=config.z_loss_weight, reduction=reduction
+            )
         return model.compute_next_token_loss(
             example, key=key, logsumexp_weight=config.z_loss_weight, reduction=reduction
         )

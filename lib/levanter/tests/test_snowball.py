@@ -232,31 +232,39 @@ def test_snowball_state_dict_key_and_shape_manifest():
         assert tuple(sd[key].shape) == shape, f"{key}: {tuple(sd[key].shape)} != {shape}"
 
 
-def test_sft_reseed_and_update_scale_preserve_other_weights_and_freeze_router():
+@pytest.mark.multidevice
+@pytest.mark.parametrize("data_axis,context_axis", [(1, 8), (8, 1)])
+def test_sft_reseed_and_update_scale_preserve_other_weights_and_freeze_router(data_axis, context_axis):
     cfg = _tiny_config()
     settings = SnowballSftConfig((30, 31), (2, 3), 4.0, True)
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(0))
-        original = model.to_state_dict()
-        reseeded = reseed_snowball_head(model, settings)
-        after = reseeded.to_state_dict()
-        for name, value in original.items():
-            if name == "lm_head.weight":
-                expected = np.array(value)
-                expected[[30, 31]] = np.asarray(value)[[2, 3]]
-            else:
-                expected = value
-            np.testing.assert_array_equal(after[name], expected)
-        updates = jax.tree.map(jnp.ones_like, model)
-        transform = snowball_update_transform(settings)
-        scaled, _ = transform.update(updates, transform.init(model), model)
-        for name, value in scaled.to_state_dict().items():
-            expected = np.ones(value.shape)
-            if name in ("model.embed_tokens.weight", "lm_head.weight"):
-                expected[[30, 31]] = 4
-            elif name.endswith("mlp.router.bias"):
-                expected[:] = 0
-            np.testing.assert_array_equal(value, expected)
+    with use_test_devices(8) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, data_axis, 1, context_axis, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "replica", "model"),
+            axis_types=(AxisType.Explicit,) * 6,
+        )
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(0))
+            original = model.to_state_dict()
+            reseeded = reseed_snowball_head(model, settings)
+            after = reseeded.to_state_dict()
+            for name, value in original.items():
+                if name == "lm_head.weight":
+                    expected = np.array(value)
+                    expected[[30, 31]] = np.asarray(value)[[2, 3]]
+                else:
+                    expected = value
+                np.testing.assert_array_equal(after[name], expected)
+            updates = jax.tree.map(jnp.ones_like, model)
+            transform = snowball_update_transform(settings)
+            scaled, _ = transform.update(updates, transform.init(model), model)
+            for name, value in scaled.to_state_dict().items():
+                expected = np.ones(value.shape)
+                if name in ("model.embed_tokens.weight", "lm_head.weight"):
+                    expected[[30, 31]] = 4
+                elif name.endswith("mlp.router.bias"):
+                    expected[:] = 0
+                np.testing.assert_array_equal(value, expected)
 
 
 def test_snowball_state_dict_roundtrip_is_exact():
@@ -643,7 +651,7 @@ def test_snowball_hf_config_loading_allows_distributed_initialization(tmp_path):
 
 @pytest.mark.timeout(120)
 @pytest.mark.multidevice
-def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
+def test_snowball_context_and_replica_parallel_values_and_gradients_match_data_parallel():
     with use_test_devices(8) as devices:
         cfg = SnowballConfig(
             vocab_size=32,
@@ -665,7 +673,7 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
             jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
             (Axis("batch", 4), Axis("position", 8)),
         )
-        axes = ("replica_dcn", "data", "expert", "context", "model")
+        axes = ("replica_dcn", "replica", "data", "expert", "context", "model")
 
         def run(shape):
             mesh = Mesh(
@@ -687,12 +695,16 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
                 np.asarray(grad.transformer.output_proj),
             )
 
-        data_axis, reference = run((1, 2, 2, 1, 1))
+        data_axis, reference = run((1, 1, 2, 2, 1, 1))
         assert data_axis is None
         # Four context shards make the flattened token sharding larger than the batch.
-        for shape in [(1, 1, 2, 2, 1), (1, 1, 2, 4, 1)]:
+        for shape, expected_axis in [
+            ((1, 1, 1, 2, 2, 1), "context"),
+            ((1, 1, 1, 2, 4, 1), "context"),
+            ((1, 2, 1, 2, 1, 1), None),
+        ]:
             context_axis, sharded = run(shape)
-            assert context_axis == "context"
+            assert context_axis == expected_axis
             for expected, actual in zip(reference, sharded, strict=True):
                 np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
 

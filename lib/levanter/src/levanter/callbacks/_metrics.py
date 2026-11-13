@@ -10,7 +10,9 @@ from datetime import timedelta
 from typing import Optional
 
 import jax
+import numpy as np
 from fray.device_flops import device_flops_for_jax_device
+from jax.experimental import multihost_utils
 from tqdm_loggable.auto import tqdm
 from tqdm_loggable.tqdm_logging import tqdm_logging
 
@@ -21,6 +23,34 @@ from levanter.tracker import log_optimizer_hyperparams
 from levanter.utils.jax_utils import jnp_to_python
 
 logger = pylogging.getLogger(__name__)
+
+
+def log_device_memory(step_info: StepInfo) -> None:
+    """Record allocator usage and the least memory headroom across every GPU."""
+    local = []
+    for device in jax.local_devices():
+        # JAX exposes allocator statistics as optional backend capabilities.
+        stats = device.memory_stats() or {}
+        local.append([stats.get(key, np.nan) / 2**30 for key in ("bytes_in_use", "peak_bytes_in_use", "bytes_limit")])
+    all_devices = np.asarray(multihost_utils.process_allgather(np.asarray(local, dtype=np.float32))).reshape(-1, 3)
+    metrics = {}
+    for index, (used, peak, capacity) in enumerate(all_devices):
+        metrics.update(
+            {
+                name: value
+                for name, value in {
+                    f"memory/gpu{index}/used_gib": used,
+                    f"memory/gpu{index}/peak_gib": peak,
+                    f"memory/gpu{index}/capacity_gib": capacity,
+                }.items()
+                if np.isfinite(value)
+            }
+        )
+    available = np.isfinite(all_devices).all(axis=1) & (all_devices[:, 2] > 0)
+    metrics["memory/stats_devices_measured"] = int(available.sum())
+    if available.all():
+        metrics["memory/min_headroom_fraction"] = float(np.min(1 - all_devices[:, 1] / all_devices[:, 2]))
+    levanter.tracker.log(metrics, step=step_info.step)
 
 
 @dataclass

@@ -151,13 +151,20 @@ def _context_axis() -> str | None:
     return "context" if mesh is not None and not mesh.empty and _mesh_axis_size(mesh, "context") > 1 else None
 
 
+def _batch_axes() -> tuple[str, ...]:
+    mesh = _current_mesh()
+    if _mesh_axis_size(mesh, "replica") > 1:
+        return ("replica_dcn", "replica", "data", "expert")
+    return _BATCH_AXES
+
+
 def _activation_spec(*tail: Any) -> P:
-    return P(_BATCH_AXES, _context_axis(), *tail)
+    return P(_batch_axes(), _context_axis(), *tail)
 
 
 def _token_spec() -> P:
     context = _context_axis()
-    return P((*_BATCH_AXES, context) if context is not None else _BATCH_AXES)
+    return P((*_batch_axes(), context) if context is not None else _batch_axes())
 
 
 def _reshard_sequence(x: jax.Array, axis: str | None) -> jax.Array:
@@ -864,9 +871,9 @@ class SnowballTransformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
-        token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
+        token_ids = reshard(token_ids, P(_batch_axes(), _context_axis()))
         if token_valid is not None:
-            token_valid = reshard(token_valid, P(_BATCH_AXES, _context_axis()))
+            token_valid = reshard(token_valid, P(_batch_axes(), _context_axis()))
         hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
