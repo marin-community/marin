@@ -14,7 +14,7 @@ from experiments.post_training.task_curation.datasets import (
     thoughtcrime,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
-from experiments.post_training.task_curation.datasets.daytona_measurements import ACTOR_CENSUS_RECEIPTS
+from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
 from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
 from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
@@ -26,10 +26,10 @@ from experiments.post_training.task_curation.datasets.evalchemy import mmlu as e
 from experiments.post_training.task_curation.datasets.evalchemy import nupa as eval_nupa
 from experiments.post_training.task_curation.datasets.evalchemy import reasoning as eval_reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
-from experiments.post_training.task_curation.datasets.lexical_measurements import LEXICAL_MEASUREMENTS
+from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
-from experiments.post_training.task_curation.datasets.retained_releases import RETAINED_RELEASE_RECEIPTS
+from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
 from experiments.post_training.task_curation.datasets.skyrl import ifeval as skyrl_ifeval
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
@@ -49,15 +49,20 @@ from experiments.post_training.task_curation.datasets.tasktrove import repositor
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
+from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.remediation_binding import bind_retained_release
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
-WITHIN_SOURCE_DEDUP_RECEIPTS = read_dedup_receipts(Path(__file__).with_name("datasets") / "within_source_dedup.json")
-
 
 def all_sources() -> dict[str, RlDataSource]:
+    actor_receipts = actor_census_receipts()
+    lexical_receipts = lexical_measurements()
+    retained_receipts = retained_release_receipts()
+    dedup_receipts = read_dedup_receipts(
+        Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
+    )
     sources = [
         *eval_code.sources(),
         *eval_harness.sources(),
@@ -95,16 +100,16 @@ def all_sources() -> dict[str, RlDataSource]:
         *campaign_releases.sources(),
         *native_releases.sources(),
     ]
-    sources = [bind_actor_census(source, ACTOR_CENSUS_RECEIPTS.get(source.info.id)) for source in sources]
+    sources = [bind_actor_census(source, actor_receipts.get(source.info.id)) for source in sources]
     sources = [
-        bind_lexical_measurement(source, LEXICAL_MEASUREMENTS.get(source.info.id), source_lexical_use(source))
+        bind_lexical_measurement(source, lexical_receipts.get(source.info.id), source_lexical_use(source))
         for source in sources
     ]
-    sources = [bind_within_source_dedup(source, WITHIN_SOURCE_DEDUP_RECEIPTS[source.info.id]) for source in sources]
+    sources = [bind_within_source_dedup(source, dedup_receipts[source.info.id]) for source in sources]
     sources = [
         (
-            bind_retained_release(source, RETAINED_RELEASE_RECEIPTS[source.info.id])
-            if source.info.id in RETAINED_RELEASE_RECEIPTS
+            bind_retained_release(source, retained_receipts[source.info.id])
+            if source.info.id in retained_receipts
             else source
         )
         for source in sources
