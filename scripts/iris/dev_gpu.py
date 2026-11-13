@@ -37,7 +37,7 @@ HOLDER_COMMAND = (
     "import signal, sys, time; "
     "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "
     "signal.signal(signal.SIGINT, lambda *_: sys.exit(0)); "
-    "print('iris dev gpu holder ready', flush=True); "
+    "print('iris dev holder ready', flush=True); "
     "time.sleep(365 * 24 * 60 * 60)"
 )
 
@@ -269,6 +269,26 @@ def save_state(path: Path, state: DevGpuState) -> None:
 
 def is_job_active(client: IrisClient, job_id: str) -> bool:
     return client.job_state(JobName.from_wire(job_id)) not in TERMINAL_JOB_STATES
+
+
+def release_holder_job(config_file: str, job_id: str, state_file: Path, *, force: bool) -> None:
+    """Terminate a dev holder job, then delete its local session file.
+
+    The file stays when termination fails, so the job id is not lost while the pod may still
+    run; ``force`` deletes it anyway for jobs that are already gone.
+    """
+    try:
+        with controller_client(config_file) as client:
+            client.cancel_job(JobName.from_wire(job_id))
+    except Exception as exc:
+        if not force:
+            raise click.ClickException(
+                f"Failed to terminate holder job {job_id}; the pod may still be running. "
+                f"Retry `release`, or pass --force to drop local state anyway (then confirm the job is gone "
+                f"with `iris job list`). Error: {exc}"
+            ) from exc
+        logger.warning("Terminate failed but --force given; deleting local session state anyway.", exc_info=True)
+    state_file.unlink(missing_ok=True)
 
 
 def wait_for_running_tasks(job: Job, *, node_count: int, timeout: float) -> list[str]:
@@ -543,20 +563,7 @@ def release(ctx, force: bool) -> None:
     """Terminate the holder job and clear the local session file."""
     state_file = state_path(ctx.obj.state_dir, ctx.obj.session_name)
     state = load_state(state_file)
-    try:
-        with controller_client(state.config_file) as client:
-            client.cancel_job(JobName.from_wire(state.job_id))
-    except Exception as exc:
-        # Keep the state file on failure so the job id isn't lost while the pod may
-        # still be running; --force is the escape hatch for already-dead jobs.
-        if not force:
-            raise click.ClickException(
-                f"Failed to terminate holder job {state.job_id}; the GPU pod may still be running. "
-                f"Retry `release`, or pass --force to drop local state anyway (then confirm the job is gone "
-                f"with `iris job list`). Error: {exc}"
-            ) from exc
-        logger.warning("Terminate failed but --force given; deleting local session state anyway.", exc_info=True)
-    state_file.unlink(missing_ok=True)
+    release_holder_job(state.config_file, state.job_id, state_file, force=force)
 
 
 def main() -> None:

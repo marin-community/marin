@@ -34,6 +34,7 @@ from finestore.rl.curation import (
     CurationSummary,
     CurrentCatalog,
     GradingEnvironmentEvidence,
+    OversightLevel,
     SnapshotSource,
     SourceDeclaration,
     SourceOrigin,
@@ -68,6 +69,7 @@ from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
+from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
@@ -253,6 +255,8 @@ def publish_sample(
     origin: SourceOrigin = SourceOrigin.MARIN,
     duplicates: int = 0,
     grading_environment: GradingEnvironmentEvidence | None = None,
+    admitted_verdicts: tuple[str, str] = ("good", "unknown"),
+    oversight: OversightLevel = OversightLevel.NONE,
 ) -> None:
     declaration = SourceDeclaration(
         id=source_id,
@@ -276,6 +280,7 @@ def publish_sample(
             update={"unique_count": 3 - duplicates, "within_source_duplicates": duplicates}
         ),
         notes="",
+        oversight=oversight,
         dataset_id="fixture",
         dataset_revision="1",
         url=None,
@@ -303,8 +308,8 @@ def publish_sample(
         register_catalog(store)
         items = []
         for task_id, cohort, verdict, has_task in (
-            ("one", "admitted", "good", True),
-            ("two", "admitted", "unknown", False),
+            ("one", "admitted", admitted_verdicts[0], True),
+            ("two", "admitted", admitted_verdicts[1], admitted_verdicts[1] != "unknown"),
             ("three", "excluded", "bad", True),
         ):
             packet = {"task": {"id": task_id, "prompt": "Null: \u0000; Unicode: π"}} if has_task else {}
@@ -731,6 +736,48 @@ def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
         assert client.get("/archive/reviews/legacy/artifacts/nested/trace.txt").text == "saved trace"
 
 
+@pytest.mark.parametrize("verdicts, provisional", [(("good", "good"), False), (("good", "unknown"), True)])
+def test_loaded_sample_result_uses_required_review_completeness(
+    catalog_database, catalog_query, tmp_path, verdicts, provisional
+):
+    root = str(tmp_path / "sample")
+    publish_sample(root, "sample", admitted_verdicts=verdicts, oversight=OversightLevel.SAMPLE)
+    load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        detail = client.get("/source", params={"source_id": source["id"]}).json()
+        assert source["quality"] == "SAMPLE" and source["result"] == "GOOD"
+        assert source["result_provisional"] is detail["result_provisional"] is provisional
+        assert (
+            source["review_completeness"]
+            == detail["review_completeness"]
+            == {
+                "required": 2,
+                "reviewed": 1 if provisional else 2,
+                "coverage_complete": True,
+                "provisional": provisional,
+            }
+        )
+        # The execution scope is FULL, but the required review panel is smaller than the retained source.
+        assert source["assessment"]["scope"] == "full"
+        assert source["within_source_dedup"]["unique_count"] == 3
+
+
+def test_unchanged_catalog_refreshes_pre_completeness_load(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "sample", admitted_verdicts=("good", "good"), oversight=OversightLevel.SAMPLE)
+    catalog = CurationCatalog(root)
+    load_catalog(catalog, catalog_query)
+    catalog_query("UPDATE atlas_loads SET review_completeness_version=0", {})
+    catalog_query("UPDATE atlas_sources SET review_completeness=NULL", {})
+    assert load_catalog(catalog, catalog_query)["changed"] is True
+    assert load_catalog(catalog, catalog_query)["changed"] is False
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["review_completeness"]["required"] == source["review_completeness"]["reviewed"] == 2
+        assert source["result_provisional"] is False
+
+
 def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, catalog_query, tmp_path):
     root = str(tmp_path / "lexical-catalog")
     cases = contamination_declarations()
@@ -771,6 +818,49 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         assert sources["Marin:unmeasured"]["lexical_contamination"] is None
         assert sources["Marin:unmeasured"]["issue_rate"] is None
         assert sources["Marin:eval"]["issue_rate"] == 0.0
+
+
+def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "lexical-catalog")
+    cases = review_declarations()
+    with DataStore.open(root, writer_id="lexical") as store:
+        register_catalog(store)
+        with store.transaction() as tx:
+            tx.table(INVENTORY).extend(
+                SnapshotSource(
+                    snapshot_id="lexical",
+                    id=declaration.id,
+                    declaration=declaration,
+                    assessment_key=None,
+                    latest_attempt_key=None,
+                    latest_attempt_status="skipped",
+                    reason=None,
+                    curation=None,
+                ).model_dump(mode="json")
+                for _, declaration in cases
+            )
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="lexical",
+                    created_at="2026-11-13T00:00:00Z",
+                    source_count=len(cases),
+                ).model_dump()
+            )
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="lexical").model_dump())
+    load_catalog(CurationCatalog(root), catalog_query)
+    shutil.rmtree(root)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        sources = {row["id"]: row for row in client.get("/sources").json()["sources"]}
+        for provisional, declaration in cases:
+            source = sources[declaration.id]
+            detail = client.get("/source", params={"source_id": declaration.id}).json()
+            assert source["result_provisional"] is detail["result_provisional"] is provisional
+            assert source["review_completeness"] == detail["review_completeness"]
+            assert declaration.quality_result is not None
+            assert source["review_completeness"]["reviewed"] == declaration.quality_result.reviewed
+        assert sources["Marin:sample-complete"]["quality"] == sources["Marin:sample-uncertain"]["quality"] == "SAMPLE"
+        assert sources["Marin:full-uncertain"]["quality"] == "FULL"
+        assert sources["Marin:full-inflight"]["review_completeness"]["coverage_complete"] is False
 
 
 def test_a_competing_atlas_cutover_prevents_an_older_load_from_being_selected(catalog_query, tmp_path):

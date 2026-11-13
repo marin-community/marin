@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS atlas_loads (
 CREATE TABLE IF NOT EXISTS atlas_current (
     name TEXT PRIMARY KEY, load_id TEXT
 );
+ALTER TABLE atlas_loads ADD COLUMN IF NOT EXISTS review_completeness_version INTEGER NOT NULL DEFAULT 0;
 INSERT INTO atlas_current (name) VALUES ('latest') ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS curriculum_loads (
     load_id TEXT PRIMARY KEY, release_id TEXT NOT NULL, release_uri TEXT NOT NULL,
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS atlas_sources (
 );
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS source_fingerprint JSONB;
 ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS duplicate_group JSONB;
+ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS review_completeness JSONB;
 CREATE TABLE IF NOT EXISTS atlas_identity_surveys (
     load_id TEXT PRIMARY KEY, survey_id TEXT NOT NULL, metadata JSONB NOT NULL
 );

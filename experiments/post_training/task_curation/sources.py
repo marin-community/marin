@@ -117,6 +117,11 @@ def all_sources() -> dict[str, RlDataSource]:
         )
         for source in sources
     ]
+    # Retained selection changes the active pin and actor input for new measurements.
+    sources = [
+        bind_lexical_measurement(source, lexical_receipts.get(source.info.id), source_lexical_use(source))
+        for source in sources
+    ]
     sources = [
         bind_grading_census(source, grading_receipts[source.info.id]) if source.info.id in grading_receipts else source
         for source in sources

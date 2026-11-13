@@ -12,7 +12,7 @@ image, and the pipeline places each one:
   `task` stage of `lib/iris/Dockerfile`), runs in a sandbox of an image built
   for the environment;
 - every other environment runs in the Zephyr worker, in a uv environment built
-  from its lock ([`../environment_runtime.py`](../environment_runtime.py)).
+  from its lock ([`taskcompendium.runtime.local`](../../../../lib/taskcompendium/src/taskcompendium/runtime/local.py)).
 
 Agent environments name their image. Iris workers and training pull images
 anonymously, so new agent images use the public

@@ -20,13 +20,14 @@ import yaml
 from harbor.agents.base import BaseAgent  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]
 from harbor.agents.installed.base import BaseInstalledAgent  # pyrefly: ignore[missing-import]
+from harbor.environments.daytona import DaytonaEnvironment  # pyrefly: ignore[missing-import]
 from harbor.environments.docker_translate import (  # pyrefly: ignore[missing-import]
     COMPOSE_FILENAMES,
     PINNED_IMAGE,
     import_prepared_task,
     prepared_images,
 )
-from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
+from harbor.environments.factory import EnvironmentFactory, _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
     JudgeAccess,
     task_model_relays,
@@ -46,6 +47,8 @@ from harbor.host_capabilities import (  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.models.task.config import TaskOS  # pyrefly: ignore[missing-import]
 from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
+from harbor.models.trial.paths import TrialPaths  # pyrefly: ignore[missing-import]
+from harbor.trial.trial import load_task  # pyrefly: ignore[missing-import]
 from harbor.utils.env import (  # pyrefly: ignore[missing-import]
     resolve_env_vars,
     validate_task_environment,
@@ -714,16 +717,54 @@ def _preflight(request_path: Path, *, host_environment: Mapping[str, str]) -> No
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
+async def _snapshot_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> list[dict[str, Any]]:
+    """Resolve a job's effective Daytona snapshot requests without allocating sandboxes.
+
+    The config passes through the same launcher-contract validation and runtime
+    overlay that ``run`` applies, so the preflight resolves the task set the run
+    actually launches.
+    """
+    if config.environment.type is not EnvironmentType.DAYTONA:
+        raise ValueError("Snapshot specs require the daytona environment")
+    config = effective_job_config(config, overlay)
+    requests: dict[str, dict[str, Any]] = {}
+    with tempfile.TemporaryDirectory(prefix="marin-harbor-snapshot-specs-") as jobs_dir:
+        trial_paths = TrialPaths(Path(jobs_dir) / "trial")
+        for task_config in await Job.resolve_task_configs(config):
+            task = await load_task(
+                task_config,
+                disable_verification=config.verifier.disable or config.verifier.import_path is not None,
+            )
+            environment = EnvironmentFactory.create_environment_from_config(
+                config=config.environment,
+                environment_dir=task.paths.environment_dir,
+                environment_name=task.short_name,
+                session_id="snapshot-specs",
+                trial_paths=trial_paths,
+                task_env_config=task.config.environment,
+                # Preflight never allocates a sandbox, so it needs no provider
+                # credentials; the adapter builds its client lazily.
+                host_capabilities=HostCapabilities(),
+                guest_environment={},
+            )
+            assert isinstance(environment, DaytonaEnvironment)
+            request = environment.snapshot_request()
+            requests[request.name] = request.as_dict()
+    return list(requests.values())
+
+
 async def _run(config: JobConfig, *, host_capabilities: HostCapabilities) -> None:
     job = await Job.create(config, host_capabilities=host_capabilities, guest_environment=_model_environment(config))
     _validate_job_tasks(job)
     await job.run()
 
 
-def effective_job_config(policy: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
+def effective_job_config(policy: JobConfig, overlay: RuntimeOverlay | None = None) -> JobConfig:
     """Apply a parsed Marin overlay to the stable policy and validate the job."""
     if policy.tasks or len(policy.agents) != 1 or len(policy.datasets) != 1:
         raise ValueError("Harbor stable policy violates the shared launcher contract")
+    if overlay is None:
+        return policy
     return _effective_config(policy, overlay)
 
 
@@ -743,8 +784,14 @@ def main() -> None:
         if command == "preflight":
             _preflight(Path(sys.argv[2]), host_environment=host_environment)
             return
-        if command != "run":
+        if command not in {"run", "snapshot-specs"}:
             raise ValueError(f"unknown command {command!r}")
+        if command == "snapshot-specs":
+            config = JobConfig.model_validate(_document(Path(sys.argv[2])), extra="forbid")
+            overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text()) if len(sys.argv) > 3 else None
+            specs = asyncio.run(_snapshot_specs(config, overlay))
+            sys.stdout.write(json.dumps(specs, ensure_ascii=False, separators=(",", ":")))
+            return
         policy = JobConfig.model_validate_json(Path(sys.argv[2]).read_text(), extra="forbid")
         overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text())
         config = effective_job_config(policy, overlay)

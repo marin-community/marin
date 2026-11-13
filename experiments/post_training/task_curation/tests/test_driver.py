@@ -156,7 +156,8 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     install_fake_build_tools(tmp_path, monkeypatch)
     # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
     monkeypatch.setattr(
-        "shellbox.backends.local.machine._working_bwrap", lambda candidates, system_directories: Path("/usr/bin/bwrap")
+        "shellbox.backends.local.machine._working_bwrap",
+        lambda candidates, system_directories, mounts, environment: Path("/usr/bin/bwrap"),
     )
     environment = Environment(
         requirements=REQUIREMENTS,
@@ -191,6 +192,47 @@ def test_remote_planning_uses_cw_instead_of_ambient_gcs(tmp_path, catalog, monke
     assert plan["chunk_storage_prefix"] == f"{root or 's3://marin-us-east-02a/marin'}/.zephyr/rl-data-campaign"
     assert os.environ["MARIN_PREFIX"] == previous
     assert not (tmp_path / "report.json").exists()
+
+
+def test_remote_campaign_plans_with_canonical_execution_defaults(tmp_path, catalog):
+    # An Iris campaign uses its pinned reviewer and resolves execution defaults once.
+    root = "s3://marin-us-east-02a/marin/curation-trial"
+    minimal = [
+        "--mode",
+        "sample",
+        "--report-path",
+        str(tmp_path / "report.json"),
+        "--artifact-root",
+        root,
+    ]
+    result = CliRunner().invoke(main, minimal)
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["max_workers"] == 64
+    assert plan["coordinator_resources"]["ram"] == "16g"
+    # No image override: Iris starts the workers from the cluster's configured task image.
+    assert plan["worker_resources"]["image"] is None
+    assert plan["review_cache"] == f"{root}/rl-data/review-cache"
+
+    overrides = ["--max-workers", "8", "--coordinator-memory", "8g", "--worker-image", "fixture-image"]
+    overrides += ["--review-cache", str(tmp_path / "cache")]
+    result = CliRunner().invoke(main, [*minimal, *overrides])
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["max_workers"] == 8
+    assert plan["coordinator_resources"]["ram"] == "8g"
+    assert plan["worker_resources"]["image"] == "fixture-image"
+    assert plan["review_cache"] == str(tmp_path / "cache")
+
+
+def test_local_campaign_keeps_its_review_cache_in_the_cache_directory(tmp_path, catalog):
+    cache = tmp_path / "canary"
+    options = ["--mode", "sample"]
+    result = CliRunner().invoke(main, [*options, "--cache-dir", str(cache)])
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["review_cache"] == str(cache.resolve() / "review-cache")
+    assert plan["max_workers"] == 4
 
 
 def test_gvisor_image_backend_requires_an_in_cluster_driver(tmp_path, catalog, monkeypatch):

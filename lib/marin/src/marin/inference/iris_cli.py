@@ -45,8 +45,8 @@ from pathlib import Path
 import click
 import requests
 from click.core import ParameterSource
-from fray.iris_backend import convert_constraints, convert_resources, resolve_coscheduling
-from fray.types import ANY_REGION, ResourceConfig, create_environment
+from fray.iris_backend import FrayIrisClient, convert_constraints, convert_resources, resolve_coscheduling
+from fray.types import ANY_REGION, GpuConfig, ResourceConfig, create_environment
 from iris.cli.connect import connect_controller
 from iris.cli.job import build_tpu_alternatives, parse_gpu_spec
 from iris.client.client import IrisClient, Job
@@ -77,6 +77,7 @@ from marin.inference.config import (
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from marin.inference.iris_tpu_vllm import RAY_PORTS
+from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
 
 # The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
 # subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
@@ -220,6 +221,43 @@ def _checkout_free_setup_script(marin_version: str, extras: tuple[str, ...]) -> 
         f'uv venv "$IRIS_VENV" --python {WORKER_PYTHON_VERSION}\n'
         f'uv pip install --python "$IRIS_VENV" --link-mode symlink --torch-backend cpu {shlex.quote(spec)}\n'
     )
+
+
+def _prepared_direct_service(
+    service: IrisServiceConfig,
+    placement: ResourceConfig,
+    workspace_dir: Path | None,
+    client: IrisClient,
+    secrets: dict[str, str],
+) -> IrisServiceConfig:
+    regions = placement.regions
+    if not placement.target_cluster and (
+        isinstance(placement.device, GpuConfig) or not regions or len(regions) != 1 or ANY_REGION in regions
+    ):
+        click.echo(
+            "Warning: skipping CPU model preparation because the serving cache location is not pinned; "
+            "weights will download on the serving worker. Set --target-cluster for GPUs, or a single --region for TPUs.",
+            err=True,
+        )
+        return service
+    setup_scripts = None if workspace_dir is not None else [_checkout_free_setup_script(_marin_core_version(), ())]
+    environment = create_environment(
+        workspace=str(workspace_dir or Path.cwd()),
+        setup_scripts=setup_scripts,
+        secrets={name: value for name, value in secrets.items() if name == "HF_TOKEN"},
+    )
+    click.echo("Preparing Hugging Face weights on CPU before reserving accelerators...")
+    try:
+        model, engine = prepare_hf_models(
+            service.model,
+            service.engine,
+            replace(service.iris, worker_resources=placement),
+            client=FrayIrisClient.from_iris_client(client),
+            environment=environment,
+        )
+    except ModelPreparationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    return replace(service, model=model, engine=engine)
 
 
 def _resolve_chat_template(spec: str | None) -> str | None:
@@ -656,6 +694,8 @@ def main(
         dashboard_url = endpoint_info.config.dashboard_url if endpoint_info.config else None
         click.echo(f"Using controller {controller_url}")
         with IrisClient.remote(controller_url, workspace=workspace_dir, credentials=endpoint_info.credentials) as client:
+            if not brokered:
+                service = _prepared_direct_service(service, submission_resources, workspace_dir, client, secrets)
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(run_iris_service, service),
                 name=job_name,
