@@ -963,8 +963,6 @@ def test_snowball_packed_context_parallel_hidden_states_and_loss_are_isolated(
         weights = hax.named((later & (jnp.arange(Pos.size)[None, :] < Pos.size - 1)).astype(jnp.float32), ids.axes)
         outputs = {}
         for context in (1, 4):
-            # Keep the plain baseline on one device: BF16 data-parallel reductions can vary
-            # between identical runs and obscure the packed-attention isolation check.
             mesh = Mesh(
                 np.asarray(devices[:context]).reshape(1, 1, 1, context, 1),
                 ("replica_dcn", "data", "expert", "context", "model"),
@@ -975,7 +973,9 @@ def test_snowball_packed_context_parallel_hidden_states_and_loss_are_isolated(
                 if implementation in ("tpu_splash", "gpu_fa4_cute"):
                     model = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16").cast_to_compute(model)
 
-                @eqx.filter_jit
+                # BF16 MoE scatters can vary between identical GPU runs. Compile deterministically
+                # so their rounding noise cannot masquerade as a cross-document dependency.
+                @eqx.filter_jit(compiler_options={"xla_gpu_exclude_nondeterministic_ops": True})
                 def forward(model, tokens, mask):
                     hidden = model.activations(tokens, mask).array
                     loss = model.compute_next_token_loss(LmExample(tokens, weights, mask), reduction=None)
