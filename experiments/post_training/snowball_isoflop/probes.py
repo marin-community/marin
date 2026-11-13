@@ -99,7 +99,7 @@ def batch_probes(size: int) -> tuple[Probe, ...]:
     return (Probe("B-accumulation", size, 1, 1), *(Probe("B", size, microbatch, 4) for microbatch in (1, 2, 4, 8, 16)))
 
 
-def layout_probes(size: int, batch_size: int) -> tuple[Probe, ...]:
+def layout_probes(batch_probe: Probe) -> tuple[Probe, ...]:
     layouts = (
         Layout(),
         Layout(dispatch="ring_gather_combine"),
@@ -108,10 +108,15 @@ def layout_probes(size: int, batch_size: int) -> tuple[Probe, ...]:
         Layout(context=4, data=1, expert=2, dispatch="ring_gather_combine"),
         Layout(context=4, data=1, replica=2),
     )
-    if batch_size % 8:
-        raise ValueError("The B-selected batch must be divisible by eight")
+    batch_size = batch_probe.batch_size
+    microbatch = batch_probe.microbatch
+    if any(batch_size % (microbatch * layout.batch_shards) for layout in layouts):
+        raise ValueError("The B-selected batch and microbatch must divide every C layout")
     return tuple(
-        Probe("C-throughput", size, batch_size // 8, 8 // layout.batch_shards, layout=layout) for layout in layouts
+        Probe(
+            "C-throughput", batch_probe.size, microbatch, batch_size // (microbatch * layout.batch_shards), layout=layout
+        )
+        for layout in layouts
     )
 
 
