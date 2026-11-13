@@ -98,6 +98,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
+from cloud.iris.role_topology import node_role_resources, role_topology_groups, validate_role_nodes
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -1229,6 +1230,7 @@ def _ray_mem_flags() -> list[str]:
 def ray_start_head(
     head_ip: str,
     spill_target: RaySpillTarget,
+    *, resources: dict[str, float] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1243,6 +1245,7 @@ def ray_start_head(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.head_flags(),
+        *([f"--resources={json.dumps(resources)}"] if resources else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray HEAD: {' '.join(cmd)}")
@@ -1256,6 +1259,7 @@ def ray_start_worker(
     ray_port: int,
     node_ip: str,
     spill_target: RaySpillTarget,
+    *, resources: dict[str, float] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1266,6 +1270,7 @@ def ray_start_worker(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.worker_flags(),
+        *([f"--resources={json.dumps(resources)}"] if resources else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray WORKER: {' '.join(cmd)}")
@@ -1294,7 +1299,10 @@ def ray_stop() -> None:
     _log(f"Ray stop completed (exit {completed.returncode})")
 
 
-def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_cb=None) -> None:
+def wait_for_nodes(
+    ray_address: str, expected_nodes: int, timeout: int, rewrite_cb=None,
+    *, role_groups: tuple[str, ...] = (), gpus_per_node: int = 0,
+) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
     ``rewrite_cb`` (head only): a no-arg callable invoked on every poll to RE-PUBLISH
@@ -1325,6 +1333,13 @@ def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_
                 _log(f"Ray nodes alive: {count}/{expected_nodes}")
                 last_count = count
             if count >= expected_nodes:
+                if role_groups:
+                    rows = validate_role_nodes(
+                        alive, groups=role_groups, num_nodes=expected_nodes, gpus_per_node=gpus_per_node,
+                    )
+                    report = json.dumps({"role_topology": "nvlink.domain", "nodes": rows}, sort_keys=True)
+                    (Path(os.environ.get("IRIS_OUTPUT_DIR", "/tmp")) / "role-topology.json").write_text(report + "\n")
+                    _log(f"Verified physical role placement before model actors: {report}")
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return
             time.sleep(POLL_INTERVAL)
@@ -1964,6 +1979,7 @@ def run_head(
     ray_start_head(
         head_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        resources=args.ray_resources,
     )
     _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
 
@@ -1987,6 +2003,8 @@ def run_head(
             num_tasks,
             args.cluster_join_timeout,
             rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
+            role_groups=args.role_groups,
+            gpus_per_node=args.gpus_per_node,
         )
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
@@ -2089,6 +2107,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
         ray_port,
         node_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        resources=args.ray_resources,
     )
     wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout)
     _log(f"Worker rank {rank} joined Ray cluster at {ray_address}; parking until the head finishes.")
@@ -2172,6 +2191,9 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
+        role_groups=role_topology_groups(_container(config)),
+        gpus_per_node=int(config.iris.allocation.gpus_per_node),
+        ray_resources={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
         rendezvous_dir=str(config.ray.rendezvous_dir),
@@ -2296,6 +2318,12 @@ def main() -> None:
     launch_config = load_launch_config(config_path)
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
+    if args.role_groups:
+        fabric = subprocess.run(["nvidia-smi", "-q", "-x"], check=True, capture_output=True, text=True, timeout=30)
+        args.ray_resources = node_role_resources(
+            groups=args.role_groups, rank=_rank(), num_nodes=_num_tasks(),
+            gpus_per_node=args.gpus_per_node, host=os.environ["IRIS_NODE_NAME"], fabric_xml=fabric.stdout,
+        )
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.

@@ -457,6 +457,7 @@ class IrisSkyRLExecution:
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
+    role_topology: str | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -876,6 +877,7 @@ def _launch_config_yaml(
             "cluster_config": execution.cluster_config,
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
             "wandb_entity": execution.wandb_entity,
+            "role_topology": execution.role_topology,
             "allocation": {
                 "num_nodes": spec.topology.num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,
