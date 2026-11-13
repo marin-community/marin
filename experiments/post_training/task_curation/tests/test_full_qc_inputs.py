@@ -29,11 +29,12 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.review import ReviewBatchResult
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs, FullQCReview, RetentionPlan
+from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs, FullQCReview
 from experiments.post_training.task_curation.full_qc_inputs import InputConfig, prepare_inputs
 from experiments.post_training.task_curation.full_qc_review import review_inputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
+from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 
 

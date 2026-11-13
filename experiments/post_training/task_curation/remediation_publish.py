@@ -24,8 +24,8 @@ from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.calibforge_publish import publish
 from experiments.post_training.task_curation.datasets.lexical_measurements import LEXICAL_MEASUREMENTS
-from experiments.post_training.task_curation.full_qc_artifacts import RetentionPlan
 from experiments.post_training.task_curation.native_quick import source_slug
+from experiments.post_training.task_curation.retention_plan import RetentionPlan
 
 LOGGER = logging.getLogger(__name__)
 TASK_SCHEMA = pa.schema(
