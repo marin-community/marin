@@ -429,7 +429,7 @@ temperature 0.7, top_p 0.95, top_k 0 (disabled), low reasoning effort, three
 attempts, payload revision 4 and the task-quality-v2 rubric with its content hash.
 Its explicit serving pin checks the checkpoint, API name and context independently
 of shared relay presets. Top_p matches the pinned model's generation configuration;
-top_k disables a token-count cap in vLLM 0.28.0. Optional sampling overrides are
+top_k disables top-k filtering of candidate next tokens in vLLM 0.28.0. Optional sampling overrides are
 absent from existing v2 requests and identity, preserving its frozen caches. Prompt character budgets remain explicit and unchanged (512,000 by
 default); they are separate from the serving token context. Compilation and CUDA
 graphs remain enabled. The v3 YAML has not yet been exercised by a live GPU job.
