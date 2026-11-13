@@ -14,7 +14,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.evaluation import EvalDataset
 from experiments.post_training.task_curation.pipeline import CurationRecipe
-from experiments.post_training.task_curation.prebuilt import COHORT_INTENDED_USE, PrebuiltCohort
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.retained_release import RetainedCohort
 from experiments.post_training.task_curation.source import RlDataSource
 
@@ -37,7 +37,7 @@ def source_lexical_use(source: RlDataSource) -> LexicalUse:
     elif isinstance(config, CurationRecipe):
         intended = config.intended_use
     elif isinstance(config, PrebuiltCohort):
-        intended = IntendedUse(COHORT_INTENDED_USE)
+        intended = config.intended_use
     elif isinstance(config, RetainedCohort):
         intended = config.intended_use
     else:

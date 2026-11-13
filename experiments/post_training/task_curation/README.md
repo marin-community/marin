@@ -589,6 +589,22 @@ remain separate requirements for execution qualification.
 
 ### CrossCode Python qualification candidate
 
+CrossCodeEval Python, TypeScript, Java and C# are evaluation sources. Python's
+native `tests/test_state.py` contains the Terminal-Bench canary; the evaluation
+policy applies to all four derived cohorts. Their explicit `intended_use` is
+`eval`, and TRAIN selection rejects even older artifacts that claim training
+eligibility. Within-source deduplication still applies; lexical overlap is
+measured without dropping evaluation tasks.
+
+All four frozen duplicate and combined-drop manifests are empty, so the private
+pins and all 7,763 task contracts are unchanged. [Drop-set equality evidence](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Ffull-qc%2Fcrosscode-eval%2F2026.11.13.1%2Fretention-proof.json)
+is also available at
+`s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/crosscode-eval/2026.11.13.1/retention-proof.json`.
+Python's original pin retains FULL content QA: 500 valid reviews, eight issues
+(1.60%, GOOD), with zero unavailable or uncertain observations. That exact-pin
+content evidence does not establish execution qualification of Python's four-tier
+grading repair candidate.
+
 `crosscode_python` stages a new candidate for the frozen 500-task CrossCode Python
 population. Build the archived public actor context with the image builder first,
 using explicit batch priority and three-day deadlines for its build and push.

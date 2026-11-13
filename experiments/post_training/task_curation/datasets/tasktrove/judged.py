@@ -66,6 +66,7 @@ JUDGE_QUALIFICATION_PENDING = (
 
 QUICK_COHORTS = {
     "tasktrove-codereview": PrebuiltCohort(
+        intended_use=IntendedUse.TRAIN,
         name="tasktrove-codereview",
         version="3",
         repo="open-athena/tasktrove-codereview-medium-quick-20261112",
@@ -73,6 +74,7 @@ QUICK_COHORTS = {
         expected_rows=10000,
     ),
     "tasktrove-stack_overflow": PrebuiltCohort(
+        intended_use=IntendedUse.TRAIN,
         name="tasktrove-stack_overflow",
         version="3",
         repo="open-athena/tasktrove-stack_overflow-medium-quick-20261112",
@@ -80,6 +82,7 @@ QUICK_COHORTS = {
         expected_rows=10000,
     ),
     "tasktrove-superuser": PrebuiltCohort(
+        intended_use=IntendedUse.TRAIN,
         name="tasktrove-superuser",
         version="3",
         repo="open-athena/tasktrove-superuser-medium-quick-20261112",
@@ -87,6 +90,7 @@ QUICK_COHORTS = {
         expected_rows=10000,
     ),
     "tasktrove-unix": PrebuiltCohort(
+        intended_use=IntendedUse.TRAIN,
         name="tasktrove-unix",
         version="3",
         repo="open-athena/tasktrove-unix-medium-quick-20261112",
@@ -94,6 +98,7 @@ QUICK_COHORTS = {
         expected_rows=10000,
     ),
     "tasktrove-wizard_orca": PrebuiltCohort(
+        intended_use=IntendedUse.TRAIN,
         name="tasktrove-wizard_orca",
         version="3",
         repo="open-athena/tasktrove-wizard_orca-medium-quick-20261112",

@@ -106,3 +106,35 @@ def test_training_use_keeps_benchmark_tagged_sources_in_remediation_review():
     )
     assert source_lexical_use(source) is LexicalUse.TRAIN
     assert measurement_for_use(overlap_measurement(source.dataset.name), source_lexical_use(source)).receipt is None
+
+
+@pytest.mark.parametrize("language", ["python-v2", "typescript-v2", "java-v3", "csharp-v4"])
+def test_crosscode_eval_keeps_its_private_population_and_measures_lexical_overlap_only(language):
+    source = all_sources()[f"TaskTrove:laion__exp_rpt_crosscodeeval-{language}"]
+    evidence = source.info.lexical_contamination
+    assert source.config.intended_use is IntendedUse.EVAL
+    assert source_lexical_use(source) is LexicalUse.EVAL
+    assert evidence.input_dataset_id == source.dataset.name
+    assert evidence.input_dataset_revision == source.dataset.revision
+    assert evidence.receipt.use is LexicalUse.EVAL
+    assert evidence.receipt.status is DeconReceiptStatus.BENCHMARK_MEASURED
+    assert evidence.receipt.retained_tasks == source.info.count
+    assert evidence.receipt.dropped_tasks == 0
+    assert evidence.receipt.release is None
+    assert source.info.within_source_dedup.unique_count == source.info.count
+    assert source.declaration.status == "Not selectable"
+
+
+def test_crosscode_python_retains_complete_content_result_without_execution_admission():
+    source = all_sources()["TaskTrove:laion__exp_rpt_crosscodeeval-python-v2"]
+    declaration = source.declaration
+    assert declaration.current_release.revision == "a953f93bc830704525ff2cce0b296dd262009662"
+    assert declaration.quality_result.reviewed == declaration.task_count == 500
+    assert declaration.quality_result.issue_count == 8
+    assert declaration.quality_result.issue_rate == 0.016
+    assert declaration.quality_result.verdict == "good"
+    assert declaration.quality_result.unavailable_count == declaration.quality_result.uncertain_count == 0
+    assert declaration.independent_qc.reviewed == 500
+    assert declaration.independent_qc.admitted is None
+    assert declaration.oversight == "none"
+    assert declaration.status == "Not selectable"
