@@ -60,6 +60,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.tests.admission_fixtures import (
@@ -570,6 +571,44 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
     )
     (tmp_path / "coverage.json").write_text(coverage.model_dump_json())
     return path
+
+
+@pytest.mark.parametrize("retired_source", ["Marin:a", "Marin:inventory", "MarinSkyRL:aime24"])
+def test_retired_curriculum_is_rejected_before_idempotency_or_sql(tmp_path, monkeypatch, retired_source):
+    path = curriculum_release(tmp_path)
+    if retired_source == "MarinSkyRL:aime24":
+        release = json.loads(path.read_text())
+        release["inventory"][0].update(id=retired_source, origin=SourceOrigin.HUGGINGFACEH4, upstream_dataset="aime24")
+        release["sources"][0]["source_id"] = retired_source
+        path.write_text(json.dumps(release))
+    inputs = [path, tmp_path / "coverage.json", tmp_path / "tasks.parquet", tmp_path / "statistics.parquet"]
+    original_bytes = {file: file.read_bytes() for file in inputs}
+    ledger = tmp_path / "retirement-ledger.json"
+    ledger.write_text(json.dumps({"entries": [{"id": retired_source, "disposition": "retired_admission_check"}]}))
+    reference = tmp_path / "retirement-reference.json"
+    reference.write_text(
+        json.dumps(
+            {
+                "repo": "fixture/retirements",
+                "revision": "a" * 40,
+                "path": "retirements.json",
+                "sha256": hashlib.sha256(ledger.read_bytes()).hexdigest(),
+            }
+        )
+    )
+    monkeypatch.setattr(retirement, "RETIREMENTS_PATH", reference)
+    monkeypatch.setattr(registry, "hf_hub_download", lambda **_kwargs: str(ledger))
+    retirement.retired_admission_source_ids.cache_clear()
+    queries = []
+
+    def already_selected(sql, parameters):
+        queries.append((sql, parameters))
+        return {"rows": [{"release_id": "first", "release_uri": str(path)}]}
+
+    with pytest.raises(ValueError, match=f"Retired sources.*{canonical_source_id(retired_source)}"):
+        load_curriculum(str(path), str(tmp_path / "coverage.json"), already_selected)
+    assert queries == []
+    assert {file: file.read_bytes() for file in inputs} == original_bytes
 
 
 @pytest.mark.parametrize("unavailable_status", ["insufficient_context", "skipped"])
