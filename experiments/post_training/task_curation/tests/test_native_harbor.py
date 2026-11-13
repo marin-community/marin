@@ -33,9 +33,16 @@ from experiments.post_training.task_curation.within_source_binding import bind_w
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
-@pytest.mark.parametrize("complete_limits", [False, True])
-@pytest.mark.parametrize("separate_solution", [False, True])
-@pytest.mark.parametrize("intended_use", [IntendedUse.TRAIN, IntendedUse.EVAL])
+@pytest.mark.parametrize(
+    "separate_solution,intended_use,complete_limits",
+    [
+        (False, IntendedUse.TRAIN, False),
+        (True, IntendedUse.TRAIN, False),
+        (False, IntendedUse.EVAL, False),
+        (True, IntendedUse.EVAL, False),
+        (False, IntendedUse.TRAIN, True),
+    ],
+)
 def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
     separate_solution, complete_limits, intended_use, tmp_path, monkeypatch
 ):

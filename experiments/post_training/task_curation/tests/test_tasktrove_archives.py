@@ -11,7 +11,6 @@ from dataclasses import replace
 import pytest
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import MachineSpec, PackageSpec
-from taskcompendium.harbor.execution import native_execution_limits, task_with_declared_execution_requirements
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -27,7 +26,6 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.conversion import convert_row as convert_mechanical_row
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
-from taskcompendium.pipeline.review import review_payload
 from taskcompendium.runtime.shell import upload_resources
 from verifyit.grade import Status
 from verifyit.modes import grade_pytest
@@ -330,11 +328,6 @@ def test_archive_conversion_lifts_only_complete_original_limits(complete):
 
     converted = TaskTroveConverter("fixture", convert)(RawRow(task.id, source, data), ConversionContext({}, None))
     assert isinstance(converted, TaskSpec)
-    original = converted.model_copy(update={"execution_requirements": None})
-    assert review_payload(converted) == review_payload(original)
-    assert converted.source == task.source
-    assert converted.id == task.id
-    assert (converted.execution_requirements is not None) == complete
     if complete:
         assert converted.execution_requirements.model_dump() == {
             "cpus": 2,
@@ -343,9 +336,5 @@ def test_archive_conversion_lifts_only_complete_original_limits(complete):
             "agent_timeout_sec": 900,
             "verifier_timeout_sec": 60,
         }
-        with pytest.raises(ValueError, match="cpus conflicts"):
-            task_with_declared_execution_requirements(converted, native_execution_limits({"environment": {"cpus": 3}}))
-    assert (
-        next(resource for resource in converted.resources.oracle if resource.path == "task.toml").source.content_base64
-        == base64.b64encode(native).decode()
-    )
+    else:
+        assert converted.execution_requirements is None

@@ -24,6 +24,7 @@ class _EnvEntry(NamedTuple):
 
 # Optional Shellbox backends load only when selected.
 _ENVIRONMENT_REGISTRY: dict[EnvironmentType, _EnvEntry] = {
+    EnvironmentType.IRIS_SANDBOX: _EnvEntry("harbor.environments.iris_sandbox", "IrisSandboxEnvironment"),
     EnvironmentType.LOCAL: _EnvEntry("harbor.environments.local", "LocalEnvironment"),
     EnvironmentType.DAYTONA: _EnvEntry(
         "harbor.environments.daytona", "DaytonaEnvironment"

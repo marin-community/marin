@@ -149,17 +149,32 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
-3. Verify every source has a complete, exact-pin `within_source_dedup` receipt and
+3. Require `sandbox-image-workdir` in the direct Kubernetes backend descriptor
+   before submitting any prepared-image Iris task, even without declared disk.
+   Older controllers hide `/app` and must be rejected before submission.
+   Keep Iris sandbox storage admission disabled until a real
+   `CONTAINER_PROFILE_SANDBOX` overflow succeeds on the pinned CPU pool. Record
+   the node's CoreWeave-provided `runsc.toml` `overlay2` setting beside the raw
+   kubelet eviction status; a restricted-profile overflow is insufficient.
+   Check one sandbox container and one replica per task, exact-byte storage
+   quantities, no writable hostPath, and CPU/memory pod limits. Confirm an
+   own-limit eviction is `FAILED / RESOURCE_LIMIT_DISK`, rather than memory OOM
+   or node pressure. Only then enable Harbor storage admission and advertise
+   `sandbox-storage-limit` as an explicit backend fact. The current controller
+   advertises no such capability, and Harbor `iris-sandbox` rejects declared disk.
+   Controller deployment/restart requires separate user authorization. Service
+   groups and model relays remain unsupported on this environment.
+4. Verify every source has a complete, exact-pin `within_source_dedup` receipt and
    Examples equals its `unique_count`, including QUICK sources. Check raw and duplicate
    counts against the drop manifest, then verify version-bound lexical evidence.
    New or changed admissions require a private TaskCompendium clean/remediated
    receipt after [lexical decontamination](task-curation.md#lexical-decontamination-before-publication);
    preserve grandfathered selection until explicitly approved.
-4. Validate and release the app against the inspected package version, then load
+5. Validate and release the app against the inspected package version, then load
    the catalog with that survey's `--backend-map` artifact and the selected
    snapshot's `--source-identities` artifact. Fingerprint changed sources and
    resolve or acknowledge their shortlisted source-overlap flags before admission.
-5. Check `/backends`, `/source-duplicates`, `/sources`, an assessment and its evidence. Confirm the
+6. Check `/backends`, `/source-duplicates`, `/sources`, an assessment and its evidence. Confirm the
    selected snapshot and survey revision agree with the deployment record.
 
 ### Preview packaging before the shared runtime is updated
@@ -238,8 +253,10 @@ outcomes. `supported` means the declared feature passes its check; `partial`
 records an implementation or deployment condition; `unsupported` records a
 rejection or missing implementation. These are execution-contract checks, not
 provider capacity or verifier-liveness measurements. Docker storage quotas depend
-on its storage driver; Iris disk is a scheduling request. QEMU OCI inputs need
-configured assets and caches. Uploaded mtimes and non-root users have separate cells.
+on its storage driver. Iris storage enforcement remains unqualified and is not advertised. It requires
+one sandbox per task on a direct Kubernetes controller and the SANDBOX overflow
+evidence described in the deployment checklist. Shared-worker LOCAL has no disk quota.
+QEMU OCI inputs need configured assets and caches. Uploaded mtimes and non-root users have separate cells.
 
 This offline survey makes no provider calls and creates no machines or snapshots.
 Record measured account limits separately in `deployment_limits`, keyed by backend,

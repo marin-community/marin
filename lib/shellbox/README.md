@@ -41,7 +41,7 @@ credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
-`/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
+`/bin/sh`, `setsid`, `base64`, `tar`, `head`, `tail`, `wc` and readable `/proc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer.
 Daytona uploads each control wrapper into a private command directory before execution,
@@ -110,8 +110,33 @@ UTS namespaces. Container names resolve to `127.0.0.1` inside the group.
 address. Concurrent groups may use the same ports. Every member must request
 `NetworkPolicy.DENY`; the group never falls back to host networking.
 
-The Iris adapter supports single-container machine commands and file transfer;
-it provides neither `create_task` nor process sessions.
+The Iris adapter supports singleton `create_task`, machine commands and file
+transfer. It rejects multi-container tasks and provides no process sessions.
+Each command runs in a new process group. Timeout or caller cancellation stops
+that group, waits for its live members and remote exec to finish, and preserves
+the machine's files for verification. Failure to confirm the stop closes the
+machine. A stop marker fences commands admitted after cancellation.
+
+Declared storage requires a direct Kubernetes controller advertising
+`sandbox-storage-limit`. The candidate manifest sets exact-byte ephemeral-storage
+limits with zero harness allowance, including command files. Only newly marked
+sandbox pods' explicit own-limit evictions raise `DiskLimitExceeded`; ordinary
+jobs and node disk pressure retain their prior classification. SANDBOX writable
+layer accounting is unqualified, so no controller currently advertises this
+capability. Restricted-profile overflow evidence is insufficient.
+
+Prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
+Harbor selects this backend through `--environment iris-sandbox` with `cluster`,
+`pool`, `priority` and `ttl` kwargs. It reports no storage capability and rejects
+declared disk until a real SANDBOX overflow qualifies the pinned pool and its
+`runsc.toml` `overlay2` setting. Sandbox startup is currently blocked on
+[cpu-genoa](https://github.com/marin-community/marin/issues/11343) and
+[H100](https://github.com/marin-community/marin/issues/10090). The environment
+supports only single-container tasks without process-session model relays.
 
 Creation starts the containers and returns handles without waiting for health.
 Start host capabilities before readiness when a container needs them:
