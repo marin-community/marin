@@ -6,34 +6,22 @@ from dataclasses import replace
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
-from iris.cluster.controller.backend import plans_from_snapshot
-from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.backend import ScheduleRequest, plans_from_snapshot, run_scheduling_decision
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
-from iris.cluster.controller.scheduling.scheduler import (
-    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
-    JobRequirements,
-    Scheduler,
-    SchedulingContext,
-    worker_snapshot_from_row,
-)
+from iris.cluster.controller.scheduling.policy import build_scheduling_context
+from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
     assign_task,
-    building_counts,
-    check_task_can_be_scheduled,
     dispatch_task,
-    healthy_active_workers,
     make_test_entrypoint,
     make_worker_metadata,
     query_attempt,
-    query_job,
     query_task,
     query_tasks_for_job,
     register_worker,
-    schedulable_tasks,
     submit_job,
 )
 from iris.testing.controller_state import ControllerTestState
@@ -82,44 +70,13 @@ def _tpu_used(state: ControllerTestState, worker_id: WorkerId) -> int:
 
 
 def _schedule(state: ControllerTestState) -> list[tuple[JobName, WorkerId]]:
-    tasks = [task for task in schedulable_tasks(state) if check_task_can_be_scheduled(task)]
-    jobs = {}
-    for task in tasks:
-        job = query_job(state, task.job_id)
-        devices = device_counts_from_json(job.res_device_json)
-        jobs[task.job_id] = JobRequirements(
-            req_cpu_millicores=job.res_cpu_millicores,
-            req_memory_bytes=job.res_memory_bytes,
-            req_gpu_count=devices.gpu,
-            req_tpu_count=devices.tpu,
-            device_variant=device_variant_from_json(job.res_device_json),
-            constraints=constraints_from_json(job.constraints_json),
-            is_coscheduled=job.has_coscheduling,
-            coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
-        )
     with state._db.read_snapshot() as snap:
-        usage = reads.resource_usage_by_worker(snap)
-    scheduler = Scheduler()
-    context = SchedulingContext(
-        workers=[worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in healthy_active_workers(state)],
-        building_counts=building_counts(state),
-        max_building_tasks=scheduler.max_building_tasks_per_worker,
-        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
-        pending_tasks=[task.task_id for task in tasks],
-        jobs=jobs,
-        pending_task_rows=[],
-        user_spend={},
-        user_budget_limits={},
-        requested_bands={},
-        user_budget_defaults=UserBudgetDefaults(),
-    )
-    assignments = scheduler.find_assignments(context).assignments
-    if assignments:
+        context = build_scheduling_context(snap, state._health, state._worker_attrs, UserBudgetDefaults())
+    result = run_scheduling_decision(Scheduler(), ScheduleRequest(context=context, max_tasks_per_job_per_cycle=0))
+    if result.assignments:
         with state._db.transaction() as cur:
-            ops.task.assign(
-                cur, [Assignment(task_id=tid, worker_id=wid) for tid, wid in assignments], health=state._health
-            )
-    return assignments
+            ops.task.assign(cur, result.assignments, health=state._health)
+    return [(assignment.task_id, assignment.worker_id) for assignment in result.assignments]
 
 
 def _preempt(state: ControllerTestState, task_ids: list[JobName]) -> None:
