@@ -32,6 +32,7 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     QemuBundle,
     Result,
     ShellStatus,
@@ -322,6 +323,9 @@ class QemuMachine:
             raise
         self._shell = QemuShellSession(reader, writer)
         return self._shell
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("QEMU does not provide an independent scope control channel")
 
     async def run(self, command: Command) -> Result:
         if not command.argv:

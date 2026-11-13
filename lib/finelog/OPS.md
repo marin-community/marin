@@ -549,7 +549,9 @@ forwarding:
 The public key in `marin.yaml` must be the public half of `forwarding.signing_key` —
 that pairing is what authenticates the sender, and a wrong key is a 401 on every
 push. `forwarding.cluster` is the origin name the sender stamps on every forwarded
-row; keep it equal to the hub key entry's `cluster` label so reads line up.
+row; keep it equal to the hub key entry's `cluster` label so reads line up. A sender
+forwards rows whose `cluster` is empty or already its own `forwarding.cluster`, and
+skips rows naming any other cluster.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
 then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager

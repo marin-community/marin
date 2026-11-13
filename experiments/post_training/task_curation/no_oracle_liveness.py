@@ -147,9 +147,8 @@ async def run_one(
             from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
             from shellbox.backends.daytona.machine import (  # noqa: PLC0415
                 DaytonaMachineFactory,
-                snapshot_identity,
-                snapshot_resources,
             )
+            from shellbox.backends.daytona.snapshot import snapshot_request_for_spec  # noqa: PLC0415
 
             if requirements.docker_build is not None:
                 context_dir = Path(context)
@@ -175,7 +174,7 @@ async def run_one(
                 memory_mb=runtime.memory_mb,
                 storage_mb=runtime.storage_mb,
             )
-            snapshot = snapshot_identity(spec_machine.source, snapshot_resources(spec_machine))
+            snapshot = snapshot_request_for_spec(spec_machine).name
             grading_factory = factory or DaytonaMachineFactory()
         spec_machine = replace(spec_machine, startup_timeout=runtime.startup_timeout)
         try:

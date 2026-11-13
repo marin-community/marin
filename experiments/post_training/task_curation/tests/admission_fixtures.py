@@ -8,7 +8,7 @@ import json
 from dataclasses import replace
 
 import pytest
-from finestore.rl.curation import ActorCensusInput
+from finestore.rl.curation import ActorCensusInput, SourceDeclaration
 
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.admission_binding import AdmissionCensusReceipt
@@ -102,3 +102,16 @@ def with_admission_census(source: RlDataSource) -> RlDataSource:
         source.info.within_source_dedup.unique_count,
     )
     return replace(source, info=replace(source.info, actor_census_input=binding))
+
+
+def with_declaration_admission_census(declaration: SourceDeclaration) -> SourceDeclaration:
+    assert declaration.dataset_id is not None and declaration.dataset_revision is not None
+    assert declaration.pipeline is not None
+    binding = register_admission_census(
+        declaration.id,
+        declaration.dataset_id,
+        declaration.dataset_revision,
+        declaration.pipeline.version,
+        declaration.within_source_dedup.unique_count,
+    )
+    return SourceDeclaration.model_validate({**declaration.model_dump(), "actor_census_input": binding})
