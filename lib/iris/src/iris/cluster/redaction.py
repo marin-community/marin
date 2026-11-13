@@ -114,8 +114,6 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
         next_tok = out[i + 1] if i + 1 < n else None
         key = _env_var_flag_key(tok, next_tok)
         if key is None:
-            # A flag named like a secret (``--api-key VALUE``,
-            # ``--password=VALUE``) has its value masked.
             if _sensitive_flag_name(tok) is not None:
                 if "=" in tok:
                     out[i] = tok.split("=", 1)[0] + "=" + REDACTED_VALUE

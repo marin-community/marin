@@ -6,7 +6,8 @@
 The shared regex/entropy/key-name behavior is covered in
 ``lib/rigging/tests/test_redaction.py``. These tests focus on iris-specific
 adaptation: argv parsing for ``iris job run -e KEY VALUE`` in every Click
-syntax variant.
+syntax variant, masking the value of a flag named like a secret, and stripping
+URL userinfo.
 """
 
 import pytest
