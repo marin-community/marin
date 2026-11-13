@@ -67,10 +67,12 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
         data=data, train_seq_len=16, data_seed=31, trainer=TrainerConfig(seed=17, train_batch_size=2, num_train_steps=8)
     )
     native = tmp_path / "trained"
-    checkpoint = native / "checkpoints/step-8"
+    checkpoint = native / "checkpoints/step-7"
     checkpoint.mkdir(parents=True)
-    (checkpoint / "metadata.json").write_text('{"step":8,"is_temporary":false}')
-    (native / "selected.json").write_text(json.dumps({"step": 8, "checkpoint": str(checkpoint), "format": "SFTSpec"}))
+    (checkpoint / "metadata.json").write_text('{"step":7,"is_temporary":false}')
+    (native / "selected.json").write_text(
+        json.dumps({"step": 7, "completed_updates": 8, "checkpoint": str(checkpoint), "format": "SFTSpec"})
+    )
     (native / "consumed-config.json").write_text(
         json.dumps({"format": "SFTSpec", "train_config": draccus.encode(config)})
     )
@@ -112,6 +114,9 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
     assert report["overall"]["left_truncated_traces"] > 0
     assert report["overall"]["pad_tokens"] > 0
     assert report["overall"]["real_tokens"] + report["overall"]["pad_tokens"] == 256
+    replay = [row for row in rows if not row["is_sft"]]
+    assert report["overall"]["replay"]["loss_tokens"] == sum(row["loss_tokens"] for row in replay)
+    assert report["overall"]["replay"]["fraction_of_positions"] == len(replay) / len(rows)
     inputs, receipt = sft_accounting_inputs(str(output))
     archive = tmp_path / "archive"
     seal_archive(str(archive), inputs, {"sft_data_accounting": receipt})

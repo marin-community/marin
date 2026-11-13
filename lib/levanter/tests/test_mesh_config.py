@@ -2,8 +2,35 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from dataclasses import dataclass
+from jax.sharding import AxisType
 
-from levanter.utils.mesh import MeshConfig
+from levanter.utils.mesh import MeshConfig, create_mesh_from_axis_specs
+
+
+@dataclass(frozen=True)
+class GpuDevice:
+    id: int
+    slice_index: int
+    process_index: int
+    platform: str = "gpu"
+    device_kind: str = "NVIDIA H100"
+
+
+def test_hybrid_gpu_mesh_preserves_iota_assignment_and_named_groups():
+    devices = [GpuDevice(i, i // 8, i // 8) for i in range(256)]
+    mesh = create_mesh_from_axis_specs(
+        ici_axes={"expert": 8},
+        dcn_axes={"context": 32},
+        devices=list(reversed(devices)),
+        axis_types=(AxisType.Explicit, AxisType.Auto),
+    )
+    assert [device.id for device in mesh.devices.flat] == list(range(256))
+    assert mesh.axis_types == (AxisType.Auto, AxisType.Explicit)
+    for node in range(32):
+        assert [device.id for device in mesh.devices[node, :]] == list(range(node * 8, (node + 1) * 8))
+    for expert in range(8):
+        assert [device.id for device in mesh.devices[:, expert]] == list(range(expert, 256, 8))
 
 
 def test_axis_shapes_inherit_defaults_and_absorb():

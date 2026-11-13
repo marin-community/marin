@@ -127,15 +127,21 @@ def native_sft_step(name: str, version: str, recipe: dict) -> ArtifactStep:
 
     def execute(config):
         run(config)
-        checkpoint = prefix_join(config.output_path, f"checkpoints/step-{spec.num_train_steps}")
-        metadata = read_json(prefix_join(checkpoint, "metadata.json"))
-        if metadata["step"] != spec.num_train_steps or metadata["is_temporary"]:
-            raise ValueError("Shared SFT did not commit its final native checkpoint")
-        (StoragePath(config.output_path) / "selected.json").write_text(
-            json.dumps({"checkpoint": checkpoint, "step": spec.num_train_steps, "format": "SFTSpec"})
-        )
+        select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
 
     return replace(trained, run=execute)
+
+
+def select_shared_sft(*, output: str, completed_updates: int) -> None:
+    """Bind native zero-based checkpoint indices to the completed update count."""
+    step = completed_updates - 1
+    checkpoint = prefix_join(output, f"checkpoints/step-{step}")
+    metadata = read_json(prefix_join(checkpoint, "metadata.json"))
+    if metadata["step"] != step or metadata["is_temporary"]:
+        raise ValueError("Shared SFT did not commit its final native checkpoint")
+    (StoragePath(output) / "selected.json").write_text(
+        json.dumps({"checkpoint": checkpoint, "step": step, "completed_updates": completed_updates, "format": "SFTSpec"})
+    )
 
 
 def export_shared_sft(*, output: str, trained: str, context_limit: int, source_revision: str) -> None:

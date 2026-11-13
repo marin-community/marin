@@ -9,11 +9,17 @@ import draccus
 import pytest
 import yaml
 from fray.types import ResourceConfig
+from levanter.checkpoint import save_checkpoint
 from marin.execution.lazy import ArtifactStep, StepContext
 
 from experiments.post_training.long_loop.run_spec import resolve_spec
 from experiments.post_training.long_loop.sft import SMOKE_CONFIG
-from experiments.post_training.long_loop.shared_sft import export_shared_sft, legacy_sft_step, shared_sft_spec
+from experiments.post_training.long_loop.shared_sft import (
+    export_shared_sft,
+    legacy_sft_step,
+    select_shared_sft,
+    shared_sft_spec,
+)
 from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
 from experiments.sft.launcher import sft_step
 
@@ -86,7 +92,12 @@ def test_native_handoff_preserves_exported_weights_and_declares_rl_context(tmp_p
     root = tmp_path / "trained"
     hf = root / "hf/step-2"
     hf.mkdir(parents=True)
-    (root / "selected.json").write_text(json.dumps({"step": 2, "checkpoint": str(root / "checkpoints/step-2")}))
+    save_checkpoint(
+        {"model": 1, "step": 3}, step=2, checkpoint_path=str(root / "checkpoints/step-2"), is_temporary=False
+    )
+    select_shared_sft(output=str(root), completed_updates=3)
+    selection = json.loads((root / "selected.json").read_text())
+    assert selection["step"] == 2 and selection["completed_updates"] == 3
     (root / "consumed-config.json").write_text('{"format":"SFTSpec"}')
     (hf / "config.json").write_text('{"max_position_embeddings":32768}')
     (hf / "model.safetensors.index.json").write_text('{"weight_map":{"model.weight":"weight.safetensors"}}')

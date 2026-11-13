@@ -153,6 +153,17 @@ def create_mesh_from_axis_specs(
     if not devices:
         raise ValueError("No devices available to build a mesh.")
 
+    if axis_types is not None and len(axis_types) != len(axis_names):
+        raise ValueError(f"axis_types must match axis_names length: {len(axis_types)} != {len(axis_names)}")
+    if devices[0].platform == "gpu":
+        # XLA's distributed GPU autotuner requires IOTA device assignment.
+        # Outer-network axes must precede node-local axes so flattening the
+        # hybrid grid preserves topology-aware GPU numbering.
+        types_by_name = dict(zip(axis_names, axis_types, strict=True)) if axis_types is not None else None
+        axis_names = list(dcn_axes) + list(ici_axes)
+        if types_by_name is not None:
+            axis_types = tuple(types_by_name[name] for name in axis_names)
+
     ici_mesh_shape = tuple(ici_axes.get(name, 1) for name in axis_names)
     dcn_mesh_shape = tuple(dcn_axes.get(name, 1) for name in axis_names)
 
@@ -172,9 +183,6 @@ def create_mesh_from_axis_specs(
             devices=devices,
             allow_split_physical_axes=allow_split_physical_axes,
         )
-
-    if axis_types is not None and len(axis_types) != len(axis_names):
-        raise ValueError(f"axis_types must match axis_names length: {len(axis_types)} != {len(axis_names)}")
 
     return Mesh(device_mesh, tuple(axis_names), axis_types=axis_types)
 

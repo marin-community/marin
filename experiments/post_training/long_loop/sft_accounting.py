@@ -90,6 +90,11 @@ def sequence_statistics(rows: list[dict], sequence_length: int, batch_size: int,
     real = int(lengths.sum())
     original = sum(row["original_tokens"] for row in rows)
     assistant = sum(row["loss_tokens"] for row in rows if row["is_sft"])
+    replay = [row for row in rows if not row["is_sft"]]
+    replay_positions = len(replay) * sequence_length
+    replay_real = sum(row["real_tokens"] for row in replay)
+    replay_loss = sum(row["loss_tokens"] for row in replay)
+    all_loss = assistant + replay_loss
     documents = [doc for row in rows for doc in row["documents"]]
     document_lengths = [doc["real_tokens"] for doc in documents]
     document_lengths.extend(row["real_tokens"] for row in rows if not row["is_sft"])
@@ -121,6 +126,23 @@ def sequence_statistics(rows: list[dict], sequence_length: int, batch_size: int,
         "loss_bearing_assistant_tokens": assistant,
         "assistant_fraction_of_positions": assistant / positions if positions else 0.0,
         "all_loss_tokens": sum(row["loss_tokens"] for row in rows),
+        "replay": {
+            "positions": replay_positions,
+            "real_tokens": replay_real,
+            "loss_tokens": replay_loss,
+            "fraction_of_positions": replay_positions / positions if positions else 0.0,
+            "fraction_of_real_tokens": replay_real / real if real else 0.0,
+            "fraction_of_loss_tokens": replay_loss / all_loss if all_loss else 0.0,
+        },
+        "chat": {
+            "positions": positions - replay_positions,
+            "real_tokens": real - replay_real,
+            "assistant_loss_tokens": assistant,
+            "fraction_of_positions": 1 - replay_positions / positions if positions else 0.0,
+            "fraction_of_real_tokens": 1 - replay_real / real if real else 0.0,
+            "fraction_of_loss_tokens": assistant / all_loss if all_loss else 0.0,
+            "assistant_fraction_of_chat_real_tokens": assistant / (real - replay_real) if real > replay_real else 0.0,
+        },
         "positions_per_second": batch_size * sequence_length / step_seconds,
         "estimated_real_tokens_per_second": (
             batch_size * sequence_length / step_seconds * real / positions if positions else 0.0
@@ -190,9 +212,9 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
     if document["format"] != "SFTSpec":
         raise ValueError("SFT accounting requires the native SFTSpec producer")
     config = draccus.decode(TrainLmConfig, document["train_config"])
-    steps = selected["step"]
+    steps = selected["completed_updates"]
     metadata = (StoragePath(selected["checkpoint"]) / "metadata.json").read_bytes()
-    if json.loads(metadata)["step"] != steps:
+    if json.loads(metadata)["step"] != selected["step"] or selected["step"] + 1 != steps:
         raise ValueError("SFT accounting checkpoint and selection disagree")
     length = config.train_seq_len or config.model.max_seq_len
     batch = config.trainer.train_batch_size
