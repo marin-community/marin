@@ -21,7 +21,7 @@ def tensor(value):
     return torch.from_numpy(np.asarray(value).copy())
 
 
-def optimizers(parameters, routes, *, offload_momentum=True, expert_parallel_group=None):
+def optimizers(parameters, routes, *, offload_momentum=True, expert_parallel_group=None, normalization="all_experts"):
     groups = [
         {"params": [parameter], "optimizer": megatron_grug_route(name, parameter)}
         for name, parameter in parameters.items()
@@ -42,7 +42,9 @@ def optimizers(parameters, routes, *, offload_momentum=True, expert_parallel_gro
             parameter: bank
             for name, parameter in parameters.items()
             if (bank := megatron_grug_expert_bank(name)) is not None
-        },
+        }
+        if normalization == "all_experts"
+        else {},
         expert_parallel_group=expert_parallel_group,
     )
     adam = torch.optim.Adam(
@@ -54,9 +56,11 @@ def optimizers(parameters, routes, *, offload_momentum=True, expert_parallel_gro
     return muon, adam
 
 
+@pytest.mark.parametrize("normalization", ["all_experts", "per_expert"])
 @pytest.mark.parametrize("offload_momentum", [False, True])
-def test_hero_ep_routes_updates_moments_and_restart_match_pinned_jax(offload_momentum):
-    with np.load(FIXTURE, allow_pickle=False) as fixture:
+def test_hero_ep_routes_updates_moments_and_restart_match_pinned_jax(offload_momentum, normalization):
+    fixture_path = FIXTURE if normalization == "all_experts" else FIXTURE.with_name("golden_per_expert.npz")
+    with np.load(fixture_path, allow_pickle=False) as fixture:
         names = fixture["metadata_names"].tolist()
         routes = dict(zip(names, fixture["metadata_routes"].tolist(), strict=True))
         parameters = {name: torch.nn.Parameter(tensor(fixture[f"initial__{name}"])) for name in names}
@@ -65,7 +69,14 @@ def test_hero_ep_routes_updates_moments_and_restart_match_pinned_jax(offload_mom
             assert (
                 "adam" if actual_route == "adam" else "adamh" if actual_route == "grug_adamh" else "muonh"
             ) == routes[name]
-        muon, adam = optimizers(parameters, routes, offload_momentum=offload_momentum)
+        muon, adam = optimizers(parameters, routes, offload_momentum=offload_momentum, normalization=normalization)
+        # Megatron replaces the original parameters with FP32 masters after
+        # constructing the optimizer. Bank identity must survive that replacement.
+        replacements = {p: torch.nn.Parameter(p.detach().clone()) for p in parameters.values()}
+        for optimizer in (muon, adam):
+            for group in optimizer.param_groups:
+                group["params"] = [replacements[p] for p in group["params"]]
+        parameters = {name: replacements[p] for name, p in parameters.items()}
         for number in range(1, 4):
             previous = {name: parameter.detach().clone() for name, parameter in parameters.items()}
             for name, parameter in parameters.items():
@@ -116,7 +127,9 @@ def test_hero_ep_routes_updates_moments_and_restart_match_pinned_jax(offload_mom
                 saved.seek(0)
                 restored = torch.load(saved, weights_only=True)
                 parameters = {name: torch.nn.Parameter(value) for name, value in restored["parameters"].items()}
-                muon, adam = optimizers(parameters, routes, offload_momentum=offload_momentum)
+                muon, adam = optimizers(
+                    parameters, routes, offload_momentum=offload_momentum, normalization=normalization
+                )
                 muon.initialize_state()
                 muon.load_state_dict(restored["muon"])
                 adam.load_state_dict(restored["adam"])
@@ -128,28 +141,72 @@ def expert_bank_worker(rank, root):
         with np.load(FIXTURE, allow_pickle=False) as fixture:
             # The two owners have unequal expert counts and unequal expert norms.
             names = [
-                f"decoder.layers.0.mlp.experts.linear_fc2.weight{index}" for index in ((0,) if rank == 0 else (1, 2))
+                f"decoder.layers.{layer}.mlp.experts.linear_fc{projection}.weight{index}"
+                for layer in range(2)
+                for projection in (1, 2)
+                for index in ((0,) if rank == 0 else (1, 2))
             ]
             parameters = {name: torch.nn.Parameter(tensor(fixture[f"initial__{name}"])) for name in names}
-            optimizer = MegatronGrugMuonH(
-                [{"params": list(parameters.values()), "optimizer": "grug_muonh"}],
-                lr=0.03,
-                betas=(0.9, 0.95),
-                momentum=0.95,
-                nesterov=True,
-                ns_steps=5,
-                eps=1e-8,
-                muon_eps=1e-8,
-                qkv_split_shapes=(4, 2, 2),
-                offload_momentum=True,
-                parameter_banks={parameter: "layer0-down" for parameter in parameters.values()},
-                expert_parallel_group=dist.group.WORLD,
-            )
+
+            def new_optimizer(parameters):
+                return MegatronGrugMuonH(
+                    [{"params": [p], "optimizer": megatron_grug_route(name, p)} for name, p in parameters.items()],
+                    lr=0.03,
+                    betas=(0.9, 0.95),
+                    momentum=0.95,
+                    nesterov=True,
+                    ns_steps=5,
+                    eps=1e-8,
+                    muon_eps=1e-8,
+                    qkv_split_shapes=(4, 2, 2),
+                    offload_momentum=True,
+                    # Both grouped-GEMM naming forms must activate the same banks.
+                    parameter_banks={
+                        p: megatron_grug_expert_bank(name.replace(".experts.", ".experts.experts."))
+                        for name, p in parameters.items()
+                    },
+                    expert_parallel_group=dist.group.WORLD,
+                )
+
+            optimizer = new_optimizer(parameters)
             for number in range(1, 4):
+                previous = {name: p.detach().clone() for name, p in parameters.items()}
                 for name, parameter in parameters.items():
                     parameter.grad = tensor(fixture[f"gradient_{number}__{name}"])
                 optimizer.step()
-            torch.save({name: p.detach() for name, p in parameters.items()}, Path(root) / f"rank-{rank}.pt")
+                for name, parameter in parameters.items():
+                    expected = tensor(fixture[f"parameter_{number}__{name}"])
+                    expected_previous = tensor(
+                        fixture[f"{'initial' if number == 1 else f'parameter_{number - 1}'}__{name}"]
+                    )
+                    delta = parameter.detach() - previous[name]
+                    expected_delta = expected - expected_previous
+                    assert (
+                        torch.linalg.vector_norm(delta - expected_delta) / torch.linalg.vector_norm(expected_delta)
+                        < 1e-3
+                    )
+                    torch.testing.assert_close(parameter, expected, rtol=3e-3, atol=1.5e-3)
+                    torch.testing.assert_close(
+                        optimizer.state[parameter]["momentum_buffer"],
+                        tensor(fixture[f"momentum_{number}__{name}"]),
+                        rtol=2e-6,
+                        atol=5e-7,
+                    )
+                if number == 1:
+                    path = Path(root) / f"rank-{rank}.pt"
+                    torch.save(
+                        {
+                            "parameters": {name: p.detach() for name, p in parameters.items()},
+                            "optimizer": optimizer.state_dict(),
+                        },
+                        path,
+                    )
+                    saved = torch.load(path, weights_only=True)
+                    parameters = {name: torch.nn.Parameter(value) for name, value in saved["parameters"].items()}
+                    optimizer = new_optimizer(parameters)
+                    optimizer.initialize_state()
+                    optimizer.load_state_dict(saved["optimizer"])
+            torch.save({name: p.detach() for name, p in parameters.items()}, Path(root) / f"final-{rank}.pt")
     finally:
         dist.destroy_process_group()
 
@@ -157,6 +214,6 @@ def expert_bank_worker(rank, root):
 def test_hero_expert_parallel_bank_matches_jax_with_unequal_local_banks(tmp_path):
     mp.spawn(expert_bank_worker, args=(str(tmp_path),), nprocs=2, join=True)
     with np.load(FIXTURE, allow_pickle=False) as fixture:
-        for path in sorted(tmp_path.glob("rank-*.pt")):
-            for name, value in torch.load(path, weights_only=True).items():
+        for rank in range(2):
+            for name, value in torch.load(tmp_path / f"final-{rank}.pt", weights_only=True).items():
                 torch.testing.assert_close(value, tensor(fixture[f"parameter_3__{name}"]), rtol=3e-3, atol=1.5e-3)

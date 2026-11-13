@@ -6,6 +6,7 @@ optimizer update is not jitted; JAX executes its individual compiled primitives.
 mapping Levanter arrays into Megatron's fused parameter layout.
 """
 
+import argparse
 from pathlib import Path
 
 import jax
@@ -16,7 +17,12 @@ from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 
 REFERENCE = "4af966070e5d0252e87d404196400c35bd04883b"
-OUTPUT = Path(__file__).with_name("golden.npz")
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--expert-normalization", choices=("all_experts", "per_expert"), default="all_experts")
+args = parser.parse_args()
+OUTPUT = Path(__file__).with_name(
+    "golden.npz" if args.expert_normalization == "all_experts" else "golden_per_expert.npz"
+)
 STEPS = 3
 rng = np.random.default_rng(20261111)
 
@@ -104,6 +110,7 @@ def megatron_layout(tree, selected_route=None):
 with jax.set_mesh(mesh):
     params = jax.tree.map(lambda value: jax.device_put(value, NamedSharding(mesh, PartitionSpec())), params)
     config = GrugMoeMuonHConfig(
+        expert_normalization=args.expert_normalization,
         learning_rate=0.03,
         adam_lr=0.004,
         momentum=0.95,

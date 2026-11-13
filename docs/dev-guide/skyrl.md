@@ -65,6 +65,50 @@ policy. It trades host memory and device-to-host/host-to-device copies for GPU
 headroom; update time can increase. It cannot be combined with Megatron's other
 activation-offload modes.
 
+## Hero EP MuonH
+
+Set `trainer.policy.optimizer_config.optimizer: MuonH` and
+`trainer.policy.optimizer_config.optimizer_kwargs.expert_normalization: all_experts`
+to use Hero EP's norm constraint. Each layer's routed gate, up and down expert
+banks each preserve their weight Frobenius norm across expert owners. The implementation reduces
+norm scalars over the EP group without gathering weights. Each shared expert
+projection keeps its own weight norm. Fused gate/up and Q/K/V weights retain
+separate logical matrix updates. Supported routed names end in
+`mlp.experts.linear_fc[12].weight<N>` or
+`mlp.experts.experts.linear_fc[12].weight<N>`.
+
+The default `expert_normalization: per_expert` keeps a separate constraint for
+each expert matrix. Both modes round quintic coefficients and the FP32 sum
+of squared BF16 direction entries to BF16 before taking the square root. Square
+matrices transpose before Newton–Schulz in Megatron layout to match Levanter's
+transposed weight layout. This changes numerical updates
+in the existing per-expert mode too. Independent three-update JAX fixtures cover
+both modes in `vendor/skyrl/skyrl-train/tests/test_grug_muonh.py`.
+
+MuonH and AdamH use Muon and Adam directions, respectively, then project the
+updated weights back to their original Frobenius norm. MuonH owns matrix
+weights, AdamH owns the readout, and Adam owns embeddings,
+routers, attention gates, scalar norm gains and ShortConv kernels. Set
+`optimizer_kwargs.adam_lr` separately for the Adam route. The checked fixtures
+use the `GrugMoeMuonHConfig` and SkyRL MuonH defaults:
+`adam_betas: [0.9, 0.95]`, momentum `0.95`, Nesterov momentum, five BF16 quintic
+steps, `epsilon: 1e-8` for Adam/AdamH and `muon_epsilon: 1e-8` for direction
+normalization. The Hero pretraining heuristic in
+`experiments/grug/moe_hero_ep/heuristic.py` sets learning rates, schedules, beta2
+and Adam/AdamH epsilon from the run's token budget and batch size.
+
+Use `weight_decay: 0`, `max_grad_norm: 0`, TP=ETP=1, FP32 master parameters and
+`megatron_config.optimizer_config_kwargs.use_distributed_optimizer: false`.
+Megatron's AdamW CPU offload and precision-aware optimizer are unsupported for
+MuonH. `optimizer_kwargs.offload_momentum: true` keeps Muon momentum in pinned
+CPU memory while the update runs on GPU.
+
+Native checkpoints record `MuonH:hero_ep_all_experts` for whole-bank state and
+`MuonH` for per-expert state. Training-state restore rejects a mismatched recipe.
+Model-only restore can start a fresh optimizer with a different recipe. The
+implementation was extracted from [the Mochi experiment](https://github.com/marin-community/marin/pull/11199);
+the numerical reference is [Hero EP at 4af966070e5d0252e87d404196400c35bd04883b](https://github.com/marin-community/marin/tree/4af966070e5d0252e87d404196400c35bd04883b/experiments/grug/moe_hero_ep).
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
