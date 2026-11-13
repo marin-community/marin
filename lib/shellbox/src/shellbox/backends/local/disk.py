@@ -25,6 +25,8 @@ GUARD_SOURCE = Path(disk_lifecycle.__file__).read_text()
 
 @dataclass
 class LocalDisk:
+    """A bounded filesystem whose guardian owns mount and loop-device cleanup."""
+
     directory: Path
     guardian: subprocess.Popen[bytes]
     errors: BinaryIO
@@ -70,6 +72,7 @@ class LocalDisk:
             )
 
     def close(self) -> None:
+        """Release the filesystem and surface any guardian cleanup failure."""
         assert self.guardian.stdin is not None
         self.guardian.stdin.close()
         code = self.guardian.wait(timeout=disk_lifecycle.CLEANUP_TIMEOUT + disk_lifecycle.COMMAND_TIMEOUT)
@@ -129,6 +132,7 @@ class LocalDiskPool:
                     disk_lifecycle.reclaim(directory)
 
     def create(self, storage_mb: int) -> LocalDisk:
+        """Allocate exactly storage_mb MiB and wait for the ext4 mount."""
         with (self.root / "pool.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             directory = Path(tempfile.mkdtemp(prefix="sandbox-", dir=self.root))

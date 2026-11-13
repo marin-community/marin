@@ -665,6 +665,11 @@ class LocalMachine:
             return await self._execute_command(command, environment)
         except OSError as error:
             if self._disk is not None and error.errno == errno.ENOSPC:
+                # Configuration files live on the host, outside the sandbox's
+                # quota. A host ENOSPC alone must not become a task disk failure.
+                if error.filename is None or not Path(error.filename).is_relative_to(self._disk.data):
+                    self._disk.check_limit()
+                    raise
                 raise DiskLimitExceeded(
                     "RESOURCE_LIMIT_DISK: LOCAL command spool exhausted its filesystem (ENOSPC)"
                 ) from error

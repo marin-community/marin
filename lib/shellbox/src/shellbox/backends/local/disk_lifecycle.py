@@ -28,15 +28,11 @@ def run(*argv: str) -> str:
     return result.stdout.strip()
 
 
-def mounted(path: Path) -> bool:
-    return os.path.ismount(path)
-
-
 def reclaim(directory: Path) -> None:
     """Unmount only this allocation; never use lazy unmount or detach other loops."""
     deadline = time.monotonic() + CLEANUP_TIMEOUT
     for path in (directory / "root", directory / "data"):
-        while mounted(path):
+        while os.path.ismount(path):
             result = subprocess.run(["umount", str(path)], capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
             if result.returncode == 0:
                 break
