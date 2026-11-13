@@ -5,6 +5,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.custom_batching import sequential_vmap
+from jax.experimental.pallas import tpu as pltpu
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
@@ -16,6 +19,7 @@ from levanter.grug.attention import (
     reference_attention,
     token_validity_from_attention_mask,
 )
+from levanter.testing.devices import use_cpu_devices, use_test_devices
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -130,6 +134,84 @@ def test_real_tpu_splash_attention_matches_reference():
         expected = jax.jit(lambda q, k, v: reference_attention(q, k, v, mask, logits_dtype=jnp.float32))(q, k, v)
 
     np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize("batched_ids", [False, True])
+@pytest.mark.parametrize("ids_context_sharded", [False, True])
+def test_tpu_splash_traces_packed_attention_with_context_sharded_queries(batched_ids, ids_context_sharded):
+    # Trace the real Splash kernel on CPU: q IDs and mask metadata must be local,
+    # while KV IDs must cover the full sequence even when the input IDs are sharded.
+    with use_test_devices(8) as devices:
+        mesh = jax.sharding.Mesh(
+            np.asarray(devices).reshape(2, 4),
+            ("model", "context"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit),
+        )
+        q_sharding = NamedSharding(mesh, P(None, "context", "model", None))
+        kv_sharding = NamedSharding(mesh, P(None, None, "model", None))
+        q = jax.ShapeDtypeStruct((2, 512, 4, 128), jnp.float32, sharding=q_sharding)
+        kv = jax.ShapeDtypeStruct(q.shape, q.dtype, sharding=kv_sharding)
+        sequence_axis = "context" if ids_context_sharded else None
+        ids_shape = (2, 512) if batched_ids else (512,)
+        ids_spec = P(None, sequence_axis) if batched_ids else P(sequence_axis)
+        ids = jax.ShapeDtypeStruct(ids_shape, jnp.int32, sharding=NamedSharding(mesh, ids_spec))
+
+        def attend(q, k, v, segment_ids):
+            mask = AttentionMask.causal().with_segment_ids(segment_ids)
+            return attention(q, k, v, mask, implementation="tpu_splash")
+
+        with jax.set_mesh(mesh):
+            output = jax.eval_shape(attend, q, kv, kv, ids)
+
+        assert output.shape == q.shape
+        assert output.sharding.spec == q_sharding.spec
+
+
+@pytest.mark.multidevice
+def test_tpu_splash_context_sharded_packed_attention_matches_dense_reference(monkeypatch):
+    # JAX's TPU interpreter cannot batch a Splash grid (4 grid axes vs 3
+    # dimension semantics). Execute the original per-example kernel sequentially;
+    # the production shard_map, metadata partitioning, and kernel math stay intact.
+    original_call = splash_attention_kernel.SplashAttentionKernel.__call__
+
+    def unbatched_call(kernel, *args):
+        return sequential_vmap(lambda *values: original_call(kernel, *values))(*args)
+
+    monkeypatch.setattr(splash_attention_kernel.SplashAttentionKernel, "__call__", unbatched_call)
+
+    with use_cpu_devices(8):
+        mesh = jax.sharding.Mesh(
+            np.asarray(jax.devices()).reshape(2, 4),
+            ("model", "context"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit),
+        )
+        q_sharding = NamedSharding(mesh, P(None, "context", "model", None))
+        kv_sharding = NamedSharding(mesh, P(None, None, "model", None))
+        rng = np.random.default_rng(3)
+        shape = (2, 512, 4, 128)
+        q = jax.device_put(rng.normal(size=shape).astype(np.float32) * 0.2, q_sharding)
+        k = jax.device_put(rng.normal(size=shape).astype(np.float32) * 0.2, kv_sharding)
+        v = jax.device_put(rng.normal(size=shape).astype(np.float32), kv_sharding)
+        positions = np.arange(shape[1])
+        # Boundary 70 is inside a shard; the segment [70, 330) spans three shards.
+        ids = np.stack(
+            [np.where(positions < 70, 0, np.where(positions < 330, 1, 2)), np.where(positions < 190, 0, 1)]
+        ).astype(np.int32)
+        ids = jax.device_put(ids, NamedSharding(mesh, P(None, None)))
+
+        def attend(q, k, v, ids):
+            return attention(q, k, v, AttentionMask.causal().with_segment_ids(ids), implementation="tpu_splash")
+
+        def dense(q, k, v, ids):
+            return reference_attention(q, k, v, AttentionMask.causal().with_segment_ids(ids), logits_dtype=jnp.float32)
+
+        with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+            expected = np.asarray(jax.jit(dense)(q, k, v, ids))
+            with pltpu.force_tpu_interpret_mode():
+                actual = np.asarray(jax.jit(attend)(q, k, v, ids))
+
+        np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
 def test_token_validity_uses_padding_ids_without_excluding_packed_boundaries():
