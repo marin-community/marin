@@ -412,11 +412,9 @@ to suppress inherited region selectors, with batch priority and a three-day
 timeout. Iris removes this marker before scheduling; CoreWeave nodes need not
 advertise an iris.region label. A cluster target on these local children would
 request another federation handoff. The immutable public checkpoint, serving image, precision, model
-YAML digest, sampling settings, and endpoint identity participate in reviewer
+YAML digest, explicit worker setup scripts, sampling settings, and endpoint identity participate in reviewer
 evidence and request caches. The existing relay retains its separate unverified
-checkpoint identity.
-
-Payload revision 4 omits top-level execution requirements and actor/grader lock
+checkpoint identity. The upstream vLLM image needs Git installed before Marin\nworker imports; the explicit setup command is part of local endpoint identity.\n\nPayload revision 4 omits top-level execution requirements and actor/grader lock
 artifact locations. Deployment runtime is retained in audit hashes rather than
 appended to the content rubric. Calibration-only changes to these fields reuse
 identical reviewer requests. Public instructions, grader settings, images and

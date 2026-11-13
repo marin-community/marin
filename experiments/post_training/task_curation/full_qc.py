@@ -55,6 +55,9 @@ def local_reviewer() -> ReviewerSpec:
         priority=job_pb2.PRIORITY_BAND_BATCH,
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
         worker_image=WORKER_IMAGE,
+        worker_setup_scripts=(
+            "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends git",
+        ),
         worker_timeout=Duration.from_hours(72),
     )
     return replace(
