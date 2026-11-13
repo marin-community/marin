@@ -7,79 +7,80 @@ from datetime import UTC, datetime, timedelta
 
 import duckdb
 import pyarrow as pa
-from b200_utilization_alert import b200_capacity_alert_rows, b200_utilization_alert_rows, b200_utilization_query
-from conftest import install_finelog_dialect_macros
+from b200_utilization_alert import b200_utilization_alert_rows, b200_utilization_query
+from conftest import install_finelog_dialect_macros, k8s_api, make_k8s_source, node
+from k8s_source import Gb200Capacity, K8sFleet
 
 NOW = datetime(2026, 11, 9, 12, tzinfo=UTC)
-CLUSTERS = ("cw-us-east-02a", "cw-us-east-08a")
+GB200_CLUSTER = "cw-us-east-08a"
 
 
-def _node(name: str, *, cluster: str = "cw-us-east-08a", capacity: int = 4, ready: bool = True) -> dict:
-    return {
-        "cluster": cluster,
-        "node": name,
-        "instance_type": "gb200-4x",
-        "gpu_capacity": capacity,
-        "ready": ready,
-        "unschedulable": False,
-    }
+def _gb200(name: str, *, ready: bool = True) -> dict:
+    return node(name, instance_type="gb200-4x", gpu_capacity=4, ready=ready)
+
+
+def _capacity(*gb200_cluster_nodes: dict) -> Gb200Capacity:
+    """Capacity of a two-cluster fleet: one cluster with no nodes and one with the given nodes."""
+    fleet = K8sFleet(
+        [
+            make_k8s_source(k8s_api({"/api/v1/nodes": []}), name="cw-us-east-02a"),
+            make_k8s_source(k8s_api({"/api/v1/nodes": list(gb200_cluster_nodes)}), name=GB200_CLUSTER),
+        ]
+    )
+    return fleet.gb200_capacity(fleet.nodes())
 
 
 def _telemetry(*rows: tuple[str, int, int]) -> pa.Table:
-    return (
-        pa.Table.from_pylist(
-            [
-                {
-                    "cluster": "cw-us-east-08a",
-                    "node": node,
-                    "observed_gpus": observed,
-                    "active_gpus": active,
-                }
-                for node, observed, active in rows
-            ]
-        )
-        if rows
-        else pa.table({})
+    return pa.Table.from_pylist(
+        [
+            {"cluster": GB200_CLUSTER, "node": name, "observed_gpus": observed, "active_gpus": active}
+            for name, observed, active in rows
+        ]
     )
 
 
 def test_b200_alert_fires_for_idle_ready_capacity_and_ignores_other_hardware():
-    nodes = [_node("gb200-a"), _node("gb200-b"), _node("unready", ready=False)]
-    nodes.append({**_node("h100", capacity=8), "instance_type": "gd-8xh100ib-i128"})
+    capacity = _capacity(
+        _gb200("gb200-a"),
+        _gb200("gb200-b"),
+        _gb200("unready", ready=False),
+        node("h100", instance_type="gd-8xh100ib-i128", gpu_capacity=8),
+    )
     rows = b200_utilization_alert_rows(
-        nodes,
-        _telemetry(("gb200-a", 4, 0), ("gb200-b", 4, 0), ("unready", 4, 4), ("h100", 8, 8)),
-        CLUSTERS,
+        capacity, _telemetry(("gb200-a", 4, 0), ("gb200-b", 4, 0), ("unready", 4, 4), ("h100", 8, 8))
     )
 
-    assert rows[1] == {
-        "cluster": "cw-us-east-08a",
-        "state": "idle",
-        "value": 0.0,
-    }
-    assert rows[0]["state"] == "no_ready_capacity" and rows[0]["value"] == 100.0
-    assert b200_capacity_alert_rows(nodes, CLUSTERS) == [
-        {"cluster": "cw-us-east-02a", "value": 0},
-        {"cluster": "cw-us-east-08a", "value": 8},
+    assert rows == [
+        {"cluster": "cw-us-east-02a", "state": "no_ready_capacity", "value": 0, "active_percent": 0.0, "ready_gpus": 0},
+        {"cluster": GB200_CLUSTER, "state": "idle", "value": 1, "active_percent": 0.0, "ready_gpus": 8},
     ]
 
 
 def test_b200_alert_stays_normal_with_active_gpus_or_incomplete_telemetry():
-    nodes = [_node("gb200-a"), _node("gb200-b")]
-    active = b200_utilization_alert_rows(nodes, _telemetry(("gb200-a", 4, 1), ("gb200-b", 4, 0)), CLUSTERS)
-    missing = b200_utilization_alert_rows(nodes, _telemetry(("gb200-a", 4, 0)), CLUSTERS)
+    capacity = _capacity(_gb200("gb200-a"), _gb200("gb200-b"))
+    active = b200_utilization_alert_rows(capacity, _telemetry(("gb200-a", 4, 1), ("gb200-b", 4, 0)))
+    missing = b200_utilization_alert_rows(capacity, _telemetry(("gb200-a", 4, 0)))
 
-    assert active[1]["state"] == "active" and active[1]["value"] == 12.5
-    assert missing[1]["state"] == "telemetry_incomplete" and missing[1]["value"] == 100.0
+    assert active[1] == {
+        "cluster": GB200_CLUSTER,
+        "state": "active",
+        "value": 0,
+        "active_percent": 12.5,
+        "ready_gpus": 8,
+    }
+    assert missing[1]["state"] == "telemetry_incomplete" and missing[1]["value"] == 0
 
 
 def test_b200_alert_distinguishes_inventory_failure_from_zero_capacity():
-    rows = b200_utilization_alert_rows([{"cluster": "cw-us-east-08a", "error_class": "network"}], pa.table({}), CLUSTERS)
+    fleet = K8sFleet([make_k8s_source(k8s_api({}), name=GB200_CLUSTER)])
+    rows = b200_utilization_alert_rows(fleet.gb200_capacity(fleet.nodes()), pa.table({}))
 
-    assert rows[1] == {"cluster": "cw-us-east-08a", "state": "capacity_unavailable", "value": 100.0}
+    assert rows == [
+        {"cluster": GB200_CLUSTER, "state": "capacity_unavailable", "value": 0, "active_percent": 0.0, "ready_gpus": 0}
+    ]
 
 
-def test_b200_query_uses_latest_recent_sample_per_gpu():
+def test_b200_query_counts_a_gpu_as_active_on_its_peak_recent_sample():
     database = duckdb.connect()
     install_finelog_dialect_macros(database)
     database.execute(
@@ -88,23 +89,21 @@ def test_b200_query_uses_latest_recent_sample_per_gpu():
     )
     recent = int((NOW - timedelta(minutes=1)).timestamp() * 1000)
     old = int((NOW - timedelta(minutes=6)).timestamp() * 1000)
+
+    def sample(gpu: str, value: float, timestamp_ms: int, name: str = "gpu_utilization_percent") -> tuple:
+        return (GB200_CLUSTER, "gb200-a", "iris-node-agent", name, f'{{"gpu_uuid":"{gpu}"}}', value, timestamp_ms)
+
     database.executemany(
         'INSERT INTO "telemetry_v1.node_agent" VALUES (?, ?, ?, ?, ?, ?, ?)',
         [
-            ("cw-us-east-08a", "gb200-a", "iris-node-agent", "gpu_utilization_percent", '{"gpu_uuid":"a"}', 99, old),
-            (
-                "cw-us-east-08a",
-                "gb200-a",
-                "iris-node-agent",
-                "gpu_utilization_percent",
-                '{"gpu_uuid":"a"}',
-                80,
-                recent - 1000,
-            ),
-            ("cw-us-east-08a", "gb200-a", "iris-node-agent", "gpu_utilization_percent", '{"gpu_uuid":"a"}', 2, recent),
-            ("cw-us-east-08a", "gb200-a", "iris-node-agent", "gpu_utilization_percent", '{"gpu_uuid":"b"}', 75, recent),
-            ("cw-us-east-08a", "gb200-a", "iris-node-agent", "gpu_power_watts", '{"gpu_uuid":"c"}', 400, recent),
+            # GPU a was busy only before the lookback; GPU b had one busy sample inside it.
+            sample("a", 99, old),
+            sample("a", 3, recent - 1000),
+            sample("a", 2, recent),
+            sample("b", 75, recent - 1000),
+            sample("b", 1, recent),
+            sample("c", 400, recent, name="gpu_power_watts"),
         ],
     )
 
-    assert database.execute(b200_utilization_query(NOW)).fetchall() == [("cw-us-east-08a", "gb200-a", 2, 1)]
+    assert database.execute(b200_utilization_query(NOW)).fetchall() == [(GB200_CLUSTER, "gb200-a", 2, 1)]

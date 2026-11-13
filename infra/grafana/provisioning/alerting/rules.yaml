@@ -341,9 +341,9 @@ groups:
               conditions:
                 - evaluator: { type: lt, params: [16] }
 
-  # Fewer than 10% of Ready GB200 GPUs are active (>10% device utilization)
-  # for 30 minutes. The bridge requires telemetry for at least 80% of Ready
-  # GPUs. Cluster is the only alert label; capacity is a numeric annotation.
+  # The bridge decides idleness (b200_utilization_alert.py) and reports it as
+  # value 0|1. A, B and D read one endpoint and keep the same labels so that
+  # $values can join them; B and D only feed the summary.
   - orgId: 1
     name: b200-capacity
     folder: Alerts
@@ -359,7 +359,7 @@ groups:
           severity: warning
           notification: slack
         annotations:
-          summary: "{{ $labels.cluster }}: {{ $values.A.Value }}% of {{ $values.B.Value }} Ready B200 GPUs active"
+          summary: "{{ $labels.cluster }}: {{ $values.B.Value }}% of {{ $values.D.Value }} Ready B200 GPUs active"
           dashboard_url: "https://grafana.oa.dev/d/marin-accel?var-cluster={{ $labels.cluster }}"
         data:
           - refId: A
@@ -376,22 +376,40 @@ groups:
               url_options: { method: GET }
               columns:
                 - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
                 - { selector: value, text: value, type: number }
           - refId: B
             relativeTimeRange: { from: 300, to: 0 }
-            datasourceUid: k8s
+            datasourceUid: finelog-marin
             model:
               refId: B
-              datasource: { type: yesoreyeram-infinity-datasource, uid: k8s }
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
               type: json
               source: url
               parser: backend
               format: table
-              url: /alerts/b200_capacity
+              url: /alerts/b200_utilization
               url_options: { method: GET }
               columns:
                 - { selector: cluster, text: cluster, type: string }
-                - { selector: value, text: value, type: number }
+                - { selector: state, text: state, type: string }
+                - { selector: active_percent, text: value, type: number }
+          - refId: D
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: D
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: ready_gpus, text: value, type: number }
           - refId: C
             datasourceUid: __expr__
             model:
@@ -400,7 +418,7 @@ groups:
               type: threshold
               expression: A
               conditions:
-                - evaluator: { type: lt, params: [10] }
+                - evaluator: { type: gt, params: [0] }
 
   # The marin datasource combines a query-path probe of the GCE hub with the
   # HTTP-readiness state of each CoreWeave finelog Deployment. K8s marks a pod

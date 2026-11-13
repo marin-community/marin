@@ -46,7 +46,7 @@ GET /finelog/marin/alerts/training_telemetry     watched hero runs + silent-tele
 GET /finelog/marin/alerts/training_optimizer     watched hero runs + optimizer-fault value(0|1)
 GET /finelog/marin/alerts/training_health        watched hero runs + degraded-signal value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
-GET /finelog/marin/alerts/b200_utilization       per-cluster active GB200 GPU percentage
+GET /finelog/marin/alerts/b200_utilization       GB200 clusters + state + idle value(0|1)
 GET /iris/{cluster}/job_counts | jobs | workers | health
                                                     live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
@@ -64,7 +64,6 @@ GET /k8s/node_pools                               NodePool capacity, autoscaling
 GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
 GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
-GET /k8s/alerts/b200_capacity                     per-cluster Ready GB200 GPU count
 GET /k8s/arch_mismatch                            containers killed by an exec-format failure on a non-amd64 node
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
      webhook_ready,degraded,node_deadlocks,       numeric; gpu_rack_trays omits rows for
@@ -602,16 +601,10 @@ recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 The CoreWeave storage-telemetry freshness warning and `TrainingRunHealthDegraded`
 carry the explicit `notification=slack` exception, so they announce in Slack
 and open a session on the default `operator` channel.
-`B200ClusterUnderutilized` uses the same route. Every five minutes it compares
-the latest GPU utilization samples from the preceding five minutes with Ready,
-schedulable GB200 capacity in each CoreWeave cluster. A GPU is active above
-10 percent utilization. The rule fires after 30 minutes with fewer than
-10 percent of Ready GPUs active. It requires telemetry from at least 80 percent
-of that capacity; lower coverage reports `telemetry_incomplete` with a nonfiring
-value. A failed Kubernetes inventory read reports `capacity_unavailable` with a
-nonfiring value. Clusters with no Ready GB200 capacity do not fire. The
-notification shows the active GPU percentage and Ready capacity, with a link
-to the accelerator dashboard.
+`B200ClusterUnderutilized` uses the same route when a cluster's Ready GB200
+GPUs stay idle for 30 minutes; the thresholds are the constants in
+`src/b200_utilization_alert.py`. A cluster with incomplete telemetry or an
+unreadable node inventory does not fire, and its `state` label says why.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
 dashboard panels rather than alert rules because they have expected benign
 causes. `severity=critical` routes to `ops-critical` (email

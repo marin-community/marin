@@ -248,20 +248,7 @@ def test_configured_finelog_query_dependent_alerts_stay_normal_when_query_path_i
             response = client.get(url, params=params)
 
             assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
-            if rule["uid"] == "b200-cluster-underutilized":
-                assert all(row["state"] == "telemetry_incomplete" and row["value"] >= 10 for row in response.json())
-            else:
-                assert all(row["value"] == 0 for row in response.json()), rule["uid"]
-
-
-def test_b200_alert_keeps_changing_capacity_out_of_instance_labels():
-    (rule,) = [rule for rule in _rules() if rule["uid"] == "b200-cluster-underutilized"]
-    activity, capacity, _ = rule["data"]
-
-    assert [column["selector"] for column in activity["model"]["columns"] if column["type"] == "string"] == ["cluster"]
-    assert [column["selector"] for column in capacity["model"]["columns"] if column["type"] == "string"] == ["cluster"]
-    assert capacity["model"]["url"] == "/alerts/b200_capacity"
-    assert "$values.B.Value" in rule["annotations"]["summary"]
+            assert all(row["value"] == 0 for row in response.json()), rule["uid"]
 
 
 def test_alert_queries_select_exactly_one_numeric_column():

@@ -919,6 +919,17 @@ class K8sSource:
         return [racks[rack] for rack in sorted(racks, key=int)]
 
 
+@dataclass(frozen=True)
+class Gb200Capacity:
+    """Ready, schedulable GB200 GPUs per cluster and node.
+
+    `unavailable` names the clusters whose node listing failed; their counts are unknown, not zero.
+    """
+
+    ready_gpus: dict[str, dict[str, int]]
+    unavailable: frozenset[str]
+
+
 def _node_gpu_capacity(node: dict) -> int:
     return _node_gpu_quantity(node, "capacity")
 
@@ -1064,10 +1075,19 @@ class K8sFleet:
         self._sources = tuple(sources)
         self._executor = ThreadPoolExecutor(max_workers=max(len(self._sources), 1), thread_name_prefix="k8s")
 
-    @property
-    def cluster_names(self) -> tuple[str, ...]:
-        """Names of clusters represented by this fleet, including unreachable ones."""
-        return tuple(source.target.name for source in self._sources)
+    def gb200_capacity(self, nodes: list[dict]) -> Gb200Capacity:
+        """Project `nodes()` rows to Ready, schedulable GB200 GPU counts for every fleet cluster."""
+        ready_gpus: dict[str, dict[str, int]] = {source.target.name: {} for source in self._sources}
+        unavailable: set[str] = set()
+        for row in nodes:
+            if "error_class" in row:
+                unavailable.add(row["cluster"])
+                continue
+            if _GB200_INSTANCE_TYPE_SUBSTRING not in row["instance_type"]:
+                continue
+            if row["ready"] and not row["unschedulable"] and row["gpu_capacity"] > 0:
+                ready_gpus[row["cluster"]][row["node"]] = row["gpu_capacity"]
+        return Gb200Capacity(ready_gpus, frozenset(unavailable))
 
     def _collect(
         self,
