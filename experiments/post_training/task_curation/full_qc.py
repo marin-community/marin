@@ -8,6 +8,7 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
@@ -28,10 +29,16 @@ from taskcompendium.pipeline.review import ChatReviewer, ReviewBatchResult
 from taskcompendium.pipeline.reviewer_spec import JudgeTier, ReviewerSpec
 
 from experiments.post_training.task_curation.full_qc_review import load_inputs, review_inputs
-from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJudgeEndpoint
+from experiments.post_training.task_curation.judges import (
+    JUDGE_TIERS,
+    LocalJudgeEndpoint,
+    LocalJudgeModel,
+    PinnedLocalJudgeEndpoint,
+)
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3.yaml")
+V3_MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3-full-qc-v3.yaml")
 WORKER_IMAGE = "vllm/vllm-openai@sha256:61fc8a896b0a4fbbbdc063bc4b0dbc25ce98e02b5050c24aeb7830ac02039b14"
 REVIEW_RUBRIC = ReviewRubric(
     id="atlas-retained-full-qc",
@@ -42,6 +49,11 @@ REVIEW_RUBRIC = ReviewRubric(
         "Execution qualification is pending and assessed separately; do not infer execution from static evidence.",
     ),
 )
+
+
+class ReviewerVersion(StrEnum):
+    V2 = "v2"
+    V3 = "v3"
 
 
 class ReviewWork(BaseModel):
@@ -86,12 +98,11 @@ class ReadyChatReviewer:
         return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
 
 
-def local_reviewer() -> ReviewerSpec:
-    definition = JUDGE_TIERS[JudgeTier.HEAVY]
-    assert definition.qa_reviewer is not None and definition.model_revision is not None
-    endpoint = LocalJudgeEndpoint(
+def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudgeEndpoint:
+    return LocalJudgeEndpoint(
         tier=JudgeTier.HEAVY,
-        model_config=MODEL_CONFIG,
+        model_config=model_config,
+        context_window_tokens=context_window_tokens,
         accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, region=ANY_REGION),
         priority=job_pb2.PRIORITY_BAND_BATCH,
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
@@ -101,10 +112,43 @@ def local_reviewer() -> ReviewerSpec:
         ),
         worker_timeout=Duration.from_hours(72),
     )
+
+
+def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
+    if version is ReviewerVersion.V3:
+        pin = LocalJudgeModel(
+            model_identity="zai-org/GLM-5.3",
+            model_revision="aca966e4e02791568aa6a4ced368624b3d897f42",
+            api_model="glm-5.3",
+            context_window_tokens=524288,
+        )
+        return ReviewerSpec(
+            tier=JudgeTier.HEAVY,
+            model=pin.api_model,
+            model_revision=pin.model_revision,
+            endpoint=PinnedLocalJudgeEndpoint(_local_endpoint(V3_MODEL_CONFIG, pin.context_window_tokens), pin),
+            precision="native-fp8-e4m3;kv-cache-fp8-e4m3",
+            temperature=0.7,
+            top_p=0.95,
+            top_k=0,
+            reasoning_effort="low",
+            max_tokens=8192,
+            retry_max_tokens=16384,
+            max_attempts=3,
+            prompt_budget=512000,
+            retry_prompt_budget=512000,
+            base_rubric_version="task-quality-v2",
+            base_rubric_sha256="af7ae2a33e3f73d17f27907d930beae35453a22b63ef6f28138c50a8d65131eb",
+            payload_revision="4",
+        )
+    if version is not ReviewerVersion.V2:
+        raise ValueError(f"Unknown FULL-QC reviewer version: {version}")
+    definition = JUDGE_TIERS[JudgeTier.HEAVY]
+    assert definition.qa_reviewer is not None and definition.model_revision is not None
     return replace(
         definition.qa_reviewer,
         model_revision=definition.model_revision,
-        endpoint=endpoint,
+        endpoint=_local_endpoint(MODEL_CONFIG, definition.context_window_tokens),
         precision="native-fp8-e4m3;kv-cache-fp8-e4m3",
     )
 
@@ -115,6 +159,7 @@ def main() -> None:
     parser.add_argument("--work", required=True, help="JSON list of prepared input and review output paths")
     parser.add_argument("--campaign-output", required=True)
     parser.add_argument("--review-cache", required=True)
+    parser.add_argument("--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     configure_coreweave_s3()
@@ -126,13 +171,13 @@ def main() -> None:
         inputs = load_inputs(row.inputs_path)
         prepared.append((row, inputs))
         logger.info("Content review planned for %s: %d retained tasks", inputs.source_id, inputs.retained_count)
-    spec = local_reviewer()
+    spec = local_reviewer(args.reviewer_version)
     logger.info("Reviewer: %s", json.dumps(spec.identity, sort_keys=True))
     if not args.run:
         return
     campaign_path = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
     endpoint = spec.endpoint
-    assert isinstance(endpoint, LocalJudgeEndpoint)
+    assert isinstance(endpoint, (LocalJudgeEndpoint, PinnedLocalJudgeEndpoint))
     with endpoint.serve() as session:
         reviewer = ReadyChatReviewer(
             session,

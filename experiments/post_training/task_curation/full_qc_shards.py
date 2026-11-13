@@ -16,10 +16,15 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 
-from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReadyChatReviewer, local_reviewer
+from experiments.post_training.task_curation.full_qc import (
+    REVIEW_RUBRIC,
+    ReadyChatReviewer,
+    ReviewerVersion,
+    local_reviewer,
+)
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCReviewShard
 from experiments.post_training.task_curation.full_qc_review import assemble_shards, load_inputs, review_shard
-from experiments.post_training.task_curation.judges import LocalJudgeEndpoint
+from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +55,9 @@ def read_shard(path: StoragePath) -> FullQCReviewShard:
 
 
 def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
-    spec = local_reviewer()
+    spec = local_reviewer(args.reviewer_version)
     endpoint = spec.endpoint
-    assert isinstance(endpoint, LocalJudgeEndpoint)
+    assert isinstance(endpoint, (LocalJudgeEndpoint, PinnedLocalJudgeEndpoint))
     campaign = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
     with endpoint.serve() as session:
         for row in work:
@@ -95,7 +100,7 @@ def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
 
 def assemble_work(work: list[ShardWork], args: argparse.Namespace) -> None:
     campaign = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
-    spec = local_reviewer()
+    spec = local_reviewer(args.reviewer_version)
     for row in work:
         pointers = [
             StoragePath(row.shard_output_path) / f"{index:03}" / "latest.json" for index in range(args.shard_count)
@@ -144,6 +149,7 @@ def main() -> None:
     for name in ("review", "assemble"):
         command = commands.add_parser(name)
         command.add_argument("--work", required=True)
+        command.add_argument("--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), required=True)
         command.add_argument("--shard-count", required=True, type=int)
         command.add_argument("--campaign-output", required=True)
         command.add_argument("--run", action="store_true")

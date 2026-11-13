@@ -37,7 +37,8 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona,sotopia]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona,sotopia,iris]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+iris = ["marin-shellbox[iris]"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
 sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
@@ -77,6 +78,7 @@ override-dependencies = ["marin-rigging"]
 module-name = ["harbor", "harbor_config"]
 
 [tool.uv.sources]
+marin-iris = { path = "../../lib/iris", editable = true }
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
 marin-shellbox = { path = "../../lib/shellbox", editable = true }

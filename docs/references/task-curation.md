@@ -1284,8 +1284,8 @@ in the native package; calibrate only missing dimensions. Existing native TOML
 literals remain unchanged; only missing keys are inserted. Added native settings
 still require an exact content-review payload comparison before cache reuse. After a failed trial, double only the
 dimension identified by its failure: memory for an explicit OOM kill, disk for
-ENOSPC, agent timeout for an agent timeout, or verifier timeout for a verifier
-timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
+ENOSPC or a typed Iris `RESOURCE_LIMIT_DISK` eviction, agent timeout for an agent
+timeout, or verifier timeout for a verifier timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
 of its allocated capacity. A bare exit 137 does not establish OOM, and unavailable
 CPU counters do not establish CPU saturation.
 
@@ -1328,6 +1328,41 @@ available, the protected version observation. Preserve the declared environment 
 this exclusion does not establish an oracle score of zero. Unrecognized
 infrastructure failures remain unscored after the retry budget, while other
 population tasks continue. The summary counts exclusions by typed reason.
+
+#### Targeted requalification after an approved harness change
+
+An explicit source-specific decision may replace a fresh full-population pass with
+a targeted pass. Record that decision and the exact old/new payload and backend
+commits. Re-run every task without a clean prior oracle pass, including source
+environment exclusions, resource failures and unscored or hung tasks. Count a hung
+task once within the unscored set.
+
+Also re-run every prior pass whose verdict the actual trial-payload change could
+affect. Derive that set mechanically from frozen task evidence and the code delta;
+report the selection rule, coverage limitations, count and ETA before dispatch.
+The conservative static criterion includes explicit subprocess/interpreter APIs,
+pytester, xdist or virtualenv use, access to builtins changed by the payload delta, and unresolved local
+helper or dynamic code paths. A complete trace of every third-party dependency is
+not required; record that limitation in the release notes.
+A host-only collection change does not invalidate a trial. For example, restoring
+the source environment's dependency search paths in an ordinary child interpreter concerns tasks whose tests
+invoke such an interpreter, directly or through product/helper code. Missing
+evidence of a subprocess is not proof that none ran. Include unresolved impact in
+the targeted set rather than classifying it as unaffected.
+
+Carry an unaffected pass only with its original TaskSpec, native payload, execution
+requirements and production oracle receipt. Do not attach an old verdict to a
+changed native checksum. Preserve the prior production oracle receipts, all rerun receipts and a per-task
+selection/lineage manifest; assemble the release from carried original tasks and
+newly passing targeted tasks. Keep unscored tasks pending, separately from source
+faults. Apply the final deduplication, lexical checks and [SAMPLE/FULL oversight](#curation-modes-and-oversight-levels) to
+that exact release union before publishing or rebinding its source pin.
+
+SWE-rebench v14 uses this targeted procedure. Its baseline set is all 1,567 v13
+nonpasses, plus mechanically affected clean passes. The original 5,474-task scope
+and the v13 history remain preserved. Report the breakdown before dispatch if
+more than half of the 3,907 clean passes meet the impact rule. The final targeted count belongs in its
+immutable selection manifest, not a generic policy constant.
 
 #### Replaying our infrastructure failures
 
@@ -1418,12 +1453,12 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
 
-# LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
-# on Iris CPU workers. This route supports only root commands.
+# IRIS-SANDBOX: intended invocation after SANDBOX disk qualification.
+# Currently rejects declared storage; do not use for calibrated cohorts.
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
-  --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
-  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness"}'
+  --output-dir /path/to/oracle-iris-v2 --environment iris-sandbox --concurrency 4 \
+  --environment-kwargs '{"cluster":"cw-us-east-02a","pool":"cpu-genoa","priority":"batch","ttl":259200}'
 
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
@@ -1432,13 +1467,52 @@ uv run python -m experiments.post_training.task_curation.oracle_filter collect \
 ~~~
 
 DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
-when the cohort's snapshot identities fit the cap. Otherwise use LOCAL on Iris
-CPU workers, with the task's own prepared images. Concurrency does not waive
-snapshot or CPU capacity limits. LOCAL honors allow_internet and cannot run
-nonroot task commands; choose a supporting route when the task requires them.
+when the cohort's snapshot identities fit the cap. The `iris-sandbox` environment
+uses prepared image references from `shellbox-images.json` and submits exactly
+one sandbox container and replica per Iris job. It takes `cluster`, `pool`,
+`priority` (`batch` by default, or `production`) and `ttl` in seconds. A TTL of
+259200 gives each job a three-day timeout. Images retain their prepared `/app`
+contents; commands run in separate process groups so a timeout or cancellation
+can stop a command while preserving the task filesystem for the verifier.
+Images must provide `setsid` and a readable `/proc`.
 
-Use CPU Iris workers at production priority with a three-day job timeout.
-Run `collect` against the same calibrated run; there is no second oracle pass.
+Prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
+Iris SANDBOX storage enforcement is unqualified. Harbor reports no storage-limit
+capability and rejects declared `storage_mb` for this environment. The Shellbox
+adapter also requires a direct Kubernetes controller advertising
+`sandbox-storage-limit` before submitting any declared disk; current controllers
+do not advertise it. Sandbox-profile pods cannot start on the pinned CPU pool
+([#11343](https://github.com/marin-community/marin/issues/11343)); H100 startup
+is blocked separately ([#10090](https://github.com/marin-community/marin/issues/10090)).
+See the [runtime incident](https://marina.oa.dev/echo/wiki/976).
+
+The candidate pod manifest sets ephemeral-storage to exactly
+`storage_mb * 1024**2` bytes, with zero harness allowance. The driver stays outside
+the pod. Kubelet's runtime accounting must include task writes and command files
+for this to enforce disk. Its accounting and eviction are asynchronous. A real
+`CONTAINER_PROFILE_SANDBOX` overflow on the pinned pool must establish the disk
+boundary, with the node's `runsc.toml` `overlay2` setting recorded beside raw
+kubelet eviction evidence. A restricted-profile overflow does not qualify this
+path; a memory-backed overlay can turn disk pressure into an OOM. Follow the
+[deployment checklist](rl-data-atlas.md#deployment-checklist) before enabling
+storage admission or advertising the capability. Deployment/restart requires
+separate user authorization.
+
+Only newly annotated sandbox pods receive typed own-limit storage failures:
+`RESOURCE_LIMIT_DISK`, Shellbox `DiskLimitExceeded`, then Harbor disk-full.
+Calibration doubles disk as for ENOSPC, including alongside an infrastructure
+verifier verdict. Ordinary jobs and node disk-pressure evictions retain their
+previous retry classification. The shared-worker bubblewrap `local` environment
+remains separate. `iris-sandbox` honors `allow_internet`, supports root commands
+and one container, and rejects service groups and process-session model relays.
+
+Use CPU Iris jobs with a three-day job timeout. Select the campaign's approved
+priority explicitly through `priority`; use production for the bounded
+disk-overflow correctness check. Run `collect` against the same calibrated run; there is no second oracle pass.
 Each attempt uses a fresh container and a fresh native package directory.
 Preserve the original packages, trials and published prefixes; select a new
 output version when rerunning.
@@ -1497,7 +1571,7 @@ the relay does not attest an immutable checkpoint. Connection fails if its model
 list does not advertise `glm-5.3`. A provider that cannot accept temperature may use
 `temperature=None` to retain its API default; zero is disallowed.
 
-The spec pins base rubric `task-quality-v1`, its SHA-256 content hash, and review
+The spec pins base rubric `task-quality-v2`, its SHA-256 content hash, and review
 payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
 hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
@@ -1513,6 +1587,14 @@ projection, so calibration-only changes reuse exact requests. Full task and
 runtime hashes remain in the audit. Images, grader settings and resource bytes
 remain visible; edits to native task.toml or verifier code invalidate requests.
 The spec records serving precision as part of reviewer identity.
+
+The self-hosted retained-population FULL-QC workflow has explicit reviewer
+versions, separate from the shared relay preset. Its v3 policy doubles v2's
+serving context from 262,144 to 524,288 tokens and generation limits from
+4,096/8,192 to 8,192/16,384 initial/retry tokens. Future source starts use v3;
+in-flight v2 work and its valid observations keep their original identities.
+The [FULL-QC reviewer changelog](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#complete-retained-population-review)
+records cache separation, resume commands and the preserved v2 repair policy.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and
@@ -1749,15 +1831,50 @@ registry remain staged; they do not register a new source. The declaration
 persists the input binding in `actor_census_input` and rejects a later input or
 converter change that carries the old census.
 
-Freeze a complete set of measured actor artifacts into the checked-in receipt
-shards with:
+### Updating pinned registry receipts
+
+When recording new measurements, stage raw JSON in a fresh directory using each
+file's repository-relative path. For example, census shards belong under
+`STAGED_ROOT/experiments/post_training/task_curation/datasets/daytona_census_receipts/`.
+Review the complete staged collection, then append it to the existing private
+registry and update its references:
+
+```bash
+uv run python -m experiments.post_training.task_curation.registry \
+  --staged-root /tmp/atlas-registry-YYYYMMDD-v1 --references-root . \
+  --repo open-athena/marin-rl-data-atlas-registry \
+  --parent-revision CURRENT_REGISTRY_COMMIT --message 'Record approved census receipts'
+```
+
+Use the registry's current 40-character commit as `--parent-revision`; a concurrent
+update fails rather than overwriting it. The command uses add operations only,
+reads every staged file back at the new immutable commit and verifies its hash
+before updating any Git reference. Earlier commits and artifacts remain intact.
+Stage the complete replacement shard collection. For each staged `part-*.json`
+directory, inactive existing tail shards are archived as empty objects in the
+new revision and their references are updated too. This prevents stale receipts
+without deleting any earlier artifact or revision.
+Do not write generated bodies over pinned references. The overlap workflow reads
+through the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in
+that job. Local readers use the Hugging Face client's normal credentials; the
+archive command needs write access to this private registry only.
+
+
+### Actor census registration
+
+Stage a complete set of measured actor artifacts in a fresh registry tree:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.census_binding \
   --censuses actor-censuses.json \
   --integrity-censuses integrity-censuses.json \
-  --output-dir experiments/post_training/task_curation/datasets/daytona_census_receipts
+  --output-dir /tmp/atlas-registry-YYYYMMDD-v1/experiments/post_training/task_curation/datasets/daytona_census_receipts
 ```
+
+Archive the staged tree with the
+[registry update command](#updating-pinned-registry-receipts).
+It appends an immutable private revision, verifies readback, then updates the Git
+references. Never use the checked-in reference directory as producer output.
 
 Integrity-contract summaries are optional and independent of actor safety.
 The optional `--integrity-censuses` input requires the same source, normalized
@@ -1800,7 +1917,7 @@ uv run python -m experiments.post_training.task_curation.lexical_registration \
   --outcomes lexical-outcomes.json --populations normalized-populations.json \
   --source-uses measured-source-uses.json \
   --actor-receipts-dir experiments/post_training/task_curation/datasets/daytona_census_receipts \
-  --output-dir /tmp/atlas-lexical-measurements-YYYYMMDD
+  --output-dir /tmp/atlas-registry-YYYYMMDD-v2/experiments/post_training/task_curation/datasets/lexical_measurement_receipts
 ```
 
 This command updates metadata only. It does not publish dataset versions or
@@ -1808,8 +1925,10 @@ change admitted selection. Training release publication combines within-source
 exact deduplication and lexical decontamination after approval of the retained
 population.
 The output directory must be new; an existing directory is never replaced.
-Review the staged shards before updating the checked-in
-`datasets/lexical_measurement_receipts` registry.
+Review the staged shards, then use the
+[registry update command](#updating-pinned-registry-receipts)
+with that fresh staging root. The checked-in `datasets/lexical_measurement_receipts`
+directory contains references, not writable receipt bodies.
 
 Approved frozen combined plans are published with `remediation_publish`. Run
 publication on CPU Iris workers in the artifacts' region, at production priority
@@ -1834,8 +1953,11 @@ uv run iris --config lib/iris/config/marin.yaml job run \
 After readback, `retained_census` measures the retained actor and integrity
 population using the existing complete census. It also writes a normalized
 `task_json` view with the original serialized bytes. `remediation_binding` joins
-these measurements to the publication receipts and stages
-`datasets/retained_release_receipts`. Registry loading validates the original
+these measurements to the publication receipts. Set its `--output-dir` to a fresh
+`STAGED_ROOT/experiments/post_training/task_curation/datasets/retained_release_receipts`
+directory, then use the
+[registry update command](#updating-pinned-registry-receipts)
+to archive/read back the shards and update their references. Registry loading validates the original
 conversion binding before selecting the retained importer and pin. Original
 pipeline, conversion, deduplication and qualification records stay in lineage.
 Active deduplication counts describe the retained pin: raw and unique both equal

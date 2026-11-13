@@ -6,7 +6,10 @@
 import argparse
 import json
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
+from functools import partial
+from itertools import batched
 from typing import Any
 from uuid import uuid4
 
@@ -21,10 +24,11 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.review import ChatReviewer, Reviewer
 
-from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, local_reviewer
+from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCReview
 from experiments.post_training.task_curation.full_qc_review import (
     RECORD_SCHEMA,
+    ContractBatch,
     contract_batches,
     review_batch,
     write_source_result,
@@ -33,6 +37,8 @@ from experiments.post_training.task_curation.full_qc_review import (
 REPAIR_MAX_TOKENS = 8192
 REPAIR_RETRY_MAX_TOKENS = 16384
 REPAIR_REQUEST_TIMEOUT = 1200
+REPAIR_REQUEST_CONCURRENCY = 4
+MAX_REPAIR_BATCH_WORKERS = 16
 OVERLAY_SCHEMA = RECORD_SCHEMA.append(pa.field("reviewer", pa.large_string())).append(
     pa.field("origin", pa.large_string())
 )
@@ -86,8 +92,45 @@ def primary_records(primary: FullQCReview, rubric: ReviewRubric) -> dict[str, di
     return records
 
 
-def repair_source(primary: FullQCReview, reviewer: Reviewer, rubric: ReviewRubric, output_path: str) -> FullQCReview:
+@dataclass(frozen=True)
+class RepairBatchResult:
+    selected: dict[str, ReviewRecord]
+    repaired_task_ids: frozenset[str]
+    receipt: dict[str, str] | None
+
+
+def repair_batch(
+    batch: ContractBatch,
+    *,
+    original: dict[str, dict],
+    reviewer: Reviewer,
+    rubric: ReviewRubric,
+    output: StoragePath,
+) -> RepairBatchResult:
+    """Repair only incomplete contracts in one original batch."""
+    selected = {task.id: ReviewRecord.model_validate_json(original[task.id]["review"]) for task in batch.tasks}
+    pending = [task for task in batch.tasks if selected[task.id].status is not ReviewStatus.REVIEWED]
+    if not pending:
+        return RepairBatchResult(selected, frozenset(), None)
+    pending_ids = frozenset(task.id for task in pending)
+    contracts = [contract for contract in batch.contracts if contract["task_id"] in pending_ids]
+    observations, path = review_batch(pending, contracts, rubric, reviewer, output / "repairs")
+    selected.update((record.task_id, record) for record in observations)
+    receipt = {"kind": "batch_reviews", "path": path, "sha256": file_sha256(StoragePath(path))}
+    return RepairBatchResult(selected, pending_ids, receipt)
+
+
+def repair_source(
+    primary: FullQCReview,
+    reviewer: Reviewer,
+    rubric: ReviewRubric,
+    output_path: str,
+    *,
+    batch_workers: int,
+) -> FullQCReview:
     """Retry only incomplete primary observations and persist their separate reviewer origins."""
+    if not 1 <= batch_workers <= MAX_REPAIR_BATCH_WORKERS:
+        raise ValueError(f"Repair batch workers must be between one and {MAX_REPAIR_BATCH_WORKERS}")
     identity = repair_identity(primary.reviewer, reviewer.identity)
     original = primary_records(primary, rubric)
     output = StoragePath(output_path)
@@ -102,30 +145,24 @@ def repair_source(primary: FullQCReview, reviewer: Reviewer, rubric: ReviewRubri
     }
     all_reviews = []
     receipts = []
-    with records_path.open("wb", auto_mkdir=True) as stream:
-        with pq.ParquetWriter(stream, OVERLAY_SCHEMA, compression="zstd") as writer:
-            for batch in contract_batches(primary.inputs):
-                selected = {
-                    task.id: ReviewRecord.model_validate_json(original[task.id]["review"]) for task in batch.tasks
-                }
-                pending = [task for task in batch.tasks if selected[task.id].status is not ReviewStatus.REVIEWED]
-                repair_receipt = None
-                repaired = {}
-                if pending:
-                    pending_ids = {task.id for task in pending}
-                    contracts = [c for c in batch.contracts if c["task_id"] in pending_ids]
-                    observations, path = review_batch(pending, contracts, rubric, reviewer, output / "repairs")
-                    repair_receipt = {"kind": "batch_reviews", "path": path, "sha256": file_sha256(StoragePath(path))}
-                    repaired = {r.task_id: r for r in observations}
-                    selected.update(repaired)
+    repair = partial(repair_batch, original=original, reviewer=reviewer, rubric=rubric, output=output)
+    with (
+        ThreadPoolExecutor(max_workers=batch_workers) as executor,
+        records_path.open("wb", auto_mkdir=True) as stream,
+        pq.ParquetWriter(stream, OVERLAY_SCHEMA, compression="zstd") as writer,
+    ):
+        for group in batched(contract_batches(primary.inputs), batch_workers):
+            for batch, result in zip(group, executor.map(repair, group), strict=True):
                 rows = []
                 origins = {}
                 for contract in batch.contracts:
                     task_id = contract["task_id"]
-                    from_repair = task_id in repaired
-                    origin = repair_receipt if from_repair else primary_origin
+                    from_repair = task_id in result.repaired_task_ids
+                    origin = result.receipt if from_repair else primary_origin
                     actual_reviewer = reviewer.identity if from_repair else primary.reviewer
-                    review_json = selected[task_id].model_dump_json() if from_repair else original[task_id]["review"]
+                    review_json = (
+                        result.selected[task_id].model_dump_json() if from_repair else original[task_id]["review"]
+                    )
                     origins[task_id] = {"reviewer": actual_reviewer, "receipt": origin}
                     rows.append(
                         {
@@ -138,41 +175,46 @@ def repair_source(primary: FullQCReview, reviewer: Reviewer, rubric: ReviewRubri
                 receipt_path = attempt / "batches" / f"{batch.index:06}.json"
                 payload = {
                     "identity": {"contracts": batch.contracts, "rubric": asdict(rubric), "reviewer": identity},
-                    "reviews": [selected[task.id].model_dump(mode="json") for task in batch.tasks],
+                    "reviews": [result.selected[task.id].model_dump(mode="json") for task in batch.tasks],
                     "origins": origins,
                     "primary_review": primary_origin,
-                    "repair_receipt": repair_receipt,
+                    "repair_receipt": result.receipt,
                 }
                 with receipt_path.open("w", auto_mkdir=True) as receipt_stream:
                     json.dump(payload, receipt_stream, ensure_ascii=False)
                 for row in rows:
                     row["batch_receipt"] = str(receipt_path)
                 writer.write_table(pa.Table.from_pylist(rows, schema=OVERLAY_SCHEMA))
-                all_reviews.extend(selected[task.id] for task in batch.tasks)
+                all_reviews.extend(result.selected[task.id] for task in batch.tasks)
                 receipts.append(str(receipt_path))
     return write_source_result(primary.inputs, identity, rubric, records_path, all_reviews, receipts)
 
 
 @dataclass(frozen=True)
 class OwnedServingClient:
-    """Borrow an owned worker's current registration without owning its serving lifecycle."""
+    """Route requests across current registrations of explicitly owned serving workers."""
 
-    serving_root: str
+    serving_roots: tuple[str, ...]
     model: str
 
     def complete(self, body: Mapping[str, Any]) -> dict[str, Any]:
         endpoints = [
             endpoint
             for endpoint in iris_ctx().client.list_endpoints("/serve/")
-            if endpoint.task_id.startswith(self.serving_root + "/inference-")
+            if any(endpoint.task_id.startswith(root + "/inference-") for root in self.serving_roots)
         ]
         if not endpoints:
             raise ConnectionError("Owned review worker has no current serving registration")
-        if len(endpoints) != 1:
-            raise ValueError("Owned review worker has more than one current serving registration")
-        endpoint = endpoints[0]
-        if endpoint.metadata.get("kind") != "marin-serve" or endpoint.metadata.get("model") != self.model:
+        for root in self.serving_roots:
+            if sum(endpoint.task_id.startswith(root + "/inference-") for endpoint in endpoints) > 1:
+                raise ValueError("Owned review worker has more than one current serving registration")
+        if any(
+            endpoint.metadata.get("kind") != "marin-serve" or endpoint.metadata.get("model") != self.model
+            for endpoint in endpoints
+        ):
             raise ValueError("Owned serving registration differs from the pinned reviewer model")
+        endpoints.sort(key=lambda endpoint: endpoint.task_id)
+        endpoint = endpoints[int(canonical_sha256(body), 16) % len(endpoints)]
         return OpenAIChatClient(endpoint.address.rstrip("/") + "/v1", "unused", REPAIR_REQUEST_TIMEOUT).complete(body)
 
 
@@ -180,24 +222,40 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--primary", required=True, help="Immutable strict source assembly after its primary pass")
     parser.add_argument("--primary-sha256", required=True, help="SHA-256 of the primary .artifact.json")
-    parser.add_argument("--serving-root", required=True, help="Owned primary worker whose local model can be borrowed")
+    parser.add_argument(
+        "--serving-root",
+        action="append",
+        required=True,
+        help="Owned primary worker to borrow; repeat for a serving pool",
+    )
+    parser.add_argument(
+        "--batch-workers", type=int, required=True, help="Number of original batches repaired concurrently"
+    )
     parser.add_argument("--output", required=True, help="New repair-overlay prefix, separate from primary outputs")
     parser.add_argument("--review-cache", required=True, help="Separate exact-request cache for the repair spec")
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
+    roots = tuple(args.serving_root)
+    if len(set(roots)) != len(roots):
+        raise ValueError("Serving roots must be distinct")
+    if not 1 <= args.batch_workers <= MAX_REPAIR_BATCH_WORKERS:
+        raise ValueError(f"Repair batch workers must be between one and {MAX_REPAIR_BATCH_WORKERS}")
     configure_coreweave_s3()
     if file_sha256(StoragePath(args.primary) / ".artifact.json") != args.primary_sha256:
         raise ValueError("Pinned primary artifact changed")
     primary = FullQCReview.raw_load(args.primary)
     spec = replace(
-        local_reviewer(),
+        local_reviewer(ReviewerVersion.V2),
         max_tokens=REPAIR_MAX_TOKENS,
         retry_max_tokens=REPAIR_RETRY_MAX_TOKENS,
         prompt_budget=primary.reviewer["prompt_budget"],
         retry_prompt_budget=primary.reviewer["retry_prompt_budget"],
     )
     reviewer = ChatReviewer(
-        OwnedServingClient(args.serving_root, spec.model), spec, query_cache_root=args.review_cache, max_concurrent=4
+        OwnedServingClient(roots, spec.model),
+        spec,
+        query_cache_root=args.review_cache,
+        max_concurrent=REPAIR_REQUEST_CONCURRENCY,
     )
     identity = repair_identity(primary.reviewer, reviewer.identity)
     rows = primary_records(primary, REVIEW_RUBRIC)
@@ -220,12 +278,14 @@ def main() -> None:
     )
     if not args.run:
         return
-    result = repair_source(primary, reviewer, REVIEW_RUBRIC, args.output)
+    result = repair_source(primary, reviewer, REVIEW_RUBRIC, args.output, batch_workers=args.batch_workers)
     deployment = StoragePath(result.path) / "deployment.json"
     with deployment.open("w", auto_mkdir=True) as stream:
         json.dump(
             {
-                "serving_root": args.serving_root,
+                "serving_roots": roots,
+                "batch_workers": args.batch_workers,
+                "request_concurrency_per_batch": REPAIR_REQUEST_CONCURRENCY,
                 "primary": args.primary,
                 "primary_sha256": args.primary_sha256,
                 "repair_identity": reviewer.identity,

@@ -19,6 +19,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
 from infra.marina.apps.rl_data_catalog.load import batches, insert_rows
+from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, validated_role_projection
 
 DELETE_BATCH_SIZE = 10_000
 TABLE_COLUMNS = {
@@ -96,7 +97,12 @@ def release_tasks(paths: list[str]) -> Iterator[dict]:
                     }
 
 
-def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> dict[str, Any]:
+def load_curriculum(
+    release_uri: str,
+    coverage_uri: str,
+    query: AppletQuery,
+    role_projection: ManifestReference | None = None,
+) -> dict[str, Any]:
     """Load full-population statistics and bounded task examples, then select atomically."""
     started = time.monotonic()
     release = AlignmentRelease.model_validate_json(StoragePath(release_uri).read_text())
@@ -107,6 +113,12 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> 
         release.task_count,
     ):
         raise ValueError("Coverage statistics refer to a different alignment release")
+    projection = (
+        validated_role_projection(role_projection, release_uri, coverage_uri, query)
+        if role_projection is not None
+        else None
+    )
+    recorded_uses = {change.source_id: change.recorded_use for change in projection.changes} if projection else {}
     current = query(
         "SELECT l.release_id, l.release_uri FROM curriculum_current c JOIN curriculum_loads l USING (load_id) "
         "WHERE c.name = 'latest'",
@@ -146,7 +158,13 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> 
             "load_id": load_id,
             "release_id": coverage.coverage_id,
             "release_uri": release_uri,
-            "manifest": json.dumps({**release.model_dump(mode="json"), "coverage": coverage.model_dump(mode="json")}),
+            "manifest": json.dumps(
+                {
+                    **release.model_dump(mode="json"),
+                    "coverage": coverage.model_dump(mode="json"),
+                    "role_projection": role_projection.model_dump(mode="json") if role_projection else None,
+                }
+            ),
         },
     )
     selected = {row.source_id: row.model_dump(mode="json") for row in release.sources}
@@ -178,7 +196,8 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> 
             subjects = (detail["matches"] or {}).get("subjects", [])
             if (
                 expected is None
-                or any(detail[key] != expected[key] for key in ("source_key", "population", "intended_use"))
+                or any(detail[key] != expected[key] for key in ("source_key", "population"))
+                or detail["intended_use"] != recorded_uses.get(row["source_id"], expected["intended_use"])
                 or (row["description_status"] == "ready") != bool(subjects)
                 or row["description_status"] not in ("ready", "insufficient_context", "skipped")
             ):
@@ -253,9 +272,22 @@ def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> 
 @click.option("--coverage", "coverage_uri", required=True, help="Compact coverage.json with statistics and samples.")
 @click.option("--app-id", "applet_id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
-def main(release_uri: str, coverage_uri: str, applet_id: str, service_url: str) -> None:
+@click.option(
+    "--role-projection",
+    type=(str, str),
+    metavar="URI SHA256",
+    help="Explicit hashed metadata-only role-correction receipt; ordinary imports keep exact-role checks.",
+)
+def main(
+    release_uri: str,
+    coverage_uri: str,
+    applet_id: str,
+    service_url: str,
+    role_projection: tuple[str, str] | None,
+) -> None:
     configure_coreweave_s3()
-    click.echo(json.dumps(load_curriculum(release_uri, coverage_uri, applet_query(service_url, applet_id))))
+    reference = ManifestReference(uri=role_projection[0], sha256=role_projection[1]) if role_projection else None
+    click.echo(json.dumps(load_curriculum(release_uri, coverage_uri, applet_query(service_url, applet_id), reference)))
 
 
 if __name__ == "__main__":

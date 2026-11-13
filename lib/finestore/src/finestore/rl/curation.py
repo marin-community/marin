@@ -233,7 +233,7 @@ DAYTONA_SAFE_SNAPSHOT_LIMIT = 10
 
 
 class CurationMode(StrEnum):
-    """How much of a source a curation pass examined."""
+    """Population scope requested for a curation pass."""
 
     QUICK = "quick"
     """Conversion without execution qualification. Never admits tasks or selects for training."""
@@ -242,7 +242,7 @@ class CurationMode(StrEnum):
     """A documented sample was executed end to end, including its verifiers."""
 
     FULL = "full"
-    """Every task was executed end to end, including its verifier."""
+    """Process the full population; execution coverage comes from separate oversight evidence."""
 
 
 class OversightLevel(StrEnum):

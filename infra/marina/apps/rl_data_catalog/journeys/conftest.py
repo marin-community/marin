@@ -1,0 +1,53 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Seed lexical evidence in the installed app's disposable Postgres schema."""
+
+import shutil
+from collections.abc import Iterator
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+from marina.applets import applet_schema
+from marina.db import DatabaseSpec, engine_for
+from marina.journeys import Kernel, running_kernel
+from marina.preview import install_preview_sources
+from marina.server import MarinaConfig
+from sqlalchemy import text
+
+from infra.marina.apps.rl_data_catalog.server.app import migrate
+from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
+
+APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
+
+
+@pytest.fixture(scope="session")
+def marina_kernel(marina_database: DatabaseSpec, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Kernel]:
+    root = tmp_path_factory.mktemp("atlas-browser")
+    apps = root / "apps"
+    shutil.copytree(Path(__file__).resolve().parents[1], apps / "rl_data_catalog")
+    install_preview_sources(apps, marina_database)
+    with running_kernel(MarinaConfig(data_root=str(root), iap_audience=None, database=marina_database)) as kernel:
+        yield kernel
+
+
+@pytest.fixture(scope="session", autouse=True)
+def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Iterator[None]:
+    engine = engine_for(marina_database, applet_schema(APP_ID))
+    try:
+        with engine.begin() as connection:
+            migrate(connection)
+            connection.execute(text("INSERT INTO atlas_loads VALUES ('lexical','fixture','lexical',NOW(),NOW())"))
+            for _, declaration in contamination_declarations():
+                connection.execute(
+                    text(
+                        "INSERT INTO atlas_sources (load_id,id,declaration,latest_attempt_status,diagnostics) "
+                        "VALUES ('lexical',:id,CAST(:declaration AS JSONB),'skipped','{}'::jsonb)"
+                    ),
+                    {"id": declaration.id, "declaration": declaration.model_dump_json()},
+                )
+            connection.execute(text("UPDATE atlas_current SET load_id='lexical' WHERE name='latest'"))
+        yield
+    finally:
+        engine.dispose()

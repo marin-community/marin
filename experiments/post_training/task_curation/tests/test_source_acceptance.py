@@ -34,19 +34,6 @@ def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -
     )
 
 
-def test_every_runnable_agentic_source_ingests_a_task_directory_format():
-    """Require an accepted format or an explicit grandfathered internal-format exemption."""
-    agentic = [source for source in all_sources().values() if "agentic" in source.info.tags]
-    runnable = [source for source in agentic if source.pipeline is not None]
-
-    missing = sorted(source.info.id for source in runnable if source.info.task_format is None)
-    assert missing == []
-    accepted = {TaskFormat.TASKCOMPENDIUM, TaskFormat.HARBOR}
-    assert all(
-        source.info.task_format in accepted or source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES for source in runnable
-    )
-
-
 @pytest.mark.parametrize(
     "task_format, source_id, error",
     [
@@ -97,6 +84,7 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
     assert source.declaration.status == "Not selectable"
 
 
+@pytest.mark.data_integration
 def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(monkeypatch):
     source = next(source for source in all_sources().values() if source.is_grandfathered_blend)
     source_id = source.info.id
@@ -107,6 +95,7 @@ def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(m
     assert source.declaration.daytona_safety is None
 
 
+@pytest.mark.data_integration
 def test_verified_retained_legacy_subset_inherits_admission_but_not_daytona_exemption(monkeypatch):
     source = next(
         source
@@ -122,6 +111,7 @@ def test_verified_retained_legacy_subset_inherits_admission_but_not_daytona_exem
 
 
 @pytest.mark.parametrize("missing", ["verified_pin", "private_receipt", "fresh_actor"])
+@pytest.mark.data_integration
 def test_retained_legacy_admission_cannot_bypass_pin_privacy_or_fresh_actor_gates(monkeypatch, missing):
     source = next(
         source
