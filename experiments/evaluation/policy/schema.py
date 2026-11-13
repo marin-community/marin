@@ -3,68 +3,56 @@
 
 """Typed declarations of Marin's eval policy: which candidates run which evaluations, with which exceptions.
 
-These are the policy's own view of models and benchmarks. Adapters outside this package translate them
-into launches.
+Candidates are model catalog entries and evaluations are launcher evaluation definitions, so a policy
+that names an unknown model or benchmark fails when its module is imported.
 """
 
 from collections import Counter
 from dataclasses import dataclass
 
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import EvaluationSelection
 
-@dataclass(frozen=True)
-class TaskSpecCorpus:
-    """A published TaskSpec corpus, named by its benchmark."""
-
-    benchmark: str
-
-
-@dataclass(frozen=True)
-class VendoredEvalchemy:
-    """A named config for the vendored Evalchemy runtime."""
-
-    config: str
-
-
-@dataclass(frozen=True)
-class VendoredHarbor:
-    """A named config for the vendored Harbor runtime."""
-
-    config: str
-
-
-Runtime = TaskSpecCorpus | VendoredEvalchemy | VendoredHarbor
+from experiments.evaluation.evals import EvaluationDefinition
 
 
 @dataclass(frozen=True, kw_only=True)
 class PolicyCandidate:
-    """A model under evaluation.
+    """A model catalog entry under evaluation.
 
-    ``model`` names its model catalog entry. ``max_context`` is the largest context window the model
-    supports; no evaluation runs it with more.
+    ``max_context`` is the largest context window the model supports; no evaluation runs it with more.
     """
 
-    name: str
-    model: str
+    model: ModelConfig
     max_context: int
+
+    @property
+    def name(self) -> str:
+        return self.model.name
 
 
 @dataclass(frozen=True, kw_only=True)
 class PolicyEvaluation:
-    """One benchmark. Unset settings use the policy's defaults."""
+    """One evaluation definition and the settings the policy runs it with.
 
-    name: str
-    run: Runtime
-    context: int | None = None
-    max_output: int | None = None
-    seed: int | None = None
+    The policy owns ``max_output`` and ``seed``, so a selection may not set them in its run overrides.
+    """
 
-
-@dataclass(frozen=True, kw_only=True)
-class PolicyDefaults:
+    definition: EvaluationDefinition
     context: int
     max_output: int | None
     """None leaves output limited only by the context."""
     seed: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.definition, EvaluationSelection) and (
+            self.definition.run.max_tokens is not None or self.definition.run.seed is not None
+        ):
+            raise ValueError(f"{self.name}: set max_output and seed on the policy evaluation, not the selection")
+
+    @property
+    def name(self) -> str:
+        return self.definition.name
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -76,7 +64,7 @@ class PolicyExclusion:
 
 @dataclass(frozen=True, kw_only=True)
 class PolicyOverride:
-    """Settings for one candidate on one evaluation; unset ones resolve as if there were no override."""
+    """Settings for one candidate on one evaluation; unset ones keep the evaluation's value."""
 
     candidate: PolicyCandidate
     evaluation: PolicyEvaluation
@@ -97,7 +85,6 @@ class EvalPolicy:
     """One version of the eval policy. Every evaluation runs for every candidate unless excluded."""
 
     version: str
-    defaults: PolicyDefaults
     candidates: tuple[PolicyCandidate, ...]
     in_distribution: tuple[PolicyEvaluation, ...]
     exclusions: tuple[PolicyExclusion, ...] = ()

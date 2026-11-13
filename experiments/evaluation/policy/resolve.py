@@ -1,16 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Combine a policy's defaults, evaluations and exceptions into the settings for one candidate."""
+"""Combine a policy's evaluations and exceptions into the settings for one candidate."""
 
 from dataclasses import dataclass
 
-from marin.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
+from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate, PolicyEvaluation
 
 
 @dataclass(frozen=True, kw_only=True)
 class ResolvedPolicyEvaluation:
-    """One candidate on one evaluation, with the policy's defaults and exceptions applied.
+    """One candidate on one evaluation, with the candidate's exceptions applied.
 
     Build these with ``resolve``. The top-level settings are the ones to run with; ``evaluation``
     keeps the evaluation as the policy declares it.
@@ -39,19 +39,17 @@ def resolve(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[ResolvedPol
     """Return every evaluation the candidate runs under the policy, in policy order.
 
     Excluded evaluations are left out. Each setting comes from the candidate's override, else the
-    evaluation, else the policy defaults, and context is capped at the candidate's window.
+    evaluation, and context is capped at the candidate's window.
     """
     if candidate not in policy.candidates:
         raise ValueError(f"{candidate.name} is not a candidate in policy {policy.version}")
-    defaults = policy.defaults
     excluded = {item.evaluation.name for item in policy.exclusions if item.candidate == candidate}
     overrides = {item.evaluation.name: item for item in policy.overrides if item.candidate == candidate}
     resolved = []
     for evaluation in policy.in_distribution:
         if evaluation.name in excluded:
             continue
-        context = defaults.context if evaluation.context is None else evaluation.context
-        max_output = defaults.max_output if evaluation.max_output is None else evaluation.max_output
+        context, max_output = evaluation.context, evaluation.max_output
         if (override := overrides.get(evaluation.name)) is not None:
             context = context if override.context is None else override.context
             max_output = max_output if override.max_output is None else override.max_output
@@ -61,7 +59,7 @@ def resolve(policy: EvalPolicy, candidate: PolicyCandidate) -> tuple[ResolvedPol
                 evaluation=evaluation,
                 context=min(context, candidate.max_context),
                 max_output=max_output,
-                seed=defaults.seed if evaluation.seed is None else evaluation.seed,
+                seed=evaluation.seed,
             )
         )
     return tuple(resolved)
