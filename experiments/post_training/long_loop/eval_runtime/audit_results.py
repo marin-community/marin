@@ -23,6 +23,7 @@ def audit(
     failures = Counter()
     source_counts = Counter()
     identities = Counter()
+    unscored = []
     for path in sorted(fs.glob(pattern)):
         if path.endswith("/aggregated_results.jsonl"):
             continue
@@ -34,6 +35,13 @@ def audit(
         for row in rows:
             if row["verification"]["status"] != "verified":
                 failures[row.get("exception_type") or row["verification"]["status"]] += 1
+                unscored.append(
+                    {
+                        "data_source": row["data_source"],
+                        "uid": str(row["uid"]),
+                        "exception_type": row.get("exception_type"),
+                    }
+                )
         summaries.append(
             {
                 "file": path.rsplit("/", 1)[-1],
@@ -56,6 +64,8 @@ def audit(
         "result_uri": result_uri,
         "expected_rollouts": expected_rollouts,
         "completed_rollouts": completed,
+        "verified_rollouts": sum(row["verified"] for row in summaries),
+        "unscored_attempts": unscored,
         "all_verified": completed == expected_rollouts and not failures and coverage_matches and identities_match,
         "attempts_by_data_source": dict(source_counts),
         "expected_by_data_source": expected_by_data_source,
@@ -63,6 +73,23 @@ def audit(
         "unverified_types": dict(failures),
         "benchmarks": summaries,
     }
+
+
+def require_evaluation_coverage(evaluation: dict) -> None:
+    """Require full scoring or an exact, explicitly accepted set of unscored attempts."""
+    if evaluation["all_verified"]:
+        return
+    unscored = evaluation["unscored_attempts"]
+    accepted = evaluation.get("accepted_unscored_attempts", [])
+    if (
+        evaluation["completed_rollouts"] != evaluation["expected_rollouts"]
+        or not evaluation["source_coverage_matches"]
+        or not evaluation["identity_coverage_matches"]
+        or not accepted
+        or sorted(json.dumps(row, sort_keys=True) for row in unscored)
+        != sorted(json.dumps(row, sort_keys=True) for row in accepted)
+    ):
+        raise ValueError("Evaluation has missing, unexpected or unaccepted unscored attempts")
 
 
 if __name__ == "__main__":

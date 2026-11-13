@@ -112,6 +112,15 @@ verification produces an explicitly partial archive and prevents checkpoint
 cleanup. Model exports go to public Hugging Face repositories; native optimizer
 payloads remain location/TTL references.
 
+An explicitly approved partial evaluation can pass an exact list of
+`data_source`, `uid` and `exception_type` records to
+`report_step(accepted_unscored_attempts=...)`. Every selected identity and each
+source's expected attempt count must still match. The report retains `all_verified=false`, excludes
+unscored attempts from reward means, and records the accepted exceptions. The
+archive preserves this limitation, publishes an `infra_failed` EvalDash record
+with scored coverage, and blocks deletion of superseded native checkpoints. Unexpected failures still
+stop finalization.
+
 If the strict W&B exporter reports `IncompleteRunHistoryError`, the archive
 confirms that typed provider error and automatically streams every row from
 unfiltered, unsampled `run.scan_history()`. The JSONL and its SHA256 receipt are

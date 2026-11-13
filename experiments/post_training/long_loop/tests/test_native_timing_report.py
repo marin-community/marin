@@ -45,3 +45,51 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
             sft_geometry="CPU fixture",
             additional_timing=[pin],
         )
+
+
+@pytest.mark.parametrize("failure", ["accepted", "unaccepted", "missing_identity"])
+def test_report_preserves_explicit_unscored_attempt_without_certifying_full_scoring(tmp_path, failure):
+    evaluation = tmp_path / "eval"
+    results = evaluation / "exports/dumped_evals/eval_only"
+    results.mkdir(parents=True)
+    rows = [
+        {"uid": "0", "verification": {"status": "verified", "score": 1}},
+        {"uid": "1", "verification": {"status": "error", "score": None}, "exception_type": "AddTestsDirError"},
+    ]
+    rows = [{**row, "data_source": "bench", "response_token_ids": [1], "stop_reason": "stop"} for row in rows]
+    (results / "bench.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+    selection = tmp_path / "selection"
+    selection.mkdir()
+    (selection / "selection.json").write_text(
+        json.dumps(
+            {
+                "attempts": 2,
+                "attempts_per_data_source": {"bench": 2},
+                "identities": [
+                    {"data_source": "bench", "dataset_row_uid": "0"},
+                    {"data_source": "bench", "dataset_row_uid": "2" if failure == "missing_identity" else "1"},
+                ],
+            }
+        )
+    )
+    output = tmp_path / "report"
+    output.mkdir()
+    accepted = [{"data_source": "bench", "uid": "1", "exception_type": "AddTestsDirError"}]
+    arguments = dict(
+        output=str(output),
+        stages=[str(evaluation)],
+        expected_rollouts=2,
+        evaluation_selection=str(selection),
+        sft_geometry="CPU fixture",
+        accepted_unscored_attempts=[] if failure == "unaccepted" else accepted,
+    )
+    if failure != "accepted":
+        with pytest.raises(ValueError, match="unaccepted unscored"):
+            write_report(**arguments)
+        return
+    write_report(**arguments)
+    summary = json.loads((output / "evaluation.json").read_text())
+    assert not summary["all_verified"]
+    assert summary["verified_rollouts"] == 1
+    assert summary["benchmarks"][0]["mean_verified_reward"] == 1
+    assert summary["unscored_attempts"] == summary["accepted_unscored_attempts"] == accepted

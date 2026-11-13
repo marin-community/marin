@@ -93,11 +93,27 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
 
 
 @pytest.mark.parametrize("incomplete", [False, True])
-def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_path, monkeypatch, hub, incomplete):
+@pytest.mark.parametrize("unscored", [False, True])
+def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
+    tmp_path, monkeypatch, hub, incomplete, unscored
+):
 
     report = tmp_path / "report"
     report.mkdir()
-    (report / "evaluation.json").write_text('{"all_verified": true}')
+    accepted = [{"data_source": "bench", "uid": "task1", "exception_type": "AddTestsDirError"}]
+    (report / "evaluation.json").write_text(
+        json.dumps(
+            {
+                "all_verified": not unscored,
+                "expected_rollouts": 1,
+                "completed_rollouts": 1,
+                "source_coverage_matches": True,
+                "identity_coverage_matches": True,
+                "unscored_attempts": accepted if unscored else [],
+                "accepted_unscored_attempts": accepted if unscored else [],
+            }
+        )
+    )
     selected = tmp_path / "checkpoints" / "global_step_5"
     selected.mkdir(parents=True)
     weight = selected / "weight"
@@ -112,7 +128,7 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
         "hf_upload": asdict(upload_config(tmp_path, selected)),
         "provenance": {
             "marin_commit": "a" * 40,
-            "evaluation_complete": True,
+            "evaluation_complete": not unscored,
             "checkpoint_inventory": {
                 "root": str(selected.parent),
                 "selected": str(selected),
@@ -124,6 +140,9 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
     if incomplete:
         plan["provenance"]["missing_evidence"] = {"timing": "Native journal coverage incomplete"}
         plan["provenance"]["cleanup_blockers"] = ["Native journal coverage incomplete"]
+    if unscored:
+        plan["provenance"].setdefault("missing_evidence", {})["evaluation"] = "One explicitly unscored attempt"
+        plan["provenance"].setdefault("cleanup_blockers", []).append("One explicitly unscored attempt")
     native = tmp_path / "native-eval"
     native.mkdir()
     (native / "bench.jsonl").write_text(
@@ -132,7 +151,11 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
                 "uid": "task1",
                 "data_source": "bench",
                 "env_class": "taskcompendium",
-                "verification": {"status": "verified", "score": 1, "passed": True},
+                "verification": (
+                    {"status": "error", "score": None, "passed": None}
+                    if unscored
+                    else {"status": "verified", "score": 1, "passed": True}
+                ),
             }
         )
         + "\n"
@@ -148,8 +171,8 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
             "model": {"name": "test", "location": "test", "backend": "vllm"},
             "eval": {"name": "smoke", "mechanism": "skyrl"},
             "hardware": {"platform": "local", "accelerator": "none", "region_or_cluster": None},
-            "status": "succeeded",
-            "error": None,
+            "status": "infra_failed" if unscored else "succeeded",
+            "error": "One unscored attempt" if unscored else None,
             "results_path": "resolved-by-archive",
             "metrics": {},
             "jobs": {},
@@ -200,14 +223,16 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(tmp_
     assert manifest["provenance"]["checkpoint_inventory"]["ttl"] == "14d"
     assert not any("weight" in item["destination"] for item in manifest["objects"])
     assert weight.read_bytes() == b"selected-native-weights"
-    assert (prior / "weights.distcp").exists() == incomplete
-    assert Path(root, "cleanup-blocked.json").exists() == incomplete
+    assert manifest["provenance"]["evaluation_complete"] is not unscored
+    assert (prior / "weights.distcp").exists() == (incomplete or unscored)
+    assert Path(root, "cleanup-blocked.json").exists() == (incomplete or unscored)
 
 
 @pytest.mark.parametrize("incomplete_wandb_history", [False, True])
 @pytest.mark.parametrize("rl_state", ["succeeded", "failed"])
+@pytest.mark.parametrize("unscored", [False, True])
 def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
-    tmp_path, monkeypatch, incomplete_wandb_history, rl_state
+    tmp_path, monkeypatch, incomplete_wandb_history, rl_state, unscored
 ):
     def document(path, value):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -292,7 +317,21 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
     document(Path(roots["report"]) / "timing-sources.json", [])
     document(
         Path(roots["report"]) / "evaluation.json",
-        {"all_verified": True, "result_uri": roots["eval"], "completed_rollouts": 44},
+        {
+            "all_verified": not unscored,
+            "result_uri": roots["eval"],
+            "expected_rollouts": 44,
+            "completed_rollouts": 44,
+            "verified_rollouts": 43 if unscored else 44,
+            "source_coverage_matches": True,
+            "identity_coverage_matches": True,
+            "unscored_attempts": (
+                [{"data_source": "bench", "uid": "id", "exception_type": "AddTestsDirError"}] if unscored else []
+            ),
+            "accepted_unscored_attempts": (
+                [{"data_source": "bench", "uid": "id", "exception_type": "AddTestsDirError"}] if unscored else []
+            ),
+        },
     )
     spec = {"marin_revision": "a" * 40, "name": "test", "datasets": {"rows": "pinned"}, "rl": {"execution": {}}}
     plan = derive_archive_plan(
@@ -306,7 +345,11 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
     )
     assert plan["hf_upload"]["repo_id"].endswith("-2026.11.10")
     assert plan["provenance"]["rl_terminal"] == terminal
-    assert set(plan["provenance"]["missing_evidence"]) == {"timing", "wandb"}
+    assert set(plan["provenance"]["missing_evidence"]) == (
+        {"timing", "wandb", "evaluation"} if unscored else {"timing", "wandb"}
+    )
+    assert plan["provenance"]["evaluation_complete"] is not unscored
+    assert plan["evaldash"]["record"]["status"] == ("infra_failed" if unscored else "succeeded")
     assert any(item["name"] == "eval_inputs/selection.json" for item in plan["inputs"])
     assert sum(item["name"].endswith("trace.zip") for item in plan["inputs"]) == 2
     evidence = json.loads((tmp_path / "archive/derived-inputs/evidence-status.json").read_text())

@@ -36,6 +36,7 @@ from experiments.post_training.long_loop.archive import (
     write_once,
 )
 from experiments.post_training.long_loop.eval_archive import publish_evaluation
+from experiments.post_training.long_loop.eval_runtime.audit_results import require_evaluation_coverage
 from experiments.post_training.long_loop.hf_archive import (
     HfUpload,
     file_identity,
@@ -53,8 +54,7 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
     """Seal an explicit reviewed inventory, then clean only its superseded checkpoints."""
     fs, key = filesystem_for(prefix_join(completed_report, "evaluation.json"))
     evaluation = json.loads(fs.cat_file(key))
-    if not evaluation["all_verified"]:
-        raise ValueError("Completed report has unverified evaluation paths")
+    require_evaluation_coverage(evaluation)
     inputs = [ArchiveInput(**item) for item in plan["inputs"]]
     missing = REQUIRED_CATEGORIES - {item.category for item in inputs}
     declared_missing = plan["provenance"].get("missing_evidence", {})
@@ -64,8 +64,10 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
     revision = provenance["marin_commit"]
     if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
         raise ValueError("Archive requires an exact Marin commit")
-    if not provenance["evaluation_complete"]:
-        raise ValueError("Archival post-script requires completed evaluation")
+    if provenance["evaluation_complete"] != evaluation["all_verified"]:
+        raise ValueError("Archive plan misstates evaluation completeness")
+    if not evaluation["all_verified"] and "evaluation" not in declared_missing:
+        raise ValueError("Unscored evaluation attempts must block cleanup")
     receipt_fs, receipt_key = filesystem_for(prefix_join(output, "hf-checkpoint.json"))
     if receipt_fs.exists(receipt_key):
         receipt = json.loads(receipt_fs.cat_file(receipt_key))
@@ -479,6 +481,14 @@ def derive_archive_plan(
             "One or more exact W&B identities or strict native-history exports unavailable; see wandb-status.json."
         )
         blockers.append(missing["wandb"])
+    evaluation = documents[("report", "evaluation.json")]
+    require_evaluation_coverage(evaluation)
+    if not evaluation["all_verified"]:
+        missing["evaluation"] = "Explicitly unscored attempts: " + json.dumps(
+            evaluation["unscored_attempts"], sort_keys=True
+        )
+        limitations.append(missing["evaluation"])
+        blockers.append(missing["evaluation"])
     record(
         "evidence-status.json",
         {
@@ -489,15 +499,15 @@ def derive_archive_plan(
         },
         "provenance",
     )
-    evaluation = documents[("report", "evaluation.json")]
-    if not evaluation["all_verified"] or evaluation["result_uri"] != evaluated:
-        raise ValueError("Evaluation report is incomplete or belongs to another run")
+    if evaluation["result_uri"] != evaluated:
+        raise ValueError("Evaluation report belongs to another run")
     card = (
         "---\nlicense: openmdw-1.1\n---\n\n# Long-loop selected checkpoint\n\n"
         + WARNING
         + "\n\n"
         + f"Selected RL step: {run.global_step}. Selection: five-step EMA validation reward. "
-        + f"Marin source commit: `{revision}`. Verified evaluation attempts: {evaluation['completed_rollouts']}.\n\n"
+        + f"Marin source commit: `{revision}`. Scored evaluation attempts: {evaluation['verified_rollouts']} "
+        + f"of {evaluation['completed_rollouts']}. Unscored attempts are excluded from reward means.\n\n"
         + "This is an experimental training result, not a quality-parity claim. "
         + "Exact private dataset/config/provenance records are retained in the internal evidence archive.\n\n"
         + RESPONSIBLE_USE
@@ -521,7 +531,7 @@ def derive_archive_plan(
         "provenance": {
             "marin_commit": revision,
             "rl_terminal": documents[("rl", "terminal.json")]["result"],
-            "evaluation_complete": True,
+            "evaluation_complete": evaluation["all_verified"],
             "wandb_runs": wandb_status,
             "missing_evidence": missing,
             "cleanup_blockers": blockers,
@@ -538,8 +548,8 @@ def derive_archive_plan(
                 "model": {"name": settings["evaldash"]["model_name"], "location": run.hf_model_uri, "backend": "vllm"},
                 "eval": {"name": settings["evaldash"]["eval_name"], "mechanism": "skyrl"},
                 "hardware": settings["evaldash"]["hardware"],
-                "status": "succeeded",
-                "error": None,
+                "status": "succeeded" if evaluation["all_verified"] else "infra_failed",
+                "error": None if evaluation["all_verified"] else missing["evaluation"],
                 "results_path": prefix_join(output, "evaluation"),
                 "metrics": {},
                 "jobs": {},

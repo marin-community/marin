@@ -15,7 +15,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.long_loop.archive_stage import archive_step
-from experiments.post_training.long_loop.eval_runtime.audit_results import audit
+from experiments.post_training.long_loop.eval_runtime.audit_results import audit, require_evaluation_coverage
 from experiments.post_training.long_loop.eval_runtime.profile import SKIPPED_BENCHMARKS, SMOKE_PATH_COUNT
 from experiments.post_training.long_loop.timing import Event, EventLog, report
 
@@ -46,6 +46,7 @@ def write_report(
     sft_geometry: str,
     evaluation_selection: str | None = None,
     additional_timing: list[dict] | None = None,
+    accepted_unscored_attempts: list[dict] | None = None,
 ) -> None:
     events = []
     sources = []
@@ -92,9 +93,15 @@ def write_report(
         expected_identities=expected_identities,
     )
     evaluation["excluded_benchmarks"] = SKIPPED_BENCHMARKS
+    evaluation["accepted_unscored_attempts"] = accepted_unscored_attempts or []
+    require_evaluation_coverage(evaluation)
     fs.pipe_file(prefix_join(root, "evaluation.json"), json.dumps(evaluation, indent=2).encode())
     if not evaluation["all_verified"]:
-        raise ValueError(f"Micro210 did not verify all {expected_rollouts} selected paths")
+        text += (
+            "\nEvaluation limitations: the following attempts are explicitly unscored and excluded from reward means: "
+        )
+        text += json.dumps(evaluation["unscored_attempts"], sort_keys=True) + ". Full scoring is not certified.\n"
+        fs.pipe_file(prefix_join(root, "timing.md"), text.encode())
 
 
 def report_step(
@@ -105,6 +112,7 @@ def report_step(
     expected_rollouts: int = SMOKE_PATH_COUNT,
     evaluation_selection: ArtifactStep | None = None,
     additional_timing: list[dict] | None = None,
+    accepted_unscored_attempts: list[dict] | None = None,
     sft_geometry: str = "Plumbing SFT (32k/32 GPU), not target: 15 updates, 125,829,120 packed token positions.",
 ) -> ArtifactStep:
     completed = apply(
@@ -117,5 +125,6 @@ def report_step(
         sft_geometry=sft_geometry,
         evaluation_selection=evaluation_selection,
         additional_timing=additional_timing,
+        accepted_unscored_attempts=accepted_unscored_attempts,
     )
     return archive_step(version, archive_plan, completed) if archive_plan is not None else completed
