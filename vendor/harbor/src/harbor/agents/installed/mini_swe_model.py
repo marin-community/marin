@@ -169,7 +169,13 @@ class ContextLimitedModel(OpenAIModel):
                     context_window=self.context_window,
                     max_output_tokens=self.max_output_tokens,
                 )
-        except ContextBudgetExceeded as error:
+            return super()._query(messages, **{**kwargs, "max_tokens": max_tokens})
+        except (ContextBudgetExceeded, openai.BadRequestError) as error:
+            if (
+                isinstance(error, openai.BadRequestError)
+                and "context_length_exceeded" not in (error.type, error.code)
+            ):
+                raise
             raise LimitsExceeded(
                 {
                     "role": "exit",
@@ -177,7 +183,6 @@ class ContextLimitedModel(OpenAIModel):
                     "extra": {"exit_status": "ContextLimit", "submission": ""},
                 }
             ) from error
-        return super()._query(messages, **{**kwargs, "max_tokens": max_tokens})
 
 
 class K2HorizonContextLimitedModel(ContextLimitedModel):
