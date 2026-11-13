@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
@@ -28,6 +28,8 @@ from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
 from marinskyrl.inference_placement import validate_expert_block_transport
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
+from skyrl_train.inference_engines import placement as inference_placement
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:
@@ -43,6 +45,106 @@ def test_training_channels_require_compatible_weight_transport() -> None:
         validate_expert_block_transport(config)
     config.generator.weight_sync_transport = "broadcast"
     validate_expert_block_transport(config)
+
+
+def test_colocated_expert_block_accepts_only_the_four_gpu_verified_layout() -> None:
+    config = get_default_config()
+    config.trainer.strategy = "megatron"
+    config.trainer.placement.colocate_all = True
+    config.trainer.placement.policy_num_nodes = 1
+    config.trainer.placement.policy_num_gpus_per_node = 4
+    config.trainer.policy.megatron_config.tensor_model_parallel_size = 1
+    config.trainer.policy.megatron_config.pipeline_model_parallel_size = 1
+    config.trainer.policy.megatron_config.expert_tensor_parallel_size = 1
+    config.trainer.policy.megatron_config.expert_model_parallel_size = 4
+    config.generator.weight_sync_transport = "expert_block"
+    config.generator.weight_sync_backend = "nccl"
+    config.generator.backend = "vllm"
+    config.generator.run_engines_locally = True
+    config.generator.num_inference_engines = 1
+    config.generator.inference_engine_tensor_parallel_size = 1
+    config.generator.inference_engine_pipeline_parallel_size = 1
+    config.generator.inference_engine_data_parallel_size = 4
+    config.generator.inference_engine_expert_parallel_size = 4
+    config.generator.expert_block_sync.verify = True
+    with open_dict(config.generator.engine_init_kwargs):
+        config.generator.engine_init_kwargs.kernel_config = {"moe_backend": "triton"}
+
+    validate_expert_block_transport(config)
+
+    config.generator.inference_engine_data_parallel_size = 2
+    with pytest.raises(ValueError, match="colocation requires"):
+        validate_expert_block_transport(config)
+
+
+def test_colocated_expert_block_rejects_generation_before_ray_starts() -> None:
+    config = get_default_config()
+    config.trainer.placement.colocate_all = True
+    config.generator.weight_sync_transport = "expert_block"
+
+    with pytest.raises(ValueError, match="requires a training entrypoint"):
+        validate_rollout_launch(config, EntrypointOperation.GENERATE)
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    ["skyrl_train.entrypoints.main_generate", "skyrl_train.entrypoints.taskcompendium"],
+)
+def test_colocated_expert_block_rejects_unverified_launch_entrypoint(tmp_path: Path, entrypoint: str) -> None:
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw_launch_config()))
+    config = load_launch_config(path)
+    config.skyrl.generator.weight_sync_transport = "expert_block"
+    config.runtime.entrypoint = entrypoint
+
+    with pytest.raises(ValueError, match="requires the standard training entrypoint"):
+        validate_launch_config(config)
+
+
+def test_shared_bundle_reports_reject_duplicate_or_misrouted_receivers(monkeypatch) -> None:
+    shared_group = object()
+    bundle_nodes = {0: "node-a", 1: "node-b", 2: "node-a", 3: "node-b"}
+    monkeypatch.setattr(
+        inference_placement,
+        "placement_group_table",
+        lambda group: {"bundles_to_node_id": bundle_nodes},
+    )
+    nodes = inference_placement.colocated_inference_bundle_nodes(
+        shared_group, [[2], [0], [3], [1]], num_inference_engines=1, data_parallel_size=4, pipeline_parallel_size=1
+    )
+    assert nodes == [["node-a", "node-a", "node-b", "node-b"]]
+    reports = [
+        [
+            {
+                "host": "host-a" if rank < 2 else "host-b",
+                "gpu_uuid": f"gpu-{rank}",
+                "dp_rank": rank,
+                "dp_world_size": 4,
+                "ep_rank": rank,
+                "ep_world_size": 4,
+                "torch_rank": rank,
+                "torch_world_size": 4,
+            }
+        ]
+        for rank in range(4)
+    ]
+    kwargs = dict(
+        bundle_nodes=nodes,
+        node_hosts={"node-a": "host-a", "node-b": "host-b"},
+        relative_rank_offsets=[0] * 4,
+        data_parallel_size=4,
+        expert_parallel_size=4,
+    )
+    placements = inference_placement.verified_inference_replica_placements(reports, **kwargs)
+    assert [row.worker.gpu_uuid for row in placements] == [f"gpu-{rank}" for rank in range(4)]
+
+    reports[3][0]["gpu_uuid"] = "gpu-0"
+    with pytest.raises(ValueError, match="distinct"):
+        inference_placement.verified_inference_replica_placements(reports, **kwargs)
+    reports[3][0]["gpu_uuid"] = "gpu-3"
+    reports[3][0]["ep_rank"] = 2
+    with pytest.raises(ValueError, match="EP rank"):
+        inference_placement.verified_inference_replica_placements(reports, **kwargs)
 
 
 def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
@@ -72,7 +174,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
 
 def test_default_hf_export_requests_only_the_terminal_checkpoint(tmp_path):
     raw = raw_launch_config()
-    raw["skyrl"]["trainer"].update(export_hf_artifact=True, ckpt_interval=1)
+    raw["skyrl"]["trainer"].update(ckpt_interval=1)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 
@@ -288,13 +390,19 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
     profiles = {"sampled": {"sampling_params": {"stop": ["./END"]}}}
     raw["trainer"]["callbacks"] = [
         {"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles},
-        {"type": "best_checkpoint", "selection_metric": "eval/identity_behavior_holdout/pass_at_1"},
+        {
+            "type": "best_checkpoint",
+            "selection_metric": "eval/identity_behavior_holdout/pass_at_1",
+            "initial_model_uri": "s3://models/initial",
+            "expected_tasks": 4,
+            "minimum_scored_tasks": 2,
+        },
     ]
     path = tmp_path / "evaluation.yaml"
     path.write_text(yaml.safe_dump(raw))
 
     config = compose_skyrl_config(
-        parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
+        parse_rl_config(OmegaConf.load(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
     ).config
 
     assert config.trainer.callbacks[0].metric_groups == groups
@@ -361,7 +469,7 @@ def test_composed_launch_rejects_tis_selectors(tmp_path: Path, key: str, value) 
                 "algorithm.off_policy_correction": "custom",
                 "algorithm.off_policy_correction_rules": [{"action": "truncate", "high": 2.0}],
             },
-            "kind must be token or sequence",
+            "discriminator 'kind'",
         ),
         (
             {
@@ -418,29 +526,87 @@ def test_launch_validates_correction_and_selection_contract(tmp_path: Path, over
     path = tmp_path / "launch.yaml"
     OmegaConf.save(raw, path)
     if error is not None:
-        with pytest.raises(ValueError, match=error):
+        with pytest.raises(ValueError, match=error) as raised:
             load_launch_config(path)
+        assert "/tmp/" not in str(raised.value)
     else:
         # Explicitly uncorrected stale policies and active reward filters are valid launch contracts.
         load_launch_config(path)
 
 
-@pytest.mark.parametrize(
-    ("recipe", "nodes"), [("snowball_mopd_ultra_async_smoke", 8), ("snowball_mopd_ultra_async_32k_smoke", 9)]
-)
-def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path, recipe: str, nodes: int):
+def test_source_launch_preserves_nested_open_mappings(tmp_path):
     raw = raw_launch_config()
-    raw["skyrl"] = {"defaults": [recipe, "_self_"], "trainer": {"max_steps": 2}}
-    raw["iris"]["allocation"]["num_nodes"] = nodes
+    raw["skyrl"]["generator"]["engine_init_kwargs"] = {"user_options": {"nested": {}}}
+    path = tmp_path / "source.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    assert OmegaConf.to_container(load_launch_config(path).skyrl.generator.engine_init_kwargs.user_options) == {
+        "nested": {}
+    }
+
+
+def test_first_train_submission_validates_recipe_and_resolved_reload(tmp_path):
+    raw = raw_launch_config()
+    raw["runtime"]["entrypoint"] = ""
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
-    config = load_launch_config(path)
-    assert config.skyrl.trainer.max_steps == 2
-    assert config.skyrl.trainer.rollout_buffer.max_staleness_steps == 1
-    assert config.skyrl.trainer.algorithm.off_policy_correction == "tis"
-    assert config.skyrl.data.sampling.kind is None
-    assert config.skyrl.generator.engine_init_kwargs.max_model_len == (8192 if nodes == 8 else 32767)
+    loaded = load_launch_config(path)
     resolved = tmp_path / "resolved.yaml"
-    OmegaConf.save(config, resolved)
-    reloaded = load_launch_config(resolved)
-    assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
+    OmegaConf.save(loaded, resolved)
+    assert OmegaConf.to_container(load_launch_config(resolved), resolve=True) == OmegaConf.to_container(
+        loaded, resolve=True
+    )
+    del raw["skyrl"]["context_budget"]
+    path.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError, match="context_budget"):
+        load_launch_config(path)
+
+
+def test_source_launch_rejects_conflicting_author_values(tmp_path):
+    cases = []
+    for recipe_key, envelope_key in (("train_data", "train_data"), ("val_data", "validation_data")):
+        raw = OmegaConf.create(raw_launch_config())
+        raw.skyrl.data = {recipe_key: ["/authored/data"]}
+        raw.inputs[envelope_key] = [
+            {
+                "uri": "s3://data/gsm8k",
+                "identity": "sha256:gsm8k",
+                "local_path": "/tmp/data/gsm8k",
+                "relative_path": "train.parquet",
+                "kind": "directory",
+            }
+        ]
+        cases.append((raw, f"data.{recipe_key} conflicts"))
+    for role in ("policy", "ref"):
+        raw = OmegaConf.create(raw_launch_config())
+        raw.skyrl.trainer.placement[f"{role}_num_gpus_per_node"] = 32
+        cases.append((raw, rf"trainer\.placement\.{role}_num_gpus_per_node=32 exceeds"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.inputs.data_kind = "parquet"
+    cases.append((raw, "inputs.data_kind"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.iris.allocation.num_nodes = 2
+    raw.skyrl.trainer.placement.colocate_all = False
+    raw.skyrl.generator.speculative_decoding = {
+        "method": "eagle3",
+        "model": {"source_uri": "s3://models/draft", "source_identity": "mutable"},
+        "num_speculative_tokens": 3,
+        "training": None,
+    }
+    cases.append((raw, "artifact sources require sha256"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.iris.allocation.num_nodes = 2
+    cases.append((raw, "num_nodes"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.runtime.profile = "fsdp"
+    cases.append((raw, "runtime.profile"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.skyrl.trainer.callbacks = [{"type": "best_checkpoint"}]
+    cases.append((raw, "initial_model_uri"))
+    raw = OmegaConf.create(raw_launch_config())
+    raw.skyrl.checkpoint_export = {"hf_hub_repo_id": "authored/model"}
+    cases.append((raw, "checkpoint_export: the launch document owns export settings"))
+    path = tmp_path / "invalid.yaml"
+    for raw, error in cases:
+        OmegaConf.save(raw, path)
+        with pytest.raises(ValueError, match=error):
+            load_launch_config(path)

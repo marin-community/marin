@@ -18,9 +18,10 @@ Building the catalog performs no downloads, inference or job submission.
 [Evaluation tasks](evaluation-tasks.md) use population-preserving publication and
 carry execution protocols beside canonical tasks. Name them explicitly with
 `--source` and `--mode quick`; the default selection contains training sources.
-`experiments.post_training.task_curation.evaluation.EvalDataset` binds the recipe,
-protocol, and item builder. TaskCompendium owns the reusable source importers and
-corpus publisher; the experiment owns acquisition and artifact graphs.
+`experiments.evaluation.preparation.EvaluationCorpusRecipe` binds the recipe,
+protocol, and item builder. Evaluation owns shot selection and prompt preparation;
+shared curation code supplies acquisition and catalog publication. TaskCompendium
+owns reusable source importers and the corpus publisher.
 
 ## Pipeline overview
 
@@ -107,7 +108,8 @@ candidates are recorded without changing the blend wiring.
 The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
 `--artifact-root URL` selects another root explicitly and overrides the ambient
 `MARIN_PREFIX`. Local `--cache-dir PATH` takes precedence for local execution.
-`--output-root`, `--report-path` and `--review-cache` remain explicit locations;
+`--output-root` and `--report-path` remain explicit locations, and `--review-cache`
+defaults to `<artifact-root>/rl-data/review-cache`;
 use the same CW bucket for retained remote runs and a new versioned output
 directory for each campaign.
 
@@ -129,8 +131,8 @@ campaigns use `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/pr
 to accumulate results across versioned report directories, with assessment enabled.
 `--cache-dir` selects local execution and a local artifact root, so shared
 publication rejects it; local and SAMPLE runs keep separate catalogs. Remote runs
-reuse completed artifacts under `--artifact-root` and model requests under the
-explicit `--review-cache`. Reuse those locations, pinned inputs, recipe versions,
+reuse completed artifacts under `--artifact-root` and model requests under
+`--review-cache`. Reuse those locations, pinned inputs, recipe versions,
 rubric and model revisions across campaigns. A new report directory or enabling
 assessment does not force recomputation of completed work. Switching artifact
 roots does not copy completed work or model-request caches; verify their reuse
@@ -200,8 +202,8 @@ reference semantics requires a separate decision.
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
 The implementation is
 [`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
-It depends on the recipe's admitted source artifacts and a pinned heldout
-Parquet. Selection reads only `final/*.parquet` from training sources whose
+It depends on the recipe's admitted source artifacts and a list of pinned heldout
+inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
@@ -219,11 +221,12 @@ this small recipe selects 100 calendar tasks from two admitted sources:
     "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
   },
   "family_limits": {"calendar": 100},
-  "heldout": {
+  "heldout": [{
     "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
     "version": "2026.10.23.1",
-    "rows": 910
-  },
+    "rows": 910,
+    "format": "historical"
+  }],
   "validation_per_family": 20,
   "seed": 20261023
 }
@@ -261,12 +264,88 @@ a shortfall fails before publishing the training files. These rules provide
 exact overlap checks, not semantic decontamination.
 
 The artifact contains `train.parquet`, the per-family evaluation sample in
-`validation.parquet`, the complete exclusion set in `full_validation.parquet`,
-and `summary.json` with the recipe, source paths, eligible/overlap/duplicate/selected
-counts and evaluation IDs. Each Parquet has a `task_spec` JSON column. Source
-TaskSpecs retain their private graders and resources. The historical structural
-heldout tasks use the shared closure converter. SkyRL chooses rollout limits,
-harnesses and verifier backends when it loads these canonical tasks.
+`validation.parquet`, and the complete exclusion set in `full_validation.parquet`.
+These files have a `task_spec` JSON column. `summary.json` records the recipe,
+source paths, eligible/overlap/duplicate/selected counts, evaluation IDs and
+grader-kind counts for each file.
+
+`task_manifest.parquet` records every heldout task's `task_id`, `family`,
+`aaii_category`, `agentic` flag, `grader_kind` and `upstream_pass_rate` (NVIDIA's
+eight-sample rate where available). The evaluation sample is a subset of this
+complete heldout manifest. Historical Nemotron panel tasks use the package
+environment from an admitted task in their matching training component; their
+private grader resources and command stay attached to each task. The historical
+structural heldout tasks use the shared closure converter. SkyRL chooses rollout
+limits, harnesses and verifier backends when it loads these canonical tasks.
+
+### EvalLite
+
+EvalLite is a fixed sample of 1,500 public benchmark tasks that RL runs
+grade on the training job's own machines, with no container image or judge
+service. It draws only from evaluation sources and skips any task that matches
+training data or the 910-task development panel, which tuning looks at. It
+compares checkpoints of one model; it is not a headline benchmark (use
+[`experiments/evaluation`](https://github.com/marin-community/marin/tree/main/experiments/evaluation) for that) and does not
+cover multi-turn agent work or long context.
+
+| family | sources (tasks) | fast subset |
+|---|---|---|
+| scientific_reasoning | MATH500 (500), AIME24 (20) | 35 |
+| general | MMLU-Pro (200), GPQA-Diamond (50) | 17 |
+| competitive_coding | HumanEval+ (164), MBPP+ (111) | 18 |
+| structural | IFEval (150), IFBench (140) | 19 |
+| agents | NeMo next tool call (165) | 11 |
+
+Benchmark tasks come from the catalog's Evalchemy corpora, asked once in chat
+form without examples. An agents task shows a tool-use conversation and asks for
+the next tool call; only the exact function name with exact JSON arguments
+scores 1. It measures tool-call accuracy, not agent ability. The agents part
+stays only while the starting model passes 5%–95% of its answers; the published
+panel measured 19.2%.
+
+To change the panel:
+
+1. Edit the parts of
+   [`recipes/eval-lite.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/eval-lite.json)
+   (`source_id`, `family`, `count`, `fast_counts`) and its `version`. A new source
+   is a `SourceInfo` plus `CurationRecipe(HfSource(...), convert,
+   intended_use=IntendedUse.EVAL)` registered in `sources.py`, as in
+   [`nemo_tool_calls.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/nemo_tool_calls.py).
+   Its tasks need the `eval` tag and an in-process or package grader.
+2. Set `CORPUS_URI` to the converted corpus artifact from the campaign, then build it:
+
+   ```bash
+   uv run --package marin-core --extra cpu python -m experiments.post_training.task_curation.driver \
+     --corpus "$CORPUS_URI" \
+     --eval-lite experiments/post_training/task_curation/recipes/eval-lite.json --run
+   ```
+
+3. Measure the starting model with eight answers per task (temperature 1.0,
+   24,576-token window, at most 8,192 generated tokens), add the result as
+   `pass_rates`, and publish that as the final version. Rows bind a task by the
+   SHA-256 of its TaskSpec, so rows of unchanged tasks can be reused. A separate
+   greedy evaluation must score at least 99% of tasks with zero grading errors.
+
+The artifact contains `full_validation.parquet` (all tasks), `validation.parquet`
+(fast subset), `task_manifest.parquet` (family, category, grader kind, source,
+license and difficulty per task) and `summary.json`.
+
+### Rebuild a Snowball training selection
+
+`recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
+admitted training sources, with a quota for each source. It excludes the
+development panel (`heldout`) and EvalLite (`exclusions`) by task ID, full
+conversation and whitespace-normalized final user statement, and refuses tasks
+that need a container image or a judge service.
+
+The checked-in recipe names version `2026.11.10.1`, which is not yet published;
+build it before training on it. The published `snowball-100k@2026.11.04.1` was
+built before EvalLite and has no `exclusions`; the panel build excludes it
+instead, and existing Snowball controls use it. Published versions are frozen;
+any recipe change takes a new version.
+
+Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
+`--run`. Use a separate `--artifact-root` for an independent rebuild.
 
 ## Dataset-owned invocation
 
@@ -806,6 +885,33 @@ Conversation-only tasks need no machine. Memory settings are advisory sizing hin
 Built environments export gzip layers, including inherited base-image layers,
 for Docker and OCI consumers. Compression enters built-image cache
 identity; lock-backed worker environments retain their existing identities.
+
+## Environment fidelity and repair
+
+An agentic task's environment is part of its data. Execution uses the environment
+and resource requirements carried by that task's specification. A declaration or
+worker image cannot replace missing task requirements.
+
+A native Harbor package retains its own `task.toml`, build context, files and
+permissions. A TaskCompendium task carries its declared image, build context or
+package environment. `lower_environment` in
+[`environment_fidelity.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/environment_fidelity.py)
+can express supported archive recipes as setup commands on a matching
+digest-pinned base, preserving the working directory and environment variables.
+Unsupported steps remain explicit conversion failures. `missing_environment`
+rejects an agentic task without an environment; `environment_unused` detects a
+conversion that drops the archive's environment.
+
+A source is repaired when the published specification completely describes its
+runtime behavior. Changing a task's bytes requires a new private, pinned
+TaskCompendium release with [SAMPLE or FULL oversight](#curation-modes-and-oversight-levels).
+Conversion fidelity, executed grading controls, drop accounting and the frozen
+review evidence remain distinct. A zero reward does not establish verifier
+liveness; use the [no-oracle procedure](#sources-without-oracle-solutions).
+Every oracle-bearing task is filtered in both SAMPLE and FULL, subject only to
+an explicitly recorded [targeted requalification decision](#targeted-requalification-after-an-approved-harness-change).
+QC reports issues and never rejects tasks. Mandatory within-source deduplication
+and lexical evidence apply separately, including measurement-only EVAL receipts.
 
 ## Graders and controls
 
@@ -1622,6 +1728,14 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
 
+Iris execution defaults to `--max-workers 64`, `--coordinator-memory 16g`,
+`--normalized-shards 32` and `--review-cache <artifact-root>/rl-data/review-cache`.
+Review cache keys hash the model, its revision and the complete request, so one
+shared cache cannot return a judgment for a different prompt or model. Without
+`--worker-image`, Zephyr workers run the cluster's configured task image
+(`default_task_image`, `ghcr.io/marin-community/iris-task:latest`). Pass a
+digest-pinned `--worker-image` to record an exact image in the artifact identity.
+
 Build the [registered environments](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/images/README.md#building)
 first, with `MARIN_PREFIX` set to the driver's artifact root:
 
@@ -1767,11 +1881,13 @@ alive under object-age lifecycle deletion.
 
 ## Curation modes and oversight levels
 
-`CurationSummary.mode` is a `CurationMode`, and it says how much of a source a pass
-examined: `QUICK` (inventory or a spot check), `SAMPLE` (a documented sample executed
-end to end, verifiers included) or `FULL` (every task executed end to end). Only
-`SAMPLE` and `FULL` admit tasks; a `QUICK` summary cannot record admitted counts
-(`CurationSummary` rejects it) and its corpus is not selectable for training.
+`CurationSummary.mode` records the requested processing scope. `QUICK` converts
+without qualifying execution oversight; `SAMPLE` records a documented end-to-end
+sample, including verifiers; `FULL` processes the complete population. The mode
+alone does not prove execution coverage or complete content QA: those require
+their own oversight and review evidence. Only `SAMPLE` and `FULL` admit tasks;
+a `QUICK` summary cannot record admitted counts (`CurationSummary` rejects it),
+and its corpus is not selectable for training.
 
 Oracle filtering covers the full population in both SAMPLE and FULL whenever
 solutions are supplied. Oversight still differs in its other quality checks,
@@ -1788,9 +1904,10 @@ release and does not raise the level.
 
 Runnable agentic sources require an accepted task format, a production snapshot-identity
 measurement and its basis, an execution-requirement failure count, and SAMPLE or FULL
-oversight with verification evidence. Sources missing these records remain visible as
-Inventory. The grandfathered MarinSkyRL sources retain their existing admission policy.
-Conversion and sampled review can collect evidence before a source becomes runnable.
+oversight with verification evidence. A missing required record blocks admission.
+The grandfathered MarinSkyRL sources retain their existing admission policy.
+Conversion and diagnostic review can collect evidence before admission; there is
+no inventory-only substitute for a registered converter.
 Deprecated sources retain their history and name their qualified replacement.
 
 Conversion rejects machine tasks without a declared image, build context, package lock
@@ -1911,6 +2028,11 @@ converter version/revision, TaskSpec digest, task count and declared Use.
 `SourceInfo.lexical_contamination` receives matching metrics. Stale input or Use
 changes clear raw metrics; an existing valid current release proof is preserved.
 Training measurements alone do not supply private-release admission proof.
+For retained evaluation releases, measure the current private pin and bind its
+receipt after retained-release selection updates the actor input. An older
+upstream-pin benchmark measurement stays in lineage and cannot substitute for
+the current-pin receipt. Evaluation and benchmark receipts retain every task
+without remediation.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.lexical_registration \

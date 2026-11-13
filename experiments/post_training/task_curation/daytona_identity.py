@@ -6,14 +6,13 @@
 Measurement runs the production naming path: each pinned task's environment
 is materialized to a build context, the shellbox ``MachineSpec`` is built
 through Harbor's own task-config mapping, and the snapshot name comes from
-``shellbox.backends.daytona.machine.snapshot_identity`` — the same function
+``shellbox.backends.daytona.snapshot.snapshot_request_for_spec`` — the same function
 the Daytona factory uses to name and create snapshots. A task the production
 validation rejects is counted as a failure and reported; it is not
 Daytona-safe. No Daytona API calls are made.
 """
 
 import base64
-import gzip
 import io
 import tarfile
 import tempfile
@@ -31,6 +30,8 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 from shellbox.survey import ProbeRequirements
+
+from experiments.post_training.task_curation.task_tars import open_task_tar
 
 ENVIRONMENT_PREFIX = "environment/"
 DOCKERFILE = "Dockerfile"
@@ -60,9 +61,7 @@ def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], b
     """The extracted ``environment/`` entries and the task's own ``task.toml``."""
     entries: list[tuple[str, bytes, int]] = []
     task_toml: bytes | None = None
-    with tarfile.open(
-        fileobj=io.BytesIO(gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload)
-    ) as archive:
+    with open_task_tar(payload) as archive:
         for member in archive.getmembers():
             if member.isdir() or member.issym():
                 continue
@@ -76,10 +75,9 @@ def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], b
 
 def _registry_identity(reference: str) -> str:
     """Production snapshot name for a registry reference with default resources."""
-    from daytona import Resources  # noqa: PLC0415
-    from shellbox.backends.daytona.machine import snapshot_identity  # noqa: PLC0415
+    from shellbox.backends.daytona.snapshot import snapshot_request_for_spec  # noqa: PLC0415
 
-    return snapshot_identity(RegistryImage(reference), Resources())
+    return snapshot_request_for_spec(MachineSpec(source=RegistryImage(reference))).name
 
 
 def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentityCount:
@@ -87,11 +85,8 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
     # Harbor's optional runtime is needed only for a requested native probe.
     from harbor.environments.daytona import machine_spec  # noqa: PLC0415
     from harbor_config.models.task.config import EnvironmentConfig  # noqa: PLC0415
-    from shellbox.backends.daytona.machine import (  # noqa: PLC0415
-        DaytonaMachineFactory,
-        snapshot_identity,
-        snapshot_resources,
-    )
+    from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
+    from shellbox.backends.daytona.snapshot import snapshot_request_for_spec  # noqa: PLC0415
 
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
@@ -117,7 +112,7 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
                 factory.check_environment(ProbeRequirements(), spec)
                 if config.gpus:
                     raise UnsupportedMachineSpec("Native Harbor's Daytona mapping does not carry the requested GPUs")
-                name = snapshot_identity(spec.source, snapshot_resources(spec))
+                name = snapshot_request_for_spec(spec).name
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
                 continue
@@ -178,11 +173,8 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
     """
     # Native Harbor counting also runs in Harbor's standalone environment, which
     # does not install TaskCompendium. Only lowered TaskCompendium inputs need it.
-    from shellbox.backends.daytona.machine import (  # noqa: PLC0415
-        DaytonaMachineFactory,
-        snapshot_identity,
-        snapshot_resources,
-    )
+    from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
+    from shellbox.backends.daytona.snapshot import snapshot_request_for_spec  # noqa: PLC0415
     from taskcompendium.backend_requirements import execution_resource_shape  # noqa: PLC0415
     from taskcompendium.models import EnvironmentRequirements, require_resolved_environment  # noqa: PLC0415
 
@@ -244,10 +236,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
                 if not isinstance(source, RegistryImage | DockerfileSource):
                     continue
                 try:
-                    name = snapshot_identity(
-                        source,
-                        snapshot_resources(machine),
-                    )
+                    name = snapshot_request_for_spec(machine).name
                 except UnsupportedMachineSpec as error:
                     mapping_errors.append(f"{role}: {error}")
                 else:

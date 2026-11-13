@@ -3,9 +3,8 @@ Main entrypoint for training on terminal bench tasks.
 """
 
 import ray
-import hydra
 from omegaconf import DictConfig
-from skyrl_train.entrypoints.main_base import BasePPOExp, config_dir, run_ray_driver
+from skyrl_train.entrypoints.main_base import BasePPOExp, run_ray_driver
 from skyrl_train.rollouts.workers import RolloutWorkerPool, RolloutWorkerResources
 from skyrl_train.rollouts.task_worker import TaskRolloutWorkerSpec
 from skyrl_train.dataset.harbor import HarborTaskDataset
@@ -55,12 +54,3 @@ def skyrl_entrypoint(cfg: DictConfig):
 
 def run(cfg: DictConfig) -> None:
     run_ray_driver(cfg, skyrl_entrypoint)
-
-
-@hydra.main(config_path=config_dir, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()

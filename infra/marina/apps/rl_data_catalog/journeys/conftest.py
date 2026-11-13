@@ -3,6 +3,7 @@
 
 """Seed lexical evidence in the installed app's disposable Postgres schema."""
 
+import json
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
@@ -16,8 +17,10 @@ from marina.preview import install_preview_sources
 from marina.server import MarinaConfig
 from sqlalchemy import text
 
+from infra.marina.apps.rl_data_catalog.load import review_completeness
 from infra.marina.apps.rl_data_catalog.server.app import migrate
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
+from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
 
@@ -39,13 +42,19 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
         with engine.begin() as connection:
             migrate(connection)
             connection.execute(text("INSERT INTO atlas_loads VALUES ('lexical','fixture','lexical',NOW(),NOW())"))
-            for _, declaration in contamination_declarations():
+            for _, declaration in [*contamination_declarations(), *review_declarations()]:
                 connection.execute(
                     text(
-                        "INSERT INTO atlas_sources (load_id,id,declaration,latest_attempt_status,diagnostics) "
-                        "VALUES ('lexical',:id,CAST(:declaration AS JSONB),'skipped','{}'::jsonb)"
+                        "INSERT INTO atlas_sources (load_id,id,declaration,latest_attempt_status,"
+                        "diagnostics,review_completeness) "
+                        "VALUES ('lexical',:id,CAST(:declaration AS JSONB),'skipped','{}'::jsonb,"
+                        "CAST(:completeness AS JSONB))"
                     ),
-                    {"id": declaration.id, "declaration": declaration.model_dump_json()},
+                    {
+                        "id": declaration.id,
+                        "declaration": declaration.model_dump_json(),
+                        "completeness": json.dumps(review_completeness(declaration, [], [])),
+                    },
                 )
             connection.execute(text("UPDATE atlas_current SET load_id='lexical' WHERE name='latest'"))
         yield

@@ -71,6 +71,14 @@ config:
       source_ref: gcp-secret://projects/hai-gcp-models/secrets/marin-github-alerts-slack-webhook/versions/1
       disposition: keep
       note: Routes GitHub Actions alerts to #marin-alerts.
+    - name: ATLAS_REGISTRY_HF_TOKEN
+      scope: repository
+      repository: marin-community/marin
+      presence: present
+      source_kind: manual
+      source_ref: owner-recovery:atlas-registry-read-token
+      disposition: keep
+      note: Read-only access to the private Atlas registry for source-overlap CI.
     - name: BELAY_INTAKE_TOKEN
       scope: repository
       repository: marin-community/marin

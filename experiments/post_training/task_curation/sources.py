@@ -114,6 +114,11 @@ def all_sources() -> dict[str, RlDataSource]:
         )
         for source in sources
     ]
+    # Retained selection changes the active pin and actor input for new measurements.
+    sources = [
+        bind_lexical_measurement(source, lexical_receipts.get(source.info.id), source_lexical_use(source))
+        for source in sources
+    ]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
