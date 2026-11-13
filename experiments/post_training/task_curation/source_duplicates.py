@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import logging
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -134,14 +135,27 @@ def main() -> None:
         if args.manifest:
             manifest = json.loads(args.manifest.read_text())
             for entry in manifest["inputs"]:
-                populations[canonical_source_id(entry["source_id"])] = PopulationIndex(
-                    list(content_rows(converted_specs([Path(path) for path in entry["paths"]], entry["column"])))
+                source_id = canonical_source_id(entry["source_id"])
+                fingerprint = source.fingerprints[source_id]
+                if fingerprint is None:
+                    raise ValueError(f"Population has no fingerprint: {source_id}")
+                digests = []
+                for path in entry["paths"]:
+                    with Path(path).open("rb") as stream:
+                        digests.append(hashlib.file_digest(stream, "sha256").hexdigest())
+                if Counter(digests) != Counter(fingerprint.inputs.values()):
+                    raise ValueError(f"Population input digests differ: {source_id}")
+                populations[source_id] = PopulationIndex(
+                    list(content_rows(converted_specs([Path(path) for path in entry["paths"]], entry["column"]))),
+                    fingerprint.inputs,
                 )
         else:
             args.cache_dir.mkdir(parents=True, exist_ok=True)
             for source_id, fingerprint in source.fingerprints.items():
                 if fingerprint is not None:
-                    populations[source_id] = read_population(cache_population(source_id, fingerprint, args.cache_dir))
+                    populations[source_id] = read_population(
+                        cache_population(source_id, fingerprint, args.cache_dir), fingerprint.inputs
+                    )
         acknowledgements = json.loads(args.acknowledgements.read_text()) if args.acknowledgements else {}
         labels = json.loads(args.labels.read_text()) if args.labels else []
         changed = set(args.changed_source)

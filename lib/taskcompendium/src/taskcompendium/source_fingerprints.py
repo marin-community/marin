@@ -122,6 +122,8 @@ class MeasuredOverlap(BaseModel):
     version: Literal["content-nn-v2"] = "content-nn-v2"
     seed: int
     sample_size: int
+    left_inputs_sha256: str | None = None
+    right_inputs_sha256: str | None = None
     similarity_threshold: float
     duplicate_threshold: float
     partial_threshold: float

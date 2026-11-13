@@ -117,9 +117,10 @@ def shingles(text: str) -> set[str]:
 class PopulationIndex:
     """An exact lookup and lazy MinHash/LSH search of every target task."""
 
-    def __init__(self, rows: list[TaskContent]):
+    def __init__(self, rows: list[TaskContent], inputs: dict[str, str]):
         if not rows:
             raise ValueError("Overlap requires nonempty source populations")
+        self.inputs_sha256 = canonical_sha256(inputs)
         self.rows = strip_boilerplate(rows)
         self.exact: dict[str, list[int]] = defaultdict(list)
         self.stripped: dict[str, list[int]] = defaultdict(list)
@@ -219,7 +220,12 @@ def directional_overlap(source: PopulationIndex, target: PopulationIndex, sample
 
 
 def measured_review(
-    pair: PairSimilarity, left: DirectionalOverlap, right: DirectionalOverlap, sample_size: int
+    pair: PairSimilarity,
+    left: DirectionalOverlap,
+    right: DirectionalOverlap,
+    sample_size: int,
+    left_inputs_sha256: str,
+    right_inputs_sha256: str,
 ) -> DuplicateReview:
     """Mechanical labels cannot be overridden by a language-model opinion."""
     fractions = [max(direction.fraction, direction.exact_fraction) for direction in (left, right)]
@@ -234,6 +240,8 @@ def measured_review(
     measurement = MeasuredOverlap(
         seed=SEED,
         sample_size=sample_size,
+        left_inputs_sha256=left_inputs_sha256,
+        right_inputs_sha256=right_inputs_sha256,
         similarity_threshold=SIMILARITY_THRESHOLD,
         duplicate_threshold=DUPLICATE_THRESHOLD,
         partial_threshold=PARTIAL_THRESHOLD,
@@ -264,7 +272,12 @@ def compare_populations(
     pair: PairSimilarity, left: PopulationIndex, right: PopulationIndex, sample_size: int = SAMPLE_SIZE
 ) -> DuplicateReview:
     return measured_review(
-        pair, directional_overlap(left, right, sample_size), directional_overlap(right, left, sample_size), sample_size
+        pair,
+        directional_overlap(left, right, sample_size),
+        directional_overlap(right, left, sample_size),
+        sample_size,
+        left.inputs_sha256,
+        right.inputs_sha256,
     )
 
 

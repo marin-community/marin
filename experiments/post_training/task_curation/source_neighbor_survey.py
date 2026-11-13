@@ -108,8 +108,8 @@ def cache_population(source_id: str, fingerprint: SourceFingerprint, cache_dir: 
     return path
 
 
-def read_population(path: Path) -> PopulationIndex:
-    return PopulationIndex([TaskContent(**row) for row in pq.read_table(path).to_pylist()])
+def read_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
+    return PopulationIndex([TaskContent(**row) for row in pq.read_table(path).to_pylist()], inputs)
 
 
 def widened_pairs(survey: SourceIdentitySurvey) -> list[PairSimilarity]:
@@ -133,7 +133,7 @@ def discover_pairs(
     buckets = defaultdict(list)
     rows = []
     for source_id, path in paths.items():
-        population = read_population(path)
+        population = read_population(path, fingerprints[source_id].inputs)
         panel = population.sample(256)
         del population
         for row, signature in zip(panel, signatures(panel), strict=True):
@@ -194,7 +194,7 @@ def rerun(
     directions: dict[tuple[str, str], DirectionalOverlap] = {}
     integrity = []
     for target_id in sources:
-        target = read_population(paths[target_id])
+        target = read_population(paths[target_id], fingerprints[target_id].inputs)
         partners = sorted(
             {
                 pair.left if pair.right == target_id else pair.right
@@ -204,7 +204,7 @@ def rerun(
             key=original_source_id,
         )
         for source_id in partners:
-            source = read_population(paths[source_id])
+            source = read_population(paths[source_id], fingerprints[source_id].inputs)
             direction_key = canonical_sha256(
                 {
                     "source": original_source_id(source_id),
@@ -245,7 +245,14 @@ def rerun(
     prior = {(row.similarity.left, row.similarity.right): row for row in survey.reviews}
     reviews, diff = [], []
     for pair in pairs:
-        review = measured_review(pair, directions[pair.left, pair.right], directions[pair.right, pair.left], sample_size)
+        review = measured_review(
+            pair,
+            directions[pair.left, pair.right],
+            directions[pair.right, pair.left],
+            sample_size,
+            canonical_sha256(fingerprints[pair.left].inputs),
+            canonical_sha256(fingerprints[pair.right].inputs),
+        )
         old = prior.get((pair.left, pair.right))
         # Historical ACKs are request-bound. Keep them in the prior artifact and
         # the diff, never attach an old approval to a newly measured request.

@@ -88,7 +88,7 @@ def test_source_fingerprint_census_is_order_independent_and_counts_duplicate_con
 
 def test_measured_review_acknowledgement_is_bound_to_content_evidence(tmp_path):
     rows = [task_document(str(index), f"Compute the square of {index}.") for index in range(25)]
-    populations = {key: PopulationIndex(list(content_rows(rows))) for key in ("left", "right")}
+    populations = {key: PopulationIndex(list(content_rows(rows)), {}) for key in ("left", "right")}
     fingerprints = {key: fingerprint_source(rows, {}) for key in populations}
     pairs = candidate_pairs(fingerprints, {"left"}, 1)
     receipts = StoragePath(str(tmp_path / "responses"))
@@ -107,14 +107,14 @@ def test_measured_review_acknowledgement_is_bound_to_content_evidence(tmp_path):
     assert acknowledged.acknowledgement == "Retain both histories"
     assert acknowledged.prompt_sha256 == first.prompt_sha256
     assert len(duplicate_groups([acknowledged])) == 1
-    changed_rows = [task_document(str(index), f"Name chemical element {index}.") for index in range(25)]
-    changed = {**populations, "right": PopulationIndex(list(content_rows(changed_rows)))}
+    changed = {**populations, "right": PopulationIndex(list(content_rows(rows)), {"shard": "changed-input-digest"})}
     reviewed = next(
         review_pairs(
             pairs, changed, {first.prompt_sha256: "Retain both histories"}, StoragePath(str(tmp_path / "changed"))
         )
     )
-    assert reviewed.verdict.label is DuplicateLabel.DISTINCT
+    assert reviewed.verdict.label is DuplicateLabel.DUPLICATE
+    assert reviewed.prompt_sha256 != first.prompt_sha256
     assert reviewed.acknowledgement is None
 
 
@@ -198,7 +198,7 @@ def test_content_neighbors_ignore_permuted_ids_and_measure_both_populations(coho
     fingerprints = {"left": fingerprint_source(left, {}), "right": fingerprint_source(right, {})}
     pair = pair_similarity("left", fingerprints["left"], "right", fingerprints["right"])
     review = compare_populations(
-        pair, PopulationIndex(list(content_rows(left))), PopulationIndex(list(content_rows(right)))
+        pair, PopulationIndex(list(content_rows(left)), {}), PopulationIndex(list(content_rows(right)), {})
     )
     assert review.verdict.label == expected
     assert review.verdict.overlap_fraction == pytest.approx(fraction)
@@ -216,13 +216,13 @@ def test_neighbor_integrity_reports_answer_swap_even_with_identical_id_sets():
         TaskContent(str(9 - index), row.instruction_hash, row.text, row.reference_hash, row.tests_hash)
         for index, row in enumerate(rows)
     ]
-    original, copy = PopulationIndex(rows), PopulationIndex(permuted)
+    original, copy = PopulationIndex(rows, {}), PopulationIndex(permuted, {})
     assert exact_reference_integrity(original, copy)["mismatched"] == 0
     swapped = [
         TaskContent(row.task_id, row.instruction_hash, row.text, f"answer-{9 - index}", row.tests_hash)
         for index, row in enumerate(permuted)
     ]
-    result = exact_reference_integrity(original, PopulationIndex(swapped))
+    result = exact_reference_integrity(original, PopulationIndex(swapped, {}))
     assert result["checked"] == result["mismatched"] == 10
     assert result["examples"][0]["reference_sha256"] != result["examples"][0]["partner_reference_sha256"]
 
@@ -244,7 +244,7 @@ def test_lsh_matches_full_population_after_shared_wrapper_is_stripped():
         for index in range(20)
     ]
     target = PopulationIndex(
-        [*distractors, TaskContent("hidden-partner", "other", f"{wrapper}\n{question}", "reference", "test")]
+        [*distractors, TaskContent("hidden-partner", "other", f"{wrapper}\n{question}", "reference", "test")], {}
     )
     query = TaskContent("query", "new", question.replace("substance50", "modified50"), "reference", "test")
     neighbor = target.neighbors([query])[0]
@@ -266,7 +266,7 @@ def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_conten
     )
     cache = tmp_path / "cache"
     cache.mkdir()
-    population = read_population(cache_population("fixture", fingerprint, cache))
+    population = read_population(cache_population("fixture", fingerprint, cache), fingerprint.inputs)
     assert len(population.rows) == 30
     assert {row.task_id for row in population.rows} == {str(index) for index in range(30)}
     assert population.neighbors([population.rows[-1]])[0].partner_task_id == "29"
