@@ -264,8 +264,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
     @property
     def admission_blockers(self) -> tuple[str, ...]:
         """Evidence missing before a source can enter admitted selection."""
-        if self.is_grandfathered_blend:
-            return ()
         info = self.info
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
@@ -283,6 +281,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             info.grading_environment,
         ):
             blockers.append(blocker)
+        if self.is_grandfathered_blend:
+            return tuple(blockers)
         try:
             require_private_release(
                 info.lexical_contamination, dataset.name if dataset else None, dataset.revision if dataset else None

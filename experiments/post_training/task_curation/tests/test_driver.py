@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.curation import CurationCatalog
+from finestore.rl.curation import CurationCatalog, OversightEvidence, OversightLevel
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -712,6 +712,13 @@ def test_quick_conversion_can_collect_actor_evidence_before_catalog_publication(
 def test_quick_selection_does_not_require_admission_for_unrelated_sources(tmp_path, monkeypatch):
     source = number_source(tmp_path / "input")
     unrelated = number_source(tmp_path / "other", "unqualified")
+    unrelated = replace(
+        unrelated,
+        info=replace(
+            unrelated.info,
+            oversight=OversightEvidence(level=OversightLevel.SAMPLE, verification="Executed fixture controls"),
+        ),
+    )
     monkeypatch.setattr(driver, "all_sources", lambda: {source.info.id: source, unrelated.info.id: unrelated})
 
     monkeypatch.setattr(source_catalog, "all_sources", driver.all_sources)

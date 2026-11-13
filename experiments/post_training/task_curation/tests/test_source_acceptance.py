@@ -135,3 +135,20 @@ def test_retained_legacy_admission_cannot_bypass_pin_privacy_or_fresh_actor_gate
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source.info.id: source})
     assert source.admission_blockers
     assert source.name not in runnable_sources()
+
+
+def test_grandfathered_execution_exemption_does_not_bypass_grader_census(tmp_path):
+    source = number_source(tmp_path / "input")
+    source_id = sorted(GRANDFATHERED_MARINSKYRL_SOURCES)[0]
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            id=source_id,
+            origin=SourceOrigin.NEMOTRON,
+            upstream_dataset=source_id.partition(":")[2],
+            task_format=TaskFormat.MARINSKYRL,
+        ),
+    )
+    assert source.is_grandfathered_blend
+    assert any("census" in reason for reason in source.admission_blockers)

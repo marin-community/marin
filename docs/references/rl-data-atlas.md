@@ -339,7 +339,7 @@ evidence before catalog export. See the
 Admission uses the grading evidence carried by each declaration. The actor input
 must match the configured dataset pin and converter version; every retained task
 must have a grading assessment, and the retained population must be nonempty.
-The explicit missing-executable-grader reason blocks admission. Other unavailable
+The `No executable grader is declared` assessment reason blocks admission. Other unavailable
 boundary assessments remain visible without being relabeled as missing graders.
 Native Harbor packages must pass package validation during import and grading
 census. QUICK conversion can run before admission evidence exists. Publication,
