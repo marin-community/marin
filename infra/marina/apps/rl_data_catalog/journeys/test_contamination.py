@@ -56,6 +56,12 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels .contamination-chip")).to_have_text("MEASURED, EVAL")
     expect(page.locator("#sections")).to_contain_text("Flagged tasks")
+    lexical_drops = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
+    expect(
+        lexical_drops.locator(".field")
+        .filter(has=page.get_by_text("Lexically contaminated tasks removed", exact=True))
+        .locator("dd")
+    ).to_have_text("0")
     page.get_by_role("link", name="Getting started", exact=True).click()
     expect(page.locator("#contamination")).to_contain_text("NOT MEASURED")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

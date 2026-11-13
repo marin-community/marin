@@ -161,13 +161,16 @@ function backendDetails(source) {
   table.append(body); wrap.append(table); return wrap;
 }
 function filtrationRows(source) {
-  const lexical = source.lexical_contamination, receipt = lexical?.receipt, dedup = source.within_source_dedup, oracle = source.oracle_inventory;
+  const lexical = source.lexical_contamination, dedup = source.within_source_dedup, oracle = source.oracle_inventory;
+  const measured = ['NO ISSUES', 'REMEDIATED', 'MEASURED, EVAL'].includes(source.contamination_status);
+  const receipt = measured ? lexical?.receipt : null;
+  const zeroDrops = (source.contamination_status === 'NO ISSUES' && lexical?.contaminated_tasks === 0) || source.contamination_status === 'MEASURED, EVAL';
   return [
-    ['Raw converted input measured for retention', lexical?.measured_tasks ?? dedup?.raw_count],
+    ['Raw converted input measured for retention', measured ? lexical?.measured_tasks : dedup?.raw_count],
     ['Original oracle-bearing tasks', oracle?.oracle_tasks ?? 'Not measured'],
     ['Oracle-failing tasks removed', oracle?.oracle_tasks === 0 ? 'N/A: complete census found no shipped oracle solutions' : 'Pending: no complete population-wide oracle-filter receipt is recorded'],
     ['Within-source duplicates removed', receipt?.duplicate_dropped_tasks ?? dedup?.within_source_duplicates],
-    ['Lexically contaminated tasks removed', receipt?.dropped_tasks ?? 'Not measured'],
+    ['Lexically contaminated tasks removed', receipt?.dropped_tasks ?? (zeroDrops ? 0 : 'Not measured')],
     ['Retained converted population', dedup?.unique_count],
     ['Admitted after all filtration', 'Pending: post-oracle admission is not measured'],
   ];
