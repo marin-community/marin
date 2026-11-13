@@ -79,7 +79,7 @@ import click
 import draccus
 import jax.numpy as jnp
 import jmp
-from fray.types import ANY_REGION, GpuConfig, ResourceConfig
+from fray.types import ANY_REGION, CpuConfig, GpuConfig, ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import ChatLmDatasetFormat
@@ -296,7 +296,10 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig, *, task_timeout_seconds:
         for key in ("MARIN_PREFIX", "MARIN_TEMP_PREFIX", "JAX_COMPILATION_CACHE_DIR")
         if key in os.environ
     }
-    environment["JAX_PLATFORMS"] = "cuda,cpu" if isinstance(pod_config.resources.device, GpuConfig) else "cpu"
+    if isinstance(pod_config.resources.device, GpuConfig):
+        environment["JAX_PLATFORMS"] = "cuda,cpu"
+    elif isinstance(pod_config.resources.device, CpuConfig):
+        environment["JAX_PLATFORMS"] = "cpu"
     remote(
         run_levanter_train_lm,
         resources=pod_config.resources,
