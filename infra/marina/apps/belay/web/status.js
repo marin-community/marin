@@ -293,12 +293,11 @@ const LEGACY_RUNGS = ['d768', 'd1024', 'd1280']
 // from the idea's latest hero-mfu result (experiments/belay config.Protocol.HERO_MFU_MATCHED).
 const HERO_MFU_MATCHED = 'hero_mfu_matched'
 
-// Gate 4, the hero-scale projection: a verdict once all four competitive rungs are recorded. A hero-MFU-matched
-// ladder's verdict is final; an equal-steps ladder (hero-mfu skipped) gets a provisional verdict, since the idea needs
-// a hero-mfu result before it joins the recipe. A partial ladder or legacy pre-ladder trials show their deltas without
-// a verdict.
-// ``rungRuns`` is the idea's latest launch of ladder rungs: while any is in flight the ladder shows as running, and
-// once all have ended it shows any that failed or that results are still to be recorded.
+// Gate 4, the hero-scale projection: a complete ladder's projection to hero compute, which its last rung records on
+// the entry. Its verdict is final for a hero-MFU-matched ladder and provisional at equal steps (hero-mfu skipped: the
+// idea needs a hero-mfu result before it joins the recipe). A partial ladder or legacy pre-ladder trials show their
+// deltas without a verdict. ``rungRuns`` is the idea's latest launch of ladder rungs: while any is in flight the
+// ladder shows as running, and once all have ended it shows any that failed or that results are still to be recorded.
 function scalingGate(idea, cfg, rungRuns) {
   const rungTrials = idea.trials.filter((t) => t.rung?.startsWith(COMPETITIVE))
   const ladder = new Map(counted(rungTrials).map((t) => [t.rung.slice(COMPETITIVE.length), t]))
@@ -309,15 +308,16 @@ function scalingGate(idea, cfg, rungRuns) {
   const recorded = LADDER_RUNGS.filter((r) => ladder.has(r)).length
   const registered = new Set(rungTrials.map((t) => t.rung)).size
   const failed = rungRuns.filter((r) => TERMINAL.has(r.state) && r.state !== 'succeeded').length
-  if (recorded === LADDER_RUNGS.length) {
-    const verdicts = [...ladder.values()].map((t) => verdictOf(t.delta[0], trackInfo(cfg, t.rung).noise))
-    const kind = verdicts.includes('loss') ? 'loss' : verdicts.every((v) => v === 'win') ? 'win' : 'noise'
-    const short = signed(ladder.get('d1280').delta[0])
-    if ([...ladder.values()].every((t) => t.protocol === HERO_MFU_MATCHED)) {
-      return { kind, short, text: `${kind} at all 4 rungs, hero-MFU matched`, title }
-    }
-    return { kind, short, provisional: true, text: `provisional ${kind} at all 4 rungs, equal steps · needs hero-mfu before inclusion`, title }
+  const p = idea.projection
+  if (p) {
+    const kind = verdictOf(p.delta, trackInfo(cfg, 'competitive-d1280').noise)
+    const at = `projected Δ ${signed(p.delta)} at hero compute (${p.hero_flops.toExponential(1)} FLOPs), ${p.multiplier.toFixed(2)}× compute`
+    const fit = `fit α ${p.alpha} vs the recipe's ${p.recipe_alpha}; extrapolated ${p.extrapolation.toLocaleString()}× past d1280 (${p.basis}; trials ${p.trials.join(', ')})`
+    const detail = `${title}\n${at}\n${fit}`
+    if (p.protocol === HERO_MFU_MATCHED) return { kind, short: signed(p.delta), text: `${kind}: ${at}, hero-MFU matched`, title: detail }
+    return { kind, short: signed(p.delta), provisional: true, text: `provisional ${kind}: ${at}; equal steps, needs hero-mfu before inclusion`, title: detail }
   }
+  if (recorded === LADDER_RUNGS.length) return { kind: 'partial', short: '4/4', text: 'ladder complete · projection to hero compute not yet recorded', title }
   if (rungRuns.some((r) => !TERMINAL.has(r.state))) return { kind: 'running', short: `${recorded}/4`, text: `ladder running · ${recorded}/4 rungs recorded`, title }
   if (registered > recorded) {
     const why = failed ? `${failed} rung${failed > 1 ? 's' : ''} failed` : 'results not yet recorded'
