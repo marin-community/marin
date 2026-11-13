@@ -438,6 +438,20 @@ trials:
   commit: efe91da31c
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t023
+  variant: gated value embeds on MLA, table LR 0.3x
+  rung: competitive-d1024
+  protocol: equal_steps
+  batch: X0014
+  date: '2026-11-13'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0014
+  wandb: []
+  settings:
+    value_embed_lr_mult: '0.3'
+    value_embeds: gated
+  commit: d628a01322
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 events:
 - type: adopted
   batch: '89'
