@@ -1,0 +1,52 @@
+{
+  "prepared_date_pt": "2026-11-04",
+  "status": "unpublished_review_package",
+  "source_drafts": "docs/model-cards/mochi-eu-draft",
+  "packaged_copy_changes": [
+    "checkout-only links replaced with bundled evidence/public URLs",
+    "official license URL substituted in packaged main card",
+    "access-gating preservation clarified in packaged review",
+    "removed contact-typo conversational aside"
+  ],
+  "files": {
+    "EVIDENCE.md": {
+      "bytes": 4946,
+      "sha256": "98da46e42c7a5808e8cbaa0d959fb0e4f93c831d5c47ce73a63f70a32ffeae99"
+    },
+    "REMAINING_TODOS.md": {
+      "bytes": 5277,
+      "sha256": "36a85741b65b42a088c42312217978c082bff7bdfe741520ec68aece7d980a28"
+    },
+    "START_HERE.md": {
+      "bytes": 2816,
+      "sha256": "2943a84a1427809763a3a0c971bd003081d3be0194c5156abec9025f18c1a466"
+    },
+    "drafts/CHECKPOINT_CARD_CHANGES.md": {
+      "bytes": 2635,
+      "sha256": "598be4b451b7ca5371390e57fba907e458f12f3e7a21998f586f8a4a3dce2393"
+    },
+    "drafts/COPYRIGHT_POLICY.md": {
+      "bytes": 5756,
+      "sha256": "82717b761b0bea436389f653015853dd12f87bc3572d47b22ea2c4633a904a6c"
+    },
+    "drafts/README.md": {
+      "bytes": 5110,
+      "sha256": "a7a40ef68e2d20eaf30a3b977a734fac5146b9e0e47627384d95a3ec8cdf011a"
+    },
+    "drafts/REVIEW.md": {
+      "bytes": 16329,
+      "sha256": "c03f0fe6ff5d498a6f4a014440c76d6b4f5f125227995f21d0936fb62aca5264"
+    },
+    "drafts/TRAINING_CONTENT.md": {
+      "bytes": 15509,
+      "sha256": "be85e3af343832d7164fde4911dcbdff7e1e84d930dca8fed40ff2f22b8e31b7"
+    }
+  },
+  "source_draft_sha256": {
+    "CHECKPOINT_CARD_CHANGES.md": "598be4b451b7ca5371390e57fba907e458f12f3e7a21998f586f8a4a3dce2393",
+    "COPYRIGHT_POLICY.md": "82717b761b0bea436389f653015853dd12f87bc3572d47b22ea2c4633a904a6c",
+    "README.md": "9e5cd67b876fee86f24481c7f036930c47bad13b40383da253fec4e9867da9c8",
+    "REVIEW.md": "8fd57bd8766d331d78c7e6ca844b206543b0c60597ccbecae859d63f0a4a7150",
+    "TRAINING_CONTENT.md": "be85e3af343832d7164fde4911dcbdff7e1e84d930dca8fed40ff2f22b8e31b7"
+  }
+}
