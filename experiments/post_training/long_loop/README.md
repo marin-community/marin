@@ -128,6 +128,9 @@ archived with observed row count and `_step` bounds in the manifest. This fallba
 does not certify provider completeness or permit checkpoint deletion. Other
 export/provider failures propagate. A running coordinator uses an immutable
 source bundle; older runs need archive-only postprocessing to use a later fix.
+The archive recipe pins `wandb.package`, `wandb.sdk_version` and `wandb.base_url`.
+Both export paths use that API origin explicitly: newer SDK defaults can target
+a different service from the one hosting the recorded training runs.
 
 ### CPU data and configuration validation
 
