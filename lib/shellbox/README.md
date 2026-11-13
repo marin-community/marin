@@ -355,6 +355,10 @@ With the `qemu` extra, `quicksand_qemu.get_bin_dir()` gives the QEMU executable 
 
 `LocalMachineFactory` runs commands in a persistent [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`) sandbox on the calling host. `HostImage()` uses host programs without a container image or VM; the dependency `bubblewrap-bin` supplies a `bwrap` binary. Use it for trusted commands, such as vendored grader scripts on an ephemeral worker: commands share the host's kernel, and the sandbox is not a boundary against hostile code.
 
+On NixOS, host-program machines also expose `/run/current-system/sw` and its Nix store closure read-only.
+The factory queries the closure with `nix-store` so the sandbox can resolve `/bin/sh` and the system programs' dependencies.
+Its command and control paths include `/run/current-system/sw/bin`. Other store paths and user profiles remain outside the sandbox.
+
 Without a delegated cgroup, an external `SIGKILL` of the bwrap launcher during its internal startup handshake
 can strand a namespace init before Shellbox receives its identity. The local
 backend cannot guarantee reclamation in that window. Use disposable workers;

@@ -19,9 +19,11 @@ import re
 import resource
 import shutil
 import signal
+import subprocess
 import sys
 import tarfile
 import tempfile
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -58,7 +60,9 @@ from shellbox.task import Task, TaskSpec, single_container_task
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+NIX_SYSTEM_PROFILE = Path("/run/current-system/sw")
+NIX_SYSTEM_PATH_SUFFIX = f":{NIX_SYSTEM_PROFILE}/bin" if NIX_SYSTEM_PROFILE.is_dir() else ""
+DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" + NIX_SYSTEM_PATH_SUFFIX
 # Resolve the program through sh, as the container backends do: a missing or unexecutable program
 # or working directory becomes a failed command (127 or 126 for the program) rather than an exception.
 RUN_SCRIPT = 'cd "$1" || exit; shift; exec "$@"'
@@ -110,7 +114,7 @@ SHARED_MEMORY = "/dev/shm"
 """Python's multiprocessing creates its semaphores here."""
 SCRATCH = PurePosixPath("/tmp")
 HOME = PurePosixPath("/home/shellbox")
-CONTROL_ENVIRONMENT = {"PATH": "/usr/bin:/bin", "HOME": str(HOME), "LANG": "C.UTF-8"}
+CONTROL_ENVIRONMENT = {"PATH": "/usr/bin:/bin" + NIX_SYSTEM_PATH_SUFFIX, "HOME": str(HOME), "LANG": "C.UTF-8"}
 """The environment of the backend's own commands, such as transfers; ``MachineSpec.env`` does not reach them."""
 ROOT_MODE = 0o755
 """Lets a command that runs as another user traverse the machine's root directory."""
@@ -275,7 +279,25 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     return (bwrap_path(), *(() if system is None else (Path(system),)))
 
 
-def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
+def _nix_system_mounts() -> tuple[Mount, ...]:
+    """Expose the NixOS system programs and their store closure read-only."""
+    if not NIX_SYSTEM_PROFILE.is_dir():
+        return ()
+    profile = NIX_SYSTEM_PROFILE.resolve()
+    closure = subprocess.run(
+        ["nix-store", "--query", "--requisites", str(profile)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=PROBE_TIMEOUT,
+    ).stdout.splitlines()
+    return (
+        *(Mount(Path(path), PurePosixPath(path)) for path in closure),
+        Mount(profile, PurePosixPath(NIX_SYSTEM_PROFILE)),
+    )
+
+
+def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories, mounts: tuple[Mount, ...]) -> str | None:
     """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
@@ -285,17 +307,23 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
             bwrap=bwrap,
             root=root,
             layers=layers,
-            mounts=(),
+            mounts=mounts,
             environment=CONTROL_ENVIRONMENT,
         )
         try:
-            async with asyncio.timeout(PROBE_TIMEOUT):
-                await machine._start_keeper()
-                result = await machine._control("exit 0", PurePosixPath("/"))
+            try:
+                async with asyncio.timeout(PROBE_TIMEOUT):
+                    await machine._start_keeper()
+                    result = await machine._control("exit 0", PurePosixPath("/"))
+            finally:
+                await machine.close()
         except (OSError, RuntimeError, TimeoutError) as error:
+            if machine._keeper is not None:
+                assert machine._keeper.stderr is not None
+                stderr = (await machine._keeper.stderr.read()).decode(errors="replace").strip()
+                if stderr:
+                    return stderr
             return str(error) or type(error).__name__
-        finally:
-            await machine.close()
         if result.exit_code == 0:
             return None
         return result.stderr.decode(errors="replace").strip() or f"exit status {result.exit_code}"
@@ -305,10 +333,10 @@ def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str 
         return executor.submit(asyncio.run, probe()).result()
 
 
-def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories) -> Path:
+def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories, mounts: tuple[Mount, ...]) -> Path:
     errors = []
     for candidate in candidates:
-        error = _prepare_sandbox(candidate, system_directories)
+        error = _prepare_sandbox(candidate, system_directories, mounts)
         if error is None:
             return candidate
         errors.append(f"{candidate}: {error}")
@@ -1070,12 +1098,13 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
     missing = [str(mount.host) for mount in mounts if not mount.host.exists()]
     if missing:
         raise ValueError(f"Mounted host paths do not exist: {', '.join(missing)}")
+    destinations = Counter(mount.guest for mount in mounts)
     for mount in mounts:
         if not mount.guest.is_absolute():
             raise UnsupportedMachineSpec(f"The local backend mounts only at absolute guest paths: {mount.guest}")
         if _within(mount.guest, SYSTEM_DIRECTORIES):
             raise UnsupportedMachineSpec(f"The local backend cannot mount inside a host system directory: {mount.guest}")
-        if any(other is not mount and mount.guest.is_relative_to(other.guest) for other in mounts):
+        if destinations[mount.guest] > 1 or any(parent in destinations for parent in mount.guest.parents):
             raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
 
 
@@ -1182,7 +1211,9 @@ class LocalMachineFactory:
         self.package_cache = package_cache if package_cache is not None else Path.home() / ".cache/shellbox/python"
         self.python_version = python_version
         self.system_directories = system_directories
-        self.bwrap = _working_bwrap(_bwrap_candidates(bwrap), system_directories)
+        candidates = _bwrap_candidates(bwrap)
+        self._system_mounts = _nix_system_mounts()
+        self.bwrap = _working_bwrap(candidates, system_directories, self._system_mounts)
         logger.info("Local backend sandboxes commands with %s, system directories %s", self.bwrap, system_directories)
 
     def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
@@ -1274,6 +1305,7 @@ class LocalMachineFactory:
         mounts = tuple(
             dict.fromkeys(
                 (
+                    *self._system_mounts,
                     *(Mount(directory, PurePosixPath(directory)) for directory in read_only),
                     *(Mount(mount.host.absolute(), mount.guest) for mount in host.mounts),
                 )
@@ -1290,6 +1322,8 @@ class LocalMachineFactory:
         # A workdir in an overlaid directory is made by a command once the machine runs, so it lands in the layer.
         root, layers = _machine_directories(None if overlaid_workdir else workdir, copy_on_write=copy_on_write)
         if aliases is not None:
+            # The copied host file can be read-only, as on NixOS.
+            (root / "etc/hosts").unlink(missing_ok=True)
             (root / "etc/hosts").write_text(aliases)
         environment = {
             "PATH": os.pathsep.join(

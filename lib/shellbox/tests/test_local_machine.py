@@ -129,6 +129,25 @@ def test_local_factory_reports_unsupported_host(monkeypatch):
         LocalMachineFactory()
 
 
+@pytest.mark.skipif(not Path("/run/current-system/sw").is_dir(), reason="Requires a NixOS system profile")
+def test_nixos_system_programs_execute_and_transfer_files(tmp_path):
+    factory = LocalMachineFactory()
+
+    async def check():
+        machine = await factory.create(SPEC)
+        root = machine.root
+        try:
+            result = await machine.run(Command(("sh", "-c", "sleep 0 && mkdir result && printf answer > result/value")))
+            assert result.exit_code == 0
+            await machine.download("/app/result", tmp_path / "result")
+            assert (tmp_path / "result/value").read_text() == "answer"
+        finally:
+            await machine.close()
+        assert not root.exists()
+
+    asyncio.run(check())
+
+
 def test_local_numeric_limits_allow_execution_without_delegation(undelegated_factory):
     async def check():
         machine = await undelegated_factory.create(MachineSpec(HostImage(), workdir="/app", cpus=2, memory_mb=256))
