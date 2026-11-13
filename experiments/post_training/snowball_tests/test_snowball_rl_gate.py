@@ -399,6 +399,8 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
             "top_k": -1,
             "logprobs": None,
             "stop": None,
+            "stop_token_ids": None,
+            "skip_special_tokens": True,
         }
         assert protocol["n_samples_per_prompt"] == 1
         assert protocol["context_budget"]["max_new_tokens_per_turn"] == 8192
