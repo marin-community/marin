@@ -145,10 +145,11 @@ def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig
         extra["top_k"] = sampling.top_k
     extra.update(config.generation_extra_body)
     options: dict[str, Any] = {
-        "temperature": sampling.temperature,
         "max_tokens": min(config.max_tokens, sampling.max_tokens or config.max_tokens),
         "extra_body": extra,
     }
+    if sampling.temperature is not None:
+        options["temperature"] = sampling.temperature
     if sampling.top_p is not None:
         options["top_p"] = sampling.top_p
     if sampling.stop:

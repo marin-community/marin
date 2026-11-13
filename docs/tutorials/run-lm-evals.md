@@ -32,6 +32,8 @@ inference, and submits evaluation workers. It cancels an evaluator before resumi
 its archive when inference is interrupted.
 
 The catalog fixes prompts, graders, shots, sampling, trials and context policies.
+Evalchemy protocols inherit the served model's temperature and seed unless the
+run explicitly overrides them, preserving the legacy launcher's request behavior.
 Native likelihood tasks use completion logprobs. Generation protocols specify chat
 or raw completion transport. Instruct-model menus choose separately published chat
 variants where the original entrypoint used a chat template. HumanEval's standard

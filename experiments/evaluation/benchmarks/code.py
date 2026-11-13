@@ -46,7 +46,6 @@ def python_source(
     max_tokens: int | None,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     completion = suite == "humaneval"
-    sampled = suite == "cruxeval"
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + suite,
@@ -70,14 +69,14 @@ def python_source(
                 version="2026.11.02",
                 operation=OperationKind.TEXT_GENERATION if completion else OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=0.2 if sampled else 0,
+                    temperature=None,
                     top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
                     stop=HUMANEVAL_REQUEST_STOPS if completion else (),
                     chat_template_kwargs={} if completion else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=42 if sampled else None),
+                trials=TrialPolicy(count=1, seed=None),
                 num_fewshot=0 if completion else None,
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
