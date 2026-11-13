@@ -20,7 +20,7 @@ from skyrl_train.models.grug_moe import GrugMoeConfig, grug_long_layer_flags
 from skyrl_train.utils.utils import validate_cfg, validate_generator_cfg
 
 
-def main(source: Path, destination: Path) -> None:
+def main(source: Path, destination: Path, model_config: Path | None = None) -> None:
     project = Path(__file__).resolve().parents[3] / "vendor/skyrl"
     config = load_launch_config(source)
     if config.runtime.entrypoint in {
@@ -34,8 +34,11 @@ def main(source: Path, destination: Path) -> None:
         RL_ENTRYPOINTS[RLEntrypoint.GENERATE],
         RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
     }:
-        fs, key = filesystem_for(prefix_join(config.inputs.model.uri, "config.json"))
-        model_bytes = fs.cat_file(key)
+        if model_config is None:
+            fs, key = filesystem_for(prefix_join(config.inputs.model.uri, "config.json"))
+            model_bytes = fs.cat_file(key)
+        else:
+            model_bytes = model_config.read_bytes()
         model_dict = json.loads(model_bytes)
         if model_dict.get("model_type") == "grug_moe":
             model = GrugMoeConfig(**model_dict)
@@ -77,10 +80,13 @@ def main(source: Path, destination: Path) -> None:
                 "runtime_entrypoint": config.runtime.entrypoint,
                 "python": sys.version,
                 "skyrl_lock_sha256": hashlib.sha256((project / "uv.lock").read_bytes()).hexdigest(),
+                "initializer_config_sha256": (
+                    hashlib.sha256(model_config.read_bytes()).hexdigest() if model_config is not None else None
+                ),
             }
         )
     )
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]), Path(sys.argv[2]))
+    main(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]) if len(sys.argv) == 4 else None)

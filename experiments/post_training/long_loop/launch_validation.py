@@ -18,7 +18,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.post_training.long_loop.serving import serving_release
 
 
-def validate_launch(document: str, directory: Path) -> dict:
+def validate_launch(document: str, directory: Path, *, model_config: bytes | None = None) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     source = directory / "launch.yaml"
     source.write_text(document)
@@ -26,6 +26,10 @@ def validate_launch(document: str, directory: Path) -> dict:
     command = skyrl_cpu_command(
         "python", "-m", "experiments.post_training.long_loop.validate_launch", str(source), str(compiled)
     )
+    if model_config is not None:
+        metadata = directory / "model-config.json"
+        metadata.write_bytes(model_config)
+        command.append(str(metadata))
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)

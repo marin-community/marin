@@ -11,6 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import click
+from huggingface_hub import hf_hub_download
 from iris.cluster.client.job_info import get_job_info
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -26,7 +27,9 @@ from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blo
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
 
-def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str) -> None:
+def validate_graph(
+    terminal: ArtifactStep, directory: Path, artifact_prefix: str, *, model_config: bytes | None = None
+) -> None:
     rows = []
     for step in graph_handles([terminal]):
         if step.adopt_source:
@@ -45,7 +48,7 @@ def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str
             row = {
                 "stage": step.name,
                 "status": "strictly composed; future checkpoint identity unresolved",
-                **validate_launch(launch.launch_config_yaml, directory / digest),
+                **validate_launch(launch.launch_config_yaml, directory / digest, model_config=model_config),
             }
         rows.append(row)
     directory.mkdir(parents=True, exist_ok=True)
@@ -90,7 +93,14 @@ def main(
     require_secret("HF_TOKEN")
     version = resolve_version(resolved["name"], None)
     terminal = build_spec_graph(resolved, version, through=through)
-    validate_graph(terminal, validation_output / version, os.environ["MARIN_PREFIX"])
+    model_config = None
+    if through != "sft" and resolved["adopted_handoff"] is None:
+        # SFT preserves the initializer architecture, but its export does not exist at submission.
+        initializer = resolved["initializer"]
+        model_config = Path(
+            hf_hub_download(initializer["repo"], "config.json", revision=initializer["revision"])
+        ).read_bytes()
+    validate_graph(terminal, validation_output / version, os.environ["MARIN_PREFIX"], model_config=model_config)
     return terminal
 
 

@@ -49,14 +49,15 @@ def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_p
         built = step.build_config(replace(context, is_fingerprint=True))
         launch = built if stage == "rl" else built.skyrl
         document = yaml.safe_load(launch.launch_config_yaml)
-        # Substitute only model-metadata I/O; the emitted recipe and role plan
-        # still come from the production graph and strict runtime composition.
-        model = tmp_path / stage / "model"
-        model.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(SPEC.parent.parent / "context-fixtures/config.json", model / "config.json")
-        document["inputs"]["model"]["uri"] = str(model)
-        validate_launch(yaml.safe_dump(document), tmp_path / stage / "strict-composition")
+        # The new export is a future artifact. Validate its unchanged architecture
+        # from initializer metadata while preserving its actual artifact locator.
+        model_config = (SPEC.parent.parent / "context-fixtures/config.json").read_bytes()
+        receipt = validate_launch(
+            yaml.safe_dump(document), tmp_path / stage / "strict-composition", model_config=model_config
+        )
+        assert receipt["initializer_config_sha256"] == hashlib.sha256(model_config).hexdigest()
         compiled = yaml.safe_load((tmp_path / stage / "strict-composition/compiled.yaml").read_text())
+        assert compiled["inputs"]["model"]["uri"] == document["inputs"]["model"]["uri"]
         for key, value in resolved[stage]["ray_timeouts"].items():
             assert compiled["ray"][key] == value
         emitted = compiled["skyrl"]
@@ -173,6 +174,12 @@ def test_actual_sft_graph_constructs_without_admitting_unprepared_rl(tmp_path, m
         StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=terminal.runtime_args, deps=terminal.deps)
     ).train_config.initialize_from_hf.endswith("@" + resolved["initializer"]["revision"])
     assert terminal.runtime_args["skyrl_execution"].priority == "production"
+    assert (
+        terminal.build_config(
+            StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=terminal.runtime_args, deps=terminal.deps)
+        ).resources.target_cluster
+        is None
+    )
     resolved["blockers"] = ["Missing admitted agentic manifest"]
     with pytest.raises(ValueError, match="Run is not admitted"):
         build_spec_graph(resolved, "2026.11.09.12", through="archive")

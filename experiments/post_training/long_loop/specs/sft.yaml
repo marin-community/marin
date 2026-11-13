@@ -66,6 +66,6 @@ resources:
   preemptible: false
   ram: 1500GB
   replicas: 4
-  target_cluster: cw-rno2a
+  target_cluster: null
   zone: null
 task_timeout_seconds: 259200
