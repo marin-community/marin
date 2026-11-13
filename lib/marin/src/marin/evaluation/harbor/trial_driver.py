@@ -716,10 +716,16 @@ def _preflight(request_path: Path, *, host_environment: Mapping[str, str]) -> No
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
-async def _snapshot_specs(config: JobConfig) -> list[dict[str, Any]]:
-    """Resolve a job's effective Daytona snapshot requests without allocating sandboxes."""
+async def _snapshot_specs(config: JobConfig, overlay: RuntimeOverlay | None) -> list[dict[str, Any]]:
+    """Resolve a job's effective Daytona snapshot requests without allocating sandboxes.
+
+    The config passes through the same launcher-contract validation and runtime
+    overlay that ``run`` applies, so the preflight resolves the task set the run
+    actually launches.
+    """
     if config.environment.type is not EnvironmentType.DAYTONA:
         raise ValueError("Snapshot specs require the daytona environment")
+    config = effective_job_config(config, overlay)
     requests: dict[str, dict[str, Any]] = {}
     with tempfile.TemporaryDirectory(prefix="marin-harbor-snapshot-specs-") as jobs_dir:
         trial_paths = TrialPaths(Path(jobs_dir) / "trial")
@@ -752,10 +758,12 @@ async def _run(config: JobConfig, *, host_capabilities: HostCapabilities) -> Non
     await job.run()
 
 
-def effective_job_config(policy: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
+def effective_job_config(policy: JobConfig, overlay: RuntimeOverlay | None = None) -> JobConfig:
     """Apply a parsed Marin overlay to the stable policy and validate the job."""
     if policy.tasks or len(policy.agents) != 1 or len(policy.datasets) != 1:
         raise ValueError("Harbor stable policy violates the shared launcher contract")
+    if overlay is None:
+        return policy
     return _effective_config(policy, overlay)
 
 
@@ -779,7 +787,9 @@ def main() -> None:
             raise ValueError(f"unknown command {command!r}")
         if command == "snapshot-specs":
             config = JobConfig.model_validate(_document(Path(sys.argv[2])), extra="forbid")
-            sys.stdout.write(json.dumps(asyncio.run(_snapshot_specs(config)), ensure_ascii=False, separators=(",", ":")))
+            overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text()) if len(sys.argv) > 3 else None
+            specs = asyncio.run(_snapshot_specs(config, overlay))
+            sys.stdout.write(json.dumps(specs, ensure_ascii=False, separators=(",", ":")))
             return
         policy = JobConfig.model_validate_json(Path(sys.argv[2]).read_text(), extra="forbid")
         overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text())

@@ -637,10 +637,40 @@ async def test_snapshot_specs_apply_job_resource_overrides(tmp_path, prepared_ta
         }
     )
 
-    specs = await _snapshot_specs(config)
+    specs = await _snapshot_specs(config, None)
 
     request = SnapshotRequest.from_dict(specs[0])
     assert specs == [request.as_dict()]
     assert request.source == RegistryImage("example.test/task@sha256:" + "a" * 64)
     assert (request.resources.cpu, request.resources.memory, request.resources.disk) == (1, 4, 4)
     assert request.resources.gpu is None
+
+
+async def test_snapshot_specs_apply_runtime_overlay(tmp_path, prepared_task, overlay):
+    other = tmp_path / "other-dataset"
+    other_task = other / "task"
+    (other_task / "environment").mkdir(parents=True)
+    (other_task / "tests").mkdir()
+    (other_task / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
+    (other_task / "instruction.md").write_text("Write an answer in /workspace.\n")
+    (other_task / "task.toml").write_text(
+        '[task]\nname = "test/other"\n[environment]\n'
+        f'docker_image = "example.test/other@sha256:{"b" * 64}"\n'
+        "allow_internet = false\n"
+    )
+    policy = JobConfig.model_validate(
+        {
+            "environment": {"type": "daytona"},
+            "agents": [{"name": "terminus-2"}],
+            "datasets": [{"path": str(other)}],
+        }
+    )
+
+    baseline = await _snapshot_specs(policy, None)
+    assert SnapshotRequest.from_dict(baseline[0]).source == RegistryImage("example.test/other@sha256:" + "b" * 64)
+
+    relocated = overlay.model_copy(
+        update={"dataset_path": str(prepared_task.parent), "task_limit": 1}
+    )
+    specs = await _snapshot_specs(policy, relocated)
+    assert SnapshotRequest.from_dict(specs[0]).source == RegistryImage("example.test/task@sha256:" + "a" * 64)
