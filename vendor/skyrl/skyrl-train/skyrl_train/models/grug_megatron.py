@@ -483,7 +483,6 @@ class GrugSharedExperts(nn.Module):
 # TE 2.19 BF16 FC1 changed fixed local rows when peer expert row counts changed.
 # A 1 KiB workspace passed the repro but was slower and needed a global allocator patch.
 # Revisit when native TE passes Grug's peer-batch parity and trainer checks without that cost.
-# Measurements and tested scope: https://github.com/marin-community/marin/pull/11241
 class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
     """Keep Blackwell BF16 expert rows independent of peer-rank token counts."""
 

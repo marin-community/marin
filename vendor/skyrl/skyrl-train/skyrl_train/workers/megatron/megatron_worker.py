@@ -141,7 +141,6 @@ class MegatronWorker:
         # different log-probs at fixed weights. PPO needs those scores to agree.
         # Revisit after cuDNN passes test_grug_megatron_train_forward_matches_eval_forward
         # in the selected profile. This observation does not establish a cuDNN defect.
-        # Evidence: https://github.com/marin-community/marin/pull/11241
         flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
         transformer_config_kwargs["attention_backend"] = (

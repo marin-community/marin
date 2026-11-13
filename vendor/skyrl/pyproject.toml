@@ -25,7 +25,7 @@ dependencies = [
     "ijson>=3.5",
     "jinja2>=3.1",
     "math-verify==0.9.0",
-    "hydra-core==1.3.4",
+    "hydra-core==1.3.2",
     "jaxtyping",
     "langdetect==1.0.9",
     "loguru",
@@ -103,12 +103,12 @@ megatron = [
     "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
     "causal-conv1d==1.7.0+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    # Keep the qualified FlashAttention 2 path for context parallelism.
-    "flash-attn==2.8.3.post1+marin.cu132torch2141.1 ; sys_platform == 'linux'",
+    # Use FA2 without the optional bundled FA4 code; see scripts/wheels/FA2.md.
+    "flash-attn==2.8.3.post2+marin.fa2.cu132torch2141.1 ; sys_platform == 'linux'",
     "flash-linear-attention==0.4.2 ; sys_platform == 'linux'",
     "mamba-ssm==2.3.2.post1+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "megatron-bridge==0.6.2+marin.torch2141.2 ; sys_platform == 'linux'",
-    "megatron-core==0.19.2+marin.torch2141.4 ; sys_platform == 'linux'",
+    "megatron-bridge==0.6.0 ; sys_platform == 'linux'",
+    "megatron-core==0.18.0 ; sys_platform == 'linux'",
     "nvidia-modelopt==0.46.1 ; sys_platform == 'linux'",
     "peft>=0.19 ; sys_platform == 'linux'",
     "tensordict ; sys_platform == 'linux'",
@@ -193,9 +193,13 @@ override-dependencies = [
     # Megatron Bridge pins older serving libraries; share the selected vLLM ABI.
     "flashinfer-python==0.6.18.post1 ; sys_platform == 'linux'",
     "flashinfer-cubin==0.6.18.post1 ; sys_platform == 'linux'",
-    # Inherited override above Bridge 0.6.2's declared <=5.12.1 requirement.
-    # Grug and Qwen3 paths pass here; other Bridge adapters remain unqualified.
+    # Retain the tested Transformers version above Bridge's declared upper bound.
+    # Exercise Grug and Qwen3 when changing this; other adapters remain unqualified.
     "transformers==5.16.1",
+    # Core 0.18 dev extras require OTEL 1.33; Iris needs a newer API.
+    # Keep the existing paired 1.44 telemetry stack without changing Core.
+    "opentelemetry-api==1.44.0 ; sys_platform == 'linux'",
+    "opentelemetry-api ; sys_platform != 'linux'",
 ]
 constraint-dependencies = [
     "dnspython>=2.9.0",
@@ -232,17 +236,12 @@ torchcodec = { index = "pytorch-cu132", extra = "vllm", marker = "sys_platform =
 # Torch 2.14.1 wheels use pinned sources and checked-in patches:
 # https://github.com/marin-community/MarinSkyRL/tree/604f2c1463032ffc1f47da114f43cf1d550dd473/scripts/wheels
 flash-attn = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/flash_attn-2.8.3.post1+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/flash_attn-2.8.3.post1+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]
 harbor = { path = "../harbor", editable = true }
 hs-connectors = { git = "https://github.com/marin-community/speculators.git", rev = "ecac1b16278063e9640004135153882c02de5801", subdirectory = "hs_connectors" }
 speculators = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/speculators-0.9.0a16.post1-py3-none-any.whl" }
-megatron-core = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/megatron_core-0.19.2+marin.torch2141.4-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/megatron_core-0.19.2+marin.torch2141.4-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-]
-megatron-bridge = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/megatron_bridge-0.6.2+marin.torch2141.2-py3-none-any.whl", marker = "sys_platform == 'linux'" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
     { index = "pytorch-cu132", extra = "cuda" },
