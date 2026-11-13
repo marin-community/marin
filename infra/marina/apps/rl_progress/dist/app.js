@@ -50,15 +50,12 @@ function showDetails(run) {
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
-    ['Verdict', run.gate_result?.verdict ?? run.verdict], ['Label', run.gate_result?.label], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
+    ['Verdict', run.gate_result?.verdict], ['Label', run.gate_result?.label], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
-    ['Reward', `${number(run.baseline?.reward)} → ${number(run.final?.reward)}`],
-    ['Coverage', `Baseline ${run.baseline?.scored ?? 'Unknown'}/${run.baseline?.attempted ?? 'Unknown'}; final ${run.final?.scored ?? 'Unknown'}/${run.final?.attempted ?? 'Unknown'}`],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
     ['Timing scope', run.timing_scope], ['Run date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
-    ['Evaluation', run.evaluation ? `${run.evaluation.name} · ${run.evaluation.version}` : null], ['Task set', run.evaluation?.task_set_sha256],
-    ['Evaluation protocol', run.evaluation?.protocol_sha256], ['Artifact location', run.artifact_uri],
+    ['Artifact location', run.artifact_uri],
     ['Engine facts', run.engine == null ? null : JSON.stringify(run.engine)],
   ];
   for (const [title, value] of facts) addField(fields, title, value);
@@ -111,7 +108,7 @@ function render() {
     } else {
       objectives.textContent = 'Report details unavailable';
       constraints.textContent = '—';
-      verdict.textContent = run.verdict ?? '—';
+      verdict.textContent = '—';
     }
     tr.append(name, objectives, constraints, verdict);
     return tr;

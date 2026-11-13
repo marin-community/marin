@@ -13,7 +13,7 @@ import click
 from finestore.rl.run_records import AttemptRecord, attempt_lineage
 from marin.execution.artifact import RECORD_FILENAME, read_record
 from marin.rl import skyrl_records
-from marin.rl.rl_progress import RunSummary
+from marin.rl.rl_progress import GateResult, RunSummary
 from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -39,20 +39,6 @@ class PublicationOutcome:
         } | ({"retry": self.retry} if self.retry is not None else {})
 
 
-def publishes(preset: presets.Preset) -> bool:
-    return preset.publishes
-
-
-CONTROL_PRESETS = tuple(
-    sorted(
-        name
-        for name, preset in presets.PRESETS.items()
-        if publishes(preset)
-        and any(pin.revision == preset.revision for pin in gate.CONTROLS.get(preset.shared_control or name, ()))
-    )
-)
-
-
 def label(inputs: gate.GateInputs) -> str:
     parts = [inputs.preset_name, *inputs.settings]
     if inputs.tasks:
@@ -66,13 +52,15 @@ def build_record(
     run_output: str,
     preset: presets.Preset,
     *,
-    attempt_id: str | None = None,
-    attempts: tuple[str | None, dict[str, AttemptRecord]] | None = None,
-) -> dict:
+    attempt_id: str,
+    attempts: tuple[str | None, dict[str, AttemptRecord]],
+    report: gate.GateReport | None = None,
+    gate_name: str | None = None,
+    issue: int | None = None,
+) -> RunSummary:
     """Build a terminal progress record from stored native outputs without live lookups."""
-    current_id, receipts = attempts if attempts is not None else read_stored_skyrl_attempts(run_output)
-    selected_id = attempt_id or current_id
-    receipt = receipts.get(selected_id) if selected_id is not None else None
+    _, receipts = attempts
+    receipt = receipts.get(attempt_id)
     if receipt is None:
         raise FileNotFoundError(f"No stored native receipt at {run_output} for {attempt_id}")
     launch, result = receipt.native.config, receipt.native.result
@@ -85,8 +73,6 @@ def build_record(
         inputs = gate.GateInputs(preset_name=preset.name)
         evidence.append("Stored Snowball inputs are unavailable; using the supplied preset.")
     preset = replace(presets.PRESETS[inputs.preset_name], updates=launch["skyrl"]["trainer"]["max_steps"])
-    if not publishes(preset):
-        raise ValueError("Progress publication requires a trained-panel preset")
     native = launch["run"]
     attempt_id = native["attempt_id"]
     provenance = result.provenance or {}
@@ -128,41 +114,57 @@ def build_record(
         )
     if not provenance:
         evidence.append("Recorded source provenance is unavailable.")
-    record = {
-        "run_id": native["id"],
-        "attempt_id": attempt_id,
-        "label": label(inputs),
-        "series": preset.name,
-        "issue": None,
-        "verdict": None,
-        "gate": None,
-        "gate_result": None,
-        "min_scored_fraction": presets.MINIMUM_PANEL_COVERAGE,
-        "date_basis": "launch_started",
-        "run_date": started or tracking.get("started_at"),
-        "started_at": started,
-        "completed_at": finished,
-        "elapsed_seconds": elapsed,
-        "timing_scope": "checkpoint_lineage_native_jobs",
-        "status": "failed" if failed else "succeeded",
-        "failed_facts": failed,
-        "optimizer_steps": optimizer_steps,
-        "iris_job_id": result.iris_job_id,
-        "wandb_url": tracking.get("wandb_url"),
-        "engine": tracking.get("engine"),
-        "source_revision": (
+    if report is not None and len(report.run.attempt_ids) == report.run.replicates:
+        replicate = report.run.attempt_ids.index(attempt_id)
+        failed = list(
+            dict.fromkeys(
+                [*failed, *(fact.name for fact in report.invariants if not fact.holds and fact.replicate == replicate)]
+            )
+        )
+    return RunSummary(
+        run_id=receipt.run_id,
+        attempt_id=attempt_id,
+        label=label(inputs),
+        series=preset.name,
+        issue=issue,
+        gate=gate_name,
+        gate_result=(
+            GateResult(
+                verdict=report.verdict,
+                label=report.label,
+                reason=report.reason,
+                invariants=list(report.invariants),
+                comparisons=[
+                    row
+                    for row in report.comparisons
+                    if row.role
+                    in (gate.ComparisonRole.OBJECTIVE, gate.ComparisonRole.CONSTRAINT, gate.ComparisonRole.REQUIREMENT)
+                ],
+                attempt_ids=list(report.run.attempt_ids),
+                replicates=report.run.replicates,
+            )
+            if report is not None
+            else None
+        ),
+        run_date=started or tracking.get("started_at"),
+        started_at=started,
+        completed_at=finished,
+        elapsed_seconds=elapsed,
+        timing_scope="checkpoint_lineage_native_jobs",
+        status="failed" if failed else "succeeded",
+        failed_facts=failed,
+        optimizer_steps=optimizer_steps,
+        iris_job_id=result.iris_job_id,
+        wandb_url=tracking.get("wandb_url"),
+        engine=tracking.get("engine"),
+        source_revision=(
             f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
         ),
-        "data_identity": "; ".join(row["identity"] for row in launch["inputs"]["train_data"]),
-        "initializer_identity": launch["inputs"]["model"]["identity"],
-        "evaluation": None,
-        "baseline": None,
-        "final": None,
-        "artifact_uri": run_output,
-        "evidence": evidence,
-    }
-    RunSummary.model_validate_json(json.dumps(record, allow_nan=False), strict=True)
-    return record
+        data_identity="; ".join(row["identity"] for row in launch["inputs"]["train_data"]),
+        initializer_identity=launch["inputs"]["model"]["identity"],
+        artifact_uri=run_output,
+        evidence=evidence,
+    )
 
 
 def gate_complete(gate_path: str | None) -> bool:
@@ -215,46 +217,18 @@ def publish_runs(
                 if gate_required and attempt_id == current_id and receipt.native.result.state == "succeeded":
                     if report_error:
                         raise ValueError(report_error)
-                    if report is None or attempt_id not in report.run.attempt_ids:
+                    if report is None:
                         raise ValueError("Gate report missing for this attempt; repeat the original command with --wait")
-                record = build_record(path, preset, attempt_id=attempt_id, attempts=(current_id, attempts))
-                if attempt_id == current_id:
-                    record["issue"] = issue
-                    if report is not None and attempt_id in report.run.attempt_ids:
-                        record.update(
-                            gate=read_record(gate_path).name,
-                            verdict=report.verdict.value,
-                            gate_result={
-                                **report.model_dump(mode="json", include={"verdict", "label", "reason", "invariants"}),
-                                "comparisons": [
-                                    row.model_dump(mode="json")
-                                    for row in report.comparisons
-                                    if row.role
-                                    in (
-                                        gate.ComparisonRole.OBJECTIVE,
-                                        gate.ComparisonRole.CONSTRAINT,
-                                        gate.ComparisonRole.REQUIREMENT,
-                                    )
-                                ],
-                                "attempt_ids": list(report.run.attempt_ids),
-                                "replicates": report.run.replicates,
-                            },
-                        )
-                        if len(report.run.attempt_ids) == report.run.replicates:
-                            replicate = report.run.attempt_ids.index(attempt_id)
-                            record["failed_facts"] = list(
-                                dict.fromkeys(
-                                    [
-                                        *record["failed_facts"],
-                                        *(
-                                            fact.name
-                                            for fact in report.invariants
-                                            if not fact.holds and fact.replicate == replicate
-                                        ),
-                                    ]
-                                )
-                            )
-                            record["status"] = "failed" if record["failed_facts"] else "succeeded"
+                current_report = report if attempt_id == current_id else None
+                record = build_record(
+                    path,
+                    preset,
+                    attempt_id=attempt_id,
+                    attempts=(current_id, attempts),
+                    report=current_report,
+                    gate_name=read_record(gate_path).name if current_report is not None else None,
+                    issue=issue if attempt_id == current_id else None,
+                )
                 url = publish_rl_progress.publish_result(record, service_url)
                 result.served_records.append(destination)
                 if attempt_id == current_id:
@@ -269,11 +243,13 @@ def publish_runs(
 
 def publish_controls(preset_name: str, *, service_url: str | None = None) -> PublicationOutcome:
     """Publish the exact pinned controls from their stored native outputs."""
-    if preset_name not in CONTROL_PRESETS:
-        raise click.UsageError("Progress publication requires a trained-panel preset with current control pins")
     preset = presets.PRESETS[preset_name]
     result = PublicationOutcome()
-    for pin in gate.control_pins(preset):
+    try:
+        pins = gate.control_pins(preset)
+    except gate.InvalidComparison as error:
+        raise click.UsageError(str(error)) from error
+    for pin in pins:
         outcome = publish_runs(
             [gate.control_path(preset, pin, index) for index in range(pin.runs)],
             presets.PRESETS[pin.preset],
@@ -292,7 +268,7 @@ def publish_controls(preset_name: str, *, service_url: str | None = None) -> Pub
 @click.option(
     "--preset",
     "preset_name",
-    type=click.Choice(CONTROL_PRESETS),
+    type=click.Choice([name for name, preset in presets.PRESETS.items() if preset.publishes]),
     required=True,
 )
 @click.option("--url", help="Marina origin (defaults to the Marina service).")

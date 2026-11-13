@@ -112,7 +112,7 @@ def applet_query(
     session: requests.Session | None = None,
     token_provider: TokenProvider | None = None,
 ) -> AppletQuery:
-    """Return a SQL client with shared transport and token refresh."""
+    """Return a SQL client for an applet, sharing caller-owned transport and refreshing tokens."""
     details = marina_request(
         service_url,
         "GET",

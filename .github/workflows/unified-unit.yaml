@@ -137,7 +137,7 @@ jobs:
       - name: Test progress publication through Marina and Postgres
         run: >-
           uv run --all-packages --no-default-groups --extra cpu --extra dedup
-          --group test pytest -n 0 -m "" infra/marina/tests/test_rl_progress.py
+          --group test pytest -n 0 -m integration infra/marina/tests/test_rl_progress.py
           experiments/post_training/snowball_tests/test_snowball_rl_publication.py::test_snowball_publication_updates_attempts_and_publishes_controls
 
   slow:

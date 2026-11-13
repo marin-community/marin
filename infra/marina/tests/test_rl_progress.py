@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import hashlib
 import json
 
+import pytest
+
 from infra.marina.tests.rl_progress_fixtures import APPLET_ID
+
+pytestmark = pytest.mark.integration
 
 
 def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client):
@@ -19,7 +22,6 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         assert response.status_code == 200, response.text
         return response.json()
 
-    membership = [f"task-{index}" for index in range(100)]
     record = {
         "run_id": "test/control",
         "attempt_id": "native-first",
@@ -27,10 +29,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "series": "learning-medium",
         "issue": 123,
         "gate": "test/gate",
-        "verdict": None,
-        "min_scored_fraction": 0.99,
         "run_date": "2026-11-02T00:00:00Z",
-        "date_basis": "submission_acknowledged",
         "started_at": "2026-11-02T00:00:00Z",
         "completed_at": "2026-11-02T01:00:00Z",
         "elapsed_seconds": 3600,
@@ -40,25 +39,21 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "source_revision": "source-1",
         "data_identity": "data-1",
         "initializer_identity": "model-1",
-        "evaluation": {
-            "name": "eval_lite",
-            "version": "1",
-            "task_count": 100,
-            "task_set_sha256": "a" * 64,
-            "membership_sha256": (
-                hashlib.sha256(json.dumps(sorted(membership), separators=(",", ":")).encode()).hexdigest()
-            ),
-            "protocol": {"temperature": 0},
-            "protocol_sha256": hashlib.sha256(b'{"temperature":0}').hexdigest(),
+        "gate_result": {
+            "comparisons": [
+                {"metric": "score", "role": "objective", "run": 0.4, "control": 0.2, "n_run": 1, "n_control": 4}
+            ],
+            "invariants": [{"name": "planned_updates", "value": 25, "limit": 25, "holds": True, "replicate": 0}],
+            "verdict": "pass",
+            "label": "improves",
+            "reason": None,
+            "attempt_ids": ["native-first"],
+            "replicates": 1,
         },
-        "baseline": {"reward": 0.2, "attempted": 100, "scored": 99},
-        "final": {"reward": 0.4, "attempted": 100, "scored": 99},
         "artifact_uri": "s3://example/test",
         "evidence": [],
     }
-    record["baseline"]["saved_evidence"] = {"source": "native output"}
     assert publish(record) == record
-    publish(copy.deepcopy(record))
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
@@ -68,8 +63,8 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     }
     publish(failed)
     changed = copy.deepcopy(record)
-    changed.update(issue=456, label="corrected label", verdict="fail")
-    changed["final"]["reward"] = 0.9
+    changed.update(issue=456, label="corrected label")
+    changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
@@ -78,25 +73,19 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         else:
             missing_issue["issue"] = None
         assert publish(missing_issue) == changed
-    partial = copy.deepcopy(record)
-    partial.update(run_id="test/partial", attempt_id="partial")
-    partial["final"]["scored"] = 98
-    publish(partial)
     unknown = record | {
         "run_id": "test/unknown",
         "attempt_id": "unknown",
-        "verdict": "invalid",
         "elapsed_seconds": None,
         "run_date": None,
         "started_at": None,
         "completed_at": None,
-        "baseline": None,
-        "final": None,
-        "evaluation": None,
         "optimizer_steps": None,
+        "evidence": ["Checkpoint lineage timing is unknown: a native time window is missing."],
     }
     publish(unknown)
     for run_id, invalid in (
+        ("test/legacy", record | {"evaluation": None}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
         (
@@ -114,7 +103,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             },
         )
     huge_extra = json.dumps(
-        record | {"run_id": "test/huge-extra", "attempt_id": "bad", "extra": "large-number"}
+        record | {"run_id": "test/huge-extra", "attempt_id": "bad", "engine": {"value": "large-number"}}
     ).replace('"large-number"', "1" + "0" * 400 + ".5")
     request(
         "http://localhost",
@@ -126,22 +115,24 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         },
     )
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
-    assert len(payload["runs"]) == 4
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-first"]["final"]["reward"] == 0.9
     assert rows["native-first"] == changed
     assert rows["native-second"] == failed
-    assert rows["partial"] == partial and rows["unknown"] == unknown
+    assert rows["unknown"] == unknown
+    assert len(rows) == 3
+    assert rows["unknown"]["evidence"] == unknown["evidence"]
+    assert "comparator" not in rows["native-first"]["gate_result"]["invariants"][0]
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
-    assert set(skipped) == {"test/bad-shape", "test/bad-result", "test/huge-extra", "test/wrong-sql-key"}
+    assert set(skipped) == {"test/bad-shape", "test/bad-result", "test/huge-extra", "test/wrong-sql-key", "test/legacy"}
 
     before = client.get(api_path).json()
     for invalid in (
-        changed | {"baseline": None},
+        changed | {"started_at": "2026-11-02T01:00:00+01:00"},
+        changed | {"evaluation": None},
         changed | {"elapsed_seconds": float("nan")},
-        changed | {"extra": float("inf")},
-        changed | {"extra": "\x00"},
+        changed | {"engine": {"value": float("inf")}},
+        changed | {"label": "\x00"},
         changed | {"gate_result": {"comparisons": "invalid"}},
     ):
         response = client.post(api_path, content=json.dumps(invalid), headers={"Content-Type": "application/json"})

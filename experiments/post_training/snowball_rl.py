@@ -413,7 +413,7 @@ def _iris_client() -> Iterator[IrisClient]:
 def _publish_records(
     run: SnowballRun, preset: presets.Preset, *, issue: int | None = None
 ) -> snowball_rl_publication.PublicationOutcome | None:
-    if not snowball_rl_publication.publishes(preset):
+    if not preset.publishes:
         return None
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
     completed_gate = snowball_rl_gate.completed_gate(run.gate)
