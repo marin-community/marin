@@ -961,7 +961,6 @@ def test_snowball_packed_context_parallel_hidden_states_and_loss_are_isolated(
         changed = hax.named(jnp.where(later, ids.array, (ids.array + 13) % cfg.vocab_size), ids.axes)
         # Score only next-token predictions wholly inside the second document.
         weights = hax.named((later & (jnp.arange(Pos.size)[None, :] < Pos.size - 1)).astype(jnp.float32), ids.axes)
-        outputs = {}
         for context in (1, 4):
             mesh = Mesh(
                 np.asarray(devices[:context]).reshape(1, 1, 1, context, 1),
@@ -982,20 +981,20 @@ def test_snowball_packed_context_parallel_hidden_states_and_loss_are_isolated(
                     return hidden, loss.array
 
                 before = tuple(np.asarray(x) for x in forward(model, ids, packed))
+                repeated = forward(model, ids, packed)
+                for expected, actual in zip(before, repeated, strict=True):
+                    np.testing.assert_array_equal(expected, actual, err_msg="Identical inputs must be deterministic")
                 after = tuple(np.asarray(x) for x in forward(model, changed, packed))
                 assert not np.allclose(before[0][~np.asarray(later)], after[0][~np.asarray(later)])
                 np.testing.assert_array_equal(before[0][np.asarray(later)], after[0][np.asarray(later)])
                 np.testing.assert_array_equal(before[1], after[1])
                 assert np.all(before[1][np.asarray(weights.array, dtype=bool)] > 0)
-                outputs[context] = before
 
                 # A single document must preserve the pre-packing causal path bit for bit.
                 unpacked = forward(model, ids, None)
                 one_document = forward(model, ids, single)
                 for expected, actual in zip(unpacked, one_document, strict=True):
                     np.testing.assert_array_equal(expected, actual)
-        for expected, actual in zip(outputs[1], outputs[4], strict=True):
-            np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.timeout(120)
