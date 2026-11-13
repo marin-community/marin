@@ -588,10 +588,10 @@ def calibrated_task(
                 stderr=subprocess.STDOUT,
                 check=True,
             )
-        paths = list((attempt / "jobs").rglob("result.json"))
-        if len(paths) != 1:
+        trials = [trial for group in collect_trials(attempt / "jobs").values() for trial in group]
+        if len(trials) != 1:
             raise ValueError(f"Expected exactly one persisted production trial for {task.id}")
-        trial = trial_receipt(paths[0])
+        trial = trials[0]
         if retry_context is not None:
             trial = trial.model_copy(update={"infrastructure_retry": retry_context})
         attempts.append(trial)
