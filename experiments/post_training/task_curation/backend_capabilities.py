@@ -27,7 +27,6 @@ from shellbox.backends.local.disk import LocalDiskPool
 from shellbox.machine import UnsupportedMachineSpec
 from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell, Checker, capability_matrix, production_checkers
-from experiments.post_training.task_curation.catalog_identity import canonical_backend_survey
 from taskcompendium.backend_requirements import (
     BackendFit,
     BackendSourceMap,
@@ -39,7 +38,7 @@ from taskcompendium.backend_requirements import (
 )
 from taskcompendium.models import EnvironmentRequirements
 
-from experiments.post_training.task_curation.catalog_identity import canonical_snapshot_source
+from experiments.post_training.task_curation.catalog_identity import canonical_backend_survey, canonical_snapshot_source
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 SUPPORT_ORDER = (Support.SUPPORTED, Support.PARTIAL, Support.UNSUPPORTED)
