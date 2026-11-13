@@ -37,7 +37,7 @@ from experiments.post_training.task_curation.full_qc_review import (
     quality_result,
     review_batch,
 )
-from experiments.post_training.task_curation.judges import LocalJudgeEndpoint
+from experiments.post_training.task_curation.judges import PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 
 LOGGER = logging.getLogger(__name__)
@@ -175,7 +175,7 @@ def main() -> None:
     if spec.cache_revision != PINNED_REVIEWER_SHA256:
         raise ValueError("SAMPLE QC requires the reviewed literal v3 profile")
     endpoint = spec.endpoint
-    assert isinstance(endpoint, LocalJudgeEndpoint)
+    assert isinstance(endpoint, PinnedLocalJudgeEndpoint)
     LOGGER.info("Reviewer: %s", json.dumps(spec.identity, sort_keys=True))
     LOGGER.info("Queue: %d sources, %d sampled tasks", len(panels), sum(p.sample_size for p in panels))
     if not args.run:
