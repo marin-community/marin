@@ -250,6 +250,7 @@ def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(r
     source, receipt = retained_receipt
     bound = bind_retained_release(source, receipt)
     assert bound.current_release == receipt.publication.release
+    assert bound.declaration.url == source.declaration.url
     assert bound.declaration.task_count == 1
     assert bound.info.within_source_dedup.raw_count == bound.info.within_source_dedup.unique_count == 1
     assert bound.info.actor_census_input.dataset_id == receipt.publication.repo

@@ -203,6 +203,7 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
     info = replace(
         source.info,
         current_release=publication.release,
+        upstream_url=source.info.upstream_url or dataset.url,
         dataset=config.dataset,
         count=plan.retained_count,
         task_format=TaskFormat.TASKCOMPENDIUM,
