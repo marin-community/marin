@@ -44,7 +44,7 @@ from rigging.secrets import COREWEAVE_SECRET_NAMES, SecretBehavior, get_secret
 from rigging.timing import Duration
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, NetworkPolicy
+from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy
 from taskforge.sandbox.image_builder import (
     BUILD_IMAGE,
     BUILD_SCRIPT,
@@ -93,23 +93,35 @@ UNPACK = (
     "for wheel in sorted(pathlib.Path('/opt/probe-wheels').glob('*.whl')):\n"
     "    zipfile.ZipFile(wheel).extractall('/opt/pt')\n"
 )
-EGRESS = """\
-import json, socket, sys, urllib.request
-urls = sys.argv[1:]
-result = {}
-for url in urls:
-    try:
-        urllib.request.urlopen(url, timeout=5)
-        result[url] = "reached"
-    except Exception as error:
-        result[url] = type(error).__name__
+# One target per exec: urllib's timeout does not bound the DNS lookup, which can hang when egress drops packets.
+EGRESS_URL = """\
+import sys, urllib.request
+try:
+    urllib.request.urlopen(sys.argv[1], timeout=5)
+    print("reached")
+except Exception as error:
+    print(type(error).__name__)
+"""
+EGRESS_DNS = """\
+import socket
 try:
     socket.getaddrinfo("pypi.org", 443)
-    result["dns"] = "resolved"
+    print("resolved")
 except OSError as error:
-    result["dns"] = type(error).__name__
-print(json.dumps(result))
+    print(type(error).__name__)
 """
+EGRESS_TIMEOUT = 30
+# kaniko unpacks the base image over the root it runs in and keeps files already there. Taskforge runs it in
+# an Alpine bash image, so Alpine's /etc/protocols and /etc/ssl/openssl.cnf stay in the build root, and an
+# apt install of netbase or openssl stops at a dpkg conffile prompt. Like the official kaniko image, leave
+# only the pod-provided name-resolution files in /etc before exec'ing kaniko.
+KANIKO_EXEC = 'SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor"'
+CLEAR_ETC = "find /etc -mindepth 1 -maxdepth 1 ! -name resolv.conf ! -name hosts ! -name hostname -exec rm -rf {} +\n"
+if BUILD_SCRIPT.count(KANIKO_EXEC) != 1:
+    raise RuntimeError("Taskforge's kaniko build script changed; re-check the /etc clean-up")
+PROBE_BUILD_SCRIPT = BUILD_SCRIPT.replace(KANIKO_EXEC, CLEAR_ETC + KANIKO_EXEC)
+# kaniko holds layer snapshots in memory; 4 GiB OOMs on pip installs of large wheels.
+BUILD_MEMORY = 16 * 1024**3
 SETSID = (
     "setsid --fork sh -c 'echo $$ > /tmp/pg; exec sleep 600' </dev/null >/dev/null 2>&1; sleep 1; "
     "pg=$(cat /tmp/pg); kill -0 $pg && kill -TERM -- -$pg; sleep 1; "
@@ -134,14 +146,20 @@ def _text(result) -> str:
     return result.stdout.decode(errors="replace").strip()
 
 
-async def _checks(machine, scratch: Path) -> dict:
-    checks: dict = {}
+async def _egress(machine, script: str, *args: str) -> str:
+    result = await machine.run(Command(("python3", "-c", script, *args), timeout=EGRESS_TIMEOUT))
+    # A target that never answers within the deadline was not reached.
+    return "timed_out" if result.reason == ExitReason.TIMED_OUT else _text(result) or f"exit {result.exit_code}"
+
+
+async def _checks(machine, scratch: Path, row: dict) -> None:
+    """Run the checks in order, recording each in ``row`` as it completes."""
     first = time.monotonic()
     await machine.run(Command(("true",), timeout=COMMAND_TIMEOUT))
-    checks["first_exec_seconds"] = time.monotonic() - first
-    checks["setsid"] = _text(await machine.run(_bash(SETSID))) == "KILLED"
+    row["first_exec_seconds"] = time.monotonic() - first
+    row["setsid"] = _text(await machine.run(_bash(SETSID))) == "KILLED"
     tmux = [await machine.run(_bash(script)) for script in TMUX_EXECS]
-    checks["tmux"] = all(r.exit_code == 0 for r in tmux) and _text(tmux[-1]) == "SEEN"
+    row["tmux"] = all(r.exit_code == 0 for r in tmux) and _text(tmux[-1]) == "SEEN"
     await machine.upload(WHEEL_DIR, "/opt/probe-wheels")
     await machine.upload(scratch / "test_probe.py", "/tests/test_probe.py")
     unpacked = await machine.run(Command(("python3", "-c", UNPACK), timeout=COMMAND_TIMEOUT))
@@ -152,13 +170,11 @@ async def _checks(machine, scratch: Path) -> dict:
             timeout=COMMAND_TIMEOUT,
         )
     )
-    checks["pytest"] = unpacked.exit_code == 0 and pytest.exit_code == 0 and "1 passed" in _text(pytest)
-    egress = json.loads(
-        _text(await machine.run(Command(("python3", "-c", EGRESS, *EGRESS_URLS), timeout=COMMAND_TIMEOUT)))
-    )
-    checks["egress"] = egress
-    checks["egress_blocked"] = all(value not in ("reached", "resolved") for value in egress.values())
-    return checks
+    row["pytest"] = unpacked.exit_code == 0 and pytest.exit_code == 0 and "1 passed" in _text(pytest)
+    egress = {url: await _egress(machine, EGRESS_URL, url) for url in EGRESS_URLS}
+    egress["dns"] = await _egress(machine, EGRESS_DNS)
+    row["egress"] = egress
+    row["egress_blocked"] = all(value not in ("reached", "resolved") for value in egress.values())
 
 
 async def _sandbox(factory: IrisMachineFactory, scratch: Path, index: int) -> dict:
@@ -175,7 +191,7 @@ async def _sandbox(factory: IrisMachineFactory, scratch: Path, index: int) -> di
     row["start_seconds"] = time.monotonic() - start
     row["job_id"] = str(machine.job.job_id)
     try:
-        row.update(await _checks(machine, scratch))
+        await _checks(machine, scratch, row)
     except Exception as error:
         row["error"] = f"checks: {type(error).__name__}: {error}"
     finally:
@@ -221,7 +237,7 @@ def _submit_build(client: IrisClient, task: str) -> Job:
     storage = {name: value for name in COREWEAVE_SECRET_NAMES if (value := get_secret(name)) is not None}
     return client.submit(
         entrypoint=Entrypoint(
-            command=["bash", "-c", BUILD_SCRIPT],
+            command=["bash", "-c", PROBE_BUILD_SCRIPT],
             workdir_files={CONTEXT_FILE: _context_archive(TASK_DIR / task / "environment")},
         ),
         name=f"tmax-gvisor-probe-build-{uuid.uuid4().hex[:12]}",
@@ -241,7 +257,7 @@ def _submit_build(client: IrisClient, task: str) -> Job:
             secrets=storage,
             secret_behavior=SecretBehavior.ISOLATE,
         ),
-        resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
+        resources=ResourceSpec(cpu=2, memory=BUILD_MEMORY, disk=20 * 1024**3),
         task_image=BUILD_IMAGE,
         container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
         scheduling_timeout=Duration.from_seconds(SCHEDULING_TIMEOUT),
