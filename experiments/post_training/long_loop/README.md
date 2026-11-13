@@ -374,3 +374,9 @@ The verifier checks the complete object inventory and SHA-256 values, model and
 expert geometry, tokenizer and EOS settings. The RL graph consumes that verified
 URI directly, without native checkpoint restoration, SFT or another export.
 HF-only adoption stops at `--through rl`; the archive requires native SFT evidence.
+
+Output and temporary buckets must match the physical execution cluster's region,
+using the bucket registry in `config/coreweave.yaml`. RNO2A outputs must stay
+under supported `tmp/ttl=Nd` paths. The earlier recipe targeted RNO2A compute but
+required US-EAST-08A outputs, causing cross-region checkpoint writes; its default
+output paths now use RNO2A scratch. Inputs retain their separately pinned identities.
