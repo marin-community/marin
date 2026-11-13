@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from finestore.rl.source_identity import canonical_source_id, canonical_source_map
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.reviewer_spec import JudgeEndpoint
 from taskcompendium.source_fingerprints import DuplicateJudgeRun, DuplicateLabel, SourceFingerprint, SourceIdentitySurvey
@@ -26,6 +27,7 @@ from experiments.post_training.task_curation.duplicate_review import (
     DUPLICATE_SYSTEM_PROMPT,
     DUPLICATE_TEMPERATURE,
     LocalDuplicateEndpoint,
+    UnresolvedDuplicatePair,
     review_pairs,
 )
 from experiments.post_training.task_curation.judges import HostedJudgeEndpoint
@@ -86,9 +88,17 @@ def scan(
     ordered = list({(pair.left, pair.right): pair for pair in [*labelled, *selected.values()]}.values())
     expected = {(row["left"], row["right"]): DuplicateLabel(row["expected"]) for row in labels}
     reviews = []
-    with closing(review_pairs(ordered, fingerprints, endpoint, survey.reviews, acknowledgements)) as results:
-        with receipts.open("w") as output:
+    unresolved = []
+    unresolved_path = receipts.with_suffix(".unresolved.jsonl")
+    responses = StoragePath(str(receipts.with_suffix(".responses")))
+    with closing(review_pairs(ordered, fingerprints, endpoint, survey.reviews, acknowledgements, responses)) as results:
+        with receipts.open("w") as output, unresolved_path.open("w") as failures:
             for review in results:
+                if isinstance(review, UnresolvedDuplicatePair):
+                    failures.write(review.model_dump_json() + "\n")
+                    failures.flush()
+                    unresolved.append(review)
+                    continue
                 reviews.append(review)
                 output.write(review.model_dump_json() + "\n")
                 output.flush()
@@ -97,6 +107,8 @@ def scan(
                 label = expected.get((pair.left, pair.right))
                 if label is not None and label != review.verdict.label:
                     raise ValueError(f"Labelled duplicate control disagrees: {pair.left} / {pair.right}")
+    if unresolved:
+        raise ValueError(f"{len(unresolved)} source pairs remain unresolved; evidence: {unresolved_path}")
     local = endpoint if isinstance(endpoint, LocalDuplicateEndpoint) else None
     judge = DuplicateJudgeRun(
         model=DUPLICATE_MODEL,

@@ -25,7 +25,20 @@ private reference agrees with the task. Do not flag ordinary numbers, public
 examples, or standard domain assumptions as leakage. Difficult tasks can be good.
 Assess static task quality separately from whether this pipeline can execute its
 grader. A missing oracle, an unbound judge, or omitted fixture previews alone is
-not a content defect. Use quality=good when the public task is coherent and no
+not a content defect.
+TaskCompendium harness facts: for conversation answers (TEXT, NUMBER, JSON and
+NATIVE_ACTION), the harness extracts the submitted answer using answer_format.
+An in-process grader receives that value. For a Verifyit grader running in a
+grading environment, the harness writes the extracted answer to the verifier's
+configured answer file before invoking it. The actor needs neither file-writing
+tools nor public instructions to write that private transport file. ScriptGraders
+with answer_path likewise receive the extracted answer at that path. FILE,
+WORKSPACE_STATE and STATE tasks still require their declared captured outputs or
+state; these facts do not waive public deliverables. Judge the canonical TaskSpec
+answer contract and grader; archived source scripts are evidence, not overrides
+of that contract. These transport facts establish no execution qualification and
+do not excuse a concrete content, reference, extraction or grader-semantic defect.
+Use quality=good when the public task is coherent and no
 material defect is supported. Difficulty, unfamiliar subject matter, and inability
 to independently solve every hidden test do not require some_issues or unknown.
 Confidence describes this quality assessment, not proof of every reference.
@@ -60,7 +73,7 @@ calling review_task exactly once. Do not rewrite the task or invent a reference.
 """
 
 
-BASE_RUBRIC_VERSION = "task-quality-v1"
+BASE_RUBRIC_VERSION = "task-quality-v2"
 BASE_RUBRIC_SHA256 = hashlib.sha256(BASE_RUBRIC.encode()).hexdigest()
 
 

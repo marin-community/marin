@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import openai
@@ -21,6 +22,8 @@ from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import load_model_config
 from marin.evaluation.serving_config import ENDPOINT_READY_TIMEOUT_SECONDS, inference_config_for_model
 from marin.inference.iris import remote_inference
+from pydantic import BaseModel, ConfigDict
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.reviewer_spec import JudgeEndpoint
 from taskcompendium.source_fingerprints import DuplicateReview, PairSimilarity, PairVerdict, SourceFingerprint
@@ -36,6 +39,7 @@ DUPLICATE_MODEL_CONFIG = Path("experiments/post_training/task_curation/models/qw
 DUPLICATE_TEMPERATURE = 0.7
 DUPLICATE_PROMPT_VERSION = "source-overlap-v1"
 DUPLICATE_MAX_TOKENS = 2048
+DUPLICATE_MAX_ATTEMPTS = 3
 DUPLICATE_TRANSPORT_TIMEOUT = 180
 DUPLICATE_READ_TIMEOUT = ENDPOINT_READY_TIMEOUT_SECONDS + EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 DUPLICATE_SYSTEM_PROMPT = """Assess whether two RL task sources reuse the same underlying tasks.
@@ -53,6 +57,15 @@ population present in the larger, in [0,1]. Use 0 for distinct and 1 for duplica
 Give a short evidence-based reason and distinguish observed overlap from uncertainty.
 These are advisory source flags, never an instruction to delete or merge data.
 """
+
+
+class UnresolvedDuplicatePair(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    similarity: PairSimilarity
+    prompt_sha256: str
+    response_receipts: tuple[str, ...]
+    validation_errors: tuple[str, ...]
 
 
 @dataclass
@@ -124,7 +137,8 @@ def review_pairs(
     endpoint: JudgeEndpoint,
     cached: list[DuplicateReview],
     acknowledgements: dict[str, str],
-) -> Iterator[DuplicateReview]:
+    response_receipts: StoragePath,
+) -> Iterator[DuplicateReview | UnresolvedDuplicatePair]:
     """Review only shortlisted pairs; reuse complete identical requests."""
     cache = {review.prompt_sha256: review for review in cached}
     requests = []
@@ -159,35 +173,70 @@ def review_pairs(
                 if prior is not None:
                     result = prior
                 else:
-                    response = client.chat.completions.create(
-                        model=DUPLICATE_MODEL,
-                        messages=[
-                            {"role": "system", "content": DUPLICATE_SYSTEM_PROMPT},
-                            {"role": "user", "content": prompt},
-                        ],
-                        temperature=DUPLICATE_TEMPERATURE,
-                        max_tokens=DUPLICATE_MAX_TOKENS,
-                        response_format={
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": "source_overlap",
-                                "strict": True,
-                                "schema": PairVerdict.model_json_schema(),
-                            },
-                        },
-                        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-                    )
-                    choice = response.choices[0]
-                    if choice.finish_reason != "stop" or choice.message.content is None or response.usage is None:
-                        raise ValueError("Duplicate judge returned an incomplete opinion")
-                    result = DuplicateReview(
-                        similarity=pair,
-                        verdict=PairVerdict.model_validate_json(choice.message.content),
-                        prompt_sha256=request_key,
-                        model=DUPLICATE_MODEL,
-                        completion_id=response.id,
-                        prompt_tokens=response.usage.prompt_tokens,
-                        completion_tokens=response.usage.completion_tokens,
-                    )
+                    result = review_pair(client, pair, prompt, request_key, response_receipts)
+                if isinstance(result, UnresolvedDuplicatePair):
+                    yield result
+                    continue
                 acknowledgement = acknowledgements.get(request_key)
                 yield result.model_copy(update={"acknowledgement": acknowledgement})
+
+
+def review_pair(
+    client: openai.OpenAI,
+    pair: PairSimilarity,
+    prompt: str,
+    request_key: str,
+    response_receipts: StoragePath,
+) -> DuplicateReview | UnresolvedDuplicatePair:
+    """Checkpoint each response before validation and exhaust invalid opinions per pair."""
+    receipts, errors = [], []
+    for attempt in range(DUPLICATE_MAX_ATTEMPTS):
+        raw = client.chat.completions.with_raw_response.create(
+            model=DUPLICATE_MODEL,
+            messages=[
+                {"role": "system", "content": DUPLICATE_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=DUPLICATE_TEMPERATURE,
+            max_tokens=DUPLICATE_MAX_TOKENS,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "source_overlap",
+                    "strict": True,
+                    "schema": PairVerdict.model_json_schema(),
+                },
+            },
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        receipt = response_receipts / request_key / f"{attempt + 1}-{uuid4().hex}.json"
+        with receipt.open("wb", auto_mkdir=True) as stream:
+            stream.write(raw.content)
+        receipts.append(str(receipt))
+        try:
+            response = raw.parse()
+            if len(response.choices) != 1 or response.usage is None:
+                raise ValueError("Duplicate judge returned an incomplete opinion")
+            choice = response.choices[0]
+            if choice.finish_reason != "stop" or choice.message.content is None:
+                raise ValueError("Duplicate judge returned an incomplete opinion")
+            return DuplicateReview(
+                similarity=pair,
+                verdict=PairVerdict.model_validate_json(choice.message.content),
+                prompt_sha256=request_key,
+                model=DUPLICATE_MODEL,
+                completion_id=response.id,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+            )
+        except ValueError as error:
+            errors.append(str(error))
+            logger.warning(
+                "Invalid duplicate opinion for %s, attempt %d; response: %s", request_key, attempt + 1, receipt
+            )
+    return UnresolvedDuplicatePair(
+        similarity=pair,
+        prompt_sha256=request_key,
+        response_receipts=tuple(receipts),
+        validation_errors=tuple(errors),
+    )
