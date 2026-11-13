@@ -19,8 +19,8 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 from experiments.post_training.task_curation.admission_binding import require_declaration_admission
-from experiments.post_training.task_curation.datasets.admission_censuses import ADMISSION_CENSUS_RECEIPTS
-from experiments.post_training.task_curation.retirement import RETIRED_ADMISSION_SOURCE_IDS
+from experiments.post_training.task_curation.datasets.admission_censuses import admission_census_receipts
+from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality
 
@@ -145,10 +145,10 @@ def load_catalog(
         },
     )
     sources = list(catalog.sources(snapshot.snapshot_id))
-    if retired := {source.id for source in sources} & RETIRED_ADMISSION_SOURCE_IDS:
+    if retired := {source.id for source in sources} & retired_admission_source_ids():
         raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
     for source in sources:
-        require_declaration_admission(source.declaration, ADMISSION_CENSUS_RECEIPTS)
+        require_declaration_admission(source.declaration, admission_census_receipts())
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:

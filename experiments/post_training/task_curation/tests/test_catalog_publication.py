@@ -377,8 +377,8 @@ def test_publication_does_not_carry_retired_sources_into_a_later_campaign(tmp_pa
     record_attempt(root, retired, "first", "2026-10-16T10:00:00Z", "retired-key")
     original = publish_catalog(root, "first", [kept, retired])
     monkeypatch.setattr(
-        "experiments.post_training.task_curation.catalog_snapshot.RETIRED_ADMISSION_SOURCE_IDS",
-        frozenset({retired.info.id}),
+        "experiments.post_training.task_curation.catalog_snapshot.retired_admission_source_ids",
+        lambda: frozenset({retired.info.id}),
     )
     record_attempt(root, kept, "next", "2026-10-16T11:00:00Z", "next-key")
     publish_catalog(root, "next", [kept])

@@ -9,16 +9,16 @@ import pytest
 from finestore.rl.curation import ActorCensusInput
 
 from experiments.post_training.task_curation.admission_binding import AdmissionCensusReceipt
-from experiments.post_training.task_curation.datasets.admission_censuses import ADMISSION_CENSUS_RECEIPTS
+from experiments.post_training.task_curation.datasets.admission_censuses import admission_census_receipts
 from experiments.post_training.task_curation.source import RlDataSource
 
 
 @pytest.fixture
 def isolated_admission_census():
-    original = dict(ADMISSION_CENSUS_RECEIPTS)
+    original = dict(admission_census_receipts())
     yield
-    ADMISSION_CENSUS_RECEIPTS.clear()
-    ADMISSION_CENSUS_RECEIPTS.update(original)
+    admission_census_receipts().clear()
+    admission_census_receipts().update(original)
 
 
 def register_admission_census(source_id: str, dataset: str, revision: str, version: str, count: int) -> ActorCensusInput:
@@ -31,7 +31,7 @@ def register_admission_census(source_id: str, dataset: str, revision: str, versi
         task_specs_sha256="a" * 64,
         evidence_url="https://example.test/census",
     )
-    ADMISSION_CENSUS_RECEIPTS[source_id] = AdmissionCensusReceipt(
+    admission_census_receipts()[source_id] = AdmissionCensusReceipt(
         source_id=source_id,
         input=binding,
         population_path="https://example.test/population",

@@ -60,7 +60,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
-from experiments.post_training.task_curation.datasets.admission_censuses import ADMISSION_CENSUS_RECEIPTS
+from experiments.post_training.task_curation.datasets.admission_censuses import admission_census_receipts
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
@@ -740,15 +740,15 @@ def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalo
     load_catalog(CurationCatalog(root), catalog_query)
     publish_sample(root, "next")
     source_id = "Marin:math"
-    receipt = ADMISSION_CENSUS_RECEIPTS[source_id]
+    receipt = admission_census_receipts()[source_id]
     if failure == "missing":
-        del ADMISSION_CENSUS_RECEIPTS[source_id]
+        del admission_census_receipts()[source_id]
     elif failure == "stale":
-        ADMISSION_CENSUS_RECEIPTS[source_id] = receipt.model_copy(
+        admission_census_receipts()[source_id] = receipt.model_copy(
             update={"input": receipt.input.model_copy(update={"dataset_revision": "stale"})}
         )
     else:
-        ADMISSION_CENSUS_RECEIPTS[source_id] = type(receipt).model_validate(
+        admission_census_receipts()[source_id] = type(receipt).model_validate(
             {
                 **receipt.model_dump(),
                 "runnable_grader_tasks": 2,
