@@ -121,7 +121,7 @@ class RecordedLaunch(BaseModel):
                 f"{'.'.join(map(str, item['loc']))}: {item['type']}"
                 for item in error.errors(include_input=False, include_context=False, include_url=False)
             )
-            raise ValueError(f"Attempt {attempt} has malformed recorded configuration: {fields}") from error
+            raise ValueError(f"Attempt {attempt} has malformed recorded configuration: {fields}") from None
 
 
 def recorded_launch(record: AttemptRecord) -> RecordedLaunch:

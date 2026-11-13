@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import traceback
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
@@ -1008,8 +1009,9 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
             del malformed.config["skyrl"]["generator"][field]
         else:
             malformed.config["skyrl"]["generator"][field] = value
-        with pytest.raises(ValueError, match=f"{receipt.attempt_id}.*{field}"):
+        with pytest.raises(ValueError, match=f"{receipt.attempt_id}.*{field}") as error:
             recorded_launch(malformed)
+        assert "input_value" not in "".join(traceback.format_exception(error.value))
     assert tracking["attempt_id"] == config.attempt_id
     assert tracking["wandb_url"] == f"https://wandb.ai/tests-team/tests-project/runs/{config.attempt_id}"
     assert tracking["engine"]["vllm_version"] == "fixture-vllm"
