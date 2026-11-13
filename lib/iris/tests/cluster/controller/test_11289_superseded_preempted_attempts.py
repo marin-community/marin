@@ -187,6 +187,10 @@ def test_superseded_preempted_attempt_is_finalized_by_worker_report(state, obser
     assign_task(state, task, new_worker)
     assert query_task(state, task.task_id).current_attempt_id == 1
     old_attempt = query_attempt(state, task.task_id, 0)
+    # Persisted pre-deployment shape: the old attempt still holds its worker.
+    assert old_attempt.state == job_pb2.TASK_STATE_PREEMPTED
+    assert old_attempt.finished_at_ms is None
+    assert old_attempt.worker_id == old_worker
 
     # The superseded attempt stays in its worker's plan, as a stop of its own process.
     plan = _plan_for(state, old_worker)
