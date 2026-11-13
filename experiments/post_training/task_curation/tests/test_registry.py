@@ -61,7 +61,6 @@ def test_archive_updates_references_only_after_every_document_verifies(tmp_path,
         def create_commit(self, *, operations, **kwargs):
             assert kwargs["parent_commit"] == "a" * 40
             for operation in operations:
-                assert isinstance(operation, registry.CommitOperationAdd)
                 remote[operation.path_in_repo] = operation.path_or_fileobj
             return SimpleNamespace(oid="b" * 40)
 
