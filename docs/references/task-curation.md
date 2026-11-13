@@ -1967,6 +1967,18 @@ paths and each file's row order; older population
 digests used conversion order and cannot be compared to this scan digest.
 Existing output directories are refused; select a new version for reruns.
 
+Stage the downloaded regional `receipts.json` indexes into a new directory:
+
+```bash
+uv run python -m experiments.post_training.task_curation.grading_binding \
+  --censuses east-receipts.json rno2a-receipts.json \
+  --output-dir STAGE/experiments/post_training/task_curation/datasets/grading_census_receipts
+```
+
+Archive that stage with the [registry publication command](#updating-pinned-registry-receipts),
+then commit its returned references. `grading_census_receipts()` lazily verifies
+and loads them when building the source catalog.
+
 `bind_grading_census` attaches evidence only when the configured source pin,
 converter version and full actor input still match. This census measures grading
 boundaries without executing graders or qualifying integrity contracts.

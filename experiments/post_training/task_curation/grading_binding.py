@@ -3,12 +3,16 @@
 
 """Bind complete grading censuses to the measured source population."""
 
+import argparse
+import json
 from dataclasses import replace
+from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence
 from finestore.rl.source_identity import SourceId
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.source import RlDataSource
 
 
@@ -45,3 +49,23 @@ def bind_grading_census(source: RlDataSource, receipt: GradingCensusReceipt) -> 
     ):
         return replace(source, info=replace(source.info, grading_environment=None))
     return replace(source, info=replace(source.info, grading_environment=receipt.evidence))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--censuses", type=Path, nargs="+", required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    args = parser.parse_args()
+    receipts = {}
+    for path in args.censuses:
+        for raw in json.loads(path.read_text()):
+            receipt = GradingCensusReceipt.model_validate(raw)
+            if receipt.source_id in receipts:
+                raise ValueError(f"Duplicate grading census: {receipt.source_id}")
+            receipts[receipt.source_id] = receipt.model_dump(mode="json")
+    args.output_dir.mkdir(parents=True, exist_ok=False)
+    write_receipt_shards(args.output_dir, receipts)
+
+
+if __name__ == "__main__":
+    main()
