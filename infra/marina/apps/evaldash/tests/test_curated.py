@@ -225,6 +225,7 @@ def test_regional_curation_builds_compare_and_grader_changes_remain_separate(raw
         answer_field="answer",
         population=2,
         trials=1,
+        temperature=0,
     )
     dataset = source.config
     assert dataset is not None and dataset.recipe.grader is not None
