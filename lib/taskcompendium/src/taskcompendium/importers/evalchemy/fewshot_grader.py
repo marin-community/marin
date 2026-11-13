@@ -29,7 +29,7 @@ DEPENDENCIES = {
     "gsm8k_cot": ("minerva.py", "amc.py"),
     "minerva_math": ("minerva.py", "amc.py"),
     "bbh_cot": (),
-    "harness_generation": ("harness_completion.py", "minerva.py", "amc.py"),
+    "harness_generation": ("harness_completion.py", "harness_generation.py", "minerva.py", "amc.py"),
 }
 
 
