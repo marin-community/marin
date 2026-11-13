@@ -32,6 +32,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 
 import fsspec
 from huggingface_hub import RepoFile, hf_hub_download, list_repo_tree, model_info
@@ -50,6 +51,11 @@ class CacheMetadata:
     """Metadata persisted with a completed cache snapshot."""
 
     source_revision: str | None = None
+
+
+class CacheMode(StrEnum):
+    POPULATE = "populate"
+    READ_ONLY = "read_only"
 
 
 _LOCK_SUFFIX = ".lock"
@@ -176,6 +182,7 @@ def resolve_cached_model_path(
     cache_ttl_days: int,
     cache_prefix: str,
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
+    cache_mode: CacheMode = CacheMode.POPULATE,
 ) -> str:
     """Resolve *model* to a path to load it from, mirroring a HuggingFace repo to a TTL cache.
 
@@ -192,29 +199,39 @@ def resolve_cached_model_path(
         cache_ttl_days: TTL in days for the region-local mirror; ``<= 0`` disables mirroring.
         cache_prefix: Sub-path under the TTL bucket the mirror is written to.
         complete_marker: Filename written last to mark the cache complete.
+        cache_mode: READ_ONLY returns the original source on a miss without creating a mirror.
 
     Returns:
         A path the caller can load *model* from.
     """
-    # Deferred so importing levanter (which eagerly imports this module) does not pull
-    # transformers via hf_checkpoints onto CPU-only workers (see levanter/__init__.py).
+    if cache_ttl_days <= 0:
+        return model
+    pinned = resolve_hf_model_ref(model)
+    if pinned is None:
+        return model
+    repo, _, revision = pinned.partition("@")
+    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(pinned)}")
+    if cache_mode is CacheMode.READ_ONLY:
+        fs, _ = url_to_fs(cache_path)
+        return cache_path if fs.exists(f"{cache_path.rstrip('/')}/{complete_marker}") else model
+    return cache_hf_model(cache_path, repo, revision=revision, complete_marker=complete_marker)
+
+
+def resolve_hf_model_ref(model: str, *, token: str | None = None) -> str | None:
+    """Return a pinned ``repo@commit`` for a Hub model without deriving a storage path."""
     from levanter.compat.hf_checkpoints import _is_hf_model_id  # noqa: PLC0415  # optional dep: transformers
 
     repo, _, revision = model.partition("@")
-    if cache_ttl_days <= 0 or not _is_hf_model_id(repo):
-        return model
-
+    if not _is_hf_model_id(repo):
+        return None
     requested_revision = revision or None
     if requested_revision is not None and _HF_COMMIT_PATTERN.fullmatch(requested_revision):
         resolved_revision = requested_revision.lower()
     else:
-        resolved_revision = model_info(repo, revision=requested_revision).sha
+        resolved_revision = model_info(repo, revision=requested_revision, token=token).sha
         if resolved_revision is None:
             raise ValueError(f"Hugging Face did not return a commit SHA for {model!r}")
-
-    resolved_model = f"{repo}@{resolved_revision}"
-    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(resolved_model)}")
-    return cache_hf_model(cache_path, repo, revision=resolved_revision, complete_marker=complete_marker)
+    return f"{repo}@{resolved_revision}"
 
 
 def _cache_slug(model: str) -> str:

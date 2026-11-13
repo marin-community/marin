@@ -35,7 +35,7 @@ from marin.evaluation.metric_selection import (
     base_metric,
     declared_metric,
 )
-from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
+from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, EvalTaskRef, MetricKind
 from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
@@ -279,6 +279,10 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     n_scored = sum(counts) if len(counts) == len(scores) else None
 
     coverage = _mechanism_coverage(record, n_scored)
+    repeated = tuple(record.repeat_aggregates.values())
+    if len(repeated) > 1:
+        raise ValueError(f"{record.run_id}: cannot combine several repeated task aggregates")
+    repeat_aggregation = repeated[0] if repeated else None
     selected = PUBLICATION_METRICS.get(record.evaluation.name)
     if selected is not None:
         # These policy metrics share their benchmark's scored-item denominator.
@@ -287,12 +291,17 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     declared = all(score.declared for score in scores)
     declared_kinds = {score.kind for score in scores if score.kind is not None}
     declared_metrics = {score.protocol_metric for score in scores if score.protocol_metric is not None}
-    kind = (
-        next(iter(declared_kinds))
-        if declared and len(declared_kinds) == 1
-        else MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    if repeat_aggregation is not None:
+        kind = MetricKind.CONTINUOUS
+    elif declared and len(declared_kinds) == 1:
+        kind = next(iter(declared_kinds))
+    else:
+        kind = MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    stderr = (
+        repeat_aggregation.stderr
+        if repeat_aggregation is not None
+        else _combined_stderr([score.stderr for score in scores])
     )
-    stderr = _combined_stderr([score.stderr for score in scores])
     n_correct = _successes(value, coverage) if kind is MetricKind.BINARY else None
     if n_correct is None and kind is MetricKind.BINARY:
         # A binary metric whose value is not k/n (an unweighted rollup across subtasks) has no
@@ -311,6 +320,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         coverage=coverage,
         n_correct=n_correct,
         recorded_stderr=stderr,
+        repeat_aggregation=repeat_aggregation,
         item_cap=item_cap,
         flags=_flags(coverage, kind, stderr, item_cap),
         num_fewshot=next(iter(fewshot_values)) if len(fewshot_values) == 1 else None,
@@ -323,7 +333,11 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         status=record.status,
         declared=declared,
         protocol_metric=next(iter(declared_metrics)) if declared and len(declared_metrics) == 1 else None,
-        protocol_kind=next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None,
+        protocol_kind=(
+            MetricKind.CONTINUOUS
+            if repeat_aggregation is not None
+            else next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None
+        ),
     )
 
 
@@ -345,6 +359,77 @@ def declared_metric_gap(record: EvalRunRecord) -> str | None:
         if name not in metrics:
             return f"declared metric {name} not in canonical results"
     return None
+
+
+@dataclass(frozen=True)
+class MetricRow:
+    """One metric a record reports for a task: protocol name, value, and whether it was declared."""
+
+    task: str
+    metric: str
+    value: float
+    declared: bool
+
+
+def _metric_task_keys(record: EvalRunRecord) -> list[str]:
+    """Every distinct non-scratch metrics key, from either the raw or the canonical map."""
+    return [key for key in dict.fromkeys((*record.metrics, *record.canonical_metrics)) if not _is_scratch_task_key(key)]
+
+
+def _declared_metric_value(record: EvalRunRecord, task_keys: Sequence[str], metric: BenchmarkMetricRef) -> float | None:
+    """A declared metric's canonical value, or its raw source value under filter priority."""
+    for task_key in task_keys:
+        canonical = record.canonical_metrics.get(task_key, {})
+        if metric.name in canonical:
+            return canonical[metric.name]
+    for task_key in task_keys:
+        picked = declared_metric(record.metrics.get(task_key, {}), metric.source_name)
+        if picked is not None:
+            return picked[1]
+    return None
+
+
+def declared_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
+    """Every declared benchmark metric for each recorded task, the primary metric first.
+
+    A declared metric reports its protocol name and takes the canonical value when the producer
+    wrote one; otherwise the raw source metric supplies it under the same extraction-filter priority
+    the statistics engine ranks with. Metrics with no recorded value are left out.
+    """
+    rows: list[MetricRow] = []
+    task_keys = _metric_task_keys(record)
+    for task in record.evaluation.tasks:
+        benchmark = task.benchmark
+        if benchmark is None:
+            continue
+        keys = [task_key for task_key in task_keys if _task_ref(record, task_key) is task]
+        ordered = [metric for metric in benchmark.metrics if metric.name == benchmark.primary_metric]
+        ordered += [metric for metric in benchmark.metrics if metric.name != benchmark.primary_metric]
+        for metric in ordered:
+            value = _declared_metric_value(record, keys, metric)
+            if value is not None:
+                rows.append(MetricRow(task=task.name, metric=metric.name, value=value, declared=True))
+    return rows
+
+
+def undeclared_metric_rows(record: EvalRunRecord) -> list[MetricRow]:
+    """Raw metric rows for task keys that no declared benchmark covers.
+
+    A record can mix tasks with benchmark metadata and tasks without it. The declared rows describe
+    only the former, so the latter keep their raw rows; a record with no declarations at all returns
+    its whole raw metric map, in stable task then metric order.
+    """
+    rows: list[MetricRow] = []
+    for task_key, metrics in record.metrics.items():
+        if _is_scratch_task_key(task_key):
+            continue
+        task = _task_ref(record, task_key)
+        if task is not None and task.benchmark is not None:
+            continue
+        rows.extend(
+            MetricRow(task=task_key, metric=name, value=value, declared=False) for name, value in metrics.items()
+        )
+    return sorted(rows, key=lambda row: (row.task, row.metric))
 
 
 def _successes(value: float, coverage: Coverage) -> int | None:
