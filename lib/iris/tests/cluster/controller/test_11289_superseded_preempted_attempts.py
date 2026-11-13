@@ -12,6 +12,8 @@ left the plan, its report was dropped, and the host stayed charged forever: a
 full-slice gang could never be admitted onto that slice again.
 """
 
+from dataclasses import replace
+
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
@@ -143,6 +145,13 @@ def _preempt(state: ControllerTestState, task_ids: list[JobName]) -> None:
 def _plan_for(state: ControllerTestState, worker_id: WorkerId) -> WorkerReconcilePlan:
     with state._db.read_snapshot() as snap:
         snapshot = reads.load_control_snapshot(snap, state._health, scan_timeouts=False)
+    # The controller fills dispatch templates after loading the database snapshot.
+    snapshot = replace(
+        snapshot,
+        job_specs={
+            row.job_id: job_pb2.RunTaskRequest(entrypoint=make_test_entrypoint()) for row in snapshot.reconcile_rows
+        },
+    )
     return next(plan for plan in plans_from_snapshot(snapshot) if plan.worker_id == worker_id)
 
 
@@ -161,8 +170,10 @@ def _report(state: ControllerTestState, plan: WorkerReconcilePlan, attempt_uid: 
 
 
 @pytest.mark.parametrize("observed", [job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_MISSING])
-def test_superseded_preempted_attempt_is_finalized_by_worker_report(state, observed):
-    old_worker, new_worker = _register_slice(state, "slice-a")[:2]
+@pytest.mark.parametrize("same_worker", [False, True])
+def test_superseded_preempted_attempt_is_finalized_by_worker_report(state, observed, same_worker):
+    old_worker, other_worker = _register_slice(state, "slice-a")[:2]
+    new_worker = old_worker if same_worker else other_worker
     submit_job(state, "victim", _tpu_request("victim", 1, gang=False))
     task = query_tasks_for_job(state, JobName.root("test-user", "victim"))[0]
     dispatch_task(state, task, old_worker)
@@ -181,11 +192,16 @@ def test_superseded_preempted_attempt_is_finalized_by_worker_report(state, obser
     plan = _plan_for(state, old_worker)
     desired = _desired_by_uid(plan)[old_attempt.attempt_uid]
     assert desired.stop == worker_pb2.Worker.STOP_REASON_PREEMPTED
+    retry_uid = query_attempt(state, task.task_id, 1).attempt_uid
+    if same_worker:
+        # Do not launch the retry against the old process on the same host.
+        assert retry_uid not in _desired_by_uid(plan)
+        assert _tpu_used(state, old_worker) == 2 * CHIPS_PER_HOST
 
     _report(state, plan, old_attempt.attempt_uid, observed)
 
     assert query_attempt(state, task.task_id, 0).finished_at_ms is not None
-    assert _tpu_used(state, old_worker) == 0
+    assert _tpu_used(state, old_worker) == (CHIPS_PER_HOST if same_worker else 0)
     assert old_attempt.attempt_uid not in _desired_by_uid(_plan_for(state, old_worker))
     # The newer attempt and the task are untouched.
     current = query_task(state, task.task_id)
@@ -194,6 +210,8 @@ def test_superseded_preempted_attempt_is_finalized_by_worker_report(state, obser
     assert current.current_worker_id == new_worker
     assert query_attempt(state, task.task_id, 1).finished_at_ms is None
     assert _tpu_used(state, new_worker) == CHIPS_PER_HOST
+    retry_intent = _desired_by_uid(_plan_for(state, new_worker))[retry_uid]
+    assert retry_intent.run.request.attempt_uid == retry_uid
 
 
 def test_superseded_preempted_gang_member_blocks_full_slice_until_confirmed(state):
