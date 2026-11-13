@@ -89,11 +89,13 @@ MuonH and AdamH use Muon and Adam directions, respectively, then project the
 updated weights back to their original Frobenius norm. MuonH owns matrix
 weights, AdamH owns the readout, and Adam owns embeddings,
 routers, attention gates, scalar norm gains and ShortConv kernels. Set
-`optimizer_kwargs.adam_lr` separately for the Adam route. Hero EP uses
+`optimizer_kwargs.adam_lr` separately for the Adam route. The checked fixtures
+use the `GrugMoeMuonHConfig` and SkyRL MuonH defaults:
 `adam_betas: [0.9, 0.95]`, momentum `0.95`, Nesterov momentum, five BF16 quintic
 steps, `epsilon: 1e-8` for Adam/AdamH and `muon_epsilon: 1e-8` for direction
-normalization. Learning rates and schedules belong to the run;
-the pretraining heuristic is in `experiments/grug/moe_hero_ep/optimizer.py`.
+normalization. The Hero pretraining heuristic in
+`experiments/grug/moe_hero_ep/heuristic.py` sets learning rates, schedules, beta2
+and Adam/AdamH epsilon from the run's token budget and batch size.
 
 Use `weight_decay: 0`, `max_grad_norm: 0`, TP=ETP=1, FP32 master parameters and
 `megatron_config.optimizer_config_kwargs.use_distributed_optimizer: false`.
