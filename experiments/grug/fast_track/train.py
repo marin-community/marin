@@ -78,6 +78,7 @@ from experiments.grug.fast_track.model import (
     Transformer,
     forward_flops_per_token,
 )
+from experiments.grug.fast_track.spelling_bytes import check_token_bytes
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -1098,6 +1099,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         bind_case_tables(tables)
         shared = int(np.sum(tables.members[:, 1] >= 0))
         logger.info("cplm_plus case classes: %d tokens in shared classes, width %d", shared, tables.members.shape[1])
+    if config.model.spelling_byte_embeds:
+        check_token_bytes(config.data.the_tokenizer, config.model.vocab_size)
 
     run_id = trainer.id
     if run_id is None:

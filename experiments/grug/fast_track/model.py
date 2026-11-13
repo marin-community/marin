@@ -59,6 +59,7 @@ from experiments.grug.fast_track.router_metrics import (
     reduce_router_stats,
     summarize_router_metrics,
 )
+from experiments.grug.fast_track.spelling_bytes import BYTE_POSITIONS, SpellingCase, spelling_tables
 from experiments.grug.moe.kda import chunk_kda, kda_fused
 from experiments.grug.moe.kda_prep_pallas import GateFn, GateKind, gate_log_decay
 from experiments.grug.moe.kda_state_pallas import StateGrads
@@ -459,6 +460,10 @@ class GrugModelConfig:
     cplm_plus: bool = False
     """CPLM Plus copy head (``cplm.py``): the next-token distribution mixes the vocabulary softmax with a copy
     distribution over earlier same-document tokens and their case classes. Needs ``cplm.bind_case_tables``."""
+    spelling_byte_embeds: bool = False
+    """Spelling-normalised byte embeddings (``spelling_bytes.py``): each input embedding row adds zero-initialised
+    rows for its token's first 8 lowercased, space-stripped UTF-8 bytes, its leading space and its case. Input side
+    only; the vocabulary is the hero 16k BPE tokenizer's."""
 
     def __post_init__(self) -> None:
         if self.cplm_plus and self.logit_soft_cap is not None:
@@ -1872,6 +1877,10 @@ class Transformer(eqx.Module):
     skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
     skip_router_bias: Float[Array, ""] | None
     copy_head: CopyHead | None  # cfg.cplm_plus
+    # cfg.spelling_byte_embeds: one 256-row table per byte position, the leading-space row and the case rows.
+    token_embed_bytes: Float[Array, "P 256 D"] | None
+    token_embed_space: Float[Array, " D"] | None
+    token_embed_case: Float[Array, "C D"] | None
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -1923,6 +1932,19 @@ class Transformer(eqx.Module):
             ),
             skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
             copy_head=CopyHead.init(cfg.hidden_dim, key=key) if cfg.cplm_plus else None,
+            token_embed_bytes=(
+                reshard(jnp.zeros((BYTE_POSITIONS, 256, cfg.hidden_dim), jnp.float32), P(None, None, None))
+                if cfg.spelling_byte_embeds
+                else None
+            ),
+            token_embed_space=(
+                reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None)) if cfg.spelling_byte_embeds else None
+            ),
+            token_embed_case=(
+                reshard(jnp.zeros((len(SpellingCase), cfg.hidden_dim), jnp.float32), P(None, None))
+                if cfg.spelling_byte_embeds
+                else None
+            ),
             config=cfg,
         )
 
@@ -1940,6 +1962,20 @@ class Transformer(eqx.Module):
         for stack, indices in zip(self.layer_stacks(), self.stack_layer_indices(), strict=True):
             by_index.update(zip(indices, _unstack_layers(stack), strict=True))
         return [by_index[i] for i in range(self.config.num_layers)]
+
+    def input_embedding_table(self) -> Float[Array, "V D"]:
+        """``token_embed``, plus each token's byte, space and case rows under ``spelling_byte_embeds``."""
+        if self.token_embed_bytes is None:
+            return self.token_embed
+        tables = spelling_tables(self.config.vocab_size)
+        # Gather in float32 so the backward scatter-adds into float32 rows.
+        byte_rows = self.token_embed_bytes.astype(jnp.float32)
+        extra = self.token_embed_case.astype(jnp.float32)[tables.case]
+        extra = extra + tables.leading_space[:, None] * self.token_embed_space.astype(jnp.float32)
+        for position in range(BYTE_POSITIONS):
+            extra = extra + tables.byte_present[:, position, None] * byte_rows[position][tables.byte_ids[:, position]]
+        table = self.token_embed.astype(jnp.float32) + extra
+        return reshard(table.astype(self.token_embed.dtype), P(None, None))
 
     @property
     def Vocab(self) -> Axis:
@@ -1963,7 +1999,7 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         cfg = self.config
-        hidden = _embedding_gather(self.token_embed, token_ids)
+        hidden = _embedding_gather(self.input_embedding_table(), token_ids)
         hidden = self.embed_norm(hidden)
         if self.embed_gated_norm is not None:
             hidden = self.embed_gated_norm(hidden)
@@ -2444,7 +2480,7 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
 
 
 # Lookup tables: a token reads one row, so they cost no matmul FLOPs.
-_EMBEDDING_TABLES = frozenset({"token_embed", "value_embed"})
+_EMBEDDING_TABLES = frozenset({"token_embed", "value_embed", "token_embed_bytes", "token_embed_case"})
 # Per-head or per-expert vectors stored as 2-D arrays that are added, not multiplied.
 _NON_MATMUL_PARAMS = frozenset({"dt_bias", "router_bias", "a_log"})
 
