@@ -105,6 +105,42 @@ requests. The command that mints the URL prints its expiration time. Share chat
 links only with trusted users. The share operation grants the same access as the
 current dashboard URL; it does not narrow or revoke that access.
 
+## Report a poor response
+
+Choose **Report issue** in Chat to open a confirmation dialog that warns the
+destination repository is public. Choose **Open GitHub draft** to open a
+prefilled [`marin-community/marin`](https://github.com/marin-community/marin/issues)
+new-issue page in a new tab. Nothing is submitted automatically. Edit the draft on GitHub,
+describe what went wrong, and submit it with your own GitHub account. The
+repository is public, so remove private or sensitive content first. The draft
+begins with an HTML comment that repeats this reminder; GitHub shows it in the
+editor but does not render it in the submitted issue.
+
+The draft title is `[model feedback] <model>: <conversation title>`. The body
+contains the serving backend, dtype, tensor parallelism, and context length.
+It records the current temperature, top_p, max_tokens, thinking mode, and
+custom template instructions. It also contains the complete **Raw chat**
+transcript, which includes the system prompt, reasoning, tool calls, tool
+results, and errors. The sampling values are the settings at report time, not a
+record of the settings used for each reply. Python tool source and shell
+workspace files are omitted; the draft notes only that they were configured. It
+also notes whether web search was enabled.
+The dashboard URL is never included because it contains the Iris capability
+token.
+
+**Include the conversation**, in the dialog, is checked each time the dialog
+opens. Uncheck it to report only the model and settings. The draft then omits the transcript, the
+conversation title, and custom template instructions, and states that the
+reporter omitted the conversation.
+
+GitHub rejects new-issue URLs longer than about 8 KB. When the draft would
+exceed that limit, the dashboard removes text from the middle of the transcript,
+keeps its start and end, and downloads the full transcript as
+`model-feedback-transcript.txt`. Drag that file into the GitHub issue to attach
+it; attachments do not count toward GitHub's 65,536-character issue body limit.
+If the browser blocks the new tab, the button reports **Popup blocked** and no
+transcript is downloaded.
+
 ## Custom Python tools
 
 Open **Python tools** above the Chat composer to define functions for the active
