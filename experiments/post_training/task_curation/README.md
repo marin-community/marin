@@ -580,6 +580,52 @@ the private registry and commit its exact references under
 converter or population digest and preserves execution oversight. Catalog refresh
 uses the pinned content Result while retaining earlier assessments and packets.
 
+### Final whole-source content Results
+
+Whole-source finalization is explicit. Content coverage records whether every
+retained task has a completed review observation, including valid uncertain
+observations. A verified
+`FullContentResultBinding` records the exact dataset pin, converter, retained
+population digest/count, contract index, immutable review receipt and records.
+`COMPLETE` requires every retained task reviewed; `ACCEPTED_INCOMPLETE` requires
+SHA-pinned waiver evidence and retains each missing review in the Result counts.
+Completed uncertain observations remain separate from the conclusive denominator.
+Neither state changes execution qualification or drops tasks.
+
+Verify observations before staging the small transport record:
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_content_receipts \
+  --review-receipt s3://BUCKET/IMMUTABLE_REVIEW/.artifact.json \
+  --review-receipt-sha256 ARTIFACT_SHA256 \
+  --reviewer-version v2 --prompt-budget 512000 \
+  --finalization accepted_incomplete \
+  --waiver s3://BUCKET/FINALIZATION.json --waiver-sha256 WAIVER_SHA256 \
+  --output /private/staging/source-final-binding.json
+```
+
+The verifier checks receipt, index, record and waiver digests, the pinned reviewer,
+task/runtime contracts and recomputed Result. If the original population included
+drops, supply `--population EXACT_RETAINED_CENSUS_ARTIFACT`, the `SourceTextPopulation`
+artifact produced by [`retained_census`](../../../docs/references/task-curation.md#retained-release-census)
+for the retained release. A raw population with a different count cannot certify
+the retained input. Review the resulting metadata
+before adding it to `datasets/full_content_results.json`. This transport contains
+pins, counts, digests, generic Result and evidence references; task-level evidence
+stays private. Source loading reads the local transport without new storage
+credentials or remote verification calls. This step does not publish a dataset or
+load production Atlas.
+
+Before SAMPLE attachment, validate any carried whole-source binding against the
+declaration's current full-population census (`ActorCensusInput`); changed pins,
+converters, counts or task digests clear stale Result/finality. Then attach SAMPLE
+and apply the verified matching whole-source binding afterward. A matching final
+Result survives later SAMPLE attachment. The
+declaration persists `quality_result_finalization`; Atlas uses it to keep an
+accepted incomplete Result final while still reporting incomplete coverage.
+Completed SAMPLE panels keep their existing finality rules.
+
 ### Audit reviewer errors
 
 `audit_harness` freezes a stratified sample of Prism issue-positive reviews and

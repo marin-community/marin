@@ -46,7 +46,7 @@ from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prio
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
-REVIEW_COMPLETENESS_VERSION = 1
+REVIEW_COMPLETENESS_VERSION = 2
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
@@ -107,7 +107,10 @@ def review_completeness(
         )
     else:
         return None
-    return {**asdict(completeness), "provisional": completeness.provisional}
+    return {
+        **asdict(completeness),
+        "provisional": completeness.provisional if declaration.quality_result_finalization is None else False,
+    }
 
 
 def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:

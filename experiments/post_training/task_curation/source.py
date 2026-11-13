@@ -22,6 +22,7 @@ from finestore.rl.curation import (
     OversightEvidence,
     OversightLevel,
     PipelineReference,
+    QualityResultFinalization,
     RoleExecutionEvidence,
     SourceDeclaration,
     SourceOrigin,
@@ -36,6 +37,7 @@ from experiments.post_training.task_curation.admission_binding import population
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.source_policy import (
     GRANDFATHERED_DAYTONA_EXEMPTION,
     GRANDFATHERED_MARINSKYRL_SOURCES,
@@ -121,6 +123,8 @@ class SourceInfo:
     inherited_admission: DatasetRelease | None = None
     upstream_url: str | None = None
     quality_result: SourceQualityResult | None = None
+    quality_result_finalization: QualityResultFinalization | None = None
+    full_content_result_binding: FullContentResultBinding | None = None
     family: str = ""
     tags: tuple[str, ...] = ()
     count: int | None = None
@@ -367,6 +371,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             variant=info.variant,
             current_release=self.current_release,
             quality_result=info.quality_result,
+            quality_result_finalization=info.quality_result_finalization,
             family=info.family,
             tags=list(tags),
             task_count=dedup.unique_count,
