@@ -20,6 +20,7 @@ from iris.cluster.client.bundle import collect_workspace_files
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import GradingEnvironmentMode
+from taskcompendium.harbor.adapter import TASK_SPEC_FILE, declared_execution_limits
 from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
@@ -37,7 +38,6 @@ from taskcompendium.pipeline.oracle_filter import (
     ResourceCalibrationReceipt,
     SourcePytestEnvironment,
     VerifierResourceProfile,
-    has_oracle_solution,
     next_trial_requirements,
     require_infrastructure_retry_parent,
     source_environment_incompatibility,
@@ -48,7 +48,7 @@ from taskcompendium.pipeline.resource_calibration import (
     ResourceDimension,
     ResourceUsage,
 )
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import has_oracle_solution, inline_resource
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HARBOR_PROJECT = PROJECT_ROOT / "vendor/harbor"
@@ -66,6 +66,9 @@ FAILURE_LOG_BYTES = 64 * 1024
 
 
 def declared_native_requirements(path: Path) -> dict[ResourceDimension, float]:
+    if (path / TASK_SPEC_FILE).is_file():
+        task = TaskSpec.model_validate_json((path / TASK_SPEC_FILE).read_text())
+        return {ResourceDimension(name): value for name, value in declared_execution_limits(task).items()}
     document = tomllib.loads((path / "task.toml").read_text())
     return {ResourceDimension(name): value for name, value in native_execution_limits(document).declared.items()}
 
@@ -550,11 +553,17 @@ def calibrated_task(
         if declared is None:
             document = tomlkit.parse((package / "task.toml").read_text())
             for name in ("cpus", "memory_mb", "storage_mb"):
-                document.setdefault("environment", {}).setdefault(name, shape.model_dump()[name])
+                if (package / TASK_SPEC_FILE).is_file():
+                    document["environment"][name] = shape.model_dump()[name]
+                else:
+                    document.setdefault("environment", {}).setdefault(name, shape.model_dump()[name])
                 if "environment" in document.get("verifier", {}):
                     document["verifier"]["environment"].setdefault(name, shape.model_dump()[name])
             for phase in ("agent", "verifier"):
-                document.setdefault(phase, {}).setdefault("timeout_sec", shape.model_dump()[f"{phase}_timeout_sec"])
+                if (package / TASK_SPEC_FILE).is_file():
+                    document[phase]["timeout_sec"] = shape.model_dump()[f"{phase}_timeout_sec"]
+                else:
+                    document.setdefault(phase, {}).setdefault("timeout_sec", shape.model_dump()[f"{phase}_timeout_sec"])
             (package / "task.toml").write_text(tomlkit.dumps(document))
         config = {
             "task": {"path": str(package)},

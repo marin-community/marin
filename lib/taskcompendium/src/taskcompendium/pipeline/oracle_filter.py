@@ -25,14 +25,7 @@ from taskcompendium.pipeline.resource_calibration import (
     next_requirements,
 )
 from taskcompendium.pipeline.sources import source_files_identity
-
-
-def has_oracle_solution(task: TaskSpec) -> bool:
-    resources = task.resources
-    return any(
-        resource.path.startswith("solution/")
-        for resource in (*resources.all, *resources.worker, *resources.verifier, *resources.oracle)
-    )
+from taskcompendium.runtime.resources import has_oracle_solution
 
 
 def oracle_recipe_identity(recipe: SourceRecipe) -> str:
@@ -109,7 +102,12 @@ class OracleTrialReceipt(BaseModel):
             update={"oom_kills": self.resource_usage.oom_kills + self.verifier_resource_usage.oom_kills}
         )
         signal = failure_signal(self.result.get("exception_info"), self.failure_log, usage)
-        if signal is FailureSignal.DISK_FULL:
+        if signal in {
+            FailureSignal.OOM,
+            FailureSignal.DISK_FULL,
+            FailureSignal.AGENT_TIMEOUT,
+            FailureSignal.VERIFIER_TIMEOUT,
+        }:
             return signal
         if (self.verdict or {}).get("status") == "infra_error":
             return FailureSignal.INFRASTRUCTURE

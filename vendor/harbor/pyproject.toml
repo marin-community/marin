@@ -37,7 +37,8 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona,sotopia,iris]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona,sotopia,iris,taskcompendium]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+taskcompendium = ["marin-taskcompendium", "marin-rolloutengine"]
 iris = ["marin-shellbox[iris]"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
@@ -82,6 +83,9 @@ marin-iris = { path = "../../lib/iris", editable = true }
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
 marin-shellbox = { path = "../../lib/shellbox", editable = true }
+marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
+marin-rolloutengine = { path = "../../lib/rolloutengine", editable = true }
+marin-verifyit = { path = "../../lib/verifyit", editable = true }
 marin-finelog = { path = "../../lib/finelog", editable = true }
 
 [tool.pytest.ini_options]

@@ -9,7 +9,7 @@ This supplies a single shell tool on the task machine as well as specified host 
 import json
 import math
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -183,6 +183,8 @@ class ShellHarness:
     """The shell interface for tasks that declare the shell capability without binding a tool of their own."""
     tools: Mapping[str, ToolProvider] = NO_TOOLS
     """The provider that serves each ``ProviderRequirement.action_interface``."""
+    prompt: Callable[[TaskSpec, BoundShellTool | None, tuple[FunctionDefinition, ...]], Prompt] = task_prompt
+    """Render the task's public conversation and tool presentation."""
 
     def __post_init__(self) -> None:
         if self.command_timeout is not None and not (math.isfinite(self.command_timeout) and self.command_timeout > 0):
@@ -224,7 +226,7 @@ class ShellHarness:
                 sessions[bound.requirement_name] = provider_session
             tools[name] = sessions[bound.requirement_name]
         definitions = tuple(tool.definition for tool in provider_tools.values())
-        turn = await session.start(task_prompt(task, shell_tool, definitions))
+        turn = await session.start(self.prompt(task, shell_tool, definitions))
         while True:
             transition = await _call_tools(task, machine, tools, context.events, turn)
             if transition.done:
