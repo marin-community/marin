@@ -108,9 +108,7 @@ class InstalledAgentRuntime:
                 raise ValueError("Snapshot leasing requires the RL Daytona connection")
             self.snapshot_leaser = shared_snapshot_leaser(
                 capacity=settings.snapshot_capacity,
-                api_key=daytona_connection.api_key,
-                api_url=daytona_connection.api_url,
-                target=daytona_connection.target,
+                connection=daytona_connection,
             )
         self.resources = AsyncExitStack()
         self.port: int | None = None

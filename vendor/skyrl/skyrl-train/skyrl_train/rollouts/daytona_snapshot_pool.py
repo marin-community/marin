@@ -8,9 +8,10 @@ from dataclasses import asdict
 from uuid import uuid4
 
 import ray
-from daytona import AsyncDaytona, CreateSnapshotParams, DaytonaConfig, DaytonaNotFoundError, Resources
+from daytona import CreateSnapshotParams, DaytonaNotFoundError, Resources
 from daytona_api_client_async import SnapshotState
 from loguru import logger
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.leases import SnapshotLease
 from shellbox.backends.daytona.snapshot import snapshot_resources
 from shellbox.image import RegistryImage
@@ -21,8 +22,8 @@ from skyrl_train.rollouts.snapshot_leases import SnapshotLeasePool
 
 @ray.remote(num_cpus=0, max_concurrency=512, max_restarts=0)
 class DaytonaSnapshotPool:
-    def __init__(self, capacity: int, prefix: str, api_key: str, api_url: str, target: str):
-        self.connection = DaytonaConfig(api_key=api_key, api_url=api_url, target=target)
+    def __init__(self, capacity: int, prefix: str, connection: DaytonaConnection):
+        self.client_factory = connection.client_factory()
         self.prefix = prefix
         self.sources: dict[str, tuple[str, Resources]] = {}
         self.pool = SnapshotLeasePool(capacity, self.build, self.delete)
@@ -57,7 +58,7 @@ class DaytonaSnapshotPool:
         image, resources = self.sources[identity]
         name = self.prefix + identity[:32]
         started = time.monotonic()
-        async with AsyncDaytona(self.connection) as client, asyncio.timeout(600):
+        async with self.client_factory() as client, asyncio.timeout(600):
             snapshot = await client.snapshot.create(CreateSnapshotParams(name=name, image=image, resources=resources))
             while snapshot.state != SnapshotState.ACTIVE:
                 if snapshot.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED, SnapshotState.INACTIVE):
@@ -71,7 +72,7 @@ class DaytonaSnapshotPool:
         if not name.startswith(self.prefix):
             raise ValueError("Refusing to delete a snapshot outside this run")
         started = time.monotonic()
-        async with AsyncDaytona(self.connection) as client, asyncio.timeout(120):
+        async with self.client_factory() as client, asyncio.timeout(120):
             live = {sandbox.snapshot async for sandbox in client.list() if sandbox.snapshot}
             snapshot = await client.snapshot.get(name)
             if name in live or snapshot.id in live:
@@ -112,10 +113,10 @@ class RaySnapshotLeaser:
         await self.actor.release.remote(lease.token)
 
 
-def shared_snapshot_leaser(*, capacity: int, api_key: str, api_url: str, target: str) -> RaySnapshotLeaser:
+def shared_snapshot_leaser(*, capacity: int, connection: DaytonaConnection) -> RaySnapshotLeaser:
     job = ray.get_runtime_context().get_job_id()
     prefix = "long-loop-" + hashlib.sha256(str(job).encode()).hexdigest()[:12] + "-"
     actor = DaytonaSnapshotPool.options(name=prefix + "snapshot-pool", get_if_exists=True).remote(
-        capacity, prefix, api_key, api_url, target
+        capacity, prefix, connection
     )
     return RaySnapshotLeaser(actor)
