@@ -862,6 +862,12 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
                 return SimpleNamespace(exit_code=result.exit_code, result=result.stdout.decode())
 
         class GuestFiles:
+            async def upload_file_stream(self, data, target):
+                result = await guest.run(
+                    Command(("/bin/sh", "-c", '/bin/cat > "$1"', "upload", target), stdin=data, user="root")
+                )
+                assert result.exit_code == 0
+
             async def download_file(self, source):
                 result = await docker("exec", "--user", "0", guest.name, "cat", source)
                 assert result.exit_code == 0
