@@ -4,10 +4,18 @@
 """Iris-specific redaction wrappers around :mod:`rigging.redaction`.
 
 The actual secret-pattern matching lives in ``rigging``; this module only
-adapts iris-specific shapes (the ``LaunchJobRequest`` proto and Click argv
-for ``iris job run``) into a form the shared redactor can consume.
+adapts iris-specific shapes (the ``LaunchJobRequest`` proto, Click argv for
+``iris job run`` and the environment inputs copied to the controller's Finelog
+rows) into a form the shared redactor can consume.
 """
 
+import dataclasses
+import json
+from collections.abc import Callable, Mapping
+from typing import cast
+from urllib.parse import urlsplit, urlunsplit
+
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from iris.rpc import controller_pb2
@@ -35,6 +43,24 @@ def _env_var_flag_key(token: str, next_token: str | None) -> str | None:
     if token.startswith(_ENV_VAR_SHORT_FLAG) and len(token) > 2 and not token.startswith("--"):
         return token[2:]
     return None
+
+
+def _sensitive_flag_name(token: str) -> str | None:
+    """The name of a ``-flag`` or ``--flag[=value]`` token, if it names a secret."""
+    if not token.startswith("-"):
+        return None
+    name = token.lstrip("-").split("=", 1)[0]
+    return name if name and is_sensitive_key_name(name) else None
+
+
+def strip_url_userinfo(url: str) -> str:
+    """*url* without its ``user:password@`` part, which can hold a credential."""
+    parts = urlsplit(url)
+    if parts.username is None and parts.password is None:
+        return url
+    host = parts.hostname or ""
+    netloc = f"{host}:{parts.port}" if parts.port is not None else host
+    return urlunsplit(parts._replace(netloc=netloc))
 
 
 def redact_request_env_vars(
@@ -66,6 +92,9 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
     When KEY matches the shared sensitive-key regex, VALUE is replaced with
     REDACTED_VALUE. Values under benign keys still pass through the shared
     string redactor so prefixed or high-entropy tokens do not leak.
+
+    Any other flag whose name matches that regex (``--api-key VALUE``,
+    ``--password=VALUE``) also has its value replaced with REDACTED_VALUE.
     """
     out = list(argv)
     n = len(out)
@@ -75,6 +104,14 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
         next_tok = out[i + 1] if i + 1 < n else None
         key = _env_var_flag_key(tok, next_tok)
         if key is None:
+            # A flag named like a secret (``--api-key VALUE``,
+            # ``--password=VALUE``) has its value masked.
+            if _sensitive_flag_name(tok) is not None:
+                if "=" in tok:
+                    out[i] = tok.split("=", 1)[0] + "=" + REDACTED_VALUE
+                elif next_tok is not None and not next_tok.startswith("-"):
+                    out[i + 1] = REDACTED_VALUE
+                    i += 1
             i += 1
             continue
 
@@ -92,3 +129,41 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
         out[val_idx] = REDACTED_VALUE if is_sensitive_key_name(key) else redact_string(value)
         i = val_idx + 1
     return out
+
+
+def _redacted_provenance(raw: str) -> dict[str, object] | None:
+    """The launch provenance's fields, each redacted; ``None`` if *raw* does not parse."""
+    try:
+        provenance = Provenance.from_json(raw)
+    except (ValueError, KeyError, TypeError):
+        return None
+    fields = dataclasses.asdict(provenance)
+    if provenance.git_remote is not None:
+        fields["git_remote"] = strip_url_userinfo(provenance.git_remote)
+    fields["command_line"] = redact_submit_argv(list(provenance.command_line))
+    return cast(dict[str, object], redact_value(fields))
+
+
+# The environment variables whose values the controller copies into its Finelog
+# rows (``iris.controller_db__job_config.env_inputs``), each with its redactor.
+# Every other variable, and every secret, is dropped.
+CONTROLLER_ROW_ENV_INPUTS: dict[str, Callable[[str], object | None]] = {
+    LAUNCH_PROVENANCE_ENV: _redacted_provenance,
+}
+
+
+def redact_env_inputs(env_vars: Mapping[str, str]) -> str | None:
+    """The :data:`CONTROLLER_ROW_ENV_INPUTS` among *env_vars*, redacted, as a JSON object.
+
+    ``MARIN_PROVENANCE`` is stored parsed, as its ``Provenance`` fields: the
+    remote URL loses its userinfo, the command line is redacted like a submit
+    argv, and every value then goes through the shared value redactor. A value
+    that does not parse is dropped. ``None`` when no allowed key is set.
+    """
+    inputs: dict[str, object] = {}
+    for key, redact in CONTROLLER_ROW_ENV_INPUTS.items():
+        raw = env_vars.get(key)
+        value = redact(raw) if raw is not None else None
+        if value is not None:
+            inputs[key] = value
+    return json.dumps(inputs, sort_keys=True) if inputs else None

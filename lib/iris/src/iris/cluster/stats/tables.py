@@ -289,7 +289,8 @@ class IrisJobConfig:
     Copies the controller ``job_config`` columns whose values the controller or
     a fixed vocabulary writes. Text the user wrote is not copied: the
     environment, command lines, setup scripts, egress hosts, ports and bundle id.
-    ``docs/controller-rows.md`` lists each excluded column.
+    The one exception is ``env_inputs``: the allowlisted environment variables,
+    redacted. ``docs/controller-rows.md`` lists each excluded column.
     """
 
     key_column: ClassVar[str] = "root_job_id"
@@ -326,6 +327,10 @@ class IrisJobConfig:
     fail_if_exists: bool
     container_profile: str
     egress_policy: str
+    # The allowlisted environment variables (iris.cluster.redaction.
+    # CONTROLLER_ROW_ENV_INPUTS) as a JSON object, each value redacted; NULL when
+    # the job sets none. MARIN_PROVENANCE is stored as its parsed fields.
+    env_inputs: str | None
     ts: datetime
 
 

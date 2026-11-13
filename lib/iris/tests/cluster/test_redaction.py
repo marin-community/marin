@@ -9,7 +9,8 @@ adaptation: argv parsing for ``iris job run -e KEY VALUE`` in every Click
 syntax variant.
 """
 
-from iris.cluster.redaction import REDACTED_VALUE, redact_submit_argv
+import pytest
+from iris.cluster.redaction import REDACTED_VALUE, redact_submit_argv, strip_url_userinfo
 
 
 def test_redact_submit_argv_redacts_short_flag():
@@ -148,3 +149,27 @@ def test_redact_submit_argv_mixed_forms():
 def test_redact_submit_argv_attached_long_form_missing_value():
     argv = ["iris", "--env-vars=HF_TOKEN"]
     assert redact_submit_argv(argv) == argv
+
+
+def test_redact_submit_argv_masks_the_value_of_a_flag_named_like_a_secret():
+    argv = ["iris", "job", "run", "--", "python", "t.py", "--api-key", "made-up-key", "--password=made-up-pw"]
+    assert redact_submit_argv(argv) == [*argv[:7], REDACTED_VALUE, f"--password={REDACTED_VALUE}"]
+
+
+def test_redact_submit_argv_keeps_flags_not_named_like_a_secret():
+    argv = ["iris", "job", "run", "--", "python", "t.py", "--max-tokens", "512", "--lr=0.1", "--auth", "--verbose"]
+    assert redact_submit_argv(argv) == argv
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("https://made-up-user:made-up-pw@github.com/org/repo.git", "https://github.com/org/repo.git"),
+        ("https://made-up-token@example.com:8443/repo", "https://example.com:8443/repo"),
+        ("https://github.com/org/repo.git", "https://github.com/org/repo.git"),
+        ("git@github.com:org/repo.git", "git@github.com:org/repo.git"),
+    ],
+    ids=["user-and-password", "token-and-port", "no-userinfo", "scp-style"],
+)
+def test_strip_url_userinfo(url, expected):
+    assert strip_url_userinfo(url) == expected

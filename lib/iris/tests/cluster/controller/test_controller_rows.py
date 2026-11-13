@@ -4,6 +4,7 @@
 """The controller's durable job, job config, task and attempt rows in Finelog."""
 
 import dataclasses
+import json
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -384,6 +385,73 @@ def test_job_config_stores_no_environment_command_lines_or_other_user_text(state
         "made-up-argv-value",
     ]:
         assert value not in written
+    assert rows.job_configs[0].env_inputs is None
+
+
+_MADE_UP_TOKEN = "ghp_madeUpToken0123456789abcdefghijkl"
+
+
+def _provenance_json(**overrides: object) -> str:
+    fields: dict[str, object] = {
+        "tree_hash": "1a2b3c4d5e",
+        "base_commit": "6f7a8b9c0d",
+        "dirty": True,
+        "branch": "made-up-branch",
+        "built_by": "made-up-user",
+        "git_remote": "https://made-up-user:made-up-password@github.com/made-up-org/repo.git",
+        "created_at": "2026-01-02T03:04:05+00:00",
+        "command_line": ["python", "train.py", "--api-key", "made-up-key", "--password=made-up-pw", "--lr", "0.1"],
+    }
+    fields.update(overrides)
+    return json.dumps(fields)
+
+
+def test_job_config_keeps_launch_provenance_redacted_field_by_field(state):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    request.environment.env_vars.update({"MARIN_PROVENANCE": _provenance_json(), "SERVICE_URL": "made-up-env-value"})
+    request.environment.secrets.update({"HF_TOKEN": "made-up-secret"})
+
+    submit_job(state, "train", request)
+
+    assert json.loads(rows.job_configs[0].env_inputs) == {
+        "MARIN_PROVENANCE": {
+            "tree_hash": "1a2b3c4d5e",
+            "base_commit": "6f7a8b9c0d",
+            "dirty": True,
+            "branch": "made-up-branch",
+            "built_by": "made-up-user",
+            "git_remote": "https://github.com/made-up-org/repo.git",
+            "created_at": "2026-01-02T03:04:05+00:00",
+            "command_line": ["python", "train.py", "--api-key", "[REDACTED]", "--password=[REDACTED]", "--lr", "0.1"],
+        }
+    }
+
+
+def test_job_config_redacts_a_secret_under_an_allowed_key(state):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    request.environment.env_vars["MARIN_PROVENANCE"] = _provenance_json(
+        branch=f"fix-{_MADE_UP_TOKEN}", command_line=["python", "train.py", _MADE_UP_TOKEN]
+    )
+
+    submit_job(state, "train", request)
+
+    env_inputs = rows.job_configs[0].env_inputs
+    assert _MADE_UP_TOKEN not in env_inputs
+    provenance = json.loads(env_inputs)["MARIN_PROVENANCE"]
+    assert "[REDACTED]" in provenance["branch"]
+    assert provenance["command_line"] == ["python", "train.py", "[REDACTED]"]
+
+
+def test_job_config_drops_an_unparseable_launch_provenance(state):
+    rows = _attach(state, "marin")
+    request = make_job_request("train")
+    request.environment.env_vars["MARIN_PROVENANCE"] = "made-up-not-json"
+
+    submit_job(state, "train", request)
+
+    assert rows.job_configs[0].env_inputs is None
 
 
 @dataclass(frozen=True)
@@ -455,10 +523,12 @@ _COLUMNS: dict[str, _Classified] = {
             "fail_if_exists": "fail_if_exists",
             "container_profile": "container_profile",
             "egress_policy": "egress_policy",
+            # Only the allowlisted variables, redacted; other variables and every
+            # secret are dropped (iris.cluster.redaction.CONTROLLER_ROW_ENV_INPUTS).
+            "environment_json": "env_inputs",
         },
         {
             "name": "duplicate",
-            "environment_json": "secret",
             "entrypoint_json": "user-text",
             "submit_argv_json": "user-text",
             "bundle_id": "user-text",
