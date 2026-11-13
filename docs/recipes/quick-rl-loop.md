@@ -16,10 +16,12 @@ and an 8,192-token response limit.
 
 ## Serving profile
 
-The recipe uses batch-invariant arithmetic, prefix caching, TRITON_ATTN and a
-fixed evaluation seed. Task admission follows the configured serving capacity.
-See the [serving reproducibility record](https://github.com/marin-community/marin/issues/11007)
-for runtime qualification and limitations.
+Add `--reproducible-serving` to use batch-invariant arithmetic, TRITON_ATTN,
+prefix caching and a fixed evaluation seed. This profile limits each serving
+rank to one sequence and admits eight concurrent tasks in training and
+evaluation. Training throughput for this profile is unmeasured. Use a fresh
+run version when switching profiles. See the
+[serving reproducibility record](https://github.com/marin-community/marin/issues/11007).
 
 ## Make or update tasks
 
