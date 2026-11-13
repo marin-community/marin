@@ -10,6 +10,7 @@ from typing import Protocol
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     ActorCensusInput,
+    ContentEvidenceReference,
     ConvertedExamples,
     DatasetRelease,
     DaytonaMeasurement,
@@ -124,6 +125,7 @@ class SourceInfo:
     upstream_url: str | None = None
     quality_result: SourceQualityResult | None = None
     quality_result_finalization: QualityResultFinalization | None = None
+    quality_result_waiver: ContentEvidenceReference | None = None
     full_content_result_binding: FullContentResultBinding | None = None
     family: str = ""
     tags: tuple[str, ...] = ()
@@ -372,6 +374,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             current_release=self.current_release,
             quality_result=info.quality_result,
             quality_result_finalization=info.quality_result_finalization,
+            quality_result_waiver=info.quality_result_waiver,
             family=info.family,
             tags=list(tags),
             task_count=dedup.unique_count,
