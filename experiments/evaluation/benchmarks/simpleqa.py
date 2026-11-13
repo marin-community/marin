@@ -86,16 +86,17 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCor
     )
 
 
-def simpleqa_verified_source() -> RlDataSource[EvaluationCorpusRecipe]:
+def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpusRecipe]:
     """Google DeepMind's SimpleQA Verified (arXiv:2509.07968), the leaderboard's 1,000 cleaned SimpleQA questions.
 
     The judge sees only the final answer, as in the reference notebook. The leaderboard judge is
     gpt-4.1-2025-04-14; runs name their own judge, so scores are comparable only under the same judge.
+    The thinking variant enables the chat template's reasoning mode, with room for a long trace.
     """
-    benchmark = "SimpleQAVerified"
+    benchmark = "SimpleQAVerifiedThinking" if thinking else "SimpleQAVerified"
     return RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:simpleqa-verified",
+            id="Evalchemy:" + ("simpleqa-verified-thinking" if thinking else "simpleqa-verified"),
             title=benchmark,
             origin="Evalchemy",
             family="judged-answer",
@@ -112,7 +113,8 @@ def simpleqa_verified_source() -> RlDataSource[EvaluationCorpusRecipe]:
                     SourceFormat.CSV,
                     read=read_simpleqa_verified,
                 ),
-                convert=partial(convert_simpleqa_verified, benchmark=benchmark),
+                # Both variants grade the same task corpus.
+                convert=partial(convert_simpleqa_verified, benchmark="SimpleQAVerified"),
                 version="2026.11.13",
                 intended_use=IntendedUse.EVAL,
             ),
@@ -125,10 +127,10 @@ def simpleqa_verified_source() -> RlDataSource[EvaluationCorpusRecipe]:
                     temperature=0.0,
                     top_p=None,
                     top_k=None,
-                    max_tokens=2048,
+                    max_tokens=16384 if thinking else 2048,
                     stop=(),
-                    # The benchmark measures direct factual recall without tools or reasoning.
-                    chat_template_kwargs={"enable_thinking": False},
+                    # The default variant measures direct factual recall without reasoning.
+                    chat_template_kwargs={"enable_thinking": thinking},
                 ),
                 trials=TrialPolicy(count=1, seed=None),
                 # The classification summary also reports f1, the leaderboard's headline metric.
@@ -146,9 +148,13 @@ def simpleqa_verified_source() -> RlDataSource[EvaluationCorpusRecipe]:
 def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         *(simpleqa_source(benchmark, mini=mini) for benchmark, mini in (("SimpleQA", False), ("SimpleQAMini", True))),
-        simpleqa_verified_source(),
+        simpleqa_verified_source(thinking=False),
+        simpleqa_verified_source(thinking=True),
     ]
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
-    return fixed_benchmarks(sources(), names={"SimpleQAVerified": "simpleqa-verified"})
+    return fixed_benchmarks(
+        sources(),
+        names={"SimpleQAVerified": "simpleqa-verified", "SimpleQAVerifiedThinking": "simpleqa-verified-thinking"},
+    )

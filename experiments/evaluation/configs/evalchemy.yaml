@@ -27,6 +27,18 @@ evaluations:
       judge_api_key:
       - env:TOGETHER_API_KEY
       - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+  simpleqa-verified-thinking:
+    benchmark: simpleqa-verified-thinking
+    run:
+      judge:
+        deployment: together
+        models:
+          openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+        default_model: openai/gpt-oss-120b
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key:
+      - env:TOGETHER_API_KEY
+      - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
   gsm8k-0shot:
     benchmark: gsm8k
     num_fewshot: 0

@@ -181,7 +181,7 @@ def test_simpleqa_verified_publishes_bare_question_and_judges_only_the_final_ans
                 dict(zip(fields, ("3", "Who wrote it?", "Ada", "Art", "Person", "False", "False", "u"), strict=True))
             )
 
-    (case,) = published_cases(simpleqa_verified_source(), write_rows, tmp_path, monkeypatch, 1)
+    (case,) = published_cases(simpleqa_verified_source(thinking=False), write_rows, tmp_path, monkeypatch, 1)
     assert conversation_messages(case.task.context.events) == [{"role": "user", "content": "Who wrote it?"}]
     assert case.item.operation.response_selection == "final"
     assert case.item.groups == {"source_index": "0"}
