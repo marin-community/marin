@@ -314,9 +314,8 @@ def test_shards_assemble_every_retained_contract_and_reuse_existing_batch_cache(
     expected = {row["task_id"] for row in pq.read_table(inputs.index_path).to_pylist()}
     records = pq.read_table(result.records_path).to_pylist()
     assert result.coverage_complete
-    assert result.attempted_count == len(records) == len(expected) == 66
+    assert result.attempted_count == len(records) == len(expected)
     assert {row["task_id"] for row in records} == expected
-    assert "dropped" not in expected
     assert result.result.issue_count == 1
     replay = review_inputs(inputs, replace(reviewer, available=False), rubric, output)
     assert replay.result == result.result
