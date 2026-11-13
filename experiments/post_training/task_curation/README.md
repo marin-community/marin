@@ -1,22 +1,61 @@
 # Task data curation
 
+To add a dataset to the RL Data Atlas, start with the Atlas
+[Getting started](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/guide.html)
+page. It shows every ingestion path, what each outcome guarantees and live
+per-outcome source counts. Its source is
+[`guide.html`](../../../infra/marina/apps/rl_data_catalog/dist/guide.html).
+
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
 reviewed SAMPLE/FULL campaigns and artifact outputs.
+
+## Pinned registry receipts
+
+Generated census, lexical, retention, deduplication and fingerprint-index JSON is
+archived in the private `open-athena/marin-rl-data-atlas-registry` dataset. The
+repository keeps a reference at each original path with `repo`, exact commit
+`revision`, archive `path` and `sha256`. The archive preserves the original bytes
+and layout; it does not publish or modify a retained TaskCompendium release.
+Human-reviewed policy, including duplicate acknowledgements, stays in Git.
+
+`registry.read_registry_json()` uses the Hugging Face client's authenticated
+cache and verifies the downloaded bytes before decoding. Missing revisions,
+unavailable credentials and checksum mismatches fail the operation; there is no
+fallback to a different revision or inline data. Catalog construction, admission,
+selection and the source-overlap gate use this reader. Importing catalog modules
+does not download the registry; receipt accessors load it when called.
+
+For new measurements, follow the [registry update procedure](../../../docs/references/task-curation.md#updating-pinned-registry-receipts): stage raw JSON in a fresh tree, append to the private registry, verify readback, then update Git references. The overlap workflow uses the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in that job. Local readers use normal Hugging Face credentials; archive updates need write access to this private registry only.
+
+Unit tests inject small documents at the download boundary and reject registry
+downloads. Tests that inspect the complete private registry use the
+`data_integration` marker and are excluded from the default safe suite. The
+source-overlap ranking fixture contains two small contracts rather than an
+archived production population.
 
 ## Final task selection
 
 Pass `--selection RECIPE.json` to a FULL campaign to append a
 `rl-data/task-selection/<name>/<version>` artifact after source admission.
 The recipe names the source IDs, assigns them to selection families, sets
-family quotas and pins the complete heldout source in retained storage.
+family quotas and pins the complete heldout inputs in retained storage.
 The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
 See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
 selection recipe and the training/evaluation handoff.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection)
 for the recipe and resume commands.
+
+## EvalLite
+
+`--corpus <converted-corpus.json> --eval-lite
+experiments/post_training/task_curation/recipes/eval-lite.json`
+builds the EvalLite: 1,500 evaluation-only benchmark tasks that RL
+runs grade without containers or judges, and a 100-task fast subset. The
+[panel reference](../../../docs/references/task-curation.md#evallite)
+lists its parts and how to change them.
 
 ## Local conversion loop
 
@@ -39,8 +78,11 @@ Evaluation sources also use QUICK, with stricter publication checks that preserv
 the complete benchmark population. They publish canonical TaskSpec rows and
 evaluation protocol sidecars. See [evaluation tasks](../../../docs/references/evaluation-tasks.md)
 for declarations, outputs and the standard evaluation driver.
-`evaluation.py` binds `EvalDataset` recipes to
+`experiments.evaluation.preparation` binds `EvaluationCorpusRecipe` inputs to
 `taskcompendium.pipeline.evaluation.publish_evaluation_corpus`. Evaluation
+configuration and prompt compilation belong to `experiments/evaluation/`;
+shot counts are recorded with the resulting immutable tasks. Shared curation
+provides acquisition and inventory/catalog integration. Evaluation
 protocols use schema version 3 from `taskcompendium.evaluation.spec`; source
 adapters live under `taskcompendium.importers` and `taskcompendium.convert`,
 including reusable benchmark modules in `taskcompendium.importers.evalchemy`.
@@ -164,7 +206,7 @@ For a production FULL campaign, add
 Enable assessment and omit `--cache-dir`, which selects local execution and a
 local artifact root. Production reuses the remote artifact cache under
 `--artifact-root` (default `s3://marin-us-east-02a/marin`) and model requests under
-the explicit `--review-cache`. Reuse those locations, pinned inputs, recipe
+`--review-cache` (default `<artifact-root>/rl-data/review-cache`). Reuse those locations, pinned inputs, recipe
 versions, rubric and model revisions across campaigns. A new report directory or
 enabling assessment does not force recomputation of completed work. Switching
 artifact roots does not move cached work; verify artifact and model-cache reuse
@@ -305,7 +347,8 @@ temporarily changes Torch's default dtype. Concurrent workers reuse the cached
 backend after initialization.
 
 `--cache-dir` selects local workers and artifacts. `--review-cache` selects the
-shared inference cache, defaulting locally to `<cache-dir>/review-cache`.
+shared inference cache, defaulting to `<cache-dir>/review-cache` locally and
+`<artifact-root>/rl-data/review-cache` otherwise.
 Keep it across campaigns and worker-count changes. FineStore caches vectors by
 rendered text and embedding specification; Zephyr writes vector Parquet.
 Alignment reads that Parquet and keeps the curriculum matrix in worker memory.
@@ -423,9 +466,14 @@ Reviewer-spec changelog (2026-11-13):
 | v2 repair | 262,144 | 8,192 / 16,384 | Existing incomplete-only repair policy |
 | v3 | 524,288 | 8,192 / 16,384 | Future FULL-QC starts |
 
-V3 retains GLM-5.3's pinned checkpoint, FP8 precision, temperature 0.7, low
-reasoning effort, three attempts, payload revision 4 and the task-quality-v2
-rubric. Prompt character budgets remain explicit and unchanged (512,000 by
+V3 constructs a literal ReviewerSpec: GLM-5.3 revision
+`aca966e4e02791568aa6a4ced368624b3d897f42`, API model `glm-5.3`, FP8 precision,
+temperature 0.7, top_p 0.95, top_k 0 (disabled), low reasoning effort, three
+attempts, payload revision 4 and the task-quality-v2 rubric with its content hash.
+Its explicit serving pin checks the checkpoint, API name and context independently
+of shared relay presets. Top_p matches the pinned model's generation configuration;
+top_k disables top-k filtering of candidate next tokens in vLLM 0.28.0. Optional sampling overrides are
+absent from existing v2 requests and identity, preserving its frozen caches. Prompt character budgets remain explicit and unchanged (512,000 by
 default); they are separate from the serving token context. Compilation and CUDA
 graphs remain enabled. The v3 YAML has not yet been exercised by a live GPU job.
 

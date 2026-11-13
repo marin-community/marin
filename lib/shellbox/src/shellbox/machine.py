@@ -250,6 +250,25 @@ class Machine(Protocol):
     async def close(self) -> None: ...
 
 
+class ProcessScope(Protocol):
+    """A machine-owned command boundary separate from setup and verifier work.
+
+    Scoped commands may leave background descendants. ``terminate`` closes
+    admission and waits until every descendant is gone, or raises. It is safe
+    to call repeatedly. Ordinary machine commands remain outside the scope.
+    """
+
+    async def run(self, command: Command) -> Result: ...
+
+    async def terminate(self) -> None: ...
+
+
+class ProcessScopeMachine(Machine, Protocol):
+    """A machine that can reject or create a scoped command boundary."""
+
+    async def open_process_scope(self) -> ProcessScope: ...
+
+
 class MachineFactory(Protocol):
     """Check execution support and create a fresh machine from declared software."""
 

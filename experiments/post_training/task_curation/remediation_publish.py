@@ -23,7 +23,7 @@ from rigging.filesystem.transfer import copy
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.calibforge_publish import publish
-from experiments.post_training.task_curation.datasets.lexical_measurements import LEXICAL_MEASUREMENTS
+from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.native_quick import source_slug
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
 
@@ -192,7 +192,7 @@ def publish_plan(plan: ReleasePlan, version: str, evidence_root: str) -> dict:
             raise ValueError(f"Frozen input {name} differs: {plan.source_id}")
     if canonical_source_id(metadata["source_id"]) != plan.source_id:
         raise ValueError(f"Frozen source identity differs: {plan.source_id}")
-    measurement = LEXICAL_MEASUREMENTS[plan.source_id].measurement.model_dump(mode="json")
+    measurement = lexical_measurements()[plan.source_id].measurement.model_dump(mode="json")
     if (measurement["measured_tasks"], measurement["contaminated_tasks"]) != (plan.raw_count, plan.raw_lexical_count):
         raise ValueError(f"Frozen lexical measurement differs: {plan.source_id}")
     with TemporaryDirectory(prefix="atlas-retention-") as scratch:

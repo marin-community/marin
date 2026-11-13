@@ -21,28 +21,15 @@ from typing import cast
 import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from fray.client import JobHandle, wait_all
+from fray.client import JobHandle
 from fray.current_client import current_client
-from fray.types import (
-    ANY_REGION,
-    ActorConfig,
-    Entrypoint,
-    EnvironmentConfig,
-    GpuConfig,
-    JobRequest,
-    JobStatus,
-    ResourceConfig,
-    TpuConfig,
-    create_environment,
-)
+from fray.types import ActorConfig, Entrypoint, EnvironmentConfig, JobRequest, JobStatus, TpuConfig, create_environment
 from iris.client.client import iris_ctx
 from iris.client.workload import TaskStatus
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.constraints import WellKnownAttribute, region_constraint
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName
 from iris.resources.state import TaskState, is_job_finished
-from levanter.model_cache import CacheMode, resolve_hf_model_ref
 from rigging import telemetry
 from rigging.connect import capability_path, proxy_path
 from rigging.filesystem.storage_path import StoragePath
@@ -78,7 +65,7 @@ from marin.inference.iris_vllm import (
     notify_iris_vllm_stopped,
     wait_for_iris_vllm_shutdown,
 )
-from marin.inference.model_preparation import resolve_model_path
+from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -114,11 +101,6 @@ _METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
-# The CPU job that mirrors uncached Hugging Face weights before accelerators are reserved.
-_MODEL_PREPARE_TIMEOUT = Duration.from_hours(4)
-_MODEL_PREPARE_CPU = 4
-_MODEL_PREPARE_RAM = "8g"
-_MODEL_PREPARE_DISK = "40g"
 _BROKER_ACTOR_MAX_CONCURRENCY = 32
 
 
@@ -801,134 +783,20 @@ def remote_inference(
 
 
 def _prepared_inference_config(config: RemoteInferenceConfig) -> RemoteInferenceConfig:
-    """Mirror uncached Hugging Face weights from CPU jobs before any accelerator job starts.
-
-    Accelerator workers then load the cache entries populated here instead of downloading on
-    reserved hardware. Models that are not Hugging Face ids, or with caching disabled, pass through.
-    """
-    try:
-        pinned, entries = _pinned_cache_entries(config)
-    except Exception as exc:
-        raise RemoteInferenceStartupError(
-            f"Model cache preparation failed: {exc}", jobs=(), phase=InferenceStartupPhase.PREPARATION
-        ) from exc
-    _populate_model_cache(entries, config.iris)
-    return pinned
-
-
-def _pinned_cache_entries(config: RemoteInferenceConfig) -> tuple[RemoteInferenceConfig, list[str]]:
-    """Pin Hub sources without computing a coordinator-specific cache path."""
-    if config.iris.cache_ttl_days <= 0:
-        return config, []
-    model = config.model
-    engine = config.engine
-    entries: list[str] = []
-    pinned = resolve_hf_model_ref(f"{model.weights}@{model.revision}" if model.revision else model.weights)
-    if pinned is not None:
-        entries.append(pinned)
-        repo, _, revision = pinned.partition("@")
-        model = replace(model, weights=repo, revision=revision, api_model=model.model_id)
-    if isinstance(engine, VllmEngineConfig) and engine.speculative is not None:
-        speculative = engine.speculative
-        pinned_draft = resolve_hf_model_ref(speculative.model.uri)
-        if pinned_draft is not None:
-            entries.append(pinned_draft)
-            draft_model = replace(speculative.model, uri=pinned_draft)
-            engine = replace(engine, speculative=replace(speculative, model=draft_model))
-    return replace(config, model=model, engine=engine), list(dict.fromkeys(entries))
-
-
-def _coordinator_matches_serving_placement(resources: ResourceConfig) -> bool:
-    if resources.target_cluster is not None:
-        return False
-    info = get_job_info()
-    if info is None or info.worker_region is None:
-        return False
-    if resources.regions:
-        if list(resources.regions) != [info.worker_region]:
-            return False
-    else:
-        # Unset children inherit parent constraints, or the parent's physical region.
-        expected = region_constraint([info.worker_region])
-        if any(c.key == WellKnownAttribute.REGION and c != expected for c in info.constraints):
-            return False
-    return True
-
-
-def _populate_model_cache(entries: list[str], iris: IrisConfig) -> None:
-    """Run one CPU prepare job per entry at the serving placement and wait for all of them.
-
-    A colocated coordinator checks the same resolver in read-only mode first. Other
-    placements always resolve inside a CPU job so a different prefix cannot become a false hit.
-    """
-    if not entries:
-        return
-    if (
-        isinstance(iris.worker_resources.device, GpuConfig)
-        and not iris.worker_resources.target_cluster
-        and get_job_info() is None
-    ):
-        logger.warning(
-            "Skipping CPU model preparation for unpinned GPU placement: serving may auto-federate "
-            "while the CPU job stays local. Set target_cluster to prepare the serving cache."
-        )
-        return
-    resources = iris.worker_resources
-    region_is_fixed = (
-        len(resources.regions) == 1 and ANY_REGION not in resources.regions
-        if resources.regions
-        else get_job_info() is not None
+    """Mirror uncached Hugging Face weights from CPU jobs before any accelerator job starts."""
+    environment = create_environment(
+        setup_scripts=[default_setup_script(packages=["marin-core"])],
+        env_vars=dict(config.iris.worker_environment.env_vars),
+        secrets=dict(config.iris.worker_environment.secrets),
+        secret_behavior=config.iris.worker_environment.secret_behavior,
     )
-    if isinstance(resources.device, TpuConfig) and not resources.target_cluster and not region_is_fixed:
-        logger.warning(
-            "Skipping CPU model preparation for unrestricted regional placement: CPU and accelerator "
-            "jobs may use different caches. Pin one region to prepare the serving cache."
-        )
-        return
-    jobs: list[JobHandle] = []
     try:
-        check_local = _coordinator_matches_serving_placement(iris.worker_resources)
-        for entry in entries:
-            if check_local and resolve_model_path(entry, iris.cache_ttl_days, cache_mode=CacheMode.READ_ONLY) != entry:
-                continue
-            jobs.append(_submit_model_prepare_job(entry, iris))
-        wait_all(jobs, timeout=(iris.worker_timeout or _MODEL_PREPARE_TIMEOUT).to_seconds())
-    except Exception as exc:
-        for job in jobs:
-            try:
-                job.terminate()
-            except Exception:
-                logger.warning("could not terminate model preparation job %s", job.job_id, exc_info=True)
-        raise RemoteInferenceStartupError(
-            f"Model cache preparation failed: {exc}", jobs=tuple(jobs), phase=InferenceStartupPhase.PREPARATION
-        ) from exc
-
-
-def _submit_model_prepare_job(entry: str, iris: IrisConfig) -> JobHandle:
-    worker_resources = iris.worker_resources
-    return current_client().submit(
-        JobRequest(
-            name=f"prepare-model-{uuid.uuid4().hex}",
-            entrypoint=Entrypoint.from_callable(resolve_model_path, args=(entry, iris.cache_ttl_days)),
-            resources=ResourceConfig.with_cpu(
-                cpu=_MODEL_PREPARE_CPU,
-                ram=_MODEL_PREPARE_RAM,
-                disk=_MODEL_PREPARE_DISK,
-                preemptible=False,
-                regions=worker_resources.regions,
-                target_cluster=worker_resources.target_cluster,
-            ),
-            environment=create_environment(
-                setup_scripts=[default_setup_script(packages=["marin-core"])],
-                env_vars=dict(iris.worker_environment.env_vars),
-                secrets=dict(iris.worker_environment.secrets),
-                secret_behavior=iris.worker_environment.secret_behavior,
-            ),
-            priority=iris.priority,
-            timeout=iris.worker_timeout or _MODEL_PREPARE_TIMEOUT,
-            max_retries_failure=1,
+        model, engine = prepare_hf_models(
+            config.model, config.engine, config.iris, client=current_client(), environment=environment
         )
-    )
+    except ModelPreparationError as exc:
+        raise RemoteInferenceStartupError(str(exc), jobs=exc.jobs, phase=InferenceStartupPhase.PREPARATION) from exc
+    return replace(config, model=model, engine=engine)
 
 
 @contextlib.contextmanager

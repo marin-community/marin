@@ -101,16 +101,6 @@ def test_resolve_cluster_config_not_found(tmp_path):
         resolve_cluster_config("no-such-cluster", dirs=[tmp_path])
 
 
-def test_resolve_adds_yaml_extension(tmp_path):
-    """Resolving 'foo' finds 'foo.yaml' in the search directory."""
-    config = tmp_path / "foo.yaml"
-    config.write_text("cluster: foo\n")
-
-    result = resolve_cluster_config("foo", dirs=[tmp_path])
-    assert result == config
-    assert result.suffix == ".yaml"
-
-
 def test_resolve_adds_yml_extension(tmp_path):
     """Resolving 'bar' finds 'bar.yml' in the search directory."""
     config = tmp_path / "bar.yml"

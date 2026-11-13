@@ -38,8 +38,8 @@ def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Qua
     return Quality.QUICK
 
 
-def result(declaration: dict[str, Any], review: dict[str, Any] | None) -> str | None:
-    """Compute Result from conclusive issue counts using inclusive boundaries."""
+def measured_result(declaration: dict[str, Any], review: dict[str, Any] | None) -> SourceQualityResult | None:
+    """Read the conclusive issue counts used by both Result and issue rate."""
     stored = declaration.get("quality_result")
     if stored is not None:
         measured = SourceQualityResult.model_validate(stored)
@@ -52,7 +52,18 @@ def result(declaration: dict[str, Any], review: dict[str, Any] | None) -> str | 
         )
     else:
         return None
-    return measured.verdict.value.upper()
+    return measured
+
+
+def result(declaration: dict[str, Any], review: dict[str, Any] | None) -> str | None:
+    """Compute Result from conclusive issue counts using inclusive boundaries."""
+    measured = measured_result(declaration, review)
+    return measured.verdict.value.upper() if measured is not None else None
+
+
+def issue_rate(declaration: dict[str, Any], review: dict[str, Any] | None) -> float | None:
+    measured = measured_result(declaration, review)
+    return measured.issue_rate if measured is not None else None
 
 
 def intended_use(declaration: dict[str, Any]) -> str:

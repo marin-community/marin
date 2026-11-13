@@ -973,15 +973,26 @@ def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, 
     assert not (outside_dir / "planted.txt").exists() and not (tmp_path / "stolen.txt").exists()
 
 
-def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
-    python_environment, python_factory, monkeypatch
-):
-    script = "import sys, six; print(sys.prefix); print(sys.base_prefix)"
-    result = run_command(python_factory, Command(("python3", "-c", script)))
-    assert result.exit_code == 0, result.stderr.decode()
-    prefix, base_prefix = map(Path, result.stdout.decode().split())
-    assert prefix == python_environment.bin_dir.parent
-    assert base_prefix.is_relative_to(python_environment.root)
+@pytest.mark.skipif(sys.platform != "linux", reason="The local bubblewrap backend requires Linux")
+def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(python_environment, monkeypatch, tmp_path):
+    script = (
+        "import sys, six; from pathlib import Path; print(sys.prefix); print(sys.base_prefix); "
+        "Path('answer').write_text(six.text_type(42))"
+    )
+
+    async def scenario(machine):
+        result = await machine.run(Command(("python3", "-c", script)))
+        assert result.exit_code == 0, result.stderr.decode()
+        prefix, base_prefix = map(Path, result.stdout.decode().split())
+        assert prefix == python_environment.bin_dir.parent
+        assert base_prefix.is_relative_to(python_environment.root)
+        await machine.download("/app/answer", tmp_path / "answer")
+        assert (tmp_path / "answer").read_text() == "42"
+
+    with monkeypatch.context() as host:
+        host.setenv("PATH", "/usr/bin:/bin")
+        factory = make_factory(read_only=(python_environment.root,), bin_dirs=(python_environment.bin_dir,))
+        on_machine(factory, SPEC, scenario)
 
     packages = PackageSpec(pypi_packages=("six==1.17.0",), tools=("python3",))
     factory = make_factory(python_version=PYTHON_VERSION, hash_seed="23")
@@ -1460,6 +1471,36 @@ def test_repeated_download_preserves_existing_host_directory_permissions(
     assert (downloaded / "unrelated").read_text() == "host-owned"
 
 
+@pytest.fixture
+def executable_oci_image(oci_image):
+    busybox = shutil.which("busybox")
+    if busybox is None:
+        pytest.skip("The offline executable image requires busybox-static; the Shellbox CI lane installs it")
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w") as output:
+        binary = Path(busybox).read_bytes()
+        entry = tarfile.TarInfo("bin/busybox")
+        entry.mode, entry.size = 0o755, len(binary)
+        output.addfile(entry, io.BytesIO(binary))
+        for applet in ("sh", "sleep", "mkdir", "cat", "tar", "httpd", "wget", "dirname", "basename", "id"):
+            entry = tarfile.TarInfo(f"bin/{applet}")
+            entry.type, entry.linkname = tarfile.SYMTYPE, "busybox"
+            output.addfile(entry)
+        entry = tarfile.TarInfo("etc")
+        entry.type, entry.mode = tarfile.DIRTYPE, 0o755
+        output.addfile(entry)
+    return oci_image(
+        (archive.getvalue(),),
+        {
+            "Env": ["IMAGE_VALUE=from-image"],
+            "WorkingDir": "/app",
+            "Entrypoint": ["/bin/sh", "-c"],
+            "Cmd": ['printf "%s" "$IMAGE_VALUE" >index.html; exec httpd -f -p 8123 -h .'],
+            "User": "0:0",
+        },
+    )
+
+
 @pytest.mark.parametrize(
     "entrypoint,arguments,expected",
     [
@@ -1507,8 +1548,13 @@ def test_prepared_local_task_applies_startup_overrides_with_private_writable_roo
         roots = [cast(LocalMachine, machine).root for machine in group.containers.values()]
         try:
             await group.wait_ready()
-            identity = await group.primary.run(Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u')))
-            assert (identity.exit_code, identity.stdout) == (0, b"/app\nfrom-image\n0\n")
+            identity = await group.primary.run(
+                Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u; printf "%s" "$PATH"'))
+            )
+            assert identity.exit_code == 0, identity.stderr
+            workdir, value, user, path = identity.stdout.decode().splitlines()
+            assert (workdir, value, user) == ("/app", "from-image", "0")
+            assert "/run/current-system" not in path
             written = await group.primary.run(Command(("sh", "-c", "printf actor >index.html")))
             assert written.exit_code == 0
             response = await group.primary.run(Command(("wget", "-q", "-O", "-", "http://runtime:8123")))

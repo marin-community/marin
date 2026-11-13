@@ -53,7 +53,8 @@ async function render(data, sourceId) {
   const result = data.result;
   $('labels').replaceChildren(
     node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`),
-    node('span', result ? `Result ${resultLabels[result]}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}`),
+    node('span', result ? `Result ${resultLabels[result]}${data.quality !== 'FULL' ? ' · provisional' : ''}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}${result && data.quality !== 'FULL' ? ' result-provisional' : ''}`),
+    contaminationChip(data.contamination_status),
     node('span', `Daytona ${daytonaLabel(data.daytona)}`, 'chip quality-unassessed'),
     node('span', data.updated_at ? `Last updated ${new Date(data.updated_at).toLocaleDateString()}` : 'Catalog load time unavailable', 'chip quality-unassessed'),
   );
@@ -113,6 +114,7 @@ async function render(data, sourceId) {
   ] : []));
   const lexical = d.lexical_contamination;
   sections.push(card('Lexical contamination', lexical ? [
+    ['Contamination', contaminationChip(data.contamination_status)],
     ['Measured tasks', lexical.measured_tasks], ['Flagged tasks', lexical.contaminated_tasks],
     ['Flagged rate', `${(100 * lexical.contaminated_fraction).toFixed(2)}%`],
     ['Matched evaluations', lexical.matched_evals], ['Maximum overlap', lexical.max_overlap],
