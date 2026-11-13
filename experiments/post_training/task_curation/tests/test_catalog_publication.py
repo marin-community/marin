@@ -26,7 +26,10 @@ from finestore.rl.curation import (
     DaytonaSafety,
     DaytonaUnsafeReason,
     OracleValidation,
+    OversightEvidence,
+    OversightLevel,
     SnapshotSource,
+    SourceQualityResult,
     register_catalog,
 )
 from finestore.store import DataStore
@@ -34,16 +37,36 @@ from rigging.filesystem.distributed_lock import LeaseLostError, LocalFileLease
 
 from experiments.post_training.task_curation.catalog_identity import canonical_assessment
 from experiments.post_training.task_curation.catalog_snapshot import (
-    publish_catalog,
-    refresh_catalog,
+    publish_catalog as publish_censused_catalog,
+)
+from experiments.post_training.task_curation.catalog_snapshot import (
+    refresh_catalog as refresh_censused_catalog,
+)
+from experiments.post_training.task_curation.catalog_snapshot import (
     refresh_daytona_measurements,
     retire_catalog_sources,
 )
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    isolated_admission_census as isolated_admission_census,
+)
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
+
+pytestmark = pytest.mark.usefixtures("isolated_admission_census")
+
+
+def publish_catalog(root, run_id, sources):
+    return publish_censused_catalog(root, run_id, [with_admission_census(source) for source in sources])
+
+
+def refresh_catalog(root, snapshot_id, sources, *, retired_source_ids):
+    return refresh_censused_catalog(
+        root, snapshot_id, [with_admission_census(source) for source in sources], retired_source_ids=retired_source_ids
+    )
 
 
 def record_attempt(root, source, run_id, started_at, key, status=AssessmentStatus.COMPLETE, *, source_count=1):
@@ -319,6 +342,12 @@ def test_a_lost_publication_lease_cannot_replace_the_selected_snapshot(tmp_path,
 def test_metadata_refresh_retires_sources_without_removing_archived_assessments(tmp_path):
     root = str(tmp_path / "production")
     kept = number_source(tmp_path / "input", "kept")
+    kept = replace(
+        kept,
+        info=replace(
+            kept.info, oversight=OversightEvidence(level=OversightLevel.FULL, verification="Executed fixture controls")
+        ),
+    )
     retired = number_source(tmp_path / "input", "retired")
     record_attempt(root, kept, "first", "2026-10-16T10:00:00Z", "kept-key", source_count=2)
     record_attempt(root, retired, "first", "2026-10-16T10:00:00Z", "retired-key")
@@ -350,6 +379,25 @@ def test_metadata_refresh_cannot_reuse_a_grade_for_a_changed_pipeline(tmp_path):
     assert CurationCatalog(root).current() == original
 
 
+def test_publication_does_not_carry_retired_sources_into_a_later_campaign(tmp_path, monkeypatch):
+    root = str(tmp_path / "production")
+    kept = number_source(tmp_path / "input", "kept")
+    retired = number_source(tmp_path / "input", "retired")
+    record_attempt(root, kept, "first", "2026-10-16T10:00:00Z", "kept-key", source_count=2)
+    record_attempt(root, retired, "first", "2026-10-16T10:00:00Z", "retired-key")
+    original = publish_catalog(root, "first", [kept, retired])
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.catalog_snapshot.retired_admission_source_ids",
+        lambda: frozenset({retired.info.id}),
+    )
+    record_attempt(root, kept, "next", "2026-10-16T11:00:00Z", "next-key")
+    publish_catalog(root, "next", [kept])
+    assert set(selected_sources(root)) == {kept.info.id}
+    catalog = CurationCatalog(root)
+    assert {row.id for row in catalog.sources(original.snapshot_id)} == {kept.info.id, retired.info.id}
+    assert catalog.packet("retired-key", "retired-key") == {"task": {"id": "retired-key"}}
+
+
 def test_publication_rejects_a_source_without_a_registered_converter(tmp_path):
     root = str(tmp_path / "production")
     pointer = RlDataSource(
@@ -362,7 +410,7 @@ def test_publication_rejects_a_source_without_a_registered_converter(tmp_path):
         )
     )
     with pytest.raises(ValueError, match="no registered conversion pipeline"):
-        publish_catalog(root, "invalid-source", [pointer])
+        publish_censused_catalog(root, "invalid-source", [pointer])
     assert not (tmp_path / "production").exists()
 
 
@@ -511,3 +559,55 @@ def test_alias_metadata_refresh_keeps_archived_rows_and_packet_bytes(tmp_path):
     assert catalog.view.point(INVENTORY, snapshot_id="legacy", id=old)["declaration"]["id"] == old
     assert {table: list(catalog.view.iter_rows(table)) for table in before} == before
     assert catalog.packet("opaque-assessment-key", "opaque-assessment-key") == packet
+
+
+@pytest.mark.parametrize("publication", ["refresh", "campaign"])
+def test_pinned_content_result_survives_historical_assessment_counts(tmp_path, publication):
+    root = str(tmp_path / "catalog")
+    source = number_source(tmp_path / "input")
+    record_attempt(root, source, "historical", "2026-10-16T10:00:00Z", "historical-key")
+    publish_catalog(root, "historical", [source])
+    result = SourceQualityResult(
+        reviewed=1, issue_count=1, issues=[], repair_recommendation="Inspect new content review"
+    )
+    updated = replace(source, info=replace(source.info, quality_result=result))
+    if publication == "refresh":
+        refresh_catalog(root, "content", [updated], retired_source_ids=frozenset())
+    else:
+        record_attempt(root, updated, "content", "2026-10-16T11:00:00Z", "content-key")
+        publish_catalog(root, "content", [updated])
+    row = selected_sources(root)[source.info.id]
+    assert row.declaration.quality_result == result
+    catalog = CurationCatalog(root)
+    assert next(catalog.items("historical-key")).verdict == "good"
+    assert next(catalog.items(row.assessment_key)).verdict == "good"
+
+
+@pytest.mark.parametrize("level", [OversightLevel.SAMPLE, OversightLevel.FULL])
+def test_publication_and_refresh_reject_oversight_without_result_before_selecting_snapshot(tmp_path, level):
+    root = str(tmp_path / "catalog")
+    source = number_source(tmp_path / "input")
+    record_attempt(root, source, "first", "2026-10-16T10:00:00Z", "reviewed")
+    publish_catalog(root, "first", [source])
+    changed = replace(
+        source,
+        config=replace(source.config, version="2"),
+        info=replace(
+            source.info,
+            oversight=OversightEvidence(level=level, verification="Executed controls"),
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, "2"),
+        ),
+    )
+    record_attempt(root, changed, "next", "2026-10-16T11:00:00Z", "pending", AssessmentStatus.SKIPPED)
+    with pytest.raises(ValueError, match="SAMPLE/FULL quality requires a computed Result"):
+        publish_catalog(root, "next", [changed])
+    assert CurationCatalog(root).current().snapshot_id == "first"
+    refresh_root = str(tmp_path / "refresh-catalog")
+    record_attempt(refresh_root, source, "quick", "2026-10-16T10:00:00Z", "unreviewed", AssessmentStatus.SKIPPED)
+    publish_catalog(refresh_root, "quick", [source])
+    unreviewed = replace(
+        source, info=replace(source.info, oversight=OversightEvidence(level=level, verification="Executed controls"))
+    )
+    with pytest.raises(ValueError, match="SAMPLE/FULL quality requires a computed Result"):
+        refresh_catalog(refresh_root, "refresh", [unreviewed], retired_source_ids=frozenset())
+    assert CurationCatalog(refresh_root).current().snapshot_id == "quick"

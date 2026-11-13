@@ -134,11 +134,15 @@ async function render(data, sourceId) {
   ], 'This observation does not determine FULL or Result. Partial-batch reviews may be additional.'));
   const qualityResult = d.quality_result;
   sections.push(card('Content review coverage', data.review_completeness ? [
-    ['Status', data.result_provisional ? 'Provisional / incomplete' : 'Required content review complete'],
+    ['Status', data.result_provisional ? 'Provisional / incomplete' : d.quality_result_finalization === 'accepted_incomplete' ? 'Final with accepted whole-source waiver' : 'Required content review complete'],
+    ['Strict coverage complete', String(data.review_completeness.coverage_complete)],
+    ['Unreviewed tasks', qualityResult?.unavailable_count],
+    ['Finalization waiver and exact unreviewed reasons', d.quality_result_waiver && pointer(d.quality_result_waiver.uri)],
+    ['Waiver SHA-256', d.quality_result_waiver?.sha256],
     ['Conclusive reviewed contracts', data.review_completeness?.reviewed], ['Required reviews', data.review_completeness?.required], ['Retained contracts', d.within_source_dedup?.unique_count],
     ['Execution qualification', d.oversight],
     ['Review evidence', d.independent_qc?.evidence_url && pointer(d.independent_qc.evidence_url)],
-  ] : [], 'Content QA and execution qualification are separate. FULL requires complete recorded review coverage.'));
+  ] : [], 'Content QA and execution qualification are separate. A whole-source waiver can finalize FULL while strict coverage remains incomplete; its receipt lists every unreviewed task and exact reason.'));
   sections.push(card('Computed Result', qualityResult ? [
     ['Conclusive reviews', qualityResult.reviewed], ['Tasks with issues', qualityResult.issue_count],
     ['Issue rate', qualityResult.issue_rate == null ? null : `${(100 * qualityResult.issue_rate).toFixed(2)}%`],
@@ -148,6 +152,7 @@ async function render(data, sourceId) {
   const capabilities = data.backend_capabilities;
   sections.push(card('Backend requirements and overlap', [
     ['Measurement basis', capabilities?.basis], ['Measured tasks', capabilities?.basis === 'converted_spec_census' ? capabilities.task_count : null],
+    ['Unassessed reason', capabilities?.basis === 'unassessed' ? capabilities.reason : null],
     ['Role assignments', capabilities?.role_backend_assignments], ['Declared requirements', capabilities?.demands],
     ['Backend fit and blockers', capabilities?.backends], ['Duplicate group', data.duplicate_group],
     ['Full backend matrix', link('Open the backend survey', 'api/backends')],

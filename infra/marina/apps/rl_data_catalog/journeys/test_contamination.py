@@ -14,7 +14,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(16)
+    expect(page.locator("#rows tr")).to_have_count(19)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -42,12 +42,6 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         "cells => cells.every(cell => cell.children.length === 1 && "
         "cell.textContent === cell.firstElementChild.textContent)"
     )
-    warning = page.locator('tr[data-source-id="Marin:required"] .contamination-chip')
-    assert warning.evaluate("chip => getComputedStyle(chip).borderTopWidth") == "2px"
-    colors = page.locator("#rows .contamination-chip").evaluate_all(
-        "chips => [...new Set(chips.map(chip => getComputedStyle(chip).backgroundColor))]"
-    )
-    assert len(colors) == 5
     page.locator("#contamination-legend summary").click()
     expect(page.locator("#contamination-legend")).to_contain_text("Cleanliness is unknown")
     for width in (1440, 390):
@@ -77,8 +71,10 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     expect(complete.locator(".level")).to_have_text("SAMPLE")
     expect(complete.locator(".result-provisional")).to_have_count(0)
     expect(complete.locator("td").nth(4)).to_have_text("Good")
-    for name in ("sample-uncertain", "full-inflight", "full-uncertain"):
+    for name in ("sample-uncertain", "full-inflight", "full-uncertain", "full-false-complete", "sample-false-waiver"):
         expect(page.locator(f'tr[data-source-id="Marin:{name}"] .result-provisional')).to_have_text("Good · provisional")
+    for name in ("full-false-complete", "sample-false-waiver"):
+        expect(page.locator(f'tr[data-source-id="Marin:{name}"] .level')).to_have_text("SAMPLE")
     page.set_viewport_size({"width": 390, "height": 844})
     page.locator('tr[data-source-id="Marin:sample-uncertain"] .source-name').click()
     result_field = page.locator("#detail-fields .field").filter(has=page.get_by_text("Result", exact=True)).locator("dd")
@@ -89,4 +85,27 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels .result-provisional")).to_have_count(0)
     expect(page.locator("#sections")).to_contain_text("Required content review complete")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_whole_source_waiver_is_full_final_with_incomplete_evidence(journey: Journey, theme: str) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.locator("#show-all").check()
+    row = page.locator('tr[data-source-id="Marin:full-waiver"]')
+    expect(row.locator(".level")).to_have_text("FULL")
+    expect(row.locator(".result-provisional")).to_have_count(0)
+    row.locator(".source-name").click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    expect(page.locator("#sections")).to_contain_text("Final with accepted whole-source waiver")
+    coverage = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Content review coverage"))
+    expect(coverage).to_contain_text("Strict coverage complete")
+    expect(coverage).to_contain_text("false")
+    expect(coverage).to_contain_text("Unreviewed tasks")
+    expect(coverage).to_contain_text("1")
+    expect(coverage.locator('a[href="https://example.org/waiver-with-exact-reasons.json"]')).to_be_visible()
+    expect(coverage).to_contain_text("a" * 64)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

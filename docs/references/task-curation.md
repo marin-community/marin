@@ -454,6 +454,29 @@ MarinSkyRL builds them.
 | `current_release` | Required exact `{repo, revision, url}` consumed for training. QUICK uses its pinned input; QA/repair uses its private open-athena release; decontamination uses the configured remediated pin after the pipeline is rebound. Release URLs must match their repository and revision. |
 | `quality_result` | Computed `reviewed`, `issue_count`, `issue_rate`, `verdict`, `issues`, and `repair_recommendation`. `sample_count`, `uncertain_count` and `unavailable_count` retain coverage. Mechanical exclusions remain in their own ledger. |
 
+Catalog publication, metadata refresh, Atlas loading and registered training selection require
+the grading census carried by the source declaration. Its `ActorCensusInput` must match the
+current dataset pin, converter and retained population; that population must be nonempty, and
+the grading census must cover every task without missing-grader findings. Missing or stale
+evidence fails validation. Native
+Harbor packages are checked for their executable verifier and environment rather than treating
+their `NoGrader` transport wrapper as an absent grader. A population with no executable grader
+is retired into the historical ledger; aliases, previous snapshots and artifacts remain available.
+Atlas also refuses a new load that would display SAMPLE or FULL without a computed Result.
+Executed grader controls alone do not supply a content-quality Result.
+
+`admission_inventory` scans current populations through their actor-census bindings and freezes
+seed-zero panels of at most 100 tasks. It records the stored-byte scan digest independently from
+the original conversion-order digest. `--resume-root` reuses completed matching censuses and
+hash-checked panels. These panels provide neither execution qualification nor an oracle receipt.
+Run the census on CPU workers in the data's region with an explicit target, production priority
+and a three-day timeout:
+
+```bash
+python -m experiments.post_training.task_curation.admission_inventory \
+  --declarations FROZEN_DECLARATIONS.json --output-root NEW_VERSIONED_PREFIX --workers 12
+```
+
 Catalog projection rejects every non-grandfathered source without actor census
 counts and their basis, including conversation-only sources claiming N/A. Keep
 unmeasured cohorts in the pending ingestion ledger. Publish a new metadata
@@ -1510,6 +1533,19 @@ inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
 three infrastructure attempts applies independently to this approved phase.
+Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
+This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
+standalone Harbor trials without it keep PHASE behavior. Safe provider retries
+spend neither the three infrastructure attempts nor source execution time.
+Request duration and backoff pause phase clocks while the overall attempt clock
+advances. Controls and deletion use a 60-second per-call timeout and backoff capped
+at 120 seconds. Artifact transfers retain SDK timeouts appropriate for large files;
+snapshot and acquisition operations retain their SDK settings. Normal cleanup
+allows job-bounded provider recovery; cancellation cleanup and grace remain bounded
+by wall-clock time. Source commands execute once per attempt; an ambiguous source
+response remains infrastructure evidence.
+Preserve the original phase and replay approved provider-unscored tasks after a
+pinned backend repair, with the same native files and source limits.
 New attempts record that approved context; historical failure classifications
 remain unchanged, including old phases that stopped after one unknown error.
 Further phases require another explicit decision; the runner never schedules them
@@ -1792,6 +1828,18 @@ serving context from 262,144 to 524,288 tokens and generation limits from
 in-flight v2 work and its valid observations keep their original identities.
 The [FULL-QC reviewer changelog](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#complete-retained-population-review)
 records cache separation, resume commands and the preserved v2 repair policy.
+
+Whole-source content Result finality is recorded explicitly as `complete` or
+`accepted_incomplete`, independently of coverage. The latter requires a pinned
+waiver enumerating every unreviewed task and exact reason, and preserves
+missing-review and uncertainty counts. This accepted whole-source review displays
+Quality FULL and a final Result; strict coverage remains false on Evidence.
+Exact-input whole-source bindings
+take precedence over later SAMPLE panels; input changes invalidate that finality.
+See [final whole-source Results](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#final-whole-source-content-results)
+for offline evidence verification and transport. Completed SAMPLE panels retain
+their existing finality semantics. Content finality supplies neither execution
+qualification nor permission to publish a remediated dataset.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and
@@ -2162,6 +2210,8 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   --plans s3://BUCKET/frozen-plans.json --version YYYYMMDD-v1 \
   --evidence-root s3://BUCKET/new-publication-prefix --workers 4
 ```
+
+#### Retained release census
 
 After readback, `retained_census` measures the retained actor and integrity
 population using the existing complete census. It also writes a normalized

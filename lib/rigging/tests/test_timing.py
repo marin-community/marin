@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 import threading
 import time
@@ -13,8 +14,10 @@ from rigging.timing import (
     RateLimiter,
     Timestamp,
     TokenBucket,
+    active_timeout,
     log_time,
     retry_with_backoff,
+    suspend_active_time,
 )
 
 
@@ -438,3 +441,63 @@ def test_retry_with_backoff_does_not_mutate_caller_backoff():
 
     assert retry_with_backoff(fn, backoff=backoff) == "ok"
     assert backoff.next_interval() == 0.001
+
+
+@pytest.mark.asyncio
+async def test_active_timeout_preserves_work_budget_across_overlapping_provider_waits(monkeypatch):
+    loop = asyncio.get_running_loop()
+    clock = [loop.time()]
+    monkeypatch.setattr(loop, "time", lambda: clock[0])
+    entered = [asyncio.Event(), asyncio.Event()]
+    release = [asyncio.Event(), asyncio.Event()]
+    finished = [asyncio.Event(), asyncio.Event()]
+    active = asyncio.Event()
+    completed = []
+
+    async def provider(index):
+        with suspend_active_time():
+            entered[index].set()
+            await release[index].wait()
+        finished[index].set()
+
+    async def operation():
+        async with active_timeout(1):
+            await asyncio.gather(provider(0), provider(1))
+            completed.append("providers recovered")
+            active.set()
+            await asyncio.Future()
+
+    task = asyncio.create_task(operation())
+    await asyncio.gather(*(event.wait() for event in entered))
+    clock[0] += 10
+    release[0].set()
+    await finished[0].wait()
+    clock[0] += 10
+    release[1].set()
+    await active.wait()
+    clock[0] += 2
+    with pytest.raises(TimeoutError):
+        await task
+    assert completed == ["providers recovered"]
+
+
+@pytest.mark.asyncio
+async def test_active_timeout_keeps_external_cancellation_during_provider_wait():
+    entered = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def operation():
+        async with active_timeout(1):
+            with suspend_active_time():
+                entered.set()
+                try:
+                    await asyncio.Future()
+                finally:
+                    stopped.set()
+
+    task = asyncio.create_task(operation())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert stopped.is_set()

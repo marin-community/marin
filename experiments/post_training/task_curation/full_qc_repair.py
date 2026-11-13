@@ -24,7 +24,12 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.review import ChatReviewer, Reviewer
 
-from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
+from experiments.post_training.task_curation.full_qc import (
+    LONG_REQUEST_TIMEOUT,
+    REVIEW_RUBRIC,
+    ReviewerVersion,
+    local_reviewer,
+)
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCReview
 from experiments.post_training.task_curation.full_qc_review import (
     RECORD_SCHEMA,
@@ -36,7 +41,6 @@ from experiments.post_training.task_curation.full_qc_review import (
 
 REPAIR_MAX_TOKENS = 8192
 REPAIR_RETRY_MAX_TOKENS = 16384
-REPAIR_REQUEST_TIMEOUT = 1200
 REPAIR_REQUEST_CONCURRENCY = 4
 MAX_REPAIR_BATCH_WORKERS = 16
 OVERLAY_SCHEMA = RECORD_SCHEMA.append(pa.field("reviewer", pa.large_string())).append(
@@ -226,7 +230,7 @@ class OwnedServingClient:
             raise ValueError("Owned serving registration differs from the pinned reviewer model")
         endpoints.sort(key=lambda endpoint: endpoint.task_id)
         endpoint = endpoints[int(canonical_sha256(body), 16) % len(endpoints)]
-        return OpenAIChatClient(endpoint.address.rstrip("/") + "/v1", "unused", REPAIR_REQUEST_TIMEOUT).complete(body)
+        return OpenAIChatClient(endpoint.address.rstrip("/") + "/v1", "unused", LONG_REQUEST_TIMEOUT).complete(body)
 
 
 def main() -> None:

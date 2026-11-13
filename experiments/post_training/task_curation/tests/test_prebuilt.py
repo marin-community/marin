@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
@@ -125,6 +126,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 2),
         ),
     )
+    source = with_admission_census(source)
     step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
     if storage == "local":
         artifact = run(step)[0]
@@ -148,7 +150,7 @@ def test_prebuilt_import_publishes_readable_admitted_and_converted_views(tmp_pat
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
-@pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero", "missing_contract"])
+@pytest.mark.parametrize("change", ["none", "package", "infrastructure_zero", "missing_contract", "default_environment"])
 def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch, change, mode):
     task = TaskSpec.model_validate(json.loads(prebuilt_task("native")["lowered_task_spec"])["task"])
     task = task.model_copy(
@@ -170,7 +172,12 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
                 verifier=tuple(
                     inline_resource(path, content)
                     for path, content in {
-                        "task.toml": b'[environment]\ndocker_image = "custom-task-image"\n',
+                        "task.toml": (
+                            b""
+                            if change == "default_environment"
+                            else b'[environment]\ndocker_image = "custom-task-image"\n'
+                        ),
+                        "environment/Dockerfile": b"FROM ubuntu@sha256:" + b"a" * 64 + b"\n",
                         "instruction.md": b"Fix the repository.",
                         "tests/test.sh": b"#!/bin/bash\nexit 0\n",
                     }.items()
@@ -197,7 +204,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
     (tmp_path / "controls.jsonl").write_text(json.dumps(receipt) + "\n")
     (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(oracle_receipt([task]).model_dump_json())
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(tmp_path / kwargs["filename"]))
-    if change in {"none", "missing_contract"}:
+    if change in {"none", "missing_contract", "default_environment"}:
         assert prebuilt.import_harbor_cohort(_cohort(1)) == str(path)
         monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
         monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
@@ -222,6 +229,7 @@ def test_native_harbor_import_preserves_controlled_package(tmp_path, monkeypatch
                 task_format=TaskFormat.HARBOR,
             ),
         )
+        source = with_admission_census(source)
         step = prebuilt.import_harbor_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
         if change == "missing_contract":
             with pytest.raises(RuntimeError) as failure:
@@ -293,6 +301,7 @@ def test_direct_prebuilt_admission_requires_oversight_but_allows_unsafe_tasks(tm
             ),
         ),
     )
+    source = with_admission_census(source)
     options = PipelineOptions(mode=SourceProcessingMode.SAMPLE, runtime=CampaignRuntime())
     if not qualified:
         with pytest.raises(ValueError, match="cannot admit tasks"):
@@ -375,6 +384,7 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     )
+    source = with_admission_census(source)
     artifact = run(
         prebuilt.import_taskcompendium_prebuilt(source, PipelineOptions(SourceProcessingMode.SAMPLE, CampaignRuntime()))
     )[0]
@@ -415,6 +425,7 @@ def test_prebuilt_rejects_calibration_only_success_without_no_oracle_liveness(tm
             lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
         ),
     )
+    source = with_admission_census(source)
     step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
     invocation = step.build_config(StepContext.for_run(str(tmp_path / "admitted"), str(tmp_path)))
     with pytest.raises(ValueError, match="no-oracle liveness qualification"):
@@ -491,6 +502,7 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     )
+    source = with_admission_census(source)
     step = pipeline(source, PipelineOptions(mode, CampaignRuntime()))
     destination = tmp_path / "admitted"
     invocation = step.build_config(StepContext.for_run(str(destination), str(tmp_path)))
@@ -546,6 +558,7 @@ def test_atlas_private_release_policy_blocks_prebuilt_download(monkeypatch, poli
             lexical_contamination=evidence,
         ),
     )
+    source = with_admission_census(source)
     downloaded = []
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: downloaded.append(kwargs))
     with pytest.raises(ValueError, match="private open-athena TaskCompendium"):
@@ -569,6 +582,7 @@ def test_quick_pass_writes_the_validated_cohort_as_converted_tasks(tmp_path, mon
             build_path="test",
         ),
     )
+    source = with_admission_census(source)
     step = prebuilt.import_prebuilt(source, PipelineOptions(SourceProcessingMode.QUICK, CampaignRuntime()))
     artifact = step.run(step.build_config(StepContext.for_run(str(output), str(tmp_path))))
 

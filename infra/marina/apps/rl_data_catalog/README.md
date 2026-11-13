@@ -7,11 +7,15 @@ progress, reviewed/retained counts and lower bounds on the source Evidence page.
 
 A Result includes `provisional` only while its required content review is
 incomplete, including unreviewed or uncertain observations. A completed SAMPLE
-review is final for its required sample. The loader computes this state from review
+review is final for its required sample. An explicitly accepted whole-source
+waiver also makes its Result final and Quality FULL, while Evidence shows false
+strict coverage, unreviewed counts and a pinned receipt with every exact reason.
+The loader computes this state from review
 coverage and conclusive reviewed/required counts; never infer it from the Quality
 label. Rerunning the loader refreshes older stored completeness metadata once,
 even when the snapshot ID is unchanged. SAMPLE requires a complete review of a selected sample; FULL requires a complete review of
-the whole retained population. Execution qualification remains separate.
+the whole retained population, with explicit whole-source waivers as described
+above. Execution qualification remains separate.
 The source table legend and Getting started guide define that variant and all five
 Contamination states. Keep the API, table, source details and guide consistent.
 Use the shared chip colors, with light and dark theme rules; a remediation warning

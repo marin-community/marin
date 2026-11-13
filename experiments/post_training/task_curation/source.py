@@ -10,6 +10,7 @@ from typing import Protocol
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
     ActorCensusInput,
+    ContentEvidenceReference,
     ConvertedExamples,
     DatasetRelease,
     DaytonaMeasurement,
@@ -22,6 +23,7 @@ from finestore.rl.curation import (
     OversightEvidence,
     OversightLevel,
     PipelineReference,
+    QualityResultFinalization,
     RoleExecutionEvidence,
     SourceDeclaration,
     SourceOrigin,
@@ -32,9 +34,11 @@ from finestore.rl.curation import (
 )
 from marin.execution.lazy import ArtifactStep
 
+from experiments.post_training.task_curation.admission_binding import population_admission_blocker
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.source_policy import (
     GRANDFATHERED_DAYTONA_EXEMPTION,
     GRANDFATHERED_MARINSKYRL_SOURCES,
@@ -120,6 +124,9 @@ class SourceInfo:
     inherited_admission: DatasetRelease | None = None
     upstream_url: str | None = None
     quality_result: SourceQualityResult | None = None
+    quality_result_finalization: QualityResultFinalization | None = None
+    quality_result_waiver: ContentEvidenceReference | None = None
+    full_content_result_binding: FullContentResultBinding | None = None
     family: str = ""
     tags: tuple[str, ...] = ()
     count: int | None = None
@@ -263,12 +270,25 @@ class RlDataSource[ConfigT: CatalogConfig]:
     @property
     def admission_blockers(self) -> tuple[str, ...]:
         """Evidence missing before a source can enter admitted selection."""
-        if self.is_grandfathered_blend:
-            return ()
         info = self.info
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
         dataset = self.dataset
+        actor = info.actor_census_input
+        if actor is not None and (
+            dataset is None
+            or (actor.dataset_id, actor.dataset_revision, actor.converter_version)
+            != (dataset.name, dataset.revision, self.version)
+        ):
+            blockers.append("actor census does not cover the current configured input")
+        if blocker := population_admission_blocker(
+            actor,
+            info.within_source_dedup.unique_count if info.within_source_dedup else 0,
+            info.grading_environment,
+        ):
+            blockers.append(blocker)
+        if self.is_grandfathered_blend:
+            return tuple(blockers)
         try:
             require_private_release(
                 info.lexical_contamination, dataset.name if dataset else None, dataset.revision if dataset else None
@@ -353,6 +373,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             variant=info.variant,
             current_release=self.current_release,
             quality_result=info.quality_result,
+            quality_result_finalization=info.quality_result_finalization,
+            quality_result_waiver=info.quality_result_waiver,
             family=info.family,
             tags=list(tags),
             task_count=dedup.unique_count,

@@ -7,19 +7,14 @@ import json
 import time
 import uuid
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import click
 from finestore.rl.curation import (
     MAX_UNAVAILABLE_JUDGMENT_SHARE,
-    AssessmentItem,
-    AssessmentPopulation,
     CurationCatalog,
     JudgmentStatus,
-    SourceDeclaration,
-    Verdict,
     validate_items,
 )
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
@@ -28,6 +23,10 @@ from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sh
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
+from experiments.post_training.task_curation.admission_binding import (
+    require_content_result,
+    require_declaration_admission,
+)
 from experiments.post_training.task_curation.catalog_identity import (
     backend_survey_payload,
     canonical_assessment,
@@ -36,12 +35,14 @@ from experiments.post_training.task_curation.catalog_identity import (
     canonical_snapshot_source,
     identity_survey_payload,
 )
+from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
+from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
-REVIEW_COMPLETENESS_VERSION = 1
+REVIEW_COMPLETENESS_VERSION = 4
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
@@ -64,45 +65,6 @@ TABLE_COLUMNS = {
     "identity_surveys": "survey_id TEXT, metadata JSONB",
     "duplicate_reviews": "left_source TEXT, right_source TEXT, review JSONB",
 }
-
-
-@dataclass(frozen=True)
-class ReviewCompleteness:
-    reviewed: int
-    required: int
-    coverage_complete: bool
-
-    @property
-    def provisional(self) -> bool:
-        return not self.coverage_complete or self.reviewed < self.required
-
-
-def review_completeness(
-    declaration: SourceDeclaration, populations: list[AssessmentPopulation], items: list[AssessmentItem]
-) -> dict[str, Any] | None:
-    """Bind Result completeness to its required review panel, independently of Quality."""
-    aggregate = declaration.quality_result
-    if aggregate is not None:
-        assert aggregate.sample_count is not None
-        completeness = ReviewCompleteness(
-            reviewed=aggregate.reviewed,
-            required=aggregate.sample_count,
-            coverage_complete=aggregate.unavailable_count == 0,
-        )
-    elif populations:
-        required = next(row.sample_count for row in populations if row.cohort == "admitted")
-        panel = [row for row in items if row.cohort == "admitted"]
-        completeness = ReviewCompleteness(
-            reviewed=sum(
-                row.status == JudgmentStatus.REVIEWED and row.has_task and row.verdict != Verdict.UNKNOWN
-                for row in panel
-            ),
-            required=required,
-            coverage_complete=len(panel) == required and all(row.status == JudgmentStatus.REVIEWED for row in panel),
-        )
-    else:
-        return None
-    return {**asdict(completeness), "provisional": completeness.provisional}
 
 
 def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
@@ -205,6 +167,10 @@ def load_catalog(
         },
     )
     sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
+    if retired := {source.id for source in sources} & retired_admission_source_ids():
+        raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
+    for source in sources:
+        require_declaration_admission(source.declaration)
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
@@ -265,6 +231,7 @@ def load_catalog(
         key = source.assessment_key
         record["review_completeness"] = review_completeness(source.declaration, [], [])
         if key is None:
+            require_content_result(source.declaration, source.curation, key)
             continue
         assessment = canonical_assessment(catalog.assessment(key))
         if assessment.source_id != source.id:

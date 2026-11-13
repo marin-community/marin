@@ -87,12 +87,17 @@ not declared*. Edit the rules in the reference first, then the page text in
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
 curriculum area. The levels define required content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
-and FULL requires a complete review of the whole retained population. Execution qualification is recorded separately. Result uses the
+and FULL requires a review of the whole retained population. An explicitly accepted
+whole-source waiver also displays FULL when its pinned evidence accounts for every
+unreviewed task and reason; strict coverage remains false. Execution qualification is recorded separately. Result uses the
 inclusive issue-rate boundaries above.
 
 The loader records required and conclusive reviewed counts plus coverage
 completeness. Result is provisional if coverage is incomplete or any required
-observation remains unreviewed or uncertain. A completed SAMPLE review is final
+observation remains unreviewed or uncertain, unless a verified whole-source
+finalization accepts those observations with pinned waiver evidence. Its Result is
+final while Evidence retains the incomplete coverage, unreviewed count and exact
+reasons. A completed SAMPLE review is final
 for its sample; the Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
@@ -123,7 +128,7 @@ not describe residual overlap in the retained release or semantic decontaminatio
 The source table legend and Getting started guide define the same five states.
 Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
 Result from incomplete content review carries a provisional variant within its
-chip. Review progress and lower bounds appear only on the source Evidence page.
+chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
 
 **Daytona safe** measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;
@@ -186,6 +191,9 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
+   The source map must census every current pinned source's complete converted
+   population; sources without converted inputs are listed `unassessed` with
+   their reason and never as fit.
    For storage-enforcing LOCAL workers, run the survey on the actual PRIVILEGED
    worker with `--local-disk-root /cache/shellbox-disks`. Require its ext4 loop,
    OverlayFS, ENOSPC and cleanup probe to pass. Retain the overflow/neighbor and
@@ -269,11 +277,26 @@ over generated specs, then validates each converted task's combined agent and
 grader machine demands through rolloutengine's machine mapping.
 
 Prepare `survey-inputs.json` with `inputs` entries containing `source_id`, local
-Parquet `paths`, JSON spec `column` and `expected_tasks`. Use complete converted
+Parquet `paths`, JSON spec `column` and `expected_tasks`. A `runtime_column`
+entry reads the published machine allocations from a second Parquet column and
+surveys each row as `{"task": …, "runtime": …}`; converted-spec shards store
+`task_spec` and `runtime` side by side, while published TaskCompendium
+`tasks.parquet` files embed both in `lowered_task_spec`. Use complete converted
 populations, not sampled assessment packets. Each entry must match the selected
-catalog's pinned source revision. Stage remote shards with `uv run fsutil cp`
-near their storage region. The survey streams rows and records input SHA-256s.
-Sources without converted inputs remain explicitly `unassessed`.
+catalog's pinned source revision. On a worker near the shards' storage region,
+stage remote inputs and rewrite their manifest paths with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.stage_survey_manifest \
+  --manifest survey-inputs.json --stage-dir survey-shards \
+  --output staged-survey-inputs.json
+```
+
+The survey streams staged rows and records input SHA-256s. Sources without
+converted inputs remain `unassessed`, and the manifest must declare a
+`unassessed_reasons` entry for each of them individually — a shared blanket
+reason cannot hide an accidentally omitted input, and an entry naming a source
+that has inputs is rejected.
 
 Set `runtime_defaults.agent` and `runtime_defaults.grader` to the deployment's
 explicit machine settings: `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`,
@@ -285,8 +308,34 @@ it never infers missing resource or network policy from backend choice.
 uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,iris]' python -m \
   experiments.post_training.task_curation.backend_capabilities \
   --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
-  --manifest survey-inputs.json --output backend-map.json
+  --manifest staged-survey-inputs.json --output backend-map.json
 ```
+
+On a worker workspace without git metadata, pass the code revision explicitly
+with `--revision`. Pass `--local-disk-root` to verify a LOCAL disk pool on a
+privileged Linux worker: the local checker is constructed with that pool and
+the artifact records the verified pool root from the checker itself, so a
+manifest can never claim a pool the checkers do not use. Without a verified
+pool the LOCAL storage cell stays unsupported with its deployment condition;
+never widen it by hand. Full
+population surveys of every current pinned source (millions of tasks) shard the
+manifest by source, stage each shard beside its storage region, and run one
+survey process per shard concurrently on a CPU worker at production priority.
+Combine the shard artifacts with the tracked merge, which rejects shards that
+disagree on the matrix, runtime profile, deployment limits, schema, revision or
+verified disk pool, rejects a source measured twice, and drops shard-level
+unassessed placeholders:
+
+```bash
+uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,iris]' python -m \
+  experiments.post_training.task_curation.backend_capabilities \
+  --merge partials/shard-01.json partials/shard-02.json \
+  --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
+  --snapshot-id <selected snapshot> --output backend-map.json
+```
+
+The merged artifact must then cover the selected snapshot's complete source
+set; the loader re-checks that coverage and the grading evidence at import.
 
 Add `--local-disk-root /cache/shellbox-disks` only on a worker configured for
 [LOCAL disk enforcement](task-curation.md#full-population-oracle-filter).
@@ -336,6 +385,16 @@ per-task Parquet records retain mismatches, unavailable graders and validation
 failures with their reasons. A changed source binding clears stale grading
 evidence before catalog export. See the
 [grading census procedure](task-curation.md#curation-modes-and-oversight-levels).
+Admission uses the grading evidence carried by each declaration. The actor input
+must match the configured dataset pin and converter version; every retained task
+must have a grading assessment, and the retained population must be nonempty.
+The `No executable grader is declared` assessment reason blocks admission. Other unavailable
+boundary assessments remain visible without being relabeled as missing graders.
+Native Harbor packages must pass package validation during import and grading
+census. QUICK conversion can run before admission evidence exists. Publication,
+metadata refresh and Atlas loading reject SAMPLE/FULL entries without a computed
+content Result before changing the selected snapshot.
+
 The offline `daytona_census` command measures registered converters' TaskSpec
 outputs before admission gates and records admission rejections separately.
 An all-rejected population retains its measured execution cost and a BAD

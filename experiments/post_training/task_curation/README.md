@@ -520,6 +520,141 @@ completion writes task-level observations, computed Result and repair guidance,
 and a campaign record identifying serving jobs and pending qualification. This
 command does not publish datasets or alter Atlas admission.
 
+### Review frozen SAMPLE content panels
+
+Requests using ReviewerSpec V3 have a 1,200-second HTTP deadline to give its
+16,384-token output retry more time. ReviewerSpec V2 retains 300 seconds. The
+client deadline preserves the pinned model, prompt, sampling parameters, token
+budgets and reviewer cache identity.
+
+[`admission_inventory`](../../../docs/references/task-curation.md#declarations)
+counts each pinned source population and selects at most 100 TaskSpecs by
+seed-zero task-ID ordering. The queue is a JSON array of complete, unchanged rows
+selected from its `inventory.json` by the source IDs assigned to SAMPLE.
+Record the queue file's SHA-256 before submission.
+
+`sample_qc` verifies the frozen panel bytes, dataset revision, converter version
+and full-population digest. It uses the GLM-5.3 v3 profile described above and
+writes each selected TaskSpec hash, deployment-runtime hash, review observation
+and batch receipt. Computed Results describe content quality; the artifacts
+record `scope=sample_content` and `qualification_status=pending`.
+[Full-population oracle filtering and empty-submission verifier liveness](../../../docs/references/task-curation.md#full-population-oracle-filter)
+remain prerequisites for execution admission.
+
+Launch the batch coordinator on `cw-us-east-08a`. Its GB200 serving children
+inherit that regional controller, with batch priority and three-day timeouts.
+Compilation and CUDA graphs remain enabled. Panels and evidence stay in their
+original storage region.
+
+```bash
+uv run --no-sync iris --cluster marin job run \
+  --job-name atlas-sample-qc-VERSION --target-cluster cw-us-east-08a \
+  --priority batch --timeout 259200 --cpu 4 --memory 16G --disk 40G \
+  --sync-package marin-core --extra dedup --no-wait -- \
+  uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.sample_qc \
+  --queue s3://bucket/campaign/sample-queue.json --queue-sha256 QUEUE_SHA256 \
+  --output-root s3://bucket/campaign/sample-content-v3 \
+  --review-cache s3://bucket/campaign/request-cache-v3 --run
+```
+
+Run the inner command without `--run` to inspect the queue size and pinned
+reviewer without reserving GPUs. A resume reuses reviewed batch receipts only
+when task/runtime contracts, rubric and reviewer identity match exactly.
+Unavailable observations and unsuccessful attempts remain recorded.
+
+Export a selected Result for each source with:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.sample_qc_receipts \
+  --review-artifacts selected-review-artifacts.json \
+  --output-directory /private/staging/sample_qc_receipts
+```
+
+The input is a JSON array of immutable review artifact paths. Receipt generation
+checks panel membership, task/runtime hashes and the pinned reviewer, then
+recomputes counts from the stored observations. Archive the generated shards in
+the private registry and commit its exact references under
+`datasets/sample_qc_receipts/`. Source binding rejects another dataset pin,
+converter or population digest and preserves execution oversight. Catalog refresh
+uses the pinned content Result while retaining earlier assessments and packets.
+
+### Final whole-source content Results
+
+Whole-source finalization is explicit. Content coverage records whether every
+retained task has a completed review observation, including valid uncertain
+observations. A verified
+`FullContentResultBinding` records the exact dataset pin, converter, retained
+population digest/count, contract index, immutable review receipt and records.
+`COMPLETE` requires every retained task reviewed; `ACCEPTED_INCOMPLETE` requires
+SHA-pinned waiver evidence enumerating every unreviewed task and exact reason,
+with matching Result and uncertainty counts. It displays Quality FULL and a final
+Result while retaining false strict coverage and every missing review.
+Completed uncertain observations remain separate from the conclusive denominator.
+Neither state changes execution qualification or drops tasks.
+
+The campaign owner writes the private waiver sidecar after approval, using the
+frozen review observations. The verifier reads it; it does not grant approval or
+create missing reviews. The sidecar requires these JSON fields (additional audit
+metadata may be retained):
+
+| Field | Required value |
+| --- | --- |
+| `source_id` | Exact reviewed source ID |
+| `retained_count` | Number of retained contract records |
+| `contract_index_sha256` | SHA-256 of the frozen contract index |
+| `review_artifact_sha256` | SHA-256 of the immutable review artifact record |
+| `records_sha256` | SHA-256 of the review-record parquet |
+| `qc_unreviewed` | One `{ "task_id": "...", "reason": "..." }` per unreviewed task, with its exact nonempty failure reason |
+| `result` | Frozen `SourceQualityResult` object, including `reviewed`, `issue_count`, `uncertain_count` and `unavailable_count` |
+
+The task-ID set must match all unreviewed observations exactly, without duplicates.
+Result counts must match recomputation from the records; uncertain observations
+remain explicit. The binding pins the SHA-256 of the entire sidecar. Invalid or
+inconsistent finalization fields in stored declarations never suppress provisional
+Result status: Atlas also requires matching whole-population Result and QC counts.
+
+Verify observations before staging the small transport record:
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_content_receipts \
+  --review-receipt s3://BUCKET/IMMUTABLE_REVIEW/.artifact.json \
+  --review-receipt-sha256 ARTIFACT_SHA256 \
+  --actor-census s3://BUCKET/CURRENT_ACTOR_CENSUS \
+  --reviewer-version v2 --prompt-budget 512000 \
+  --finalization accepted_incomplete \
+  --waiver s3://BUCKET/FINALIZATION.json --waiver-sha256 WAIVER_SHA256 \
+  --output /private/staging/source-final-binding.json
+```
+
+The verifier checks receipt, index, record and waiver digests, the pinned reviewer,
+task/runtime contracts and recomputed Result. If the original population included
+drops, supply `--population EXACT_RETAINED_CENSUS_ARTIFACT`, the `SourceTextPopulation`
+artifact produced by [`retained_census`](../../../docs/references/task-curation.md#retained-release-census)
+for the retained release. A raw population with a different count cannot certify
+the retained input. Review the resulting metadata
+before adding it to `datasets/full_content_results.json`. This transport contains
+pins, counts, digests, generic Result and evidence references; task-level evidence
+stays private. The public Result projection omits private issue excerpts while
+preserving every computed numeric field and verdict. The binding preserves the
+current actor-census provenance URI as part of exact input equality. Source
+loading reads the local transport without new storage
+credentials or remote verification calls. This step does not publish a dataset or
+load production Atlas.
+
+Before SAMPLE attachment, validate any carried whole-source binding against the
+declaration's current full-population census (`ActorCensusInput`); changed pins,
+converters, counts or task digests clear stale Result/finality. Then attach SAMPLE
+and apply the verified matching whole-source binding afterward. A matching final
+Result survives later SAMPLE attachment. The
+declaration persists `quality_result_finalization` and `quality_result_waiver`.
+Atlas requires both accepted-incomplete finality and its typed waiver reference
+plus whole-population accounting to display FULL. Evidence shows false strict
+coverage, the unreviewed count, and the pinned receipt containing exact reasons.
+Completed SAMPLE panels keep their existing finality rules.
+
 ### Audit reviewer errors
 
 `audit_harness` freezes a stratified sample of Prism issue-positive reviews and
@@ -593,6 +728,20 @@ uses at most `32 // batch_workers` concurrent requests, so a shard sends at most
 finished batch immediately frees its slot for another assigned batch while
 slower batches continue. Shard receipts remain ordered by original batch index.
 Scheduling does not change reviewer or request identities.
+
+Retries reuse completed source-shard records from the current coordinator root
+before loading a model. To replace a coordinator, stop its writers, then pass
+`--resume-root /owner/retired-coordinator` to reuse its completed source shards.
+Repeat the option for multiple retired roots. Reuse verifies the immutable
+record digest, exact inputs, reviewer, rubric and batch assignment. A completed
+record with a digest or configuration mismatch raises an error before model
+loading. A completed
+primary shard remains frozen even when it contains invalid or uncertain
+observations. Invalid or unavailable observations use the separate repair
+procedure below; completed uncertain observations remain unchanged. Changing
+the pass count does not reopen a completed primary shard.
+If all assigned source shards are complete, the coordinator exits without
+loading a model.
 
 Each pass retries invalid or unavailable observations under the pinned review
 protocol. Valid observations in partially completed batches are retained,

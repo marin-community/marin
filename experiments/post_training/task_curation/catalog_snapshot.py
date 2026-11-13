@@ -47,9 +47,14 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.assessment import assessment_inputs, assessment_judgments, validate_coverage
 from zephyr.readers import load_parquet
 
+from experiments.post_training.task_curation.admission_binding import (
+    require_content_result,
+    require_declaration_admission,
+)
 from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.catalog_identity import canonical_attempt, canonical_snapshot_source
 from experiments.post_training.task_curation.curation_catalog import RUNS
+from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
@@ -212,6 +217,8 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
     """Archive selected outputs before publishing their typed catalog snapshot."""
     declarations = [source.declaration for source in sources]
     by_id = {row.id: row for row in declarations}
+    if retired := by_id.keys() & retired_admission_source_ids():
+        raise ValueError(f"Retired sources cannot re-enter the catalog: {sorted(retired)}")
     if len(by_id) != len(declarations):
         raise ValueError("Catalog source IDs must be unique")
     lease = create_lock(str(StoragePath(root) / "publication.lock"), worker_id=run_id)
@@ -253,8 +260,12 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             declarations.extend(
                 row.declaration
                 for source_id, row in previous.items()
-                if source_id not in by_id and row.declaration.pipeline is not None
+                if source_id not in by_id
+                and source_id not in retired_admission_source_ids()
+                and row.declaration.pipeline is not None
             )
+            for declaration in declarations:
+                require_declaration_admission(declaration)
             completed = set(catalog.view.keys(ASSESSMENTS))
             rows = []
             for declaration in declarations:
@@ -273,15 +284,10 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                         and prior.declaration.dataset_id == declaration.dataset_id
                         and prior.declaration.dataset_revision == declaration.dataset_revision
                     ):
-                        update["declaration"] = declaration.model_copy(
-                            update={
-                                "quality_result": (
-                                    assessment_quality_result(catalog.items(prior.assessment_key))
-                                    if prior.assessment_key
-                                    else declaration.quality_result
-                                )
-                            }
-                        )
+                        result = declaration.quality_result
+                        if result is None and prior.assessment_key:
+                            result = assessment_quality_result(catalog.items(prior.assessment_key))
+                        update["declaration"] = declaration.model_copy(update={"quality_result": result})
                     rows.append(prior.model_copy(update=update))
                     continue
                 unchanged = (
@@ -317,7 +323,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                                 f"attempts/{run_id}/{attempt.name}",
                                 ("grades/*.parquet", "requests/*.jsonl", "responses/*.jsonl"),
                             )
-                if key is not None:
+                if key is not None and declaration.quality_result is None:
                     declaration = declaration.model_copy(
                         update={"quality_result": assessment_quality_result(catalog.items(key))}
                     )
@@ -334,6 +340,8 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                         diagnostics=diagnostics,
                     )
                 )
+            for row in rows:
+                require_content_result(row.declaration, row.curation, row.assessment_key)
             snapshot = CatalogSnapshot(
                 snapshot_id=run_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )
@@ -383,6 +391,10 @@ def _refresh_snapshot(
                 SnapshotSource.model_validate({**row, "snapshot_id": snapshot_id}).model_dump(mode="json")
                 for row in transform(prior)
             ]
+            for row in rows:
+                source = SnapshotSource.model_validate(row)
+                require_declaration_admission(source.declaration)
+                require_content_result(source.declaration, source.curation, source.assessment_key)
             snapshot = CatalogSnapshot(
                 snapshot_id=snapshot_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )
@@ -438,7 +450,7 @@ def refresh_catalog(
             declaration = declarations.get(source_id)
             if declaration is None:
                 raise ValueError(f"Live catalog source has no registered declaration: {source_id}")
-            if record["assessment_key"] is not None:
+            if record["assessment_key"] is not None and declaration.quality_result is None:
                 declaration = declaration.model_copy(
                     update={"quality_result": assessment_quality_result(catalog.items(record["assessment_key"]))}
                 )

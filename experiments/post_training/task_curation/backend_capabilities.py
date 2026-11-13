@@ -4,8 +4,8 @@
 """Survey backend validation and join a complete converted-spec census for Atlas.
 
 This command never creates machines, snapshots, or provider clients. Inputs are
-an explicit local JSON manifest; published object-store shards should first be
-staged with fsutil near their storage region.
+an explicit local JSON manifest; stage object-store shards and rewrite their
+paths with stage_survey_manifest on a worker near their storage region.
 """
 
 import argparse
@@ -38,7 +38,7 @@ from taskcompendium.backend_requirements import (
 )
 from taskcompendium.models import EnvironmentRequirements
 
-from experiments.post_training.task_curation.catalog_identity import canonical_snapshot_source
+from experiments.post_training.task_curation.catalog_identity import canonical_backend_survey, canonical_snapshot_source
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 SUPPORT_ORDER = (Support.SUPPORTED, Support.PARTIAL, Support.UNSUPPORTED)
@@ -114,7 +114,7 @@ def source_map(
             }
             for role, slot in (("agent", "task_machine"), ("grader", "verifier_machine"))
         }
-        demands = task_demands({"task": task, "runtime": runtime})
+        demands, failures = task_demands({"task": task, "runtime": runtime})
         for role, needs in demands.items():
             declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
             assigned = "local" if role == "grader" and declared.get("packages_lock") else "daytona"
@@ -130,6 +130,14 @@ def source_map(
         for backend, check in checkers.items():
             statuses = []
             for role, needs in demands.items():
+                if role in failures:
+                    error = failures[role]
+                    role_counts[backend][role][Support.UNSUPPORTED] += 1
+                    for capability in error.capabilities:
+                        blockers[backend][f"{role}:{capability}"] += 1
+                    errors[backend][str(error)] += 1
+                    statuses.append(Support.UNSUPPORTED)
+                    continue
                 status = combined_support(cells[backend, need].support for need in needs)
                 for need in needs:
                     if cells[backend, need].support != Support.SUPPORTED:
@@ -174,19 +182,36 @@ def source_map(
     )
 
 
-def converted_specs(paths: list[Path], column: str) -> Iterable[dict]:
+def converted_specs(paths: list[Path], column: str, runtime_column: str | None = None) -> Iterable[dict]:
     """Stream converted spec JSON without retaining private task payloads."""
+    columns = [column, runtime_column] if runtime_column is not None else [column]
     for path in paths:
-        for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=[column]):
-            for encoded in batch.column(0).to_pylist():
+        for batch in pq.ParquetFile(path).iter_batches(batch_size=32, columns=columns):
+            for row in batch.to_pylist():
+                encoded = row[column]
                 if encoded is None:
                     raise ValueError(f"Null converted spec in {path}")
-                yield json.loads(encoded)
+                task = json.loads(encoded)
+                if runtime_column is None:
+                    yield task
+                    continue
+                yield {"task": task, "runtime": json.loads(row[runtime_column])}
+
+
+def verified_disk_pool(checkers: dict[str, Checker]) -> LocalDiskPool | None:
+    """Read the LOCAL disk pool the checkers were actually built with."""
+    pool = getattr(checkers.get("local"), "keywords", {}).get("disk_pool")
+    return pool if isinstance(pool, LocalDiskPool) else None
 
 
 def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) -> BackendSurvey:
-    """Bind a census to its catalog inventory; unavailable sources remain unassessed."""
+    """Bind a census to its catalog inventory; unavailable sources remain unassessed.
+
+    The artifact records the LOCAL disk pool the local checker was actually
+    constructed with, never a manifest claim about one.
+    """
     matrix = production_matrix(checkers)
+    disk_pool = verified_disk_pool(checkers)
     runtime_defaults = {
         role: RuntimeProfile.model_validate(manifest["runtime_defaults"][role]) for role in ("agent", "grader")
     }
@@ -210,7 +235,7 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
                 digests[f"{index}:{path.name}"] = hashlib.file_digest(stream, "sha256").hexdigest()
         measured = source_map(
             source_id,
-            converted_specs(paths, entry["column"]),
+            converted_specs(paths, entry["column"], entry.get("runtime_column")),
             matrix,
             checkers,
             digests,
@@ -221,6 +246,17 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
         if measured.task_count != entry["expected_tasks"]:
             raise ValueError(f"Converted population differs from manifest: {source_id}")
         selected[source_id] = measured
+    unassessed = [source_id for source_id in source_ids if source_id not in selected]
+    declared_reasons = canonical_source_map(manifest.get("unassessed_reasons", {}))
+    missing_reasons = [source_id for source_id in unassessed if source_id not in declared_reasons]
+    if missing_reasons:
+        raise ValueError(
+            "Sources without converted inputs require their own unassessed_reasons entry so an "
+            f"accidentally omitted input cannot hide behind a shared reason: {missing_reasons}"
+        )
+    unused_reasons = [source_id for source_id in declared_reasons if source_id not in unassessed]
+    if unused_reasons:
+        raise ValueError(f"unassessed_reasons declares sources that have converted inputs: {unused_reasons}")
     limits = {
         backend: {
             "max_concurrent_sandboxes": None,
@@ -241,12 +277,14 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
         schema_sha256=backend_schema_sha256(),
         matrix=matrix,
         deployment_limits=limits,
+        local_disk_pool=None if disk_pool is None else str(disk_pool.root),
         runtime_defaults=runtime_defaults,
         sources=[
             selected.get(source_id)
             or BackendSourceMap(
                 source_id=source_id,
                 basis="unassessed",
+                reason=declared_reasons[source_id],
                 task_count=0,
                 inputs={},
                 demands={},
@@ -261,15 +299,101 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
     )
 
 
+def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_id: str) -> BackendSurvey:
+    """Combine shard surveys into one artifact bound to the selected snapshot.
+
+    Projects every partial through the canonical source-ID boundary before
+    deduplication, so historical and current spellings of one source cannot
+    evade the overlap check. Rejects shards that disagree on the matrix,
+    runtime profile, deployment limits, schema, revision or verified disk
+    pool, and sources measured in more than one shard. A source that is
+    unassessed in every shard keeps its declared reason in the merged
+    artifact; a measured row overrides shard placeholders. The selected
+    snapshot's coverage is checked again at load time.
+    """
+    projected = [canonical_backend_survey(partial.model_dump(mode="json")) for partial in partials]
+    first = projected[0]
+    identity = (
+        first.schema_sha256,
+        first.git_revision,
+        first.local_disk_pool,
+        [cell.model_dump(mode="json") for cell in first.matrix],
+        {role: profile.model_dump(mode="json") for role, profile in first.runtime_defaults.items()},
+        first.deployment_limits,
+    )
+    for partial in projected[1:]:
+        other = (
+            partial.schema_sha256,
+            partial.git_revision,
+            partial.local_disk_pool,
+            [cell.model_dump(mode="json") for cell in partial.matrix],
+            {role: profile.model_dump(mode="json") for role, profile in partial.runtime_defaults.items()},
+            partial.deployment_limits,
+        )
+        if other != identity:
+            raise ValueError(f"Shard {partial.snapshot_id} does not share the survey identity")
+    rows: dict[str, BackendSourceMap] = {}
+    unassessed: dict[str, BackendSourceMap] = {}
+    for partial in projected:
+        for source in partial.sources:
+            if source.basis == "unassessed":
+                if source.source_id not in rows:
+                    unassessed.setdefault(source.source_id, source)
+                continue
+            if source.source_id in rows:
+                raise ValueError(f"Source measured in more than one shard: {source.source_id}")
+            unassessed.pop(source.source_id, None)
+            rows[source.source_id] = source
+    if not rows and not unassessed:
+        raise ValueError("The shards measure no sources")
+    return BackendSurvey(
+        catalog_root=catalog_root,
+        snapshot_id=snapshot_id,
+        generated_at=datetime.now(UTC).isoformat(),
+        git_revision=first.git_revision,
+        schema_sha256=first.schema_sha256,
+        matrix=first.matrix,
+        deployment_limits=first.deployment_limits,
+        local_disk_pool=first.local_disk_pool,
+        runtime_defaults=first.runtime_defaults,
+        sources=[*rows.values(), *unassessed.values()],
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, help="Survey manifest for a census run.")
+    parser.add_argument("--merge", type=Path, nargs="+", help="Combine these shard surveys into one artifact instead.")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--local-disk-root", type=Path, help="Probe ext4 loop/OverlayFS enforcement on this privileged worker."
     )
-    parser.add_argument("--catalog-root", help="Bind to the current published catalog instead of an archived inventory.")
+    parser.add_argument(
+        "--catalog-root",
+        help="Live catalog root to bind a census to, or the literal binding root for --merge.",
+    )
+    parser.add_argument("--snapshot-id", help="Selected snapshot ID bound by --merge.")
+    parser.add_argument("--revision", help="Survey code revision; the workspace carries no git metadata on workers.")
     args = parser.parse_args()
+    if args.merge is not None:
+        if args.snapshot_id is None or args.catalog_root is None:
+            raise SystemExit("--merge requires the binding --catalog-root and --snapshot-id")
+        partials = [BackendSurvey.model_validate_json(path.read_text()) for path in args.merge]
+        survey = merge_surveys(partials, catalog_root=args.catalog_root, snapshot_id=args.snapshot_id)
+        args.output.write_text(survey.model_dump_json(indent=2) + "\n")
+        print(
+            json.dumps(
+                {
+                    "output": str(args.output),
+                    "shards": len(partials),
+                    "sources": len(survey.sources),
+                    "tasks": sum(source.task_count for source in survey.sources),
+                }
+            )
+        )
+        return
+    if args.manifest is None:
+        raise SystemExit("A census run requires --manifest")
     manifest = json.loads(args.manifest.read_text())
     if args.catalog_root is not None:
         configure_coreweave_s3()
@@ -287,7 +411,10 @@ def main() -> None:
                 if source.declaration.grading_environment is not None
             },
         }
-    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if args.revision is not None:
+        revision = args.revision
+    else:
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     disk_pool = LocalDiskPool(args.local_disk_root) if args.local_disk_root is not None else None
     survey = build_survey(manifest, production_checkers(local_disk_pool=disk_pool), revision)
     args.output.write_text(survey.model_dump_json(indent=2) + "\n")
