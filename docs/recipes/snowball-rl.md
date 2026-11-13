@@ -71,7 +71,7 @@ and record the finishing status's `rl_progress_url` with the verdict.
 Repeat the original command with `--wait` from the same source and inputs. The executor reuses
 successful steps and runs failed work, then the launcher retries publication from stored outputs.
 Errors identify the affected native attempt; missing credentials suggest `iris login`.
-Publication errors preserve the experiment verdict and exit code. A successful gated attempt
+Publication errors preserve the experiment verdict and exit code. A current successful gated attempt
 requires a report for exactly the current native attempts.
 
 Publish a preset's controls from their stored paths with one command:
