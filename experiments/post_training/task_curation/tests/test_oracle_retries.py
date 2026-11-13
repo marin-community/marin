@@ -168,9 +168,19 @@ def retry_case(tmp_path, monkeypatch, request):
     return RetryCase(cohort, parent_map, approvals, backend_fix, backend_file, native, calls)
 
 
-@pytest.mark.parametrize("retry_case", ["pass", "infra", "zero", "unknown", "legacy-unknown"], indirect=True)
+@pytest.mark.parametrize(
+    ("retry_case", "expected_passed", "expected_attempts"),
+    [
+        ("pass", True, 1),
+        ("infra", False, 3),
+        ("zero", False, 1),
+        ("unknown", False, 3),
+        ("legacy-unknown", True, 1),
+    ],
+    indirect=["retry_case"],
+)
 def test_fixed_backend_phase_preserves_parent_attempts_and_never_turns_failed_retry_into_source_negative(
-    tmp_path, retry_case
+    tmp_path, retry_case, expected_passed, expected_attempts
 ):
     case = retry_case
     parent_bytes = case.parent_map.read_bytes()
@@ -191,16 +201,10 @@ def test_fixed_backend_phase_preserves_parent_attempts_and_never_turns_failed_re
     assert case.parent_map.read_bytes() == parent_bytes
     assert (case.native / "task.toml").read_bytes() == native_bytes
     assert all(Path(attempt.path).exists() for attempt in transition.parent_calibration.attempts)
-    final_status = (entry.calibration.attempts[-1].verdict or {}).get("status")
-    if entry.calibration.passed:
-        assert len(entry.calibration.attempts) == 1
-        assert entry.passed and entry.exclusion_reason is None
-        assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 1
-    else:
-        assert len(entry.calibration.attempts) == (1 if final_status == "scored" else 3)
-        assert not entry.passed
-        assert entry.exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
-        assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 0
+    assert entry.passed is expected_passed
+    assert len(entry.calibration.attempts) == expected_attempts
+    assert entry.exclusion_reason is (None if expected_passed else OracleExclusionReason.INFRASTRUCTURE)
+    assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == int(expected_passed)
     assert len(case.calls) == parent_attempt_count + len(entry.calibration.attempts)
 
 
