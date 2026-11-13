@@ -3,16 +3,66 @@
 
 """Compute execution oversight and informational review results for Atlas."""
 
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
-from finestore.rl.curation import SourceQualityResult
+from finestore.rl.curation import (
+    AssessmentItem,
+    AssessmentPopulation,
+    JudgmentStatus,
+    SourceDeclaration,
+    SourceQualityResult,
+    Verdict,
+)
 
 
 class Quality(StrEnum):
     QUICK = "QUICK"
     SAMPLE = "SAMPLE"
     FULL = "FULL"
+
+
+@dataclass(frozen=True)
+class ReviewCompleteness:
+    reviewed: int
+    required: int
+    coverage_complete: bool
+
+    @property
+    def provisional(self) -> bool:
+        return not self.coverage_complete or self.reviewed < self.required
+
+
+def review_completeness(
+    declaration: SourceDeclaration, populations: list[AssessmentPopulation], items: list[AssessmentItem]
+) -> dict[str, Any] | None:
+    """Bind Result completeness to its required review panel, independently of Quality."""
+    aggregate = declaration.quality_result
+    if aggregate is not None:
+        assert aggregate.sample_count is not None
+        completeness = ReviewCompleteness(
+            reviewed=aggregate.reviewed,
+            required=aggregate.sample_count,
+            coverage_complete=aggregate.unavailable_count == 0,
+        )
+    elif populations:
+        required = next(row.sample_count for row in populations if row.cohort == "admitted")
+        panel = [row for row in items if row.cohort == "admitted"]
+        completeness = ReviewCompleteness(
+            reviewed=sum(
+                row.status == JudgmentStatus.REVIEWED and row.has_task and row.verdict != Verdict.UNKNOWN
+                for row in panel
+            ),
+            required=required,
+            coverage_complete=len(panel) == required and all(row.status == JudgmentStatus.REVIEWED for row in panel),
+        )
+    else:
+        return None
+    return {
+        **asdict(completeness),
+        "provisional": completeness.provisional if declaration.quality_result_finalization is None else False,
+    }
 
 
 def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Quality:
