@@ -16,6 +16,7 @@ import logging
 import os
 import re
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
@@ -124,6 +125,11 @@ def main() -> None:
         AcceleratorChoice(platform=Platform.GPU, gpu_type=SERVE_GPU, gpu_count=SERVE_GPU_COUNT),
         env_vars={},
         priority=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+    # A preempted serve stalls every trial in flight; the pilot holds its node for the whole run.
+    inference = replace(
+        inference,
+        iris=replace(inference.iris, worker_resources=replace(inference.iris.worker_resources, preemptible=False)),
     )
     gate = HeadroomGate(args.snapshot_quota, args.min_wave_size, HEADROOM_POLL_SECONDS, args.headroom_wait)
     try:
