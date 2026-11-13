@@ -268,7 +268,9 @@ def test_daytona_long_guest_command_remains_available_for_verification(tmp_path,
 
     async def scenario():
         client = IdleStoppingClient()
-        machine = await factory_type(lambda: client).create(MachineSpec(RegistryImage("ubuntu:24.04")))
+        machine = await factory_type(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
         try:
             await client.sandbox.process.exec("true guest-work", cwd="/")
             workspace = tmp_path / "answer"
