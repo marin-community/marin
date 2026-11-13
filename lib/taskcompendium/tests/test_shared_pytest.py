@@ -29,6 +29,7 @@ class SharedRuntime:
     site: Path
     verifyit: Path
     candidate: Path
+    plugin: Path
 
     def grade(self) -> dict:
         shared_pytest.grade(Path(self.contract.protected_root) / "contract.json", str(self.verifyit))
@@ -89,7 +90,7 @@ def shared_runtime(request):
             else:
                 configuration = "[pytest]\npythonpath = extras\n"
             (workspace / request.param).write_text(configuration)
-        task_python = base / "task-python"
+        task_python = workspace / "runtime" if request.param == "workspace-plugin-interpreter" else base / "task-python"
         source_python = request.config.getoption("--shared-source-python") or sys.executable
         subprocess.run(
             [Path(source_python).resolve(), "-m", "venv", "--copies", "--without-pip", str(task_python)], check=True
@@ -105,7 +106,8 @@ def shared_runtime(request):
         ).strip()
         (site / "test-dependencies.pth").write_text(source_site + "\n")
         (site / "dependency.py").write_text("VALUE = 0\n")
-        (site / "baseline_plugin.py").write_text("# Source-required pytest plugin\n")
+        plugin_path = site / "baseline_plugin.py"
+        plugin_path.write_text("# Source-required pytest plugin\n")
         metadata = site / "baseline_plugin-1.dist-info"
         metadata.mkdir()
         (metadata / "METADATA").write_text("Name: baseline-plugin\nVersion: 1\n")
@@ -133,6 +135,14 @@ def shared_runtime(request):
                 "    assert baseline_plugin.SENTINEL == 1\n"
             )
             (site / "baseline_plugin.py").write_text("SENTINEL = 1\n")
+            if request.param == "workspace-plugin-interpreter":
+                plugin_path.unlink()
+                plugin_path = site / "baseline_plugin/__init__.py"
+                plugin_path.parent.mkdir()
+                plugin_path.write_text("SENTINEL = 1\n")
+                (metadata / "RECORD").write_text(
+                    (metadata / "RECORD").read_text().replace("baseline_plugin.py", "baseline_plugin/__init__.py")
+                )
             owner = workspace if request.param == "workspace-plugin-editable" else site
             product_metadata = owner / "candidate_product-1.dist-info"
             product_metadata.mkdir()
@@ -162,6 +172,7 @@ def shared_runtime(request):
                 "def pytest_addoption(parser): parser.addoption('--baseline-enabled', action='store_true')\n"
                 "@pytest.fixture\ndef source_value(): return 1\n"
             )
+            plugin_path = package / "a.py"
             (package / "z.py").write_text("VALUE = 1\n")
             (metadata / "entry_points.txt").write_text(
                 "[pytest11]\nbaseline = baseline_plugin.a\nbaseline-z = baseline_plugin.z\n"
@@ -207,19 +218,25 @@ def shared_runtime(request):
             "'from verifyit.grade import main; raise SystemExit(main())' \"$@\"\n"
         )
         verifyit.chmod(0o755)
-        yield SharedRuntime(contract, site, verifyit, candidate)
+        yield SharedRuntime(contract, site, verifyit, candidate, plugin_path)
 
 
 @pytest.mark.parametrize(
     "shared_runtime",
-    ["workspace-plugin-editable", "workspace-plugin-wheel", "workspace-plugin-dependency", "workspace-plugin-namespace"],
+    [
+        "workspace-plugin-editable",
+        "workspace-plugin-wheel",
+        "workspace-plugin-dependency",
+        "workspace-plugin-namespace",
+        "workspace-plugin-interpreter",
+    ],
     indirect=True,
 )
 def test_shared_grading_keeps_repository_product_live_and_third_party_plugin_pinned(shared_runtime):
     runtime = shared_runtime
     candidate = runtime.candidate
     candidate.write_text("VALUE = 1\n")
-    (runtime.site / "baseline_plugin.py").write_text("SENTINEL = 0\n")
+    runtime.plugin.write_text("SENTINEL = 0\n")
     verdict = runtime.grade()
     assert verdict["reward"] == 1.0, verdict
     reports = Path(runtime.contract.report_directory)

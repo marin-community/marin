@@ -657,9 +657,14 @@ files, and removes added tests and protected fixture-plugin initializers. Instal
 use frozen pre-agent entrypoint names and modules. Third-party implementations
 load from the protected runner; repository-owned distributions remain live
 product code, even when they register pytest plugins. Ownership is captured
-before agent access: distribution files resolve into the workspace, or its
+before agent access: distribution source files resolve into the repository workspace, or its
 top-level import names match repository package roots in that census. The census
-identifies Python packages, including `src` layouts, and single-module files outside
+excludes the source interpreter's actual dependency sites and installation/virtualenv
+prefixes from both ownership checks. It also excludes virtualenvs identified by
+`pyvenv.cfg`, `.tox` environments and build/cache trees. Third-party packages installed
+in a workspace virtualenv stay pinned; editable source outside the excluded roots
+can remain repository-owned. The census identifies Python packages, including
+namespace packages and `src` layouts, and single-module files outside
 test, docs, build, cache and repository-metadata trees. A third-party
 plugin's dependency on a repository-owned distribution does not pin that product.
 The runner registers entrypoint packages for assertion rewriting before imports,
@@ -679,7 +684,7 @@ retained as diagnostic output and cannot serve as the verdict. Per-trial
 `site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
 and startup hooks to the pre-agent baseline. `source-environment.json` records the
 pytest and pytest-metadata versions captured with the protected runner before
-agent access. `workspace-owned-distributions.json` records the package-root census,
+agent access. `workspace-owned-distributions.json` records dependency-root exclusions, the package-root census,
 ownership evidence and which distributions were encountered in the grader's
 dependency graph; `workspace-owned-diff.json` compares their repository files
 against the pre-agent baseline. Installed copies remain covered by the site-packages

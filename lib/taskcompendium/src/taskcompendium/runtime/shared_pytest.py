@@ -18,21 +18,25 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
-PACKAGE_CENSUS_EXCLUDED = {
+SOURCE_DIRECTORY_EXCLUSIONS = {
     ".git",
-    ".venv",
-    "venv",
     ".tox",
+    ".cache",
     "__pycache__",
     "node_modules",
     "build",
     "dist",
-    "tests",
-    "test",
-    "docs",
 }
+PACKAGE_CENSUS_EXCLUDED = SOURCE_DIRECTORY_EXCLUSIONS | {"tests", "test", "docs"}
+
+
+@dataclass(frozen=True)
+class RepositoryPackages:
+    roots: dict[str, list[str]]
+    dependency_roots: tuple[str, ...]
 
 
 def write_json(path: Path, value: object) -> None:
@@ -75,14 +79,24 @@ def inventory(roots: list[str]) -> dict[str, str]:
     return result
 
 
-def repository_package_roots(workspace: Path) -> dict[str, list[str]]:
-    """Census source package roots before the agent can change the repository."""
+def repository_packages(workspace: Path, dependency_roots: list[Path]) -> RepositoryPackages:
+    """Census repository source while excluding interpreter dependencies and virtualenvs."""
     roots: dict[str, set[str]] = {}
+    excluded = {path.resolve() for path in dependency_roots}
     for directory, children, files in os.walk(workspace):
+        parent = Path(directory).resolve()
+        if "pyvenv.cfg" in files:
+            excluded.add(parent)
+        if any(parent.is_relative_to(path) for path in excluded):
+            children[:] = []
+            continue
         children[:] = [
-            name for name in children if name not in PACKAGE_CENSUS_EXCLUDED and not name.endswith(".egg-info")
+            name
+            for name in children
+            if name not in PACKAGE_CENSUS_EXCLUDED
+            and not name.endswith(".egg-info")
+            and not any((parent / name).resolve().is_relative_to(path) for path in excluded)
         ]
-        parent = Path(directory)
         if parent != workspace and any(Path(name).suffix == ".py" for name in files):
             import_bases = [workspace]
             for ancestor in parent.parents:
@@ -113,7 +127,10 @@ def repository_package_roots(workspace: Path) -> dict[str, list[str]]:
                 path = parent / name
                 if path.suffix == ".py" and path.stem not in {"setup", "conftest", "__init__"}:
                     roots.setdefault(path.stem, set()).add(str(path))
-    return {name: sorted(paths) for name, paths in sorted(roots.items())}
+    return RepositoryPackages(
+        {name: sorted(paths) for name, paths in sorted(roots.items())},
+        tuple(sorted(str(path) for path in excluded)),
+    )
 
 
 def inventory_diff(before: dict[str, str], after: dict[str, str]) -> dict:
@@ -280,14 +297,25 @@ def freeze_runner(contract: dict, python: str, plugins: list[str], source_config
     """Freeze third-party grader code; keep repository-owned distributions live."""
     root = Path(contract["protected_root"])
     workspace = Path(contract["workspace"]).resolve()
-    package_roots = repository_package_roots(workspace)
-    package_roots_path = root / "repository-packages.json"
-    write_json(package_roots_path, package_roots)
-    probe = (
-        "import json,sys,sysconfig;print(json.dumps({'sites':"
-        "list({sysconfig.get_path('purelib'),sysconfig.get_path('platlib')}),'executable':sys.executable}))"
-    )
+    probe = """import json,sys,sysconfig,site
+sites={sysconfig.get_path('purelib'),sysconfig.get_path('platlib')}
+print(json.dumps({'sites':sorted(sites),'executable':sys.executable,
+ 'dependency_sites':sorted(sites | set(site.getsitepackages()) | {site.getusersitepackages()}),
+ 'prefixes':[sys.prefix,sys.base_prefix]}))"""
     info = json.loads(checked([python, "-I", "-c", probe], cwd=root, timeout=30))
+    packages_census = repository_packages(
+        workspace, [Path(path) for path in (*info["dependency_sites"], *info["prefixes"])]
+    )
+    package_roots = packages_census.roots
+    package_roots_path = root / "repository-packages.json"
+    write_json(
+        package_roots_path,
+        {
+            "packages": package_roots,
+            "dependency_roots": packages_census.dependency_roots,
+            "excluded_directory_names": sorted(SOURCE_DIRECTORY_EXCLUSIONS),
+        },
+    )
     checked(
         [python, "-I", "-m", "venv", "--copies", "--without-pip", str(Path(contract["interpreter"]).parent.parent)],
         cwd=root,
@@ -298,7 +326,10 @@ def freeze_runner(contract: dict, python: str, plugins: list[str], source_config
 from packaging.utils import canonicalize_name
 from _pytest.config import _iter_rewritable_modules
 workspace=pathlib.Path(__import__('sys').argv[1]).resolve()
-package_roots=json.loads(pathlib.Path(__import__('sys').argv[2]).read_text())
+census=json.loads(pathlib.Path(__import__('sys').argv[2]).read_text())
+package_roots=census['packages']
+dependency_roots=[pathlib.Path(path) for path in census['dependency_roots']]
+excluded_names=set(census['excluded_directory_names'])
 distributions=list(m.distributions())
 entrypoints=[{'name':e.name,'module':e.value,'distribution':d.metadata['Name']}
  for d in distributions for e in d.entry_points if e.group=='pytest11']
@@ -314,8 +345,13 @@ for d in distributions:
   str(f).split('/')[0].split('.')[0] for f in d.files or []
   if not str(f).startswith('..') and '.dist-info/' not in str(f) and '.egg-info/' not in str(f))
  top.update(e.value.split('.')[0] for e in d.entry_points if e.group=='pytest11')
- inside=[str(pathlib.Path(d.locate_file(f)).resolve()) for f in d.files or []
-  if pathlib.Path(d.locate_file(f)).resolve().is_relative_to(workspace)]
+ inside=[]
+ for f in d.files or []:
+  path=pathlib.Path(d.locate_file(f)).resolve()
+  if not path.is_relative_to(workspace): continue
+  if any(path.is_relative_to(root) for root in dependency_roots): continue
+  if excluded_names.intersection(path.relative_to(workspace).parts): continue
+  inside.append(str(path))
  matching=sorted(top & package_roots.keys())
  if inside or matching:
   key=canonicalize_name(d.metadata['Name'])
@@ -388,6 +424,7 @@ print(json.dumps({'distributions':sorted(pinned),'files':files,'plugins':plugins
             "pytest_config": source_config,
             "source_environment": packages["source_environment"],
             "repository_package_roots": package_roots,
+            "dependency_roots": packages_census.dependency_roots,
             "workspace_owned_distributions": packages["workspace_owned_distributions"],
             "workspace_owned_paths": packages["workspace_owned_paths"],
             "protected_local_plugins": packages["protected_local_plugins"],
@@ -499,6 +536,7 @@ def prepare_grading(contract: dict) -> None:
         reports / "workspace-owned-distributions.json",
         {
             "package_roots": runtime["repository_package_roots"],
+            "dependency_roots": runtime["dependency_roots"],
             "distributions": runtime["workspace_owned_distributions"],
         },
     )
