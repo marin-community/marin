@@ -3,6 +3,7 @@
 
 import inspect
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,8 @@ def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, mon
         validate(spec)
 
     monkeypatch.setattr(SkyRLSpec, "__post_init__", record_producer)
+    # PyYAML writes these twelve hex digits unquoted, and OmegaConf reads them as a float.
+    monkeypatch.setattr(uuid, "uuid4", lambda: uuid.UUID(hex="104e63883176" + "0" * 20))
     documents, failures = render_launch_census(tmp_path / "artifacts")
     assert not failures, failures
     root = Path(__file__).resolve().parents[2]
