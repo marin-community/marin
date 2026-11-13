@@ -74,8 +74,8 @@ def run_harbor_job(
     backend_state: Callable[[], InferenceBackendState],
     snapshot_quota: int,
     work: Path,
-) -> Path:
-    """Run ``overlay.dataset_path`` as one Harbor job and return its jobs directory.
+) -> None:
+    """Run ``overlay.dataset_path`` as one Harbor job.
 
     Writes ``<work>/account.json``, ``<work>/snapshots.json`` (all, pre-existing, and to-delete names),
     ``<work>/snapshots-prepared.json`` and ``<work>/snapshot-deletions.json``.
@@ -104,4 +104,3 @@ def run_harbor_job(
     finally:
         deletions = snapshot_command("delete", str(to_delete), env=driver_env)
         (work / "snapshot-deletions.json").write_text(json.dumps(deletions, indent=1))
-    return Path(overlay.jobs_dir)

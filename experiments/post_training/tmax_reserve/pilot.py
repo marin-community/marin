@@ -106,8 +106,12 @@ def main() -> None:
     parser.add_argument("--policy", type=Path, required=True, help="The pilot Harbor policy (local dataset path).")
     parser.add_argument("--model", required=True, help="Evaluation catalog model name.")
     parser.add_argument("--snapshot-quota", type=int, required=True, help="The account's snapshot quota.")
-    parser.add_argument("--output", type=Path, required=True, help="New local directory for jobs and the summary.")
-    parser.add_argument("--upload", required=True, help="Remote directory that receives a copy of --output.")
+    parser.add_argument("--output", type=Path, required=True, help="New local directory for records and the summary.")
+    parser.add_argument(
+        "--durable-root",
+        required=True,
+        help="Remote directory Harbor writes each trial and the archive to as it finishes; also receives --output.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args.output.mkdir(parents=True)
@@ -132,7 +136,8 @@ def main() -> None:
             logger.info("serving %s at %s", model.name, session.model.endpoint.base_url)
             overlay = HarborRuntimeOverlay(
                 job_name="tmax-pilot",
-                jobs_dir=str(args.output / "jobs"),
+                # Each trial lands in durable storage as it finishes, so a lost coordinator keeps finished traces.
+                jobs_dir=f"{args.durable_root}/jobs",
                 dataset_path=str(dataset),
                 endpoint_url=session.model.endpoint.base_url,
                 served_model=session.model.endpoint.model,
@@ -140,7 +145,7 @@ def main() -> None:
                 task_limit=None,
                 model_agent_kwargs=model_kwargs,
                 verifier_env={},
-                archive_root=str(args.output / "archive"),
+                archive_root=f"{args.durable_root}/archive",
                 archive_dataset="tmax-pilot",
             )
             driver_env = {
@@ -150,15 +155,19 @@ def main() -> None:
             driver_env.update({key: os.environ[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in os.environ})
             run_harbor_job(config, overlay, driver_env, session.backend_state, args.snapshot_quota, args.output)
     finally:
+        fs, root = filesystem_for(args.durable_root)
         jobs_dir = args.output / "jobs"
+        if fs.exists(f"{root}/jobs"):
+            # Trailing slashes copy the directory's contents into jobs_dir (fsspec copy semantics).
+            fs.get(f"{root}/jobs/", f"{jobs_dir}/", recursive=True)
         trials = trial_results(jobs_dir)
         seconds = sandbox_seconds(jobs_dir)
         apt = apt_usage(sorted(path.parent for path in jobs_dir.glob("*/*/result.json")))
         summary = summarize(trials, seconds, apt)
         (args.output / "pilot-trials.jsonl").write_text("".join(json.dumps(t) + "\n" for t in trials))
         (args.output / "pilot-summary.json").write_text(json.dumps(summary, indent=1))
-        fs, path = filesystem_for(args.upload)
-        fs.put(str(args.output), path, recursive=True)
+        for record in sorted(args.output.glob("*.json*")):
+            fs.put(str(record), f"{root}/{record.name}")
 
 
 if __name__ == "__main__":
