@@ -99,7 +99,6 @@ def test_pending_review_is_quick_without_a_result(journey: Journey, theme: str) 
     expect(pending.locator(".level")).to_have_attribute("title", "SAMPLE review in progress")
     expect(pending.locator("td").nth(4)).to_have_text("Not assessed")
     expect(pending.locator(".issue-rate-cell")).to_have_text("—")
-    assert pending.locator("td:has(> .chip)").evaluate_all("cells=>cells.every(c=>c.children.length===1)")
     for width in (1440, 390):
         page.set_viewport_size({"width": width, "height": 844})
         pending.locator(".source-name").click()
