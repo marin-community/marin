@@ -34,6 +34,7 @@ from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
     DEFAULT_SANDBOX_TTL_MINUTES,
+    DaytonaImageBuild,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkPolicy,
@@ -99,6 +100,7 @@ class DaytonaEnvironment(BaseEnvironment):
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
+        image_build: str = DaytonaImageBuild.SNAPSHOT,
         model_endpoint: str | None = None,
         model_name: str | None = None,
         judge_access: JudgeAccess = JudgeAccess.VERIFIER,
@@ -130,6 +132,7 @@ class DaytonaEnvironment(BaseEnvironment):
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
             network_policy=policy,
+            image_build=DaytonaImageBuild(image_build),
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)
@@ -186,6 +189,10 @@ class DaytonaEnvironment(BaseEnvironment):
 
     def snapshot_request(self) -> SnapshotRequest:
         """The snapshot that this task's sandbox starts from."""
+        if self.factory.image_build != DaytonaImageBuild.SNAPSHOT:
+            raise ValueError(
+                f"{self.factory.image_build} image builds start sandboxes without a snapshot"
+            )
         return snapshot_request_for_spec(self._machine_spec())
 
     async def start(
