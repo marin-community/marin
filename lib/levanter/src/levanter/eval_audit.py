@@ -93,4 +93,5 @@ def initial_eval_match(reference: dict, metrics: dict, audit: dict, absolute_tol
 
 def write_evaluation_result(path: str, metrics: dict, input_audit: dict) -> None:
     if jax.process_index() == 0:
-        StoragePath(path).write_text(json.dumps({"metrics": metrics, "input_audit": input_audit}, indent=2))
+        values = {name: float(value) for name, value in metrics.items()}
+        StoragePath(path).write_text(json.dumps({"metrics": values, "input_audit": input_audit}, indent=2))

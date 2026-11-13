@@ -42,7 +42,10 @@ def test_reference_match_survives_batch_changes_and_rejects_changed_tokens(tmp_p
             batch = hax.Axis("batch", batch_size)
             evaluator = TaggedEvaluator(
                 EvalBatch=batch,
-                tagged_eval_sets=[(ListAsyncDataset(examples), ["heldout"])],
+                tagged_eval_sets=[
+                    (ListAsyncDataset(examples[:2]), ["heldout/a"]),
+                    (ListAsyncDataset(examples[2:]), ["heldout/b"]),
+                ],
                 loss_fn=partial(lm_eval_loss, EvalBatch=batch, mp=None),
                 device_mesh=mesh,
                 axis_mapping={"batch": "data"},
