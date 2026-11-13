@@ -186,6 +186,10 @@ Before selecting a new catalog load:
 2. Survey the production backends at Marin latest for their current capabilities
    with the [survey procedure](#backend-survey), and publish the matrix beside the deployment record.
    Execute this survey at each deployment; do not reuse an older deployment's matrix.
+   For storage-enforcing LOCAL workers, run the survey on the actual PRIVILEGED
+   worker with `--local-disk-root /cache/shellbox-disks`. Require its ext4 loop,
+   OverlayFS, ENOSPC and cleanup probe to pass. Retain the overflow/neighbor and
+   post-teardown loop/mount evidence; a workstation survey cannot qualify the host.
 3. Require `sandbox-image-workdir` in the direct Kubernetes backend descriptor
    before submitting any prepared-image Iris task, even without declared disk.
    Older controllers hide `/app` and must be rejected before submission.
@@ -283,6 +287,13 @@ uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,
   --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
   --manifest survey-inputs.json --output backend-map.json
 ```
+
+Add `--local-disk-root /cache/shellbox-disks` only on a worker configured for
+[LOCAL disk enforcement](task-curation.md#full-population-oracle-filter).
+The survey constructs the same verified `LocalDiskPool` used by factory admission.
+Without it, LOCAL storage stays unsupported. A successful check records conditional
+support tied to that worker configuration; use the same `disk_root` in Harbor's
+environment kwargs when executing the surveyed tasks.
 
 The versioned artifact contains every backend/requirement cell, evidence and
 conditions, per-role requirement counts and resource ranges, and per-backend task
