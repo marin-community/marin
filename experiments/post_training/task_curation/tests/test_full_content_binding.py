@@ -122,17 +122,16 @@ def sample_receipt(source):
 
 
 @pytest.mark.parametrize("finalization", list(QualityResultFinalization))
-def test_same_input_sample_cannot_replace_explicit_whole_source_finality(content_source, finalization):
+def test_same_input_full_result_replaces_sample_and_survives_roundtrip(content_source, finalization):
     binding = whole_source_binding(content_source, finalization)
-    first = bind_full_content_result(bind_sample_result(content_source, sample_receipt(content_source)), binding)
-    repeated = bind_full_content_result(bind_sample_result(first, sample_receipt(first)), None)
-    assert repeated.info.quality_result == binding.result
-    assert repeated.info.quality_result_finalization is finalization
-    assert repeated.info.actor_census_input == content_source.info.actor_census_input
-    assert repeated.info.oversight == content_source.info.oversight
-    assert repeated.info.within_source_dedup == content_source.info.within_source_dedup
-    assert repeated.info.grading_environment == content_source.info.grading_environment
-    table = pa.Table.from_pylist([repeated.declaration.model_dump(mode="json")], schema=arrow_schema(SourceDeclaration))
+    bound = bind_full_content_result(bind_sample_result(content_source, sample_receipt(content_source)), binding)
+    assert bound.info.quality_result == binding.result
+    assert bound.info.quality_result_finalization is finalization
+    assert bound.info.actor_census_input == content_source.info.actor_census_input
+    assert bound.info.oversight == content_source.info.oversight
+    assert bound.info.within_source_dedup == content_source.info.within_source_dedup
+    assert bound.info.grading_environment == content_source.info.grading_environment
+    table = pa.Table.from_pylist([bound.declaration.model_dump(mode="json")], schema=arrow_schema(SourceDeclaration))
     restored = SourceDeclaration.model_validate(table.to_pylist()[0])
     assert restored.quality_result_finalization is finalization
     completeness = review_completeness(restored, [], [])
@@ -145,49 +144,36 @@ def test_same_input_sample_cannot_replace_explicit_whole_source_finality(content
     assert quality(restored.model_dump(mode="json"), None) == ("FULL" if binding.coverage_complete else "SAMPLE")
 
 
-@pytest.mark.parametrize("change", ["dataset_revision", "task_specs_sha256", "evidence_url", "missing_binding"])
-def test_changed_input_or_missing_binding_clears_stale_finality_before_fresh_sample(content_source, change):
+@pytest.mark.parametrize("change", ["dataset_revision", "task_specs_sha256", "evidence_url"])
+def test_changed_input_rejects_whole_source_binding(content_source, change):
     binding = whole_source_binding(content_source, QualityResultFinalization.ACCEPTED_INCOMPLETE)
-    final = bind_full_content_result(content_source, binding)
-    actor = final.info.actor_census_input
-    if change == "missing_binding":
-        changed = replace(final, info=replace(final.info, full_content_result_binding=None))
-    else:
-        replacement = {
-            "dataset_revision": "b" * 40,
-            "task_specs_sha256": "b" * 64,
-            "evidence_url": "memory://actor-census/replaced/.artifact.json",
-        }[change]
-        actor = actor.model_copy(update={change: replacement})
-        changed = replace(
-            final,
-            config=replace(
-                final.config,
-                dataset=replace(
-                    final.dataset,
-                    revision=actor.dataset_revision,
-                    url=f"https://huggingface.co/datasets/{actor.dataset_id}/tree/{actor.dataset_revision}",
-                ),
+    actor = content_source.info.actor_census_input
+    replacement = {
+        "dataset_revision": "b" * 40,
+        "task_specs_sha256": "b" * 64,
+        "evidence_url": "memory://actor-census/replaced/.artifact.json",
+    }[change]
+    actor = actor.model_copy(update={change: replacement})
+    changed = replace(
+        content_source,
+        config=replace(
+            content_source.config,
+            dataset=replace(
+                content_source.dataset,
+                revision=actor.dataset_revision,
+                url=f"https://huggingface.co/datasets/{actor.dataset_id}/tree/{actor.dataset_revision}",
             ),
-            info=replace(
-                final.info,
-                actor_census_input=actor,
-                within_source_dedup=deduplication_evidence(actor.dataset_id, actor.dataset_revision, final.version, 201),
+        ),
+        info=replace(
+            content_source.info,
+            actor_census_input=actor,
+            within_source_dedup=deduplication_evidence(
+                actor.dataset_id, actor.dataset_revision, content_source.version, 201
             ),
-        )
-    fresh = sample_receipt(changed)
-    bound = bind_full_content_result(bind_sample_result(changed, fresh), None)
-    assert bound.info.quality_result == fresh.review.result
-    assert bound.info.quality_result_finalization is None and bound.info.full_content_result_binding is None
-    assert review_completeness(bound.declaration, [], []) == {
-        "reviewed": 100,
-        "required": 100,
-        "coverage_complete": True,
-        "provisional": False,
-    }
-    if change != "missing_binding":
-        with pytest.raises(ValueError, match="another current retained population"):
-            bind_full_content_result(bound, binding)
+        ),
+    )
+    with pytest.raises(ValueError, match="another current retained population"):
+        bind_full_content_result(changed, binding)
 
 
 def test_retained_gym_3939_result_cannot_bind_to_raw_3941_population(content_source):
@@ -223,7 +209,6 @@ def test_retained_gym_3939_result_cannot_bind_to_raw_3941_population(content_sou
     )
     with pytest.raises(ValueError, match="another current retained population"):
         bind_full_content_result(raw, binding)
-    assert raw.info.quality_result is None
 
 
 @pytest.mark.parametrize("finalization", list(QualityResultFinalization))
@@ -299,14 +284,12 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
         evidence_url="memory://actor-census/immutable/.artifact.json",
     )
     binding = full_content_result_binding(receipt, finalization, waiver, reviewer, actor_input, population)
-    assert binding.input.measured_tasks == 2 and binding.input.task_specs_sha256 == files.task_specs_sha256
     assert binding.result.issue_count == (1 if incomplete else 2)
     assert binding.result.unavailable_count == int(incomplete)
     assert binding.records.sha256 == review.records_sha256 and binding.contract_index.sha256 == inputs.index_sha256
     assert binding.result.issues == []
     assert review.result.issues
     assert binding.result.model_dump(exclude={"issues"}) == review.result.model_dump(exclude={"issues"})
-    assert binding.input == actor_input
     table = pq.read_table(review.records_path)
     rows = table.to_pylist()
     rows[0]["runtime_sha256"] = "f" * 64

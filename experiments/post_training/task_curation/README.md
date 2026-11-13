@@ -621,12 +621,7 @@ loading reads the local transport without new storage
 credentials or remote verification calls. This step does not publish a dataset or
 load production Atlas.
 
-Before SAMPLE attachment, validate any carried whole-source binding against the
-declaration's current full-population census (`ActorCensusInput`); changed pins,
-converters, counts or task digests clear stale Result/finality. Then attach SAMPLE
-and apply the verified matching whole-source binding afterward. A matching final
-Result survives later SAMPLE attachment. The
-declaration persists `quality_result_finalization`; Atlas uses it to keep an
+The declaration persists `quality_result_finalization`; Atlas uses it to keep an
 accepted incomplete Result final while still reporting incomplete coverage.
 Completed SAMPLE panels keep their existing finality rules.
 
