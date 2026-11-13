@@ -5351,16 +5351,16 @@ mod tests {
                 .unwrap();
         }
 
-        /// The planner's view of each segment's bounds, in segment order.
+        /// The bounds the catalog records for each segment, in segment order.
         fn recorded_bounds(&self) -> Vec<Option<(i64, i64)>> {
-            let snapshot = self.store.query_snapshot("iris.worker").unwrap();
+            let records = self.store.catalog.object_segments("iris.worker").unwrap();
             self.paths
                 .iter()
                 .map(|path| {
-                    snapshot
-                        .column_bounds
-                        .get(path)
-                        .and_then(|bounds| bounds.get("timestamp_ms").copied())
+                    records
+                        .iter()
+                        .find(|record| &record.path == path)
+                        .and_then(|record| record.column_bounds.get("timestamp_ms").copied())
                 })
                 .collect()
         }
@@ -5446,7 +5446,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn flushed_segments_record_column_bounds_and_prune_by_them() {
+    async fn flushed_segments_record_column_bounds() {
         let table = TimeBoundedTable::new("column_bounds_flushed").await;
         assert_eq!(
             table.recorded_bounds(),
@@ -5456,6 +5456,12 @@ mod tests {
                 Some((3_000, 3_500))
             ]
         );
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn time_filters_prune_by_column_bounds() {
+        let table = TimeBoundedTable::new("column_bounds_pruned").await;
         table.assert_results_unchanged([2, 2, 2, 2, 1]).await;
         table.cleanup();
     }

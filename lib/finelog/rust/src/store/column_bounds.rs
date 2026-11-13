@@ -72,11 +72,10 @@ pub fn from_batches(batches: &[RecordBatch], columns: &[String]) -> ColumnBounds
                 typed = false;
                 break;
             };
-            for index in 0..values.len() {
-                if values.is_valid(index) {
-                    let value = values.value(index);
-                    widen(&mut range, value, value);
-                }
+            if let (Some(low), Some(high)) =
+                (arrow::compute::min(values), arrow::compute::max(values))
+            {
+                widen(&mut range, low, high);
             }
         }
         let range = if typed { range } else { None };
