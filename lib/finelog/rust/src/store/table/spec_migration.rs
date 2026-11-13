@@ -559,6 +559,7 @@ async fn rewrite_batch(
         .and_then(|layout| layout.max_row_group_rows)
         .map(|rows| rows as usize)
         .unwrap_or(migration.format.max_row_group_rows());
+    let bounds_columns = migration.format.bounds_columns().to_vec();
     let max_merge_arrow_bytes = migration.max_merge_arrow_bytes;
     let partitions = target_layout.and_then(TargetPartitions::new);
     let bounds_by_path: HashMap<String, (Option<String>, Option<String>)> = batch
@@ -602,6 +603,7 @@ async fn rewrite_batch(
                     sort_columns: &sort_columns,
                     key_column: &key_column,
                     max_row_group_rows,
+                    bounds_columns: &bounds_columns,
                 },
                 index_config: &index_config,
                 partition_policy: partitions
@@ -680,6 +682,7 @@ async fn rewrite_batch(
             row: segment_to_row(migration.table, &segment),
             source: stored.source,
             artifacts: references,
+            column_bounds: segment.column_bounds.clone(),
         });
     }
     let upload_ms = upload_started.elapsed().as_millis() as u64;
@@ -990,6 +993,7 @@ mod tests {
                     values: BTreeMap::from([("run_id".to_string(), index.to_string())]),
                 }),
                 location: SegmentLocation::Local,
+                column_bounds: Default::default(),
                 artifacts: Default::default(),
             })
             .collect::<Vec<_>>();

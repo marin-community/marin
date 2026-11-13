@@ -19,6 +19,7 @@ use parquet::arrow::ProjectionMask;
 use crate::errors::StatsError;
 use crate::indices::{local_sidecar_artifacts, write_segment_index, SegmentIndexConfig};
 use crate::partition_policy::{segment_path, PhysicalPartitionPolicy, SegmentPartition};
+use crate::store::column_bounds::{self, ColumnBounds};
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::merge::{
     merge_row_converter, merge_runs, project_to_schema, sort_batch_to_run, sort_col_indices,
@@ -66,6 +67,9 @@ pub struct CompactionLayout<'a> {
     pub sort_columns: &'a [String],
     pub key_column: &'a str,
     pub max_row_group_rows: usize,
+    /// Columns whose bounds a rewritten output records. A bump keeps no
+    /// bounds here; its driver carries the input's forward.
+    pub bounds_columns: &'a [String],
 }
 
 /// Whether an input may reach the output without being decoded.
@@ -257,6 +261,8 @@ fn apply_level_bump(
         max_key_value: max_key,
         partition: old.partition.clone(),
         location: SegmentLocation::Local,
+        // The driver carries the input's column bounds forward with the rename.
+        column_bounds: ColumnBounds::new(),
         // The commit resolves the artifacts that survive the promotion rename.
         artifacts: LocalArtifacts::default(),
     };
@@ -499,6 +505,7 @@ fn apply_merge(
             max_key_value: metadata.max_key_value,
             partition: metadata.partition,
             location: SegmentLocation::Local,
+            column_bounds: column_bounds::from_batches(&batches, execution.layout.bounds_columns),
             artifacts: local_sidecar_artifacts(&merged_path),
         });
     }
@@ -646,6 +653,7 @@ mod tests {
             sort_columns,
             key_column: "key",
             max_row_group_rows: MAX_ROW_GROUP_ROWS,
+            bounds_columns: &[],
         }
     }
 
@@ -897,6 +905,7 @@ mod tests {
                 sort_columns: &["worker_id".to_string(), "key".to_string()],
                 key_column: "key",
                 max_row_group_rows: 2,
+                bounds_columns: &[],
             },
             &SegmentIndexConfig::from_policies(
                 Vec::<String>::new(),

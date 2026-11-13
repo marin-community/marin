@@ -2071,3 +2071,66 @@ async fn a_hub_migration_under_live_forwarding_loses_nothing() {
         "a hub migration under live forwarding must not duplicate or drop rows"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sender_without_catalog_bounds_forwards_to_a_hub_that_has_them() {
+    // A staged deploy upgrades servers one at a time, so a sender's schema may lack
+    // a `catalog_bounds` flag the hub already has. Its registration must neither
+    // conflict nor turn the hub's flag off.
+    let fx = Fixture::new("catalog-bounds-skew").await;
+    let namespace = "iris.bounded";
+    let schema = |catalog_bounds: bool| {
+        let ts = Column::new("ts", ColumnType::COLUMN_TYPE_INT64, false);
+        let ts = if catalog_bounds {
+            ts.with_catalog_bounds()
+        } else {
+            ts
+        };
+        Schema::new(
+            vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false), ts],
+            "id",
+        )
+    };
+    fx.target_store()
+        .register_table(namespace, schema(true), StoragePolicy::default())
+        .unwrap();
+    fx.source
+        .register_table(namespace, schema(false), StoragePolicy::default())
+        .unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&arrow_schema),
+        vec![
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            Arc::new(arrow::array::Int64Array::from(vec![10, 20, 30])),
+        ],
+    )
+    .unwrap();
+    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+    let (_, last_seq) = fx.source.write_rows(namespace, &ipc, None).unwrap();
+    fx.source
+        .await_persisted(namespace, last_seq, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    fx.forward_from_start(namespace).await;
+    fx.drain(PRIV_A, namespace).await;
+
+    assert_eq!(
+        scalar_i64(fx.target_store(), "SELECT count(*) FROM \"iris.bounded\"").await,
+        3
+    );
+    assert!(
+        fx.target_store()
+            .get_table_schema(namespace)
+            .unwrap()
+            .column("ts")
+            .unwrap()
+            .index
+            .catalog_bounds,
+        "the sender's registration must not turn the hub's catalog bounds off"
+    );
+}

@@ -59,14 +59,16 @@ MIGRATION_PHASE_OBSERVING: MigrationPhase
 MIGRATION_PHASE_RETIRED: MigrationPhase
 
 class ColumnIndex(_message.Message):
-    __slots__ = ("trigram", "exact_values", "value_counts")
+    __slots__ = ("trigram", "exact_values", "value_counts", "catalog_bounds")
     TRIGRAM_FIELD_NUMBER: _ClassVar[int]
     EXACT_VALUES_FIELD_NUMBER: _ClassVar[int]
     VALUE_COUNTS_FIELD_NUMBER: _ClassVar[int]
+    CATALOG_BOUNDS_FIELD_NUMBER: _ClassVar[int]
     trigram: bool
     exact_values: _containers.RepeatedScalarFieldContainer[str]
     value_counts: bool
-    def __init__(self, trigram: _Optional[bool] = ..., exact_values: _Optional[_Iterable[str]] = ..., value_counts: _Optional[bool] = ...) -> None: ...
+    catalog_bounds: bool
+    def __init__(self, trigram: _Optional[bool] = ..., exact_values: _Optional[_Iterable[str]] = ..., value_counts: _Optional[bool] = ..., catalog_bounds: _Optional[bool] = ...) -> None: ...
 
 class Column(_message.Message):
     __slots__ = ("name", "type", "nullable", "index")
@@ -243,7 +245,7 @@ class ObjectRef(_message.Message):
     def __init__(self, object_id: _Optional[str] = ..., provider_version: _Optional[str] = ..., etag: _Optional[str] = ..., byte_size: _Optional[int] = ...) -> None: ...
 
 class CatalogSegment(_message.Message):
-    __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "table_spec_version", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill", "index_bundle", "projections", "source_segment_uuid")
+    __slots__ = ("segment_id", "source", "level", "min_seq", "max_seq", "row_count", "created_at_ms", "min_key_value", "max_key_value", "partition_json", "table_spec_version", "retired_at_ms", "delete_after_ms", "migration_source_id", "migration_source_rows", "migration_backfill", "index_bundle", "projections", "source_segment_uuid", "column_bounds")
     SEGMENT_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     LEVEL_FIELD_NUMBER: _ClassVar[int]
@@ -263,6 +265,7 @@ class CatalogSegment(_message.Message):
     INDEX_BUNDLE_FIELD_NUMBER: _ClassVar[int]
     PROJECTIONS_FIELD_NUMBER: _ClassVar[int]
     SOURCE_SEGMENT_UUID_FIELD_NUMBER: _ClassVar[int]
+    COLUMN_BOUNDS_FIELD_NUMBER: _ClassVar[int]
     segment_id: str
     source: ObjectRef
     level: int
@@ -282,7 +285,18 @@ class CatalogSegment(_message.Message):
     index_bundle: ObjectRef
     projections: _containers.RepeatedCompositeFieldContainer[ProjectionArtifact]
     source_segment_uuid: str
-    def __init__(self, segment_id: _Optional[str] = ..., source: _Optional[_Union[ObjectRef, _Mapping]] = ..., level: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., row_count: _Optional[int] = ..., created_at_ms: _Optional[int] = ..., min_key_value: _Optional[str] = ..., max_key_value: _Optional[str] = ..., partition_json: _Optional[str] = ..., table_spec_version: _Optional[int] = ..., retired_at_ms: _Optional[int] = ..., delete_after_ms: _Optional[int] = ..., migration_source_id: _Optional[str] = ..., migration_source_rows: _Optional[int] = ..., migration_backfill: _Optional[bool] = ..., index_bundle: _Optional[_Union[ObjectRef, _Mapping]] = ..., projections: _Optional[_Iterable[_Union[ProjectionArtifact, _Mapping]]] = ..., source_segment_uuid: _Optional[str] = ...) -> None: ...
+    column_bounds: _containers.RepeatedCompositeFieldContainer[CatalogColumnBounds]
+    def __init__(self, segment_id: _Optional[str] = ..., source: _Optional[_Union[ObjectRef, _Mapping]] = ..., level: _Optional[int] = ..., min_seq: _Optional[int] = ..., max_seq: _Optional[int] = ..., row_count: _Optional[int] = ..., created_at_ms: _Optional[int] = ..., min_key_value: _Optional[str] = ..., max_key_value: _Optional[str] = ..., partition_json: _Optional[str] = ..., table_spec_version: _Optional[int] = ..., retired_at_ms: _Optional[int] = ..., delete_after_ms: _Optional[int] = ..., migration_source_id: _Optional[str] = ..., migration_source_rows: _Optional[int] = ..., migration_backfill: _Optional[bool] = ..., index_bundle: _Optional[_Union[ObjectRef, _Mapping]] = ..., projections: _Optional[_Iterable[_Union[ProjectionArtifact, _Mapping]]] = ..., source_segment_uuid: _Optional[str] = ..., column_bounds: _Optional[_Iterable[_Union[CatalogColumnBounds, _Mapping]]] = ...) -> None: ...
+
+class CatalogColumnBounds(_message.Message):
+    __slots__ = ("column", "min", "max")
+    COLUMN_FIELD_NUMBER: _ClassVar[int]
+    MIN_FIELD_NUMBER: _ClassVar[int]
+    MAX_FIELD_NUMBER: _ClassVar[int]
+    column: str
+    min: int
+    max: int
+    def __init__(self, column: _Optional[str] = ..., min: _Optional[int] = ..., max: _Optional[int] = ...) -> None: ...
 
 class ProjectionArtifact(_message.Message):
     __slots__ = ("name", "object")

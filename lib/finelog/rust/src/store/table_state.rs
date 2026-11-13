@@ -161,6 +161,7 @@ pub struct SegmentDescriptor {
     pub row: SegmentRow,
     pub source: ObjectRef,
     pub artifacts: ArtifactReferences,
+    pub column_bounds: crate::store::column_bounds::ColumnBounds,
 }
 
 /// Exact references to one segment's derived index artifacts.

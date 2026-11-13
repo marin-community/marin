@@ -149,7 +149,10 @@ pub fn log_registered_schema() -> Schema {
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
             // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
-            Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            // Each segment covers a short time span, so per-segment bounds in
+            // the catalog drop most segments for a time-bounded search; the
+            // key column is `key`, so key bounds cannot.
+            Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false).with_catalog_bounds(),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
             Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
         ],
@@ -779,6 +782,9 @@ impl Store {
                         table_spec_version,
                         source: source.clone(),
                         artifacts: ArtifactReferences::from_catalog_segment(segment),
+                        column_bounds: crate::store::column_bounds::from_proto(
+                            &segment.column_bounds,
+                        ),
                         migration_backfill: segment.migration_backfill.unwrap_or(false),
                         migration_source_id: segment.migration_source_id.clone(),
                         migration_source_rows: segment.migration_source_rows,
@@ -2144,7 +2150,7 @@ mod tests {
             .is_empty());
         std::fs::remove_file(&path).unwrap();
 
-        maintenance::run(&runtime, TableWork::KeyBounds)
+        maintenance::run(&runtime, TableWork::SegmentBounds)
             .await
             .unwrap();
         assert!(
@@ -5243,11 +5249,177 @@ mod tests {
             schema.column("key").unwrap().index.trigram,
             "boot enables the key trigram index a pre-existing namespace lacks"
         );
+        assert!(
+            schema.column("epoch_ms").unwrap().index.catalog_bounds,
+            "boot enables epoch_ms catalog bounds a pre-existing namespace lacks"
+        );
         assert_eq!(
             store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
             seeded_policy,
             "boot evolution must not reset the persisted log policy"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn catalog_bounds_leave_the_index_policy_fingerprint_unchanged() {
+        // Turning the flag on must not rebuild every index bundle of `log`.
+        let flagged = stored_form(log_registered_schema());
+        assert!(flagged.column("epoch_ms").unwrap().index.catalog_bounds);
+        let mut plain = flagged.clone();
+        for column in &mut plain.columns {
+            column.index.catalog_bounds = false;
+        }
+        let fingerprint = |schema: Schema| {
+            crate::store::table::segment_format::SegmentFormat::resolve(schema)
+                .unwrap()
+                .index_config("iris.worker")
+                .policy_fingerprint()
+        };
+        assert_eq!(fingerprint(flagged), fingerprint(plain));
+    }
+
+    /// `iris.worker` keyed on `worker_id`, with catalog bounds on `timestamp_ms`.
+    fn time_bounded_worker_spec() -> ValidatedTableSpec {
+        let mut schema = worker_schema_keyed_on("worker_id");
+        for column in &mut schema.columns {
+            if column.name == "timestamp_ms" {
+                column.index.catalog_bounds = true;
+            }
+        }
+        ObjectSpec::new(1).schema(schema).validated()
+    }
+
+    struct TimeBoundedTable {
+        store: Store,
+        data_dir: PathBuf,
+        remote_dir: PathBuf,
+        /// One segment per write, in `timestamp_ms` order: 1000–1500,
+        /// 2000–2500 and 3000–3500.
+        paths: Vec<String>,
+    }
+
+    impl TimeBoundedTable {
+        async fn new(tag: &str) -> Self {
+            let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
+            let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
+            let store = Store::new(
+                Some(data_dir.clone()),
+                remote_dir.to_string_lossy().into_owned(),
+                crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+                ServeMode::Shadow,
+            )
+            .unwrap();
+            store
+                .register_versioned_table("iris.worker", time_bounded_worker_spec())
+                .unwrap();
+            store.publish_object_catalog("iris.worker").await.unwrap();
+            for (worker, start) in [("w-1", 1_000), ("w-2", 2_000), ("w-3", 3_000)] {
+                let (_, ipc) = worker_ipc(&[(worker, 1, start), (worker, 2, start + 500)]);
+                store.write_rows("iris.worker", &ipc, None).unwrap();
+                store
+                    .maintain_namespace("iris.worker", false)
+                    .await
+                    .unwrap();
+            }
+            let paths = store.query_snapshot("iris.worker").unwrap().paths;
+            assert_eq!(paths.len(), 3, "each write flushes its own segment");
+            Self {
+                store,
+                data_dir,
+                remote_dir,
+                paths,
+            }
+        }
+
+        fn clear_column_bounds(&self, path: &str) {
+            let runtime = self.store.tables.require("iris.worker").unwrap();
+            let lease = runtime.controller().begin_compaction().unwrap();
+            runtime
+                .controller()
+                .commit_maintenance(&lease, || {
+                    let revision = self
+                        .store
+                        .catalog
+                        .clear_object_segment_column_bounds("iris.worker", path)?;
+                    Ok((revision, ()))
+                })
+                .unwrap();
+        }
+
+        /// The bounds the catalog records for each segment, in segment order.
+        fn recorded_bounds(&self) -> Vec<Option<(i64, i64)>> {
+            let records = self.store.catalog.object_segments("iris.worker").unwrap();
+            self.paths
+                .iter()
+                .map(|path| {
+                    records
+                        .iter()
+                        .find(|record| &record.path == path)
+                        .and_then(|record| record.column_bounds.get("timestamp_ms").copied())
+                })
+                .collect()
+        }
+
+        fn cleanup(self) {
+            std::fs::remove_dir_all(self.data_dir).ok();
+            std::fs::remove_dir_all(self.remote_dir).ok();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flushed_segments_record_column_bounds() {
+        let table = TimeBoundedTable::new("column_bounds_flushed").await;
+        assert_eq!(
+            table.recorded_bounds(),
+            vec![
+                Some((1_000, 1_500)),
+                Some((2_000, 2_500)),
+                Some((3_000, 3_500))
+            ]
+        );
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn maintenance_backfills_column_bounds_from_footers_without_rewriting_objects() {
+        let table = TimeBoundedTable::new("column_bounds_backfill").await;
+        let sources_before: Vec<_> = table
+            .store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|record| record.source)
+            .collect();
+        for path in &table.paths {
+            table.clear_column_bounds(path);
+        }
+        let runtime = table.store.tables.require("iris.worker").unwrap();
+        maintenance::run(&runtime, TableWork::SegmentBounds)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            table.recorded_bounds(),
+            vec![
+                Some((1_000, 1_500)),
+                Some((2_000, 2_500)),
+                Some((3_000, 3_500))
+            ]
+        );
+        let sources_after: Vec<_> = table
+            .store
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .into_iter()
+            .map(|record| record.source)
+            .collect();
+        assert_eq!(
+            sources_after, sources_before,
+            "the backfill reuses each object"
+        );
+        table.cleanup();
     }
 }

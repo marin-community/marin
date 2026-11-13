@@ -305,6 +305,9 @@ pub fn visible_segments(
             max_key_value: row.max_key_value,
             partition: row.partition,
             location: row.location,
+            column_bounds: record
+                .map(|record| record.column_bounds.clone())
+                .unwrap_or_default(),
             artifacts,
         });
     }
