@@ -26,7 +26,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from rigging.filesystem.storage_path import prefix_join
-from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
+from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import (
     EvaluationSampling,
 )
@@ -46,20 +46,18 @@ def _training_config(
     recipe = preset.recipe
     micro_batch, in_flight = recipe.layout.workload.batch_parameters(recipe.config)
     geometry = asdict(recipe.layout.megatron)
+    budget = recipe.config.context_budget
+    assert budget is not None
+    if recipe.fixed_reply_tokens is not None:
+        budget = budget.model_copy(update={"max_new_tokens_per_turn": recipe.fixed_reply_tokens})
     config = recipe.config.merge(
         RecipePatch(
-            context_budget=ContextBudget(
-                request_window_tokens=recipe.request_window_tokens,
-                max_new_tokens_per_turn=(
-                    recipe.fixed_reply_tokens if recipe.fixed_reply_tokens is not None else recipe.max_new_tokens
-                ),
-                max_turns=1,
-            ),
+            context_budget=budget,
             trainer=sections.Trainer(
                 max_steps=preset.updates or 1,
                 micro_forward_batch_size_per_gpu=micro_batch,
                 eval_interval=max(1, preset.updates) if preset.evaluations else -1,
-                resume_mode=preset.resume_mode,
+                resume_mode="latest" if preset.checkpoint_every else "none",
                 policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**geometry)),
                 ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**geometry)),
                 rollout_buffer=sections.RolloutBuffer(
@@ -70,8 +68,6 @@ def _training_config(
                 sampling_params=sections.SamplingParams(ignore_eos=recipe.fixed_reply_tokens is not None),
             ),
         ),
-        presets.training_mode_patch(recipe.mode),
-        presets.numerics_patch(recipe.numerics, recipe.config),
     )
     return presets.apply_settings(config, settings, preset)
 
@@ -88,7 +84,7 @@ def _model_input(preset: presets.Preset, init: ArtifactStep | None) -> tuple[Sky
         if init is None
         else ArtifactHfModel(init, preset.model.tokenizer_uri, preset.model.tokenizer_revision)
     )
-    if not preset.best_checkpoint_export:
+    if not preset.checkpoint_every:
         return model, None
     if model.relative_path is not None:
         return model, prefix_join(model.step.path(), model.relative_path)
@@ -134,16 +130,6 @@ def run_spec(
     _refuse_judged(presets.selection_summary(selection), "train")
     chosen = preset.evaluations
     workload = preset.recipe.layout.workload
-    try:
-        numerics = presets.Numerics(
-            trainer_dtype="bfloat16" if config.trainer.bf16 else "float32",
-            engine_dtype=config.generator.model_dtype,
-            batch_invariant=config.trainer.algorithm.batch_invariant,
-        )
-        numerics.validate_recipe(config)
-    except (TypeError, ValueError) as error:
-        raise click.BadParameter(str(error)) from error
-    config = config.merge(numerics.patch())
     preset = replace(
         preset,
         updates=config.trainer.max_steps,
@@ -181,7 +167,7 @@ def run_spec(
                     chosen[0] if chosen else None,
                     profiles,
                     expected_tasks,
-                    initial_model_uri if preset.best_checkpoint_export else None,
+                    initial_model_uri if preset.checkpoint_every else None,
                 ),
             )
         )

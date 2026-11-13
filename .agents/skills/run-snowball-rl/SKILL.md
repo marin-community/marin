@@ -18,13 +18,14 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
    [selection handoff](../../../docs/references/task-curation.md#train-on-a-snowball-selection).
    They need an immutable recipe, the same development holdout, the full EvalLite in
    `exclusions`, and no AI-judged tasks.
-3. Print the plan:
+3. A gated preset without a pin at its current revision refuses every command, including the plan print,
+   with exit 4. Controls are collected after merge; `--control` and train-long need no pin. Print the plan:
 
    ```bash
    uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev
    ```
 
-   Check inputs, allocation, objective/constraint names, budget estimate and output paths.
+   Check inputs, allocation, guards, budget estimate and output paths.
    `--version dev` satisfies the launcher; step versions use each preset's `revision`.
 4. Before submission, tell the person the preset, estimated budget and replicate count. Use their
    experiment issue or prepare one through `file-issue`. Submit train-long or multiple 40-H100
@@ -48,8 +49,9 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
 
 Read existing answers before launching another run. Controls are named by preset, `commit`
 and revision in `snowball_rl_gate.CONTROLS`; use their configured output paths. Candidate status
-prints its output. The recipe's [file layout](../../../docs/recipes/snowball-rl.md#tasks-and-evaluation)
-locates primary answers and speed-short's separate quality answers. Each native JSONL row carries
+prints its output. Read the configured export root from the native resolved launch to locate answers.
+[EvalLite evaluations](../../../docs/recipes/snowball-rl.md#tasks-and-evaluation) are greedy; data-short
+evaluates sampled candidate training tasks. Each native JSONL row carries
 its TaskSpec ID, prompt, output, tokens and verification.
 
 ## Read and record the result

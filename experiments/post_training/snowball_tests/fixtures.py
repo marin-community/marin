@@ -5,7 +5,6 @@ import json
 import shutil
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +12,7 @@ import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.run_records import (
+    METRIC_METADATA_KEYS,
     AttemptRecord,
     LaunchReceipt,
     MetricRow,
@@ -39,7 +39,8 @@ from experiments.post_training import snowball_rl_command as command
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_recipe as recipe
-from experiments.post_training.skyrl_test_support import native_json as native_json
+from experiments.post_training.skyrl_test_support import current_control_pins, selection_summary
+from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME, GateInputs
 
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
 
@@ -86,31 +87,18 @@ def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
             MetricRow(attempt_id=values["attempt_id"], step=step, name=name, value=value).model_dump()
             for step, values in metrics.items()
             for name, value in values.items()
-            if name not in ("step", "attempt_id", "metric_attempt_ids")
+            if name not in METRIC_METADATA_KEYS
         )
 
 
 def selection(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        gate,
-        "CONTROLS",
-        {
-            name: tuple(replace(pin, revision=presets.PRESETS[name].revision) for pin in pins)
-            for name, pins in gate.CONTROLS.items()
-        },
-    )
+    current_control_pins(monkeypatch)
     monkeypatch.setattr(command, "configure_coreweave_s3", lambda: None)
     monkeypatch.setattr(presets, "SELECTION_ROOT", str(tmp_path))
     monkeypatch.setattr(presets, "artifact_prefix", lambda cluster: str(tmp_path))
     training = {preset.tasks for preset in presets.PRESETS.values()}
     task_sets = {preset.eval_lite for preset in presets.PRESETS.values()}
-    summary = {
-        "recipe": {"heldout": [{"version": "2026.10.23.1", "rows": 910}]},
-        "training_rows": 100000,
-        "validation_rows": 100,
-        "full_validation_rows": 910,
-        "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
-    }
+    summary = selection_summary(910)
     for binding in training:
         write_json(Path(presets.selection_artifact(binding).path()) / "summary.json", summary)
     candidate = presets.selection_artifact("fixture-selection@2026.11.10")
@@ -124,12 +112,7 @@ def selection(tmp_path, monkeypatch):
     for binding in task_sets:
         write_json(
             Path(presets.selection_artifact(binding).path()) / "summary.json",
-            {
-                "recipe": {},
-                "validation_rows": 100,
-                "full_validation_rows": 1500,
-                "grader_kind_counts": {"validation": {}, "full_validation": {}},
-            },
+            selection_summary(20),
         )
     return candidate
 
@@ -162,7 +145,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                         "aaii_category": "format" if i == 0 else "coding",
                         "agentic": False,
                     }
-                    for i in range(1500)
+                    for i in range(100)
                 ]
             ),
             task_set / presets.TASK_MANIFEST_FILENAME,
@@ -222,13 +205,12 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         metrics=None,
         inputs=None,
         fingerprint="",
-        legacy=False,
         missing_steps=(),
     ):
         preset = presets.PRESETS[preset_name]
         root = tmp_path / name / preset.revision
         root.mkdir(parents=True, exist_ok=True)
-        inputs = inputs or gate.GateInputs(preset_name=preset.name)
+        inputs = inputs or GateInputs(preset_name=preset.name)
         source_root, config = composed(preset, inputs)
         old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = "recorded-attempt"
@@ -245,7 +227,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
 
         native = {"config": relocate(config), "result": deepcopy(NATIVE_RECORD["receipt"]["result"])}
         launch, result = native["config"], native["result"]
-        pin = gate.control_pins(preset)[0] if preset.gated else None
+        pin = gate.control_pin(preset) if preset.gated else None
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
@@ -256,7 +238,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             dirty=False,
             command_line=["unrelated-command", "--preset", "train-long"],
         )
-        write_json(root / gate.GATE_INPUTS_FILENAME, inputs.model_dump(mode="json"))
+        write_json(root / GATE_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_json(
             root / RECORD_FILENAME,
             ArtifactRecord(
@@ -363,10 +345,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                         for value in (*Outcome, "rollout_failure")
                     }
                 )
-                if generating and legacy and index == 0:
-                    values.update(
-                        {"generate/outcome/" + value: values[prefix + value] for value in (*Outcome, "rollout_failure")}
-                    )
         for values in stored_metrics.values():
             values.update(metrics or {})
             values["attempt_id"] = attempt

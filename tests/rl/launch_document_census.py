@@ -21,6 +21,7 @@ from experiments.post_training import snowball_rl_presets as snowball
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
+from experiments.post_training.skyrl_test_support import selection_summary
 from experiments.post_training.task_sessions import validation
 
 VERSION = "2026.10.24"
@@ -33,22 +34,14 @@ def _curriculum_step(scale, policy, arm) -> ArtifactStep[SkyRLRun]:
 def _snowball_step(preset: snowball.Preset, settings: tuple[str, ...] = ()) -> ArtifactStep[SkyRLRun]:
     eval_lite = snowball.selection_artifact(preset.eval_lite)
     selection = snowball.selection_artifact(preset.tasks)
-    for source, full_rows in ((selection, 910), (eval_lite, 1500)):
-        summary = {
-            "recipe": {
-                "heldout": [],
-                "exclusions": [
-                    {
-                        "uri": str(StoragePath(eval_lite.path()) / snowball.FULL_VALIDATION_FILENAME),
-                        "version": eval_lite.version,
-                    }
-                ],
-            },
-            "training_rows": 100000,
-            "validation_rows": 100,
-            "full_validation_rows": full_rows,
-            "grader_kind_counts": {"train": {}, "validation": {}, "full_validation": {}},
-        }
+    for source, full_rows in ((selection, 910), (eval_lite, 20)):
+        summary = selection_summary(full_rows)
+        summary["recipe"]["exclusions"] = [
+            {
+                "uri": str(StoragePath(eval_lite.path()) / snowball.FULL_VALIDATION_FILENAME),
+                "version": eval_lite.version,
+            }
+        ]
         path = StoragePath(source.path()) / snowball.SUMMARY_FILENAME
         path.parent.mkdirs()
         path.write_text(json.dumps(summary))

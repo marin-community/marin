@@ -7,5 +7,4 @@ from experiments.post_training.snowball_tests import fixtures
 
 selection = pytest.fixture(fixtures.selection)
 source_provenance = pytest.fixture(fixtures.source_provenance)
-native_json = pytest.fixture(fixtures.native_json)
 recorded_runs = pytest.fixture(fixtures.recorded_runs)

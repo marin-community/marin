@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import traceback
 
 import click
 from marin.rl.rl_progress import Verdict
@@ -23,8 +24,8 @@ class SnowballCommand(click.Command):
             raise
 
     def invoke(self, context):
-        configure_coreweave_s3()
         try:
+            configure_coreweave_s3()
             return super().invoke(context)
         except click.UsageError as error:
             error.exit_code = REFUSAL_EXIT_CODE
@@ -36,3 +37,8 @@ class SnowballCommand(click.Command):
                 )
             )
             raise click.exceptions.Exit(REFUSAL_EXIT_CODE) from None
+        except click.exceptions.Exit:
+            raise
+        except Exception:
+            traceback.print_exc()
+            raise click.exceptions.Exit(EXIT_CODES[None]) from None

@@ -8,13 +8,12 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import ClassVar, Literal
-from urllib.parse import urlencode
 
 import click
 import pyarrow as pa
@@ -23,7 +22,6 @@ import yaml
 from marin.execution.artifact import is_mutable_version, read_record, result_type_name
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply
-from marin.experiment.namespacing import user_owned_name
 from marin.rl.rl_progress import Invariant
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -38,8 +36,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from rigging.provenance import Provenance
-from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import (
     BestCheckpointCallback,
     Callback,
@@ -48,10 +45,8 @@ from skyrlrecipe.declared import (
     EvaluationSampling,
     HFModelSaveCallback,
 )
-from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
-from skyrlrecipe.model import Section
+from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.sampling import EvalSamplingParams
-from skyrlrecipe.settings import parse_setting as typed_setting_value
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
@@ -93,6 +88,7 @@ _DEFAULT_MODEL = ArtifactHfModel(
     relative_path="",
 )
 _DEFAULT_PATCH = RecipePatch(
+    context_budget=ContextBudget(request_window_tokens=24576, max_new_tokens_per_turn=8192, max_turns=1),
     environment=sections.Environment(task_sessions={"local": {}}),
     data=sections.Data(kind="parquet", shuffle=True),
     trainer=sections.Trainer(
@@ -174,22 +170,8 @@ _DEFAULT_PATCH = RecipePatch(
 )
 
 
-class Focus(StrEnum):
-    SPEED = "speed"
-    LEARNING = "learning"
-    DATA = "data"
-    TRAIN = "train"
-
-
-class Duration(StrEnum):
-    SHORT = "short"
-    MEDIUM = "medium"
-    LONG = "long"
-
-
 class WindowStatistic(StrEnum):
     MEAN = "mean"
-    MEDIAN = "median"
     PHASE_SUM_MEDIAN = "phase-sum-median"
     GAIN_PER_H100_HOUR = "gain-per-h100-hour"
     FIRST = "first"
@@ -204,16 +186,10 @@ class Gap(StrEnum):
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
 
 
-class EvaluationKind(StrEnum):
-    TRAINING_DATA = "training-data"
-    HELD_OUT = "held-out"
-
-
 @dataclass(frozen=True)
 class Evaluation:
     name: str
     file: str
-    kind: EvaluationKind
     profile: EvaluationSampling
     source: Literal["default", "tasks", "eval_lite"] = "default"
     sample: int | None = None
@@ -233,7 +209,7 @@ class Evaluation:
 
     @property
     def held_out(self) -> bool:
-        return self.kind is EvaluationKind.HELD_OUT
+        return self.source == "eval_lite"
 
     def tasks(self, selection: ArtifactStep, default: ArtifactStep, eval_lite: str) -> ArtifactStep:
         if self.source == "default":
@@ -254,6 +230,7 @@ class Training:
     completion_metric: ClassVar[str] = "timing/step_wall/unaccounted"
     outcome_prefix: ClassVar[str] = "generate/outcome/"
     named_schedule: ClassVar[Literal["final"]] = "final"
+    setting_sections: ClassVar[frozenset[str] | None] = None
 
     def update_count(self, max_steps: int) -> int:
         return max_steps
@@ -278,10 +255,6 @@ class Training:
 
     def with_batches(self, changes: dict[str, int]) -> Training:
         return replace(self, plan=replace(self.plan, **changes))
-
-    def validate_mode(self, mode: Sync | Async) -> None:
-        if isinstance(mode, Async) and self.plan.colocate_all:
-            raise ValueError("asynchronous training requires separate policy and rollout roles")
 
     def invariants(self, updates: int, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
         planned = set(self.planned_steps(updates))
@@ -334,7 +307,7 @@ class Training:
                     **({"additional_evaluations": profiles} if profiles else {}),
                 )
             )
-        if preset.best_checkpoint_export:
+        if preset.checkpoint_every:
             assert initial_model_uri is not None
             callbacks.extend(
                 (
@@ -351,7 +324,7 @@ class Training:
                     ),
                 )
             )
-        if preset.publishes and not preset.best_checkpoint_export:
+        if preset.publishes and not preset.checkpoint_every:
             callbacks.extend(
                 (
                     CheckpointCallback(type="checkpoint", save_steps=preset.updates + 1, save_on_train_end=True),
@@ -367,6 +340,7 @@ class Generation:
     completion_metric: ClassVar[str] = GENERATE_WALL_SECONDS_METRIC
     outcome_prefix: ClassVar[str] = "eval/all/outcome/"
     named_schedule: ClassVar[Literal["every_evaluation"]] = "every_evaluation"
+    setting_sections: ClassVar[frozenset[str]] = frozenset({"generator"})
 
     def update_count(self, max_steps: int) -> int:
         return 0
@@ -396,10 +370,6 @@ class Generation:
                 self.plan, n_samples_per_prompt=changes.get("n_samples_per_prompt", self.plan.n_samples_per_prompt)
             ),
         )
-
-    def validate_mode(self, mode: Sync | Async) -> None:
-        if isinstance(mode, Async):
-            raise ValueError("asynchronous training requires separate policy and rollout roles")
 
     def invariants(self, updates: int, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
         return (
@@ -432,53 +402,6 @@ class Layout:
     host_memory: str
 
 
-class Numerics(Section):
-    trainer_dtype: Literal["bfloat16", "float32"] = "bfloat16"
-    engine_dtype: Literal["bfloat16", "float16", "float32"] = "bfloat16"
-    batch_invariant: bool = False
-
-    def validate_recipe(self, config: RecipePatch) -> None:
-        if self.batch_invariant and (config.generator.backend != "vllm" or not config.generator.run_engines_locally):
-            raise ValueError("batch invariance requires local vLLM engines")
-
-    def patch(self) -> RecipePatch:
-        return RecipePatch(
-            trainer=sections.Trainer(
-                bf16=self.trainer_dtype == "bfloat16", algorithm=sections.Algorithm(batch_invariant=self.batch_invariant)
-            ),
-            generator=sections.Generator(model_dtype=self.engine_dtype),
-        )
-
-
-def numerics_patch(numerics: Numerics, *patches: RecipePatch) -> RecipePatch:
-    configured = numerics.patch()
-    expected = configured.to_skyrl()
-    for patch in patches:
-        numerics.validate_recipe(patch)
-        document = patch.to_skyrl()
-        for path in ("trainer.bf16", "generator.model_dtype", "trainer.algorithm.batch_invariant"):
-            value = get_path(document, path)
-            if value is not MISSING and value != get_path(expected, path):
-                raise ValueError(f"{path} is chosen by Recipe.numerics")
-    return configured
-
-
-@dataclass(frozen=True)
-class Sync:
-    max_staleness_steps: ClassVar[int] = 0
-    correction: ClassVar[Literal["none"]] = "none"
-
-
-@dataclass(frozen=True)
-class Async:
-    max_staleness_steps: int
-    correction: Literal["none", "custom", "icepop", "outlier_mask", "seq_mask_tis", "tis"]
-
-    def __post_init__(self) -> None:
-        if self.max_staleness_steps <= 0:
-            raise ValueError("asynchronous training requires positive max_staleness_steps")
-
-
 _MODE_KEYS = (
     "trainer.rollout_buffer.max_staleness_steps",
     "trainer.rollout_buffer.batch_policy",
@@ -486,39 +409,11 @@ _MODE_KEYS = (
 )
 
 
-def training_mode_patch(mode: Sync | Async, *patches: RecipePatch) -> RecipePatch:
-    configured = RecipePatch(
-        trainer=sections.Trainer(
-            rollout_buffer=sections.RolloutBuffer(
-                max_staleness_steps=mode.max_staleness_steps, batch_policy="full_batch"
-            ),
-            algorithm=sections.Algorithm(off_policy_correction=mode.correction),
-        )
-    )
-    expected = configured.to_skyrl()
-    for patch in patches:
-        document = patch.to_skyrl()
-        for path in _MODE_KEYS:
-            value = get_path(document, path)
-            if value is not MISSING and value != get_path(expected, path):
-                raise ValueError(f"{path} is chosen by Recipe.mode")
-    return configured
-
-
 @dataclass(frozen=True)
 class Recipe:
     layout: Layout
-    request_window_tokens: int
-    max_new_tokens: int
     fixed_reply_tokens: int | None
-    mode: Sync | Async
-    numerics: Numerics = field(default_factory=Numerics)
     config: RecipePatch = _DEFAULT_PATCH
-
-    def __post_init__(self) -> None:
-        training_mode_patch(self.mode, self.config)
-        numerics_patch(self.numerics, self.config)
-        self.layout.workload.validate_mode(self.mode)
 
 
 @dataclass(frozen=True)
@@ -530,13 +425,7 @@ class Metric:
 
 def override_document(settings: tuple[str, ...]) -> dict:
     """Canonical explicit user values for preset ownership and stored input identity."""
-    document = {}
-    for text in settings:
-        key, _, raw = text.partition("=")
-        patch = {}
-        set_path(patch, key, typed_setting_value(RecipePatch, key, raw))
-        document = merge_mappings(document, patch)
-    return document
+    return RecipePatch().with_settings(settings).to_skyrl()
 
 
 def configure_evaluation(
@@ -575,21 +464,18 @@ EVALUATIONS = MappingProxyType(
                 name="eval_lite",
                 file=Path(FULL_VALIDATION_FILENAME).stem,
                 source="eval_lite",
-                kind=EvaluationKind.HELD_OUT,
                 profile=_HELD_OUT_SAMPLING,
             ),
             Evaluation(
                 name="eval_lite_100",
                 file=Path(VALIDATION_FILENAME).stem,
                 source="eval_lite",
-                kind=EvaluationKind.HELD_OUT,
                 profile=_HELD_OUT_SAMPLING,
             ),
             Evaluation(
                 name="speed_512x4",
                 file=Path(TRAIN_FILENAME).stem,
                 sample=512,
-                kind=EvaluationKind.TRAINING_DATA,
                 profile=_THROUGHPUT_SAMPLING,
             ),
             Evaluation(
@@ -597,7 +483,6 @@ EVALUATIONS = MappingProxyType(
                 file=Path(TRAIN_FILENAME).stem,
                 source="tasks",
                 sample=256,
-                kind=EvaluationKind.TRAINING_DATA,
                 profile=_SCREENING_SAMPLING,
             ),
         )
@@ -645,30 +530,24 @@ E8 = replace(
         )
     ),
 )
-_GENERATION_NATIVE_DEFAULTS = RecipePatch(
-    trainer=sections.Trainer(
-        placement=sections.Placement(
-            colocate_all=False,
-            colocate_policy_ref=True,
-            policy_num_nodes=4,
-            policy_num_gpus_per_node=8,
-            ref_num_nodes=4,
-            ref_num_gpus_per_node=8,
-        ),
-        train_batch_size=128,
-        policy_mini_batch_size=128,
-        micro_train_batch_size_per_gpu=1,
-    )
-)
-_LEARNING = Recipe(
+_GENERATION_DOCUMENT = {}
+for _key, _value in _P40_PLAN.config_values().items():
+    if _key.startswith("trainer."):
+        set_path(_GENERATION_DOCUMENT, _key, _value)
+_GENERATION_NATIVE_DEFAULTS = RecipePatch.from_document(_GENERATION_DOCUMENT)
+_ASYNC_P40 = Recipe(
     layout=P40,
-    request_window_tokens=24576,
-    max_new_tokens=8192,
     fixed_reply_tokens=None,
-    mode=Sync(),
+    config=_DEFAULT_PATCH.merge(
+        RecipePatch(
+            trainer=sections.Trainer(
+                rollout_buffer=sections.RolloutBuffer(max_staleness_steps=2, batch_policy="full_batch"),
+                algorithm=sections.Algorithm(off_policy_correction="tis"),
+            )
+        )
+    ),
 )
-_GENERATING = replace(_LEARNING, layout=E8, config=_DEFAULT_PATCH.merge(_GENERATION_NATIVE_DEFAULTS))
-_ASYNC_P40 = replace(_LEARNING, mode=Async(2, "tis"))
+_GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH.merge(_GENERATION_NATIVE_DEFAULTS))
 
 _GAPS = (
     Gap.AAII_COVERAGE,
@@ -689,6 +568,7 @@ _OWNED_KEYS = (
         {
             "entrypoint",
             "trainer.resume_mode",
+            "trainer.dump_eval_results",
             "trainer.placement",
             "generator.trajectory_retention",
             "generator.run_engines_locally",
@@ -717,30 +597,23 @@ _SPEED_KEYS = frozenset(
 
 @dataclass(frozen=True)
 class Preset:
+    name: str
     revision: str
-    focus: Focus
-    duration: Duration
     recipe: Recipe
     updates: int
     measured: range
     tasks_input: Literal["forbidden", "required", "optional"]
     accepts_settings: bool
     accepts_init: bool
-    accepts_replicates: bool
-    accepts_control: bool
-    gated: bool
-    resume_mode: Literal["none", "latest"]
-    best_checkpoint_export: bool
     publishes: bool
-    shared_control: str | None
+    controls: str | None
+    checkpoint_every: int | None
     owned_keys: frozenset[str]
-    setting_sections: frozenset[str] | None
     data_settings: frozenset[str]
     tasks: str = _DEFAULT_TASKS
     model: ArtifactHfModel = _DEFAULT_MODEL
     eval_lite: str = _DEFAULT_EVAL_LITE
     evaluations: tuple[Evaluation, ...] = ()
-    checkpoint_every: int | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[Gap, ...] = ()
@@ -749,41 +622,41 @@ class Preset:
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
             raise ValueError("measured window must lie within the planned steps")
+        if self.gated and not self.guards:
+            raise ValueError("gated presets require guards")
+        if self.checkpoint_every is not None and (self.checkpoint_every <= 0 or not self.evaluations):
+            raise ValueError("checkpoint export requires a positive checkpoint interval and an evaluation")
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
                 raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
 
     @property
-    def name(self) -> str:
-        return f"{self.focus}-{self.duration}"
+    def gated(self) -> bool:
+        return self.controls is not None
+
+    @property
+    def held_out(self) -> Evaluation | None:
+        return next((evaluation for evaluation in self.evaluations if evaluation.held_out), None)
 
     @property
     def guarded(self) -> Evaluation | None:
-        if not self.gated or not self.evaluations:
-            return None
-        return next((evaluation for evaluation in self.evaluations if evaluation.held_out), self.evaluations[0])
+        return (self.held_out or self.evaluations[0]) if self.gated and self.evaluations else None
 
 
 _LEARNING_MEDIUM = Preset(
-    tasks_input="forbidden",
-    accepts_settings=True,
-    accepts_init=True,
-    accepts_replicates=True,
-    accepts_control=True,
-    gated=True,
-    resume_mode="none",
-    best_checkpoint_export=False,
-    publishes=True,
-    shared_control=None,
-    owned_keys=_OWNED_KEYS | _GATED_KEYS,
-    setting_sections=None,
-    data_settings=frozenset({"shuffle", "sampling"}),
+    name="learning-medium",
     revision="2026.11.12.1",
-    focus=Focus.LEARNING,
-    duration=Duration.MEDIUM,
     recipe=_ASYNC_P40,
     updates=25,
     measured=range(21, 26),
+    tasks_input="forbidden",
+    accepts_settings=True,
+    accepts_init=True,
+    publishes=True,
+    controls="learning-medium",
+    checkpoint_every=None,
+    owned_keys=_OWNED_KEYS | _GATED_KEYS,
+    data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     guards=(Metric("eval_lite/family_mean", True),),
     objectives=(
@@ -798,79 +671,52 @@ PRESETS = MappingProxyType(
         preset.name: preset
         for preset in (
             Preset(
+                name="speed-short",
                 revision="2026.11.13.1",
-                tasks_input="forbidden",
-                accepts_settings=True,
-                accepts_init=False,
-                accepts_replicates=True,
-                accepts_control=True,
-                gated=True,
-                resume_mode="none",
-                best_checkpoint_export=False,
-                publishes=False,
-                shared_control=None,
-                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-                setting_sections=frozenset({"generator"}),
-                data_settings=frozenset(),
-                focus=Focus.SPEED,
-                duration=Duration.SHORT,
-                objectives=(Metric("generate/tokens_per_second_per_gpu", True),),
                 recipe=replace(_GENERATING, fixed_reply_tokens=4096),
                 updates=0,
                 measured=range(1),
+                tasks_input="forbidden",
+                accepts_settings=True,
+                accepts_init=False,
+                publishes=False,
+                controls="speed-short",
+                checkpoint_every=None,
+                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+                data_settings=frozenset(),
                 evaluations=(EVALUATIONS["speed_512x4"], EVALUATIONS["eval_lite"]),
                 guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("eval_lite/family_mean", True)),
+                objectives=(Metric("generate/tokens_per_second_per_gpu", True),),
                 gaps=_GAPS,
                 budget="14-17 min; 2 H100-h",
             ),
             Preset(
+                name="data-short",
                 revision="2026.11.13.1",
-                tasks_input="required",
-                accepts_settings=False,
-                accepts_init=False,
-                accepts_replicates=True,
-                accepts_control=True,
-                gated=True,
-                resume_mode="none",
-                best_checkpoint_export=False,
-                publishes=False,
-                shared_control=None,
-                owned_keys=_OWNED_KEYS | _GATED_KEYS | _BATCH_KEYS,
-                setting_sections=frozenset({"generator"}),
-                data_settings=frozenset(),
-                focus=Focus.DATA,
-                duration=Duration.SHORT,
-                objectives=(Metric("screen_256x4/mixed_fraction", True),),
                 recipe=_GENERATING,
                 updates=0,
                 measured=range(1),
+                tasks_input="required",
+                accepts_settings=False,
+                accepts_init=False,
+                publishes=False,
+                controls="data-short",
+                checkpoint_every=None,
+                owned_keys=_OWNED_KEYS | _GATED_KEYS | _BATCH_KEYS,
+                data_settings=frozenset(),
                 evaluations=(EVALUATIONS["screen_256x4"],),
                 guards=(Metric("screen_256x4/mixed_fraction", True),),
+                objectives=(Metric("screen_256x4/mixed_fraction", True),),
                 gaps=_GAPS,
                 budget="10-15 min; 2 H100-h",
             ),
             Preset(
+                name="speed-medium",
                 revision="2026.11.12.1",
-                tasks_input="forbidden",
-                accepts_settings=True,
-                accepts_init=False,
-                accepts_replicates=True,
-                accepts_control=True,
-                gated=True,
-                resume_mode="none",
-                best_checkpoint_export=False,
-                publishes=False,
-                shared_control=None,
-                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-                setting_sections=None,
-                data_settings=frozenset(),
-                focus=Focus.SPEED,
-                duration=Duration.MEDIUM,
-                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
                 recipe=replace(
                     _ASYNC_P40,
                     fixed_reply_tokens=4096,
-                    config=_DEFAULT_PATCH.merge(
+                    config=_ASYNC_P40.config.merge(
                         RecipePatch(
                             trainer=sections.Trainer(
                                 algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False)
@@ -880,90 +726,74 @@ PRESETS = MappingProxyType(
                 ),
                 updates=10,
                 measured=range(2, 11),
+                tasks_input="forbidden",
+                accepts_settings=True,
+                accepts_init=False,
+                publishes=False,
+                controls="speed-medium",
+                checkpoint_every=None,
+                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+                data_settings=frozenset(),
                 guards=(
                     Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
+                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
                 gaps=(*_GAPS, Gap.MISMATCH_IS_AGREEMENT, Gap.LAYOUT_P40_ONLY),
                 budget="asynchronous runtime unmeasured",
             ),
             Preset(
+                name="speed-long",
                 revision="2026.11.11.1",
-                tasks_input="forbidden",
-                accepts_settings=True,
-                accepts_init=False,
-                accepts_replicates=True,
-                accepts_control=True,
-                gated=True,
-                resume_mode="none",
-                best_checkpoint_export=False,
-                publishes=False,
-                shared_control=None,
-                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-                setting_sections=None,
-                data_settings=frozenset(),
-                focus=Focus.SPEED,
-                duration=Duration.LONG,
-                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
                 recipe=_ASYNC_P40,
                 updates=20,
                 measured=range(3, 21),
+                tasks_input="forbidden",
+                accepts_settings=True,
+                accepts_init=False,
+                publishes=False,
+                controls="speed-long",
+                checkpoint_every=None,
+                owned_keys=_OWNED_KEYS | _GATED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+                data_settings=frozenset(),
                 guards=(
                     Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),
                     Metric("policy/mismatch/staleness0/kl_k3", False, WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN),
                 ),
+                objectives=(Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN),),
                 gaps=(*_GAPS, Gap.LAYOUT_P40_ONLY),
                 budget="45-75 min; 30-50 H100-h",
             ),
             _LEARNING_MEDIUM,
             replace(
                 _LEARNING_MEDIUM,
-                focus=Focus.DATA,
+                name="data-medium",
                 tasks_input="required",
                 accepts_settings=False,
                 accepts_init=False,
-                accepts_control=False,
-                shared_control=_LEARNING_MEDIUM.name,
+                controls=_LEARNING_MEDIUM.name,
                 data_settings=frozenset(),
             ),
             Preset(
+                name="train-long",
                 revision="2026.11.11.1",
-                tasks_input="optional",
-                accepts_settings=True,
-                accepts_init=True,
-                accepts_replicates=False,
-                accepts_control=False,
-                gated=False,
-                resume_mode="latest",
-                best_checkpoint_export=True,
-                publishes=True,
-                shared_control=None,
-                owned_keys=_OWNED_KEYS,
-                setting_sections=None,
-                data_settings=frozenset({"shuffle", "sampling"}),
-                focus=Focus.TRAIN,
-                duration=Duration.LONG,
                 recipe=_ASYNC_P40,
                 updates=100,
                 measured=range(1, 101),
-                evaluations=(replace(_TASK_SET, every=10, at_start=True),),
+                tasks_input="optional",
+                accepts_settings=True,
+                accepts_init=True,
+                publishes=True,
+                controls=None,
                 checkpoint_every=10,
+                owned_keys=_OWNED_KEYS,
+                data_settings=frozenset({"shuffle", "sampling"}),
+                evaluations=(replace(_TASK_SET, every=10, at_start=True),),
                 gaps=_GAPS,
             ),
         )
     }
 )
-
-
-def run_name(preset: Preset, provenance: Provenance, inputs_hash: str, replicate: int, *, control: bool) -> str:
-    if control:
-        from experiments.post_training.snowball_rl_gate import control_name  # noqa: PLC0415
-
-        return control_name(preset.name, provenance.base_commit, replicate)
-    name = f"{RUN_PREFIX}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
-    if preset.accepts_replicates:
-        name += f"-r{replicate}"
-    return user_owned_name(name)
 
 
 def selection_summary(selection: ArtifactStep) -> dict:
@@ -991,12 +821,11 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, output: 
     fs.makedirs(str(PurePosixPath(key).parent), exist_ok=True)
     with fs.open(key, "wb") as stream:
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), stream)
-    for name in (TASK_MANIFEST_FILENAME,):
-        source_fs, source_key = filesystem_for(prefix_join(selection, name))
-        if source_fs.exists(source_key):
-            fs, key = filesystem_for(prefix_join(output, name))
-            with source_fs.open(source_key, "rb") as source, fs.open(key, "wb") as target:
-                target.write(source.read())
+    source_fs, source_key = filesystem_for(prefix_join(selection, TASK_MANIFEST_FILENAME))
+    if source_fs.exists(source_key):
+        fs, key = filesystem_for(prefix_join(output, TASK_MANIFEST_FILENAME))
+        with source_fs.open(source_key, "rb") as source, fs.open(key, "wb") as target:
+            target.write(source.read())
 
 
 def sampled_tasks_step(selection: ArtifactStep, filename: str, count: int, seed: int, *, revision: str) -> ArtifactStep:
@@ -1026,14 +855,14 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
 
     trainer = values.get("trainer", {})
     generator = values.get("generator", {})
+    setting_sections = preset.recipe.layout.workload.setting_sections
     owners = {
         "use the preset's declared owned keys": any(has(path) for path in preset.owned_keys),
         "choose network transport in Layout": any(key.startswith("NCCL_") for key in values.get("extra_env", {})),
         "evaluation requests are fixed by the preset": any(key.startswith("eval_") for key in (*trainer, *generator)),
         "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
         "use the preset's permitted setting sections": (
-            preset.setting_sections is not None
-            and (bool(values.keys() - preset.setting_sections) or has("generator.sampling_params"))
+            setting_sections is not None and (bool(values.keys() - setting_sections) or has("generator.sampling_params"))
         ),
     }
     fix = next((message for message, owned in owners.items() if owned), None)
@@ -1049,32 +878,6 @@ def task_selections(preset: Preset, tasks: ArtifactStep | None = None) -> tuple[
 
 def cluster_config_path(cluster: str) -> str:
     return f"lib/iris/config/{cluster}.yaml"
-
-
-def grafana_links(
-    *,
-    run_id: str,
-    cluster: str,
-    training_type: Literal["sync", "async"],
-    started_ms: int,
-    finished_ms: int | None,
-) -> dict[str, str]:
-    """Link to the native run in the RL dashboard, through now for an unfinished run."""
-    query = urlencode(
-        {
-            "orgId": 1,
-            "timezone": "utc",
-            "from": started_ms,
-            "to": finished_ms if finished_ms is not None else "now",
-            "var-training_type": training_type,
-            "var-cluster": cluster,
-            "var-run": run_id,
-            "var-job": "$__all",
-            "var-execution": "$__all",
-        },
-        safe="$",
-    )
-    return {"run": f"{GRAFANA_URL}?{query}"}
 
 
 def artifact_prefix(cluster: str) -> str:
@@ -1107,10 +910,6 @@ def published_artifact(value: str) -> ArtifactStep:
 
 def run_path(cluster: str, name: str, version: str) -> str:
     return str(StoragePath(artifact_prefix(cluster)) / name / version)
-
-
-def eval_lite_evaluation(preset: Preset) -> Evaluation | None:
-    return next((evaluation for evaluation in preset.evaluations if evaluation.held_out), None)
 
 
 def utc_millis(value: str) -> int:
