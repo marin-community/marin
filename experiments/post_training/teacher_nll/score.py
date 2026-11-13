@@ -44,8 +44,8 @@ logger = logging.getLogger(__name__)
 
 MARIN_ROOT = Path(__file__).resolve().parents[3]
 HUB_CLUSTER = "marin"
-GPU_CLUSTER = "cw-rno2a"
-OUTPUT_ROOT = "s3://marin-rno2a/tmp/ttl="
+# Each GPU cluster writes to its own region's TTL bucket.
+OUTPUT_ROOTS = {"cw-rno2a": "s3://marin-rno2a/tmp/ttl=", "cw-us-east-02a": "s3://marin-us-east-02a/tmp/ttl="}
 # The eval campaign's 10/05 serve config (eval-campaign-09-25-unlabeled/model-configs).
 REPO = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05"
 REVISION = "8c76b22afc38f5e95360c83ca88008f00b5ae1e0"
@@ -190,16 +190,17 @@ def main() -> None:
     parser.add_argument("--repo", default=REPO, help="HF model repo to score under")
     parser.add_argument("--revision", default=REVISION, help="pinned HF commit of --repo")
     parser.add_argument("--timeout-hours", type=float, default=4.0)
+    parser.add_argument("--cluster", choices=sorted(OUTPUT_ROOTS), default="cw-rno2a")
     args = parser.parse_args()
-    if not args.output.startswith(OUTPUT_ROOT):
-        raise ValueError(f"Outputs go under {OUTPUT_ROOT}<N>d/")
+    if not args.output.startswith(OUTPUT_ROOTS[args.cluster]):
+        raise ValueError(f"{args.cluster} outputs go under {OUTPUT_ROOTS[args.cluster]}<N>d/")
     request = JobRequest(
         name=f"teacher-nll-{os.urandom(4).hex()}",
         entrypoint=Entrypoint.from_callable(
             run_job, args=[args.cells, args.output, args.passes, args.repo, args.revision]
         ),
         resources=ResourceConfig.with_gpu(
-            "H100", count=GPUS, cpu=64, ram="512g", disk="512g", target_cluster=GPU_CLUSTER
+            "H100", count=GPUS, cpu=64, ram="512g", disk="512g", target_cluster=args.cluster
         ),
         environment=create_environment(
             setup_scripts=[default_setup_script(packages=["marin-core"])],
