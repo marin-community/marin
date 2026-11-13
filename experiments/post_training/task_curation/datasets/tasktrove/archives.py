@@ -3,9 +3,11 @@
 
 """TaskTrove sources: archived Harbor tasks from the original ``open-thoughts/TaskTrove`` release."""
 
+import tomllib
 from dataclasses import dataclass, replace
 
 from taskcompendium.convert.tasks import shell_environment
+from taskcompendium.harbor.execution import native_execution_limits, task_with_declared_execution_requirements
 from taskcompendium.models import CONVERSATION_ANSWERS, EnvironmentRequirements, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Converter, ImportFailureKind, ImportRejection, NormalizedTask, RawRow
@@ -15,8 +17,10 @@ from experiments.post_training.task_curation.datasets.tasktrove.built_images imp
     archive_build_environment,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    TASK_TOML,
     TASKS_FILE,
     TASKTROVE_REPO,
+    archive_file,
     archive_resource,
     unpack_task_binary,
 )
@@ -89,6 +93,11 @@ class TaskTroveConverter:
             if path not in existing and not path.startswith(("tests/", "setup_files/"))
         )
         task = task.model_copy(update={"resources": task.resources.model_copy(update={"oracle": oracle})})
+        native_config = archive_file(row.data, TASK_TOML)
+        if native_config is not None:
+            task = task_with_declared_execution_requirements(
+                task, native_execution_limits(tomllib.loads(native_config.decode()))
+            )
         return replace(converted, task=task) if isinstance(converted, NormalizedTask) else task
 
 

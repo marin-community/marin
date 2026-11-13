@@ -17,6 +17,7 @@ from itertools import batched
 from pathlib import PurePosixPath
 
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -35,7 +36,7 @@ from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import unpack_task_binary
 
-VERSION = "2026.11.12.1"
+VERSION = "2026.11.13.2"
 HUB_READ_CONCURRENCY = 16
 
 
@@ -145,6 +146,7 @@ def native_task(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRe
             environment_variables=environment.get("env", {}),
             setup_commands=(environment["setup"]["command"],) if environment.get("setup") else (),
         ),
+        execution_requirements=native_execution_limits(config).requirements,
         answer_type=AnswerType.WORKSPACE_STATE,
         answer_format=PlainText(),
         grader=NoGrader(reason="The native Harbor Trial executes this package's declared verifier"),

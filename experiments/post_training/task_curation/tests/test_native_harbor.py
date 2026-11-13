@@ -32,10 +32,11 @@ from experiments.post_training.task_curation.source import RlDataSource, SourceI
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
 
+@pytest.mark.parametrize("complete_limits", [False, True])
 @pytest.mark.parametrize("separate_solution", [False, True])
 @pytest.mark.parametrize("intended_use", [IntendedUse.TRAIN, IntendedUse.EVAL])
 def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
-    separate_solution, intended_use, tmp_path, monkeypatch
+    separate_solution, complete_limits, intended_use, tmp_path, monkeypatch
 ):
     files = {
         "instruction.md": (b"Repair /work and preserve the service state.", 0o644),
@@ -50,6 +51,12 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
         "tests/test.sh": (b"#!/bin/sh\ncheck-service-and-links\n", 0o750),
         "solution/solve.sh": (b"#!/bin/sh\nrepair-service\n", 0o700),
     }
+    if complete_limits:
+        files["task.toml"] = (
+            files["task.toml"][0].replace(b"memory_mb = 6144", b"memory_mb = 6144\nstorage_mb = 8192")
+            + b"timeout_sec = 45\n[agent]\ntimeout_sec = 900\n",
+            0o644,
+        )
     buffer = io.BytesIO()
     solution_buffer = io.BytesIO()
     with (
@@ -74,6 +81,16 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
     result = convert_row(raw, native_task, context)
     assert isinstance(result, NormalizedTask)
     task = TaskSpec.model_validate_json(result.task.model_dump_json())
+    if complete_limits:
+        assert task.execution_requirements.model_dump() == {
+            "cpus": 3,
+            "memory_mb": 6144,
+            "storage_mb": 8192,
+            "agent_timeout_sec": 900,
+            "verifier_timeout_sec": 45,
+        }
+    else:
+        assert task.execution_requirements is None
     assert task.resources.worker == ()
     assert {r.path for r in task.resources.oracle} == {"solution/solve.sh"}
     resources = (*task.resources.verifier, *task.resources.oracle)

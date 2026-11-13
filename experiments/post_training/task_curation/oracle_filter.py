@@ -20,6 +20,7 @@ from iris.cluster.client.bundle import collect_workspace_files
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import GradingEnvironmentMode
+from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
@@ -66,11 +67,7 @@ FAILURE_LOG_BYTES = 64 * 1024
 
 def declared_native_requirements(path: Path) -> dict[ResourceDimension, float]:
     document = tomllib.loads((path / "task.toml").read_text())
-    values = {name: document.get("environment", {}).get(name) for name in ("cpus", "memory_mb", "storage_mb")}
-    values.update(
-        {f"{phase}_timeout_sec": document.get(phase, {}).get("timeout_sec") for phase in ("agent", "verifier")}
-    )
-    return {ResourceDimension(name): value for name, value in values.items() if value is not None}
+    return {ResourceDimension(name): value for name, value in native_execution_limits(document).declared.items()}
 
 
 def native_requirements(path: Path) -> ExecutionRequirements:
