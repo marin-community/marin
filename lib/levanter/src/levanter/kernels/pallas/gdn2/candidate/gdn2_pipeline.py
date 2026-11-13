@@ -13,12 +13,10 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from .configs import KernelConfig, DEFAULT_CONFIG, validate_inputs
+from .configs import KernelConfig, DEFAULT_CONFIG, _reshape_from_chunks, _reshape_to_chunks, validate_inputs
 from .gdn2_fwd import (
     gdn2_pallas_forward,
     gdn2_pallas_forward_with_residuals,
-    _reshape_to_chunks as _r2c,
-    _reshape_from_chunks as _r2f,
 )
 from .gdn2_bwd import (
     gdn2_dhu_backward,
@@ -79,10 +77,10 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     bsz, L, H, D = q.shape
     n_chunks = L // config.bt
 
-    do_r = _r2c(do, bsz, n_chunks, H, D, config.bt)
+    do_r = _reshape_to_chunks(do, bsz, n_chunks, H, D, config.bt)
 
     # Build gc from g (needed for B3 and B4)
-    g_r = _r2c(g, bsz, n_chunks, H, D, config.bt)
+    g_r = _reshape_to_chunks(g, bsz, n_chunks, H, D, config.bt)
     idx = jnp.arange(config.bt)
     tril_ones_bt = (idx[:, None] >= idx[None, :]).astype(jnp.float32)
     gc = jnp.einsum("ij,bhcjd->bhcid", tril_ones_bt, g_r, precision=_HIGHEST)
@@ -97,11 +95,11 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     dh_next_all = _build_dh_next_all(dh_all, dh_final)
 
     # B3
-    q_r = _r2c(q, bsz, n_chunks, H, D, config.bt)
-    k_r = _r2c(k, bsz, n_chunks, H, D, config.bt)
-    b_r = _r2c(b, bsz, n_chunks, H, D, config.bt)
-    w_r = _r2c(w, bsz, n_chunks, H, D, config.bt)
-    v_r = _r2c(v, bsz, n_chunks, H, D, config.bt)
+    q_r = _reshape_to_chunks(q, bsz, n_chunks, H, D, config.bt)
+    k_r = _reshape_to_chunks(k, bsz, n_chunks, H, D, config.bt)
+    b_r = _reshape_to_chunks(b, bsz, n_chunks, H, D, config.bt)
+    w_r = _reshape_to_chunks(w, bsz, n_chunks, H, D, config.bt)
+    v_r = _reshape_to_chunks(v, bsz, n_chunks, H, D, config.bt)
 
     b3_out = wy_dqkg_backward_pallas(
         q_r,
@@ -126,12 +124,12 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     dgc_total = b3_out["dgc"] + dgc4
     dg_raw = reverse_cumsum_bwd(dgc_total, chunk_size=config.bt, config=config)
 
-    dq = _r2f(b3_out["dq"] + dq4, bsz, n_chunks, config.bt, H, D)
-    dk = _r2f(b3_out["dk"] + dk4, bsz, n_chunks, config.bt, H, D)
-    db = _r2f(b3_out["db"] + db4, bsz, n_chunks, config.bt, H, D)
-    dw = _r2f(b3_out["dw"], bsz, n_chunks, config.bt, H, D)
-    dv = _r2f(b3_out["dv_raw"], bsz, n_chunks, config.bt, H, D)
-    dg = _r2f(dg_raw, bsz, n_chunks, config.bt, H, D)
+    dq = _reshape_from_chunks(b3_out["dq"] + dq4, bsz, n_chunks, config.bt, H, D)
+    dk = _reshape_from_chunks(b3_out["dk"] + dk4, bsz, n_chunks, config.bt, H, D)
+    db = _reshape_from_chunks(b3_out["db"] + db4, bsz, n_chunks, config.bt, H, D)
+    dw = _reshape_from_chunks(b3_out["dw"], bsz, n_chunks, config.bt, H, D)
+    dv = _reshape_from_chunks(b3_out["dv_raw"], bsz, n_chunks, config.bt, H, D)
+    dg = _reshape_from_chunks(dg_raw, bsz, n_chunks, config.bt, H, D)
 
     # Match cotangent dtypes without hiding non-finite arithmetic.
     dq = dq.astype(q.dtype)

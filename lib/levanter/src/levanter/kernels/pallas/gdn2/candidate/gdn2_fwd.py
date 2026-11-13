@@ -23,6 +23,8 @@ from .configs import (
     KernelConfig,
     DEFAULT_CONFIG,
     ScoreLayout,
+    _reshape_from_chunks,
+    _reshape_to_chunks,
     _stage_diag,
     validate_inputs,
 )
@@ -58,17 +60,6 @@ def _kernel_cost(kernel, inputs, outputs, **kwargs):
         kernel_inputs_specs=inputs,
         kernel_outputs_specs=outputs,
     )
-
-
-# ---------- reshape helpers ----------
-def _reshape_to_chunks(t: jnp.ndarray, bsz: int, n_chunks: int, H: int, D: int, bt: int) -> jnp.ndarray:
-    t = t.reshape(bsz, n_chunks, bt, H, D)
-    return jnp.moveaxis(t, (1, 3), (2, 1))
-
-
-def _reshape_from_chunks(t: jnp.ndarray, bsz: int, n_chunks: int, bt: int, H: int, D: int) -> jnp.ndarray:
-    t2 = jnp.moveaxis(t, (1, 2, 3), (3, 1, 2))
-    return t2.reshape(bsz, n_chunks * bt, H, D)
 
 
 # ---------- Kernel A ----------

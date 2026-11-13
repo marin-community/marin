@@ -19,7 +19,7 @@ from .configs import (
     KernelConfig,
     DEFAULT_CONFIG,
     ScoreLayout,
-    _reshape_to_chunks as _r2c,
+    _reshape_to_chunks,
 )
 from .gdn2_fwd import _kernel_cost
 
@@ -420,7 +420,7 @@ def intra_backward_pallas(
     n_chunks = L // config.bt
 
     def reshape_in(t):
-        return _r2c(t, bsz, n_chunks, H, D, config.bt)
+        return _reshape_to_chunks(t, bsz, n_chunks, H, D, config.bt)
 
     q_r, k_r, b_r, g_r = map(reshape_in, (q, k, b, g))
 

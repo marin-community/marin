@@ -28,7 +28,6 @@ def test_gdn2_rejects_bfloat16_initial_state_before_scan():
 @pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
 @pytest.mark.parametrize("decay", [0.005, 0.5, 5.0])
 @pytest.mark.parametrize("score_layout", list(ScoreLayout))
-@pytest.mark.timeout(180)
 def test_gdn2_output_state_and_all_input_gradients_match_recurrence(dtype, decay, score_layout):
     shape = (1, 64, 1, 128)
     keys = jax.random.split(jax.random.PRNGKey(17), 9)
