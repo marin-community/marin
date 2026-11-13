@@ -6,7 +6,6 @@
 from collections.abc import Mapping
 from typing import Literal
 
-from finestore.rl.source_identity import SourceId, original_source_id
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shellbox.machine import Backend, NetworkPolicy
 from shellbox.requirements import (
@@ -96,7 +95,7 @@ class BackendFit(BaseModel):
 class BackendSourceMap(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    source_id: SourceId
+    source_id: str
     basis: Literal["converted_spec_census", "unassessed"]
     reason: str | None = None
     """Why a source has no converted population; required for unassessed rows only."""
@@ -139,13 +138,6 @@ class BackendSurvey(BaseModel):
     local_disk_pool: str | None = None
     """Worker path of the verified LOCAL disk pool backing the local checker, if any."""
     sources: list[BackendSourceMap]
-
-    def identity_payload(self) -> dict:
-        """Preserve the published survey identity while source labels resolve canonically."""
-        document = self.model_dump(mode="json")
-        for source in document["sources"]:
-            source["source_id"] = original_source_id(source["source_id"])
-        return document
 
     @model_validator(mode="after")
     def validate_coverage(self) -> "BackendSurvey":
