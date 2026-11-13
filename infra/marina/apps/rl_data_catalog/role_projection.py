@@ -121,9 +121,7 @@ def validated_role_projection(
 ) -> RoleProjection:
     """Require exact metadata changes and current catalog authority before accepting historical roles."""
     receipt = RoleProjection.model_validate_json(manifest_bytes(reference))
-    manifest_bytes(
-        ManifestReference(uri=receipt.vector_cache.manifest_uri, sha256=receipt.vector_cache.manifest_sha256)
-    )
+    manifest_bytes(ManifestReference(uri=receipt.vector_cache.manifest_uri, sha256=receipt.vector_cache.manifest_sha256))
     if (receipt.corrected.release_uri, receipt.corrected.coverage_uri) != (release_uri, coverage_uri):
         raise ValueError("Role-projection receipt targets different loader inputs")
     raw = manifest_documents(receipt.raw)

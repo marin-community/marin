@@ -2,8 +2,8 @@
 // Fills the static ingestion guide with counts from the catalog snapshot Atlas serves.
 const number = new Intl.NumberFormat('en-US');
 const leafTitles = {
-  grandfathered: 'Grandfathered blends', unreviewed: 'QUICK, converted without review',
-  excluded: 'Excluded', deprecated: 'Deprecated', sample: 'Admitted, oversight SAMPLE', full: 'Admitted, oversight FULL',
+  grandfathered: 'Grandfathered blends', unreviewed: 'Execution oversight pending',
+  excluded: 'Excluded', deprecated: 'Deprecated', sample: 'Execution oversight SAMPLE', full: 'Execution oversight FULL',
 };
 const state = {sources: [], leaves: {}, loaded: false};
 
@@ -36,7 +36,7 @@ function daytonaState(row) {
 function daytonaSummary(rows) {
   const counts = tally(rows, daytonaState);
   return `Daytona check: ${summary(counts, [
-    ['safe', 'fits budget'], ['unsafe', 'exceeds budget'], ['unassessed', 'unmeasured'],
+    ['safe', 'fits budget'], ['unsafe', 'unsupported or exceeds limits'], ['unassessed', 'unmeasured'],
     ['unmeasured', 'unmeasured'], ['na', 'no sandbox'], ['none', 'not recorded'],
   ])}`;
 }
@@ -105,7 +105,7 @@ function showLeaf(key) {
   $('leaf-list-title').textContent = `${leafTitles[key]}: ${sources(rows.length)}`;
   $('leaf-rows').replaceChildren(...rows.map(row => {
     const tr = node('tr'), name = node('td'), link = node('a', row.display_name);
-    link.href = `./#${new URLSearchParams({search: row.name})}`;
+    link.href = `source.html#${new URLSearchParams({source_id: row.id})}`;
     name.append(link, node('small', row.id));
     tr.append(name, node('td', row.origin), node('td', row.oversight || 'not declared'),
       node('td', row.daytona?.state || row.daytona_safety || 'not recorded'), node('td', row.oracle_validation || 'not recorded'));

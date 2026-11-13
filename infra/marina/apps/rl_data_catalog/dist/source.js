@@ -165,7 +165,7 @@ async function render(data, sourceId) {
       const record = node('details');
       record.append(node('summary', 'Complete assessment report'), node('pre', JSON.stringify(report.report, null, 2)));
       section.replaceChildren(node('h2', 'All stored assessment reviews'),
-        node('p', `${number.format(report.report.evidence.samples.length)} stored records. Open each review for its full verdict and packet. FULL describes curation scope; reviews cover the stored assessment sample.`, 'card-intro'),
+        node('p', `${number.format(report.report.evidence.samples.length)} stored assessment records. Open each review for its verdict and packet. This sampled evidence is separate from complete content-review coverage and execution qualification.`, 'card-intro'),
         repairRecommendations(report.report), taskReviews(sourceId, report.report.evidence.samples), record);
     } catch (error) { section.append(node('p', error.message, 'error')); }
   }
