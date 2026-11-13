@@ -1731,7 +1731,7 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process and setsid contract")
 @pytest.mark.parametrize("failure", ["transient", "stalled_delete", "concurrent_close"])
-def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(monkeypatch, failure):
+def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(tmp_path, monkeypatch, failure):
     async def scenario():
         loop = asyncio.get_running_loop()
         now = loop.time
@@ -1771,7 +1771,7 @@ def test_daytona_job_wait_close_cancellation_has_wall_clock_cleanup_bound(monkey
 
         client = Client()
         machine = await DaytonaMachineFactory(lambda: client, provider_wait_policy=ProviderWaitPolicy.JOB).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"))
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         owner = asyncio.create_task(machine.close())
         await (retrying.wait() if failure == "transient" else entered.wait())
