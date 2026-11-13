@@ -1348,7 +1348,7 @@ def wait_for_nodes(
                 if role_topology is not None:
                     rows = validate_role_nodes(alive, topology=role_topology)
                     report = json.dumps({"role_topology": NVLINK_ROLE_TOPOLOGY, "nodes": rows}, sort_keys=True)
-                    (Path(os.environ.get("IRIS_OUTPUT_DIR", "/tmp")) / "role-topology.json").write_text(report + "\n")
+                    (Path(os.environ["IRIS_OUTPUT_DIR"]) / "role-topology.json").write_text(report + "\n")
                     _log(f"Verified physical role placement before model actors: {report}")
                 _log(f"All {expected_nodes} Ray node(s) joined. Resources: {ray.cluster_resources()}")
                 return

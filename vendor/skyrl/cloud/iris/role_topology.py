@@ -194,7 +194,9 @@ def validate_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTop
     if len({gpu for row in rows for gpu in row["gpu_uuids"]}) != topology.num_nodes * topology.gpus_per_node:
         raise ValueError("Ray nodes report duplicate physical GPUs")
     if any(len(values) != 1 for values in domains.values()) or len(set.union(*domains.values())) != len(domains):
-        raise ValueError("Physical NVLink domains disagree with Iris's native allocation slices")
+        observed = {index: sorted(values) for index, values in domains.items()}
+        raise ValueError(f"Physical NVLink domains disagree with Iris's native allocation slices: {observed}")
     if any(len(values) != 1 for values in fabrics.values()):
-        raise ValueError("A requested group spans physical NVLink domains")
+        observed = {role: sorted(values) for role, values in fabrics.items()}
+        raise ValueError(f"A requested group spans physical NVLink domains: {observed}")
     return sorted(rows, key=lambda row: row["rank"])

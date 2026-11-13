@@ -1,14 +1,16 @@
 """Role-local placement from a launch recipe through physical discovery and Ray bundles."""
 
 from collections import Counter
+from importlib.machinery import ModuleSpec
 import json
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import ray
 import yaml
 from omegaconf import OmegaConf
 from ray.cluster_utils import Cluster
-from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from cloud.iris.launch_config import load_launch_config
@@ -21,7 +23,9 @@ from cloud.iris.role_topology import (
 )
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.task_runtime import wait_for_nodes
-from marinskyrl.role_placement import role_bundles, verify_role_placement
+from marinskyrl.role_placement import verify_role_placement
+from skyrl_train.entrypoints.main_base import BasePPOExp
+from skyrl_train.inference_engines.ray_wrapped_inference_engine import create_ray_wrapped_inference_engines
 
 
 def launch_topology(tmp_path, *, nodes=48, policy_nodes=16, engines=2, dp=64, width=4, variant="GB200"):
@@ -163,64 +167,106 @@ def test_invalid_group_geometry_is_rejected_before_ray_can_wait_for_capacity(tmp
         launch_topology(tmp_path, nodes=24, dp=16)
 
 
-def test_omitted_locality_preserves_colocated_launches_and_unlabelled_bundles(tmp_path):
-    raw = raw_launch_config()
-    path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw))
-    config = load_launch_config(path)
-    assert derive_role_topology(OmegaConf.to_container(config, resolve=True)) is None
-    assert role_bundles("policy", [{"GPU": 8, "CPU": 8}], {"GPU": 8}) == [{"GPU": 8, "CPU": 8}]
-
-
 @pytest.mark.slow
-def test_real_ray_actors_use_disjoint_gpus_in_their_assigned_domains(tmp_path, monkeypatch):
-    # Synthetic GPUs exercise real Ray reservations and actors on this CPU host;
-    # physical NVLink and CUDA communication are qualified by the separate live probe.
+@pytest.mark.parametrize("locality", [True, False])
+def test_production_role_placement_reserves_workers_and_preserves_shared_engines(tmp_path, monkeypatch, locality):
+    # Only the CUDA/vLLM backend is replaced. Config loading, the production
+    # trainer/engine factories, Ray groups and worker scheduling all run here.
     monkeypatch.setenv("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
-    topology = launch_topology(tmp_path, nodes=2, policy_nodes=1, dp=4, width=8, variant="H100")
+    topology = launch_topology(tmp_path, nodes=2, policy_nodes=1, dp=1, width=8, variant="H100")
+    config_path = tmp_path / "launch.yaml"
+    if not locality:
+        raw = yaml.safe_load(config_path.read_text())
+        del raw["iris"]["role_topology"]
+        config_path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(config_path)
+    model = tmp_path / "model"
+    model.mkdir()
+    (model / "config.json").write_text(json.dumps({"model_type": "llama", "architectures": ["LlamaForCausalLM"]}))
     cluster = Cluster()
     try:
         for rank in range(2):
             cluster.add_node(
                 num_cpus=8,
                 num_gpus=8,
-                resources=physical_resources(topology, rank),
+                resources=physical_resources(topology, rank) if locality else {},
                 object_store_memory=100 * 1024**2,
                 include_dashboard=False,
             )
         ray.init(address=cluster.address)
-        validate_role_nodes(ray.nodes(), topology=topology)
+        if locality:
+            validate_role_nodes(ray.nodes(), topology=topology)
 
-        @ray.remote(num_cpus=1, num_gpus=4)
-        class Worker:
+        @ray.remote(num_cpus=1, num_gpus=1)
+        class BackendWorker:
+            def __init__(self, **_kwargs):
+                pass
+
             def identity(self):
-                return ray.get_runtime_context().get_node_id(), ray.get_gpu_ids()
+                pg = ray.util.get_current_placement_group()
+                return {"node": ray.get_runtime_context().get_node_id(), "gpus": ray.get_gpu_ids(), "pg": pg.id.hex()}
 
-        actors = {}
-        for role, count in (("policy", 8), ("inference_0", 4), ("inference_1", 4)):
-            bundles = [{"GPU": 4, "CPU": 1}] * (count // 4)
-            pg = placement_group(role_bundles(role, bundles, ray.cluster_resources()), "PACK")
-            ray.get(pg.ready(), timeout=60)
-            assignments = verify_role_placement(pg, role)
+            def report_engine_hosts(self):
+                return [ray.util.get_node_ip_address()]
+
+            def get_model_max_len(self):
+                return 64
+
+        # vLLM's model-capability query and its remote GPU actor are the external
+        # backend boundary. The real factory still reads the local HF metadata.
+        backend = ModuleType("vllm")
+        backend.__spec__ = ModuleSpec("vllm", loader=None)
+        backend.__version__ = "0.0.dev"
+        registry = ModuleType("vllm.model_executor.models")
+        registry.ModelRegistry = SimpleNamespace(get_supported_archs=lambda: ["LlamaForCausalLM"])
+        actor_module = ModuleType("skyrl_train.inference_engines.vllm.vllm_engine")
+        actor_module.AsyncVLLMRayActor = BackendWorker
+        monkeypatch.setitem(sys.modules, "vllm", backend)
+        monkeypatch.setitem(sys.modules, "vllm.model_executor.models", registry)
+        monkeypatch.setitem(sys.modules, actor_module.__name__, actor_module)
+
+        policy_pg = BasePPOExp.get_policy_pg(SimpleNamespace(cfg=config.skyrl), timeout=60)
+        policy_actors = []
+        if locality:
+            # The default production trainer reserves one whole eight-GPU bundle.
+            assert len(policy_pg.bundle_specs) == 1
+            assignments = verify_role_placement(policy_pg, "policy")
             handles = [
-                Worker.options(
+                BackendWorker.options(
+                    num_gpus=4,
                     scheduling_strategy=PlacementGroupSchedulingStrategy(
-                        placement_group=pg,
-                        placement_group_bundle_index=index,
-                    )
+                        placement_group=policy_pg,
+                        placement_group_bundle_index=0,
+                    ),
                 ).remote()
-                for index in range(len(bundles))
+                for _ in range(2)
             ]
-            identities = ray.get([handle.identity.remote() for handle in handles], timeout=60)
-            assert [node_id for node_id, _ in identities] == [assignments[index] for index in range(len(bundles))]
-            actors[role] = identities
-        assert len({node_id for node_id, _ in actors["policy"]}) == 1
-        assert {node_id for node_id, _ in actors["inference_0"]} == {node_id for node_id, _ in actors["inference_1"]}
-        assert {node_id for node_id, _ in actors["policy"]}.isdisjoint(node_id for node_id, _ in actors["inference_0"])
-        assert (
-            len({(node_id, gpu) for identities in actors.values() for node_id, gpus in identities for gpu in gpus})
-            == 16
+            policy_actors = ray.get([handle.identity.remote() for handle in handles], timeout=60)
+            assert {actor["node"] for actor in policy_actors} == {assignments[0]}
+        else:
+            # With no role labels and default spread eligibility, preserve the
+            # old lazy trainer reservation and the shared inference group.
+            assert policy_pg is None
+
+        engines = create_ray_wrapped_inference_engines(
+            num_inference_engines=2,
+            tensor_parallel_size=1,
+            model_dtype="float32",
+            pretrain=str(model),
+            seed=42,
+            vllm_v1_disable_multiproc=True,
+            enable_prefix_caching=False,
+            enforce_eager=False,
+            engine_init_timeout_seconds=60,
+            placement_group_timeout_seconds=60,
         )
+        inference_actors = ray.get([engine.inference_engine_actor.identity.remote() for engine in engines], timeout=60)
+        assert len({actor["pg"] for actor in inference_actors}) == (2 if locality else 1)
+        all_actors = policy_actors + inference_actors
+        assert len({(actor["node"], gpu) for actor in all_actors for gpu in actor["gpus"]}) == (10 if locality else 2)
+        if locality:
+            assert {actor["node"] for actor in policy_actors}.isdisjoint(actor["node"] for actor in inference_actors)
+            assert len({actor["node"] for actor in inference_actors}) == 1
     finally:
         ray.shutdown()
         cluster.shutdown()

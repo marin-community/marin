@@ -123,8 +123,9 @@ option does not establish exact batch invariance; see the
 
 Set `role_topology="nvlink.domain"` on `IrisSkyRLExecution`, or
 `iris.role_topology: nvlink.domain` in a resolved launch document, to keep the
-trainer and each inference engine within one NVLink domain. On H100, a domain
-is one eight-GPU host. On NVL72, a domain is one rack of four-GPU hosts.
+trainer and each inference engine within one NVLink domain. This mode assumes
+each eight-GPU H100 host is one NVLink domain. On NVL72, a domain is one rack
+of four-GPU hosts.
 
 This option supports separate trainer and local vLLM inference GPUs, with
 TP=PP=1 and EP=DP for inference. A reference model may share the trainer's
@@ -136,7 +137,7 @@ places each complete group within one slice; smaller engines can share one.
 For example, 64 trainer GPUs and two 64-GPU engines use 48 four-GPU hosts in
 three 16-host rack slices. A 64-GPU trainer and two 32-GPU engines fit two
 16-host slices, with both engines in the second rack. Groups that cannot fit
-the allocated slices fail validation before GPU submission. This option does not
+the planned slices fail validation before submitting the Iris GPU job. This option does not
 expand a slice or change Iris's rack availability policy.
 
 Before model actors start, every host reports its GPU UUIDs. NVL72 hosts also
