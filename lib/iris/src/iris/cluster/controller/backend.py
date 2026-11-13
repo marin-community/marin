@@ -103,11 +103,14 @@ class BackendDescriptor:
     scale_groups: frozenset[str] = field(default_factory=frozenset)
     capabilities: frozenset[BackendCapability] = field(default_factory=frozenset)
     display_name: str | None = None
+    # Task execution contracts, independent of reconciliation mechanisms above.
+    task_capabilities: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         normalized = {key: frozenset(values) for key, values in self.advertised_attributes.items()}
         object.__setattr__(self, "advertised_attributes", MappingProxyType(normalized))
         object.__setattr__(self, "scale_groups", frozenset(self.scale_groups))
+        object.__setattr__(self, "task_capabilities", frozenset(self.task_capabilities))
         capabilities = self.capabilities
         if not capabilities:
             capabilities = frozenset(
@@ -128,7 +131,7 @@ class DashboardBackendDescriptor:
 
 def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDescriptor:
     descriptor = backend.descriptor
-    capabilities = []
+    capabilities = sorted(descriptor.task_capabilities)
     if BackendCapability.DIRECT_DISPATCH in descriptor.capabilities:
         capabilities.append("cluster")
     if BackendCapability.WORKER_FLEET in descriptor.capabilities:

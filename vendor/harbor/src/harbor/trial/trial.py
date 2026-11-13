@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from harbor_config.errors import ErrorCategory, error_category
+from harbor_config.models.trial.config import TaskConfig
 
 from harbor.agents.factory import AgentFactory
 from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
@@ -115,6 +116,44 @@ def _log_abandoned_phase_failure(
             )
 
     phase_task.add_done_callback(_log)
+
+
+async def load_task(
+    task: TaskConfig,
+    *,
+    extra_instruction_paths: Sequence[Any] | None = None,
+    disable_verification: bool = False,
+) -> Task:
+    """Materialize one task, downloading remote descriptors as a trial would.
+
+    Git and package tasks are fetched through the task client's cache, which
+    honors the descriptor's ``download_dir`` and returns the cached path on
+    repeat calls. Callers that only inspect task definitions, such as snapshot
+    preflight, use the same acquisition path as trial execution.
+    """
+    if task.is_git_task() or task.is_package_task():
+        client = TaskClient()
+        task_id = task.get_task_id()
+        task_dir = (
+            await client.download_tasks(
+                task_ids=[task_id],
+                overwrite=task.overwrite,
+                output_dir=task.download_dir,
+            )
+        ).paths[0]
+        return Task(
+            task_dir=task_dir,
+            extra_instruction_paths=extra_instruction_paths,
+            disable_verification=disable_verification,
+        )
+
+    if task.path is None:
+        raise ValueError("Task path must be set for a local task.")
+    return Task(
+        task_dir=task.path,
+        extra_instruction_paths=extra_instruction_paths,
+        disable_verification=disable_verification,
+    )
 
 
 class Trial(ABC):
@@ -251,26 +290,8 @@ class Trial(ABC):
         script_not_required = (
             config.verifier.disable or config.verifier.import_path is not None
         )
-        if config.task.is_git_task() or config.task.is_package_task():
-            client = TaskClient()
-            task_id = config.task.get_task_id()
-            task_dir = (
-                await client.download_tasks(
-                    task_ids=[task_id],
-                    overwrite=config.task.overwrite,
-                    output_dir=config.task.download_dir,
-                )
-            ).paths[0]
-            return Task(
-                task_dir=task_dir,
-                extra_instruction_paths=config.extra_instruction_paths,
-                disable_verification=script_not_required,
-            )
-
-        if config.task.path is None:
-            raise ValueError("Task path must be set for a local task.")
-        return Task(
-            task_dir=config.task.path,
+        return await load_task(
+            config.task,
             extra_instruction_paths=config.extra_instruction_paths,
             disable_verification=script_not_required,
         )
