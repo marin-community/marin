@@ -51,6 +51,16 @@ def artifact_prefix(prefix: str) -> Iterator[None]:
             os.environ["MARIN_PREFIX"] = previous
 
 
+@contextmanager
+def local_client() -> Iterator[LocalClient]:
+    """Bind a local Fray client and shut it down after execution."""
+    with ExitStack() as cleanup:
+        client = LocalClient()
+        cleanup.callback(client.shutdown)
+        cleanup.enter_context(set_current_client(client))
+        yield client
+
+
 def run_local_steps(
     steps: Mapping[str, ArtifactStep[CampaignArtifact]],
     output_root: Path,
@@ -83,12 +93,9 @@ def run_local_steps(
         )
 
     report(CampaignStatus.RUNNING)
-    client = LocalClient()
     try:
-        with ExitStack() as cleanup:
-            cleanup.callback(client.shutdown)
+        with local_client() as client:
             with (
-                set_current_client(client),
                 ZephyrContext(
                     client=client,
                     max_workers=max_workers,
