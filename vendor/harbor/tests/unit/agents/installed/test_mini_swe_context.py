@@ -347,7 +347,7 @@ def test_compaction_falls_back_to_bounded_excerpt_when_summary_fails(monkeypatch
         "model_format",
         "max_turns",
         "summarization_threshold_chars",
-        "context_error",
+        "server_rejection",
     ),
     [
         (32000, 65536, 16384, 768, True, "openai", None, 256, None),
@@ -358,13 +358,21 @@ def test_compaction_falls_back_to_bounded_excerpt_when_summary_fails(monkeypatch
         (32000, 65536, 16384, 768, True, "openai", 1, None, None),
         pytest.param(
             32000, 65536, 16384, 768, True, "openai", None, None,
-            {"type": "context_length_exceeded", "code": 400},
+            ({"type": "context_length_exceeded", "code": 400}, "ContextLimit"),
             id="server-type",
         ),
         pytest.param(
             32000, 65536, 16384, 768, True, "openai", None, None,
-            {"type": "invalid_request_error", "code": "context_length_exceeded"},
+            ({"type": "invalid_request_error", "code": "context_length_exceeded"}, "ContextLimit"),
             id="relay-code",
+        ),
+        pytest.param(
+            32000, 65536, 16384, 768, True, "openai", None, None,
+            (
+                {"type": "generation_stopped", "code": 400, "message": "Generation stopped: budget_reached"},
+                "LimitsExceeded",
+            ),
+            id="engine-budget",
         ),
     ],
 )
@@ -379,16 +387,19 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     model_format,
     max_turns,
     summarization_threshold_chars,
-    context_error,
+    server_rejection,
 ):
     root = Path(__file__).parents[4] / "src" / "harbor"
     monkeypatch.syspath_prepend(str(root / "agents" / "installed"))
     monkeypatch.syspath_prepend(str(root / "llms"))
+    server_error, expected_status = server_rejection or (
+        None, "LimitsExceeded" if max_turns is not None else "ContextLimit"
+    )
     counts_sequence = [prompt_tokens]
     if summarization_threshold_chars is not None:
         counts_sequence.append(128)
     if max_turns is None:
-        counts_sequence.append(prompt_tokens if context_error else min(32768, server_context))
+        counts_sequence.append(prompt_tokens if server_error else min(32768, server_context))
     counts = iter(counts_sequence)
     tokenized = []
     tokenization_trial_ids = []
@@ -451,10 +462,10 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
                 200, json={"count": next(counts), "max_model_len": server_context}
             )
         assert request.url.path == "/v1/chat/completions"
-        if context_error and completions:
+        if server_error and completions:
             return httpx.Response(
                 400,
-                json={"error": {"message": "Context limit reached", **context_error}},
+                json={"error": {"message": "Context limit reached", **server_error}},
             )
         assert "drop_params" not in payload
         # Keep the real SDK signature and serialization in the tested path.
@@ -510,7 +521,6 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     agent.populate_context_post_run(context)
 
     saved = json.loads(trajectory.read_text())
-    expected_status = "LimitsExceeded" if max_turns is not None else "ContextLimit"
     assert saved["info"]["exit_status"] == expected_status
     assert saved["messages"][-1]["extra"]["exit_status"] == expected_status
     assistant = next(
@@ -541,7 +551,7 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
             "logprobs": [[-0.2, -0.3]],
         }
     ]
-    if context_error:
+    if server_error:
         assert (context.n_input_tokens, context.n_output_tokens) == (prompt_tokens, expected)
     if custom_config:
         assert agent_completions[0]["temperature"] == 0.25
