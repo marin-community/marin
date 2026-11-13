@@ -12,7 +12,9 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput
 
 EVALUATION_SCHEMA_VERSION = 3
-type ResponseSelection = Literal["combine", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning"]
+type ResponseSelection = Literal[
+    "combine", "final_only", "final_or_complete_reasoning", "final_or_complete_boxed_reasoning"
+]
 
 
 class OperationKind(StrEnum):
