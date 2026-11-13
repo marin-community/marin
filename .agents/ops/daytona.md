@@ -290,6 +290,20 @@ summaries. Compare timezone-aware timestamps in UTC. Resolved configurations,
 logs, and trial metadata can contain capability JWTs inside model ingress URLs;
 redact those as well as named API keys before publication.
 
+## Transient provider errors
+
+Snapshot metadata, snapshot creation/listing and named sandbox creation retry
+HTTP 5xx, HTTP 408/429 and SDK connection/timeouts. Retry delays are capped at
+120 seconds. Retries continue until success or caller cancellation/deadline.
+Other 4xx errors and terminal image-build failures propagate. Deterministic
+snapshot names and caller-supplied sandbox names identify resources whose
+creation succeeded despite a lost response.
+
+Each retry emits `DAYTONA_PROVIDER_RETRY` with operation, attempt, status and
+delay fields. Count these events separately from task outcomes. Provider errors
+remain infrastructure evidence and receive no oracle score. Command
+execution is not replayed after an ambiguous response.
+
 ## Making a dataset Daytona-safe
 
 A dataset is Daytona-safe when it runs on the RL org as configured: its tasks
