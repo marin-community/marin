@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.backend_capabilities import (
     merge_surveys,
     source_map,
 )
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 ROOT = Path(__file__).resolve().parents[4]
 RUNTIME = RuntimeProfile(
@@ -272,7 +273,10 @@ def _shard_survey(
         "inputs": inputs,
     }
     if set(source_ids) - set(measured_ids):
-        manifest["unassessed_reason"] = "No converted population is bound to this source in the test fixture."
+        manifest["unassessed_reasons"] = {
+            canonical_source_id(source_id): "No converted population is bound to this source in the test fixture."
+            for source_id in set(source_ids) - set(measured_ids)
+        }
     return build_survey(manifest, checkers or _unit_checkers(), "rev")
 
 
@@ -281,6 +285,46 @@ def _rejecting_checkers() -> dict[str, Checker]:
         raise UnsupportedMachineSpec("The drift shard rejects every requirement")
 
     return {name: rejecting for name in ("docker", "gvisor", "qemu", "shellsim", "daytona", "iris", "local")}
+
+
+def test_unassessed_inputs_require_their_own_declared_reason(tmp_path):
+    path = tmp_path / "specs.parquet"
+    _write_spec_parquet(path, [{"task": _docker_task("measured"), "runtime": {}}])
+    profile = RUNTIME.model_dump(mode="json")
+    manifest = {
+        "catalog_root": "test:catalog",
+        "snapshot_id": "test-snapshot",
+        "source_ids": ["cohort-measured", "cohort-omitted"],
+        "runtime_defaults": {"agent": profile, "grader": profile},
+        "inputs": [_census_entry("cohort-measured", path)],
+    }
+    with pytest.raises(ValueError, match="cohort-omitted"):
+        build_survey(manifest, _unit_checkers(), "rev")
+    manifest["unassessed_reasons"] = {"cohort-omitted": "The pinned revision has no converted population yet."}
+    survey = build_survey(manifest, _unit_checkers(), "rev")
+    row = {source.source_id: source for source in survey.sources}["cohort-omitted"]
+    assert row.basis == "unassessed"
+    assert row.reason == manifest["unassessed_reasons"]["cohort-omitted"]
+    assert row.task_count == 0 and not row.backends and not row.demands
+    manifest["unassessed_reasons"]["cohort-measured"] = "unused"
+    with pytest.raises(ValueError, match="converted inputs"):
+        build_survey(manifest, _unit_checkers(), "rev")
+
+
+def test_local_disk_pool_provenance_comes_from_the_checkers(tmp_path):
+    path = tmp_path / "specs.parquet"
+    _write_spec_parquet(path, [{"task": _docker_task("measured"), "runtime": {}}])
+    profile = RUNTIME.model_dump(mode="json")
+    manifest = {
+        "catalog_root": "test:catalog",
+        "snapshot_id": "test-snapshot",
+        "source_ids": ["cohort-measured"],
+        "runtime_defaults": {"agent": profile, "grader": profile},
+        "inputs": [_census_entry("cohort-measured", path)],
+        "local_disk_root": "/tmp/never-verified",
+    }
+    survey = build_survey(manifest, _unit_checkers(), "rev")
+    assert survey.local_disk_pool is None
 
 
 def test_merge_reconciles_binding_and_rejects_bad_shards(tmp_path):

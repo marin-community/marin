@@ -198,9 +198,20 @@ def converted_specs(paths: list[Path], column: str, runtime_column: str | None =
                 yield {"task": task, "runtime": json.loads(row[runtime_column])}
 
 
+def verified_disk_pool(checkers: dict[str, Checker]) -> LocalDiskPool | None:
+    """Read the LOCAL disk pool the checkers were actually built with."""
+    pool = getattr(checkers.get("local"), "keywords", {}).get("disk_pool")
+    return pool if isinstance(pool, LocalDiskPool) else None
+
+
 def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) -> BackendSurvey:
-    """Bind a census to its catalog inventory; unavailable sources remain unassessed."""
+    """Bind a census to its catalog inventory; unavailable sources remain unassessed.
+
+    The artifact records the LOCAL disk pool the local checker was actually
+    constructed with, never a manifest claim about one.
+    """
     matrix = production_matrix(checkers)
+    disk_pool = verified_disk_pool(checkers)
     runtime_defaults = {
         role: RuntimeProfile.model_validate(manifest["runtime_defaults"][role]) for role in ("agent", "grader")
     }
@@ -236,8 +247,16 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
             raise ValueError(f"Converted population differs from manifest: {source_id}")
         selected[source_id] = measured
     unassessed = [source_id for source_id in source_ids if source_id not in selected]
-    if unassessed and not manifest.get("unassessed_reason"):
-        raise ValueError("Sources without converted inputs require a declared unassessed_reason")
+    declared_reasons = canonical_source_map(manifest.get("unassessed_reasons", {}))
+    missing_reasons = [source_id for source_id in unassessed if source_id not in declared_reasons]
+    if missing_reasons:
+        raise ValueError(
+            "Sources without converted inputs require their own unassessed_reasons entry so an "
+            f"accidentally omitted input cannot hide behind a shared reason: {missing_reasons}"
+        )
+    unused_reasons = [source_id for source_id in declared_reasons if source_id not in unassessed]
+    if unused_reasons:
+        raise ValueError(f"unassessed_reasons declares sources that have converted inputs: {unused_reasons}")
     limits = {
         backend: {
             "max_concurrent_sandboxes": None,
@@ -258,14 +277,14 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
         schema_sha256=backend_schema_sha256(),
         matrix=matrix,
         deployment_limits=limits,
-        local_disk_pool=manifest.get("local_disk_root"),
+        local_disk_pool=None if disk_pool is None else str(disk_pool.root),
         runtime_defaults=runtime_defaults,
         sources=[
             selected.get(source_id)
             or BackendSourceMap(
                 source_id=source_id,
                 basis="unassessed",
-                reason=manifest["unassessed_reason"],
+                reason=declared_reasons[source_id],
                 task_count=0,
                 inputs={},
                 demands={},
@@ -397,8 +416,6 @@ def main() -> None:
     else:
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     disk_pool = LocalDiskPool(args.local_disk_root) if args.local_disk_root is not None else None
-    if disk_pool is not None:
-        manifest = {**manifest, "local_disk_root": str(args.local_disk_root)}
     survey = build_survey(manifest, production_checkers(local_disk_pool=disk_pool), revision)
     args.output.write_text(survey.model_dump_json(indent=2) + "\n")
     print(

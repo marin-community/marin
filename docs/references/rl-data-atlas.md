@@ -288,8 +288,10 @@ uv run python -m experiments.post_training.task_curation.stage_survey_manifest \
 ```
 
 The survey streams staged rows and records input SHA-256s. Sources without
-converted inputs remain `unassessed` with the manifest's `unassessed_reason`;
-a census that would leave sources unassessed without a declared reason fails.
+converted inputs remain `unassessed`, and the manifest must declare a
+`unassessed_reasons` entry for each of them individually — a shared blanket
+reason cannot hide an accidentally omitted input, and an entry naming a source
+that has inputs is rejected.
 
 Set `runtime_defaults.agent` and `runtime_defaults.grader` to the deployment's
 explicit machine settings: `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`,
@@ -306,10 +308,11 @@ uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,
 
 On a worker workspace without git metadata, pass the code revision explicitly
 with `--revision`. Pass `--local-disk-root` to verify a LOCAL disk pool on a
-privileged Linux worker: the local checker then accepts declared storage through
-fixed-size ext4 loop filesystems, and the artifact records the verified pool
-root in `local_disk_pool`. Without a verified pool the LOCAL storage cell stays
-unsupported with its deployment condition; never widen it by hand. Full
+privileged Linux worker: the local checker is constructed with that pool and
+the artifact records the verified pool root from the checker itself, so a
+manifest can never claim a pool the checkers do not use. Without a verified
+pool the LOCAL storage cell stays unsupported with its deployment condition;
+never widen it by hand. Full
 population surveys of every current pinned source (millions of tasks) shard the
 manifest by source, stage each shard beside its storage region, and run one
 survey process per shard concurrently on a CPU worker at production priority.
