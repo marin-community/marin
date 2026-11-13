@@ -891,8 +891,6 @@ class Trial(ABC):
                 timeout_error=TimeoutError("Trial artifact download timed out"),
             )
         except asyncio.TimeoutError as exc:
-            # Separate verifiers may consume these files. A truncated transfer
-            # must not turn an infrastructure failure into a negative grade.
             raise RuntimeServiceError("Trial artifact download timed out") from exc
 
     async def _run_shared_verifier(
