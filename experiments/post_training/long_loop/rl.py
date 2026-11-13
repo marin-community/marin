@@ -66,12 +66,13 @@ def configured_rl_step(
         export_hf=True,
     )
 
+    recipe_export_selection = config["trainer"]["hf_export_checkpoint"]
     original_builder = step.build_config
 
     def bind_runtime(context: StepContext) -> SkyRLRunConfig:
         launch = original_builder(context)
         document = yaml.safe_load(launch.launch_config_yaml)
-        document["run"]["finalization"] = "any_terminal"
+        document["run"]["finalization"] = "any_terminal" if recipe_export_selection == "best" else "success"
         document["ray"].update(ray_timeouts)
         recipe = document["skyrl"]
         for callback in recipe["trainer"].get("callbacks", []):

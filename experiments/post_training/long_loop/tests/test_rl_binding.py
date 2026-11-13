@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import draccus
+import pytest
 import yaml
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRolePlan
@@ -15,9 +16,11 @@ from experiments.post_training.long_loop import rl
 from experiments.post_training.long_loop.spec_pipeline import runtime_execution, stage_execution
 
 
-def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch):
+@pytest.mark.parametrize("export_selection,finalization", [("best", "any_terminal"), ("latest", "success")])
+def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch, export_selection, finalization):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
     recipe = yaml.safe_load((Path(__file__).parents[1] / "specs/rl.yaml").read_text())
+    recipe["config"]["trainer"]["hf_export_checkpoint"] = export_selection
     model = ArtifactStep.adopt("tests/adopted-handoff", "2026.11.10", "s3://test/committed-sft-export")
     data = ArtifactStep.adopt("tests/mixed", "2026.11.10", "s3://test/verified-data")
     step = rl.configured_rl_step(
@@ -41,7 +44,9 @@ def test_real_builder_binds_selected_model_and_attempt_trace_paths(monkeypatch):
     context = StepContext.for_run(step.path(), "s3://test/output", runtime_args=step.runtime_args, deps=step.deps)
     built = step.build_config(replace(context, is_fingerprint=True))
     document = yaml.safe_load(built.launch_config_yaml)
+    assert document["run"]["finalization"] == finalization
     config = document["skyrl"]
+    assert config["trainer"]["hf_export_checkpoint"] == export_selection
     selection = next(c for c in config["trainer"]["callbacks"] if c["type"] == "best_checkpoint")
     assert selection["initial_model_uri"] == document["inputs"]["model"]["uri"]
     assert "PENDING" not in built.launch_config_yaml
