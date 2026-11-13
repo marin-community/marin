@@ -88,6 +88,25 @@ in the URL. The four totals show canonical groups, unique examples, displayed
 quality counts and catalog freshness. Source evidence pages include exact release
 pins, deduplication ledgers, lexical measurements, QC and archived assessment packets.
 
+**Contamination** is computed from each source's lexical-decontamination record:
+
+- **NO ISSUES**: zero overlap measured for the current input pin or certified by
+  a validated current retained-release receipt.
+- **REMEDIATED**: TRAIN overlap was excluded in a new pinned private TaskCompendium
+  release, with a validated remediation receipt matching the current dataset pin.
+- **MEASURED, EVAL**: EVAL or benchmark overlap is retained by policy; the overlapping
+  count remains visible.
+- **REMEDIATION REQUIRED**: TRAIN overlap lacks verified remediation for the current
+  private pin. This state violates the ingestion requirement.
+- **NOT MEASURED**: no applicable current-pin record exists; cleanliness is unknown.
+
+Counts describe the measured input before duplicate and lexical exclusions. They do
+not describe residual overlap in the retained release or semantic decontamination.
+The source table legend and Getting started guide define the same five states.
+Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
+Result from incomplete content review carries a provisional variant within its
+chip. Review progress and lower bounds appear only on the source Evidence page.
+
 **Daytona safe** measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;
 grandfathered blends still using the legacy internal format show a dash. Retained
@@ -415,7 +434,11 @@ It records seed-0 samples of at most
 20 normalized tasks, instruction MinHash sketches, reference/test hashes,
 upstream dataset revisions, identifier/URL hashes and within-source duplicate
 counts. Pin each source's fingerprint artifact URI, its SHA-256 and task-input digest
-in `experiments/post_training/task_curation/source_fingerprint_index.json`.
+in a staged raw copy of `experiments/post_training/task_curation/source_fingerprint_index.json`.
+That Git path holds a registry reference. Use the
+[registry update command](task-curation.md#updating-pinned-registry-receipts)
+to archive the complete updated index, verify readback and replace its reference;
+do not insert fingerprint entries into the reference object.
 The task-input digest binds the consumed dataset revision, pipeline, converter
 revision and the actor census's `task_specs_sha256` for that population.
 Catalog titles, counts and assessment

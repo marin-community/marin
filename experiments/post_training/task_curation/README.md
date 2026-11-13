@@ -5,6 +5,30 @@ Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
 reviewed SAMPLE/FULL campaigns and artifact outputs.
 
+## Pinned registry receipts
+
+Generated census, lexical, retention, deduplication and fingerprint-index JSON is
+archived in the private `open-athena/marin-rl-data-atlas-registry` dataset. The
+repository keeps a reference at each original path with `repo`, exact commit
+`revision`, archive `path` and `sha256`. The archive preserves the original bytes
+and layout; it does not publish or modify a retained TaskCompendium release.
+Human-reviewed policy, including duplicate acknowledgements, stays in Git.
+
+`registry.read_registry_json()` uses the Hugging Face client's authenticated
+cache and verifies the downloaded bytes before decoding. Missing revisions,
+unavailable credentials and checksum mismatches fail the operation; there is no
+fallback to a different revision or inline data. Catalog construction, admission,
+selection and the source-overlap gate use this reader. Importing catalog modules
+does not download the registry; receipt accessors load it when called.
+
+For new measurements, follow the [registry update procedure](../../../docs/references/task-curation.md#updating-pinned-registry-receipts): stage raw JSON in a fresh tree, append to the private registry, verify readback, then update Git references. The overlap workflow uses the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in that job. Local readers use normal Hugging Face credentials; archive updates need write access to this private registry only.
+
+Unit tests inject small documents at the download boundary and reject registry
+downloads. Tests that inspect the complete private registry use the
+`data_integration` marker and are excluded from the default safe suite. The
+source-overlap ranking fixture contains two small contracts rather than an
+archived production population.
+
 ## Final task selection
 
 Pass `--selection RECIPE.json` to a FULL campaign to append a
@@ -423,9 +447,14 @@ Reviewer-spec changelog (2026-11-13):
 | v2 repair | 262,144 | 8,192 / 16,384 | Existing incomplete-only repair policy |
 | v3 | 524,288 | 8,192 / 16,384 | Future FULL-QC starts |
 
-V3 retains GLM-5.3's pinned checkpoint, FP8 precision, temperature 0.7, low
-reasoning effort, three attempts, payload revision 4 and the task-quality-v2
-rubric. Prompt character budgets remain explicit and unchanged (512,000 by
+V3 constructs a literal ReviewerSpec: GLM-5.3 revision
+`aca966e4e02791568aa6a4ced368624b3d897f42`, API model `glm-5.3`, FP8 precision,
+temperature 0.7, top_p 0.95, top_k 0 (disabled), low reasoning effort, three
+attempts, payload revision 4 and the task-quality-v2 rubric with its content hash.
+Its explicit serving pin checks the checkpoint, API name and context independently
+of shared relay presets. Top_p matches the pinned model's generation configuration;
+top_k disables top-k filtering of candidate next tokens in vLLM 0.28.0. Optional sampling overrides are
+absent from existing v2 requests and identity, preserving its frozen caches. Prompt character budgets remain explicit and unchanged (512,000 by
 default); they are separate from the serving token context. Compilation and CUDA
 graphs remain enabled. The v3 YAML has not yet been exercised by a live GPU job.
 
@@ -585,17 +614,27 @@ and 16,384-token retry budgets.
 These budgets have a separate ReviewerSpec and exact-request cache identity.
 
 Run a batch-priority CPU job on the serving workers' cluster with a three-day
-timeout. Borrow an existing serving worker from the same primary campaign; this
-command neither starts nor stops serving jobs. It resolves that worker's current child registration
-before each request, including when batch preemption replaces the child. Keep
-the primary 48 workers running and use a separate output prefix and cache:
+timeout. Repeat `--serving-root` to borrow existing workers from the same pinned
+primary campaign. Each request selects from their current registrations and
+checks the advertised model; an unregistered worker is skipped until it returns.
+The command neither starts nor stops serving jobs. Keep the primary 48 workers
+running and use a separate output prefix and cache.
+
+Set `--batch-workers` explicitly, from one to 16. The writer streams fixed groups
+of that many original 32-task batches and processes each group concurrently;
+it never queues the whole source in memory. Each batch admits at most four
+requests, so the CLI adds at most 64 concurrent repair requests across the
+borrowed serving pool. Physical routing and concurrency do not change the
+reviewer, request-cache or composite identity. Only incomplete primary contracts
+are submitted, and completed repair receipts are reused on resume:
 
 ```bash
 uv run --no-sync --package marin-core --extra dedup python -m \
   experiments.post_training.task_curation.full_qc_repair \
   --primary s3://bucket/assembled/source/v1/attempts/PRIMARY \
   --primary-sha256 PRIMARY_ARTIFACT_SHA256 \
-  --serving-root /owner/primary-worker \
+  --serving-root /owner/primary-worker-000 \
+  --serving-root /owner/primary-worker-001 --batch-workers 2 \
   --output s3://bucket/repair-overlay/source/v1 \
   --review-cache s3://bucket/repair-overlay/request-cache --run
 ```

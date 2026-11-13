@@ -1329,6 +1329,41 @@ this exclusion does not establish an oracle score of zero. Unrecognized
 infrastructure failures remain unscored after the retry budget, while other
 population tasks continue. The summary counts exclusions by typed reason.
 
+#### Targeted requalification after an approved harness change
+
+An explicit source-specific decision may replace a fresh full-population pass with
+a targeted pass. Record that decision and the exact old/new payload and backend
+commits. Re-run every task without a clean prior oracle pass, including source
+environment exclusions, resource failures and unscored or hung tasks. Count a hung
+task once within the unscored set.
+
+Also re-run every prior pass whose verdict the actual trial-payload change could
+affect. Derive that set mechanically from frozen task evidence and the code delta;
+report the selection rule, coverage limitations, count and ETA before dispatch.
+The conservative static criterion includes explicit subprocess/interpreter APIs,
+pytester, xdist or virtualenv use, access to builtins changed by the payload delta, and unresolved local
+helper or dynamic code paths. A complete trace of every third-party dependency is
+not required; record that limitation in the release notes.
+A host-only collection change does not invalidate a trial. For example, restoring
+the source environment's dependency search paths in an ordinary child interpreter concerns tasks whose tests
+invoke such an interpreter, directly or through product/helper code. Missing
+evidence of a subprocess is not proof that none ran. Include unresolved impact in
+the targeted set rather than classifying it as unaffected.
+
+Carry an unaffected pass only with its original TaskSpec, native payload, execution
+requirements and production oracle receipt. Do not attach an old verdict to a
+changed native checksum. Preserve the prior production oracle receipts, all rerun receipts and a per-task
+selection/lineage manifest; assemble the release from carried original tasks and
+newly passing targeted tasks. Keep unscored tasks pending, separately from source
+faults. Apply the final deduplication, lexical checks and [SAMPLE/FULL oversight](#curation-modes-and-oversight-levels) to
+that exact release union before publishing or rebinding its source pin.
+
+SWE-rebench v14 uses this targeted procedure. Its baseline set is all 1,567 v13
+nonpasses, plus mechanically affected clean passes. The original 5,474-task scope
+and the v13 history remain preserved. Report the breakdown before dispatch if
+more than half of the 3,907 clean passes meet the impact rule. The final targeted count belongs in its
+immutable selection manifest, not a generic policy constant.
+
 #### Replaying our infrastructure failures
 
 A backend failure is pending evidence, not a source negative. Before replay,
@@ -1880,15 +1915,50 @@ registry remain staged; they do not register a new source. The declaration
 persists the input binding in `actor_census_input` and rejects a later input or
 converter change that carries the old census.
 
-Freeze a complete set of measured actor artifacts into the checked-in receipt
-shards with:
+### Updating pinned registry receipts
+
+When recording new measurements, stage raw JSON in a fresh directory using each
+file's repository-relative path. For example, census shards belong under
+`STAGED_ROOT/experiments/post_training/task_curation/datasets/daytona_census_receipts/`.
+Review the complete staged collection, then append it to the existing private
+registry and update its references:
+
+```bash
+uv run python -m experiments.post_training.task_curation.registry \
+  --staged-root /tmp/atlas-registry-YYYYMMDD-v1 --references-root . \
+  --repo open-athena/marin-rl-data-atlas-registry \
+  --parent-revision CURRENT_REGISTRY_COMMIT --message 'Record approved census receipts'
+```
+
+Use the registry's current 40-character commit as `--parent-revision`; a concurrent
+update fails rather than overwriting it. The command uses add operations only,
+reads every staged file back at the new immutable commit and verifies its hash
+before updating any Git reference. Earlier commits and artifacts remain intact.
+Stage the complete replacement shard collection. For each staged `part-*.json`
+directory, inactive existing tail shards are archived as empty objects in the
+new revision and their references are updated too. This prevents stale receipts
+without deleting any earlier artifact or revision.
+Do not write generated bodies over pinned references. The overlap workflow reads
+through the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in
+that job. Local readers use the Hugging Face client's normal credentials; the
+archive command needs write access to this private registry only.
+
+
+### Actor census registration
+
+Stage a complete set of measured actor artifacts in a fresh registry tree:
 
 ```bash
 uv run python -m experiments.post_training.task_curation.census_binding \
   --censuses actor-censuses.json \
   --integrity-censuses integrity-censuses.json \
-  --output-dir experiments/post_training/task_curation/datasets/daytona_census_receipts
+  --output-dir /tmp/atlas-registry-YYYYMMDD-v1/experiments/post_training/task_curation/datasets/daytona_census_receipts
 ```
+
+Archive the staged tree with the
+[registry update command](#updating-pinned-registry-receipts).
+It appends an immutable private revision, verifies readback, then updates the Git
+references. Never use the checked-in reference directory as producer output.
 
 Integrity-contract summaries are optional and independent of actor safety.
 The optional `--integrity-censuses` input requires the same source, normalized
@@ -1931,7 +2001,7 @@ uv run python -m experiments.post_training.task_curation.lexical_registration \
   --outcomes lexical-outcomes.json --populations normalized-populations.json \
   --source-uses measured-source-uses.json \
   --actor-receipts-dir experiments/post_training/task_curation/datasets/daytona_census_receipts \
-  --output-dir /tmp/atlas-lexical-measurements-YYYYMMDD
+  --output-dir /tmp/atlas-registry-YYYYMMDD-v2/experiments/post_training/task_curation/datasets/lexical_measurement_receipts
 ```
 
 This command updates metadata only. It does not publish dataset versions or
@@ -1939,8 +2009,10 @@ change admitted selection. Training release publication combines within-source
 exact deduplication and lexical decontamination after approval of the retained
 population.
 The output directory must be new; an existing directory is never replaced.
-Review the staged shards before updating the checked-in
-`datasets/lexical_measurement_receipts` registry.
+Review the staged shards, then use the
+[registry update command](#updating-pinned-registry-receipts)
+with that fresh staging root. The checked-in `datasets/lexical_measurement_receipts`
+directory contains references, not writable receipt bodies.
 
 Approved frozen combined plans are published with `remediation_publish`. Run
 publication on CPU Iris workers in the artifacts' region, at production priority
@@ -1965,8 +2037,11 @@ uv run iris --config lib/iris/config/marin.yaml job run \
 After readback, `retained_census` measures the retained actor and integrity
 population using the existing complete census. It also writes a normalized
 `task_json` view with the original serialized bytes. `remediation_binding` joins
-these measurements to the publication receipts and stages
-`datasets/retained_release_receipts`. Registry loading validates the original
+these measurements to the publication receipts. Set its `--output-dir` to a fresh
+`STAGED_ROOT/experiments/post_training/task_curation/datasets/retained_release_receipts`
+directory, then use the
+[registry update command](#updating-pinned-registry-receipts)
+to archive/read back the shards and update their references. Registry loading validates the original
 conversion binding before selecting the retained importer and pin. Original
 pipeline, conversion, deduplication and qualification records stay in lineage.
 Active deduplication counts describe the retained pin: raw and unique both equal

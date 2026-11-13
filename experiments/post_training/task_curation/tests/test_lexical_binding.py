@@ -80,7 +80,9 @@ def test_historical_measurement_reaches_canonical_catalog_without_admitting_trai
     )
     record = {**receipt.model_dump(mode="json"), "source_id": historical_id}
     (tmp_path / "part-000.json").write_text(json.dumps({historical_id: record}))
-    receipts = read_receipt_shards(tmp_path, LexicalMeasurementReceipt, "lexical")
+    receipts = read_receipt_shards(
+        tmp_path, LexicalMeasurementReceipt, "lexical", load_json=lambda path: json.loads(path.read_text())
+    )
     bound = bind_lexical_measurement(source, receipts[source.info.id], LexicalUse.TRAIN)
     table = pa.Table.from_pylist([bound.declaration.model_dump(mode="json")], schema=arrow_schema(SourceDeclaration))
     restored = SourceDeclaration.model_validate(table.to_pylist()[0])
@@ -129,6 +131,10 @@ def test_measurement_registration_preserves_current_release_proof(tmp_path):
 
 
 def test_registration_writes_fresh_shards_and_preserves_occupied_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.lexical_registration.read_registry_json",
+        lambda path: json.loads(path.read_text()),
+    )
     source, receipt = measured_source(tmp_path / "input")
     population = SourceTextPopulation(
         path="s3://fixture/normalization",
@@ -185,7 +191,9 @@ def test_registration_writes_fresh_shards_and_preserves_occupied_directory(tmp_p
     output = tmp_path / "fresh"
     monkeypatch.setattr(sys, "argv", [*arguments, "--actor-receipts-dir", str(actor_dir), "--output-dir", str(output)])
     register_measurements()
-    written = read_receipt_shards(output, LexicalMeasurementReceipt, "lexical")[source.info.id]
+    written = read_receipt_shards(
+        output, LexicalMeasurementReceipt, "lexical", load_json=lambda path: json.loads(path.read_text())
+    )[source.info.id]
     assert written.measurement.contaminated_tasks == 1 and written.measurement.receipt is None
     occupied = tmp_path / "occupied"
     occupied.mkdir()

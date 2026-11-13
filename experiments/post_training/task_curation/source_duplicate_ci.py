@@ -21,6 +21,8 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation.registry import read_registry_json
+
 EXPORT_DECLARATIONS = """import json
 from experiments.post_training.task_curation.sources import all_sources
 print(json.dumps({source.info.id: source.declaration.model_dump(mode='json')
@@ -95,7 +97,7 @@ def prepare_review(base_ref: str, index: Path, output: Path, changed_output: Pat
             subprocess.run(["git", "worktree", "remove", "--force", str(baseline)], check=True)
     changed = changed_source_declarations(previous, current)
     references = canonical_source_map(
-        {key: FingerprintReference.model_validate(value) for key, value in json.loads(index.read_text()).items()}
+        {key: FingerprintReference.model_validate(value) for key, value in read_registry_json(index).items()}
     )
     missing = changed - references.keys()
     if missing:

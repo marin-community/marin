@@ -29,7 +29,12 @@ from taskcompendium.pipeline.review import ChatReviewer, ReviewBatchResult
 from taskcompendium.pipeline.reviewer_spec import JudgeTier, ReviewerSpec
 
 from experiments.post_training.task_curation.full_qc_review import load_inputs, review_inputs
-from experiments.post_training.task_curation.judges import JUDGE_TIERS, LocalJudgeEndpoint
+from experiments.post_training.task_curation.judges import (
+    JUDGE_TIERS,
+    LocalJudgeEndpoint,
+    LocalJudgeModel,
+    PinnedLocalJudgeEndpoint,
+)
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG = Path("experiments/evaluation/serve/models/zai-org/GLM-5.3.yaml")
@@ -93,14 +98,11 @@ class ReadyChatReviewer:
         return self._reviewer(current).review(tasks, rubric, originals=originals, cached=cached)
 
 
-def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
-    definition = JUDGE_TIERS[JudgeTier.HEAVY]
-    assert definition.qa_reviewer is not None and definition.model_revision is not None
-    factor = 2 if version is ReviewerVersion.V3 else 1
-    endpoint = LocalJudgeEndpoint(
+def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudgeEndpoint:
+    return LocalJudgeEndpoint(
         tier=JudgeTier.HEAVY,
-        model_config=V3_MODEL_CONFIG if version is ReviewerVersion.V3 else MODEL_CONFIG,
-        context_window_tokens=factor * definition.context_window_tokens,
+        model_config=model_config,
+        context_window_tokens=context_window_tokens,
         accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, region=ANY_REGION),
         priority=job_pb2.PRIORITY_BAND_BATCH,
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
@@ -110,13 +112,44 @@ def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
         ),
         worker_timeout=Duration.from_hours(72),
     )
+
+
+def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
+    if version is ReviewerVersion.V3:
+        pin = LocalJudgeModel(
+            model_identity="zai-org/GLM-5.3",
+            model_revision="aca966e4e02791568aa6a4ced368624b3d897f42",
+            api_model="glm-5.3",
+            context_window_tokens=524288,
+        )
+        return ReviewerSpec(
+            tier=JudgeTier.HEAVY,
+            model=pin.api_model,
+            model_revision=pin.model_revision,
+            endpoint=PinnedLocalJudgeEndpoint(_local_endpoint(V3_MODEL_CONFIG, pin.context_window_tokens), pin),
+            precision="native-fp8-e4m3;kv-cache-fp8-e4m3",
+            temperature=0.7,
+            top_p=0.95,
+            top_k=0,
+            reasoning_effort="low",
+            max_tokens=8192,
+            retry_max_tokens=16384,
+            max_attempts=3,
+            prompt_budget=512000,
+            retry_prompt_budget=512000,
+            base_rubric_version="task-quality-v2",
+            base_rubric_sha256="af7ae2a33e3f73d17f27907d930beae35453a22b63ef6f28138c50a8d65131eb",
+            payload_revision="4",
+        )
+    if version is not ReviewerVersion.V2:
+        raise ValueError(f"Unknown FULL-QC reviewer version: {version}")
+    definition = JUDGE_TIERS[JudgeTier.HEAVY]
+    assert definition.qa_reviewer is not None and definition.model_revision is not None
     return replace(
         definition.qa_reviewer,
         model_revision=definition.model_revision,
-        endpoint=endpoint,
+        endpoint=_local_endpoint(MODEL_CONFIG, definition.context_window_tokens),
         precision="native-fp8-e4m3;kv-cache-fp8-e4m3",
-        max_tokens=factor * definition.qa_reviewer.max_tokens,
-        retry_max_tokens=factor * definition.qa_reviewer.retry_max_tokens,
     )
 
 
@@ -144,7 +177,7 @@ def main() -> None:
         return
     campaign_path = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
     endpoint = spec.endpoint
-    assert isinstance(endpoint, LocalJudgeEndpoint)
+    assert isinstance(endpoint, (LocalJudgeEndpoint, PinnedLocalJudgeEndpoint))
     with endpoint.serve() as session:
         reviewer = ReadyChatReviewer(
             session,

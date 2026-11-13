@@ -6,10 +6,22 @@ from dataclasses import replace
 import pytest
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 
-from experiments.post_training.task_curation import driver
+from experiments.post_training.task_curation import driver, registry
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, HostedJudgeEndpoint
 from experiments.post_training.task_curation.tests.local_grader import LocalGraderMachines, local_grader_machines
 from experiments.post_training.task_curation.tests.review_server import running_review_server
+
+
+@pytest.fixture(autouse=True)
+def offline_registry(request, monkeypatch):
+    if request.node.get_closest_marker("data_integration") is not None:
+        return
+
+    def unavailable(**kwargs):
+        raise AssertionError("Unit tests must inject local registry documents at the download boundary")
+
+    monkeypatch.setattr(registry, "hf_hub_download", unavailable)
+    monkeypatch.setattr(driver, "all_sources", lambda: {})
 
 
 @pytest.fixture(scope="session")
