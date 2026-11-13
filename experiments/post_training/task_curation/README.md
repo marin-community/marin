@@ -590,6 +590,15 @@ reuses successful repair receipts without resampling them. Existing primary
 records and pointers are never changed. Oracle filtering and resource calibration
 remain separate requirements for execution qualification.
 
+Prism's v2 content review is finalized with 2,220 valid reviews of 2,221 retained
+contracts. The Result is SOME_ISSUES: 286 issues among 2,213 conclusive reviews
+(12.9236%); seven valid uncertain reviews are reported separately. One task stays
+in the population as “QC unreviewed: review exceeded 16,384 tokens.” Its strict
+coverage remains incomplete, and execution qualification is unchanged.
+[Final source evidence](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Ffull-qc%2Ffinal-content%2F2026.11.13.1%2Fprism.json)
+is stored at
+`s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/prism.json`.
+
 ### CrossCode Python qualification candidate
 
 CrossCodeEval Python, TypeScript, Java and C# are evaluation sources. Python's
