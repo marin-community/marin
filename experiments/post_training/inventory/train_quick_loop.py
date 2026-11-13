@@ -43,7 +43,6 @@ CLUSTER = "cw-us-east-02a"
 SEED = 20261020
 EVAL_TEMPERATURE = 0.6
 EVAL_TOP_P = 0.95
-MAX_NUM_SEQS = 1
 REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
@@ -130,7 +129,8 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
                 # Exact repeats were qualified with greedy evaluation.
                 eval_sampling_params=EvalSamplingParams(seed=SEED, temperature=0.0, top_p=1.0),
                 enable_prefix_caching=True,
-                max_num_seqs=MAX_NUM_SEQS,
+                # One sequence per serving rank; the default profile keeps the Snowball value.
+                max_num_seqs=1,
                 vllm_attention_backend="TRITON_ATTN",
                 engine_init_kwargs={
                     "compilation_config": {
@@ -145,9 +145,9 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
             ),
             trainer=sections.Trainer(algorithm=sections.Algorithm(batch_invariant=True)),
             trajectory_runner=sections.TrajectoryRunner(
+                # One task per serving rank, matching max_num_seqs above.
                 max_concurrent_tasks=plan.num_inference_engines
-                * plan.inference_engine_data_parallel_size
-                * MAX_NUM_SEQS,
+                * plan.inference_engine_data_parallel_size,
             ),
         )
     )
