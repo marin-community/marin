@@ -32,12 +32,16 @@ from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements
 
 
 class UnclassifiedCapability(ValueError):
-    """A declared capability names no requirement in the survey vocabulary."""
+    """Declared capabilities name no requirement in the survey vocabulary."""
 
-    def __init__(self, role: str, capability: str):
-        super().__init__(f"{role}: declared capability '{capability}' has no requirement classification")
+    def __init__(self, role: str, capabilities: tuple[str, ...], demands: set[Requirement]):
+        super().__init__(
+            f"{role}: declared capabilities {sorted(capabilities)} have no requirement classification; "
+            f"{len(demands)} classifiable demands retained"
+        )
         self.role = role
-        self.capability = capability
+        self.capabilities = capabilities
+        self.demands = demands
 
 
 class RuntimeProfile(BaseModel):
@@ -167,13 +171,17 @@ class BackendSurvey(BaseModel):
 
 
 def environment_demands(environment: EnvironmentRequirements) -> set[Requirement]:
-    """Describe declared behavior; unknown capabilities fail classification."""
-    demands = set()
+    """Describe declared behavior; unknown capabilities fail classification.
+
+    The failure carries every classifiable demand so the census keeps the
+    known requirements beside the unclassified ones.
+    """
+    demands, unknown = set(), []
     for capability in environment.capabilities:
         try:
             demands.add(Requirement(capability))
-        except ValueError as error:
-            raise UnclassifiedCapability("environment", capability) from error
+        except ValueError:
+            unknown.append(capability)
     if environment.command_semantics is not None:
         demands.add(Requirement(environment.command_semantics.value))
     for name in ("docker_image", "docker_build", "packages_lock", "package_spec"):
@@ -189,6 +197,8 @@ def environment_demands(environment: EnvironmentRequirements) -> set[Requirement
         demands.add(Requirement.ENV)
     if environment.tool_providers:
         demands.add(Requirement.TOOL_PROVIDERS)
+    if unknown:
+        raise UnclassifiedCapability("environment", tuple(unknown), demands)
     return demands
 
 
@@ -207,17 +217,21 @@ def execution_resource_shape(task: Mapping, shape: Mapping | None) -> dict:
     return values
 
 
-def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
+def task_demands(document: Mapping) -> tuple[dict[str, set[Requirement]], dict[str, UnclassifiedCapability]]:
     """Extract independent agent/grader demands, including published runtime budgets.
 
     Only feature names leave this function: package locks, file contents,
     environment values and backend selections never become survey metadata.
+    Roles with unclassified capabilities keep their classifiable demands and
+    are reported as failures so the census can mark them unsupported without
+    discarding the unaffected role.
     """
     task = document.get("task", document)
     runtime = document.get("runtime") or {}
     grader = task.get("grader") or {}
     resources = task.get("resources") or {}
     roles = {}
+    failures: dict[str, UnclassifiedCapability] = {}
     for role, declared, shape, files in (
         (
             "agent",
@@ -238,7 +252,8 @@ def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
         try:
             demands = environment_demands(environment)
         except UnclassifiedCapability as error:
-            raise UnclassifiedCapability(role, error.capability) from error
+            failures[role] = UnclassifiedCapability(role, error.capabilities, error.demands)
+            demands = set(error.demands)
         if task.get("integrity_contract") is not None:
             demands.update(TASK_FIELDS["integrity_contract"])
         if role == "agent":
@@ -254,7 +269,7 @@ def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
             demands.add(Requirement.FILE_MODE)
         if any(resource.get("mtime_ns") is not None for resource in files):
             demands.add(Requirement.FILE_MTIME)
-        if not demands:
+        if not demands and role not in failures:
             continue
         if role == "agent":
             shape = execution_resource_shape(task, shape)
@@ -275,6 +290,6 @@ def task_demands(document: Mapping) -> dict[str, set[Requirement]]:
                 demands.add(Requirement.ENV)
             if grader.get("cwd"):
                 demands.add(Requirement.WORKDIR)
-        if demands:
+        if demands or role in failures:
             roles[role] = demands
-    return roles
+    return roles, failures

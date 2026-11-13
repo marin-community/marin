@@ -5,6 +5,7 @@
 
 import ast
 import json
+import sys
 from dataclasses import fields
 from pathlib import Path
 from typing import get_args, get_type_hints
@@ -35,10 +36,15 @@ from taskcompendium.backend_fields import (
     SCRIPT_GRADER_FIELDS,
     TASK_FIELDS,
 )
-from taskcompendium.backend_requirements import RuntimeProfile
+from taskcompendium.backend_requirements import BackendSurvey, RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements, ScriptGrader, TaskResource, TaskSpec
 
-from experiments.post_training.task_curation.backend_capabilities import build_survey, source_map
+from experiments.post_training.task_curation.backend_capabilities import (
+    build_survey,
+    main,
+    merge_surveys,
+    source_map,
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 RUNTIME = RuntimeProfile(
@@ -184,6 +190,128 @@ def test_unclassified_capability_counts_a_misfit_on_every_backend():
     assert fit.task_counts == {Support.UNSUPPORTED: 1}
     assert fit.roles["agent"] == {Support.UNSUPPORTED: 1}
     assert fit.blockers == {"agent:nemotron-agent:ns_tools_simple_agent": 1}
+
+
+def test_unclassified_capability_preserves_the_other_role_and_known_requirements():
+    checkers = {"docker": DockerMachineFactory().check_environment}
+    task = {
+        "environment_requirements": {
+            "command_semantics": "linux_process",
+            "docker_image": "example/image@sha256:" + "0" * 64,
+            "capabilities": ["nemotron-agent:ns_tools_simple_agent"],
+        },
+        "grader": {"environment": {"command_semantics": "linux_process", "packages_lock": "private.lock"}},
+    }
+    mapped = source_map(
+        "mixed",
+        [{"task": task, "runtime": {}}],
+        capability_matrix(checkers),
+        checkers,
+        {},
+        {"agent": RUNTIME, "grader": RUNTIME},
+    )
+    fit = mapped.backends["docker"]
+    assert fit.task_counts == {Support.UNSUPPORTED: 1}
+    assert fit.roles["agent"] == {Support.UNSUPPORTED: 1}
+    assert fit.roles["grader"] == {Support.UNSUPPORTED: 1}
+    assert fit.blockers == {
+        "agent:nemotron-agent:ns_tools_simple_agent": 1,
+        "grader:cleanup_timeout": 1,
+        "grader:startup_timeout": 1,
+        "grader:host_image": 1,
+        "grader:packages_lock": 1,
+    }
+    assert mapped.demands["agent"][Requirement.DOCKER_IMAGE] == 1
+    assert mapped.demands["grader"][Requirement.PACKAGES_LOCK] == 1
+    assert mapped.demands["grader"][Requirement.HOST_IMAGE] == 1
+    assert mapped.role_backend_assignments["grader"] == {"local": 1}
+
+
+def _docker_task(task_id: str) -> dict:
+    return {
+        "id": task_id,
+        "environment_requirements": {
+            "command_semantics": "linux_process",
+            "docker_image": "example/image@sha256:" + "0" * 64,
+        },
+        "grader": {"kind": "none"},
+    }
+
+
+def _shard_survey(tmp_path: Path, name: str, source_id: str) -> BackendSurvey:
+    path = tmp_path / f"{name}.parquet"
+    _write_spec_parquet(path, [{"task": _docker_task(f"{name}-task"), "runtime": {}}])
+    manifest = _survey_manifest([source_id], [_census_entry(source_id, path)])
+    manifest["snapshot_id"] = name
+    return build_survey(manifest, _unit_checkers(), "rev")
+
+
+def _census_entry(source_id: str, path: Path) -> dict:
+    return {
+        "source_id": source_id,
+        "paths": [str(path)],
+        "column": "task_spec",
+        "runtime_column": "runtime",
+        "expected_tasks": 1,
+    }
+
+
+def test_merge_reconciles_binding_and_rejects_bad_shards(tmp_path):
+    first = _shard_survey(tmp_path, "first", "cohort-a")
+    second = _shard_survey(tmp_path, "second", "cohort-b")
+    merged = merge_surveys([first, second], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
+    assert [source.source_id for source in merged.sources] == ["cohort-a", "cohort-b"]
+    assert merged.snapshot_id == "selected-snapshot"
+    assert merged.matrix == first.matrix
+    stale = first.sources[0].model_copy(
+        update={
+            "basis": "unassessed",
+            "reason": "placeholder",
+            "task_count": 0,
+            "inputs": {},
+            "demands": {},
+            "resource_ranges": {},
+            "backends": {},
+            "role_backend_assignments": {},
+        }
+    )
+    placeholder = first.model_copy(update={"sources": [*first.sources, stale]})
+    merged = merge_surveys([placeholder, second], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
+    assert [source.source_id for source in merged.sources] == ["cohort-a", "cohort-b"]
+    with pytest.raises(ValueError, match="more than one shard"):
+        merge_surveys([first, first], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
+    drifted = first.model_copy(update={"matrix": [first.matrix[0].model_copy(update={"support": Support.UNSUPPORTED})]})
+    with pytest.raises(ValueError, match="survey identity"):
+        merge_surveys([drifted, second], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
+
+
+def test_merge_cli_writes_the_bound_artifact(tmp_path, monkeypatch, capsys):
+    first = _shard_survey(tmp_path, "first", "cohort-a")
+    second = _shard_survey(tmp_path, "second", "cohort-b")
+    for index, survey in enumerate((first, second), start=1):
+        (tmp_path / f"shard-{index}.json").write_text(survey.model_dump_json())
+    output = tmp_path / "backend-map.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "backend_capabilities",
+            "--merge",
+            str(tmp_path / "shard-1.json"),
+            str(tmp_path / "shard-2.json"),
+            "--catalog-root",
+            "selected:catalog",
+            "--snapshot-id",
+            "selected-snapshot",
+            "--output",
+            str(output),
+        ],
+    )
+    main()
+    survey = BackendSurvey.model_validate_json(output.read_text())
+    assert survey.snapshot_id == "selected-snapshot"
+    assert len(survey.sources) == 2
+    assert json.loads(capsys.readouterr().out)["shards"] == 2
 
 
 def test_actor_capacity_preserves_independent_separate_grader_profile():

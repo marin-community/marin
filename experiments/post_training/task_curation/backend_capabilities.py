@@ -33,7 +33,6 @@ from taskcompendium.backend_requirements import (
     BackendSourceMap,
     BackendSurvey,
     RuntimeProfile,
-    UnclassifiedCapability,
     backend_schema_sha256,
     execution_resource_shape,
     task_demands,
@@ -113,15 +112,7 @@ def source_map(
             }
             for role, slot in (("agent", "task_machine"), ("grader", "verifier_machine"))
         }
-        try:
-            demands = task_demands({"task": task, "runtime": runtime})
-        except UnclassifiedCapability as error:
-            for backend in checkers:
-                task_counts[backend][Support.UNSUPPORTED] += 1
-                role_counts[backend][error.role][Support.UNSUPPORTED] += 1
-                blockers[backend][f"{error.role}:{error.capability}"] += 1
-                errors[backend][str(error)] += 1
-            continue
+        demands, failures = task_demands({"task": task, "runtime": runtime})
         for role, needs in demands.items():
             declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
             assigned = "local" if role == "grader" and declared.get("packages_lock") else "daytona"
@@ -137,6 +128,14 @@ def source_map(
         for backend, check in checkers.items():
             statuses = []
             for role, needs in demands.items():
+                if role in failures:
+                    error = failures[role]
+                    role_counts[backend][role][Support.UNSUPPORTED] += 1
+                    for capability in error.capabilities:
+                        blockers[backend][f"{role}:{capability}"] += 1
+                    errors[backend][str(error)] += 1
+                    statuses.append(Support.UNSUPPORTED)
+                    continue
                 status = combined_support(cells[backend, need].support for need in needs)
                 for need in needs:
                     if cells[backend, need].support != Support.SUPPORTED:
@@ -279,16 +278,93 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
     )
 
 
+def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_id: str) -> BackendSurvey:
+    """Combine shard surveys into one artifact bound to the selected snapshot.
+
+    Rejects shards that disagree on the matrix, runtime profile, deployment
+    limits, schema, revision or verified disk pool, and sources measured in
+    more than one shard. A shard's unassessed placeholder rows are dropped: a
+    source is either measured here or absent, and the selected snapshot's
+    coverage is checked again at load time.
+    """
+    first = partials[0]
+    identity = (
+        first.schema_sha256,
+        first.git_revision,
+        first.local_disk_pool,
+        [cell.model_dump(mode="json") for cell in first.matrix],
+        {role: profile.model_dump(mode="json") for role, profile in first.runtime_defaults.items()},
+        first.deployment_limits,
+    )
+    for partial in partials[1:]:
+        other = (
+            partial.schema_sha256,
+            partial.git_revision,
+            partial.local_disk_pool,
+            [cell.model_dump(mode="json") for cell in partial.matrix],
+            {role: profile.model_dump(mode="json") for role, profile in partial.runtime_defaults.items()},
+            partial.deployment_limits,
+        )
+        if other != identity:
+            raise ValueError(f"Shard {partial.snapshot_id} does not share the survey identity")
+    rows: dict[str, BackendSourceMap] = {}
+    for partial in partials:
+        for source in partial.sources:
+            if source.basis == "unassessed":
+                continue
+            if source.source_id in rows:
+                raise ValueError(f"Source measured in more than one shard: {source.source_id}")
+            rows[source.source_id] = source
+    if not rows:
+        raise ValueError("The shards measure no sources")
+    return BackendSurvey(
+        catalog_root=catalog_root,
+        snapshot_id=snapshot_id,
+        generated_at=datetime.now(UTC).isoformat(),
+        git_revision=first.git_revision,
+        schema_sha256=first.schema_sha256,
+        matrix=first.matrix,
+        deployment_limits=first.deployment_limits,
+        local_disk_pool=first.local_disk_pool,
+        runtime_defaults=first.runtime_defaults,
+        sources=list(rows.values()),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, help="Survey manifest for a census run.")
+    parser.add_argument("--merge", type=Path, nargs="+", help="Combine these shard surveys into one artifact instead.")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--local-disk-root", type=Path, help="Probe ext4 loop/OverlayFS enforcement on this privileged worker."
     )
-    parser.add_argument("--catalog-root", help="Bind to the current published catalog instead of an archived inventory.")
+    parser.add_argument(
+        "--catalog-root",
+        help="Live catalog root to bind a census to, or the literal binding root for --merge.",
+    )
+    parser.add_argument("--snapshot-id", help="Selected snapshot ID bound by --merge.")
     parser.add_argument("--revision", help="Survey code revision; the workspace carries no git metadata on workers.")
     args = parser.parse_args()
+    if args.merge is not None:
+        if args.snapshot_id is None or args.catalog_root is None:
+            raise SystemExit("--merge requires the binding --catalog-root and --snapshot-id")
+        partials = [BackendSurvey.model_validate_json(path.read_text()) for path in args.merge]
+        survey = merge_surveys(partials, catalog_root=args.catalog_root, snapshot_id=args.snapshot_id)
+        args.output.write_text(survey.model_dump_json(indent=2) + "\n")
+        print(
+            json.dumps(
+                {
+                    "output": str(args.output),
+                    "shards": len(partials),
+                    "sources": len(survey.sources),
+                    "tasks": sum(source.task_count for source in survey.sources),
+                }
+            )
+        )
+        return
+    if args.manifest is None:
+        raise SystemExit("A census run requires --manifest")
     manifest = json.loads(args.manifest.read_text())
     if args.catalog_root is not None:
         configure_coreweave_s3()

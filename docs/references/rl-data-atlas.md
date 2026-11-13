@@ -306,9 +306,22 @@ root in `local_disk_pool`. Without a verified pool the LOCAL storage cell stays
 unsupported with its deployment condition; never widen it by hand. Full
 population surveys of every current pinned source (millions of tasks) shard the
 manifest by source, stage each shard beside its storage region, and run one
-survey process per shard concurrently on a CPU worker at production priority;
-the partial source maps share one matrix and merge into a single artifact bound
-to the selected snapshot.
+survey process per shard concurrently on a CPU worker at production priority.
+Combine the shard artifacts with the tracked merge, which rejects shards that
+disagree on the matrix, runtime profile, deployment limits, schema, revision or
+verified disk pool, rejects a source measured twice, and drops shard-level
+unassessed placeholders:
+
+```bash
+uv run --prerelease allow --with-editable './lib/shellbox[daytona,qemu,shellsim,iris]' python -m \
+  experiments.post_training.task_curation.backend_capabilities \
+  --merge partials/shard-01.json partials/shard-02.json \
+  --catalog-root s3://marin-us-east-02a/marin/rl-data/catalog/production \
+  --snapshot-id <selected snapshot> --output backend-map.json
+```
+
+The merged artifact must then cover the selected snapshot's complete source
+set; the loader re-checks that coverage and the grading evidence at import.
 
 Add `--local-disk-root /cache/shellbox-disks` only on a worker configured for
 [LOCAL disk enforcement](task-curation.md#full-population-oracle-filter).
