@@ -1754,6 +1754,11 @@ Active deduplication counts describe the retained pin: raw and unique both equal
 the retained count, with zero further duplicates. Execution qualification remains
 separate from this mechanical publication.
 
+`retained_grading` aggregates the normalized rows' stored grading-boundary
+assessments into exact-input SHARED/SEPARATE evidence before declaration binding.
+It reads only the assessment column and preserves unavailable and mismatched
+assessments; it does not filter tasks.
+
 Combined training receipts use disjoint duplicate-first accounting:
 `measured_tasks = retained_tasks + duplicate_dropped_tasks + dropped_tasks`.
 `duplicate_dropped_tasks` counts all original exact duplicates; `dropped_tasks`

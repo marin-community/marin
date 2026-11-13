@@ -26,6 +26,7 @@ from experiments.post_training.task_curation.census_binding import ActorCensusRe
 from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.remediation_publish import ReleasePlan
+from experiments.post_training.task_curation.retained_grading import RetainedGradingReceipt
 from experiments.post_training.task_curation.retained_release import (
     RETAINED_IMPORT_VERSION,
     RetainedCohort,
@@ -98,6 +99,7 @@ class RetainedReleaseReceipt(BaseModel):
     source_id: str
     publication: PublicationReceipt
     actor: ActorCensusReceipt
+    grading: RetainedGradingReceipt
     original_pipeline: PipelineReference
     original_info: SourceInfo
     retained_dedup: WithinSourceDedupEvidence
@@ -107,6 +109,8 @@ class RetainedReleaseReceipt(BaseModel):
         publication = self.publication
         if self.source_id != publication.source_id or self.actor.source_id != self.source_id:
             raise ValueError("Retention lineage contains another source")
+        if self.grading.source_id != self.source_id or self.grading.input != self.actor.input:
+            raise ValueError("Retained grading evidence belongs to another actor census input")
         if (
             self.actor.input.dataset_id,
             self.actor.input.dataset_revision,
@@ -208,7 +212,7 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
         oracle_validation=OracleValidation.SKIPPED,
         quality_result=None,
         independent_qc=None,
-        grading_environment=None,
+        grading_environment=receipt.grading.evidence,
         converted_examples=None,
         daytona_run_evidence=None,
         notes=(
@@ -224,6 +228,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--releases", type=Path, nargs="+", required=True)
     parser.add_argument("--censuses", type=Path, nargs="+", required=True)
+    parser.add_argument("--grading", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     # Registry loading depends on this module once retained receipts are installed.
@@ -231,6 +236,9 @@ def main() -> None:
 
     sources = all_sources()
     censuses = {record["source_id"]: record for path in args.censuses for record in json.loads(path.read_text())}
+    grading = {
+        row["source_id"]: RetainedGradingReceipt.model_validate(row) for row in json.loads(args.grading.read_text())
+    }
     receipts = {}
     for path in args.releases:
         for record in json.loads(path.read_text()):
@@ -241,6 +249,7 @@ def main() -> None:
                 source_id=publication.source_id,
                 publication=publication,
                 actor=ActorCensusReceipt.model_validate(measured["actor"]),
+                grading=grading[publication.source_id],
                 original_pipeline=source.pipeline_reference,
                 original_info=source.info,
                 retained_dedup=WithinSourceDedupEvidence.model_validate(measured["dedup"]),

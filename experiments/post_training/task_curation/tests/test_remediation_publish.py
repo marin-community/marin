@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.remediation_publish import (
     verify_retained,
 )
 from experiments.post_training.task_curation.retained_census import census_release
+from experiments.post_training.task_curation.retained_grading import RetainedGradingReceipt, grading_receipt
 from experiments.post_training.task_curation.retained_release import (
     RETAINED_IMPORT_VERSION,
     RetainedCohort,
@@ -220,10 +221,24 @@ def retained_receipt(frozen_population):
         drop_manifest_uri="https://example.test/empty-drops",
         evidence_url=publication.evidence_url,
     )
+    retained_actor = actor(publication.repo, publication.revision, RETAINED_IMPORT_VERSION, 1, "1" * 64)
     receipt = RetainedReleaseReceipt(
         source_id=source.info.id,
         publication=publication,
-        actor=actor(publication.repo, publication.revision, RETAINED_IMPORT_VERSION, 1, "1" * 64),
+        actor=retained_actor,
+        grading=RetainedGradingReceipt(
+            source_id=source.info.id,
+            input=retained_actor.input,
+            normalized_path="https://example.test/normalized",
+            evidence={
+                "assessed_tasks": 1,
+                "required_counts": {"separate": 1},
+                "declared_counts": {"separate": 1},
+                "status_counts": {"matched": 1},
+                "reason_counts": {"fixture": 1},
+                "evidence_url": "https://example.test/grading",
+            },
+        ),
         original_pipeline=source.pipeline_reference,
         original_info=source.info,
         retained_dedup=dedup,
@@ -238,6 +253,7 @@ def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(r
     assert bound.declaration.task_count == 1
     assert bound.info.within_source_dedup.raw_count == bound.info.within_source_dedup.unique_count == 1
     assert bound.info.actor_census_input.dataset_id == receipt.publication.repo
+    assert bound.info.grading_environment.assessed_tasks == 1
     assert bound.info.actor_census_input.task_specs_sha256 != source.info.actor_census_input.task_specs_sha256
     assert bound.info.lexical_contamination.input_dataset_id == source.dataset.name
     assert bound.info.lexical_contamination.contaminated_tasks == 1
@@ -377,3 +393,8 @@ def test_retained_census_measures_new_pin_and_normalizes_unchanged_json(tmp_path
     assert result["population"]["task_specs_sha256"] == hashlib.sha256(encoded.encode()).hexdigest()
     normalized = pq.read_table(result["normalized_path"] + "/normalize/part-000000.parquet").to_pylist()
     assert normalized[0]["task_json"] == encoded and normalized[0]["runtime"] == "{}"
+    grading = grading_receipt(result, str(tmp_path / "grading"))
+    assert grading.input == ActorCensusInput.model_validate(result["actor"]["input"])
+    assert grading.evidence.assessed_tasks == 1
+    assert grading.evidence.required_counts == {"separate": 1}
+    assert grading.evidence.status_counts == {"unavailable": 1}
