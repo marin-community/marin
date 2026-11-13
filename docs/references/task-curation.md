@@ -82,6 +82,8 @@ producers hash their original iteration order before sorting rows for storage.
 Do not equate those conventions or replace a frozen expectation with a new scan.
 Preparation preserves task identities, accounts for every exclusion, and writes
 only public semantic inputs.
+The adopted input name includes the frozen selection key so changed source
+lineage forks assignments even when instruction text and vectors are reused.
 Run preparation beside the private inputs; its output root may stage public
 inputs in the embedding worker's region. The existing embedding graph accepts
 that prepared input artifact and retains its normal vector cache and release format.

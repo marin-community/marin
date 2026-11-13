@@ -324,7 +324,7 @@ def run_stage(
             seed=0,
             inventory=inventory,
             prepared_inputs=ArtifactStep.adopt(
-                "rl-semantics/frozen-public-inputs",
+                f"rl-semantics/frozen-public-inputs-{corpus['selection_key'][:16]}",
                 INPUTS_VERSION,
                 source=corpus["prepared_inputs"],
                 kind=SemanticArtifact,

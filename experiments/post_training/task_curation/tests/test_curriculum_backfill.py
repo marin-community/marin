@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import logging
 import shutil
 
 import pyarrow as pa
@@ -166,6 +167,41 @@ def test_completed_corpus_revalidates_frozen_exclusions(tmp_path, frozen_source)
     with pytest.raises(ValueError, match="Frozen drop manifest changed"):
         prepare_sources([source], str(output), workers=1)
     assert (output / "corpus.json").read_bytes() == original
+
+
+def test_new_source_lineage_forks_assignments_while_reusing_numeric_stages(tmp_path, frozen_source, caplog):
+    source, _ = frozen_source
+    evidence = tmp_path / "new-receipt.json"
+    shutil.copyfile(source.input_evidence, evidence)
+    changed = source.model_copy(update={"input_evidence": str(evidence)})
+    plans = []
+    caplog.set_level(logging.INFO)
+    for index, frozen in enumerate((source, changed)):
+        output = tmp_path / f"public-{index}"
+        prepare_sources([frozen], str(output), workers=1)
+        corpus_path = output / "corpus.json"
+        corpus = json.loads(corpus_path.read_text())
+        corpus["prepared_descriptions"] = str(tmp_path / "shared-instructions")
+        corpus["prepared_curriculum_embeddings"] = str(tmp_path / "shared-anchors")
+        corpus_path.write_text(json.dumps(corpus))
+        caplog.clear()
+        run_stage(
+            str(corpus_path), str(tmp_path / "artifacts"), str(tmp_path / "cache"), "coverage", "cpu", 1, "8g", False
+        )
+        plans.append(
+            json.loads(
+                next(
+                    row.message.removeprefix("Stage plan: ")
+                    for row in caplog.records
+                    if row.message.startswith("Stage plan: ")
+                )
+            )
+        )
+    before, after = plans
+    for stage in ("descriptions", "task_embeddings", "curriculum_embeddings"):
+        assert before[stage] == after[stage]
+    for stage in ("inputs", "assignments", "publication", "coverage"):
+        assert before[stage] != after[stage]
 
 
 def test_unknown_exclusion_prevents_publication_and_keeps_partial_evidence(tmp_path, frozen_source):
