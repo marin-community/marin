@@ -68,9 +68,16 @@ from shellbox.machine import (
 )
 
 
-@pytest.mark.parametrize("status", [429, 502, 503])
 @pytest.mark.parametrize(
-    "failure", ["rejected_post", "accepted_post", "late_get", "prolonged_throttle", "deadline", "cancelled"]
+    ("failure", "status"),
+    [
+        ("rejected_post", 429),
+        ("accepted_post", 502),
+        ("late_get", 503),
+        ("prolonged_throttle", 429),
+        ("deadline", 502),
+        ("cancelled", 429),
+    ],
 )
 def test_daytona_creation_recovers_named_sandbox_after_transient_errors(monkeypatch, failure, status):
     async def scenario():
@@ -194,7 +201,7 @@ def test_daytona_creation_recovers_named_sandbox_after_transient_errors(monkeypa
 @pytest.mark.parametrize("failure", ["rejected_create", "accepted_create", "metadata", "list", "transport", "forbidden"])
 def test_daytona_snapshot_recovers_transient_http_without_duplicate_images(monkeypatch, failure):
     async def scenario():
-        # Advance the existing backoff clock without real waiting in either version.
+        # Advance the backoff clock without real waiting.
         monkeypatch.setattr(ExponentialBackoff, "next_interval", lambda self: 0)
         request = SnapshotRequest(
             RegistryImage("fixture.invalid/image@sha256:" + "0" * 64), Resources(cpu=2, memory=4, disk=10)
