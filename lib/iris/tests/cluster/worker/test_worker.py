@@ -448,6 +448,7 @@ def test_kill_running_task(mock_worker, mock_runtime):
     mock_handle = create_mock_container_handle(
         status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100
     )  # Stay running
+    mock_handle.stop_hook = lambda _force: None  # This process deliberately ignores SIGTERM.
     mock_runtime.create_container = Mock(return_value=mock_handle)
 
     request = create_run_task_request()
@@ -464,6 +465,61 @@ def test_kill_running_task(mock_worker, mock_runtime):
 
     assert task.status == job_pb2.TASK_STATE_KILLED
     assert any(c["force"] for c in mock_handle.stop_calls)
+
+
+def test_kill_running_task_allows_graceful_exit_without_force(mock_worker, mock_runtime):
+    stopped = threading.Event()
+    forced_while_running = threading.Event()
+    mock_handle = create_mock_container_handle()
+    mock_handle.status = lambda: ContainerStatus(  # type: ignore[method-assign]
+        phase=ContainerPhase.STOPPED if stopped.is_set() else ContainerPhase.RUNNING,
+        exit_code=143 if stopped.is_set() else None,
+    )
+
+    def on_stop(force: bool) -> None:
+        if force and not stopped.is_set():
+            forced_while_running.set()
+        if not force:
+            stopped.set()
+
+    mock_handle.stop_hook = on_stop
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    request.termination_grace.milliseconds = 1000
+    task_id = mock_worker.submit_task(request)
+    task = mock_worker.get_task(task_id)
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING and task.container_id)
+
+    assert mock_worker.kill_task(task_id)
+    task.thread.join(timeout=15.0)
+    assert task.status == job_pb2.TASK_STATE_KILLED
+    assert mock_handle.stop_calls[0] == {"force": False}
+    assert not forced_while_running.is_set()
+
+
+def test_worker_shutdown_waits_for_graceful_task_exit(mock_worker, mock_runtime):
+    stopped = threading.Event()
+    handle = create_mock_container_handle()
+    handle.status = lambda: ContainerStatus(  # type: ignore[method-assign]
+        phase=ContainerPhase.STOPPED if stopped.is_set() else ContainerPhase.RUNNING,
+        exit_code=143 if stopped.is_set() else None,
+    )
+    handle.stop_hook = lambda force: stopped.set() if not force else None
+    mock_runtime.create_container = Mock(return_value=handle)
+
+    request = create_run_task_request()
+    request.termination_grace.milliseconds = 1000
+    task_id = mock_worker.submit_task(request)
+    task = mock_worker.get_task(task_id)
+    assert task is not None
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    mock_worker.stop()
+
+    assert task.status == job_pb2.TASK_STATE_KILLED
+    assert handle.stop_calls[0] == {"force": False}
+    assert not any(call["force"] for call in handle.stop_calls)
 
 
 def test_new_attempt_supersedes_old(mock_worker, mock_runtime):
@@ -776,6 +832,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
             "SHARED_KEY": "default_value",
             "DEFAULT_ONLY": "from_default",
             "IRIS_ATTEMPT_UID": "stale-cluster-value",
+            "IRIS_TERMINATION_GRACE_MS": "999999",
         },
     )
     w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
@@ -789,12 +846,14 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
         num_tasks=1,
         attempt_id=0,
         attempt_uid="uid-env-test",
+        termination_grace={"milliseconds": 60000},
         entrypoint=Entrypoint.from_callable(_fn).to_proto(),
         environment=job_pb2.EnvironmentConfig(
             env_vars={
                 "SHARED_KEY": "job_value",
                 "JOB_ONLY": "from_job",
                 "IRIS_ATTEMPT_UID": "shared-job-value",
+                "IRIS_TERMINATION_GRACE_MS": "999999",
             },
         ),
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -817,6 +876,7 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
     assert env["IRIS_ATTEMPT_UID"] == "uid-env-test"
+    assert env["IRIS_TERMINATION_GRACE_MS"] == "60000"
 
 
 def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_store, mock_runtime, tmp_path):
@@ -1282,6 +1342,7 @@ def create_integration_run_task_request(bundle_id: str, task_id: str):
     entrypoint = create_integration_entrypoint()
 
     return job_pb2.RunTaskRequest(
+        termination_grace={"milliseconds": 10000},
         task_id=task_id,
         num_tasks=1,
         entrypoint=entrypoint.to_proto(),
@@ -1384,6 +1445,7 @@ def _make_discovered_container(
     running: bool = True,
     workdir_host_path: str = "/tmp/workdirs/test",
     ports: dict[str, int] | None = None,
+    termination_grace: Duration = Duration.from_seconds(60),
 ) -> DiscoveredContainer:
     return DiscoveredContainer(
         container_id="abc123def456",
@@ -1397,6 +1459,7 @@ def _make_discovered_container(
         exit_code=None if running else 0,
         started_at="2025-01-01T00:00:00Z",
         workdir_host_path=workdir_host_path,
+        termination_grace=termination_grace,
         ports=ports or {},
     )
 
@@ -1409,6 +1472,7 @@ def test_adopt_creates_task_in_running_state(mock_worker, mock_runtime):
     adopted = mock_worker.adopt_running_containers()
 
     assert adopted == 1
+    assert mock_worker.get_task(container.task_id).termination_grace == Duration.from_seconds(60)
     task = mock_worker.get_task(container.task_id, container.attempt_id)
     assert task is not None
     assert task.status == job_pb2.TASK_STATE_RUNNING

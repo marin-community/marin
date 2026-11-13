@@ -22,6 +22,39 @@ from harbor_config.models.task.config import TaskConfig
 from harbor_config.models.trial.config import TrialConfig
 
 
+@pytest.mark.parametrize("route", ["private-capability", "cluster=marin/private-capability"])
+def test_persisted_configs_redact_capabilities_without_changing_live_routes(route):
+    endpoint = f"https://iris.example/proxy/t/{route}/serve.model/v1"
+    config = JobConfig.model_validate(
+        {
+            "agents": [{"name": "terminus-2", "kwargs": {"api_base": endpoint}}],
+            "environment": {
+                "kwargs": {"candidate_model_endpoint": endpoint, "nested": [{"url": endpoint}]},
+                "env": {"OPENAI_BASE_URL": endpoint},
+            },
+            "verifier": {"env": {"OPENAI_BASE_URL": endpoint}},
+        }
+    )
+
+    persisted = json.loads(config.model_dump_json())
+    assert "private-capability" not in json.dumps(persisted)
+    expected = endpoint.replace("private-capability", "<redacted>")
+    assert persisted["agents"][0]["kwargs"]["api_base"] == expected
+    assert persisted["environment"]["kwargs"]["candidate_model_endpoint"] == expected
+    assert persisted["environment"]["kwargs"]["nested"] == [{"url": expected}]
+    assert persisted["verifier"]["env"]["OPENAI_BASE_URL"] == expected
+
+    runtime_copy = JobConfig.model_validate(config.model_dump(mode="python"))
+    assert runtime_copy.agents[0].kwargs["api_base"] == endpoint
+    assert runtime_copy.environment.kwargs["candidate_model_endpoint"] == endpoint
+    assert runtime_copy.environment.env["OPENAI_BASE_URL"] == endpoint
+    assert runtime_copy.verifier.env["OPENAI_BASE_URL"] == endpoint
+    overlaid = apply_overlay(config, {"n_concurrent_trials": 2})
+    assert overlaid.agents[0].kwargs["api_base"] == endpoint
+    assert overlaid.environment.kwargs["candidate_model_endpoint"] == endpoint
+    assert overlaid.verifier.env["OPENAI_BASE_URL"] == endpoint
+
+
 def test_harbor_compatibility_imports_reexport_config_package_classes() -> None:
     assert HarborJobConfig is JobConfig
     assert HarborMetricConfig is MetricConfig

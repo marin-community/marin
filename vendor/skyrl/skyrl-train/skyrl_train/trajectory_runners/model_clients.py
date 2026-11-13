@@ -3,14 +3,21 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
 import numpy as np
+from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import RolloutContractError
 
-from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
+from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
+from verifyit.reasoning_markup import (
+    REASONING_DELIMITERS,
+    ReasoningViolation,
+    first_reasoning_violation,
+    reasoning_span_violation,
+)
 
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
@@ -44,11 +51,17 @@ _OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
 _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 
+REASONING_VIOLATIONS_KEY = "reasoning_violations"
+REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
+
+
 class ModelClientOutput(InferenceEngineOutput):
     """Normalized model output with explicit token provenance."""
 
     token_provenance: TokenProvenance
     generation_token_budgets: NotRequired[list[int | None]]
+    reasoning_violations: NotRequired[list[ReasoningViolation | None]]
+    reasoning_violation_tokens: NotRequired[list[int | None]]
 
 
 class ModelClient(Protocol):
@@ -114,6 +127,30 @@ class _ChatResult:
     generation_token_budget: int | None
     routed_experts: np.ndarray | None = None
     policy_steps: list[int] | None = None
+    reasoning_violation: ReasoningViolation | None = None
+    reasoning_violation_token: int | None = None
+
+
+# Chat-template turn terminators that can differ from the tokenizer's EOS, e.g. Llama-style templates end
+# turns with `<|eot_id|>` while `eos_token` is `<|end_of_text|>`. Other special tokens, such as a template's
+# `<|tool_call_end|>`, can end a reply cut off at the output budget without ending the turn.
+TURN_END_MARKERS = frozenset({"<|eot_id|>", "<|im_end|>"})
+
+
+def _ends_turn(tokenizer, response_ids: list[int], finish_reason: str) -> bool:
+    """Whether the response ends with the EOS or a chat template's turn terminator."""
+    if not response_ids or finish_reason == "length":
+        return False
+    return response_ids[-1] in _turn_end_tokens(tokenizer)
+
+
+def _turn_end_tokens(tokenizer: PreTrainedTokenizerBase) -> set[int]:
+    tokens = {tokenizer.eos_token_id}
+    for marker in TURN_END_MARKERS:
+        token_ids = tokenizer.encode(marker, add_special_tokens=False)
+        if len(token_ids) == 1:
+            tokens.add(token_ids[0])
+    return tokens
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -139,6 +176,9 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
         token_provenance=TokenProvenance.ENGINE,
         generation_token_budgets=[result.generation_token_budget for result in results],
     )
+    if any(result.reasoning_violation is not None for result in results):
+        output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
+        output[REASONING_VIOLATION_TOKENS_KEY] = [result.reasoning_violation_token for result in results]
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
         output["behavior_topk_logprobs"] = selected_scores
@@ -199,6 +239,40 @@ async def _render_chat_prompt(
     return messages, prompt_ids
 
 
+def _reasoning_marker_tokens(tokenizer: PreTrainedTokenizerBase) -> dict[int, str]:
+    markers = {}
+    for pair in REASONING_DELIMITERS:
+        for marker in pair:
+            token_ids = tokenizer.encode(marker, add_special_tokens=False)
+            if len(token_ids) == 1:
+                markers[token_ids[0]] = marker
+    return markers
+
+
+def _reasoning_violation(
+    tokenizer: PreTrainedTokenizerBase, response_ids: Sequence[int], decoded: str, stop_reason: str
+) -> tuple[ReasoningViolation | None, int | None]:
+    """Classify a reply's reasoning span and locate the token where it goes wrong.
+
+    An unclosed span is located at the last token. The token is ``None`` when the one-token markers are
+    well formed, i.e. the violation is in literal marker text.
+    """
+    # Training keeps the rule that a leading closing marker ends a span the chat template opened.
+    violation = reasoning_span_violation(decoded, stop_reason, prompt_opens_span=True)
+    if violation is None:
+        return None, None
+    markers = _reasoning_marker_tokens(tokenizer)
+    positions = [index for index, token in enumerate(response_ids) if token in markers]
+    error = first_reasoning_violation(
+        [markers[response_ids[index]] for index in positions], stop_reason, prompt_opens_span=True
+    )
+    if error is None:
+        return violation, None
+    if error.marker_index is None:
+        return violation, len(response_ids) - 1
+    return violation, positions[error.marker_index]
+
+
 class DirectModelClient:
     """Delegate model requests to the colocated inference-engine client."""
 
@@ -237,11 +311,16 @@ class DirectModelClient:
         )
         if output.get("prompt_ids") != [prompt_ids]:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
+        # response_ids keep the stop token. The grader scores this text, and a stop token after a closing fence
+        # leaves the fence open.
         text = output["responses"][0]
-        message = (output.get("assistant_messages") or [{"role": "assistant", "content": text}])[0]
+        response_ids = output["response_ids"][0]
+        if _ends_turn(self._client.tokenizer, response_ids, output["stop_reasons"][0]):
+            text = text.removesuffix(self._client.tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
+        message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
             prompt_ids,
-            output["response_ids"][0],
+            response_ids,
             None if output.get("response_logprobs") is None else output["response_logprobs"][0],
             None if output.get("student_topk_indices") is None else output["student_topk_indices"][0],
             None if output.get("behavior_topk_logprobs") is None else output["behavior_topk_logprobs"][0],
@@ -357,12 +436,11 @@ class DirectModelClient:
             # Some serving configurations omit reasoning parsers and remove
             # special delimiters from content. Exact tokens retain the boundary.
             tokenizer = self._client.tokenizer
-            semantic_ids = (
-                response_ids[:-1] if response_ids and response_ids[-1] == tokenizer.eos_token_id else response_ids
-            )
+            stop_reason = choice["finish_reason"]
+            semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
             if len(semantic_ids) != len(response_ids):
-                eos_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
-                text = text.removesuffix(eos_text)
+                terminator_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
+                text = text.removesuffix(terminator_text)
                 if message.get("content") is not None:
                     message = {**message, "content": text}
             decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
@@ -381,17 +459,19 @@ class DirectModelClient:
                 selected = [
                     select_chat_response_topk(item.get("top_logprobs") or [], requested_top_k) for item in logprob_items
                 ]
-            stop_reason = choice["finish_reason"]
             token_budget = chat_options.get("max_completion_tokens")
             if (
                 stop_reason == "tool_calls"
                 and token_budget is not None
                 and len(response_ids) >= token_budget
                 and choice.get("stop_reason") is None
-                and response_ids[-1] != tokenizer.eos_token_id
+                and len(semantic_ids) == len(response_ids)
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"
+            reasoning_violation, reasoning_violation_token = _reasoning_violation(
+                tokenizer, response_ids, decoded, stop_reason
+            )
             return _ChatResult(
                 prompt_ids,
                 response_ids,
@@ -404,6 +484,8 @@ class DirectModelClient:
                 token_budget,
                 _choice_routed_experts(choice, prompt_ids, response_ids),
                 choice.get(CHOICE_POLICY_STEPS_KEY),
+                reasoning_violation,
+                reasoning_violation_token,
             )
 
         results = await asyncio.gather(

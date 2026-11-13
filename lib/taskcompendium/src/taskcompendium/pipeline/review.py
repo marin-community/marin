@@ -521,7 +521,7 @@ def review_records(output: str, task_ids: Sequence[str]) -> list[ReviewRecord]:
             output,
             task_ids,
             tool_name=TOOL_NAME,
-            validate=ReviewVerdict.model_validate_json,
+            validate=lambda value, _task_id: ReviewVerdict.model_validate_json(value),
             identity_error="Review task ID does not match request",
         )
     ]

@@ -39,7 +39,7 @@ from zephyr.stats import (
     StatsWriter,
 )
 from zephyr.testing.coordinator import TEST_EXECUTION_ID, TEST_TASK_COST, make_test_coordinator, start_test_stage
-from zephyr.worker_context import CounterEntry, CounterSnapshot, InputProgress
+from zephyr.worker_context import CounterEntry, CounterKey, CounterSnapshot, InputProgress
 
 
 def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
@@ -160,7 +160,8 @@ def test_runner_snapshots_keep_input_progress_separate_and_reset_between_tasks(t
         snapshot = runner.live_snapshot()
         assert list(result.shard) == records
         assert snapshot.input_progress == InputProgress(completed=count, total=total)
-        assert snapshot.counters[counters.RECORDS_IN].value == final_counters[counters.RECORDS_IN].value == count
+        records_in = CounterKey(None, counters.RECORDS_IN)
+        assert snapshot.counters[records_in].value == final_counters[records_in].value == count
 
 
 def test_exception_preserves_user_frame(local_client, tmp_path, runner_factory):
@@ -281,7 +282,11 @@ def test_iris_coordinator_exports_live_counters(actor_context, tmp_path, finelog
                 start_test_stage(coordinator, [], stage_name="review")
                 coordinator.heartbeat(
                     "worker-0",
-                    {TEST_EXECUTION_ID: CounterSnapshot({"review/completed": CounterEntry(7)}, generation=1)},
+                    {
+                        TEST_EXECUTION_ID: CounterSnapshot(
+                            {CounterKey(None, "review/completed"): CounterEntry(7)}, generation=1
+                        )
+                    },
                 )
                 coordinator._publish_telemetry()
                 assert telemetry.flush()

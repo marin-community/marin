@@ -4,7 +4,13 @@
 `GradedRollout`: the `Rollout`, which records what happened, and the `grade`.
 The engine holds the machine factories and the harnesses; each run passes the model, the policy under rollout.
 The caller owns concurrency, retries, group grading, and training projections.
-TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. VerifyIT supplies grading modes and their implementations.
+The [evaluation driver](evaluation-tasks.md),
+`marin.rollouts.evaluation.run_evaluation`, supplies that caller for
+published evaluation corpora and writes raw FineStore attempts. Its CLI is
+`experiments.evaluation.task_driver`. TaskCompendium supplies corpus metadata and
+selection policy; consumers compute summaries from the raw observations.
+TaskCompendium defines `TaskSpec`, its graders, and grading outcomes. Verifyit
+supplies grading modes and their implementations.
 Shellbox supplies machine backends. RolloutEngine supplies the harness contract, the model session that records each model turn, and the built-in harnesses.
 
 ```mermaid
@@ -26,7 +32,7 @@ flowchart TD
 
 ## Task and runtime specs
 
-`TaskSpec` contains the task definition: public context, tools, output paths, answer type, answer format, grader, environment requirements, resources, source, and tags.
+`TaskSpec` contains the task definition: public context, tools, output paths, answer type, answer format, grader, environment requirements, resources, source, tags, and labels.
 Its `environment_requirements` includes capabilities, an optional digest-pinned Docker image, workdir, setup commands, environment variables, and named tool-provider contracts.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate requirements in `grader.environment`.
 
@@ -42,8 +48,9 @@ Fields require explicit values except `trace`, which defaults to `TraceMode.EXAC
 which defaults to `None`. `judge_connection` is a verifyit `JudgeConnection` for a judge grader (see
 [Grading](#grading)). It holds an API key, so `model_dump`, `model_dump_json`, and `pickle` leave it out, and a spec
 loaded from them has no connection. Optional fields accept `None`. `RolloutLimits.cleanup_timeout` requires a
-finite, positive value. Other deadlines accept `None` or a finite, positive value. `max_total_tokens` accepts `None`
-or a positive integer.
+finite, positive value. Other deadlines accept `None` or a finite, positive value. `max_turns` and `max_total_tokens`
+accept `None` or a positive integer; with `max_turns=None` an attempt ends only on its token budget, its deadlines, or
+a `length` stop.
 
 The engine resolves two registries by key:
 
@@ -65,10 +72,12 @@ Each attempt creates a fresh verifier machine from that selection.
 SkyRL accepts Parquet rows with a `task_spec` JSON column. Its dataset loader turns
 each canonical `TaskSpec` into a `TaskRolloutSpec` when it loads the data, using
 `environment.task_sessions.task_spec` from the training configuration for limits,
-harness selection and verifier machines. The curation
-[task-selection artifact](task-curation.md#final-task-selection) uses the
-assistant-prefix harness for `structure-closure` tasks and Shellbox for the other
-families. Image graders use the configured image verifier backend; package
+harness selection and verifier machines. A task whose context ends in an assistant
+message runs under the assistant-prefix harness. The `structure-closure` tasks of the
+curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
+Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
+`default_harness`, which defaults to Shellbox.
+Image graders use the configured image verifier backend; package
 graders use the configured local verifier. The inventory artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
 rewrite the task Parquet.
@@ -145,8 +154,10 @@ Final tool schemas can condition the continuation. Interactive tools, tool provi
 capabilities are rejected during preflight. The grader can have its own verifier environment and private
 resources. The model must return the continuation as assistant text: parsed reasoning or tool-call
 channels make the attempt invalid, so parser behavior cannot silently turn a continuation into a normal
-zero reward. Structural-closure grading concatenates its fixed text prefix with this continuation and
-scores the first completed outer structure.
+zero reward. When the last token of a continuation is the tokenizer's EOS, `<|eot_id|>` or `<|im_end|>`,
+SkyRL's model client cuts that token from this text, except after a `length` stop. Response token IDs keep it.
+Structural-closure grading concatenates its fixed text prefix with this continuation and scores the first
+completed outer structure.
 
 The selected model tokenizes the conversation and prefill. Training records its actual prompt and sampled
 response tokens with their logprobs through the normal model session. Historical token IDs do not constrain
@@ -577,6 +588,11 @@ A malformed first file is a grading failure. Grading does not try a lower-priori
 The optional `pass_above` threshold supplies a separate pass/fail result.
 Grading removes existing reward files before the grader command executes.
 A valid reward file can supply a grade after a nonzero exit code. A command timeout has no grade.
+`RewardFileFormat.VERDICT_JSON` requires a zero exit code and reads Verifyit's
+structured verdict, retaining scored, invalid-task and infrastructure-error
+outcomes with their details. A scripted judge declares `ScriptGrader.judge`;
+the runtime stages `/tests/judge.toml` and supplies its connection credentials
+only in the verifier machine's environment.
 
 `GradeResult.failure` identifies timeout, execution failure, missing reward, empty reward, or invalid reward.
 An incorrect answer receives a numeric grade. A grading failure has no reward.
@@ -614,8 +630,15 @@ conversations, and the trainer selects what to train on. Final grading receives 
 has a model turn.
 
 `GenerationLimitReached` retains rendered prompt tokens when the model cannot start another response.
+A server that rejects the prompt without rendering it supplies no tokens, so the adapter passes an empty tuple.
+The engine records these tokens only when no turn of the conversation completed.
 The engine grades completed state with stop reason `length`.
 It does not add an oversized observation to retained response evidence.
+
+A model adapter reports `stop_reason="length"` for every response that ends on its output token budget.
+This includes a response that the server's tool parser reports as tool calls; vLLM's GLM tool parser reports such a response with finish reason `tool_calls`.
+`ChatModel` with a `context_window` also reports `length` for a `tool_calls` response whose prompt and completion tokens fill that window.
+The shell harness does not execute tool calls from a `length` response.
 
 ## Trace modes
 
@@ -643,8 +666,9 @@ the task holds the work. A task with `NoGrader` gets an unavailable grade. An `A
 `context.limits`.
 
 `ChatModel` from `rolloutengine.chat` serves an OpenAI-compatible chat endpoint and needs
-`trace=TraceMode.MESSAGES`. Prompt options replace its `max_tokens` and its `extra_body` keys.
-It sets `model`, `messages`, `stream`, and `n` itself. A response without `usage` is a model failure.
+`trace=TraceMode.MESSAGES`. Prompt options replace its `max_tokens` and its `extra_body` keys; `max_tokens=None`
+sends no output limit. Its `context_window`, when set, turns a `tool_calls` response that fills the window into a
+`length` stop. It sets `model`, `messages`, `stream`, and `n` itself. A response without `usage` is a model failure.
 
 ```python
 engine = RolloutEngine({}, {"agent": ShellHarness(command_timeout=None, tools={"lookup/v1": lookup})})

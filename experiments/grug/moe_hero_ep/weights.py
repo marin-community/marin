@@ -11,6 +11,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import tensorstore as ts
+from levanter.checkpoint_manifest import read_manifest
 from levanter.tensorstore_serialization import build_kvstore_spec
 from rigging.filesystem.storage_path import StoragePath
 
@@ -22,30 +23,47 @@ logger = logging.getLogger(__name__)
 PENDING_QB_BETAS_KEY = "pending_qb_betas"
 
 
+def validate_checkpoint_metadata(checkpoint: str, metadata_digest: str) -> None:
+    metadata = json.loads((StoragePath(checkpoint) / "metadata.json").read_text())
+    if digest(metadata) != metadata_digest or metadata.get("is_temporary") is not False:
+        raise ValueError("Checkpoint metadata changed or checkpoint is not permanent")
+
+
+def checkpoint_weight_path(checkpoint: str) -> str:
+    """Find authoritative parameters, preferring FP32 masters over compute copies."""
+    candidates = (
+        checkpointing.MASTER_PARAMS_KEY,
+        f"{checkpointing.LEGACY_STATE_KEY}/{checkpointing.MASTER_PARAMS_KEY}",
+        "params",
+        f"{checkpointing.LEGACY_STATE_KEY}/params",
+    )
+    manifest = read_manifest(checkpoint)
+    if manifest is not None:
+        for candidate in candidates:
+            if any(path.startswith(candidate + "/") for path in manifest.array_paths):
+                return candidate
+        raise FileNotFoundError(f"Checkpoint has no model parameters: {checkpoint}")
+    root = StoragePath(checkpoint)
+    if (root / "manifest.ocdbt").exists():
+        kvstore = ts.KvStore.open({"driver": "ocdbt", "base": build_kvstore_spec(checkpoint)}).result()
+        for candidate in candidates:
+            if kvstore.read(f"{candidate}/token_embed/zarr.json").result().state == "value":
+                return candidate
+    else:
+        for candidate in candidates:
+            if (root / candidate).exists():
+                return candidate
+    raise FileNotFoundError(f"Checkpoint has no model parameters: {checkpoint}")
+
+
 def restore_weights(
     checkpoint: str, metadata_digest: str, config: GrugModelConfig, mesh: jax.sharding.Mesh
 ) -> Transformer:
     """Restore authoritative weights and pending router bias, with no optimizer or fallback checkpoint."""
     logger.info("Validate checkpoint metadata and weight layout: %s", checkpoint)
-    checkpoint_path = StoragePath(checkpoint)
-    metadata = json.loads((checkpoint_path / "metadata.json").read_text())
-    if digest(metadata) != metadata_digest or metadata.get("is_temporary") is not False:
-        raise ValueError("Checkpoint metadata changed or checkpoint is not permanent")
+    validate_checkpoint_metadata(checkpoint, metadata_digest)
     template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.PRNGKey(0))
-    try:
-        master = checkpointing.checkpoint_stores_master(checkpoint)
-    except FileNotFoundError:
-        # Inference also accepts checkpoints written before manifests existed.
-        markers = (
-            checkpointing.MASTER_PARAMS_KEY,
-            f"{checkpointing.LEGACY_STATE_KEY}/{checkpointing.MASTER_PARAMS_KEY}",
-        )
-        if (checkpoint_path / "manifest.ocdbt").exists():
-            kvstore = ts.KvStore.open({"driver": "ocdbt", "base": build_kvstore_spec(checkpoint)}).result()
-            master = any(kvstore.read(f"{marker}/token_embed/zarr.json").result().state == "value" for marker in markers)
-        else:
-            master = any((checkpoint_path / marker).exists() for marker in markers)
-    weights_key = checkpointing.MASTER_PARAMS_KEY if master else "params"
+    weights_key = checkpoint_weight_path(checkpoint).rsplit("/", 1)[-1]
     logger.info("Restore checkpoint arrays: weights=%s", weights_key)
     state_template: dict[str, Transformer | jax.ShapeDtypeStruct] = {
         weights_key: template,

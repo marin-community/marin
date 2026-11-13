@@ -32,6 +32,7 @@ from skyrl_train.models.grug_moe import (
     GRUG_MOE_MODEL_TYPE,
     GRUG_SPLIT_EXPERT_SCHEMA_VERSION,
     grug_long_layer_flags,
+    select_routed_expert_schema,
 )
 
 GRUG_ROTARY_PERCENT = 0.5
@@ -43,6 +44,9 @@ class GrugModelProvider(GPTModelProvider):
 
     grug_qk_mult: float = 1.0
     grug_qk_mult_long_scale: float = 1.0
+    grug_log_scaling_n_floor: int | None = None
+    grug_log_scaling_alpha: float | None = None
+    grug_log_scaling_power: float | None = None
     grug_global_every: int = GRUG_DEFAULT_GLOBAL_EVERY
     grug_local_kv_heads: int = 1
     grug_global_kv_heads: int = 1
@@ -50,10 +54,22 @@ class GrugModelProvider(GPTModelProvider):
     grug_sconv_kernel: int = 4
     grug_sconv_sites: tuple[str, ...] = ()
     grug_hero: bool = False
+    grug_checkpoint_cpu_offload: bool = False
 
     def provide(self, pre_process=None, post_process=None, vp_stage=None) -> GrugGPTModel:
         if self.virtual_pipeline_model_parallel_size:
             raise NotImplementedError("Grug on Megatron does not support virtual pipeline parallelism")
+        if self.grug_checkpoint_cpu_offload:
+            if (
+                self.recompute_granularity != "full"
+                or self.recompute_method != "uniform"
+                or self.pipeline_model_parallel_size < 2
+            ):
+                raise ValueError(
+                    "Grug checkpoint CPU offload requires full/uniform recomputation and pipeline parallelism"
+                )
+            if self.cpu_offloading or self.fine_grained_activation_offloading:
+                raise ValueError("Grug checkpoint CPU offload cannot be combined with other activation offload modes")
         assert self.vocab_size is not None, "vocab_size must be configured before calling provide()"
         assert not self.should_pad_vocab, "Grug keeps the checkpoint vocab size; vLLM pads it on the serving side"
 
@@ -135,7 +151,7 @@ def _routed_expert_mappings(schema_version: int) -> list[AutoMapping | GatedMLPM
     """Map individually saved or stacked HF experts to Megatron's per-expert weights."""
     megatron = "decoder.layers.*.mlp.experts"
     hf = "model.layers.*.mlp.experts"
-    if schema_version == GRUG_SPLIT_EXPERT_SCHEMA_VERSION:
+    if schema_version >= GRUG_SPLIT_EXPERT_SCHEMA_VERSION:
         hf += ".*"
         gate_up_mapping = GatedMLPMapping
         down_mapping = AutoMapping
@@ -215,6 +231,9 @@ class GrugMoeBridge(MegatronModelBridge):
             provider.cp_comm_type = ["p2p" if is_long else "a2a" for is_long in long_flags]
         provider.grug_qk_mult = config.qk_mult
         provider.grug_qk_mult_long_scale = config.qk_mult_long_scale
+        provider.grug_log_scaling_n_floor = config.log_scaling_n_floor
+        provider.grug_log_scaling_alpha = config.log_scaling_alpha
+        provider.grug_log_scaling_power = config.log_scaling_power
 
         provider.num_moe_experts = config.num_local_experts
         provider.ffn_hidden_size = config.intermediate_size
@@ -282,7 +301,11 @@ class GrugMoeBridge(MegatronModelBridge):
                     AutoMapping(f"{megatron}.linear_fc2.weight", f"{hf}.down_proj.weight"),
                 ]
             )
-        mappings.extend(_routed_expert_mappings(config.grugmoe_artifact_schema_version))
+        hf_pretrained = getattr(self, "hf_pretrained", None)
+        state = getattr(hf_pretrained, "state", None)
+        weight_keys = set(state.source.get_all_keys()) if state is not None else None
+        routed_expert_schema = select_routed_expert_schema(config.grugmoe_artifact_schema_version, weight_keys)
+        mappings.extend(_routed_expert_mappings(routed_expert_schema))
         if config.latent_dim is not None:
             mappings.extend(
                 [

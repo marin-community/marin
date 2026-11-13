@@ -343,6 +343,32 @@ def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
         SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
+@pytest.mark.parametrize(("reference_nodes", "allocated_nodes"), [(None, 2), (1, 3)])
+def test_static_preference_launch_reserves_policy_and_reference_without_rollout_nodes(reference_nodes, allocated_nodes):
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=2,
+        num_inference_engines=0,
+        reference_num_nodes=reference_nodes,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["evaluation_runner"] = "training"
+    recipe["trainer"]["algorithm"].update(policy_loss_type="dpo", loss_reduction="pair_mean")
+    recipe["environment"] = {"env_class": "preference_pair"}
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=allocated_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["iris"]["allocation"]["num_nodes"] == allocated_nodes
+    assert launch["skyrl"]["generator"]["num_inference_engines"] == 0
+    assert plan.num_nodes == allocated_nodes
+
+
 def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
     with pytest.raises(ValueError, match=r"trainer\.train_batch_size=32"):
         dataclasses.replace(
@@ -371,7 +397,7 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
         "megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 8}
     }
     recipe["trainer"]["ref"] = {"megatron_config": {"pipeline_model_parallel_size": 2, "expert_model_parallel_size": 16}}
-    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*data-parallel size by EP"):
+    with pytest.raises(ValueError, match=r"Megatron ref has 16 GPUs.*ETP\*EP\*PP"):
         dataclasses.replace(_spec(), topology=topology, config_yaml=yaml.safe_dump(recipe))
     recipe["trainer"]["ref"]["megatron_config"]["expert_model_parallel_size"] = 8
     spec = dataclasses.replace(
@@ -393,13 +419,52 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     }
 
 
-@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
+def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
+    plan = dataclasses.replace(
+        _role_plan(),
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=4,
+        inference_engine_expert_parallel_size=4,
+    )
+    recipe = yaml.safe_load(_config_yaml())
+    recipe["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+            "expert_model_parallel_size": 4,
+        }
+    }
+    recipe["generator"].update(
+        weight_sync_transport="expert_block",
+        weight_sync_backend="nccl",
+        expert_block_sync={"verify": True},
+        engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
+    )
+    if entrypoint is not None:
+        recipe["entrypoint"] = entrypoint
+
+    return dataclasses.replace(
+        _spec(),
+        topology=dataclasses.replace(_spec().topology, role_plan=plan),
+        config_yaml=yaml.safe_dump(recipe),
+    )
+
+
+@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium", "terminal_bench_generate"])
 def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
-    # Evaluation previously passed preflight, then failed in the GPU engine factory.
-    spec = _spec()
-    recipe = f"entrypoint: {entrypoint}\n{_config_yaml(strategy='megatron')}  weight_sync_transport: expert_block\n"
-    with pytest.raises(ValueError, match="expert_block requires non-colocated"):
-        dataclasses.replace(spec, config_yaml=recipe)
+    with pytest.raises(ValueError, match="colocated expert_block requires entrypoint=standard"):
+        _colocated_expert_block_spec(entrypoint)
+
+
+def test_expert_block_colocated_four_gpu_recipe_passes_preflight() -> None:
+    spec = _colocated_expert_block_spec()
+    step = skyrl_step(spec, _execution())
+    launch = yaml.safe_load(
+        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).launch_config_yaml
+    )
+    assert launch["iris"]["allocation"]["num_nodes"] == 1
+    assert launch["skyrl"]["generator"]["inference_engine_data_parallel_size"] == 4
 
 
 def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
@@ -739,10 +804,39 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
 
 def test_megatron_geometry_rejects_incomplete_expert_groups() -> None:
     geometry = MegatronGeometry(1, 2, 1, 8, 1)
-    with pytest.raises(
-        ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*data-parallel size by EP"
-    ):
+    with pytest.raises(ValueError, match=r"Megatron policy has 8 GPUs.*TP=1, PP=2, CP=1, EP=8.*ETP\*EP\*PP"):
         validate_megatron_geometry(geometry, role="policy", num_gpus=8)
+
+
+def test_megatron_geometry_uses_separate_dense_context_and_expert_grids() -> None:
+    # This 192-GPU layout has dense DP=2 and EP=8: CP ranks also join expert groups.
+    geometry = MegatronGeometry(1, 24, 4, 8, 1)
+    validate_megatron_geometry(geometry, role="policy", num_gpus=192)
+
+    # Increasing ETP requires a larger expert grid even though the dense grid still fits.
+    with pytest.raises(ValueError):
+        validate_megatron_geometry(
+            dataclasses.replace(geometry, expert_tensor_parallel_size=2), role="policy", num_gpus=192
+        )
+
+
+@pytest.mark.parametrize("role", ["policy", "ref"])
+@pytest.mark.parametrize("explicit_null", [False, True], ids=["omitted", "null"])
+def test_skyrl_spec_inherits_expert_tensor_parallelism_from_role_tp(role: str, explicit_null: bool) -> None:
+    recipe = yaml.safe_load(_config_yaml())
+    geometry: dict[str, int | None] = {"tensor_model_parallel_size": 2, "expert_model_parallel_size": 2}
+    if explicit_null:
+        geometry["expert_tensor_parallel_size"] = None
+    recipe["trainer"][role] = {"megatron_config": geometry}
+    base = _spec()
+    dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
+
+    geometry["expert_model_parallel_size"] = 4
+    with pytest.raises(ValueError):
+        dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
+
+    geometry["expert_tensor_parallel_size"] = 1
+    dataclasses.replace(base, config_yaml=yaml.safe_dump(recipe))
 
 
 def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:

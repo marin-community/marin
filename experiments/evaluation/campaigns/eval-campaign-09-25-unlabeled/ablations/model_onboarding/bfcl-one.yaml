@@ -1,4 +1,6 @@
 # One-task tool-use probe only; this is not a policy score.
+# Prepare each selected task image with Pi before launching. Declare its digest
+# in environment/shellbox-images.json under main and use that same docker_image.
 n_concurrent_trials: 1
 release_trial_payloads_in_memory: true
 retry:

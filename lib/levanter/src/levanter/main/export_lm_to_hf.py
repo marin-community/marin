@@ -23,6 +23,7 @@ from levanter.compat.hf_checkpoints import (
     DEFAULT_MAX_SHARD_SIZE,
     MAX_CONCURRENT_HF_SHARDS,
     RepoRef,
+    build_generation_config,
     load_tokenizer,
 )
 from levanter.models.llama import LlamaConfig
@@ -55,6 +56,7 @@ class ConvertLmConfig:
     tokenizer: str | None = None  # if specified, use this tokenizer instead of the one from the model config
     override_vocab_size: Optional[int] = None  # if specified, override the vocab size in the config
     config_overrides: Optional[dict] = None  # if specified, override the config with these values
+    hf_generation_eos_token_ids: list[int] | None = None
 
     use_cpu: bool = False
 
@@ -72,6 +74,8 @@ def main(config: ConvertLmConfig):
         tokenizer = load_tokenizer(tokenizer_ref.model_name_or_path, revision=tokenizer_ref.revision)
 
     if tokenizer is None:
+        if config.hf_generation_eos_token_ids is not None:
+            raise ValueError("hf_generation_eos_token_ids requires a tokenizer")
         vocab_size = config.override_vocab_size or getattr(config.model, "vocab_size", None)
         if vocab_size is None:
             raise ValueError("override_vocab_size is required when exporting without a tokenizer")
@@ -122,6 +126,8 @@ def main(config: ConvertLmConfig):
             export_host_budget_bytes=config.export_host_budget_bytes,
             max_concurrent_shards=config.max_concurrent_shards,
             dtype=jnp.dtype(config.export_dtype) if config.export_dtype is not None else None,
+            generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+            field_dtype_overrides=config.trainer.field_dtype_overrides,
         )
 
 

@@ -25,6 +25,8 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from skyrlrecipe import RecipePatch, RLEntrypoint, SkyRLRecipe, sections
+from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
@@ -36,16 +38,17 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 SELECTION_PREFIX = "rl-data/task-selection"
-DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.10.23.2"
+DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
+MAX_NUM_SEQS = 1
 REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 
 
-def training_recipe(steps: int) -> dict:
+def training_recipe(steps: int) -> SkyRLRecipe:
     """Use the maintained Snowball geometry with synchronous RLOO-N updates."""
     preset = replace(
         DEFAULT,
@@ -57,72 +60,83 @@ def training_recipe(steps: int) -> dict:
         max_new_tokens=MAX_NEW_TOKENS,
         batch_policy="full_batch",
     )
-    config = training_config(preset)
-    config["entrypoint"] = "taskcompendium"
-    config["data"] = {"kind": "parquet", "shuffle": True}
-    config["environment"] = {
-        "task_sessions": {
-            "local": {},
-            "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
-            "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
-        }
-    }
-    config["extra_env"].update(
-        VERIFYIT_JUDGE_MODEL="openai/gpt-oss-120b",
-        NCCL_NET="Socket",
-        NCCL_IB_DISABLE="1",
-        NCCL_SOCKET_FAMILY="AF_INET",
-    )
-    trainer = config["trainer"]
-    trainer.update(
-        seed=SEED,
-        project_name="marin-snowball-curriculum",
-        eval_num_prompts=None,
-        dump_eval_results=True,
-    )
-    trainer["algorithm"].update(
-        batch_invariant=True,
-        advantage_estimator="rloo_n",
-        group_advantage_min_size=2,
-        advantage_batch_normalize=False,
-        rloo_n_filter_zero_reward_groups=True,
-        use_entropy_loss=False,
-    )
-    config["generator"].update(
-        eval_sampling_params={"seed": SEED},
-        max_num_seqs=1,
-        enable_prefix_caching=True,
-        vllm_attention_backend="TRITON_ATTN",
-        engine_init_kwargs={
-            **config["generator"]["engine_init_kwargs"],
-            "compilation_config": {
-                "inductor_compile_config": {
-                    "deterministic": True,
-                    "batch_invariant": False,
-                    "combo_kernels": True,
-                    "benchmark_combo_kernel": False,
-                }
-            },
+    base = training_config(preset)
+    config = SkyRLRecipe(
+        entrypoint=RLEntrypoint.TASKCOMPENDIUM,
+        context_budget=base.context_budget,
+        trainer=base.trainer,
+        generator=base.generator,
+        data=sections.Data(kind="parquet", shuffle=True),
+        environment=sections.Environment(
+            task_sessions={
+                "local": {},
+                "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
+                "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
+            }
+        ),
+        extra_env={
+            **base.extra_env,
+            "VERIFYIT_JUDGE_MODEL": "openai/gpt-oss-120b",
+            "NCCL_NET": "Socket",
+            "NCCL_IB_DISABLE": "1",
+            "NCCL_SOCKET_FAMILY": "AF_INET",
         },
     )
-    generator = config["generator"]
-    config["trajectory_runner"] = {
-        **config.get("trajectory_runner", {}),
-        "max_concurrent_tasks": (
-            generator["num_inference_engines"]
-            * generator["inference_engine_data_parallel_size"]
-            * generator["max_num_seqs"]
-        ),
-    }
-    trainer["policy"]["optimizer_config"].update(
-        lr=1e-6,
-        adam_betas=[0.9, 0.999],
-        weight_decay=0.0,
-        max_grad_norm=0.5,
-        scheduler="constant_with_warmup",
-        num_warmup_steps=0,
+    return config.merge(
+        RecipePatch(
+            generator=sections.Generator(
+                eval_sampling_params=EvalSamplingParams(seed=SEED),
+                max_num_seqs=MAX_NUM_SEQS,
+                vllm_attention_backend="TRITON_ATTN",
+                engine_init_kwargs={
+                    "compilation_config": {
+                        "inductor_compile_config": {
+                            "deterministic": True,
+                            "batch_invariant": False,
+                            "combo_kernels": True,
+                            "benchmark_combo_kernel": False,
+                        }
+                    }
+                },
+                trajectory_reward_shaping=sections.TrajectoryRewardShaping(
+                    enabled=True,
+                    # Enabling shaping would also apply the DAPO overlong penalty over the derived l_cache window.
+                    overlong=sections.Overlong(penalty_scale=0.0),
+                    reasoning_span=sections.ReasoningSpan(penalty=0.1, target="marker"),
+                ),
+            ),
+            trajectory_runner=sections.TrajectoryRunner(
+                max_concurrent_tasks=(
+                    base.generator.num_inference_engines
+                    * base.generator.inference_engine_data_parallel_size
+                    * MAX_NUM_SEQS
+                ),
+            ),
+            trainer=sections.Trainer(
+                project_name="marin-snowball-curriculum",
+                eval_num_prompts=None,
+                dump_eval_results=True,
+                algorithm=sections.Algorithm(
+                    batch_invariant=True,
+                    advantage_estimator="rloo_n",
+                    group_advantage_min_size=2,
+                    advantage_batch_normalize=False,
+                    rloo_n_filter_zero_reward_groups=True,
+                    use_entropy_loss=False,
+                ),
+                policy=sections.Policy(
+                    optimizer_config=sections.PolicyOptimizerConfig(
+                        lr=1e-6,
+                        adam_betas=(0.9, 0.999),
+                        weight_decay=0.0,
+                        max_grad_norm=0.5,
+                        scheduler="constant_with_warmup",
+                        num_warmup_steps=0,
+                    )
+                ),
+            ),
+        )
     )
-    return config
 
 
 def build_run(
@@ -130,6 +144,7 @@ def build_run(
     *,
     selection: ArtifactStep[Artifact],
     steps: int = DEFAULT_STEPS,
+    export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
     model = ArtifactStep.adopt(
@@ -143,7 +158,7 @@ def build_run(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
-            config_yaml=yaml.safe_dump(training_recipe(steps), sort_keys=False),
+            config_yaml=yaml.safe_dump(training_recipe(steps).to_skyrl(), sort_keys=False),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=MODEL_ID,
@@ -177,7 +192,7 @@ def build_run(
             wandb_entity="marin-community",
             required_env_vars=(EVALUATION_API_KEY_ENV, JUDGE_API_KEY_ENV),
         ),
-        export_hf=True,
+        export_hf=export_hf,
     )
 
 
@@ -186,8 +201,9 @@ def build_run(
     "--selection-uri", default=DEFAULT_SELECTION_URI, show_default=True, help="Published task-selection artifact root."
 )
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
+@click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
 @rl_build_options
-def main(selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
+def main(selection_uri: str, steps: int, export_hf: bool) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -203,6 +219,7 @@ def main(selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
         resolve_version(name, None),
         selection=selection,
         steps=steps,
+        export_hf=export_hf,
     )
 
 

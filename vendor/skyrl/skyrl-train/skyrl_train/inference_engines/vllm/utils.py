@@ -1,5 +1,5 @@
-import json
 import errno
+import json
 from collections.abc import Mapping
 from typing import Any, Dict, Protocol
 
@@ -144,7 +144,10 @@ def apply_openai_sampling(
         "top_k": sampling_params.get("top_k", -1),
         "min_p": sampling_params.get("min_p", 0.0),
     }
-    resolved_body = {**defaults, **body}
+    resolved_body = dict(body)
+    for key, value in defaults.items():
+        if resolved_body.get(key) is None:
+            resolved_body[key] = value
     # Completion logprobs=0 requests sampled-token probabilities; False disables chat logprobs.
     logprobs = resolved_body.get("logprobs")
     if validate_rollout_logprob_sampling and logprobs is not None and logprobs is not False:

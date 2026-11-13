@@ -6,8 +6,8 @@
 Each source ships one pytest file and, usually, a ``solution/solution.py`` oracle. The agent writes
 files under ``/app``; unitsyn's agent writes the fixed solution file instead. The hidden tests run
 with the grader packages (``GRADER_PACKAGES``). The sources differ only by
-configuration, rubric and, for the Stack Overflow tasks, the agent image carrying their dependencies;
-the grader packages include the same ones, so a submission that imports one there grades here.
+configuration and rubric. Each agent environment replays its archived Dockerfile on its pinned base;
+the grader runs separately with ``GRADER_PACKAGES``.
 """
 
 from dataclasses import dataclass, field
@@ -18,6 +18,9 @@ from taskcompendium.pipeline.models import Controls, Converter, ImportRejection,
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    archive_requirements,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     SOLUTION_PATHS,
     solve_script,
@@ -26,19 +29,8 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.execu
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.python_unit_tests import (
     convert as convert_unit_tests,
 )
-from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-
-AGENT_IMAGE = Environment(
-    image="ghcr.io/marin-community/iris-task@sha256:d15747080ff81dbbec4a1dcbc7cd651d3b935054d4b67e4b55dc517e1b2cfc56"
-)
-"""The Python image the agent writes its implementation in."""
-STACK_PYTEST_AGENT_IMAGE = Environment(
-    image="ghcr.io/marin-community/iris-task@sha256:97528e23c249c993641b0b5c6e7d05a978588f4be276f0fe61b1f3c3bcc6c622"
-)
-"""The Python image with the Stack Overflow tasks' dependencies that their agent works in."""
-
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 PYTHON_TESTS_CONTROLS = Controls(golden=solve_script)
 
@@ -177,18 +169,7 @@ def convert_python_tests(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(AGENT_IMAGE),
-        grader_environment=required_grader_environment(context),
-        output_paths=("/app",),
-    )
-
-
-def convert_stack_pytest(row: RawRow, context: ConversionContext) -> NormalizedTask | ImportRejection:
-    """Capture the workspace written in the image with Stack Overflow dependencies."""
-    return tasktrove_archive_task(
-        row,
-        convert=convert_unit_tests,
-        environment=environment_requirements(STACK_PYTEST_AGENT_IMAGE),
+        environment=archive_requirements(row.data),
         grader_environment=required_grader_environment(context),
         output_paths=("/app",),
     )
@@ -199,7 +180,7 @@ def convert_unitsyn(row: RawRow, context: ConversionContext) -> NormalizedTask |
     return tasktrove_archive_task(
         row,
         convert=convert_unit_tests,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=archive_requirements(row.data),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
@@ -211,7 +192,7 @@ class PythonTestsSource:
     convert: Converter
     rubric: str
     info: SourceInfo = field(kw_only=True)
-    version: str = "4"
+    version: str = "5"
 
 
 SOURCES = {
@@ -230,13 +211,14 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "curriculum_medium": PythonTestsSource(
         "DCAgent__exp_rpt_curriculum-medium-v2",
         convert_python_tests,
         CURRICULUM_MEDIUM_RUBRIC,
-        version="5",
+        version="6",
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_curriculum-medium-v2",
             title="DCAgent/exp_rpt_curriculum-medium-v2",
@@ -248,13 +230,14 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "e2egit": PythonTestsSource(
         "DCAgent__exp_rpt_e2egit-v2",
         convert_python_tests,
         E2EGIT_RUBRIC,
-        version="7",
+        version="8",
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_e2egit-v2",
             title="DCAgent/exp_rpt_e2egit-v2",
@@ -266,6 +249,7 @@ SOURCES = {
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles overlap with the large cut."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "e2egit_large": PythonTestsSource(
@@ -283,6 +267,7 @@ SOURCES = {
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
                 "tasks; exact instruction dedup handles repeated katas."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "multifile": PythonTestsSource(
@@ -300,6 +285,7 @@ SOURCES = {
                 "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
                 "submissions failed every task. Kept with the kata tag."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "pymethods": PythonTestsSource(
@@ -317,6 +303,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "pymethods_large": PythonTestsSource(
@@ -334,6 +321,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "unitsyn": PythonTestsSource(
@@ -351,6 +339,7 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. The standardized mode "
                 "passed all 10 sampled oracles and rejected all 10 empty submissions."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "unitsyn_large": PythonTestsSource(
@@ -368,11 +357,12 @@ SOURCES = {
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
                 "passed, while empty and trivial submissions failed."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     "stack_pytest": PythonTestsSource(
         "DCAgent__exp_rpt_stack-pytest-v2",
-        convert_stack_pytest,
+        convert_python_tests,
         STACK_PYTEST_RUBRIC,
         info=SourceInfo(
             id="Task Trove:DCAgent__exp_rpt_stack-pytest-v2",
@@ -385,6 +375,7 @@ SOURCES = {
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
                 "failed every task. Kept with the kata tag."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
 }

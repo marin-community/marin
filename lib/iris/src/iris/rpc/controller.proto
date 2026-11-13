@@ -83,6 +83,10 @@ message Controller {
     // If not set or milliseconds=0, no timeout.
     iris.time.Duration timeout = 21;
 
+    // SIGTERM-to-SIGKILL budget for task processes. Unset uses the controller
+    // default. The controller validates and persists the effective duration.
+    iris.time.Duration termination_grace = 41;
+
     // If true, return ALREADY_EXISTS error even if an existing job with the same
     // name is in a terminal state. If false (default), finished jobs are automatically
     // removed and replaced with the new submission.
@@ -820,6 +824,16 @@ message Controller {
     FederationBudgetPolicy budget_policy = 3;
   }
 
+  // Requested limits shown by the hub for jobs created on an execution peer.
+  message FederationJobLimits {
+    iris.time.Duration timeout = 1;
+    iris.time.Duration scheduling_timeout = 2;
+    int32 max_retries_failure = 3;
+    int32 max_retries_preemption = 4;
+    int32 max_task_failures = 5;
+    iris.time.Duration termination_grace = 6;
+  }
+
   // One handed-off job's state as the peer currently holds it. The parent mirrors
   // this into its own jobs/tasks rows (stamped with the peer's cluster) for that handle.
   message FederationJobDelta {
@@ -829,6 +843,7 @@ message Controller {
     iris.job.JobStatus summary = 2;               // job state + counts (+ spend once reported)
     repeated iris.job.TaskStatus changed_tasks = 3;  // full row for each task changed since the cursor
     bool tombstone = 4;                           // peer has pruned the job; parent drops its projection
+    FederationJobLimits limits = 5;
   }
 
   // One service endpoint exported by a handed-off (RECEIVED) job on the peer.

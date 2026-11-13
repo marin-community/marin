@@ -24,6 +24,7 @@ Usage:
 import argparse
 import ast
 import json
+import re
 import subprocess
 import tomllib
 from collections import defaultdict
@@ -43,6 +44,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "skyrlrecipe",
     "verifyit",
     "deploy",
     "iac",
@@ -59,12 +61,19 @@ class SourceRoot:
     """Repo-relative directory on ``sys.path``, e.g. ``lib/levanter/src``."""
 
 
+EXPERIMENTS_DIR = "experiments"
+EXPERIMENT_README = "README.md"
+
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    SourceRoot("lib/rolloutengine/src/rolloutengine", "lib/rolloutengine/src"),
+    SourceRoot("lib/shellbox/src/shellbox", "lib/shellbox/src"),
+    SourceRoot("lib/taskcompendium/src/taskcompendium", "lib/taskcompendium/src"),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
+    SourceRoot("infra/loom", "."),
     SourceRoot("infra/shellsim", "."),
-    SourceRoot("experiments", "."),
+    SourceRoot(EXPERIMENTS_DIR, "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
     SourceRoot("infra/marina/apps", "infra/marina/apps"),
@@ -93,6 +102,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "skyrlrecipe": "marin-skyrlrecipe",
     "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
@@ -120,8 +130,24 @@ DIFF_DRIVEN_REASON = "diff-driven"
 TEST_DIRS: dict[str, tuple[str, ...]] = {
     **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
     "deploy": ("infra/deploy/tests",),
-    "iac": ("infra/pulumi/tests",),
-    "marin": ("tests", "experiments"),
+    # The Loom Pulumi program imports iac and runs in its environment. It mixes source
+    # and tests, so its non-Python inputs force the scope.
+    "iac": ("infra/pulumi/tests", "infra/loom"),
+    "marin": ("tests", EXPERIMENTS_DIR),
+}
+
+# Files outside a scope's test directories that its tests read. The import graph cannot
+# see these reads, so a change to one runs the whole scope.
+EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
+    "iac": frozenset(
+        {
+            ".github/actions/launch-loom-run/action.yaml",
+            ".github/workflows/ops-codehealth-refinement.yaml",
+            ".github/workflows/ops-fork-ferry.yaml",
+            ".github/workflows/ops-loom-holistic-review.yaml",
+            ".github/workflows/ops-loom-review.yaml",
+        }
+    ),
 }
 
 # The Levanter and Marin suites run long enough to be worth spreading over extra runners;
@@ -159,6 +185,7 @@ DEFAULT_LEG_TIMEOUT = 15
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "skyrl-wheel": (
+        "lib/skyrlrecipe/",
         "vendor/skyrl/",
         "vendor/harbor/",
         "lib/finelog/",
@@ -172,29 +199,29 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),
-    "evalchemy-unit": (
-        "vendor/evalchemy/",
-        "lib/finestore/",
-        "lib/rigging/",
-        "lib/marin/src/marin/evaluation/evalchemy/",
-        "experiments/evaluation/",
-        "infra/ci/select_tests.py",
-        ".github/workflows/unified-unit.yaml",
-        *DEPENDENCY_MANIFESTS,
-    ),
     "harbor-unit": (
         "vendor/harbor/",
+        "lib/shellbox/",
         "lib/finestore/",
         "lib/rigging/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
         "lib/marin/src/marin/evaluation/harbor/",
+        "experiments/post_training/task_curation/calibforge_rebuild.py",
+        "experiments/post_training/task_curation/calibforge_fixtures.py",
+        "experiments/post_training/task_curation/daytona_identity.py",
+        "experiments/post_training/task_curation/task_tars.py",
         "experiments/post_training/task_curation/harbor_hub.py",
+        "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
+        "experiments/post_training/task_curation/tests/test_daytona_identity.py",
+        "experiments/post_training/task_curation/tests/task_tar_fixtures.py",
         "experiments/post_training/task_curation/tests/test_harbor_hub.py",
         "infra/ci/select_tests.py",
         "infra/ci/run_harbor_tests.py",
         "infra/ci/run_tests.py",
         ".github/workflows/unified-unit.yaml",
     ),
-    "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
+    "iris-e2e-smoke": ("lib/iris/", ".github/workflows/unified-unit.yaml", *DEPENDENCY_MANIFESTS),
     "shellbox-unit": (
         "lib/shellbox/",
         "infra/ci/select_tests.py",
@@ -736,11 +763,20 @@ def classify(
     direct_tests: dict[str, list[str]] = defaultdict(list)
     forced: set[str] = set()
     native_changed: set[str] = set()
+    experiment_asset_areas: set[str] = set()
+
+    launch_census = "tests/rl/test_rl_launch_documents.py"
+    if (repo_root / launch_census).is_file() and any(
+        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
+    ):
+        direct_tests["marin"].append(launch_census)
 
     for filepath in changed_files:
         if filepath in broad_triggers:
             broad = True
             continue
+
+        forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python
@@ -780,6 +816,13 @@ def classify(
                     if not (repo_root / filepath).exists():
                         forced.add(scope)
                     break
+                # No test reads a checked-in experiment README.
+                if filepath.startswith(f"{EXPERIMENTS_DIR}/") and filename == EXPERIMENT_README:
+                    break
+                area = experiment_asset_area(filepath)
+                if area is not None:
+                    experiment_asset_areas.add(area)
+                    break
                 # conftest.py, helper modules (stubs, workload scripts, generators), and
                 # non-Python assets (snapshots, fixtures, data files) can all change test
                 # behavior without being directly collectable: run the full scope so the
@@ -799,6 +842,11 @@ def classify(
             if filepath in (f"{package_root}/conftest.py", f"{package_root}/pyproject.toml"):
                 forced.add(scope)
                 break
+
+    if experiment_asset_areas:
+        asset_tests = experiment_asset_tests(experiment_asset_areas, repo_root)
+        direct_tests["marin"] = sorted(set(direct_tests["marin"]) | set(asset_tests))
+        src_modules.update(experiment_area_modules(experiment_asset_areas, repo_root))
 
     return ClassifyResult(
         broad=broad,
@@ -919,16 +967,61 @@ def all_test_files(scope: str, repo_root: Path) -> list[str]:
     )
 
 
+def experiment_asset_area(filepath: str) -> str | None:
+    """The ``experiments/<area>`` name owning a non-Python file, or None.
+
+    Python files, and files directly in ``experiments/``, have no area: they keep the
+    import-graph or full-scope handling.
+    """
+    parts = PurePosixPath(filepath).parts
+    if len(parts) < 3 or parts[0] != EXPERIMENTS_DIR or filepath.endswith(".py"):
+        return None
+    return parts[1]
+
+
+def experiment_area_modules(areas: set[str], repo_root: Path) -> set[str]:
+    """Non-test modules under ``experiments/<area>/``, as changed sources for the import graph.
+
+    An area module can load one of the area's files for tests elsewhere that import it,
+    e.g. ``experiments.datakit.hero_data`` reads ``hero_data_paths.json`` for
+    ``tests/datakit/test_hero_data.py``.
+    """
+    return {
+        module
+        for area in areas
+        for py in (repo_root / EXPERIMENTS_DIR / area).rglob("*.py")
+        if not is_test_module(py.name) and (module := path_to_module(py, repo_root))
+    }
+
+
+def experiment_asset_tests(areas: set[str], repo_root: Path) -> list[str]:
+    """Marin test files that may read a non-Python file under ``experiments/<area>/``.
+
+    Tests read configs and fixtures through paths the import graph cannot see, from
+    anywhere in their area (a sibling ``fixtures/`` directory, ``../datasets``, a
+    campaign config several levels down). Select every test in the area, plus tests
+    elsewhere whose source names the area as ``experiments/<area>`` or
+    ``"experiments" / "<area>"``. Tests that reach the file through an area module are
+    selected by the import graph (see ``experiment_area_modules``).
+    """
+    names = "|".join(re.escape(area) for area in sorted(areas))
+    mention = re.compile(rf"""{EXPERIMENTS_DIR}/(?:{names})\b|["']{EXPERIMENTS_DIR}["']\s*/\s*["'](?:{names})["']""")
+    prefixes = tuple(f"{EXPERIMENTS_DIR}/{area}/" for area in areas)
+    return [
+        path
+        for path in all_test_files("marin", repo_root)
+        if path.startswith(prefixes) or mention.search((repo_root / path).read_text(encoding="utf-8", errors="replace"))
+    ]
+
+
 def shard_files(tests: list[str], count: int) -> list[list[str]]:
-    """Split ``tests`` into ``count`` contiguous, size-balanced chunks."""
-    base, extra = divmod(len(tests), count)
-    chunks: list[list[str]] = []
-    start = 0
-    for index in range(count):
-        size = base + (1 if index < extra else 0)
-        chunks.append(tests[start : start + size])
-        start += size
-    return chunks
+    """Deal ``tests`` round-robin into ``count`` chunks.
+
+    Expensive tests cluster by directory (``experiments/grug/``, ``tests/grug/``), so
+    contiguous slices of the sorted list put a whole cluster on one runner. Interleaving
+    spreads each directory across every chunk.
+    """
+    return [tests[index::count] for index in range(count)]
 
 
 def scope_legs(
@@ -1038,10 +1131,10 @@ def accelerator_suite_test_paths(
         selected = all_test_files("levanter", repo_root)
     for test_path in selected:
         markers = markers_for_test_file(repo_root / test_path)
-        # TPU coverage is opt-in, including for full-suite and scheduled runs.
+        # Accelerator and multi-device coverage is opt-in, including for full-suite and scheduled runs.
         if "torch" in markers:
             torch_paths.append(test_path)
-        if "tpu" in markers:
+        if {"tpu", "multidevice"} & markers:
             tpu_paths.append(test_path)
 
     suites: dict[str, list[str]] = {}

@@ -34,6 +34,10 @@ import asyncio
 import json
 from pathlib import Path
 
+import harbor.environments.factory as environment_factory
+import pytest
+from harbor.agents.factory import AgentFactory
+from harbor.models.agent.name import AgentName
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.capabilities import EnvironmentCapabilities
@@ -82,7 +86,7 @@ class UploadFailsEnvironment(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.LOCAL
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -91,7 +95,9 @@ class UploadFailsEnvironment(BaseEnvironment):
     def _validate_definition(self):
         pass
 
-    async def start(self, force_build: bool) -> None:
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
         pass
 
     async def stop(self, delete: bool):
@@ -149,15 +155,8 @@ async def _make_trial(tmp_path: Path) -> Trial:
     config = TrialConfig(
         task=TaskConfig(path=task_dir),
         trials_dir=trials_dir,
-        agent=AgentConfig(
-            import_path="tests.unit.test_trial_verifier_invariant:TimeoutAgent"
-        ),
-        environment=EnvironmentConfig(
-            import_path=(
-                "tests.unit.test_trial_verifier_invariant:UploadFailsEnvironment"
-            ),
-            delete=True,
-        ),
+        agent=AgentConfig(name=AgentName.PI),
+        environment=EnvironmentConfig(type=EnvironmentType.LOCAL, delete=True),
         # Verification ENABLED: this is the path that must never silently drop.
         verifier=VerifierConfig(disable=False),
     )
@@ -165,6 +164,13 @@ async def _make_trial(tmp_path: Path) -> Trial:
     assert isinstance(trial.agent, TimeoutAgent)
     assert isinstance(trial.agent_environment, UploadFailsEnvironment)
     return trial
+
+
+@pytest.fixture(autouse=True)
+def registered_environment(monkeypatch):
+    monkeypatch.setattr(
+        environment_factory, "_load_environment_class", lambda _: UploadFailsEnvironment
+    )
 
 
 class TestVerifierResultInvariant:
@@ -240,3 +246,8 @@ class TestVerifierResultInvariant:
                 "emitted result.json should record the terminal AddTestsDirError, "
                 f"not the masked benign timeout, got {exc.get('exception_type')}"
             )
+
+
+@pytest.fixture(autouse=True)
+def register_test_agents(monkeypatch):
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, TimeoutAgent)

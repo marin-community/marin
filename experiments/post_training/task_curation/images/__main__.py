@@ -14,6 +14,14 @@ import click
 from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.evaluation.benchmarks.environments import (
+    ALIAS_GRADER,
+    BASIC_GRADER,
+    INSTRUCTION_ENVIRONMENTS,
+    MATH_GRADER,
+    MATH_JUDGE_GRADER,
+    PYTHON_GRADER,
+)
 from experiments.post_training.task_curation.datasets.environments import BUILDABLE_ENVIRONMENTS
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import (
@@ -25,7 +33,18 @@ from experiments.post_training.task_curation.images.build import (
 
 def declared_environments() -> dict[str, Environment]:
     """Explicitly registered buildable environments, keyed by identity."""
-    return {identity_digest(environment): environment for environment in BUILDABLE_ENVIRONMENTS}
+    return {
+        identity_digest(environment): environment
+        for environment in (
+            *BUILDABLE_ENVIRONMENTS,
+            BASIC_GRADER,
+            ALIAS_GRADER,
+            MATH_GRADER,
+            MATH_JUDGE_GRADER,
+            PYTHON_GRADER,
+            *INSTRUCTION_ENVIRONMENTS,
+        )
+    }
 
 
 @click.command(help=__doc__)
