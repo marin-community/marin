@@ -499,7 +499,7 @@ def _make_synthetic_batch(
     """Build one deterministic batch directly on the global batch sharding."""
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
-    def tokens_for_slice(index):
+    def indices_for_slice(index):
         batch_slice, position_slice = index
         batch_start, batch_stop, batch_stride = batch_slice.indices(batch_size)
         position_start, position_stop, position_stride = position_slice.indices(max_seq_len)
@@ -507,18 +507,16 @@ def _make_synthetic_batch(
             raise ValueError("synthetic batch sharding requires contiguous slices")
         batch_indices = np.arange(batch_start, batch_stop, dtype=np.int64)[:, None]
         position_indices = np.arange(position_start, position_stop, dtype=np.int64)[None, :]
+        return batch_indices, position_indices
+
+    def tokens_for_slice(index):
+        batch_indices, position_indices = indices_for_slice(index)
         return ((batch_indices * max_seq_len + position_indices + seed) % vocab_size).astype(np.int32)
 
     def loss_weight_for_slice(index):
-        batch_slice, position_slice = index
-        batch_start, batch_stop, batch_stride = batch_slice.indices(batch_size)
-        position_start, position_stop, position_stride = position_slice.indices(max_seq_len)
-        if batch_stride != 1 or position_stride != 1:
-            raise ValueError("synthetic batch sharding requires contiguous slices")
-        loss_weight = np.ones((batch_stop - batch_start, position_stop - position_start), dtype=np.float32)
-        if position_start <= max_seq_len - 1 < position_stop:
-            loss_weight[:, max_seq_len - 1 - position_start] = 0
-        return loss_weight
+        batch_indices, position_indices = indices_for_slice(index)
+        weights = (position_indices < max_seq_len - 1).astype(np.float32)
+        return np.broadcast_to(weights, (batch_indices.size, position_indices.size)).copy()
 
     shape = (batch_size, max_seq_len)
     tokens = jax.make_array_from_callback(shape, sharding, tokens_for_slice)

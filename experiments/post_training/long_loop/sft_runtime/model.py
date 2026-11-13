@@ -271,7 +271,7 @@ class GrugModelConfig:
     num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
-    # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
+    # LatentMoE (arXiv 2601.18089) uses RMSNorm in the shared latent space.
     latent_dim: int | None = None
     qb_estimator: QbEstimator = QbEstimator.TOPK
     qb_hist_bins: int = 1000  # bins for the QB histogram estimator; ignored by the top-k estimator
