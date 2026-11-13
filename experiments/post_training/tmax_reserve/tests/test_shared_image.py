@@ -58,31 +58,52 @@ def test_dockerfiles_outside_the_templates_are_rejected(dockerfile):
         parse_dockerfile(dockerfile)
 
 
-def test_setup_runs_post_install_from_root_with_template_env_and_retries_once(tmp_path):
+def _shimmed_env(tmp_path, env):
+    """The template env with apt-get and rm replaced by shims that log their arguments to ``<tmp>/calls``."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("apt-get", "rm"):
+        (bin_dir / tool).write_text(f'#!/bin/bash\necho "{tool} $*" >> {tmp_path}/calls\n')
+        (bin_dir / tool).chmod(0o755)
+    return {**env, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+
+
+def test_setup_runs_post_install_then_the_tmux_step_with_template_env_and_retries_once(tmp_path):
     counter = tmp_path / "attempts"
     (tmp_path / "post_install.sh").write_text(
-        f'echo x >> {counter}\npwd > {tmp_path}/cwd\necho "$GOPATH $HOME" > {tmp_path}/env\n'
-        f"[ $(wc -l < {counter}) -ge 2 ]\n"
+        f'echo x >> {counter}\necho "post_install" >> {tmp_path}/calls\npwd > {tmp_path}/cwd\n'
+        f'echo "$GOPATH $HOME" > {tmp_path}/env\n[ $(wc -l < {counter}) -ge 2 ]\n'
     )
-    (tmp_path / "setup.sh").write_text(setup_script(parse_dockerfile(TEMPLATE_B).env))
+    (tmp_path / "setup.sh").write_text(setup_script(_shimmed_env(tmp_path, parse_dockerfile(TEMPLATE_B).env)))
 
     result = subprocess.run(["bash", str(tmp_path / "setup.sh")], capture_output=True, text=True)
 
     assert result.returncode == 0
     assert "attempt 1 exited 1" in result.stderr
     assert counter.read_text().count("x") == 2
+    # The image build ran the tmux step after post_install.sh; it also configures packages left unpacked.
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert calls[:4] == [
+        "post_install",
+        "post_install",
+        "apt-get update",
+        "apt-get install -y --no-install-recommends tmux",
+    ]
+    # The shell expands the lists glob, so the shim sees this host's file names.
+    assert len(calls) == 5 and calls[4].startswith("rm -rf /var/lib/apt/lists/")
     assert (tmp_path / "cwd").read_text().strip() == "/"
     assert (tmp_path / "env").read_text().split() == [IMAGE_B_ENV["GOPATH"], "/root"]
 
 
 def test_setup_fails_after_two_failed_attempts(tmp_path):
     (tmp_path / "post_install.sh").write_text("exit 7\n")
-    (tmp_path / "setup.sh").write_text(setup_script(parse_dockerfile(TEMPLATE_A).env))
+    (tmp_path / "setup.sh").write_text(setup_script(_shimmed_env(tmp_path, parse_dockerfile(TEMPLATE_A).env)))
 
     result = subprocess.run(["bash", str(tmp_path / "setup.sh")], capture_output=True, text=True)
 
     assert result.returncode == 7
     assert result.stderr.count("exited 7") == 2
+    assert not (tmp_path / "calls").exists()
 
 
 def _source_task(root, name, dockerfile, fixtures=False):

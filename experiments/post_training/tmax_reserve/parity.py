@@ -60,7 +60,7 @@ def lines(*argv):
     return sorted(result.stdout.splitlines()) if result.returncode == 0 else ["<exit %d>" % result.returncode]
 print(json.dumps({{
     "files": files,
-    "dpkg": lines("dpkg-query", "-W", "-f", "${{Package}}=${{Version}}\\n"),
+    "dpkg": lines("dpkg-query", "-W", "-f", "${{db:Status-Abbrev}} ${{Package}}=${{Version}}\\n"),
     "pip": lines("python3", "-m", "pip", "list", "--format=freeze"),
 }}))
 """
