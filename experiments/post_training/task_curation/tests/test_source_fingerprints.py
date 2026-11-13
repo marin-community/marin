@@ -45,8 +45,8 @@ from experiments.post_training.task_curation.source_fingerprints import (
     duplicate_groups,
     fingerprint_source,
 )
-from experiments.post_training.task_curation.source_identity import canonical_source_id
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
 def task_document(identifier: str, instruction: str) -> dict:

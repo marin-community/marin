@@ -14,8 +14,8 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
-from experiments.post_training.task_curation.source_identity import SourceId, canonical_source_id, original_source_id
 from infra.marina.apps.rl_data_catalog.server.quality import intended_use
+from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId, canonical_source_id, original_source_id
 
 
 class ManifestReference(BaseModel):

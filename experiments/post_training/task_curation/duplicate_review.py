@@ -29,7 +29,7 @@ from taskcompendium.source_fingerprints import DuplicateReview, PairSimilarity, 
 from verifyit.modes.grade_judge import JudgeConnection
 
 from experiments.post_training.task_curation.judges import HostedJudgeEndpoint
-from experiments.post_training.task_curation.source_identity import canonical_source_map, original_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_map, original_source_id
 
 logger = logging.getLogger(__name__)
 

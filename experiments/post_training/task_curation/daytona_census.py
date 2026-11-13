@@ -47,8 +47,8 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.retained_release import RetainedCohort
-from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
 from experiments.post_training.task_curation.sources import all_sources
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 logger = logging.getLogger(__name__)
 PROFILE = dict(cpus=None, memory_mb=None, storage_mb=None, gpus=0, user=None, startup_timeout=900, cleanup_timeout=120)

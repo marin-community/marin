@@ -9,7 +9,7 @@ from marin.datakit.decon import AllSourceDropSets, DeconAttributes
 from marin.execution.artifact import Artifact
 from pydantic import Field, field_validator
 
-from experiments.post_training.task_curation.source_identity import SourceId, canonical_source_id, canonical_source_map
+from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId, canonical_source_id, canonical_source_map
 
 
 class SourceTextPopulation(Artifact):

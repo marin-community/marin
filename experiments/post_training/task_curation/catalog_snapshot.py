@@ -51,8 +51,8 @@ from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.catalog_identity import canonical_attempt, canonical_snapshot_source
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.source_identity import canonical_source_id, canonical_source_map
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 
 def assessment_quality_result(items: Iterable[AssessmentItem]) -> SourceQualityResult:

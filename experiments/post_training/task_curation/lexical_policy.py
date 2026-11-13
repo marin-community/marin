@@ -16,7 +16,7 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.retained_release import RetainedCohort
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.source_identity import SourceId, canonical_source_map
+from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId, canonical_source_map
 
 
 class LexicalInputUse(BaseModel):

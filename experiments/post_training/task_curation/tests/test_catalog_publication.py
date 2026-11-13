@@ -41,8 +41,8 @@ from experiments.post_training.task_curation.catalog_snapshot import (
 )
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, SourceReference
-from experiments.post_training.task_curation.source_identity import canonical_source_id
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 

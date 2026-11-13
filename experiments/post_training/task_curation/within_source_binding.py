@@ -10,7 +10,7 @@ from pathlib import Path
 from finestore.rl.curation import WithinSourceDedupEvidence
 
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.source_identity import canonical_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
 def read_dedup_receipts(path: Path, *, load_json: Callable[[Path], dict]) -> dict[str, WithinSourceDedupEvidence]:

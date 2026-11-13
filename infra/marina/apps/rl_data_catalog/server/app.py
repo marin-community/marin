@@ -14,13 +14,12 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
 
-from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
-
 from .contamination import contamination
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
 from .quality import intended_use, issue_rate, quality, result
 from .schema import SCHEMA_SQL
+from .source_identity import canonical_source_id, original_source_id
 
 
 def migrate(connection: Connection) -> None:
@@ -68,6 +67,30 @@ def loaded_catalog(connection: Connection) -> dict[str, Any]:
     return dict(row)
 
 
+def canonical_duplicate_group(row: dict[str, Any]) -> dict[str, Any]:
+    return DuplicateGroup.model_validate(
+        {
+            **row,
+            "canonical_source_id": canonical_source_id(row["canonical_source_id"]),
+            "members": [{**member, "source_id": canonical_source_id(member["source_id"])} for member in row["members"]],
+        }
+    ).model_dump(mode="json")
+
+
+def canonical_duplicate_review(row: dict[str, Any]) -> dict[str, Any]:
+    similarity = row["similarity"]
+    return DuplicateReview.model_validate(
+        {
+            **row,
+            "similarity": {
+                **similarity,
+                "left": canonical_source_id(similarity["left"]),
+                "right": canonical_source_id(similarity["right"]),
+            },
+        }
+    ).model_dump(mode="json")
+
+
 def canonical_source_record(row: dict[str, Any]) -> dict[str, Any]:
     """Project retained catalog metadata without rewriting its evidence or keys."""
     result = {**row, "id": canonical_source_id(row["id"])}
@@ -78,7 +101,7 @@ def canonical_source_record(row: dict[str, Any]) -> dict[str, Any]:
             "source_id": canonical_source_id(row["backend_capabilities"]["source_id"]),
         }
     if row.get("duplicate_group") is not None:
-        result["duplicate_group"] = DuplicateGroup.model_validate(row["duplicate_group"]).model_dump(mode="json")
+        result["duplicate_group"] = canonical_duplicate_group(row["duplicate_group"])
     return result
 
 
@@ -280,8 +303,8 @@ def create_api(services: AppletServices) -> FastAPI:
             return {
                 "survey_id": survey["survey_id"],
                 **survey["metadata"],
-                "reviews": [DuplicateReview.model_validate(row).model_dump(mode="json") for row in reviews],
-                "groups": [DuplicateGroup.model_validate(row).model_dump(mode="json") for row in groups],
+                "reviews": [canonical_duplicate_review(row) for row in reviews],
+                "groups": [canonical_duplicate_group(row) for row in groups],
             }
 
     @api.get("/assessment")

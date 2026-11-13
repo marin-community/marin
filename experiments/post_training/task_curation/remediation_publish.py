@@ -25,7 +25,7 @@ from experiments.post_training.task_curation.calibforge_publish import publish
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.native_quick import source_slug
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
-from experiments.post_training.task_curation.source_identity import canonical_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
 TASK_SCHEMA = pa.schema(

@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.source_identity import SourceId
+from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
 
 class GradingCensusReceipt(BaseModel):

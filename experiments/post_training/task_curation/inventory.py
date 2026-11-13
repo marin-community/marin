@@ -48,8 +48,8 @@ from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
-from experiments.post_training.task_curation.source_identity import canonical_source_map, original_source_id
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_map, original_source_id
 
 SELECTION_PREFIX = "rl-data/task-selection"
 SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"

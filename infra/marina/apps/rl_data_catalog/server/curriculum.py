@@ -13,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
+from .source_identity import canonical_source_id, original_source_id
 
 TOTAL_METRICS = ("denominator", "assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
 

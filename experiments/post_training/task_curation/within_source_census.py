@@ -26,7 +26,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.deduplication import DUPLICATE_WITHIN_SOURCE
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-from experiments.post_training.task_curation.source_identity import (
+from infra.marina.apps.rl_data_catalog.server.source_identity import (
     canonical_source_id,
     canonical_source_map,
     original_source_id,

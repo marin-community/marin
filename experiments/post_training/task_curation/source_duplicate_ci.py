@@ -22,7 +22,7 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey
 from experiments.post_training.task_curation.registry import read_registry_json
-from experiments.post_training.task_curation.source_identity import canonical_source_id, canonical_source_map
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 EXPORT_DECLARATIONS = """import json
 from experiments.post_training.task_curation.sources import all_sources

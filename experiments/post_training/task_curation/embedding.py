@@ -58,13 +58,13 @@ from zephyr.readers import load_parquet
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.catalog_identity import canonical_declaration
-from experiments.post_training.task_curation.source_identity import (
+from experiments.post_training.task_curriculum.models import CurriculumCatalog
+from infra.marina.apps.rl_data_catalog.server.source_identity import (
     SOURCE_ID_ALIASES,
     canonical_source_id,
     canonical_source_map,
     original_source_id,
 )
-from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 INPUTS_VERSION = "2026.10.14.1"
 DESCRIPTIONS_VERSION = "2026.10.15.1"

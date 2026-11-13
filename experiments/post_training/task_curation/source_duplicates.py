@@ -37,7 +37,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
     pair_similarity,
 )
-from experiments.post_training.task_curation.source_identity import canonical_source_id, canonical_source_map
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 logger = logging.getLogger(__name__)
 

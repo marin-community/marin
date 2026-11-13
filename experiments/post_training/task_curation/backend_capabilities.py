@@ -39,7 +39,7 @@ from taskcompendium.backend_requirements import (
 from taskcompendium.models import EnvironmentRequirements
 
 from experiments.post_training.task_curation.catalog_identity import canonical_snapshot_source
-from experiments.post_training.task_curation.source_identity import canonical_source_id, canonical_source_map
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 SUPPORT_ORDER = (Support.SUPPORTED, Support.PARTIAL, Support.UNSUPPORTED)
 RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")

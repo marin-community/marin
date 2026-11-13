@@ -26,7 +26,7 @@ from experiments.post_training.task_curation.daytona_census import (
 )
 from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
-from experiments.post_training.task_curation.source_identity import original_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import original_source_id
 
 
 @dataclass(frozen=True)

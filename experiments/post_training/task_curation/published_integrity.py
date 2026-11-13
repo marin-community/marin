@@ -22,7 +22,7 @@ from experiments.post_training.task_curation.published_census import (
     population_documents,
     write_contract_summary,
 )
-from experiments.post_training.task_curation.source_identity import original_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import original_source_id
 
 
 def measure_integrity(config: CensusConfig) -> IntegrityCensus:

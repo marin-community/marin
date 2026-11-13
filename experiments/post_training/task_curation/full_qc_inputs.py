@@ -28,7 +28,7 @@ from experiments.post_training.task_curation.lexical_artifacts import SourceText
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.published_census import population_documents
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
-from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 logger = logging.getLogger(__name__)
 INDEX_SCHEMA = pa.schema([("task_id", pa.string()), ("task_sha256", pa.string()), ("runtime_sha256", pa.string())])

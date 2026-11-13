@@ -16,7 +16,7 @@ from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.source_identity import SourceId, canonical_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId, canonical_source_id
 
 
 class ActorCensusReceipt(BaseModel):

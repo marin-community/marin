@@ -63,9 +63,9 @@ from experiments.post_training.task_curation.inventory import (
     write_training,
 )
 from experiments.post_training.task_curation.pipeline import source_recipe
-from experiments.post_training.task_curation.source_identity import canonical_source_id, original_source_id
 from experiments.post_training.task_curation.tests.conversion import converted_task
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
