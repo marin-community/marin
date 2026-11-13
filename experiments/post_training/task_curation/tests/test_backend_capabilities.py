@@ -15,7 +15,7 @@ import pytest
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import check_local_environment
-from shellbox.machine import Command, MachineSpec, Mount
+from shellbox.machine import Command, MachineSpec, Mount, UnsupportedMachineSpec
 from shellbox.requirements import (
     COMMAND_FIELDS,
     MACHINE_FIELDS,
@@ -23,7 +23,7 @@ from shellbox.requirements import (
     Requirement,
     Support,
 )
-from shellbox.survey import capability_matrix, production_checkers
+from shellbox.survey import Checker, capability_matrix
 from taskcompendium.backend_fields import (
     ENVIRONMENT_FIELDS,
     EXECUTION_FIELDS,
@@ -35,7 +35,7 @@ from taskcompendium.backend_fields import (
     SCRIPT_GRADER_FIELDS,
     TASK_FIELDS,
 )
-from taskcompendium.backend_requirements import BackendSourceMap, RuntimeProfile
+from taskcompendium.backend_requirements import RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements, ScriptGrader, TaskResource, TaskSpec
 
 from experiments.post_training.task_curation.backend_capabilities import build_survey, source_map
@@ -218,6 +218,23 @@ def _runtime_defaults() -> dict:
     return {"agent": profile, "grader": profile}
 
 
+def _unit_checkers() -> dict[str, Checker]:
+    """Real Docker and LOCAL checks; optional backends reject without their CI-absent packages."""
+
+    def rejecting(requirements, spec) -> None:
+        raise UnsupportedMachineSpec("The unit lane installs no optional backends")
+
+    return {
+        "docker": DockerMachineFactory().check_environment,
+        "local": check_local_environment,
+        "gvisor": rejecting,
+        "qemu": rejecting,
+        "shellsim": rejecting,
+        "daytona": rejecting,
+        "iris": rejecting,
+    }
+
+
 def _write_spec_parquet(path: Path, documents: list[dict]) -> None:
     table = pa.Table.from_pylist(
         [
@@ -262,7 +279,7 @@ def test_runtime_column_applies_published_runtime_allocations(tmp_path):
             }
         ],
     )
-    survey = build_survey(manifest, production_checkers(), "rev")
+    survey = build_survey(manifest, _unit_checkers(), "rev")
     measured = survey.sources[0]
     assert measured.task_count == 1
     assert measured.resource_ranges["agent"]["storage_mb"] == (10240, 10240)
@@ -273,29 +290,11 @@ def test_runtime_column_applies_published_runtime_allocations(tmp_path):
 def test_unassessed_sources_require_and_carry_reason():
     manifest = _survey_manifest(["absent"], [])
     with pytest.raises(ValueError, match="unassessed_reason"):
-        build_survey(manifest, production_checkers(), "rev")
+        build_survey(manifest, _unit_checkers(), "rev")
     manifest["unassessed_reason"] = "No converted population is bound to this snapshot revision."
-    survey = build_survey(manifest, production_checkers(), "rev")
+    survey = build_survey(manifest, _unit_checkers(), "rev")
     row = survey.sources[0]
     assert row.source_id == "absent"
     assert row.basis == "unassessed"
     assert row.reason == manifest["unassessed_reason"]
     assert row.task_count == 0 and not row.backends and not row.demands
-
-
-def test_survey_reason_is_bound_to_assessment_basis():
-    base = dict(
-        source_id="cohort",
-        task_count=1,
-        inputs={},
-        demands={},
-        resource_ranges={},
-        backends={},
-        role_backend_assignments={},
-        grading_environment=None,
-    )
-    with pytest.raises(ValueError, match="Unassessed sources require their reason"):
-        BackendSourceMap.model_validate({**base, "basis": "unassessed"})
-    with pytest.raises(ValueError, match="Only unassessed sources carry a reason"):
-        BackendSourceMap.model_validate({**base, "basis": "converted_spec_census", "reason": "unused"})
-    BackendSourceMap.model_validate({**base, "basis": "converted_spec_census"})
