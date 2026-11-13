@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -782,12 +783,21 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
 @pytest.mark.parametrize("task_index", [0, 1])
 @pytest.mark.parametrize("fail", [False, True])
 @pytest.mark.parametrize("tensor_parallel_size,data_parallel_size", [(8, 1), (1, 8)])
+@pytest.mark.parametrize("stage_remote", [False, True])
 def test_pipeline_service_endpoint_and_shutdown_lifecycle(
-    monkeypatch, task_index, fail, tensor_parallel_size, data_parallel_size
+    monkeypatch, task_index, fail, tensor_parallel_size, data_parallel_size, stage_remote
 ):
     events = []
     endpoints = []
     argv = []
+    staged_paths = []
+
+    def download_to(self, local_path, *, recursive=False, batch_size=None):
+        destination = Path(local_path)
+        destination.mkdir()
+        (destination / "config.json").write_text('{"model_type":"test"}')
+
+    monkeypatch.setattr(StoragePath, "download_to", download_to)
     coordinator = iris_vllm.VllmCoordinatorActor("127.0.0.1")
     if task_index == 0:
         coordinator.follower_stopped(1)
@@ -829,6 +839,11 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     @contextmanager
     def process(**kwargs):
         argv.extend(kwargs["extra_args"])
+        if stage_remote:
+            assert kwargs["model"].path is not None
+            weights = Path(kwargs["model"].path)
+            assert json.loads((weights / "config.json").read_text()) == {"model_type": "test"}
+            staged_paths.append(weights)
         events.append("started")
         try:
             yield SimpleNamespace(
@@ -842,7 +857,8 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", process)
     service = IrisServiceConfig(
         model=ServedModelConfig(
-            weights="org/model",
+            weights="s3://models/pipeline" if stage_remote else "org/model",
+            object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL,
             tensor_parallel_size=tensor_parallel_size,
             max_model_len=4096,
             chat_template_content="{{ messages }}",
@@ -858,7 +874,7 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
         timeout_hours=0,
         port_name=None,
     )
-    set_job_info(JobInfo(task_id=JobName.from_wire(f"/alice/pipeline/{task_index}"), num_tasks=2))
+    set_job_info(JobInfo(task_id=JobName.from_wire(f"/alice/pipeline-{uuid.uuid4().hex}/{task_index}"), num_tasks=2))
     try:
         if fail:
             with pytest.raises(RuntimeError, match="vLLM died"):
@@ -867,6 +883,10 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
             run_iris_service(service)
     finally:
         set_job_info(None)
+
+    if stage_remote:
+        assert staged_paths
+        assert all(not path.exists() for path in staged_paths)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--tensor-parallel-size", type=int)
