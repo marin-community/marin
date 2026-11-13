@@ -117,6 +117,7 @@ class SourceInfo:
     variant: str | None = None
     title: str | None = None
     current_release: DatasetRelease | None = None
+    inherited_admission: DatasetRelease | None = None
     upstream_url: str | None = None
     quality_result: SourceQualityResult | None = None
     family: str = ""
@@ -238,9 +239,13 @@ class RlDataSource[ConfigT: CatalogConfig]:
         )
 
     @property
+    def is_grandfathered_blend(self) -> bool:
+        return self.info.task_format is TaskFormat.MARINSKYRL and self.info.id in GRANDFATHERED_MARINSKYRL_SOURCES
+
+    @property
     def catalog_declaration(self) -> SourceDeclaration | None:
         """Hold metadata pending while QUICK produces the actor census."""
-        if self.info.id not in GRANDFATHERED_MARINSKYRL_SOURCES and not self.has_actor_census:
+        if not self.is_grandfathered_blend and not self.has_actor_census:
             return None
         return self.declaration
 
@@ -258,9 +263,10 @@ class RlDataSource[ConfigT: CatalogConfig]:
     @property
     def admission_blockers(self) -> tuple[str, ...]:
         """Evidence missing before a source can enter admitted selection."""
-        if self.info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
+        if self.is_grandfathered_blend:
             return ()
         info = self.info
+        inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
         dataset = self.dataset
         try:
@@ -271,7 +277,16 @@ class RlDataSource[ConfigT: CatalogConfig]:
             blockers.append(str(error))
         if not self.has_actor_census:
             blockers.append("actor census evidence is missing")
-        if (
+        elif inherited_legacy_admission:
+            actor = info.actor_census_input
+            if (
+                actor is None
+                or dataset is None
+                or (actor.dataset_id, actor.dataset_revision, actor.converter_version)
+                != (dataset.name, dataset.revision, self.version)
+            ):
+                blockers.append("actor census does not cover the current retained release")
+        if not inherited_legacy_admission and (
             info.oversight is None
             or info.oversight.level not in {OversightLevel.SAMPLE, OversightLevel.FULL}
             or not info.oversight.verification.strip()
@@ -301,7 +316,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
         if dedup is None:
             raise ValueError(f"Source {info.id} requires a complete within-source deduplication census")
         tags = info.tags
-        if info.id in GRANDFATHERED_MARINSKYRL_SOURCES:
+        if self.is_grandfathered_blend:
             safety = None
         else:
             if (
@@ -374,7 +389,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             pipeline=invocation,
             independent_qc=info.independent_qc,
             daytona_safety=safety,
-            daytona_exemption=GRANDFATHERED_DAYTONA_EXEMPTION if info.id in GRANDFATHERED_MARINSKYRL_SOURCES else None,
+            daytona_exemption=GRANDFATHERED_DAYTONA_EXEMPTION if self.is_grandfathered_blend else None,
             daytona_snapshot_count=info.daytona_snapshot_count,
             daytona_count_basis=info.daytona_count_basis,
             oracle_validation=info.oracle_validation,

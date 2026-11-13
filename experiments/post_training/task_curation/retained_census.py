@@ -17,6 +17,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import TaskSpec, format_conversation
 from taskcompendium.pipeline.models import IntendedUse
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.census_binding import integrity_summary_for_actor, receipt_from_census
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
@@ -29,6 +30,7 @@ from experiments.post_training.task_curation.retained_release import (
     RetainedImport,
     run_retained_import,
 )
+from experiments.post_training.task_curation.source import SourceReference
 from experiments.post_training.task_curation.within_source_census import DROP_SCHEMA
 
 LOGGER = logging.getLogger(__name__)
@@ -110,13 +112,16 @@ def census_release(publication: PublicationReceipt, root: str, converter_revisio
         name=publication.source_id,
         version=RETAINED_IMPORT_VERSION,
         release=publication.release,
+        original_dataset=SourceReference(
+            publication.plan.source_dataset_id, publication.plan.source_revision, publication.evidence_url
+        ),
         expected_rows=publication.verified_retained_tasks,
         tasks_parquet_sha256=publication.tasks_parquet_sha256,
         intended_use=IntendedUse.TRAIN if publication.plan.lexical_use.value == "train" else IntendedUse.EVAL,
         evidence_url=publication.evidence_url,
     )
     # The corpus adapter uses task_json; its importer preserves the published JSON bytes.
-    run_retained_import(RetainedImport(cohort, str(output / "normalized")))
+    run_retained_import(RetainedImport(cohort, str(output / "normalized"), SourceProcessingMode.QUICK, None, None, None))
     manifest = output / "dedup/drops.parquet"
     with manifest.open("wb", auto_mkdir=True) as stream:
         pq.write_table(pa.Table.from_pylist([], schema=DROP_SCHEMA), stream)

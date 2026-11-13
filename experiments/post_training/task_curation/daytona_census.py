@@ -48,7 +48,6 @@ from experiments.post_training.task_curation.pipeline import (
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.retained_release import RetainedCohort
-from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.sources import all_sources
 
 logger = logging.getLogger(__name__)
@@ -439,8 +438,13 @@ def main() -> None:
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--workers", type=int, required=True)
     args = parser.parse_args()
+    sources = cached_sources()
     selected = sorted(
-        {canonical_source_id(value) for value in json.loads(args.ids.read_text())} - GRANDFATHERED_MARINSKYRL_SOURCES,
+        (
+            source_id
+            for source_id in {canonical_source_id(value) for value in json.loads(args.ids.read_text())}
+            if not sources[source_id].is_grandfathered_blend
+        ),
         key=original_source_id,
     )
     args.output.mkdir(parents=True, exist_ok=True)

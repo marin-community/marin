@@ -15,7 +15,6 @@ from finestore.rl.curation import (
     LexicalContaminationEvidence,
     LexicalReceipt,
     LexicalUse,
-    OracleValidation,
     PipelineReference,
     WithinSourceDedupEvidence,
 )
@@ -32,7 +31,7 @@ from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     import_retained,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference, TaskFormat
 
 RETAINED_RECEIPTS_PER_SHARD = 16
 
@@ -197,6 +196,7 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
         name=source.name + "-retained",
         version=RETAINED_IMPORT_VERSION,
         release=publication.release,
+        original_dataset=SourceReference(plan.source_dataset_id, plan.source_revision, dataset.url),
         expected_rows=plan.retained_count,
         tasks_parquet_sha256=publication.tasks_parquet_sha256,
         intended_use=IntendedUse.TRAIN if plan.lexical_use is LexicalUse.TRAIN else IntendedUse.EVAL,
@@ -206,21 +206,19 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
         source.info,
         current_release=publication.release,
         upstream_url=source.info.upstream_url or dataset.url,
+        inherited_admission=source.current_release if source.declaration.status == "Available" else None,
         dataset=config.dataset,
         count=plan.retained_count,
         task_format=TaskFormat.TASKCOMPENDIUM,
         within_source_dedup=receipt.retained_dedup,
         lexical_contamination=release_lexical_evidence(publication),
-        oversight=None,
-        oracle_validation=OracleValidation.SKIPPED,
-        quality_result=None,
-        independent_qc=None,
         grading_environment=receipt.grading.evidence,
         converted_examples=None,
         daytona_run_evidence=None,
         notes=(
-            source.info.notes + f" Retention lineage and exact readback: {publication.evidence_url}. "
-            "Original conversion and qualification remain archived; this release adds mechanical retention only."
+            f"remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
+            f"original oversight and quality evidence apply through this subset lineage: {publication.evidence_url}. "
+            + source.info.notes
         ),
     )
     retained = RlDataSource(info=info, config=config, pipeline=import_retained)

@@ -486,7 +486,7 @@ def refresh_daytona_measurements(
                 declaration.update(measurement.model_dump(mode="json", exclude={"dataset_id", "dataset_revision"}))
                 declaration["daytona_safety"] = measurement.safety.value
                 declaration["daytona_snapshot_threshold"] = DAYTONA_SAFE_SNAPSHOT_LIMIT
-            elif source_id in GRANDFATHERED_MARINSKYRL_SOURCES:
+            elif source_id in GRANDFATHERED_MARINSKYRL_SOURCES and declaration.get("daytona_exemption"):
                 declaration["daytona_safety"] = None
             else:
                 raise ValueError(f"Actor measurement is missing for live source: {source_id}")

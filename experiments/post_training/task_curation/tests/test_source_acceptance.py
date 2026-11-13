@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from finestore.rl.curation import OversightEvidence, OversightLevel
+from finestore.rl.curation import DatasetRelease, OversightEvidence, OversightLevel
 
 from experiments.post_training.task_curation.source import (
     RlDataSource,
@@ -35,15 +35,13 @@ def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -
 
 
 def test_every_runnable_agentic_source_ingests_a_task_directory_format():
-    """No agentic source reaches selection without TaskCompendium or Harbor."""
+    """Require an accepted format or an explicit grandfathered internal-format exemption."""
     agentic = [source for source in all_sources().values() if "agentic" in source.info.tags]
     runnable = [source for source in agentic if source.pipeline is not None]
 
     missing = sorted(source.info.id for source in runnable if source.info.task_format is None)
     assert missing == []
     accepted = {TaskFormat.TASKCOMPENDIUM, TaskFormat.HARBOR}
-    internal = {source.info.id for source in runnable if source.info.task_format is TaskFormat.MARINSKYRL}
-    assert internal == set(GRANDFATHERED_MARINSKYRL_SOURCES)
     assert all(
         source.info.task_format in accepted or source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES for source in runnable
     )
@@ -100,10 +98,50 @@ def test_unqualified_agentic_pipeline_stays_visible_but_cannot_be_selected(monke
 
 
 def test_existing_internal_blend_selection_does_not_require_new_audit_evidence(monkeypatch):
-    source_id = next(iter(GRANDFATHERED_MARINSKYRL_SOURCES))
-    source = all_sources()[source_id]
+    source = next(source for source in all_sources().values() if source.is_grandfathered_blend)
+    source_id = source.info.id
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source_id: source})
     assert runnable_sources()[source.name] is source
     assert source.declaration.status == "Available"
     assert source.declaration.daytona_exemption
     assert source.declaration.daytona_safety is None
+
+
+def test_verified_retained_legacy_subset_inherits_admission_but_not_daytona_exemption(monkeypatch):
+    source = next(
+        source
+        for source in all_sources().values()
+        if source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES and source.info.inherited_admission is not None
+    )
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source.info.id: source})
+    assert runnable_sources()[source.name] is source
+    assert source.admission_blockers == ()
+    assert source.declaration.daytona_exemption is None
+    assert source.declaration.daytona_safety is not None
+    assert source.declaration.status == "Available"
+
+
+@pytest.mark.parametrize("missing", ["verified_pin", "private_receipt", "fresh_actor"])
+def test_retained_legacy_admission_cannot_bypass_pin_privacy_or_fresh_actor_gates(monkeypatch, missing):
+    source = next(
+        source
+        for source in all_sources().values()
+        if source.info.id in GRANDFATHERED_MARINSKYRL_SOURCES and source.info.inherited_admission is not None
+    )
+    if missing == "verified_pin":
+        revision = "f" * 40
+        release = DatasetRelease(
+            repo=source.dataset.name,
+            revision=revision,
+            url=f"https://huggingface.co/datasets/{source.dataset.name}/tree/{revision}",
+        )
+        source = replace(
+            source, config=replace(source.config, release=release), info=replace(source.info, current_release=release)
+        )
+    elif missing == "private_receipt":
+        source = replace(source, info=replace(source.info, lexical_contamination=None))
+    else:
+        source = replace(source, info=replace(source.info, actor_census_input=None))
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: {source.info.id: source})
+    assert source.admission_blockers
+    assert source.name not in runnable_sources()

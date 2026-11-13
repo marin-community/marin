@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import DatasetRelease
+from finestore.rl.curation import DatasetRelease, LexicalContaminationEvidence, OversightEvidence
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -24,6 +24,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 
 RETAINED_IMPORT_VERSION = "2026.11.13.1"
@@ -35,6 +36,7 @@ class RetainedCohort:
     name: str
     version: str
     release: DatasetRelease
+    original_dataset: SourceReference
     expected_rows: int
     tasks_parquet_sha256: str
     intended_use: IntendedUse
@@ -53,11 +55,18 @@ class RetainedCohort:
 class RetainedImport:
     cohort: RetainedCohort
     output_path: str
+    mode: SourceProcessingMode
+    oversight: OversightEvidence | None
+    inherited_admission: DatasetRelease | None
+    lexical_contamination: LexicalContaminationEvidence | None
 
 
 def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
-    """Stream the exact published TaskSpec bytes into the converted inspection view."""
+    """Read exact published bytes, preserving the original qualification provenance."""
     cohort = invocation.cohort
+    admitted = invocation.mode is not SourceProcessingMode.QUICK
+    if admitted:
+        require_private_release(invocation.lexical_contamination, cohort.release.repo, cohort.release.revision)
     local = Path(
         hf_hub_download(cohort.release.repo, "tasks.parquet", repo_type="dataset", revision=cohort.release.revision)
     )
@@ -87,13 +96,32 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
         raise ValueError("Retained release count differs from its frozen plan")
     with local.open("rb") as source, (output / "tasks.parquet").open("wb") as destination:
         shutil.copyfileobj(source, destination)
+    outputs = {"tasks": str(output / "tasks.parquet"), "normalize": str(normalized.parent)}
+    if admitted:
+        final = output / "final/part-000000.parquet"
+        with normalized.open("rb") as source, final.open("wb", auto_mkdir=True) as destination:
+            shutil.copyfileobj(source, destination)
+        outputs["final"] = str(final.parent)
     manifest = {
-        "mode": SourceProcessingMode.QUICK.value,
+        "mode": invocation.mode.value,
         "status": SourceStatus.COMPLETED.value,
         "intended_use": cohort.intended_use.value,
         "input_rows": len(seen),
         "converted_rows": len(seen),
-        "admitted_rows": 0,
+        "admitted_rows": len(seen) if admitted else 0,
+        "qualification_newly_executed": False,
+        "inherited_oversight": invocation.oversight.model_dump(mode="json") if invocation.oversight else None,
+        "inherited_admission": (
+            invocation.inherited_admission.model_dump(mode="json") if invocation.inherited_admission else None
+        ),
+        "original_dataset": {
+            "repo": cohort.original_dataset.name,
+            "revision": cohort.original_dataset.revision,
+            "url": cohort.original_dataset.url,
+        },
+        "lexical_contamination": (
+            invocation.lexical_contamination.model_dump(mode="json") if invocation.lexical_contamination else None
+        ),
         "rejections": {},
         "repo": cohort.release.repo,
         "revision": cohort.release.revision,
@@ -105,7 +133,7 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
         status="completed",
         result=PipelineResult(
             status=SourceStatus.COMPLETED,
-            outputs={"tasks": str(output / "tasks.parquet"), "normalize": str(normalized.parent)},
+            outputs=outputs,
             evidence={"manifest": str(output / "manifest.json")},
             stages=("download", "validate", "normalize"),
         ),
@@ -113,17 +141,27 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
 
 
 def import_retained(source: RlDataSource[RetainedCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
-    """Expose mechanical retention for inspection while execution qualification remains separate."""
+    """Admit a verified subset through its existing qualification and fresh release gates."""
     if options.mode is not SourceProcessingMode.QUICK:
-        raise ValueError("Retention publication requires separate SAMPLE/FULL execution qualification")
+        if "excluded" in source.info.tags:
+            raise ValueError(f"Retained cohort is excluded pending qualification: {source.name}")
+        if source.admission_blockers:
+            raise ValueError(f"Source {source.name} cannot admit tasks: {'; '.join(source.admission_blockers)}")
     config = source.config
     assert config is not None
 
     def build_config(context) -> RetainedImport:
-        return RetainedImport(config, context.output_path)
+        return RetainedImport(
+            config,
+            context.output_path,
+            options.mode,
+            source.info.oversight,
+            source.info.inherited_admission,
+            source.info.lexical_contamination,
+        )
 
     return ArtifactStep(
-        name=f"retained/{config.release.repo}/{config.release.revision}",
+        name=f"retained/{options.mode.value}/{config.release.repo}/{config.release.revision}",
         version=RETAINED_IMPORT_VERSION,
         artifact_type=CampaignArtifact,
         run=run_retained_import,

@@ -12,16 +12,24 @@ from finestore.rl.curation import (
     ActorCensusInput,
     DaytonaMeasurement,
     LexicalContaminationEvidence,
+    OracleValidation,
+    OversightEvidence,
+    OversightLevel,
     SourceOrigin,
+    SourceQualityResult,
     WithinSourceDedupEvidence,
 )
+from marin.execution.lazy import StepContext
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import EnvironmentRequirements, NoGrader, TaskSpec
 from taskcompendium.pipeline.models import IntendedUse
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation import calibforge_publish, retained_release
+from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
+from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.remediation_binding import (
@@ -43,7 +51,7 @@ from experiments.post_training.task_curation.retained_release import (
     RetainedImport,
     run_retained_import,
 )
-from experiments.post_training.task_curation.source import SourceInfo
+from experiments.post_training.task_curation.source import SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source, prebuilt_task
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
@@ -148,7 +156,22 @@ def retained_receipt(frozen_population):
     plan, _, _ = frozen_population
     source = prebuilt_source(
         SourceInfo(
-            origin=SourceOrigin.MARIN, upstream_dataset="fixture", upstream_name="Fixture", build_path="Fixture", count=3
+            origin=SourceOrigin.MARIN,
+            upstream_dataset="fixture",
+            upstream_name="Fixture",
+            build_path="Fixture",
+            count=3,
+            oversight=OversightEvidence(
+                level=OversightLevel.SAMPLE,
+                campaign="fixture",
+                verification="Original admission receipts",
+                reviewed=3,
+                admitted=3,
+            ),
+            oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+            quality_result=SourceQualityResult(
+                reviewed=3, issue_count=0, issues=[], repair_recommendation="None needed"
+            ),
         )
     )
     plan = plan.model_copy(
@@ -258,7 +281,12 @@ def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(r
     assert bound.info.actor_census_input.task_specs_sha256 != source.info.actor_census_input.task_specs_sha256
     assert bound.info.lexical_contamination.input_dataset_id == source.dataset.name
     assert bound.info.lexical_contamination.contaminated_tasks == 1
-    assert bound.info.oversight is None and bound.info.oracle_validation.value == "skipped"
+    assert bound.info.oversight == source.info.oversight
+    assert bound.info.oracle_validation == source.info.oracle_validation
+    assert bound.info.quality_result == source.info.quality_result
+    assert bound.info.oversight.level is OversightLevel.SAMPLE and bound.info.oversight.admitted == 3
+    assert bound.info.inherited_admission == source.current_release
+    assert "remediated: dedup/decon" in bound.info.notes
     assert source_lexical_use(bound).value == "train"
     require_private_release(bound.info.lexical_contamination, bound.dataset.name, bound.dataset.revision)
     with pytest.raises(ValueError, match="different dataset pin"):
@@ -347,12 +375,15 @@ def test_retained_import_keeps_original_serialization_runtime_and_benchmark_use(
         name="fixture",
         version=RETAINED_IMPORT_VERSION,
         release=receipt.publication.release,
+        original_dataset=SourceReference("upstream/fixture", "a" * 40, "https://example.test/upstream"),
         expected_rows=1,
         tasks_parquet_sha256=file_sha256(StoragePath(str(local))),
         intended_use=IntendedUse.EVAL,
         evidence_url=receipt.publication.evidence_url,
     )
-    result = run_retained_import(RetainedImport(cohort, str(tmp_path / "imported")))
+    result = run_retained_import(
+        RetainedImport(cohort, str(tmp_path / "imported"), SourceProcessingMode.QUICK, None, None, None)
+    )
     normalized = pq.read_table(tmp_path / "imported/normalize/part-000000.parquet").to_pylist()
     assert normalized[0]["task_json"] == encoded
     assert normalized[0]["runtime"] == '{ "task_machine": {"cpus": 2} }'
@@ -403,3 +434,60 @@ def test_retained_census_measures_new_pin_and_normalizes_unchanged_json(tmp_path
     assert grading.evidence.assessed_tasks == 1
     assert grading.evidence.required_counts == {"separate": 1}
     assert grading.evidence.status_counts == {"unavailable": 1}
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_qualified_retained_import_admits_exact_bytes_with_original_sample_provenance(
+    tmp_path, retained_receipt, monkeypatch, mode
+):
+    original, receipt = retained_receipt
+    encoded = json.dumps(json.loads(prebuilt_task("retained")["lowered_task_spec"])["task"], indent=2)
+    runtime = '{ "task_machine": {"cpus": 2} }'
+    local = tmp_path / "tasks.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "task_spec": [encoded],
+                "task_sha256": [hashlib.sha256(encoded.encode()).hexdigest()],
+                "runtime": [runtime],
+            }
+        ),
+        local,
+    )
+    publication = receipt.publication.model_copy(update={"tasks_parquet_sha256": file_sha256(StoragePath(str(local)))})
+    source = bind_retained_release(original, receipt.model_copy(update={"publication": publication}))
+    monkeypatch.setattr(retained_release, "hf_hub_download", lambda *args, **kwargs: str(local))
+    step = source.pipeline(source, PipelineOptions(mode, CampaignRuntime()))
+    destination = tmp_path / "admitted"
+    artifact = step.run(step.build_config(StepContext.for_run(str(destination), str(tmp_path))))
+    final = pq.read_table(destination / "final/part-000000.parquet").to_pylist()
+    assert [(row["task_json"], row["runtime"]) for row in final] == [(encoded, runtime)]
+    assert (destination / "tasks.parquet").read_bytes() == local.read_bytes()
+    manifest = json.loads(StoragePath(artifact.result.evidence["manifest"]).read_text())
+    assert manifest["mode"] == mode.value and manifest["admitted_rows"] == 1
+    assert manifest["qualification_newly_executed"] is False
+    assert manifest["inherited_oversight"]["level"] == "sample"
+    assert manifest["original_dataset"]["repo"] == original.dataset.name
+    assert manifest["original_dataset"]["revision"] == original.dataset.revision
+    assert manifest["repo"] == publication.repo and manifest["revision"] == publication.revision
+    assert manifest["retention_evidence"] == publication.evidence_url
+    assert artifact.result.outputs["final"] == str(destination / "final")
+    # Changing published bytes after the readback receipt invalidates admission.
+    pq.write_table(pa.table({"task_spec": [encoded], "task_sha256": ["0" * 64], "runtime": [runtime]}), local)
+    with pytest.raises(ValueError, match="publication readback"):
+        step.run(step.build_config(StepContext.for_run(str(tmp_path / "changed"), str(tmp_path))))
+
+
+@pytest.mark.parametrize("missing", ["oversight", "actor", "private_receipt", "excluded"])
+def test_unqualified_retained_release_cannot_enter_admitted_import(retained_receipt, missing):
+    original, receipt = retained_receipt
+    source = bind_retained_release(original, receipt)
+    changes = {
+        "oversight": {"oversight": None},
+        "actor": {"daytona_snapshot_count": None},
+        "private_receipt": {"lexical_contamination": None},
+        "excluded": {"tags": (*source.info.tags, "excluded")},
+    }[missing]
+    source = replace(source, info=replace(source.info, **changes))
+    with pytest.raises(ValueError, match=r"cannot admit|excluded"):
+        source.pipeline(source, PipelineOptions(SourceProcessingMode.FULL, CampaignRuntime()))

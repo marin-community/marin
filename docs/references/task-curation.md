@@ -1751,8 +1751,14 @@ these measurements to the publication receipts and stages
 conversion binding before selecting the retained importer and pin. Original
 pipeline, conversion, deduplication and qualification records stay in lineage.
 Active deduplication counts describe the retained pin: raw and unique both equal
-the retained count, with zero further duplicates. Execution qualification remains
-separate from this mechanical publication.
+the retained count, with zero further duplicates. The verified subset preserves
+its original oversight and quality evidence. An admitted legacy blend can carry
+admission through this lineage, but its TaskCompendium release requires a fresh
+actor census and has no legacy Daytona exemption. SAMPLE/FULL imports require
+all current admission gates and write the exact retained bytes into the final
+corpus. Their manifests record the requested mode, original oversight, old and
+new pins, and readback receipt; they record no newly executed qualification.
+QUICK writes an inspection view with zero admitted rows.
 
 `retained_grading` aggregates the normalized rows' stored grading-boundary
 assessments into exact-input SHARED/SEPARATE evidence before declaration binding.
