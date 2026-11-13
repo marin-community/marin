@@ -26,7 +26,7 @@ from taskcompendium.pipeline.models import ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.review import ChatReviewer
 
 from experiments.post_training.task_curation import judges
-from experiments.post_training.task_curation.full_qc import ReadyChatReviewer, local_reviewer
+from experiments.post_training.task_curation.full_qc import ReadyChatReviewer, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.tests.review_server import running_review_server
 
 
@@ -40,7 +40,7 @@ class EndpointDirectory:
 
 def test_review_reconnects_after_serving_moves_and_preserves_valid_cache(review_server, monkeypatch, tmp_path):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
-    spec = local_reviewer()
+    spec = local_reviewer(ReviewerVersion.V2)
     first_url = f"http://127.0.0.1:{review_server.server_port}"
     directory = EndpointDirectory(first_url)
     monkeypatch.setattr(inference, "iris_ctx", lambda: SimpleNamespace(client=directory))
@@ -88,7 +88,7 @@ def test_review_reconnects_after_serving_moves_and_preserves_valid_cache(review_
 
 def test_initial_connection_recovers_registration_lost_after_ready_probe(review_server, monkeypatch):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
-    spec = local_reviewer()
+    spec = local_reviewer(ReviewerVersion.V2)
     old_url = f"http://127.0.0.1:{review_server.server_port}"
     released = []
     session = RemoteInferenceSession(

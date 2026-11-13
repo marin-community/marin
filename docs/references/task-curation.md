@@ -1489,7 +1489,7 @@ the relay does not attest an immutable checkpoint. Connection fails if its model
 list does not advertise `glm-5.3`. A provider that cannot accept temperature may use
 `temperature=None` to retain its API default; zero is disallowed.
 
-The spec pins base rubric `task-quality-v1`, its SHA-256 content hash, and review
+The spec pins base rubric `task-quality-v2`, its SHA-256 content hash, and review
 payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
 hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
@@ -1505,6 +1505,14 @@ projection, so calibration-only changes reuse exact requests. Full task and
 runtime hashes remain in the audit. Images, grader settings and resource bytes
 remain visible; edits to native task.toml or verifier code invalidate requests.
 The spec records serving precision as part of reviewer identity.
+
+The self-hosted retained-population FULL-QC workflow has explicit reviewer
+versions, separate from the shared relay preset. Its v3 policy doubles v2's
+serving context from 262,144 to 524,288 tokens and generation limits from
+4,096/8,192 to 8,192/16,384 initial/retry tokens. Future source starts use v3;
+in-flight v2 work and its valid observations keep their original identities.
+The [FULL-QC reviewer changelog](../../experiments/post_training/task_curation/README.md#complete-retained-population-review)
+records cache separation, resume commands and the preserved v2 repair policy.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and
