@@ -27,6 +27,7 @@ from shellbox.backends.daytona.snapshot import (
     SNAPSHOT_STALE_AFTER,
     SnapshotClassification,
     SnapshotRequest,
+    classify_inventory,
     classify_snapshot,
     ensure_snapshot,
     list_snapshots,
@@ -157,29 +158,21 @@ async def _ensure(client: AsyncDaytona, requests: list[SnapshotRequest]) -> None
     _print_rows(("NAME", "STATE", "CPU", "MEMORY_GIB", "DISK_GIB"), rows)
 
 
-async def _purge(
-    client: AsyncDaytona,
-    *,
-    now: datetime,
-    minimum_idle: timedelta,
-    apply: bool,
-) -> None:
-    if not apply:
-        stale: list[Snapshot] = []
-        unclassified: list[Snapshot] = []
-        for snapshot in await list_snapshots(client):
-            match classify_snapshot(snapshot, now=now, minimum_idle=minimum_idle):
-                case SnapshotClassification.STALE:
-                    stale.append(snapshot)
-                case SnapshotClassification.UNCLASSIFIED:
-                    unclassified.append(snapshot)
-        for snapshot in stale:
-            print(f"would delete {snapshot.name}")
-        for snapshot in unclassified:
-            print(f"unclassified {snapshot.name} (missing last-use evidence)")
-        if not stale and not unclassified:
-            print("no stale snapshots")
-        return
+async def _purge_dry_run(client: AsyncDaytona, *, now: datetime, minimum_idle: timedelta) -> None:
+    classes = classify_inventory(await list_snapshots(client), now=now, minimum_idle=minimum_idle)
+    stale = [name for name, classification in classes.items() if classification is SnapshotClassification.STALE]
+    unclassified = [
+        name for name, classification in classes.items() if classification is SnapshotClassification.UNCLASSIFIED
+    ]
+    for name in stale:
+        print(f"would delete {name}")
+    for name in unclassified:
+        print(f"unclassified {name} (missing last-use evidence)")
+    if not stale and not unclassified:
+        print("no stale snapshots")
+
+
+async def _purge_apply(client: AsyncDaytona, *, now: datetime, minimum_idle: timedelta) -> None:
     report = await purge_stale_snapshots(client, now=now, minimum_idle=minimum_idle)
     for name in report.deleted:
         print(f"deleted {name}")
@@ -203,7 +196,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--api-key-env",
-        default="DAYTONA_RL_API_KEY",
+        required=True,
         help="Environment variable holding the selected account's API key.",
     )
     parser.add_argument(
@@ -235,7 +228,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--specs",
             required=True,
-            help="Snapshot-spec JSON file emitted by 'trial_driver.py snapshot-specs'. Use - to read stdin.",
+            help="Snapshot-spec JSON file; use - to read stdin.",
         )
 
     purge = commands.add_parser("purge", help="Delete every stale account snapshot.")
@@ -266,11 +259,11 @@ async def _run(arguments: argparse.Namespace) -> None:
             else:
                 await _ensure(client, requests)
         else:
-            await _purge(
+            purge = _purge_apply if arguments.apply else _purge_dry_run
+            await purge(
                 client,
                 now=now,
                 minimum_idle=minimum_idle,
-                apply=arguments.apply,
             )
 
 

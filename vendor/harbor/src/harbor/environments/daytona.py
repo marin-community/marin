@@ -41,9 +41,10 @@ from shellbox.backends.daytona.machine import (
 from shellbox.backends.daytona.snapshot import (
     SnapshotRequest,
     snapshot_request_for_spec,
-    task_snapshot_source,
+    validate_source,
 )
-from shellbox.machine import MachineSpec, NetworkPolicy
+from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.machine import MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 from shellbox.process_session import (
     acquire_owned,
     await_cleanup,
@@ -52,12 +53,22 @@ from shellbox.process_session import (
 )
 
 
+def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
+    """Select a Harbor task's snapshot source from its image or environment."""
+    if docker_image:
+        return RegistryImage(docker_image)
+    dockerfile = environment_dir / "Dockerfile"
+    if not dockerfile.is_file():
+        raise UnsupportedMachineSpec("Daytona task requires a registry image or Dockerfile")
+    return validate_source(DockerfileSource(environment_dir, dockerfile))
+
+
 def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> MachineSpec:
     """The shellbox spec for one task environment.
 
-    Pure mapping from the task's environment config to the spec the Daytona
-    factory prepares, so measurement code can derive snapshot identities from
-    the same inputs production uses.
+    Selects and validates the task's image or build context the way the
+    factory will, so measurement code derives snapshot identities from the
+    same inputs production uses.
     """
     return MachineSpec(
         source=task_snapshot_source(task_env_config.docker_image, environment_dir),

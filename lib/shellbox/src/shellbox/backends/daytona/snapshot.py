@@ -122,16 +122,6 @@ def validate_source(
     return source
 
 
-def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
-    """Select a Harbor task's snapshot source from its image or environment."""
-    if docker_image:
-        return RegistryImage(docker_image)
-    dockerfile = environment_dir / "Dockerfile"
-    if not dockerfile.is_file():
-        raise UnsupportedMachineSpec("Daytona task requires a registry image or Dockerfile")
-    return validate_source(DockerfileSource(environment_dir, dockerfile))
-
-
 def snapshot_resources(*, cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int) -> Resources:
     """Round memory and disk up to whole GiB, as the provider requires."""
     return Resources(
@@ -258,6 +248,16 @@ def classify_snapshot(
     return SnapshotClassification.STALE if now - used > minimum_idle else SnapshotClassification.FRESH
 
 
+def classify_inventory(
+    snapshots: list[Snapshot],
+    *,
+    now: datetime,
+    minimum_idle: timedelta = SNAPSHOT_STALE_AFTER,
+) -> dict[str, SnapshotClassification]:
+    """Classify every snapshot in one account inventory, keyed by name."""
+    return {snapshot.name: classify_snapshot(snapshot, now=now, minimum_idle=minimum_idle) for snapshot in snapshots}
+
+
 async def purge_stale_snapshots(
     client: AsyncDaytona,
     *,
@@ -275,10 +275,7 @@ async def purge_stale_snapshots(
     lists deleted names that a follow-up inventory still observes.
     """
     observed_at = now or datetime.now(UTC)
-    inventory = await list_snapshots(client)
-    inventory_classes = {
-        snapshot.name: classify_snapshot(snapshot, now=observed_at, minimum_idle=minimum_idle) for snapshot in inventory
-    }
+    inventory_classes = classify_inventory(await list_snapshots(client), now=observed_at, minimum_idle=minimum_idle)
     stale = [
         name for name, classification in inventory_classes.items() if classification is SnapshotClassification.STALE
     ]

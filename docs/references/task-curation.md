@@ -386,11 +386,11 @@ Measurement runs that production path rather than reimplementing it
 task's environment is materialized to a build context, the `MachineSpec` is
 built through Harbor's own task-config mapping
 (`harbor.environments.daytona.machine_spec`), and the name comes from
-`shellbox.backends.daytona.machine.snapshot_identity` — the same function the
-Daytona factory uses to name and create snapshots. A task the production
-validation rejects (for example a Dockerfile with `ADD`, which Daytona cannot
-build) counts as a failure and is reported, not treated as safe. No Daytona API
-calls are made. A
+`shellbox.backends.daytona.snapshot.snapshot_request_for_spec` — the same
+derivation the Daytona factory uses to name and create snapshots. A task the
+production validation rejects (for example a Dockerfile with `ADD`, which
+Daytona cannot build) counts as a failure and is reported, not treated as safe.
+No Daytona API calls are made. A
 `SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed

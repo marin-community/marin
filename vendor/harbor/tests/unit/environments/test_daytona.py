@@ -19,18 +19,15 @@ from openai import (
     PermissionDeniedError,
 )
 
-from harbor.host_capabilities import (
-    HostCapabilities,
-    DAYTONA_API_URL,
-)
-from shellbox.backends.daytona.connection import DaytonaConnection
+from harbor.host_capabilities import HostCapabilities
+from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
     TmuxSession,
 )
 from harbor.environments import model_relay
-from harbor.environments.daytona import DaytonaEnvironment
+from harbor.environments.daytona import DaytonaEnvironment, task_snapshot_source
 from harbor.environments.local import LocalEnvironment
 from harbor.environments.model_relay import ModelRelay
 from harbor.environments.qemu import QemuEnvironment
@@ -40,8 +37,8 @@ from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
-from shellbox.image import RegistryImage
-from shellbox.machine import Command, MachineSpec, NetworkPolicy, PackageSpec
+from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.machine import Command, MachineSpec, NetworkPolicy, PackageSpec, UnsupportedMachineSpec
 from tests.unit.environments.transport import ProcessMachine, available_port
 
 
@@ -207,7 +204,7 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
                 host_capabilities=HostCapabilities(
                     daytona=DaytonaConnection(
                         api_key="host-daytona-private",
-                        api_url=DAYTONA_API_URL,
+                        api_url=DEFAULT_DAYTONA_API_URL,
                         target="test-target",
                     ),
                     model_authentication={
@@ -639,7 +636,7 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
                 host_capabilities=HostCapabilities(
                     daytona=DaytonaConnection(
                         api_key="explicit-key",
-                        api_url=DAYTONA_API_URL,
+                        api_url=DEFAULT_DAYTONA_API_URL,
                         target="test-target",
                     ),
                     model_authentication={},
@@ -698,3 +695,18 @@ def test_daytona_adapter_delegates_effective_resources_to_shellbox(tmp_path):
     assert spec.source == RegistryImage("test/image@sha256:" + "a" * 64)
     assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (2, 2049, 1025)
     assert spec.network is NetworkPolicy.DENY
+
+
+def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_path) -> None:
+    assert task_snapshot_source("fixture:tag", tmp_path) == RegistryImage("fixture:tag")
+
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\n")
+    assert task_snapshot_source(None, tmp_path) == DockerfileSource(tmp_path.resolve(), dockerfile.resolve())
+
+    dockerfile.write_text("FROM ubuntu:24.04\nADD payload /opt\n")
+    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
+        task_snapshot_source(None, tmp_path)
+
+    with pytest.raises(UnsupportedMachineSpec, match="registry image or Dockerfile"):
+        task_snapshot_source(None, tmp_path / "absent")

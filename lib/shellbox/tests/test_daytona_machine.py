@@ -45,7 +45,6 @@ from shellbox.backends.daytona.snapshot import (
     snapshot_name,
     snapshot_request_for_spec,
     snapshot_resources,
-    task_snapshot_source,
 )
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.image import DockerfileSource, RegistryImage
@@ -1117,22 +1116,7 @@ def test_snapshot_identity_tracks_rounded_resources_and_image_source() -> None:
     assert name != snapshot_name(image, snapshot_resources(cpus=2, memory_mb=3072, storage_mb=2048, gpus=1))
 
 
-def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_path) -> None:
-    assert task_snapshot_source("fixture:tag", tmp_path) == RegistryImage("fixture:tag")
-
-    dockerfile = tmp_path / "Dockerfile"
-    dockerfile.write_text("FROM ubuntu:24.04\n")
-    assert task_snapshot_source(None, tmp_path) == DockerfileSource(tmp_path.resolve(), dockerfile.resolve())
-
-    dockerfile.write_text("FROM ubuntu:24.04\nADD payload /opt\n")
-    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        task_snapshot_source(None, tmp_path)
-
-    with pytest.raises(UnsupportedMachineSpec, match="registry image or Dockerfile"):
-        task_snapshot_source(None, tmp_path / "absent")
-
-
-def test_machine_spec_uses_known_snapshot_identity(tmp_path) -> None:
+def test_machine_spec_uses_known_snapshot_identity() -> None:
     spec = MachineSpec(
         source=RegistryImage("fixture:tag"),
         cpus=2,

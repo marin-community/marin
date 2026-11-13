@@ -623,7 +623,7 @@ def test_preflight_standalone_pi_requires_matching_prepared_main_image(
     assert report["benchmark_metadata"]["n_benchmark"] == 1
 
 
-async def test_snapshot_specs_apply_job_resource_overrides(tmp_path, prepared_task):
+async def test_snapshot_specs_apply_job_resource_overrides(prepared_task):
     config = JobConfig.model_validate(
         {
             "environment": {
