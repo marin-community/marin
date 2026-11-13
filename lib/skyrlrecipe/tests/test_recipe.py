@@ -8,7 +8,7 @@ import pytest
 import skyrlrecipe as schema
 from skyrlrecipe import ContextBudget, declared, sections
 from skyrlrecipe.documents import set_path
-from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS, REMOVED
+from skyrlrecipe.ownership import DERIVED_PATHS, OWNER_MESSAGES, REMOVED
 
 
 @pytest.fixture
@@ -65,15 +65,25 @@ def test_recipe_round_trip_preserves_immutable_containers_and_mapping_order():
     assert list(updated.to_skyrl()["data"]["sampling"]["domain_weights"]) == ["math", "code", "chat"]
     assert type(updated.data.sampling.domain_weights["math"]) is int
     assert type(updated.data.sampling.domain_weights["code"]) is float
+    callback = declared.EvaluationCallback(
+        type="evaluation", eval_on_train_end=True, eval_steps=4, metric_groups={"eval/score": ("eval/a/score",)}
+    )
+    replaced = callback.replace(metric_groups={})
+    assert replaced.to_skyrl() == {"type": "evaluation", "eval_steps": 4, "eval_on_train_end": True, "metric_groups": {}}
+    assert callback.metric_groups["eval/score"] == ("eval/a/score",)
+    with pytest.raises(ValueError, match="eval_steps"):
+        callback.replace(eval_steps="invalid")
     restored = pickle.loads(pickle.dumps(updated))
     assert restored == updated
     with pytest.raises(TypeError):
         restored.generator.engine_init_kwargs["schedule"]["windows"] = (9,)
-    for routes in ({1: 2}, {1: 2, "1": 3}):
+    for routes in ({1: 2}, {1: 2, "1": 3}, {"nested": {1: 2, "1": 3}}):
         document = {"context_budget": context.to_skyrl(), "generator": {"engine_init_kwargs": routes}}
         original_routes = list(routes.items())
         with pytest.raises(ValueError, match="mapping keys must be strings"):
             schema.SkyRLRecipe.from_document(document)
+        with pytest.raises(ValueError, match="mapping keys must be strings"):
+            recipe.generator.replace(engine_init_kwargs=routes)
         assert list(document["generator"]["engine_init_kwargs"].items()) == original_routes
 
 
@@ -135,7 +145,7 @@ def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recip
 
 def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_recipe):
     base = base_recipe
-    for paths, owner in ((LAUNCH_PATHS, "launch document"), (DERIVED_PATHS, "context_budget")):
+    for paths, owner in ((set(OWNER_MESSAGES) - DERIVED_PATHS, "launch document"), (DERIVED_PATHS, "context_budget")):
         for path in paths:
             document = base.to_skyrl()
             set_path(document, path, "authored-sentinel")
@@ -159,8 +169,5 @@ def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_reci
     removed = {"harbor": {"max_episodes": 1}}
     with pytest.raises(ValueError, match=r"use context_budget.max_turns; Harbor reads max_turns"):
         schema.RecipePatch(terminal_bench=removed)
-    heads = schema.RecipePatch(model_num_attention_heads=42)
-    with pytest.raises(ValueError, match="does not divide model_num_attention_heads=42"):
-        base.merge(heads)
     with pytest.raises(ValueError, match="micro_forward_batch_size_per_gpu"):
         base.with_settings(["trainer.micro_forward_batch_size_per_gpu=null"])

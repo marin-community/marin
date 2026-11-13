@@ -8,7 +8,7 @@ lock and executable boundary; see the [SkyRL runtime guide](skyrl.md).
 This page describes
 how Marin pins the remaining forks and how the refresh runs.
 
-Evalchemy and Harbor are maintained in `vendor/evalchemy` and `vendor/harbor`,
+Harbor is maintained in `vendor/harbor`,
 each with an independent uv lock and local FineStore and Rigging sources. Both
 are excluded from the workspace and this fork-refresh process; evaluator changes
 land in the same Marin pull request as their callers.

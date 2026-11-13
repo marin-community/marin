@@ -15,19 +15,17 @@ from cloud.iris.launch_config import LaunchTopology
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
 
 
-def composed_config(tmp_path: Path, settings: dict):
+def composed_config(settings: dict):
     recipe = Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml"
     raw = yaml.safe_load(recipe.read_text())
     raw["environment"] = {"task_sessions": settings}
-    path = tmp_path / "recipe.yaml"
-    path.write_text(yaml.safe_dump(raw))
     return compose_skyrl_config(
-        parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
+        parse_rl_config(raw), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
     ).config
 
 
-def test_explicit_empty_local_settings_reach_the_host_capability_check(tmp_path, monkeypatch):
-    config = composed_config(tmp_path, {"local": {}})
+def test_explicit_empty_local_settings_reach_the_host_capability_check(monkeypatch):
+    config = composed_config({"local": {}})
     assert OmegaConf.to_container(config.environment.task_sessions.local) == {}
     # A host without the supported local sandbox must reject admission. A dropped
     # empty mapping previously silently omitted this backend instead.
@@ -37,8 +35,8 @@ def test_explicit_empty_local_settings_reach_the_host_capability_check(tmp_path,
 
 
 @pytest.mark.parametrize("settings", [{}, {"local": None}])
-def test_omitted_or_null_local_settings_keep_the_backend_disabled(tmp_path, monkeypatch, settings):
-    config = composed_config(tmp_path, settings)
+def test_omitted_or_null_local_settings_keep_the_backend_disabled(monkeypatch, settings):
+    config = composed_config(settings)
     monkeypatch.setattr("marinskyrl.task_machine_factories.shutil.which", lambda name: None)
     factories = task_machine_factories(config.environment.task_sessions)
     assert Backend.LOCAL not in factories
@@ -48,8 +46,8 @@ def test_omitted_or_null_local_settings_keep_the_backend_disabled(tmp_path, monk
 @pytest.mark.parametrize(
     "key,error",
     [
-        ("seed", "trainer.seed.*not a mapping"),
-        ("unknown_backend", "unknown key.*trainer.unknown_backend"),
+        ("seed", "trainer.seed.*\\n.*valid integer"),
+        ("unknown_backend", "trainer.unknown_backend.*\\n.*Extra inputs"),
     ],
 )
 def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
@@ -60,12 +58,12 @@ def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
     path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match=error):
         compose_skyrl_config(
-            parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
+            parse_rl_config(raw), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
         )
 
 
 def test_empty_session_settings_preserve_published_limits_and_shell_timeout(tmp_path):
-    config = composed_config(tmp_path, {"session": {}})
+    config = composed_config({"session": {}})
     config.generator.max_turns = 3
     config.trajectory_runner.command_timeout = 17
     spec = source_row_task(

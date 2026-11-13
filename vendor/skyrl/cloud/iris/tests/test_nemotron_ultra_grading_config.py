@@ -67,7 +67,7 @@ def _skipped_grading_config(tmp_path: Path, *, eval_interval: int) -> Path:
 
 @pytest.mark.asyncio
 async def test_pure_distillation_session_omits_verifier_credit(tmp_path):
-    parsed = parse_rl_config(str(_skipped_grading_config(tmp_path, eval_interval=-1)))
+    parsed = parse_rl_config(OmegaConf.load(_skipped_grading_config(tmp_path, eval_interval=-1)))
     cfg = compose_skyrl_config(parsed, {"job_name": "grading-test", "num_nodes": 1}, _HPCStub()).config
     lowered = source_row_task(
         {
@@ -99,7 +99,7 @@ async def test_pure_distillation_session_omits_verifier_credit(tmp_path):
 
 
 def test_launcher_rejects_skipped_grading_with_eval_before_submission(tmp_path):
-    parsed = parse_rl_config(str(_skipped_grading_config(tmp_path, eval_interval=5)))
+    parsed = parse_rl_config(OmegaConf.load(_skipped_grading_config(tmp_path, eval_interval=5)))
 
     with pytest.raises(ValueError, match="eval_interval<=0"):
         compose_skyrl_config(parsed, {"job_name": "grading-test", "num_nodes": 1}, _HPCStub())

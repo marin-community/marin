@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from omegaconf import OmegaConf
+
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,7 +50,7 @@ def math_rl_config_path(tmp_path):
 
 
 def test_math_config_composes_environment_and_caps_into_hydra_config(math_rl_config_path):
-    parsed = parse_rl_config(str(math_rl_config_path))
+    parsed = parse_rl_config(OmegaConf.load(math_rl_config_path))
     exp_args = {"job_name": "math-rl-test", "experiments_dir": "/tmp/exp", "num_nodes": 4}
     cfg = compose_skyrl_config(parsed, exp_args, _HPCStub()).config
     assert cfg.environment.env_class == "aime"
@@ -60,7 +62,7 @@ def test_math_config_composes_environment_and_caps_into_hydra_config(math_rl_con
 
 
 def test_iris_derives_durable_training_trajectory_path(math_rl_config_path):
-    parsed = parse_rl_config(str(math_rl_config_path))
+    parsed = parse_rl_config(OmegaConf.load(math_rl_config_path))
     cfg = compose_skyrl_config(
         parsed,
         {"job_name": "retained-run", "experiments_dir": "s3://bucket/iris/", "num_nodes": 4},
@@ -85,13 +87,13 @@ def test_parse_rejects_bad_tp_against_declared_heads(tmp_path):
         "  inference_engine_tensor_parallel_size: 8\n"
     )
     with pytest.raises(ValueError, match="does not divide"):
-        parse_rl_config(str(bad))
+        parse_rl_config(OmegaConf.load(bad))
 
 
 @pytest.mark.parametrize("export_artifact", [False, True])
 def test_artifact_only_launch_schedules_exports_on_the_requested_steps(math_rl_config_path, export_artifact):
     cfg = compose_skyrl_config(
-        parse_rl_config(str(math_rl_config_path)),
+        parse_rl_config(OmegaConf.load(math_rl_config_path)),
         {"job_name": "artifact-only", "num_nodes": 4, "export_hf_artifact": export_artifact, "hf_hub_repo_id": None},
         _HPCStub(),
     ).config

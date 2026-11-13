@@ -66,16 +66,6 @@ class Data(Section):
     kind: Literal["tasks", "parquet"] = field("tasks")
 
 
-class CheckpointExport(Section):
-    step: NonNegativeInt | None = field(None)
-    checkpoint_path: str | None = field(None)
-    export_root: str | None = field(None)
-    hf_hub_repo_id: str | None = field(None)
-    hf_hub_private: bool = field(False)
-    hf_hub_revision: str = field("main")
-    hf_upload_mode: Literal["latest", "all"] = field("latest")
-
-
 class TrajectorySelector(Section):
     type: Literal["best_of_n"] | None = field(None)
     "null | best_of_n; selection runs after reward postprocessing and before teacher scoring"
@@ -856,7 +846,6 @@ class TrajectoryRunner(Section):
 
 class RecipeSections(Section):
     data: Data = Field(default_factory=Data)
-    checkpoint_export: CheckpointExport = Field(default_factory=CheckpointExport)
     trainer: Trainer = Field(default_factory=Trainer)
     generator: Generator = Field(default_factory=Generator)
     environment: Environment = Field(default_factory=Environment)
