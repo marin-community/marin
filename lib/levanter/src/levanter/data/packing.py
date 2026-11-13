@@ -211,7 +211,8 @@ def pack_documents(
     lookahead_window: int | None = None,
 ) -> list[range] | list[list[int]]:
     """
-    Greedily pack documents into contiguous groups without storing full token ranges.
+    Greedily pack documents into packs without storing full token ranges. Without a lookahead
+    the packs are contiguous document ranges; with a lookahead they can be non-contiguous.
 
     Args:
         lengths: A PyTree of numpy arrays, each containing the lengths of documents for a leaf.
@@ -355,15 +356,14 @@ def _pack_documents_lookahead(
     """Bounded-window first-fit packing.
 
     Documents are consumed from a frontier of remaining documents. A pack first takes the
-    frontier document, then greedily takes the new frontier document while it fits in every
-    leaf (raw cumulative token sums from the pack start, as in the sequential packer). When
-    the frontier document does not fit, the first fitting document among up to
-    ``lookahead_window`` documents starting at the frontier is taken instead (so
-    ``lookahead_window=1`` is equivalent to the sequential packer, and ``lookahead_window=w``
-    looks at up to ``w - 1`` documents beyond it). Documents skipped by the scan stay
-    pending and keep their relative order, so reordering stays local. Over-long documents
-    (exceeding capacity in any leaf) become singleton packs -- the slice itself is applied
-    at read time, exactly as for the sequential packer.
+    frontier document, then repeatedly takes the first fitting document among up to
+    ``lookahead_window`` documents starting at the frontier (raw cumulative token sums from
+    the pack start, as in the sequential packer, and every leaf must fit). Because the scan
+    starts at the frontier, ``lookahead_window=1`` is exactly the sequential packer's
+    behavior, and ``lookahead_window=w`` looks at up to ``w - 1`` documents beyond it.
+    Documents skipped by the scan stay pending and keep their relative order, so reordering
+    stays local. Over-long documents (exceeding capacity in any leaf) become singleton
+    packs -- the slice itself is applied at read time, exactly as for the sequential packer.
 
     Deterministic: no randomness; ties resolve to the earliest document in cache order.
     """
@@ -373,74 +373,53 @@ def _pack_documents_lookahead(
     allowed = [int(v) for v in max_length_leaves]
 
     # doubly linked list over remaining (non-dropped) documents; drop_mask is False for dropped docs
-    nxt = list(range(1, n_docs + 1))
-    prv = list(range(-1, n_docs - 1))
+    next_remaining = list(range(1, n_docs + 1))
+    prev_remaining = list(range(-1, n_docs - 1))
     head = 0
+
+    def unlink(doc: int) -> None:
+        nonlocal head
+        prev, next_ = prev_remaining[doc], next_remaining[doc]
+        if prev >= 0:
+            next_remaining[prev] = next_
+        else:
+            head = next_
+        if next_ < n_docs:
+            prev_remaining[next_] = prev
+
     if drop_mask is not None:
-        for d in range(n_docs):
-            if not drop_mask[d]:
-                p, q = prv[d], nxt[d]
-                if p >= 0:
-                    nxt[p] = q
-                else:
-                    head = q
-                if q < n_docs:
-                    prv[q] = p
+        for doc in range(n_docs):
+            if not drop_mask[doc]:
+                unlink(doc)
 
     packs: list[list[int]] = []
     while head < n_docs:
         members = [head]
         used = [lens[l][head] for l in range(n_leaves)]
         over_long = any(lens[l][head] > allowed[l] for l in range(n_leaves))
-        p, q = prv[head], nxt[head]
-        if p >= 0:
-            nxt[p] = q
-        else:
-            head = q
-        if q < n_docs:
-            prv[q] = p
+        unlink(head)
         if not over_long:
             while max_segments_per_example is None or len(members) < max_segments_per_example:
-                d = head
-                if (
-                    d < n_docs
-                    and all(used[l] + lens[l][d] <= allowed[l] for l in range(n_leaves))
-                    and not any(lens[l][d] > allowed[l] for l in range(n_leaves))
-                ):
-                    for l in range(n_leaves):
-                        used[l] += lens[l][d]
-                    members.append(d)
-                    p, q = prv[d], nxt[d]
-                    if p >= 0:
-                        nxt[p] = q
-                    else:
-                        head = q
-                    if q < n_docs:
-                        prv[q] = p
-                    continue
+                # take the first fitting document among up to lookahead_window documents
+                # starting at the frontier
                 taken = -1
-                d = head
+                doc = head
                 for _ in range(lookahead_window):
-                    if d >= n_docs:
+                    if doc >= n_docs:
                         break
-                    if all(used[l] + lens[l][d] <= allowed[l] for l in range(n_leaves)) and not any(
-                        lens[l][d] > allowed[l] for l in range(n_leaves)
-                    ):
-                        taken = d
+                    fits = all(used[l] + lens[l][doc] <= allowed[l] for l in range(n_leaves)) and not any(
+                        lens[l][doc] > allowed[l] for l in range(n_leaves)
+                    )
+                    if fits:
+                        taken = doc
                         break
-                    d = nxt[d]
+                    doc = next_remaining[doc]
                 if taken < 0:
                     break
                 for l in range(n_leaves):
                     used[l] += lens[l][taken]
                 members.append(taken)
-                p, q = prv[taken], nxt[taken]
-                if p >= 0:
-                    nxt[p] = q
-                else:
-                    head = q
-                if q < n_docs:
-                    prv[q] = p
+                unlink(taken)
         packs.append(members)
     return packs
 
@@ -524,6 +503,24 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
     async def async_len(self) -> int:
         return len(self._pack_indices)
 
+    def _sliced_doc_span(self, doc_idx: int, offsets: np.ndarray, allowed: int) -> tuple[int, int]:
+        """Token span for one document, applying the slice strategy to over-long documents."""
+        doc_start = offsets[doc_idx] if doc_idx > 0 else 0
+        doc_end = offsets[doc_idx + 1]
+        doc_length = doc_end - doc_start
+        if doc_length > allowed:
+            if self.slice_strategy == "raise":
+                raise ValueError(
+                    f"Document {doc_idx} has length {doc_length} which exceeds maximum allowed length {allowed}. "
+                    "Consider using slice_strategy='left', 'right', or 'drop', or increasing max_length."
+                )
+            if self.slice_strategy == "right":
+                # slice from the right
+                return doc_end - allowed, doc_end
+            # left
+            return doc_start, doc_start + allowed
+        return doc_start, doc_end
+
     async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[PyTree[np.ndarray], PyTree[np.ndarray]]]:
         """
         For each requested packed example (by index into self._pack_indices), reconstruct the
@@ -546,75 +543,31 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             # Using ts.Batch to group reads.
             with ts.Batch():
                 for dr in pack_doc_ranges:
-                    if isinstance(dr, range):
-                        # Compute token boundaries using the store's offsets.
-                        token_start = offsets[dr.start] if dr.start > 0 else 0
-                        token_end = offsets[dr.stop]
-                        token_count = token_end - token_start
-                        if token_count > allowed:
-                            if self.slice_strategy != "raise":
-                                assert (
-                                    len(dr) == 1
-                                ), "We shouldn't have packed two examples together if one is too long."
-                                if self.slice_strategy == "right":
-                                    # slice from the right
-                                    token_start = token_end - allowed
-                                else:  # left
-                                    # slice from the left
-                                    token_end = token_start + allowed
-                            else:
-                                raise ValueError(
-                                    f"Token count {token_count} exceeds allowed maximum {allowed} for documents "
-                                    f"{list(dr)}. Consider using slice_strategy='left', 'right', or 'drop', or "
-                                    "increasing max_length."
-                                )
-                        # Read the slice from the underlying data.
-                        futures.append(store.data[token_start:token_end].read())
-                        group_sizes.append(1)
+                    doc_ids = list(range(dr.start, dr.stop)) if isinstance(dr, range) else list(dr)
+                    spans = [self._sliced_doc_span(doc_idx, offsets, allowed) for doc_idx in doc_ids]
+                    # A sliced (over-long) document always forms a singleton pack.
+                    if any(
+                        span != (offsets[doc_idx] if doc_idx > 0 else 0, offsets[doc_idx + 1])
+                        for doc_idx, span in zip(doc_ids, spans, strict=True)
+                    ):
+                        assert len(doc_ids) == 1, "We shouldn't have packed two examples together if one is too long."
 
-                        # Create segment IDs for this pack
-                        segment_ids = []
-                        for doc_idx in range(len(dr)):
-                            doc_start = offsets[dr.start + doc_idx] if dr.start + doc_idx > 0 else 0
-                            doc_end = offsets[dr.start + doc_idx + 1]
-                            doc_length = doc_end - doc_start
-                            # Use the global document index as the segment ID
-                            global_doc_idx = dr.start + doc_idx
-                            # If this is a sliced document, adjust the segment IDs to match the sliced portion
-                            if doc_length > allowed and self.slice_strategy != "raise":
-                                segment_ids.extend([global_doc_idx] * allowed)
-                            else:
-                                segment_ids.extend([global_doc_idx] * doc_length)
-                        out_segment_ids.append(np.array(segment_ids))
+                    # Use the global document index as the segment ID.
+                    segment_ids = []
+                    for doc_idx, (doc_start, doc_end) in zip(doc_ids, spans, strict=True):
+                        segment_ids.extend([doc_idx] * (doc_end - doc_start))
+                    out_segment_ids.append(np.array(segment_ids))
+
+                    if all(spans[i][1] == spans[i + 1][0] for i in range(len(spans) - 1)):
+                        # Contiguous spans (the sequential packer's packs) read as one slice.
+                        futures.append(store.data[spans[0][0] : spans[-1][1]].read())
+                        group_sizes.append(1)
                     else:
-                        # Lookahead packs: non-contiguous lists of document ids; each document's
-                        # (possibly sliced) token span is read separately and concatenated.
-                        n_parts = 0
-                        segment_ids = []
-                        for global_doc_idx in dr:
-                            doc_start = offsets[global_doc_idx] if global_doc_idx > 0 else 0
-                            doc_end = offsets[global_doc_idx + 1]
-                            doc_length = doc_end - doc_start
-                            if doc_length > allowed:
-                                if self.slice_strategy != "raise":
-                                    assert (
-                                        len(dr) == 1
-                                    ), "We shouldn't have packed two examples together if one is too long."
-                                    if self.slice_strategy == "right":
-                                        doc_start = doc_end - allowed
-                                    else:  # left
-                                        doc_end = doc_start + allowed
-                                else:
-                                    raise ValueError(
-                                        f"Token count {doc_length} exceeds allowed maximum {allowed} for document "
-                                        f"{global_doc_idx}. Consider using slice_strategy='left', 'right', or 'drop', or "
-                                        "increasing max_length."
-                                    )
+                        # Lookahead packs: read each document's (possibly sliced) token span
+                        # separately and concatenate.
+                        for doc_start, doc_end in spans:
                             futures.append(store.data[doc_start:doc_end].read())
-                            n_parts += 1
-                            segment_ids.extend([global_doc_idx] * (doc_end - doc_start))
-                        group_sizes.append(n_parts)
-                        out_segment_ids.append(np.array(segment_ids))
+                        group_sizes.append(len(spans))
 
             # Await all reads concurrently, then reassemble one array per packed example.
             flat_data = await asyncio.gather(*futures)

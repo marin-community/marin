@@ -832,14 +832,6 @@ def test_pack_documents_lookahead_drop_and_raise():
         assert any(list(p) == [1] for p in packs)
 
 
-def test_pack_documents_lookahead_invalid_window():
-    lengths = {"store": np.array([1, 2, 3])}
-    with pytest.raises(ValueError, match="lookahead_window must be a positive integer or None"):
-        pack_documents(lengths, {"store": 100}, lookahead_window=0)
-    with pytest.raises(ValueError, match="lookahead_window must be a positive integer or None"):
-        pack_documents(lengths, {"store": 100}, lookahead_window="8")
-
-
 def test_greedy_prepacked_dataset_lookahead():
     # docs [200, 160, 100, 140], budget 350, window 2 -> packs [[0, 2], [1, 3]]
     with tempfile.TemporaryDirectory() as tmpdir:

@@ -553,6 +553,11 @@ def dataset_for_component(
     block_cross_document_attention: bool,
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
+    if component.pack_lookahead_window is not None and not pack:
+        raise ValueError(
+            f"Component {component.cache_dir} sets pack_lookahead_window but pack={pack!r} disables packing; "
+            "the lookahead window only applies to packed datasets."
+        )
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
