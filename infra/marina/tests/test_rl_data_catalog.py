@@ -33,6 +33,7 @@ from finestore.rl.curation import (
     CurationCatalog,
     CurationSummary,
     CurrentCatalog,
+    GradingEnvironmentEvidence,
     SnapshotSource,
     SourceDeclaration,
     SourceOrigin,
@@ -100,7 +101,11 @@ def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:
                 resource_ranges={},
                 backends={},
                 role_backend_assignments={},
-                grading_environment=None,
+                grading_environment=(
+                    source.declaration.grading_environment.model_dump(mode="json")
+                    if source.declaration.grading_environment is not None
+                    else None
+                ),
             )
             for source in catalog.sources(snapshot.snapshot_id)
         ],
@@ -148,6 +153,25 @@ def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog
     assert not load_surveyed_catalog(catalog, catalog_query, second, identities)["changed"]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/backends").json()["generated_at"] == second.generated_at
+
+
+def test_grading_census_survives_catalog_loader_and_backend_projection(catalog_database, catalog_query, tmp_path):
+    evidence = GradingEnvironmentEvidence(
+        assessed_tasks=3,
+        required_counts={"shared": 1, "separate": 2},
+        declared_counts={"separate": 3},
+        status_counts={"matched": 2, "mismatch": 1},
+        reason_counts={"workspace state": 1, "submitted answer": 2},
+        evidence_url="s3://fixture/grading/receipt.json",
+    )
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "graded", grading_environment=evidence)
+    catalog = CurationCatalog(root)
+    load_catalog(catalog, catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        assert source["grading_environment"] == evidence.model_dump(mode="json")
+        assert source["backend_capabilities"]["grading_environment"] == evidence.model_dump(mode="json")
 
 
 def test_source_fingerprint_is_stored_separately_and_failed_refresh_keeps_previous(
@@ -227,6 +251,7 @@ def publish_sample(
     source_id: str = "Marin:math",
     origin: SourceOrigin = SourceOrigin.MARIN,
     duplicates: int = 0,
+    grading_environment: GradingEnvironmentEvidence | None = None,
 ) -> None:
     declaration = SourceDeclaration(
         id=source_id,
@@ -242,6 +267,7 @@ def publish_sample(
         daytona_machine_slots=0,
         daytona_execution_failures=0,
         daytona_count_basis="Fixture tasks contain no actor environment.",
+        grading_environment=grading_environment,
         family="Marin:math",
         tags=[],
         task_count=3 - duplicates,

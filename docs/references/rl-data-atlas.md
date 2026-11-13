@@ -282,6 +282,12 @@ Backend names are never distribution features.
 The map carries the catalog's `grading_environment` census unchanged; its
 required/declared boundary counts and mismatch reasons come from converted-row
 evidence. The loader rejects a map carrying different grading evidence.
+Frozen-population grading receipts bind that evidence to the current actor census
+input, including the dataset pin, converter and TaskSpec digest. The receipt's
+per-task Parquet records retain mismatches, unavailable graders and validation
+failures with their reasons. A changed source binding clears stale grading
+evidence before catalog export. See the
+[grading census procedure](task-curation.md#curation-modes-and-oversight-levels).
 The offline `daytona_census` command measures registered converters' TaskSpec
 outputs before admission gates and records admission rejections separately.
 An all-rejected population retains its measured execution cost and a BAD
