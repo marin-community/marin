@@ -157,12 +157,19 @@ engine ranks = engine slice * data parallel
 ```
 
 Disaggregated vLLM engines can span hosts when TP=PP=1 and EP=DP exceeds the GPUs per host.
-The runtime places each worker in a one-GPU Ray bundle and checks its host, GPU UUID and ranks.
+The runtime assigns one GPU to each worker. It checks that each worker runs on its assigned
+host, uses a distinct physical GPU, and reports the parallel ranks required by the layout.
 The rollout pool uses `ceil(engine count * DP / GPUs per host)` hosts. For example, 48 policy
 GPUs plus one DP=EP=12 rollout engine require 15 four-GPU hosts. The planner also accepts
 other configured counts with valid Megatron geometry, with no rack-size cap. Runtime evidence
-for this cross-host path covers the 48/12 layout. Other layouts, including engines that share
-or partly fill a host, need separate runtime qualification.
+for this cross-host path covers the 48/12 layout within one NVLink domain. Other layouts,
+including engines that share or partly fill a host, need separate runtime qualification.
+
+Resource-count validation does not ensure that an expert-parallel group stays within one
+NVLink domain. Iris places the combined policy and rollout allocation, and Ray assigns workers
+within it. An expert group may communicate across the interconnect between hosts or racks.
+Check placement and communication-backend support before running a new layout. Accepting a
+72-GPU policy in the planner does not establish a full-rack NVL72 trainer with inference elsewhere.
 
 Engines that fit on one host retain whole-engine packing: each host holds
 `floor(GPUs per host / engine ranks)` engines. Other disaggregated engines must still fit
