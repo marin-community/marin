@@ -16,6 +16,8 @@ SOURCE_HASHES = {
     "aarch64": "2e880125005ebcce2a11220f8e44d3740d743f9fe12fa4c0d57d6bb7ef2d5725",
     "x86_64": "8ce2a4135a6cb5db2d2d04d8d9d084ed598cc48039c817c2eaff22f51b3dd04f",
 }
+ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+ZIP_FILE_MODE = 0o100644 << 16
 SOURCE_RECIPE = "https://github.com/marin-community/MarinSkyRL/tree/604f2c1463032ffc1f47da114f43cf1d550dd473/scripts/wheels"
 
 
@@ -45,17 +47,17 @@ def package(wheel: Path, output: Path) -> dict:
                     data = data.replace(old, f"Version: {VERSION}\n".encode(), 1)
                 else:
                     preserved[new_name] = hashlib.sha256(data).hexdigest()
-                info = zipfile.ZipInfo(new_name, date_time=(1980, 1, 1, 0, 0, 0))
+                info = zipfile.ZipInfo(new_name, date_time=ZIP_TIMESTAMP)
                 info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o100644 << 16
+                info.external_attr = ZIP_FILE_MODE
                 target.writestr(info, data, compresslevel=9)
                 checksum = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
                 records.append((new_name, f"sha256={checksum}", str(len(data))))
             record = io.StringIO(newline="")
             csv.writer(record, lineterminator="\n").writerows([*records, (new_info + "RECORD", "", "")])
-            info = zipfile.ZipInfo(new_info + "RECORD", date_time=(1980, 1, 1, 0, 0, 0))
+            info = zipfile.ZipInfo(new_info + "RECORD", date_time=ZIP_TIMESTAMP)
             info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o100644 << 16
+            info.external_attr = ZIP_FILE_MODE
             target.writestr(info, record.getvalue(), compresslevel=9)
     with destination.open("rb") as stream:
         output_hash = hashlib.file_digest(stream, "sha256").hexdigest()
