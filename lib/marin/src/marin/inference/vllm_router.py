@@ -10,7 +10,7 @@ import signal
 import socket
 import subprocess
 import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,7 +52,7 @@ class RunningVllmRouter:
 @contextlib.contextmanager
 def vllm_router(
     config: VllmRouterConfig,
-    worker_urls: Sequence[str],
+    worker_url: str,
     *,
     data_parallel_size: int,
     host: str = "127.0.0.1",
@@ -60,15 +60,11 @@ def vllm_router(
     startup_timeout_seconds: float = 600,
     check_dependencies: Callable[[], None] = lambda: None,
 ) -> Iterator[RunningVllmRouter]:
-    """Start the pinned router and yield only after workers and routes are ready.
+    """Route to all native ranks behind one vLLM HTTP root, without ``/v1``.
 
-    Worker URLs are HTTP roots, without ``/v1``. Each exposes ``data_parallel_size``
-    native ranks, including remote ranks behind a global DP frontend.
-    The caller owns the workers; this context owns only the router.
+    Yield after the worker and router are ready. The caller owns the worker.
     Logs flow to the job and remain in the reported directory after shutdown.
     """
-    if not worker_urls:
-        raise ValueError("vLLM Router requires at least one worker URL")
     if data_parallel_size < 1:
         raise ValueError("router data parallel size must be positive")
     port = available_port(host) if port is None else port
@@ -85,7 +81,7 @@ def vllm_router(
         "--port",
         str(port),
         "--worker-urls",
-        *worker_urls,
+        worker_url,
         "--policy",
         "consistent_hash",
         "--intra-node-data-parallel-size",
@@ -121,7 +117,7 @@ def vllm_router(
             try:
                 root = router.server_url.removesuffix(OPENAI_API_SUFFIX)
                 return (
-                    all(requests.get(f"{worker}/health", timeout=5).status_code == 200 for worker in worker_urls)
+                    requests.get(f"{worker_url}/health", timeout=5).status_code == 200
                     and requests.get(f"{root}/health", timeout=5).status_code == 200
                     and requests.get(f"{router.server_url}/models", timeout=5).status_code == 200
                 )

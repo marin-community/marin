@@ -62,7 +62,7 @@ def resolve_tokenizer_revision(
     return None
 
 
-def validate_pipeline_args(args: tuple[str, ...]) -> None:
+def validate_serving_geometry_args(args: tuple[str, ...]) -> None:
     """Reject flags owned by Iris serving geometry."""
     for arg in args:
         option = arg.partition("=")[0]
@@ -87,7 +87,7 @@ class ServingGeometry:
         if local_dp < 1 or self.data_parallel_size % local_dp:
             raise ValueError("local data parallel size must evenly divide data_parallel_size")
         if self.pipeline_parallel_size > 1 and local_dp != self.data_parallel_size:
-            raise ValueError("a gang may distribute pipeline stages or data-parallel ranks, not both")
+            raise ValueError("pipeline parallelism requires all data-parallel ranks on each host")
         if self.tensor_parallel_size * local_dp != self.gpus_per_task:
             raise ValueError("tensor_parallel_size * local data parallel size must equal gpus_per_task")
 
@@ -492,16 +492,11 @@ class RemoteInferenceConfig:
                 raise ValueError("multi-host TPU serving requires shared weights with stream loading")
         geometry = self.iris.serving_geometry
         session_routing = isinstance(self.engine, VllmEngineConfig) and self.engine.router is not None
-        if session_routing:
-            if self.instances != 1 or self.broker is not None:
-                raise ValueError("session routing requires one native vLLM group and no broker")
-        if geometry is not None and (
-            geometry.task_count > 1 or geometry.data_parallel_size_local is not None or session_routing
-        ):
+        if (session_routing or geometry is not None) and (self.instances != 1 or self.broker is not None):
+            raise ValueError("native GPU serving requires one instance and no broker")
+        if geometry is not None:
             if not isinstance(self.engine, VllmEngineConfig):
                 raise ValueError("native GPU serving requires the vLLM backend")
-            if self.instances != 1 or self.broker is not None:
-                raise ValueError("native GPU serving requires one instance and no broker")
             if self.model.tensor_parallel_size != geometry.tensor_parallel_size:
                 raise ValueError("model tensor_parallel_size must match serving geometry")
-            validate_pipeline_args(self.engine.extra_args)
+            validate_serving_geometry_args(self.engine.extra_args)

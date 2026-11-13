@@ -41,7 +41,7 @@ from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
-from marin.inference.config import VllmEngineConfig, VllmLauncherType, VllmSource
+from marin.inference.config import ServingGeometry, VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.iris_vllm import iris_vllm_launch
 from marin.inference.vllm_backend import VllmBackend
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -142,7 +142,7 @@ def run_golden_job(repo: str, revision: str, cases: list, gpus: int, release_tag
             ),
         ),
     )
-    with iris_vllm_launch(pipeline_parallel_size=1, tensor_parallel_size=1, data_parallel_size=gpus) as launch:
+    with iris_vllm_launch(ServingGeometry(1, gpus, 1, gpus)) as launch:
         assert launch.is_leader, "PP=1 means one task, which is the leader"
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as env:
             env.wait_until_ready()

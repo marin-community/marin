@@ -175,7 +175,7 @@ def test_mirrored_model_keeps_tokenizer_revision_independent(
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
-            worker_server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -238,7 +238,7 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
-            worker_server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -393,7 +393,7 @@ def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
         yield SimpleNamespace(
             model_id="target",
             server_url="http://127.0.0.1:8000/v1",
-            worker_server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -839,7 +839,7 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
                 wait_until_ready=ready,
                 check_alive=check_alive,
                 server_url="http://127.0.0.1:1/v1",
-                worker_server_url="http://127.0.0.1:1/v1",
+                metrics_url="http://127.0.0.1:1/metrics",
             )
         finally:
             events.append("stopped")

@@ -18,7 +18,7 @@ from marin.inference.config import (
     SpeculativeServingConfig,
     VllmSource,
     resolve_tokenizer_revision,
-    validate_pipeline_args,
+    validate_serving_geometry_args,
 )
 
 
@@ -135,7 +135,7 @@ class ServeConfig:
                 raise ValueError("pipeline parallelism requires an explicit tensor_parallel_size")
             if self.instances > 1:
                 raise ValueError("pipeline parallelism requires instances=1")
-            validate_pipeline_args(self.vllm_extra_args)
+            validate_serving_geometry_args(self.vllm_extra_args)
         if self.gpu_memory_utilization is not None:
             if not 0 < self.gpu_memory_utilization <= 1:
                 raise ValueError("gpu_memory_utilization must be in (0, 1]")

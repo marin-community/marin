@@ -321,13 +321,6 @@ def _prepared_local_inference(
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
     resolved_engine = _resolved_engine(engine, iris)
-    geometry = iris.serving_geometry
-    if isinstance(resolved_engine, VllmEngineConfig) and resolved_engine.router is not None and geometry is not None:
-        # Single-host geometry can use this local path instead of the gang launcher.
-        resolved_engine = replace(
-            resolved_engine,
-            extra_args=(*resolved_engine.extra_args, "--data-parallel-size", str(geometry.data_parallel_size)),
-        )
     with _staged_model(resolved_model) as prepared_model:
         with local_inference(prepared_model, resolved_engine, num_chips=num_chips) as session:
             yield session
@@ -534,8 +527,8 @@ def run_iris_service(service: IrisServiceConfig) -> None:
         _run_tpu_service(service)
         return
     geometry = service.iris.serving_geometry
-    if geometry is not None and (geometry.task_count > 1 or geometry.data_parallel_size_local is not None):
-        _run_pipeline_service(service)
+    if geometry is not None:
+        _run_native_gpu_service(service)
         return
     broker = _broker_config(service.instances, service.broker)
     if broker is None:
@@ -602,7 +595,7 @@ def _ready_vllm_dashboard(service, model, environment, *, tensor_parallel_size, 
         backend_name=backend_name,
         streaming=True,
         chat_template_content=_model_tool_chat_template(model),
-        worker_metrics_url=f"{environment.worker_server_url.removesuffix(OPENAI_API_SUFFIX)}/metrics",
+        worker_metrics_url=environment.metrics_url,
     ):
         yield
 
@@ -652,7 +645,7 @@ def _run_tpu_service(service: IrisServiceConfig) -> None:
         notify_iris_vllm_stopped(gang.identity)
 
 
-def _run_pipeline_service(service: IrisServiceConfig) -> None:
+def _run_native_gpu_service(service: IrisServiceConfig) -> None:
     from marin.inference.vllm_backend import VllmBackend  # noqa: PLC0415
 
     geometry = service.iris.serving_geometry
@@ -661,12 +654,7 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
     model, num_chips = _resolved_model(service.model, service.iris)
     spec = _vllm_model_spec(model, num_chips, None)
     backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
-    with iris_vllm_launch(
-        pipeline_parallel_size=geometry.pipeline_parallel_size,
-        tensor_parallel_size=geometry.tensor_parallel_size,
-        data_parallel_size=geometry.data_parallel_size,
-        data_parallel_size_local=geometry.local_data_parallel_size,
-    ) as launch:
+    with iris_vllm_launch(geometry) as launch:
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
             if launch.is_leader:
                 with iris_vllm_followers(launch):

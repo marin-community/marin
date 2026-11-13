@@ -95,7 +95,7 @@ class VllmServedModel:
 
     @property
     def metrics_url(self) -> str:
-        return f"{self.environment.worker_server_url.removesuffix(OPENAI_API_SUFFIX)}/metrics"
+        return self.environment.metrics_url
 
     def check_alive(self) -> None:
         self.environment.check_alive()

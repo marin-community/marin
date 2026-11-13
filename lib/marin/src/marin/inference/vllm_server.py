@@ -921,7 +921,7 @@ class VllmEnvironment:
                 self.router = self._router_context.enter_context(
                     vllm_router(
                         self.router_config,
-                        (self.worker_server_url.removesuffix(OPENAI_API_SUFFIX),),
+                        self.worker_server_url.removesuffix(OPENAI_API_SUFFIX),
                         data_parallel_size=self._router_data_parallel_size,
                         host=self.host,
                         port=self.router_port,
@@ -985,6 +985,10 @@ class VllmEnvironment:
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
         return self.vllm_server.server_url
+
+    @property
+    def metrics_url(self) -> str:
+        return f"{self.worker_server_url.removesuffix(OPENAI_API_SUFFIX)}/metrics"
 
     def debug_snapshot(self) -> dict[str, str | int | None]:
         return {
