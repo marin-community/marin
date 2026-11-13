@@ -9,6 +9,50 @@ from playwright.sync_api import expect
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
+def test_difficulty_model_sort_tooltips_and_source_details(journey: Journey, theme: str) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.locator("#show-all").check()
+    for solver, first in [("small", "Marin:clean"), ("large", "Marin:eval")]:
+        page.locator("#difficulty-model").select_option(solver)
+        expect(page.locator("#rows tr").first).to_have_attribute("data-source-id", first)
+    row = page.locator('tr[data-source-id="Marin:clean"]')
+    expect(row.locator(".difficulty-model-label")).to_have_text(["Small", "Large", "Hosted", "Snowball v0.1"])
+    tooltip = row.locator(".difficulty-small").get_attribute("title")
+    assert tooltip is not None
+    assert "n=3" in tooltip and "Wilson 95% CI" in tooltip and "Pre-oracle-filter" in tooltip
+    for width in (1440, 390):
+        page.set_viewport_size({"width": width, "height": 900})
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert page.locator(".source-table").evaluate(
+            """table => {
+            const headers = [...table.tHead.rows[0].cells].map(c => c.getBoundingClientRect());
+            return [...table.tBodies[0].rows].every(row => [...row.cells].every((cell, index, cells) => {
+                const bounds = cell.getBoundingClientRect(), next = cells[index + 1]?.getBoundingClientRect();
+                return (!next || bounds.right <= next.left + 1) &&
+                    Math.abs(bounds.left - headers[index].left) <= 1 &&
+                    Math.abs(bounds.right - headers[index].right) <= 1 &&
+                    [...cell.querySelectorAll('.chip,.difficulty-model')].every(child => {
+                        const box = child.getBoundingClientRect();
+                        return box.left >= bounds.left && box.right <= bounds.right &&
+                            child.scrollWidth <= child.clientWidth;
+                    });
+            }));
+        }"""
+        )
+        row.locator(".source-name").click()
+        expect(page.locator("#detail-difficulty .difficulty-model")).to_have_count(4)
+        assert page.locator("#details").evaluate("dialog => dialog.scrollWidth <= dialog.clientWidth")
+        page.locator("#close-details").click()
+    row.locator(".source-name").click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    difficulty = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Difficulty", exact=True))
+    expect(difficulty).to_contain_text("resampling required after filtering")
+    expect(difficulty.locator(".difficulty-model")).to_have_count(4)
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
 def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: str) -> None:
     page = journey.page
     page.emulate_media(color_scheme=theme)

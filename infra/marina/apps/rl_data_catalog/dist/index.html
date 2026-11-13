@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Sources · RL Data Atlas</title>
   <link rel="stylesheet" href="style.css">
-  <script src="common.js" defer></script><script src="app.js" defer></script>
+  <script src="common.js" defer></script><script src="difficulty.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
 <header class="masthead"><a class="brand" href="./"><span class="brandmark">a<span>•</span></span><span>open athena <b>/</b> research tools</span></a><span class="private-label">MARINA APP <span class="live-dot"></span> CURATED CATALOG</span></header>
@@ -31,11 +31,12 @@
       <label>Use<select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unknown">Unknown</option></select></label>
       <label>Quality<select id="quality"><option value="all">All quality</option><option value="FULL">FULL</option><option value="SAMPLE">SAMPLE</option><option value="QUICK">QUICK</option></select></label>
       <label>Result<select id="result"><option value="all">All results</option><option value="GOOD">Good</option><option value="SOME_ISSUES">Some issues</option><option value="BAD">Bad</option><option value="UNKNOWN">Unknown</option><option value="none">Not assessed</option></select></label>
+      <label>Difficulty model<select id="difficulty-model"><option value="small">Small</option><option value="large" selected>Large</option><option value="hosted">Hosted</option><option value="snowball">Snowball v0.1</option></select></label>
       <label class="checkbox"><input id="show-all" type="checkbox"> Show QUICK-quality and BAD-result sources</label>
       <button id="clear-filters" class="text-button" type="button">Reset</button>
     </form>
     <div class="table-scroller" tabindex="0" aria-label="Sources">
-      <table class="source-table"><caption class="sr-only">Sources with examples, use, quality, result, issue rate, contamination, overlapping tasks, Daytona safety, curriculum area, last update and evidence</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
+      <table class="source-table"><caption class="sr-only">Sources with examples, use, quality, result, issue rate, contamination, overlapping tasks, Daytona safety, curriculum area, last update, evidence and model difficulty</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
       <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search, reset the filters, or show QUICK and BAD sources.</p></div>
     </div>
     <footer class="table-footer"><span id="visible-count"></span><span>Select a column title to sort · Open Evidence for everything behind a label</span></footer>
@@ -58,7 +59,7 @@
 <dialog id="details" aria-labelledby="detail-name">
   <div class="drawer-header"><span>Source details</span><button id="close-details" class="close" aria-label="Close source details">×</button></div>
   <h2 id="detail-name"></h2><p id="detail-notes"></p>
-  <div id="detail-links" class="detail-links"></div><div id="detail-fields"></div>
+  <div id="detail-links" class="detail-links"></div><section id="detail-difficulty"><h3>Difficulty</h3><div id="detail-difficulty-bars"></div></section><div id="detail-fields"></div>
 </dialog>
 </body>
 </html>

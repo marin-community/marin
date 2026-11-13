@@ -48,7 +48,8 @@ p { line-height: 1.6; }
 .browse-controls select { max-width: 260px; }
 .browse-controls > .text-button { min-height: 38px; }
 .catalog { border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
-.table-scroller { overflow: auto; max-height: calc(100dvh - 315px); min-height: 240px; position: relative; }
+.table-wrap { max-width: 100%; overflow-x: auto; }
+.table-scroller { max-width: 100%; overflow-x: auto; overflow-y: auto; max-height: calc(100dvh - 315px); min-height: 240px; position: relative; }
 table { border-collapse: separate; border-spacing: 0; width: 100%; text-align: left; font-size: 13px; }
 thead th { position: sticky; top: 0; background: #f2f5f2; border-bottom: 1px solid var(--line); color: #526459; z-index: 2; font-weight: 500; }
 thead button { display: flex; gap: 9px; align-items: center; padding: 13px 18px; border: 0; background: none; color: inherit; font-size: 12px; font-weight: 600; width: 100%; text-align: left; white-space: nowrap; }
@@ -59,14 +60,7 @@ tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: #f7faf7; }
 .num { font-variant-numeric: tabular-nums; text-align: right; }
 th.num button { justify-content: flex-end; }
-.source-table { table-layout: fixed; min-width: 1640px; }
-.source-table th:nth-child(1) { width: 20%; }
-.source-table th:nth-child(2) { width: 7%; }
-.source-table th:nth-child(3), .source-table th:nth-child(4), .source-table th:nth-child(6),
-.source-table th:nth-child(8), .source-table th:nth-child(11), .source-table th:nth-child(12) { width: 6%; }
-.source-table th:nth-child(5), .source-table th:nth-child(10) { width: 9%; }
-.source-table th:nth-child(7) { width: 11%; }
-.source-table th:nth-child(9) { width: 8%; }
+.source-table { table-layout: auto; }
 .source-name { border: 0; background: none; padding: 0; color: #244a37; font-size: 14px; font-weight: 550; text-align: left; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-name:hover { text-decoration: underline; }
 .source-subtitle { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -100,7 +94,7 @@ dialog h2 { font-size: 23px; margin: 26px 0 12px; overflow-wrap: anywhere; }
 #detail-notes { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .field { display: grid; grid-template-columns: 160px 1fr; gap: 18px; border-top: 1px solid var(--line); margin: 0; padding: 12px 0; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .field dt { color: var(--muted); }
-.field dd { margin: 0; }
+.field dd { margin: 0; min-width: 0; overflow-x: auto; }
 .detail-links { display: flex; flex-wrap: wrap; gap: 9px; padding: 12px 0 22px; }
 .detail-links a { border: 1px solid #ceded2; border-radius: 5px; padding: 8px 11px; font-size: 12px; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -132,7 +126,6 @@ dialog h2 { font-size: 23px; margin: 26px 0 12px; overflow-wrap: anywhere; }
   .source-table td { padding: 12px 10px; font-size: 12px; }
   .source-table thead button { padding: 12px 10px; gap: 4px; font-size: 11px; }
   .source-name { font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
-  .source-table .chip { white-space: normal; }
   dialog { padding: 22px; }
   .field { grid-template-columns: 125px 1fr; gap: 12px; }
 }
@@ -229,14 +222,6 @@ a.secondary:hover { text-decoration: none; }
 .assessment-card .dataset-links { font-size: 13px; }
 
 @media (max-width: 650px) {
-  .source-table { min-width: 0; table-layout: fixed; }
-  .source-table th:first-child { width: 45%; }
-  .source-table th:nth-child(2) { width: 22%; }
-  .source-table th:nth-child(5) { width: 33%; }
-  .source-table :is(th, td):nth-child(3),
-  .source-table :is(th, td):nth-child(4),
-  .source-table :is(th, td):nth-child(n+6) { display: none; }
-  .source-table td { overflow-wrap: anywhere; }
   .dataset-links { font-size: 10px; }
   .atlas-tabs { gap: 15px; flex-wrap: wrap; }
   .page-footer { flex-wrap: wrap; }
@@ -256,7 +241,6 @@ a.secondary:hover { text-decoration: none; }
   thead th { color: #b7cabc; }
 }
 
-.contamination-chip { white-space: normal; max-width: 100%; }
 .contamination-remediated { color: #1f5f59; background: #e6f2f1; }
 .contamination-required { font-weight: 750; border: 2px solid currentColor; }
 .contamination-legend { margin: 18px 0; font-size: 12px; color: var(--muted); }
@@ -270,4 +254,26 @@ a.secondary:hover { text-decoration: none; }
   .contamination-remediated { background: #254b47; color: #a8e1da; }
 }
 
-.result-provisional { border: 1px dashed currentColor; white-space: normal; }
+.result-provisional { border: 1px dashed currentColor; }
+
+.difficulty-comparison { display: grid; gap: 5px; width: 100%; min-width: 180px; max-width: 310px; }
+.difficulty-model { display: grid; grid-template-columns: 80px minmax(35px, 1fr) 34px; align-items: center; gap: 6px; line-height: 1.3; font-size: 11px; white-space: nowrap; }
+.difficulty-model-label { overflow: hidden; text-overflow: ellipsis; }
+.difficulty-track { display: block; height: 7px; overflow: hidden; border-radius: 4px; background: #e8eeeb; }
+.difficulty-fill { display: block; height: 100%; background: #297c5b; border-radius: inherit; }
+.difficulty-large .difficulty-fill { background: #426fa3; }
+.difficulty-hosted .difficulty-fill { background: #9d6940; }
+.difficulty-snowball .difficulty-fill { background: #9064a9; }
+.difficulty-unmeasured { border: 1px dashed #91a197; background: transparent; }
+.difficulty-score { text-align: right; font-variant-numeric: tabular-nums; }
+.difficulty-cell { padding: 14px 12px; }
+#detail-difficulty { margin: 20px 0; }
+.assessment-card > .difficulty-comparison { margin: 16px 0; }
+@media (prefers-color-scheme: dark) {
+  .difficulty-track { background: #33483d; }
+  .difficulty-fill { background: #6bb58d; }
+  .difficulty-large .difficulty-fill { background: #7da4d4; }
+  .difficulty-hosted .difficulty-fill { background: #d2a372; }
+  .difficulty-snowball .difficulty-fill { background: #bd95d4; }
+  .difficulty-unmeasured { background: transparent; }
+}

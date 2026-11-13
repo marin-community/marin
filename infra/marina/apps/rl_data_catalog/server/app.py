@@ -17,6 +17,7 @@ from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
 from .contamination import contamination
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
+from .difficulty import difficulty_records, difficulty_summary
 from .quality import intended_use, issue_rate, quality_display, result
 from .schema import SCHEMA_SQL
 from .source_identity import canonical_source_id, original_source_id
@@ -158,6 +159,7 @@ def create_api(services: AppletServices) -> FastAPI:
         with engine.connect() as connection:
             metadata = loaded_catalog(connection)
             coverage = source_coverage(connection)
+            measurements = difficulty_records(connection)
             rows = connection.execute(
                 text(
                     """
@@ -196,6 +198,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         "updated_at": metadata["loaded_at"],
                         "daytona": daytona(row["declaration"], DAYTONA_SAFE_SNAPSHOT_LIMIT),
                         "coverage": coverage.get(row["id"]),
+                        "difficulty": difficulty_summary(row["declaration"], measurements.get(row["id"], [])),
                         "intended_use": intended_use(row["declaration"]),
                         "backend_capabilities": row["backend_capabilities"],
                         "source_fingerprint": (
@@ -441,12 +444,16 @@ def create_api(services: AppletServices) -> FastAPI:
             ).scalar_one_or_none()
             load = loaded_catalog(connection)
             coverage = source_coverage(connection).get(canonical_source_id(source_id))
+            difficulty = difficulty_summary(
+                source["declaration"], difficulty_records(connection).get(canonical_source_id(source_id), [])
+            )
         declaration = source["declaration"]
         review = summaries.get("admitted")
         display = quality_display(declaration, source["curation"], source["assessment_key"])
         return {
             "declaration": declaration,
             "coverage": coverage,
+            "difficulty": difficulty,
             "intended_use": intended_use(declaration),
             "contamination_status": contamination(declaration),
             "curation": source["curation"],

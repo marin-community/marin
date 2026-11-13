@@ -6,7 +6,7 @@ const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
   ['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
-  ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['daytona', 'Daytona'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'],
+  ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['daytona', 'Daytona'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'], ['difficulty', 'Difficulty'],
 ];
 const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
 const state = {sources: [], sort: 'examples', direction: -1, origin: 'all', syncedAt: null};
@@ -25,6 +25,7 @@ function value(row, key) {
   if (key === 'daytona') return row.daytona.state;
   if (key === 'area') return row.coverage?.top_area?.name;
   if (key === 'updated') return row.updated_at;
+  if (key === 'difficulty') return AtlasDifficulty.selected(row.difficulty, $('difficulty-model').value)?.solve_rate;
   return row[key];
 }
 function shownByDefault(row) { return row.quality !== 'QUICK' && row.result !== 'BAD'; }
@@ -118,7 +119,7 @@ function render() {
     th.setAttribute('aria-sort', state.sort === key ? state.direction === 1 ? 'ascending' : 'descending' : 'none');
     if (state.sort === key) button.append(node('span', state.direction === 1 ? '↑' : '↓', 'sort-indicator'));
     button.addEventListener('click', () => {
-      state.direction = state.sort === key ? -state.direction : ['examples', 'quality', 'updated'].includes(key) ? -1 : 1;
+      state.direction = state.sort === key ? -state.direction : ['examples', 'quality', 'updated', 'difficulty'].includes(key) ? -1 : 1;
       state.sort = key; update();
     });
     th.append(button); return th;
@@ -182,10 +183,12 @@ function sourceRow(row, others, canonical) {
     updated.title = row.updated_at ? 'Load time of the selected catalog snapshot (UTC)' : 'Catalog load time unavailable';
     const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
     const contamination = contaminationCell(row);
-    tr.append(name, examples, use, quality, result, issueRate, contamination, overlap, daytonaCell(row), area, updated, evidence); return tr;
+    const difficulty = node('td', undefined, 'difficulty-cell'); difficulty.append(AtlasDifficulty.comparison(row.difficulty));
+    tr.append(name, examples, use, quality, result, issueRate, contamination, overlap, daytonaCell(row), area, updated, evidence, difficulty); return tr;
 }
 function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
+  $('detail-difficulty-bars').replaceChildren(AtlasDifficulty.comparison(row.difficulty));
   const controls = row.curation?.verification;
   const fields = [
     ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
@@ -241,9 +244,9 @@ async function load() {
 }
 function viewUrl() {
   const params = new URLSearchParams();
-  for (const id of ['search', 'use', 'quality', 'result']) {
+  for (const id of ['search', 'use', 'quality', 'result', 'difficulty-model']) {
     const item = $(id).value.trim();
-    if (item && item !== 'all') params.set(id, item);
+    if (item && item !== 'all' && !(id === 'difficulty-model' && item === 'large')) params.set(id, item);
   }
   if (state.origin !== 'all') params.set('origin', state.origin);
   if ($('show-all').checked) params.set('all', '1');
@@ -255,6 +258,7 @@ function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
   $('filters').reset(); $('search').value = params.get('search') || '';
   for (const id of ['use', 'quality', 'result']) if (params.has(id)) $(id).value = params.get(id);
+  if (AtlasDifficulty.solvers.includes(params.get('difficulty-model'))) $('difficulty-model').value = params.get('difficulty-model');
   $('show-all').checked = params.get('all') === '1';
   state.origin = params.get('origin') === 'Task Trove' ? 'TaskTrove' : params.get('origin') || 'all';
   state.sort = params.get('sort') || 'examples';
@@ -265,6 +269,7 @@ function update(replace = false) {
   render();
 }
 for (const id of ['use', 'quality', 'result']) $(id).addEventListener('change', () => update());
+$('difficulty-model').addEventListener('change', () => { state.sort = 'difficulty'; state.direction = -1; update(); });
 $('show-all').addEventListener('change', () => update());
 $('filters').addEventListener('submit', event => event.preventDefault());
 $('search').addEventListener('input', () => update(true));

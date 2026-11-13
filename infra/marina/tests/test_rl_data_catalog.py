@@ -19,6 +19,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
+from finestore.reader import ReadView
 from finestore.rl.curation import (
     ASSESSMENTS,
     CURRENT,
@@ -40,6 +41,7 @@ from finestore.rl.curation import (
     SourceOrigin,
     register_catalog,
 )
+from finestore.rl.difficulty import MEASUREMENTS, DifficultyMeasurement, Solver, register_difficulty
 from finestore.store import DataStore
 from marina.applets import (
     AppletServices,
@@ -73,12 +75,14 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
+from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
+from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -1371,6 +1375,59 @@ def test_historical_curriculum_alias_keeps_counts_samples_and_pagination(catalog
             assert detail["source_id"] == current and detail["task_preview"]
 
 
+@pytest.mark.parametrize("changed_input", ["release", "population"])
+def test_difficulty_archive_load_and_source_pin_change_preserve_history(
+    catalog_database, catalog_query, tmp_path, changed_input
+):
+    declaration = with_declaration_admission_census(contamination_declarations()[0][1])
+    measurement = difficulty_measurement(declaration, Solver.SMALL)
+    archive = str(tmp_path / "difficulty")
+    with DataStore.open(archive) as store:
+        register_difficulty(store)
+        with store.transaction() as transaction:
+            transaction.table(MEASUREMENTS).add(measurement.model_dump(mode="json"))
+    records = [
+        DifficultyMeasurement.model_validate(row)
+        for row in ReadView(archive).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields))
+    ]
+    assert records == [measurement]
+    assert load_measurements(records, catalog_query)["inserted"] == 1
+    assert load_measurements(records, catalog_query)["inserted"] == 0
+    with catalog_database.begin() as connection:
+        connection.execute(text("INSERT INTO atlas_loads VALUES ('difficulty','fixture','difficulty',NOW(),NOW())"))
+        connection.execute(text("UPDATE atlas_current SET load_id='difficulty' WHERE name='latest'"))
+        connection.execute(
+            text(
+                "INSERT INTO atlas_sources (load_id,id,declaration,latest_attempt_status,diagnostics) "
+                "VALUES ('difficulty',:id,CAST(:declaration AS JSONB),'skipped','{}'::jsonb)"
+            ),
+            {"id": declaration.id, "declaration": declaration.model_dump_json()},
+        )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        source = client.get("/sources").json()["sources"][0]
+        model = source["difficulty"]["models"][0]
+        assert (model["n"], model["solved"], model["solve_rate"]) == (3, 1, 1 / 3)
+        assert model["infrastructure_attempts"] == 2
+        assert model["sample"]["pre_oracle_filter"] and model["sample"]["resample_after_oracle_filter"]
+        assert [row["solver"] for row in source["difficulty"]["models"]] == [solver.value for solver in Solver]
+        assert all(row["solve_rate"] is None and row["reason"] for row in source["difficulty"]["models"][1:])
+        changed = declaration.model_dump(mode="json")
+        if changed_input == "release":
+            changed["current_release"] = {"repo": "fixture", "revision": "f" * 40, "url": "https://example.org/release"}
+        else:
+            changed["actor_census_input"]["task_specs_sha256"] = "f" * 64
+        with catalog_database.begin() as connection:
+            connection.execute(
+                text("UPDATE atlas_sources SET declaration=CAST(:value AS JSONB)"), {"value": json.dumps(changed)}
+            )
+        source = client.get("/sources").json()["sources"][0]
+        assert all(row["solve_rate"] is None for row in source["difficulty"]["models"])
+        assert source["difficulty"]["historical"][0]["measurement_id"] == measurement.measurement_id
+    altered = measurement.model_copy(update={"gpu_hours": 2})
+    with pytest.raises(ValueError, match="different evidence"):
+        load_measurements([altered], catalog_query)
+
+
 def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_path):
     root = str(tmp_path / "catalog")
     publish_sample(root, "frozen", source_id="HuggingFaceH4:aime24", origin=SourceOrigin.HUGGINGFACEH4)
@@ -1395,7 +1452,10 @@ def test_atlas_packages_resolve_aliases_without_repository_imports(tmp_path, mon
     def old_runtime_import(name, global_namespace=None, local_namespace=None, fromlist=(), level=0):
         if level == 0 and (
             name.startswith(("experiments.", "infra.marina.apps."))
-            or (preview and name in {"finestore.rl.curation", "taskcompendium.source_fingerprints"})
+            or (
+                preview
+                and name in {"finestore.rl.curation", "finestore.rl.difficulty", "taskcompendium.source_fingerprints"}
+            )
         ):
             raise ModuleNotFoundError(name)
         return original_import(name, global_namespace, local_namespace, fromlist, level)

@@ -61,6 +61,24 @@ async function render(data, sourceId) {
     node('span', data.updated_at ? `Last updated ${new Date(data.updated_at).toLocaleDateString()}` : 'Catalog load time unavailable', 'chip quality-unassessed'),
   );
   const sections = [];
+  const difficulty = card('Difficulty', [
+    ['Protocol', data.difficulty.protocol_id],
+    ...data.difficulty.models.flatMap(model => [
+      [AtlasDifficulty.titles[model.solver], model.status === 'measured' ? `${model.solved}/${model.n} solved` : model.reason],
+      [`${AtlasDifficulty.titles[model.solver]} sample`, model.sample_receipt && pointer(model.sample_receipt.uri)],
+      [`${AtlasDifficulty.titles[model.solver]} population`, model.sample && `${number.format(model.sample.population_count)} retained tasks; seed ${model.sample.seed}${model.sample.pre_oracle_filter ? '; pre-oracle-filter; resampling required after filtering' : ''}`],
+      [`${AtlasDifficulty.titles[model.solver]} model`, model.model && `${model.model.model} @ ${model.model.revision}`],
+      [`${AtlasDifficulty.titles[model.solver]} attempts`, model.attempts_receipt && pointer(model.attempts_receipt.uri)],
+      [`${AtlasDifficulty.titles[model.solver]} infrastructure`, model.infrastructure_attempts == null ? null : `${model.infrastructure_attempts} failed attempts preserved; ${model.pending_tasks} pending tasks`],
+    ]),
+    ['Historical observations', data.difficulty.historical.length ? list(data.difficulty.historical.map(model => {
+      const span = node('span'); span.append(`${AtlasDifficulty.titles[model.solver]} · ${model.protocol_id} · ${model.release.repo} @ ${model.release.revision} · ${model.status}`);
+      if (model.attempts_receipt) span.append(' ', pointer(model.attempts_receipt.uri));
+      return span;
+    })) : null],
+  ]);
+  difficulty.insertBefore(AtlasDifficulty.comparison(data.difficulty), difficulty.children[1] || null);
+  sections.push(difficulty);
   sections.push(card('Oversight evidence', [
     ['Declared level', d.oversight], ['Campaign', d.oversight_evidence?.campaign], ['Recipe revision', d.oversight_evidence?.recipe_revision],
     ['Verification', d.oversight_evidence?.verification], ['Reviewed', d.oversight_evidence?.reviewed], ['Admitted', d.oversight_evidence?.admitted],

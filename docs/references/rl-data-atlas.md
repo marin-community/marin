@@ -673,6 +673,74 @@ Start the local stack as shown in [Updating Atlas](#updating-atlas), then use th
 same curriculum-loader command with its printed ID and origin. Stop the stack
 with Ctrl-C when finished.
 
+## Difficulty
+
+Difficulty records a solver's pass fraction on a frozen sample of up to 100
+retained tasks per source, including evaluation sources. It never excludes a
+task or changes Quality, Result, admission, or intended use. The table shows
+four bars in this order: Small, Large, Hosted, Snowball v0.1. Select a Difficulty
+model to sort by its solve rate. Hover or focus a row for its solve count,
+denominator, Wilson 95% confidence interval, model revision, protocol and
+pre-oracle-filter status. Source details show the same bars; Evidence includes
+sample and attempt receipts and historical observations. Missing results have
+an explicit reason and no solve rate.
+Full credit (`reward == 1`) counts as solved. A scored partial-credit answer
+counts in the denominator without counting as solved. A missing or failed
+grader remains unscored until it can be re-driven.
+
+`atlas-difficulty-v3` uses Qwen3-Coder-30B-A3B-Instruct with thinking off,
+Qwen3.5-122B-A10B with thinking on, production hosted GLM-5.3 with low reasoning
+effort, and Marin-Snowball-67B-A2B-v0.1. Every run records checkpoint, tokenizer
+revision and chat-template digest. Snowball v0.1 is pinned to
+`adc0078a19a4383bc998fcdb43867b3360baf5f3`; its tokenizer and template come
+from that same repository revision. Its established serving recipe uses
+expert parallelism, tensor parallelism 1 and data parallelism 8 on H100s,
+with the Hermes tool parser. Atlas uses temperature 0.7, overriding the earlier
+sampling re-evaluation's 0.6.
+
+Each model request has a 65,536-token context budget, at most 49,152 input and
+16,384 output tokens. These are per-request limits, including requests within
+an agent's tool loop. Sampling uses temperature 0.7, top-p 0.95, top-k 20, min-p 0,
+repetition penalty 1, and presence/frequency penalties 0. A served context that
+cannot fit these budgets requires an explicit recorded deviation. Hosted
+services that omit a sampling parameter must record that omission. LLM graders
+also use temperature 0.7 through the production host judge service.
+
+The sample receipt binds the exact dataset release, converter, population
+digest, drop-manifest digest, selection seed, selected IDs and task digests.
+The standard SAMPLE QC seed-zero panels can be reused after their population
+and byte digests have been checked. For the 42 oracle-bearing sources whose
+filter has not run (630,595 retained tasks in the November 13 inventory),
+samples carry `pre_oracle_filter=true` and
+`resample_after_oracle_filter=true`. Draw a new seeded sample from the new
+retained population when filtering completes; preserve the earlier receipt and
+observations. A changed release pin or converter makes its prior results
+historical automatically.
+
+Run tasks through production Harbor trials in their declared environments and
+grade each with its own grader. Select Daytona only for measured SAFE sources;
+use LOCAL/Iris otherwise. Keep provider waits separate from task attempts and
+preserve infrastructure-failed attempts for re-driving. Those attempts never
+enter the scored denominator. A completed measurement requires every sampled
+task to have a score and an archived attempt receipt. Pending observations do
+not acquire a solve-rate bar. Use Iris H100 serving in `cw-rno2a`, with explicit
+target placement and compilation and CUDA graphs enabled. Record GPU-hours per
+model and input/output tokens; jobs have a three-day limit.
+
+Typed `difficulty_measurements` live in a FineStore catalog or campaign archive.
+Load them into an installed Atlas after its schema migration:
+
+```bash
+uv run python -m infra.marina.apps.rl_data_catalog.load_difficulty \
+  --catalog-root <catalog-or-campaign-root> \
+  --applet-id <atlas-applet-id> --receipt <new-load-receipt.json>
+```
+
+The loader is idempotent for identical records and rejects an existing ID with
+different evidence. It leaves the source catalog selection unchanged and keeps
+historical difficulty records across catalog refreshes. Publication of a UI
+or schema change alone does not establish a measured difficulty.
+
 ## Historical reviews
 
 Historical reviews and raw artifacts remain in their original Postgres tables.
