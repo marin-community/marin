@@ -37,8 +37,8 @@ trials:
   baseline: belay-X0226-control 3.0451 (same commit, seed 0)
   step_time_change: +1%
 potential:
-  score: 5
-  rationale: 'No result yet: control and variant still pending on cw-us-east-02a (not accepted by peer) → 5'
+  score: 7
+  rationale: −0.0112 at equal time (step time within 1%, equal data = equal time); ladder and MFU not run → 7
   model: claude-opus-5-5
   date: '2026-11-13'
-  inputs_digest: d1d3099d1563
+  inputs_digest: 0c4512380242
