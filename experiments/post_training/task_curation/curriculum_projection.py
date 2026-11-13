@@ -18,6 +18,7 @@ from finestore.rl.curation import SourceDeclaration
 from fray.types import ResourceConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from pydantic import BaseModel, ConfigDict, Field
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -249,7 +250,9 @@ def filter_assignment_file(
     expected = {row.source_id: row for row in archived_sources}
     counts = Counter()
     groups = 0
-    with StoragePath(source_path).open("rb", cache_type="none") as stream:
+    source_fs, source_storage_key = filesystem_for(source_path)
+    destination_fs, destination_storage_key = filesystem_for(str(destination))
+    with source_fs.open(source_storage_key, "rb", cache_type="none") as stream:
         parquet = pq.ParquetFile(stream)
         with (
             destination.open("wb", auto_mkdir=True) as output,
@@ -268,8 +271,8 @@ def filter_assignment_file(
                     writer.write_table(projected, row_group_size=projected.num_rows)
                     groups += 1
     with (
-        StoragePath(source_path).open("rb", cache_type="none") as old_stream,
-        destination.open("rb", cache_type="none") as new_stream,
+        source_fs.open(source_storage_key, "rb", cache_type="none") as old_stream,
+        destination_fs.open(destination_storage_key, "rb", cache_type="none") as new_stream,
     ):
         written = pq.ParquetFile(new_stream)
         group = 0
