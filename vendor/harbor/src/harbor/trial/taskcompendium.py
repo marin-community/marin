@@ -155,19 +155,24 @@ class _VerifierFactory:
 
     async def create(self, spec: MachineSpec) -> Machine:
         machine = await self.factory.create(spec)
-        assert self.trial._service_tasks is not None
-        await start_model_relays(
-            machine,
-            self.stack,
-            self.trial._service_tasks,
-            judge=self.relay,
-            candidate=None,
-        )
-        measured = await _MeasuredMachine.start(
-            machine,
-            self.trial.verdicts,
-            self.trial.paths.verifier_dir / "resource-usage.json",
-        )
+        try:
+            assert self.trial._service_tasks is not None
+            await start_model_relays(
+                machine,
+                self.stack,
+                self.trial._service_tasks,
+                judge=self.relay,
+                candidate=None,
+            )
+            measured = await _MeasuredMachine.start(
+                machine,
+                self.trial.verdicts,
+                self.trial.paths.verifier_dir / "resource-usage.json",
+            )
+        except BaseException:
+            async with asyncio.timeout(self.trial.config.trial_cleanup_grace_sec):
+                await machine.close()
+            raise
         self.stack.push_async_callback(measured.finish_usage)
         return measured
 
@@ -419,14 +424,13 @@ class TaskSpecTrial(Trial):
             startup_timeout=self._environment_build_timeout_sec,
         )
         async with AsyncExitStack() as stack:
-            owned = await stack.enter_async_context(
+            factory = await stack.enter_async_context(
                 grading_machine_factory(
-                    self.factory,
+                    _VerifierFactory(self.factory, self, relay, stack),
                     self.runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )
-            factory = _VerifierFactory(owned, self, relay, stack)
             if isinstance(self.agent, TaskSpecEmptyAgent):
                 return await grade_empty_in_sandbox(
                     task,
@@ -477,14 +481,13 @@ class TaskSpecTrial(Trial):
             env=env,
         )
         async with AsyncExitStack() as stack:
-            owned = await stack.enter_async_context(
+            factory = await stack.enter_async_context(
                 grading_machine_factory(
-                    self.factory,
+                    _VerifierFactory(self.factory, self, relay, stack),
                     self.runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )
-            factory = _VerifierFactory(owned, self, relay, stack)
             machine = await factory.create(spec)
             stack.push_async_callback(machine.close)
             with TemporaryDirectory(prefix="task-spec-grader-") as directory:
