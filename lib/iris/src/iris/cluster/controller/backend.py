@@ -57,6 +57,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
 from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
+from iris.resources.limits import SANDBOX_STORAGE_LIMIT_CAPABILITY
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,8 @@ def dashboard_backend_descriptor(backend: "TaskBackend") -> DashboardBackendDesc
     capabilities = []
     if BackendCapability.DIRECT_DISPATCH in descriptor.capabilities:
         capabilities.append("cluster")
+    if descriptor.kind is BackendKind.KUBERNETES:
+        capabilities.append(SANDBOX_STORAGE_LIMIT_CAPABILITY)
     if BackendCapability.WORKER_FLEET in descriptor.capabilities:
         capabilities.append("workers")
     if BackendCapability.AUTOSCALER in descriptor.capabilities:

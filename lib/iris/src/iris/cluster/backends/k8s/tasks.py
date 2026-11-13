@@ -149,6 +149,7 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
 from iris.preemption import SHUTDOWN_MARGIN, resolve_termination_grace
+from iris.resources.limits import ResourceLimitReason
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
@@ -963,12 +964,15 @@ def _build_pod_manifest(
         limits: dict[str, str] = {}
         requests: dict[str, str] = {}
         if res.cpu_millicores:
-            # CPU as a request only (no limits.cpu) so containers can burst onto
-            # idle node CPU. The scheduler still places by cpu_millicores, and
+            # Ordinary jobs can burst onto idle node CPU. Sandbox jobs use a
+            # hard CPU ceiling so task resource declarations are enforced.
+            # The scheduler still places by cpu_millicores, and
             # under contention CFS shares CPU proportionally to requests. This
             # matches the soft-cap behavior the docker runtime uses for
             # CAPACITY_TYPE_ON_DEMAND workers.
             requests["cpu"] = f"{res.cpu_millicores}m"
+            if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+                limits["cpu"] = requests["cpu"]
         if res.memory_bytes:
             # Memory stays a hard cap — overshoot is fatal, not just slow.
             # Memory-backed emptyDir usage is charged to this same cgroup.
@@ -989,9 +993,13 @@ def _build_pod_manifest(
         if requests:
             resources.setdefault("requests", {}).update(requests)
         if res.disk_bytes:
-            disk_gi = max(1, res.disk_bytes // (1024**3))
-            resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
-            resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
+            disk_quantity = (
+                str(res.disk_bytes)
+                if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+                else f"{max(1, res.disk_bytes // (1024**3))}Gi"
+            )
+            resources.setdefault("requests", {})["ephemeral-storage"] = disk_quantity
+            resources.setdefault("limits", {})["ephemeral-storage"] = disk_quantity
 
     is_gang = bool(run_req.coscheduling.group_by)
     has_accelerator = gpu_count > 0 or has_tpu
@@ -1312,6 +1320,18 @@ def _format_disruption_reason(condition: dict) -> str:
     return reason[:_TERMINAL_REASON_MAX_CHARS]
 
 
+def _disk_limit_exceeded(pod: dict) -> bool:
+    status = pod.get("status", {})
+    if status.get("reason") != "Evicted":
+        return False
+    message = status.get("message", "")
+    # Kubelet's localStorageEviction messages. Node disk pressure also says
+    # "ephemeral-storage", but does not establish that this task exceeded its limit.
+    return message.startswith("Pod ephemeral local storage usage exceeds the total limit of containers") or (
+        message.startswith("Container ") and " exceeded its local ephemeral storage limit" in message
+    )
+
+
 def _pod_failure_state(pod: dict) -> int:
     """Classify a failed pod as PREEMPTED, WORKER_FAILED, or FAILED.
 
@@ -1319,7 +1339,11 @@ def _pod_failure_state(pod: dict) -> int:
     tells a triager whether the control plane took the pod away or the node let
     it die.
     """
-    # Authoritative first: the control plane explicitly disrupted this pod
+    # Exceeding a task storage ceiling charges the failure budget, even when
+    # kubelet also marks the eviction as a disruption.
+    if _disk_limit_exceeded(pod):
+        return job_pb2.TASK_STATE_FAILED
+    # Authoritative next: the control plane explicitly disrupted this pod
     # (preempted/evicted/drained), regardless of how the container exited. This
     # catches a preemption SIGKILLed after the grace period — reason="Error",
     # exit 137 — which the terminated-reason whitelist below misses. A container
@@ -1402,7 +1426,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     task_terminated = _task_container_terminated(pod)
     new_state = (
         job_pb2.TASK_STATE_SUCCEEDED
-        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None
+        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None and not _disk_limit_exceeded(pod)
         else _pod_failure_state(pod)
     )
     terminal_reason = _extract_terminal_reason(pod)
@@ -1415,7 +1439,11 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         error=(
             None
             if new_state == job_pb2.TASK_STATE_SUCCEEDED
-            else terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else _extract_error(pod)
+            else (
+                terminal_reason
+                if new_state == job_pb2.TASK_STATE_PREEMPTED or _disk_limit_exceeded(pod)
+                else _extract_error(pod)
+            )
         ),
         status_message="",
         terminal_reason=terminal_reason,
@@ -1437,7 +1465,11 @@ def _extract_exit_code(pod: dict) -> int | None:
 
 def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
     exit_code = _extract_exit_code(pod)
-    terminal_phase = "Succeeded" if exit_code == 0 and _disruption_condition(pod) is None else "Failed"
+    terminal_phase = (
+        "Succeeded"
+        if exit_code == 0 and _disruption_condition(pod) is None and not _disk_limit_exceeded(pod)
+        else "Failed"
+    )
     terminal_pod = {**pod, "status": {**pod.get("status", {}), "phase": terminal_phase}}
     update = _task_update_from_pod(entry, terminal_pod)
     return replace(
@@ -1488,10 +1520,12 @@ def _init_container_failure(pod: dict) -> str | None:
 def _extract_terminal_reason(pod: dict) -> str | None:
     """A bounded terminal-cause string for a failed attempt.
 
-    Prefers an authoritative controller disruption condition, then an
-    init-container failure invisible to the task-container extractors, over the
-    task container's own terminal reason.
+    Prefers a task storage-limit eviction, then an authoritative controller
+    disruption condition, then an init-container failure invisible to the
+    task-container extractors, over the task container's own terminal reason.
     """
+    if _disk_limit_exceeded(pod):
+        return f"{ResourceLimitReason.DISK}: {pod['status']['message']}"[:_TERMINAL_REASON_MAX_CHARS]
     condition = _disruption_condition(pod)
     condition_reason = _format_disruption_reason(condition) if condition is not None else None
     reason = condition_reason or _init_container_failure(pod) or _extract_error(pod)
