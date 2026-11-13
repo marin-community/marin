@@ -299,9 +299,7 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig) -> dict:
         window = (firsts[min(concurrency, len(firsts)) - 1], last_submit[0])
         results[f"c{concurrency}"] = _summarize(records, concurrency=concurrency, window=window)
         results[f"c{concurrency}"]["makespan"] = time.monotonic() - start
-        logger.info(
-            "C%d: %s", concurrency, {k: v for k, v in results[f"c{concurrency}"].items() if k != "requests"}
-        )
+        logger.info("C%d: %s", concurrency, {k: v for k, v in results[f"c{concurrency}"].items() if k != "requests"})
     return results
 
 
@@ -314,9 +312,7 @@ def _quantile(values: list[float], q: float) -> float | None:
 
 def _summarize(records: list[dict], *, concurrency: int, window: tuple[float, float] | None) -> dict:
     ttft = [r["stamps"][0][0] - r["submit"] for r in records if r.get("stamps")]
-    itl = [
-        (r["end"] - r["stamps"][0][0]) / (r["tokens"] - 1) for r in records if r.get("stamps") and r["tokens"] > 1
-    ]
+    itl = [(r["end"] - r["stamps"][0][0]) / (r["tokens"] - 1) for r in records if r.get("stamps") and r["tokens"] > 1]
     summary = {
         "concurrency": concurrency,
         "requests": len(records),

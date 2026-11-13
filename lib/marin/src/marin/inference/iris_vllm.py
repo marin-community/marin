@@ -110,8 +110,13 @@ def iris_vllm_launch(
     tensor_parallel_size: int,
     data_parallel_size: int,
     data_parallel_size_local: int | None = None,
+    instance: int = 0,
 ) -> Iterator[IrisVllmLaunch]:
-    """Bootstrap native vLLM pipeline stages or a distributed data-parallel group."""
+    """Bootstrap native vLLM pipeline stages or a distributed data-parallel group.
+
+    ``instance`` distinguishes sequential launches inside one Iris job: each gets its own
+    coordinator actor name and master/RPC ports.
+    """
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("Iris vLLM launch must run inside an Iris job")
@@ -129,7 +134,7 @@ def iris_vllm_launch(
         )
 
     endpoint_namespace = str(job_info.job_id).strip("/").replace("/", "-")
-    coordinator_name = f"{endpoint_namespace}-vllm-coordinator"
+    coordinator_name = f"{endpoint_namespace}-vllm-coordinator" + (f"-{instance}" if instance else "")
     identity = IrisGangCoordinator(coordinator_name, job_info.task_index, job_info.num_tasks)
     with iris_gang_coordinator(identity, job_info.advertise_host, job_info.advertise_host) as master_addr:
         yield _build_task_launch(
@@ -138,6 +143,7 @@ def iris_vllm_launch(
             tensor_parallel_size=tensor_parallel_size,
             data_parallel_size=data_parallel_size,
             data_parallel_size_local=local_dp,
+            master_port=_MASTER_PORT + 10 * instance,
             master_addr=master_addr,
             coordinator_name=coordinator_name,
         )
@@ -247,6 +253,7 @@ def _build_task_launch(
     master_addr: str,
     coordinator_name: str,
     data_parallel_size_local: int | None = None,
+    master_port: int = _MASTER_PORT,
 ) -> IrisVllmLaunch:
     local_dp = data_parallel_size if data_parallel_size_local is None else data_parallel_size_local
     args = (
@@ -265,7 +272,7 @@ def _build_task_launch(
         "--master-addr",
         master_addr,
         "--master-port",
-        str(_MASTER_PORT),
+        str(master_port),
         "--device-ids",
         ",".join(str(index) for index in range(tensor_parallel_size * local_dp)),
     )
@@ -277,7 +284,7 @@ def _build_task_launch(
             "--data-parallel-address",
             master_addr,
             "--data-parallel-rpc-port",
-            str(_MASTER_PORT + 1),
+            str(master_port + 1),
             "--data-parallel-backend",
             "mp",
         )

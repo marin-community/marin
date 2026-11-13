@@ -29,10 +29,6 @@ from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec
 from iris.rpc import job_pb2
-from rigging.filesystem.factory import open_url
-from rigging.log_setup import configure_logging
-
-from experiments.evaluation.hero_vllm_hillclimb.probes import Client, LoadConfig, ProbeConfig, gate_probes, load_sweep, long_probes
 from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel
 from marin.inference.config import (
     IrisConfig,
@@ -50,6 +46,17 @@ from marin.inference.iris_vllm import (
     wait_for_iris_vllm_shutdown,
 )
 from marin.inference.vllm_backend import VllmBackend
+from rigging.filesystem.factory import open_url
+from rigging.log_setup import configure_logging
+
+from experiments.evaluation.hero_vllm_hillclimb.probes import (
+    Client,
+    LoadConfig,
+    ProbeConfig,
+    gate_probes,
+    load_sweep,
+    long_probes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,9 +211,25 @@ def _assert_cuda_graphs(log_dir: str) -> None:
         raise RuntimeError("G0 failed: no CUDA graph capture in the vLLM log")
 
 
-def run_arm(config: ArmConfig) -> None:
-    """Iris entrypoint for every task of an arm's gang."""
+def run_arms(configs: tuple[ArmConfig, ...]) -> None:
+    """Iris entrypoint: serve and probe each variant in order on the same gang.
+
+    Running variants back to back on one allocation removes rack/placement confounds between
+    them. A failed variant is recorded and the sequence continues; the job fails at the end.
+    """
     configure_logging()
+    failures = []
+    for instance, config in enumerate(configs):
+        error = run_arm(config, instance)
+        if error is not None:
+            failures.append((config.name, error))
+    if failures:
+        raise RuntimeError(f"variants failed: {failures}")
+
+
+def run_arm(config: ArmConfig, instance: int = 0) -> str | None:
+    """Serve and probe one variant on every task of the gang; return the leader's error, if any."""
+    error = None
     geometry = config.geometry
     model, num_chips = _resolved_model(config.model, config.iris)
     spec = _vllm_model_spec(model, num_chips, None)
@@ -216,6 +239,7 @@ def run_arm(config: ArmConfig) -> None:
         tensor_parallel_size=geometry.tensor_parallel_size,
         data_parallel_size=geometry.global_data_parallel_size,
         data_parallel_size_local=geometry.data_parallel_size,
+        instance=instance,
     ) as launch:
         subprocess_env = {**launch.subprocess_env, **dict(config.env)}
         extra_args = (*launch.extra_cli_args, *(config.leader_args if launch.is_leader else ()))
@@ -240,18 +264,27 @@ def run_arm(config: ArmConfig) -> None:
                     try:
                         _assert_cuda_graphs(server.log_dir)
                         asyncio.run(_run_probes(server.server_url, config, _read_json(config.cases_uri)))
+                    except Exception as failure:
+                        logger.exception("variant %s failed", config.name)
+                        error = repr(failure)
                     finally:
                         _copy_native_logs(server.log_dir, config.output_uri)
             else:
                 wait_for_iris_vllm_shutdown(launch, environment.check_alive)
         if not launch.is_leader:
             notify_iris_vllm_stopped(launch)
+    return error
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--name", required=True)
     parser.add_argument("--release", choices=sorted(RELEASES), required=True)
+    parser.add_argument(
+        "--sequence",
+        help="Comma-separated releases to run back to back on the same gang (e.g. 3004cd8,0ac9dcb,3004cd8); "
+        "overrides --release",
+    )
     parser.add_argument("--hosts", type=int, default=4)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--phases", default="gates,long,load")
@@ -314,7 +347,48 @@ def main() -> None:
         serving_geometry=geometry,
         cache_ttl_days=0,
     )
-    release = RELEASES[args.release]
+    releases = args.sequence.split(",") if args.sequence else [args.release]
+    assert all(tag in RELEASES for tag in releases), releases
+    configs = [
+        _variant_config(args, name if len(releases) == 1 else f"{name}-v{i}-{tag}", tag, geometry, iris_config)
+        for i, tag in enumerate(releases)
+    ]
+    config = configs[0]
+    engine = config.engine
+    submission = resources if args.direct else replace(resources, target_cluster=TARGET_CLUSTER)
+    cluster = TARGET_CLUSTER if args.direct else CLUSTER
+    coscheduling = resolve_coscheduling(submission, submission.replicas)
+    print(
+        json.dumps(
+            {"name": name, "outputs": [c.output_uri for c in configs], "args": list(engine.extra_args), "env": args.env},
+            indent=1,
+        )
+    )
+    print(f"replicas={submission.replicas} coscheduling={coscheduling}")
+    if args.dry_run:
+        return
+    print(f"controller={cluster} target_cluster={submission.target_cluster}")
+    with connect_controller(cluster_name=cluster) as endpoint:
+        with IrisClient.remote(endpoint.url, workspace=workspace, credentials=endpoint.credentials) as client:
+            job = client.submit(
+                entrypoint=Entrypoint.from_callable(run_arms, tuple(configs)),
+                name=f"hero-vllm-{name}",
+                resources=convert_resources(submission),
+                environment=EnvironmentSpec(),
+                ports=["http"],
+                replicas=submission.replicas,
+                coscheduling=coscheduling,
+                constraints=convert_constraints(submission) or None,
+                max_retries_failure=0,
+                max_retries_preemption=0,
+                priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+                timeout=None,
+            )
+            print(f"submitted {job}")
+
+
+def _variant_config(args, name, tag, geometry, iris_config) -> ArmConfig:
+    release = RELEASES[tag]
     if args.overlay_wheel:
         url_file, sha256 = args.overlay_wheel.rsplit(":", 1)
         url = Path(url_file).read_text().strip()
@@ -340,7 +414,7 @@ def main() -> None:
         dtype="bfloat16",
         tensor_parallel_size=args.tensor_parallel_size,
     )
-    config = ArmConfig(
+    return ArmConfig(
         name=name,
         output_uri=f"{OUTPUT_ROOT}/{name}",
         cases_uri=CASES_URI,
@@ -361,31 +435,6 @@ def main() -> None:
         ),
         env=tuple(tuple(item.split("=", 1)) for item in args.env),
     )
-    submission = resources if args.direct else replace(resources, target_cluster=TARGET_CLUSTER)
-    cluster = TARGET_CLUSTER if args.direct else CLUSTER
-    coscheduling = resolve_coscheduling(submission, submission.replicas)
-    print(json.dumps({"name": name, "output": config.output_uri, "args": list(engine.extra_args), "env": args.env}, indent=1))
-    print(f"replicas={submission.replicas} coscheduling={coscheduling}")
-    if args.dry_run:
-        return
-    print(f"controller={cluster} target_cluster={submission.target_cluster}")
-    with connect_controller(cluster_name=cluster) as endpoint:
-        with IrisClient.remote(endpoint.url, workspace=workspace, credentials=endpoint.credentials) as client:
-            job = client.submit(
-                entrypoint=Entrypoint.from_callable(run_arm, config),
-                name=f"hero-vllm-{name}",
-                resources=convert_resources(submission),
-                environment=EnvironmentSpec(),
-                ports=["http"],
-                replicas=submission.replicas,
-                coscheduling=coscheduling,
-                constraints=convert_constraints(submission) or None,
-                max_retries_failure=0,
-                max_retries_preemption=0,
-                priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
-                timeout=None,
-            )
-            print(f"submitted {job}")
 
 
 if __name__ == "__main__":

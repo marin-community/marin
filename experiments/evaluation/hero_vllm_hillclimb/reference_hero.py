@@ -243,7 +243,14 @@ def main() -> None:
     batches = [(rows, -(-length // LENGTH_QUANTUM) * LENGTH_QUANTUM) for rows, length in batches]
     batches += [([row], len(row.tokens)) for row in long]
 
-    outputs = {"row_case": [], "row_position": [], "target_id": [], "target_logprob": [], "top_ids": [], "top_logprobs": []}
+    outputs = {
+        "row_case": [],
+        "row_position": [],
+        "target_id": [],
+        "target_logprob": [],
+        "top_ids": [],
+        "top_logprobs": [],
+    }
     case_ids = [row.case_id for row in gate + long]
     row_meta = []
     timings = {}

@@ -88,9 +88,7 @@ def main() -> None:
             {"case_id": f"chat{i:02d}", "tokens": tokens, "sha": _sha(tokens)} for i, tokens in enumerate(gate_chat)
         ]
         + [{"case_id": f"book{i:02d}", "tokens": tokens, "sha": _sha(tokens)} for i, tokens in enumerate(gate_book)],
-        "long": [
-            {"case_id": f"long{n}", "tokens": longest[:n], "sha": _sha(longest[:n])} for n in LONG_LENGTHS
-        ],
+        "long": [{"case_id": f"long{n}", "tokens": longest[:n], "sha": _sha(longest[:n])} for n in LONG_LENGTHS],
         "load": [{"case_id": f"load{i:04d}", "tokens": tokens} for i, tokens in enumerate(load)],
     }
     args.output.write_text(json.dumps(cases))

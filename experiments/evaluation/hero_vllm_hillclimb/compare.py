@@ -14,7 +14,6 @@ import json
 import math
 
 import numpy as np
-
 from rigging.filesystem.factory import open_url
 
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=14d/hero-vllm-hillclimb/runs"
@@ -178,7 +177,13 @@ def g1a(scores: dict, reference: dict) -> dict:
                 failures.append(
                     {"case": case_id, "position": position, "max_error": max_error, "missing_top5": missing, "gap": gap}
                 )
-    return {"positions": positions, "worst": worst, "failures": len(failures), "first_failures": failures[:10], "pass": not failures}
+    return {
+        "positions": positions,
+        "worst": worst,
+        "failures": len(failures),
+        "first_failures": failures[:10],
+        "pass": not failures,
+    }
 
 
 def position_errors(scores: dict, reference: dict) -> dict[str, np.ndarray]:
