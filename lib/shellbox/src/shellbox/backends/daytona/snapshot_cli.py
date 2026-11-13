@@ -32,6 +32,7 @@ from shellbox.backends.daytona.snapshot import (
     ensure_snapshot,
     list_snapshots,
     purge_stale_snapshots,
+    referenced_snapshots,
     snapshot_last_used,
 )
 
@@ -159,13 +160,17 @@ async def _ensure(client: AsyncDaytona, requests: list[SnapshotRequest]) -> None
 
 
 async def _purge_dry_run(client: AsyncDaytona, *, now: datetime, minimum_idle: timedelta) -> None:
+    referenced = await referenced_snapshots(client)
     classes = classify_inventory(await list_snapshots(client), now=now, minimum_idle=minimum_idle)
     stale = [name for name, classification in classes.items() if classification is SnapshotClassification.STALE]
     unclassified = [
         name for name, classification in classes.items() if classification is SnapshotClassification.UNCLASSIFIED
     ]
     for name in stale:
-        print(f"would delete {name}")
+        if name in referenced:
+            print(f"referenced {name} (live sandbox)")
+        else:
+            print(f"would delete {name}")
     for name in unclassified:
         print(f"unclassified {name} (missing last-use evidence)")
     if not stale and not unclassified:
@@ -178,6 +183,8 @@ async def _purge_apply(client: AsyncDaytona, *, now: datetime, minimum_idle: tim
         print(f"deleted {name}")
     for name in report.skipped:
         print(f"kept {name} (used since inventory)")
+    for name in report.referenced:
+        print(f"kept {name} (referenced by a sandbox)")
     for name in report.unclassified:
         print(f"unclassified {name} (missing last-use evidence)")
     for name in report.remaining:

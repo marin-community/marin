@@ -187,10 +187,13 @@ neither is available.
      --api-key-env DAYTONA_RL_API_KEY purge --apply
    ```
 
-   `purge` re-reads each target's last use so a snapshot used since the inventory
-   is kept. Provider deletion is asynchronous: `removal pending <name>` means the
-   delete was accepted but a follow-up inventory still observes it. Do not repeat
-   the deletion merely because removal is asynchronous.
+   `purge` enumerates the account's sandboxes before deleting anything, keeps every
+   stale snapshot that a sandbox still references (`kept <name> (referenced by a
+   sandbox)`), and aborts without deleting when sandbox references cannot be
+   enumerated. It re-reads each remaining target's last use so a snapshot used
+   since the inventory is also kept. Provider deletion is asynchronous: `removal
+   pending <name>` means the delete was accepted but a follow-up inventory still
+   observes it. Do not repeat the deletion merely because removal is asynchronous.
 5. Re-inventory after cleanup. Report remaining stale targets and deletion
    failures rather than claiming cleanup succeeded. Recheck quota, create any
    required snapshots that are now missing with `ensure`, and verify their active

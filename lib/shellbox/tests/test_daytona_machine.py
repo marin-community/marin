@@ -1101,6 +1101,27 @@ class SnapshotAccount:
         del self.snapshots[snapshot.name]
 
 
+class SandboxLister:
+    """Async-iterable sandbox source with an injectable failure mode."""
+
+    def __init__(self, snapshot_names=(), error=None):
+        self.snapshot_names = list(snapshot_names)
+        self.error = error
+
+    def __call__(self, query=None):
+        return self
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.error is not None:
+            raise self.error
+        if not self.snapshot_names:
+            raise StopAsyncIteration
+        return SimpleNamespace(snapshot=self.snapshot_names.pop(0))
+
+
 def test_snapshot_identity_tracks_rounded_resources_and_image_source() -> None:
     image = RegistryImage("fixture@sha256:" + "a" * 64)
     rounded = snapshot_resources(cpus=2, memory_mb=2049, storage_mb=1025, gpus=0)
@@ -1149,7 +1170,7 @@ def test_purge_stale_snapshots_deletes_only_stale_account_entries() -> None:
         ]
     )
 
-    report = asyncio.run(purge_stale_snapshots(SimpleNamespace(snapshot=account), now=now))
+    report = asyncio.run(purge_stale_snapshots(SimpleNamespace(snapshot=account, list=SandboxLister()), now=now))
 
     assert report.deleted == ("stale",)
     assert report.unclassified == ("unknown",)
@@ -1161,8 +1182,9 @@ def test_purge_revalidates_last_use_before_deleting() -> None:
     now = datetime(2026, 1, 1, 12, tzinfo=UTC)
     account = SnapshotAccount([_account_snapshot("candidate", last_used_at=now - timedelta(hours=2))])
     account.used_on_get = now
+    client = SimpleNamespace(snapshot=account, list=SandboxLister())
 
-    report = asyncio.run(purge_stale_snapshots(SimpleNamespace(snapshot=account), now=now))
+    report = asyncio.run(purge_stale_snapshots(client, now=now))
 
     assert report.deleted == ()
     assert report.skipped == ("candidate",)
@@ -1185,12 +1207,44 @@ def test_purge_continues_when_a_target_loses_its_last_use_evidence() -> None:
             _account_snapshot("still-stale", last_used_at=now - timedelta(hours=2)),
         ]
     )
+    client = SimpleNamespace(snapshot=account, list=SandboxLister())
 
-    report = asyncio.run(purge_stale_snapshots(SimpleNamespace(snapshot=account), now=now))
+    report = asyncio.run(purge_stale_snapshots(client, now=now))
 
     assert report.deleted == ("still-stale",)
     assert report.unclassified == ("vanishing",)
     assert set(account.snapshots) == {"vanishing"}
+
+
+def test_purge_preserves_a_stale_snapshot_that_a_live_sandbox_references() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount(
+        [
+            _account_snapshot("referenced", last_used_at=now - timedelta(hours=2)),
+            _account_snapshot("unused", last_used_at=now - timedelta(hours=2)),
+        ]
+    )
+    client = SimpleNamespace(snapshot=account, list=SandboxLister(snapshot_names=["referenced"]))
+
+    report = asyncio.run(purge_stale_snapshots(client, now=now))
+
+    assert report.referenced == ("referenced",)
+    assert report.deleted == ("unused",)
+    assert set(account.snapshots) == {"referenced"}
+
+
+def test_purge_fails_closed_when_sandbox_references_cannot_be_enumerated() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount([_account_snapshot("stale", last_used_at=now - timedelta(hours=2))])
+    client = SimpleNamespace(
+        snapshot=account,
+        list=SandboxLister(error=DaytonaNotFoundError("listing failed", status_code=500)),
+    )
+
+    with pytest.raises(RuntimeError, match="Cannot enumerate sandbox references"):
+        asyncio.run(purge_stale_snapshots(client, now=now))
+
+    assert set(account.snapshots) == {"stale"}
 
 
 def test_daytona_network_policy_parses_declarative_fields() -> None:

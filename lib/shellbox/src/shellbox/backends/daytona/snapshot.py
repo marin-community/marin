@@ -102,6 +102,7 @@ class SnapshotPurgeReport:
     skipped: tuple[str, ...]
     unclassified: tuple[str, ...]
     remaining: tuple[str, ...]
+    referenced: tuple[str, ...]
 
 
 def validate_source(
@@ -258,6 +259,20 @@ def classify_inventory(
     return {snapshot.name: classify_snapshot(snapshot, now=now, minimum_idle=minimum_idle) for snapshot in snapshots}
 
 
+async def referenced_snapshots(client: AsyncDaytona) -> set[str]:
+    """Snapshot names that existing account sandboxes still reference.
+
+    Last-use evidence only records the most recent sandbox creation, so an
+    old timestamp does not establish absence of references. Fails closed: an
+    enumeration error raises instead of reporting an empty set, because
+    deleting without reference evidence is the one unrecoverable outcome.
+    """
+    try:
+        return {sandbox.snapshot async for sandbox in client.list() if sandbox.snapshot}
+    except Exception as error:
+        raise RuntimeError("Cannot enumerate sandbox references; refusing to purge") from error
+
+
 async def purge_stale_snapshots(
     client: AsyncDaytona,
     *,
@@ -268,13 +283,18 @@ async def purge_stale_snapshots(
 
     Every non-general account snapshot is a candidate, including names Shellbox
     did not create; provider-owned general snapshots are outside cleanup scope.
-    Revalidating each target preserves a snapshot that was used after the
-    inventory was taken, and a target whose last-use evidence disappears between
-    the inventory and the revalidation is recorded as unclassified without
-    blocking the remaining deletions. Removal is asynchronous, so the report
-    lists deleted names that a follow-up inventory still observes.
+    Sandbox references are enumerated before any deletion, so reference evidence
+    that cannot be obtained aborts the purge entirely, and a stale snapshot that
+    an existing sandbox still references is preserved and reported as
+    ``referenced``. Revalidating each target preserves a snapshot that was used
+    after the inventory was taken, and a target whose last-use evidence
+    disappears between the inventory and the revalidation is recorded as
+    unclassified without blocking the remaining deletions. Removal is
+    asynchronous, so the report lists deleted names that a follow-up inventory
+    still observes.
     """
     observed_at = now or datetime.now(UTC)
+    referenced = await referenced_snapshots(client)
     inventory_classes = classify_inventory(await list_snapshots(client), now=observed_at, minimum_idle=minimum_idle)
     stale = [
         name for name, classification in inventory_classes.items() if classification is SnapshotClassification.STALE
@@ -286,7 +306,11 @@ async def purge_stale_snapshots(
     ]
     deleted: list[str] = []
     skipped: list[str] = []
+    referenced_kept: list[str] = []
     for name in stale:
+        if name in referenced:
+            referenced_kept.append(name)
+            continue
         try:
             current = await _snapshot_metadata(client, name)
         except DaytonaNotFoundError:
@@ -305,4 +329,5 @@ async def purge_stale_snapshots(
         skipped=tuple(skipped),
         unclassified=tuple(unclassified),
         remaining=tuple(name for name in deleted if name in present),
+        referenced=tuple(referenced_kept),
     )
