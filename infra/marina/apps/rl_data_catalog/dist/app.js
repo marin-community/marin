@@ -9,7 +9,7 @@ const columns = [
   ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['daytona', 'Daytona'], ['backends', 'Backends'], ['grading', 'Grading'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'],
 ];
 const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
-const state = {sources: [], sort: 'examples', direction: -1, origin: 'all', syncedAt: null};
+const state = {sources: [], sort: 'display_name', direction: 1, origin: 'all', syncedAt: null};
 const day = value => value ? new Date(value).toLocaleDateString('en-US', {month: 'short', day: '2-digit', year: 'numeric', timeZone: 'UTC'}) : '—';
 
 const originLabels = {tasktrove: 'TaskTrove', evalchemy: 'Evalchemy', harbor_hub: 'Harbor Hub', nemotron: 'Nemotron', 'Task Trove': 'TaskTrove'};
@@ -115,12 +115,12 @@ function render() {
   $('headers').replaceChildren(...columns.map(([key, title]) => {
     const th = node('th'); th.scope = 'col';
     if (['examples', 'issue_rate', 'overlap'].includes(key)) th.className = 'num';
-    if (key === 'evidence') { th.append(node('span', title, 'header-label')); return th; }
+    if (['evidence', 'examples'].includes(key)) { th.append(node('span', title, 'header-label')); return th; }
     const button = node('button', title);
     th.setAttribute('aria-sort', state.sort === key ? state.direction === 1 ? 'ascending' : 'descending' : 'none');
     if (state.sort === key) button.append(node('span', state.direction === 1 ? '↑' : '↓', 'sort-indicator'));
     button.addEventListener('click', () => {
-      state.direction = state.sort === key ? -state.direction : ['examples', 'quality', 'updated'].includes(key) ? -1 : 1;
+      state.direction = state.sort === key ? -state.direction : ['quality', 'updated'].includes(key) ? -1 : 1;
       state.sort = key; update();
     });
     th.append(button); return th;
@@ -257,8 +257,8 @@ function viewUrl() {
   }
   if (state.origin !== 'all') params.set('origin', state.origin);
   if ($('show-all').checked) params.set('all', '1');
-  if (state.sort !== 'examples') params.set('sort', state.sort);
-  if (state.direction !== -1) params.set('direction', state.direction);
+  if (state.sort !== 'display_name') params.set('sort', state.sort);
+  if (state.direction !== 1) params.set('direction', state.direction);
   return location.pathname + (params.size ? `#${params}` : '');
 }
 function readLocation() {
@@ -267,8 +267,9 @@ function readLocation() {
   for (const id of ['use', 'quality', 'result']) if (params.has(id)) $(id).value = params.get(id);
   $('show-all').checked = params.get('all') === '1';
   state.origin = params.get('origin') === 'Task Trove' ? 'TaskTrove' : params.get('origin') || 'all';
-  state.sort = params.get('sort') || 'examples';
-  state.direction = params.get('direction') === '1' ? 1 : -1;
+  const sortable = columns.filter(([key]) => !['examples', 'evidence'].includes(key)).map(([key]) => key);
+  state.sort = sortable.includes(params.get('sort')) ? params.get('sort') : 'display_name';
+  state.direction = params.get('direction') === '-1' ? -1 : 1;
 }
 function update(replace = false) {
   history[replace ? 'replaceState' : 'pushState'](null, '', viewUrl());

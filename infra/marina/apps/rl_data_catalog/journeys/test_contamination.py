@@ -160,6 +160,16 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     expect(page.get_by_role("columnheader", name="Backends")).to_be_visible()
     expect(page.get_by_role("columnheader", name="Grading")).to_be_visible()
     expect(page.get_by_role("columnheader", name="Oracle pass")).to_have_count(0)
+    expect(page.get_by_role("columnheader", name="Examples", exact=True).get_by_role("button")).to_have_count(0)
+    source_header = page.locator("#headers th").first
+    expect(source_header).to_have_attribute("aria-sort", "ascending")
+    before = page.locator("#rows tr").evaluate_all("rows => rows.map(row => row.dataset.sourceId)")
+    source_header.get_by_role("button").click()
+    expect(source_header).to_have_attribute("aria-sort", "descending")
+    assert page.locator("#rows tr").evaluate_all("rows => rows.map(row => row.dataset.sourceId)") == list(
+        reversed(before)
+    )
+    source_header.get_by_role("button").click()
     clean = page.locator('tr[data-source-id="Marin:clean"]')
     assert set(clean.locator(".backend-chips .chip").all_text_contents()) == {
         "Docker",
