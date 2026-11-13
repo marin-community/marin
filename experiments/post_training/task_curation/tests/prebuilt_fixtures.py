@@ -22,6 +22,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
@@ -42,6 +43,7 @@ def prebuilt_source(info: SourceInfo) -> RlDataSource[PrebuiltCohort]:
             or decontamination_evidence("open-athena/fixture-tasks", "a" * 40, count),
         ),
         config=PrebuiltCohort(
+            intended_use=IntendedUse.TRAIN,
             name=info.id.rsplit(":", 1)[-1],
             version="fixture-1",
             repo="open-athena/fixture-tasks",

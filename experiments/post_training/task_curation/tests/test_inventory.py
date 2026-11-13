@@ -255,6 +255,18 @@ def test_selection_does_not_publish_an_incomplete_or_evaluation_training_pool(tm
     assert not (Path(step.path()) / TRAIN_FILENAME).exists()
 
 
+@pytest.mark.parametrize("language", ["python-v2", "typescript-v2", "java-v3", "csharp-v4"])
+@pytest.mark.parametrize("origin", ["TaskTrove", "Task Trove"])
+def test_crosscode_evaluation_policy_blocks_stale_admitted_training_artifacts(tmp_path, language, origin):
+    source_id = f"{origin}:laion__exp_rpt_crosscodeeval-{language}"
+    settings = recipe(tmp_path).model_copy(update={"sources": {source_id: "calendar"}})
+    # The archived artifact predates the EVAL ruling and still claims TRAIN/FULL.
+    source = admitted_source(tmp_path / "source", [source_task("training-a")], "train", "full")
+    with pytest.raises(ValueError, match="Evaluation-only CrossCodeEval"):
+        task_selection_step({source_id: source}, settings)
+    assert not list((tmp_path / "artifacts").rglob(TRAIN_FILENAME))
+
+
 def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monkeypatch):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
     assert declared.config is not None

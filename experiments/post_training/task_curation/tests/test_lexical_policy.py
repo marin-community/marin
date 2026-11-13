@@ -107,3 +107,20 @@ def test_training_use_keeps_benchmark_tagged_sources_in_remediation_review():
     )
     assert source_lexical_use(source) is LexicalUse.TRAIN
     assert measurement_for_use(overlap_measurement(source.dataset.name), source_lexical_use(source)).receipt is None
+
+
+@pytest.mark.parametrize("language", ["python-v2", "typescript-v2", "java-v3", "csharp-v4"])
+def test_crosscode_eval_keeps_its_private_population_and_measures_lexical_overlap_only(language):
+    source = all_sources()[f"TaskTrove:laion__exp_rpt_crosscodeeval-{language}"]
+    evidence = source.info.lexical_contamination
+    assert source.config.intended_use is IntendedUse.EVAL
+    assert source_lexical_use(source) is LexicalUse.EVAL
+    assert evidence.input_dataset_id == source.dataset.name
+    assert evidence.input_dataset_revision == source.dataset.revision
+    assert evidence.receipt.use is LexicalUse.EVAL
+    assert evidence.receipt.status is DeconReceiptStatus.BENCHMARK_MEASURED
+    assert evidence.receipt.retained_tasks == source.info.count
+    assert evidence.receipt.dropped_tasks == 0
+    assert evidence.receipt.release is None
+    assert source.info.within_source_dedup.unique_count == source.info.count
+    assert source.declaration.status == "Not selectable"

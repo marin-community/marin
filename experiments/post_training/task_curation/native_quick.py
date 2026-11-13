@@ -27,6 +27,7 @@ from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.datasets.native_harbor import VERSION, hub_rows, native_task, unpack_native
 from experiments.post_training.task_curation.registry import read_registry_json
+from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
 
 LOGGER = logging.getLogger(__name__)
 RETIRED = Path(__file__).with_name("retired-inventory-only.json")
@@ -157,7 +158,7 @@ def run_entry(entry: dict, root: Path, hub_input: str | None) -> dict:
         version=VERSION,
         source=source,
         convert=native_task,
-        intended_use=IntendedUse.TRAIN,
+        intended_use=IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN,
         rubric=None,
         controls=None,
     )
