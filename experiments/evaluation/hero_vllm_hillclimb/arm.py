@@ -151,20 +151,24 @@ def _copy_native_logs(log_dir: str, output_uri: str) -> None:
                 shutil.copyfileobj(source, target)
 
 
+_PHASES = {"gates": gate_probes, "long": long_probes, "load": load_sweep}
+
+
 async def _run_probes(base_url: str, config: ArmConfig, cases: dict) -> None:
+    """Run each requested phase; a failed phase is recorded and the next still runs on the warm server."""
+    failures = []
     async with Client(base_url, SERVED_NAME) as client:
-        if "gates" in config.phases:
+        for phase in config.phases:
             started = time.time()
-            results = await gate_probes(client, cases, config.probes)
-            _write_json(f"{config.output_uri}/gates.json", results | {"seconds": time.time() - started})
-        if "long" in config.phases:
-            started = time.time()
-            results = await long_probes(client, cases, config.probes)
-            _write_json(f"{config.output_uri}/long.json", results | {"seconds": time.time() - started})
-        if "load" in config.phases:
-            started = time.time()
-            results = await load_sweep(client, cases, config.probes)
-            _write_json(f"{config.output_uri}/load.json", results | {"seconds": time.time() - started})
+            try:
+                results = await _PHASES[phase](client, cases, config.probes)
+            except Exception as error:
+                logger.exception("phase %s failed", phase)
+                failures.append(phase)
+                results = {"error": repr(error)}
+            _write_json(f"{config.output_uri}/{phase}.json", results | {"seconds": time.time() - started})
+    if failures:
+        raise RuntimeError(f"probe phases failed: {failures}")
 
 
 def run_arm(config: ArmConfig) -> None:
