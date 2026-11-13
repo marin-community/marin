@@ -522,9 +522,7 @@ def load_run(
     default, selection = presets.task_selections(
         preset, presets.selection_artifact(inputs.tasks) if inputs.tasks else None
     )
-    task_set = _eval_lite_identity(
-        preset, launch, default, selection, terminal.native.config["skyrl"]["trainer"]["seed"]
-    )
+    task_set = _eval_lite_identity(preset, launch, default, selection, launch.seed)
     scores, initial_scores, task_set_ids = [EVAL_SCORE_SCHEMA.empty_table()], [], {}
     for evaluation in preset.evaluations:
         quality = evaluation.held_out and evaluation == preset.guarded

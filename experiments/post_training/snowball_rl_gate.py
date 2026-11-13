@@ -122,7 +122,11 @@ def validate_candidate(preset: presets.Preset, inputs: GateInputs, *, control: b
             receipt = read_stored_skyrl_receipt(path)
             if receipt is None:
                 raise InvalidComparison(f"control receipt is unavailable: {path}")
-            _check_control_config(receipt.native.config, current, recorded_launch(receipt))
+            try:
+                launch = recorded_launch(receipt)
+            except ValueError as error:
+                raise InvalidComparison(str(error)) from error
+            _check_control_config(receipt.native.config, current, launch)
 
 
 def gate_inputs(

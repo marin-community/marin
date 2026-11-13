@@ -263,7 +263,10 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
         except SkyRLReceiptLookupError as error:
             raise click.BadParameter(str(error)) from error
         result = receipt.native.result if receipt is not None else None
-        launch = recorded_launch(receipt) if receipt is not None else None
+        try:
+            launch = recorded_launch(receipt) if receipt is not None else None
+        except ValueError as error:
+            raise snowball_rl_gate.InvalidComparison(str(error)) from error
         tracking = attempt_tracking(receipt, launch) if receipt is not None else {}
         team = launch.wandb_entity if launch else execution.wandb_entity
         grafana = _grafana_links(receipt, execution.cluster, launch)

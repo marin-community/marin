@@ -366,8 +366,9 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         (("skyrl", "generator", "enable_prefix_caching"), False, (), "invalid"),
         (("runtime", "task_env", "VLLM_PROBE"), "1", ('extra_env.VLLM_PROBE="1"',), "pass"),
         (("skyrl", "generator", "eval_sampling_params", "temperature"), 0.5, (), "invalid"),
-        (("skyrl", "generator", "chat_template"), "different", (), "invalid"),
+        (("skyrl", "generator", "chat_template"), {"source": "name", "name_or_path": "different"}, (), "invalid"),
         (("runtime", "task_env", "TASK_PROBE"), "1", (), "invalid"),
+        (("skyrl", "trainer", "seed"), None, (), "invalid"),
         (("recorded-named",), None, (), "pass"),
     ],
 )
@@ -412,7 +413,9 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
     write_receipt(root, receipt)
     report = rescore("learning-medium", "--candidate", "users/test/protocol")
     assert report["verdict"] == verdict, report
-    if verdict == "invalid":
+    if path == ("skyrl", "trainer", "seed"):
+        assert "malformed recorded configuration" in report["reason"] and "seed" in report["reason"]
+    elif verdict == "invalid":
         assert "evaluation protocol" in report["reason"] or "config differs" in report["reason"]
 
 
@@ -436,6 +439,8 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("train-candidate-compose-no-wait", 4),
         ("train-pass", 0),
         ("train-failed", 3),
+        ("malformed-control", 4),
+        ("malformed-status", 4),
     ],
 )
 def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_runs, monkeypatch, case, expected):
@@ -453,6 +458,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
             fingerprint=built.runs[0].fingerprint(),
         )
     )
+    if case.startswith("malformed-"):
+        root = roots[0] if case == "malformed-control" else source
+        receipt = json.loads((root / "terminal.json").read_text())
+        receipt["config"]["skyrl"]["trainer"]["seed"] = None
+        write_receipt(root, receipt)
     if case.startswith("recorded-"):
         receipt = json.loads((source / "terminal.json").read_text())
         if case == "recorded-sync":
@@ -491,6 +501,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     jobs = {job: SimpleNamespace(wait=finish)}
     client = MagicMock(spec=IrisClient)
     client.submit.return_value.job_id = job
+    if case.startswith("malformed-"):
+        client.submit.side_effect = AssertionError("malformed stored configuration reached the coordinator RPC")
     if case.startswith("stale-control"):
         client.submit.side_effect = AssertionError("stale controls reached the coordinator RPC")
     if "candidate-compose" in case:
@@ -518,6 +530,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(recorded_r
     finally:
         set_job_info(None)
     assert result.exit_code == expected, (result.output, result.exception)
+    if case.startswith("malformed-"):
+        assert "malformed recorded configuration" in result.output and "seed" in result.output
     if case.startswith("recorded-"):
         status = yaml.safe_load(result.output[result.output.rfind("\npreset: ") + 1 :].split("\n\n", 1)[0])
         if case == "recorded-unknown":

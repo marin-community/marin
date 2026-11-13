@@ -176,15 +176,15 @@ against the control commit, or gives the reason a local git comparison is unavai
    preset-specific default. `_DEFAULT_PATCH` supplies shared settings; `Recipe.numerics` selects
    trainer and engine precision and batch invariance.
 2. Bump that preset's `revision`. Data-medium shares learning-medium's settings and revision.
-3. From the repository root, print the actual native/allocation and full-envelope hashes:
+3. From the repository root, print the complete compared-configuration hash:
 
    ```bash
-   uv run pytest -s -q -n 0 experiments/post_training/snowball_tests/test_snowball_rl.py::test_gated_presets_match_revisioned_native_configs
+   uv run pytest -s -q -n 0 experiments/post_training/snowball_tests/test_snowball_rl.py::test_presets_match_revisioned_native_configs
    ```
 
-   A new revision intentionally fails until its printed pair is added under that preset in
-   the test's `revisions` table. Inspect the composed settings before accepting the pair.
-   The full-envelope hash includes actual execution memory and priority.
+   A new revision intentionally fails until its printed hash is added under that preset in
+   the test's `revisions` table. Inspect the composed settings before accepting the hash.
+   The compared-configuration hash includes actual execution memory and priority.
 4. Controls are collected by CI after the default change merges, once per changed default.
    That CI workflow is planned separately; control collection is not a merge gate.
    The manual `--control` command remains available for an explicitly authorized calibration.

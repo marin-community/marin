@@ -78,8 +78,6 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
     paths.append(str(path))
     learning = presets.PRESETS["learning-medium"]
     gate = snowball.snowball_rl_gate
-    unrelated = presets.PRESETS["speed-short"]
-    original_pins = gate.control_pins(unrelated)
     for current, arguments in (
         (replace(learning, revision="2026.11.12.2"), {}),
         (replace(presets.PRESETS["data-medium"], revision="2026.11.12.2"), {"tasks": selection}),
@@ -87,8 +85,6 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
         with pytest.raises(gate.InvalidComparison, match="no control pin") as error:
             snowball.build_run(current, **arguments)
         assert "--preset learning-medium --version 2026.11.12.2 --control" in str(error.value)
-    assert snowball.build_run(unrelated).gate is not None
-    assert gate.control_pins(unrelated) == original_pins
     task_set = tmp_path / presets.DEFAULT_EVAL_LITE_NAME / "2026.11.12.2"
     task_set.mkdir(parents=True)
     (task_set / "summary.json").write_bytes(

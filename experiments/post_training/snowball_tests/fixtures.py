@@ -26,7 +26,7 @@ from finestore.store import DataStore
 from iris.cluster.client.job_info import set_job_info
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import materialized_config
+from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
@@ -201,7 +201,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             source_root = Path(step.path(str(source_prefix)))
             source_root.mkdir(parents=True)
             document = source_root / "launch.yaml"
-            document.write_text(materialized_config(step, str(source_prefix)).launch_config_yaml)
+            context = StepContext.for_run(
+                str(source_root),
+                presets.artifact_prefix(preset.recipe.layout.cluster),
+                runtime_args=step.runtime_args,
+                deps=step.deps,
+            )
+            document.write_text(step.build_config(context).launch_config_yaml)
             config = gate.compose_configs([str(document)])[0]
             templates[key] = (source_root, config)
         return templates[key]
@@ -301,8 +307,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     for value in (*Outcome, "rollout_failure")
                 }
             )
-            if legacy and not generating:
-                row["reward/rloo_n_total_groups"] = 64
             if generating:
                 row = {
                     key: value
