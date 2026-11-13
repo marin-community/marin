@@ -137,6 +137,30 @@ NVL72 gangs use stricter rack-aware placement:
   split evenly over the fewest racks with 10 to 16 replicas per rack slice.
   Valid examples include 20, 24, 32, and 48 replicas.
 
+Applications can request unequal local groups through the SDK:
+
+```python
+from iris.cluster.types import CoschedulingConfig
+
+CoschedulingConfig(group_by="nvlink.domain", group_sizes=(8, 16))
+```
+
+For a 24-task job, tasks 0–7 share one NVLink domain and tasks 8–23 share
+one NVLink domain. With one four-GPU task per host, these groups occupy
+eight and sixteen hosts. Kueue admits both groups as one workload. The groups may
+share a domain if they fit. Iris still retries and cancels the whole job.
+Each task keeps its global ordinal. Group sizes must be positive and sum to
+the task count. Explicit groups require the Kubernetes backend, a required
+topology level, and at most ten groups. `nvlink.domain` is a required level;
+preferred and sliced levels cannot be used with explicit groups. Each NVLink
+group is limited to 16 tasks. Omitting `group_sizes` keeps the existing rules above.
+
+The task status API exposes the scheduler's assigned node-label values in
+`attempt.topology`, including `ds.coreweave.com/nvlink.domain` for NVLink
+placement. The mapping is empty until Iris observes the assignment. It is
+recorded per attempt and retained after the Pod is deleted. These values
+describe scheduler placement; they do not measure physical connectivity.
+
 Invalid multi-rack shapes fail before submission rather than silently losing
 the one-slice-per-rack guarantee. The canonical arithmetic is in
 [`coreweave_topology.py`](../src/iris/cluster/platforms/k8s/coreweave_topology.py).

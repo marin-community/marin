@@ -353,11 +353,12 @@ def apply_one_transition(
     # changelog row (commit._flush_tasks), so a stuck task's reason reaches the hub.
     # An unchanged message stays a no-op, so the message does not churn the changelog.
     message_changed = update.status_message is not None and update.status_message != (task.status_message or "")
-    has_new_data = update.error is not None or update.exit_code is not None or message_changed
+    attempt = attempt_map.get((update.task_id, update.attempt_id))
+    topology_changed = update.topology is not None and attempt is not None and update.topology != attempt.topology_json
+    has_new_data = update.error is not None or update.exit_code is not None or message_changed or topology_changed
     if update.new_state == prior_state and not has_new_data:
         return None
 
-    attempt = attempt_map.get((update.task_id, update.attempt_id))
     if attempt is None:
         return None
     # Overlay-aware attempt state: a same-batch cascade (e.g. a coscheduled
@@ -502,6 +503,7 @@ def apply_one_transition(
             node_name=update.node_name,
             terminal_reason=update.terminal_reason,
             output_archive=update.output_archive,
+            topology=update.topology,
         )
     )
     state.merge_task(

@@ -187,6 +187,7 @@ class JourneyWorld:
         preemption_retries: int = 0,
         max_task_failures: int | None = None,
         coscheduled: bool = False,
+        locality_groups: tuple[int, ...] = (),
         scheduling_timeout: float | None = None,
         execution_timeout: float | None = None,
         termination_grace: Duration | None = None,
@@ -200,6 +201,7 @@ class JourneyWorld:
             preemption_retries=preemption_retries,
             max_task_failures=max_task_failures,
             coscheduled=coscheduled,
+            locality_groups=locality_groups,
             scheduling_timeout=scheduling_timeout,
             execution_timeout=execution_timeout,
             termination_grace=termination_grace,
@@ -242,6 +244,7 @@ class JourneyWorld:
         preemption_retries: int,
         max_task_failures: int | None = None,
         coscheduled: bool = False,
+        locality_groups: tuple[int, ...] = (),
         scheduling_timeout: float | None = None,
         execution_timeout: float | None = None,
         termination_grace: Duration | None = None,
@@ -264,8 +267,9 @@ class JourneyWorld:
         )
         if include_resources:
             request.resources.CopyFrom(job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3))
-        if coscheduled:
+        if coscheduled or locality_groups:
             request.coscheduling.group_by = "journey.group"
+            request.coscheduling.group_sizes.extend(locality_groups)
         if scheduling_timeout is not None:
             request.scheduling_timeout.milliseconds = int(scheduling_timeout * 1000)
         if execution_timeout is not None:
@@ -276,11 +280,18 @@ class JourneyWorld:
             constraint = request.constraints.add(key=key, op=job_pb2.CONSTRAINT_OP_EQ)
             constraint.value.string_value = value
         response = self.controller.launch_job(request)
-        ref = JobRef(response.job_id, tasks, coscheduled)
+        ref = JobRef(response.job_id, tasks, coscheduled or bool(locality_groups))
         self._jobs[ref.wire_id] = ref
         self.trace.append(f"submit {ref.wire_id} tasks={tasks}")
         self._check_invariants()
         return ref
+
+    def assign_topology(self, task: TaskRef, topology: dict[str, str], *, attempt_id: int | None = None) -> None:
+        self.backend.queue_observation(
+            task.wire_id,
+            ScriptedObservation(self.task(task).state, attempt_id=attempt_id, topology=topology),
+        )
+        self.trace.append(f"topology {task.wire_id} {topology}")
 
     def succeed(self, task: TaskRef, *, attempt_id: int | None = None) -> None:
         self._observe(task, job_pb2.TASK_STATE_SUCCEEDED, attempt_id=attempt_id)

@@ -421,7 +421,14 @@ class TaskOutputArchive(_message.Message):
     def __init__(self, state: _Optional[_Union[TaskOutputArchive.State, str]] = ..., uri: _Optional[str] = ..., size_bytes: _Optional[int] = ..., sha256: _Optional[str] = ..., error: _Optional[str] = ..., retention: _Optional[_Union[TaskOutputArchive.Retention, str]] = ..., ttl_days: _Optional[int] = ..., skipped_count: _Optional[int] = ..., skipped_sample: _Optional[_Iterable[_Union[TaskOutputSkippedEntry, _Mapping]]] = ...) -> None: ...
 
 class TaskAttempt(_message.Message):
-    __slots__ = ("attempt_id", "worker_id", "state", "exit_code", "error", "started_at", "finished_at", "is_worker_failure", "attempt_uid", "pod_name", "pod_uid", "node_name", "terminal_reason", "output_archive")
+    __slots__ = ("attempt_id", "worker_id", "state", "exit_code", "error", "started_at", "finished_at", "is_worker_failure", "attempt_uid", "pod_name", "pod_uid", "node_name", "terminal_reason", "output_archive", "topology")
+    class TopologyEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
     WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
@@ -436,6 +443,7 @@ class TaskAttempt(_message.Message):
     NODE_NAME_FIELD_NUMBER: _ClassVar[int]
     TERMINAL_REASON_FIELD_NUMBER: _ClassVar[int]
     OUTPUT_ARCHIVE_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
     attempt_id: int
     worker_id: str
     state: TaskState
@@ -450,7 +458,8 @@ class TaskAttempt(_message.Message):
     node_name: str
     terminal_reason: str
     output_archive: TaskOutputArchive
-    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., is_worker_failure: _Optional[bool] = ..., attempt_uid: _Optional[str] = ..., pod_name: _Optional[str] = ..., pod_uid: _Optional[str] = ..., node_name: _Optional[str] = ..., terminal_reason: _Optional[str] = ..., output_archive: _Optional[_Union[TaskOutputArchive, _Mapping]] = ...) -> None: ...
+    topology: _containers.ScalarMap[str, str]
+    def __init__(self, attempt_id: _Optional[int] = ..., worker_id: _Optional[str] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., is_worker_failure: _Optional[bool] = ..., attempt_uid: _Optional[str] = ..., pod_name: _Optional[str] = ..., pod_uid: _Optional[str] = ..., node_name: _Optional[str] = ..., terminal_reason: _Optional[str] = ..., output_archive: _Optional[_Union[TaskOutputArchive, _Mapping]] = ..., topology: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
     __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "process_count")
@@ -703,10 +712,12 @@ class ConstraintList(_message.Message):
     def __init__(self, constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ...) -> None: ...
 
 class CoschedulingConfig(_message.Message):
-    __slots__ = ("group_by",)
+    __slots__ = ("group_by", "group_sizes")
     GROUP_BY_FIELD_NUMBER: _ClassVar[int]
+    GROUP_SIZES_FIELD_NUMBER: _ClassVar[int]
     group_by: str
-    def __init__(self, group_by: _Optional[str] = ...) -> None: ...
+    group_sizes: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, group_by: _Optional[str] = ..., group_sizes: _Optional[_Iterable[int]] = ...) -> None: ...
 
 class WorkerMetadata(_message.Message):
     __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "provenance")
