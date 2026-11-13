@@ -144,7 +144,7 @@ def measured_result(declaration: dict[str, Any], review: dict[str, Any] | None) 
         )
     else:
         return None
-    return measured
+    return measured if measured.reviewed else None
 
 
 def result(declaration: dict[str, Any], review: dict[str, Any] | None) -> str | None:

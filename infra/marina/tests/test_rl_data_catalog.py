@@ -1134,7 +1134,7 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
             .one()
         )
     assert row["grade"] == expected
-    assert result({}, dict(row)) == expected.upper()
+    assert result({}, dict(row)) == (None if expected == "unknown" else expected.upper())
     assert row["issue_count"] == sum(v in {"bad", "some_issues"} for v in verdicts)
     assert row["result_reviewed"] == sum(v not in {"unknown", "missing_task"} for v in verdicts)
     if verdicts == ["good"] * 99 + ["bad"]:
