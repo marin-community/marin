@@ -9,7 +9,7 @@ a manifest that provides neither.
 """
 
 import pytest
-from iac.config import load_iris_config
+from iac.config import load_iris_config, load_provisioning
 from iac.coreweave.cluster import _nodepool_manifest
 from iac.nodepools import NodePoolSpec, derive_nodepools
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -19,6 +19,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_LABEL_SUPERPOD,
     RACK_SIZE,
 )
+from iris.cluster.types import AcceleratorType
 
 
 def _node_based_spec() -> NodePoolSpec:
@@ -88,3 +89,19 @@ def test_derive_rejects_rack_pool_with_partial_rack():
     config.scale_groups["gb200"].max_slices = 70
     with pytest.raises(ValueError, match="whole number of 18-node racks"):
         derive_nodepools(config)
+
+
+def test_02a_sandbox_runtime_selects_only_cpu_nodes():
+    config = load_iris_config("cw-us-east-02a")
+    provisioning = load_provisioning("cw-us-east-02a").coreweave
+    assert provisioning is not None and provisioning.sandbox_runtime is not None
+    runtime = provisioning.sandbox_runtime
+    assert runtime.handler == "cw-gvisor-cpu"
+
+    group_label = f"iris-{config.platform.label_prefix}-scale-group"
+    selected_group = runtime.node_selector[group_label]
+    selected = config.scale_groups[selected_group]
+    assert selected.resources is not None and selected.resources.device_type == AcceleratorType.CPU
+    assert runtime.node_selector["node.coreweave.cloud/gvisor"] == "true"
+    pools = derive_nodepools(config)
+    assert [pool.name for pool in pools if pool.node_labels[group_label] == selected_group] == ["cw-use02a-cpu-genoa"]

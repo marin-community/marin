@@ -147,6 +147,16 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
         k8s_provider=k8s_provider,
         imports=imports,
     )
+    if sandbox_runtime := coreweave_provisioning.sandbox_runtime:
+        if kubernetes_provider is None:
+            raise ValueError(f"cluster {cluster!r} configures a sandbox runtime without a Kubernetes provider")
+        k8s.node.v1.RuntimeClass(
+            "sandbox-runtime-class",
+            metadata={"name": kubernetes_provider.sandbox_runtime_class},
+            handler=sandbox_runtime.handler,
+            scheduling={"nodeSelector": sandbox_runtime.node_selector},
+            opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[coreweave_cluster]),
+        )
     rbac = IrisRbac(
         "rbac",
         IrisRbacArgs(namespace=namespace, spec=coreweave_provisioning.rbac),
