@@ -50,19 +50,17 @@ def test_omitted_or_null_local_settings_keep_the_backend_disabled(monkeypatch, s
         ("unknown_backend", "trainer.unknown_backend.*\\n.*Extra inputs"),
     ],
 )
-def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
+def test_empty_mapping_preserves_config_merge_contracts(key, error):
     recipe = Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml"
     raw = yaml.safe_load(recipe.read_text())
     raw["trainer"][key] = {}
-    path = tmp_path / "recipe.yaml"
-    path.write_text(yaml.safe_dump(raw))
     with pytest.raises(ValueError, match=error):
         compose_skyrl_config(
             parse_rl_config(raw), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
         )
 
 
-def test_empty_session_settings_preserve_published_limits_and_shell_timeout(tmp_path):
+def test_empty_session_settings_preserve_published_limits_and_shell_timeout():
     config = composed_config({"session": {}})
     config.generator.max_turns = 3
     config.trajectory_runner.command_timeout = 17
