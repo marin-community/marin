@@ -13,8 +13,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 
 
 def pinned_json(uri: str, sha256: str) -> dict:
-    fs, path = filesystem_for(uri)
-    content = fs.cat_file(path)
+    content = StoragePath(uri).read_bytes()
     if hashlib.sha256(content).hexdigest() != sha256:
         raise ValueError(f"Adopted SFT artifact digest changed: {uri}")
     return json.loads(content)

@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.archive import write_once
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit
@@ -30,13 +30,12 @@ def prepare_subset(*, output: str, source: str) -> None:
         raise ValueError("Expected exactly one original BixBench smoke task")
     manifest = read_json(prefix_join(source, "environment.json"))
     manifest.update(data_uri=output, subset_of=source, subset_benchmark="bixbench-pi")
-    target_fs, target = filesystem_for(output)
-    target_fs.makedirs(target, exist_ok=True)
-    with target_fs.open(prefix_join(target, "rollouts.parquet"), "wb") as stream:
+    target = StoragePath(output)
+    target.mkdirs(exist_ok=True)
+    with (target / "rollouts.parquet").open("wb") as stream:
         pq.write_table(selected, stream)
-    target_fs.pipe_file(prefix_join(target, "environment.json"), json.dumps(manifest, indent=2).encode())
-    target_fs.pipe_file(
-        prefix_join(target, "selection.json"),
+    (target / "environment.json").write_bytes(json.dumps(manifest, indent=2).encode())
+    (target / "selection.json").write_bytes(
         json.dumps(
             {
                 "source": source,

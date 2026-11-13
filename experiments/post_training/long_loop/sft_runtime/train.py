@@ -878,17 +878,10 @@ def _drop_metrics(
 
 
 def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
-    """Permute the global batch's rows so every batch shard gets a similar share of attention work.
+    """Balance packed attention work across batch shards while retaining all tokens.
 
-    With packed documents a row's attention cost (query-key pairs inside a document, padding excluded)
-    varies several-fold, and every layer waits for the busiest shard at its next collective. The loss is a
-    mean over all tokens and the router statistics are global sums, so every token still enters the
-    objective; only which assignments exceed expert capacity can change. Expert capacity drops a shard's
-    later tokens first, so rows keep their loaded order within a shard rather than a cost order. A full
-    receiver keeps earlier senders' tokens first, so the deal starts at the costliest row's loaded shard
-    rather than shard 0. Both spread drops over rows of all costs only because the loader shuffles rows
-    within a batch.
-    Batches without segment ids, or with one row per shard, are returned as is.
+    Row assignment can change which tokens exceed expert capacity. Batches without
+    segment ids, or with one row per shard, are returned unchanged.
     """
     segment_ids = batch.attn_mask.segment_ids
     if segment_ids is None:

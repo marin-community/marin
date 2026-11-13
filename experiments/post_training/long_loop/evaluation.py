@@ -27,7 +27,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation, run_judged
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_table
@@ -50,8 +50,7 @@ def prepare_micro(*, output: str, dataset: str, revision: str, wheels_revision: 
     receipt.update(dataset=dataset, revision=revision, wheels_revision=wheels_revision)
     receipt["unique_source_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
     receipt["expanded_source_sha256"] = hashlib.sha256(Path(expanded_path).read_bytes()).hexdigest()
-    receipt_fs, receipt_key = filesystem_for(prefix_join(output, "selection.json"))
-    receipt_fs.pipe_file(receipt_key, json.dumps(receipt, indent=2).encode())
+    (StoragePath(output) / "selection.json").write_bytes(json.dumps(receipt, indent=2).encode())
     fs, key = filesystem_for(prefix_join(output, "rollouts.parquet"))
     with fs.open(key, "wb") as target:
         pq.write_table(prepared, target)
