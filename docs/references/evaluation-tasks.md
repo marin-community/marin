@@ -293,3 +293,43 @@ See [task curation](task-curation.md) for acquisition and publication,
 [task rollouts](task-rollouts.md) for single-task execution. Harbor execution remains
 separate. Historical Evalchemy archives remain readable; reproducing their runs
 requires the recorded checkout.
+
+## Length stops
+
+Evaldash's reductions do not count length stops.
+`experiments.evaluation.length_stops` counts the scored generation attempts of a
+result root that stopped at their output token limit:
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.length_stops scratch/eval-run
+```
+
+It takes the attempts that `marin.rollouts.evaluation_results.terminal_attempts`
+selects under the consumer rule in
+[Published corpus and raw results](#published-corpus-and-raw-results), the
+selection Evaldash uses, and reads the raw evidence blob of each. An attempt is
+scored when its outcome is `graded` or `submission_failure` and its grade has a
+reward. Each generation corpus gets a row, followed by a row for each summary
+group label, printed as `name=value`; corpora scored by likelihood are not
+listed. A repeated benchmark is labelled `benchmark@version`, or
+`benchmark (<first 12 characters of the dataset digest>)` when the versions
+match too.
+
+| Column | Meaning |
+| --- | --- |
+| `attempts` | Terminal attempts, one per source row and trial |
+| `scored` | Scored attempts; every mean and fraction below divides by this count |
+| `mean_reward` | Mean reward; for a single-metric `MEAN` protocol, this is the protocol's summary |
+| `length_stop_count` | Scored attempts whose rollout ended with stop reason `length` |
+| `length_stop_fraction` | `length_stop_count` divided by `scored` |
+| `length_stop_score_contribution` | Total reward of the length-stopped attempts divided by `scored` |
+| `response_tokens_mean`, `response_tokens_max` | Completion tokens that the transport reported for each scored attempt, including a response reused after a grading failure |
+| `max_tokens` | Smallest and largest output token limit of the scored attempts |
+
+The length-stop and response-token columns carry the names of SkyRL's
+per-data-source evaluation metrics (`calculate_per_dataset_metrics`), so they
+can be read beside a trainer's `eval/<data_source>/...` values. SkyRL divides
+by every evaluated trajectory, so its values equal these when every attempt is
+scored. As in SkyRL, `length_stop_fraction` and `length_stop_score_contribution`
+print as `-` when a scored attempt has no stop reason.
