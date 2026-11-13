@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import replace
 
 import draccus
@@ -20,7 +21,7 @@ from rigging.timing import Duration
 
 from experiments.post_training.long_loop.adopted_sft import is_hf_export, verify_adopted_hf_export, verify_adopted_sft
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
-from experiments.post_training.long_loop.evaluation import configured_evaluation_step, prepare_micro
+from experiments.post_training.long_loop.evaluation import TerminalPolicy, configured_evaluation_step, prepare_micro
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.finalization import after_checkpoint, record_finalization
 from experiments.post_training.long_loop.rl import configured_rl_step
@@ -72,8 +73,18 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     blockers = stage_blockers(resolved, through)
     if blockers:
         raise ValueError("Run is not admitted: " + "; ".join(blockers))
-    if resolved.get("smoke") and through in {"rl", "eval", "archive"} and resolved.get("adopted_sft") is None:
+    if (
+        resolved.get("smoke")
+        and through in {"rl", "eval", "sft-eval", "archive"}
+        and resolved.get("adopted_sft") is None
+    ):
         raise ValueError("Downstream smoke requires an explicit committed adopted_sft input; SFT will not be replayed")
+    sft_pin = resolved.get("adopted_sft")
+    hf_pin = sft_pin if sft_pin is not None and is_hf_export(sft_pin) else None
+    if through == "sft-eval" and (
+        hf_pin is None or resolved.get("adopted_handoff") is not None or resolved.get("adopted_endpoint") is not None
+    ):
+        raise ValueError("--through sft-eval evaluates exactly one adopted HF export, with no handoff or endpoint")
     datasets = resolved["datasets"]
     name = resolved["name"]
     execution = resolved["execution"]
@@ -92,14 +103,12 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
             manifests=(
                 {"sft": datasets["sft"], "initializer": resolved["initializer"]}
                 if through in {"sft", "export"}
-                else datasets
+                else {"evaluation": datasets["evaluation"]} if through == "sft-eval" else datasets
             ),
         )
     )
     sft_evidence = [verified]
     recipe = {**resolved["sft"], "task_timeout_seconds": timeouts.get("sft", DEFAULT_TASK_TIMEOUT_SECONDS)}
-    sft_pin = resolved.get("adopted_sft")
-    hf_pin = sft_pin if sft_pin is not None and is_hf_export(sft_pin) else None
     tokenizer = resolved["tokenizer"]
     if sft_pin is not None and through in {"sft", "export"}:
         raise ValueError("An adopted SFT input is for downstream continuation, not an SFT stage")
@@ -152,6 +161,55 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
     trained = replace(trained, deps=(*trained.deps, verified))
     coordinator = runtime_execution(execution["coordinator"])
     coordinator = replace(coordinator, coordinator_name=f"{coordinator.coordinator_name}-{version}")
+
+    def evaluate(
+        policy: TerminalPolicy | ArtifactHfModel,
+        *,
+        after: tuple[ArtifactStep, ...] | None = None,
+        wrap: Callable[[ArtifactStep], ArtifactStep] = lambda step: step,
+    ) -> tuple[ArtifactStep, ArtifactStep]:
+        """Micro210 on ``policy``; the eval inputs start only after ``after`` (default: the policy) exists."""
+        evaluation = resolved["evaluation"]
+        data = datasets["evaluation"]
+        eval_inputs = timed(
+            apply(
+                f"{name}/eval-inputs",
+                remote(
+                    prepare_micro,
+                    resources=resources["eval_inputs"],
+                    timeout=Duration.from_seconds(timeouts.get("eval_inputs", DEFAULT_TASK_TIMEOUT_SECONDS)),
+                ),
+                version=version,
+                output=OUT,
+                dataset=data["repo"],
+                revision=data["revision"],
+                wheels_revision=data["wheels_revision"],
+                tasks_per_benchmark=evaluation["tasks_per_benchmark"],
+            )
+        )
+        eval_inputs = wrap(replace(eval_inputs, deps=(*eval_inputs.deps, *(policy.deps() if after is None else after))))
+        evaluated = wrap(
+            timed(
+                configured_evaluation_step(
+                    version,
+                    policy,
+                    eval_inputs,
+                    name=evaluation["name"],
+                    config=evaluation["config"],
+                    role_plan=draccus.decode(SkyRLRolePlan, evaluation["role_plan"]),
+                    execution=stage_execution(evaluation["execution"], coordinator),
+                    judge=draccus.decode(ModelConfig, evaluation["judge"]),
+                    seed=evaluation["seed"],
+                    gpu_variant=evaluation["gpu_variant"],
+                    capability_origin=evaluation["capability_origin"],
+                    data_relative_path=evaluation["data_relative_path"],
+                    judge_gpu_count=evaluation["judge_gpu_count"],
+                    ray_timeouts=evaluation["ray_timeouts"],
+                )
+            )
+        )
+        return evaluated, eval_inputs
+
     if through == "sft":
         return replace(trained, runtime_args={**trained.runtime_args, "skyrl_execution": coordinator})
     handoff = resolved.get("adopted_handoff")
@@ -205,6 +263,16 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         )
     if through == "export":
         return replace(exported, runtime_args={**exported.runtime_args, "skyrl_execution": coordinator})
+    if through == "sft-eval":
+        evaluated, _ = evaluate(
+            ArtifactHfModel(
+                step=exported,
+                tokenizer_uri=tokenizer["repo"],
+                tokenizer_revision=tokenizer["revision"],
+                relative_path=handoff_dir,
+            )
+        )
+        return replace(evaluated, runtime_args={**evaluated.runtime_args, "skyrl_execution": coordinator})
     endpoint_pin = resolved.get("adopted_endpoint")
     endpoint = None
     if endpoint_pin is not None:
@@ -295,46 +363,10 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
         output=OUT,
         trained=learned,
     )
-    evaluation = resolved["evaluation"]
-    data = datasets["evaluation"]
-    eval_inputs = timed(
-        apply(
-            f"{name}/eval-inputs",
-            remote(
-                prepare_micro,
-                resources=resources["eval_inputs"],
-                timeout=Duration.from_seconds(timeouts.get("eval_inputs", DEFAULT_TASK_TIMEOUT_SECONDS)),
-            ),
-            version=version,
-            output=OUT,
-            dataset=data["repo"],
-            revision=data["revision"],
-            wheels_revision=data["wheels_revision"],
-            tasks_per_benchmark=evaluation["tasks_per_benchmark"],
-        )
-    )
-    eval_inputs = after_checkpoint(replace(eval_inputs, deps=(*eval_inputs.deps, finalized)), learned)
-    evaluated = after_checkpoint(
-        timed(
-            configured_evaluation_step(
-                version,
-                learned,
-                eval_inputs,
-                name=evaluation["name"],
-                config=evaluation["config"],
-                role_plan=draccus.decode(SkyRLRolePlan, evaluation["role_plan"]),
-                execution=stage_execution(evaluation["execution"], coordinator),
-                judge=draccus.decode(ModelConfig, evaluation["judge"]),
-                seed=evaluation["seed"],
-                expected_step=None,
-                gpu_variant=evaluation["gpu_variant"],
-                capability_origin=evaluation["capability_origin"],
-                data_relative_path=evaluation["data_relative_path"],
-                judge_gpu_count=evaluation["judge_gpu_count"],
-                ray_timeouts=evaluation["ray_timeouts"],
-            )
-        ),
-        learned,
+    evaluated, eval_inputs = evaluate(
+        TerminalPolicy(learned, expected_step=None),
+        after=(finalized,),
+        wrap=lambda step: after_checkpoint(step, learned),
     )
     if through == "eval":
         return replace(evaluated, runtime_args={**evaluated.runtime_args, "skyrl_execution": coordinator})
@@ -350,7 +382,7 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                 eval_inputs,
                 evaluated,
             ],
-            expected_rollouts=evaluation["expected_rollouts"],
+            expected_rollouts=resolved["evaluation"]["expected_rollouts"],
             evaluation_selection=eval_inputs,
             rl_terminal=learned,
             additional_timing=[

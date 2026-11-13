@@ -16,6 +16,7 @@ from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.rl.skyrl import (
     ArtifactDataSource,
+    ArtifactHfModel,
     IrisSkyRLExecution,
     ResolvedModelLocator,
     SkyRLRetentionPolicy,
@@ -114,9 +115,16 @@ class TerminalPolicy:
         )
 
 
+def _checkpoint_step(policy: TerminalPolicy | ArtifactHfModel, ctx: StepContext) -> int | None:
+    """The RL step the traces belong to; an adopted export has none."""
+    if isinstance(policy, ArtifactHfModel):
+        return None
+    return policy.expected_step if ctx.is_fingerprint else ctx.resolved(policy.step).global_step
+
+
 def configured_evaluation_step(
     version: str,
-    trained: ArtifactStep[SkyRLRun],
+    policy: TerminalPolicy | ArtifactHfModel,
     data: ArtifactStep,
     *,
     name: str,
@@ -126,13 +134,15 @@ def configured_evaluation_step(
     judge: ModelConfig,
     judge_gpu_count: int,
     seed: int,
-    expected_step: int | None,
     gpu_variant: str,
     capability_origin: str,
     data_relative_path: str,
     ray_timeouts: dict[str, int],
 ) -> ArtifactStep:
-    """Bind an explicit evaluation recipe to pinned data and the committed model."""
+    """Bind an explicit evaluation recipe to pinned data and the committed model.
+
+    ``policy`` is the RL terminal export, or an adopted HF export evaluated as-is.
+    """
     validate_stage_config(config, "evaluation")
     config = deepcopy(config)
     materialized = deepcopy(config)
@@ -152,7 +162,7 @@ def configured_evaluation_step(
             name=name,
             version=version,
             config_yaml=yaml.safe_dump(config),
-            model=TerminalPolicy(trained, expected_step),
+            model=policy,
             train_data=(),
             validation_data=(ArtifactDataSource(data, relative_path=data_relative_path),),
             topology=SkyRLTopology(
@@ -176,7 +186,7 @@ def configured_evaluation_step(
         launch["skyrl"]["generator"]["trajectory_retention"].update(
             model_path=model["uri"],
             model_source_identity=model["identity"],
-            model_checkpoint_step=expected_step if ctx.is_fingerprint else ctx.resolved(trained).global_step,
+            model_checkpoint_step=_checkpoint_step(policy, ctx),
         )
         run = replace(run, launch_config_yaml=yaml.safe_dump(launch))
         if not ctx.is_fingerprint:

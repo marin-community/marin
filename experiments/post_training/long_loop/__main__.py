@@ -56,7 +56,10 @@ def validate_graph(terminal: ArtifactStep, directory: Path, artifact_prefix: str
 @click.option("--spec", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
 @click.option("--smoke", is_flag=True, help="Apply only the spec's explicit scale overrides.")
 @click.option(
-    "--through", type=click.Choice(["sft", "export", "rl", "eval", "archive"]), default="archive", show_default=True
+    "--through",
+    type=click.Choice(["sft", "export", "sft-eval", "rl", "eval", "archive"]),
+    default="archive",
+    show_default=True,
 )
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
 @rl_build_options

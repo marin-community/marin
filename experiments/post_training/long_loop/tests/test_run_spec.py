@@ -397,6 +397,35 @@ def test_eval_stop_excludes_report_and_archive(monkeypatch):
     assert not any("report" in name or "archive" in name for name in names)
 
 
+def test_sft_eval_evaluates_the_adopted_export_without_rl(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin/")
+    resolved = resolve_spec(SPEC, smoke=True)
+    resolved["blockers"] = ["agentic: not admitted", "archive: publication not approved"]
+    assert stage_blockers(resolved, "sft-eval") == []
+    resolved["blockers"] = []
+    resolved["adopted_sft"] = yaml.safe_load((SPEC.parent / "adopted-sft-20261005.yaml").read_text())
+    terminal = build_spec_graph(resolved, "2026.11.12.4", through="sft-eval")
+    steps = {step.name.rsplit("/", 1)[-1]: step for step in graph_handles([terminal])}
+    evaluation = resolved["evaluation"]["name"].rsplit("/", 1)[-1]
+    assert sorted(steps) == sorted(["inputs", "adopt-sft", "sft-hf", "eval-inputs", evaluation])
+    assert steps["sft-hf"] in steps["eval-inputs"].deps
+    assert terminal.runtime_args["skyrl_execution"].coordinator_name.endswith("-2026.11.12.4")
+    context = StepContext.for_run(
+        str(tmp_path / "eval"), str(tmp_path), deps=terminal.deps, runtime_args=terminal.runtime_args
+    )
+    launch = yaml.safe_load(terminal.build_config(replace(context, is_fingerprint=True)).skyrl.launch_config_yaml)
+    assert launch["inputs"]["model"]["uri"] == resolved["adopted_sft"]["uri"]
+    retention = launch["skyrl"]["generator"]["trajectory_retention"]
+    assert retention["model_path"] == resolved["adopted_sft"]["uri"]
+    assert retention["model_checkpoint_step"] is None
+    with pytest.raises(ValueError, match="exactly one adopted HF export"):
+        build_spec_graph(
+            {**resolved, "adopted_sft": {"version": "2026.11.09.12", "uri": "s3://test/committed-sft"}},
+            "2026.11.12.4",
+            through="sft-eval",
+        )
+
+
 def test_copied_native_start_must_match_its_receipt(tmp_path):
     root = tmp_path / "native-1005"
     step = root / "native/step-0"

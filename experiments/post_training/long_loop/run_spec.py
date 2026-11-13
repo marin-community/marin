@@ -207,13 +207,21 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
 
 
 def stage_blockers(resolved: dict, through: str) -> list[str]:
-    """Blockers for the stages up to ``through``; ``sft`` and ``export`` need only the SFT inputs."""
-    if through in {"rl", "eval", "archive"}:
+    """Blockers for the stages up to ``through``.
+
+    ``sft`` and ``export`` need only the SFT inputs; ``sft-eval`` needs only the
+    evaluation inputs and the adopted export.
+    """
+    if through in {"sft-eval", "rl", "eval", "archive"}:
         blockers = list(resolved["blockers"])
         if through == "rl":
             blockers = [item for item in blockers if not item.startswith(("archive:", "evaluation:"))]
         if through == "eval":
             blockers = [item for item in blockers if not item.startswith("archive:")]
+        if through == "sft-eval":
+            # Evaluating an adopted export as-is reads no RL, SFT or archive inputs.
+            keep = ("evaluation:", "adopted_sft:", "Missing admitted evaluation manifest")
+            blockers = [item for item in blockers if item.startswith(keep)]
         return blockers
     documents = {
         "sft": resolved["datasets"]["sft"],
