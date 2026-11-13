@@ -140,6 +140,25 @@ def test_junk_verdict_formatted_source_code_is_kept():
     assert junk_verdict([source]).category is None
 
 
+def test_junk_verdict_numbered_verses_are_kept():
+    # A scripture translation stores one verse per line as "<verse id>\t<text>"; the tab does not make it a table.
+    rng = random.Random(8)
+    vocabulary = _words(rng, 3000)
+    verses = "\n".join(
+        f"{40001001 + n}\t" + " ".join(rng.choice(vocabulary) for _ in range(rng.randint(15, 40))).capitalize() + "."
+        for n in range(400)
+    )
+
+    assert junk_verdict([verses]).category is None
+
+
+def test_junk_verdict_line_wrapped_base64_is_an_encoded_blob():
+    payload = _base64()
+    wrapped = "\n".join(payload[start : start + 76] for start in range(0, len(payload), 76))
+
+    assert junk_verdict([wrapped]).category == JunkCategory.ENCODED_BLOB
+
+
 def test_junk_verdict_report_with_some_tables_is_kept():
     windows = _interleave(_prose(), _markdown_table(), second_share=0.4)
 

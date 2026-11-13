@@ -81,8 +81,10 @@ NUMERIC_LETTER_SHARE = 0.25
 JSON_KEYS_PER_CHAR = 0.01
 MARKUP_CHAR_SHARE = 0.4
 DELIMITED_LINE_SHARE = 0.7
-# Three separators make a row for most delimiters; a tab inside a line is deliberate, so one is enough.
+# Three separators make a row for most delimiters. A tab inside a line is deliberate, so one is
+# enough when the line is short: a name and an amount, not a verse number and its verse.
 MIN_DELIMITERS = {",": 3, ";": 3, "|": 3, "\t": 1}
+SINGLE_TAB_LINE_CHARS = 80
 URL_CHAR_SHARE = 0.3
 # Prose has a comma every 80 characters or so; a record has a separator every 12 or fewer.
 SEPARATOR_SHARE = 0.06
@@ -101,6 +103,7 @@ ITEM_NON_ASCII_SHARE = 0.3
 _BINARY_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f�␀]")
 _ENCODED_RUNS = re.compile(
     r"[A-Za-z0-9+/_-]{120,}={0,2}"  # base64 and other unbroken alphanumeric payloads
+    r"|(?:[A-Za-z0-9+/]{56,}={0,2}(?:\\n)?\s+){3,}"  # the same, wrapped at a fixed line width
     r"|(?:(?:0x)?[0-9a-fA-F]{2}[\s,:]{0,2}){64,}"  # hex dumps and byte arrays
     r"|(?:[A-Za-z0-9+/]{1,12}[,;]+){40,}"  # source-map VLQ mappings
     r"|\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\[0-3][0-7]{2}"  # escaped bytes and code points
@@ -181,8 +184,16 @@ def _matched_share(pattern: re.Pattern[str], text: str) -> float:
 def _delimited_line_share(lines: list[str]) -> float:
     """Largest share of lines that agree on how many of one delimiter they hold, indentation aside."""
     best = 0
+    stripped = [line.strip() for line in lines]
     for delimiter, minimum in MIN_DELIMITERS.items():
-        counts = Counter(line.strip().count(delimiter) for line in lines)
+        counts = Counter(
+            (
+                0
+                if delimiter == "\t" and len(line) > SINGLE_TAB_LINE_CHARS and line.count("\t") == 1
+                else line.count(delimiter)
+            )
+            for line in stripped
+        )
         best = max(best, max((n for fields, n in counts.items() if fields >= minimum), default=0))
     return best / len(lines)
 
