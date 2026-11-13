@@ -202,10 +202,13 @@ def allocation_peaks(resolved: dict) -> dict[str, int]:
 
 
 def stage_blockers(resolved: dict, through: str) -> list[str]:
-    if through in {"rl", "archive"}:
+    """Blockers for the stages up to ``through``; ``sft`` and ``export`` need only the SFT inputs."""
+    if through in {"rl", "eval", "archive"}:
         blockers = list(resolved["blockers"])
         if through == "rl":
             blockers = [item for item in blockers if not item.startswith(("archive:", "evaluation:"))]
+        if through == "eval":
+            blockers = [item for item in blockers if not item.startswith("archive:")]
         return blockers
     documents = {
         "sft": resolved["datasets"]["sft"],

@@ -24,7 +24,13 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from experiments.post_training.long_loop.preflight import EndpointEvidence, check_endpoint
 from experiments.post_training.long_loop.serving import check_context_limit, checked_serving_release
-from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_REVISION, read_json, validate_handoff
+from experiments.post_training.long_loop.sft import (
+    HANDOFF_DIR,
+    TOKENIZER_REPO,
+    TOKENIZER_REVISION,
+    read_json,
+    validate_handoff,
+)
 
 PROBE_MODEL_ALIAS = "long-loop-sft-probe"
 
@@ -36,8 +42,17 @@ def prompt_tokens(tokenizer: PreTrainedTokenizerBase, messages: list[dict]) -> l
     )
 
 
-def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: dict | None = None) -> None:
-    validate_handoff(model_root)
+def probe(
+    *,
+    output: str,
+    model_root: str,
+    tokenizer_revision: str,
+    settings: dict | None = None,
+    relative_path: str = HANDOFF_DIR,
+) -> None:
+    """Serve the HF export at ``model_root/relative_path``; ``""`` selects the root itself."""
+    validate_handoff(model_root, relative_path)
+    hf = prefix_join(model_root, relative_path) if relative_path else model_root
     root = find_project_root()
     assert root is not None, "Run from the Marin worktree"
     if settings is None:
@@ -54,14 +69,12 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
         }
     window = settings["window"]
     tokenizer_repo = settings["tokenizer_repo"]
-    check_context_limit(
-        "SFT endpoint", read_json(prefix_join(model_root, "hf/config.json"))["max_position_embeddings"], window
-    )
+    check_context_limit("SFT endpoint", read_json(prefix_join(hf, "config.json"))["max_position_embeddings"], window)
     model = load_model_config(root / settings["model_config"])
     model = replace(
         model,
         name=PROBE_MODEL_ALIAS,
-        location=prefix_join(model_root, "hf"),
+        location=hf,
         revision=None,
         tokenizer=tokenizer_repo,
         tokenizer_revision=tokenizer_revision,
@@ -123,7 +136,7 @@ def probe(*, output: str, model_root: str, tokenizer_revision: str, settings: di
                 response.raise_for_status()
                 receipts[str(token)] = response.json()
                 stops[token] = response.json()["choices"][0]["finish_reason"]
-            tokenizer_hash = hashlib.sha256((StoragePath(model_root) / "hf/tokenizer.json").read_bytes()).hexdigest()
+            tokenizer_hash = hashlib.sha256((StoragePath(hf) / "tokenizer.json").read_bytes()).hexdigest()
             check_endpoint(
                 EndpointEvidence(
                     PROBE_MODEL_ALIAS,
