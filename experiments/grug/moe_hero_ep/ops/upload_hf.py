@@ -92,12 +92,7 @@ class _UploadPlan:
 
 
 def _rate_limit_delay(error: HfHubHTTPError) -> tuple[float, bool]:
-    """Return the retry delay and whether a repository commit quota caused the limit.
-
-    The Hub exposes generic rate-limit headers, but does not publish a structured
-    indicator for granular repository-commit quotas, so the quota-specific retry
-    floor remains keyed to the 429 message.
-    """
+    """Return the retry delay and whether a repository commit quota caused the limit."""
     headers = error.response.headers
     delays = [0.0]
     retry_after = headers.get("Retry-After")
@@ -110,6 +105,7 @@ def _rate_limit_delay(error: HfHubHTTPError) -> tuple[float, bool]:
     reset = re.search(r"(?:^|;)\s*t=(\d+(?:\.\d+)?)", rate_limit)
     if reset is not None:
         delays.append(float(reset[1]))
+    # Granular repository-commit quotas have no structured indicator in the Hub response.
     text = f"{error} {error.response.text}".lower()
     repository_limit = "commit" in text and (
         "per hour" in text or "per-hour" in text or "hourly" in text or "repository" in text
