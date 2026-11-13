@@ -100,7 +100,7 @@ from experiments.belay.submit import (
     tracks_of_comment,
     with_launched,
 )
-from experiments.belay.sync import is_belay_file, run_total_steps
+from experiments.belay.sync import is_belay_file, newest_suggestions, run_total_steps
 from experiments.grug.fast_track import belay_s7, belay_tracks
 
 MONDAY = datetime.date(2026, 11, 2)
@@ -980,3 +980,25 @@ def test_a_node_grant_counts_every_rung_of_the_idea() -> None:
     running = [IrisJob(f"/u/belay-X0037d{n}-seed0-coord", "running", "") for n in (512, 768)]
     with pytest.raises(SystemExit, match="node grant 2 for X0037d1024"):
         check_ladder_launch([Track.COMPETITIVE_D1024], running, 99, 2, "X0037d1024")
+
+
+def test_the_admin_page_lists_the_newest_suggestions_by_people_newest_first() -> None:
+    def comment(n: int, login: str = "someone", kind: str = "User") -> dict:
+        return {
+            "id": n,
+            "user": {"login": login, "type": kind},
+            "body": f"idea {n}",
+            "html_url": f"https://github.com/c/{n}",
+            "created_at": f"2026-11-{n:02d}T00:00:00Z",
+        }
+
+    comments = [comment(1), comment(2, "marin-belay-bot"), comment(3, "dependabot", "Bot"), comment(4), comment(5)]
+    listed = newest_suggestions(comments, limit=2)
+    assert [c["comment_id"] for c in listed] == ["5", "4"]
+    assert listed[0] == {
+        "comment_id": "5",
+        "author": "someone",
+        "body": "idea 5",
+        "url": "https://github.com/c/5",
+        "posted_at": "2026-11-05T00:00:00Z",
+    }

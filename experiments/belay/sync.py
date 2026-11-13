@@ -23,7 +23,7 @@ import wandb
 
 from experiments.belay.branch import git
 from experiments.belay.config import CONFIG, COREWEAVE_S3_ENDPOINT
-from experiments.belay.page import call, mark_reviewed, page_state, session_credentials
+from experiments.belay.page import call, gh_api, mark_reviewed, page_state, session_credentials
 from experiments.belay.registry_entry import reset_registry_checkout
 from experiments.belay.submit import iris_jobs
 
@@ -201,6 +201,44 @@ def sync() -> None:
     storage_at = None if measured is None else datetime.datetime.fromisoformat(measured)
     Watcher(CONFIG.registry_checkout, token=None, storage_at=storage_at).tick(refreshed, "; ".join(notes) or None)
     react_to_reviewed()
+    relay_intake()
+
+
+# Accounts whose #9514 comments are not suggestions: Belay's own bot and Loom's.
+INTAKE_BOTS = frozenset({"marin-belay-bot", "loom-oa-dev[bot]"})
+# How many of #9514's newest suggestions the admin page lists.
+INTAKE_LISTED = 30
+# GitHub serves at most this many comments per page.
+GITHUB_PAGE = 100
+
+
+def newest_suggestions(comments: list[dict], limit: int = INTAKE_LISTED) -> list[dict]:
+    """The newest ``limit`` comments by people, newest first, in the shape the app stores (GitHub's oldest-first
+    comments in)."""
+    people = [c for c in comments if c["user"]["type"] != "Bot" and c["user"]["login"] not in INTAKE_BOTS]
+    return [
+        {
+            "comment_id": str(c["id"]),
+            "author": c["user"]["login"],
+            "body": c["body"],
+            "url": c["html_url"],
+            "posted_at": c["created_at"],
+        }
+        for c in reversed(people[-limit:])
+    ]
+
+
+def relay_intake() -> None:
+    """Upload #9514's newest suggestions to the app for the admin page, read with this pass's GitHub identity: the app
+    holds no GitHub credentials, and a browser reading GitHub anonymously hits its rate limit."""
+    issue = f"repos/{CONFIG.repository}/issues/{CONFIG.intake_issue}"
+    pages = max(1, -(-json.loads(gh_api([issue]))["comments"] // GITHUB_PAGE))
+    comments = []
+    for page in range(max(1, pages - 1), pages + 1):  # the last two pages hold the newest suggestions
+        comments += json.loads(gh_api([f"{issue}/comments?per_page={GITHUB_PAGE}&page={page}"]))
+    suggestions = newest_suggestions(comments)
+    call("agent/intake", {"comments": suggestions})
+    print(f"relayed {len(suggestions)} #{CONFIG.intake_issue} suggestion(s) to the admin page")
 
 
 def reap_sessions() -> None:
