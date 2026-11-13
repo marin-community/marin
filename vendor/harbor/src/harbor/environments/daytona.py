@@ -66,12 +66,19 @@ def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> Reg
 def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> MachineSpec:
     """The shellbox spec for one task environment.
 
-    Selects and validates the task's image or build context the way the
-    factory will, so measurement code derives snapshot identities from the
-    same inputs production uses.
+    Pure projection from the task's environment config, so measurement code
+    can derive snapshot identities from the same inputs production uses.
+    Source validation happens once per boundary: environment construction
+    rejects unusable definitions, and snapshot preparation validates what it
+    is about to build.
     """
+    source = (
+        RegistryImage(task_env_config.docker_image)
+        if task_env_config.docker_image
+        else DockerfileSource(environment_dir, environment_dir / "Dockerfile")
+    )
     return MachineSpec(
-        source=task_snapshot_source(task_env_config.docker_image, environment_dir),
+        source=source,
         workdir=task_env_config.workdir or "",
         env=env or {},
         network=NetworkPolicy.ALLOW if task_env_config.allow_internet else NetworkPolicy.DENY,

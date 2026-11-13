@@ -20,6 +20,12 @@ from openai import (
 )
 
 from harbor.host_capabilities import HostCapabilities
+from daytona import (
+    CreateSnapshotParams,
+    DaytonaNotFoundError,
+    Resources,
+)
+from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
@@ -654,14 +660,43 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
     asyncio.run(run())
 
 
-def test_daytona_adapter_delegates_effective_resources_to_shellbox(tmp_path):
+async def _provider_exec(command, **kwargs):
+    """Stand in for the guest's command probe with a successful no-op."""
+    return SimpleNamespace(exit_code=0, result="")
+
+
+class RecordingSnapshotClient:
+    """Fake provider that records the snapshot and sandbox requests it receives."""
+
+    def __init__(self):
+        self.snapshot_params = None
+        self.sandbox_params = None
+        self.sandbox = SimpleNamespace(process=SimpleNamespace(exec=_provider_exec))
+        self.closed = False
+        self.snapshot = self
+
+    async def get(self, name):
+        raise DaytonaNotFoundError("Snapshot does not exist", status_code=404)
+
+    async def create(self, params, timeout=None):
+        if isinstance(params, CreateSnapshotParams):
+            self.snapshot_params = params
+            return SimpleNamespace(name=params.name, state=SnapshotState.ACTIVE, error_reason=None)
+        self.sandbox_params = params
+        return self.sandbox
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self.closed = True
+
+
+def test_daytona_adapter_launches_from_the_override_snapshot_request(tmp_path):
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
-    captured = []
-
-    class RecordingMachine:
-        async def close(self):
-            pass
+    (environment_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    client = RecordingSnapshotClient()
 
     adapter = DaytonaEnvironment(
         environment_dir=environment_dir,
@@ -669,32 +704,33 @@ def test_daytona_adapter_delegates_effective_resources_to_shellbox(tmp_path):
         session_id="trial",
         trial_paths=TrialPaths(tmp_path / "trial"),
         task_env_config=EnvironmentConfig(
-            docker_image="test/image@sha256:" + "a" * 64,
             allow_internet=False,
-            workdir="/workspace",
-            cpus=2,
-            memory_mb=2049,
-            storage_mb=1025,
+            cpus=1,
+            memory_mb=1024,
+            storage_mb=1024,
         ),
-        client_factory=lambda: pytest.fail("Unexpected provider access"),
+        override_cpus=2,
+        override_memory_mb=2049,
+        override_storage_mb=1025,
+        client_factory=lambda: client,
     )
-
-    async def create(spec):
-        captured.append(spec)
-        return RecordingMachine()
 
     async def run():
         async with asyncio.TaskGroup() as service_tasks:
-            adapter.factory = SimpleNamespace(create=create)
             await adapter.start(False, service_tasks=service_tasks)
             await adapter.stop(True)
 
     asyncio.run(run())
 
-    (spec,) = captured
-    assert spec.source == RegistryImage("test/image@sha256:" + "a" * 64)
-    assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (2, 2049, 1025)
-    assert spec.network is NetworkPolicy.DENY
+    # The provider received the job's effective resources, rounded the way the
+    # snapshot identity requires, and the sandbox started from that snapshot.
+    assert client.snapshot_params is not None
+    assert client.snapshot_params.resources == Resources(cpu=2, memory=3, disk=2, gpu=None)
+    assert client.snapshot_params.name.startswith("shellbox-")
+    assert client.sandbox_params is not None
+    assert client.sandbox_params.snapshot == client.snapshot_params.name
+    assert client.sandbox_params.network_block_all is True
+    assert client.closed
 
 
 def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_path) -> None:
