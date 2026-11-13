@@ -9,7 +9,6 @@ import logging
 from dataclasses import asdict
 from uuid import uuid4
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -29,10 +28,11 @@ from experiments.post_training.task_curation.full_qc import (
 )
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.full_qc_review import (
-    RECORD_SCHEMA,
     REVIEW_BATCH_SIZE,
+    ContractBatch,
     quality_result,
     review_batch,
+    write_observations,
 )
 from experiments.post_training.task_curation.judges import PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
@@ -87,25 +87,18 @@ def review_panel(panel: SamplePanel, reviewer: Reviewer, output_root: str) -> Sa
     """Persist sampled observations and compute Result independently of execution admission."""
     tasks, contracts = panel_tasks(panel)
     output = StoragePath(output_root) / canonical_sha256(panel.source_id)[:20]
-    records_path = output / "attempts" / uuid4().hex / "reviews.parquet"
-    all_reviews, receipts = [], []
-    with records_path.open("wb", auto_mkdir=True) as stream:
-        with pq.ParquetWriter(stream, RECORD_SCHEMA, compression="zstd") as writer:
-            for offset in range(0, len(tasks), REVIEW_BATCH_SIZE):
-                batch_tasks = tasks[offset : offset + REVIEW_BATCH_SIZE]
-                batch_contracts = contracts[offset : offset + REVIEW_BATCH_SIZE]
-                reviews, receipt = review_batch(batch_tasks, batch_contracts, REVIEW_RUBRIC, reviewer, output)
-                writer.write_table(
-                    pa.Table.from_pylist(
-                        [
-                            {**contract, "review": review.model_dump_json(), "batch_receipt": receipt}
-                            for contract, review in zip(batch_contracts, reviews, strict=True)
-                        ],
-                        schema=RECORD_SCHEMA,
-                    )
-                )
-                all_reviews.extend(reviews)
-                receipts.append(receipt)
+
+    def batches():
+        for offset in range(0, len(tasks), REVIEW_BATCH_SIZE):
+            batch = ContractBatch(
+                offset // REVIEW_BATCH_SIZE,
+                tasks[offset : offset + REVIEW_BATCH_SIZE],
+                contracts[offset : offset + REVIEW_BATCH_SIZE],
+            )
+            reviews, receipt = review_batch(batch.tasks, batch.contracts, REVIEW_RUBRIC, reviewer, output)
+            yield batch, reviews, receipt
+
+    records_path, all_reviews, receipts = write_observations(str(output), batches())
     result = SampleQCReview(
         path=str(records_path.parent),
         panel=panel,
