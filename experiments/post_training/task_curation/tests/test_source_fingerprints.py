@@ -3,17 +3,14 @@
 
 """Source identity ignores row order and keeps overlap flags advisory."""
 
+import hashlib
 import json
-from contextlib import contextmanager
 from pathlib import Path
-from types import SimpleNamespace
 
-import httpx
+import fsspec
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
-from iris.rpc import job_pb2
-from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
-from marin.evaluation.model_config import load_model_config
-from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
@@ -26,26 +23,25 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.source_fingerprints import DuplicateLabel, DuplicateReview, SourceFingerprint, SourceIdentitySurvey
+from taskcompendium.source_fingerprints import DuplicateLabel, SourceFingerprint
 
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
-from experiments.post_training.task_curation.duplicate_review import (
-    DUPLICATE_MAX_TOKENS,
-    DUPLICATE_MODEL,
-    DUPLICATE_MODEL_CONFIG,
-    LocalDuplicateEndpoint,
-    UnresolvedDuplicatePair,
-    review_pairs,
-)
-from experiments.post_training.task_curation.judges import HostedJudgeEndpoint
+from experiments.post_training.task_curation.duplicate_review import review_pairs
 from experiments.post_training.task_curation.source_duplicate_ci import changed_source_declarations
-from experiments.post_training.task_curation.source_duplicates import scan
 from experiments.post_training.task_curation.source_fingerprints import (
     candidate_pairs,
     duplicate_groups,
     fingerprint_source,
+    pair_similarity,
 )
-from experiments.post_training.task_curation.tests.review_server import JudgeReply
+from experiments.post_training.task_curation.source_neighbor_survey import cache_population, read_population
+from experiments.post_training.task_curation.task_neighbors import (
+    PopulationIndex,
+    TaskContent,
+    compare_populations,
+    content_rows,
+    exact_reference_integrity,
+)
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
@@ -90,53 +86,36 @@ def test_source_fingerprint_census_is_order_independent_and_counts_duplicate_con
     assert len(first.sample) == 20
 
 
-def test_top_candidate_review_is_cached_and_acknowledgement_is_bound_to_request(review_server, tmp_path):
-    arithmetic = [task_document(str(index), f"Compute the square of {index}.") for index in range(25)]
-    chemistry = [
-        task_document(f"chem-{index}", f"Name the chemical element with atomic number {index}.")
-        for index in range(1, 25)
-    ]
-    old_ids = ("Campaign Release:tasktrove-codeforces-rebuilt-v1", "MarinSkyRL:svamp")
-    original, rebuilt = map(canonical_source_id, old_ids)
-    fingerprints = {
-        original: fingerprint_source(arithmetic, {}),
-        rebuilt: fingerprint_source(list(reversed(arithmetic)), {}),
-        "distinct": fingerprint_source(chemistry, {}),
-    }
-    pairs = candidate_pairs(fingerprints, {old_ids[0]}, 1)
-    assert [(pair.left, pair.right) for pair in pairs] == [(original, rebuilt)]
-    review_server.model_ids = [DUPLICATE_MODEL]
-    review_server.judge_replies = [
-        JudgeReply(
-            json.dumps({"label": "duplicate", "overlap_fraction": 1.0, "reason": "The same arithmetic task population."})
-        )
-    ]
-    endpoint = HostedJudgeEndpoint(DUPLICATE_MODEL, f"http://127.0.0.1:{review_server.server_port}/v1", "test-key")
-    responses = StoragePath(str(tmp_path / "responses"))
-    reviewed = list(review_pairs(pairs, fingerprints, endpoint, [], {}, responses))
-    first = reviewed[0]
-    assert isinstance(first, DuplicateReview) and first.verdict.label == DuplicateLabel.DUPLICATE
-    request_key = first.prompt_sha256
-    legacy_fingerprints = {
-        old_ids[0]: fingerprints[original],
-        old_ids[1]: fingerprints[rebuilt],
-        "distinct": fingerprints["distinct"],
-    }
-    acknowledged = list(
+def test_measured_review_acknowledgement_is_bound_to_content_evidence(tmp_path):
+    rows = [task_document(str(index), f"Compute the square of {index}.") for index in range(25)]
+    populations = {key: PopulationIndex(list(content_rows(rows))) for key in ("left", "right")}
+    fingerprints = {key: fingerprint_source(rows, {}) for key in populations}
+    pairs = candidate_pairs(fingerprints, {"left"}, 1)
+    receipts = StoragePath(str(tmp_path / "responses"))
+    first = next(review_pairs(pairs, populations, {}, receipts))
+    assert first.verdict.label is DuplicateLabel.DUPLICATE
+    assert first.acknowledgement is None
+    # Write a different receipt directory so an ACK changes no immutable bytes.
+    acknowledged = next(
         review_pairs(
-            pairs, legacy_fingerprints, endpoint, [first], {request_key: "Retain both pinned histories"}, responses
+            pairs,
+            populations,
+            {first.prompt_sha256: "Retain both histories"},
+            StoragePath(str(tmp_path / "acknowledged")),
         )
     )
-    assert len(review_server.requests) == 1
-    acknowledged_review = acknowledged[0]
-    assert isinstance(acknowledged_review, DuplicateReview)
-    assert acknowledged_review.acknowledgement == "Retain both pinned histories"
-    assert review_server.requests[0]["model"] == DUPLICATE_MODEL
-    assert review_server.requests[0]["temperature"] == 0.7
-    groups = duplicate_groups([acknowledged_review])
-    assert groups[0].canonical_source_id == original
-    assert {member.source_id for member in groups[0].members} == {original, rebuilt}
-    assert fingerprints[original].task_count == fingerprints[rebuilt].task_count == 25
+    assert acknowledged.acknowledgement == "Retain both histories"
+    assert acknowledged.prompt_sha256 == first.prompt_sha256
+    assert len(duplicate_groups([acknowledged])) == 1
+    changed_rows = [task_document(str(index), f"Name chemical element {index}.") for index in range(25)]
+    changed = {**populations, "right": PopulationIndex(list(content_rows(changed_rows)))}
+    reviewed = next(
+        review_pairs(
+            pairs, changed, {first.prompt_sha256: "Retain both histories"}, StoragePath(str(tmp_path / "changed"))
+        )
+    )
+    assert reviewed.verdict.label is DuplicateLabel.DISTINCT
+    assert reviewed.acknowledgement is None
 
 
 def test_source_change_detection_includes_added_and_modified_declarations():
@@ -151,109 +130,6 @@ def test_source_change_detection_includes_added_and_modified_declarations():
         "added": source_input_declaration("added", "b"),
     }
     assert changed_source_declarations(before, after) == {"changed", "added"}
-
-
-def test_uncached_local_review_covers_batch_gpu_recovery(review_server, monkeypatch, tmp_path):
-    model_config = tmp_path / "config.json"
-    model_config.write_text(json.dumps({"max_position_embeddings": 262144}))
-    monkeypatch.setattr("marin.evaluation.serving_config.hf_hub_download", lambda *args, **kwargs: str(model_config))
-    leases = []
-    request_timeouts = []
-    send = httpx.Client.send
-
-    def record_request(client, request, *args, **kwargs):
-        if request.method == "POST":
-            request_timeouts.append(request.extensions["timeout"])
-        return send(client, request, *args, **kwargs)
-
-    monkeypatch.setattr(httpx.Client, "send", record_request)
-
-    @contextmanager
-    def serving_lease(config):
-        leases.append(config)
-        yield SimpleNamespace(
-            jobs=(),
-            model=RunningModel(
-                endpoint=OpenAIEndpoint(
-                    base_url=f"http://127.0.0.1:{review_server.server_port}/v1", model=DUPLICATE_MODEL
-                )
-            ),
-            wait_until_ready=lambda: None,
-        )
-
-    monkeypatch.setattr("experiments.post_training.task_curation.duplicate_review.remote_inference", serving_lease)
-    review_server.model_ids = [DUPLICATE_MODEL]
-    review_server.judge_replies = [
-        JudgeReply(json.dumps({"label": "duplicate", "overlap_fraction": 1.0, "reason": "Identical square tasks."}))
-    ]
-    rows = [task_document("square", "Compute the square of 2.")]
-    fingerprints = {"original": fingerprint_source(rows, {}), "copy": fingerprint_source(rows, {})}
-    pairs = candidate_pairs(fingerprints, {"copy"}, 1)
-    reviews = list(
-        review_pairs(
-            pairs, fingerprints, LocalDuplicateEndpoint(DUPLICATE_MODEL_CONFIG), [], {}, StoragePath(str(tmp_path))
-        )
-    )
-
-    assert isinstance(reviews[0], DuplicateReview) and reviews[0].verdict.label is DuplicateLabel.DUPLICATE
-    assert leases[0].iris.priority == job_pb2.PRIORITY_BAND_BATCH
-    assert request_timeouts[0]["read"] >= (
-        leases[0].iris.endpoint_ready_timeout_seconds + EVALUATION_REQUEST_TIMEOUT_SECONDS
-    )
-    assert review_server.requests[0]["temperature"] == 0.7
-
-
-def test_invalid_duplicate_opinions_are_checkpointed_retried_and_isolated_per_pair(review_server, monkeypatch, tmp_path):
-    rows = [task_document("square", "Compute the square of 2.")]
-    fingerprints = {name: fingerprint_source(rows, {}) for name in ("first", "second", "third")}
-    pairs = candidate_pairs(fingerprints, set(fingerprints), 3)
-    valid = json.dumps({"label": "duplicate", "overlap_fraction": 1, "reason": "Identical square tasks."})
-    inconsistent = json.dumps({"label": "duplicate", "overlap_fraction": 0.95, "reason": "Estimated shared population."})
-    contents = [inconsistent, valid, "not-json", inconsistent, inconsistent, valid]
-    review_server.model_ids = [DUPLICATE_MODEL]
-    review_server.judge_replies = [JudgeReply(content) for content in contents]
-    endpoint = HostedJudgeEndpoint(DUPLICATE_MODEL, f"http://127.0.0.1:{review_server.server_port}/v1", "test-key")
-    send = httpx.Client.send
-
-    def checkpoint_before_next_request(client, request, *args, **kwargs):
-        if request.method == "POST":
-            assert len(list(tmp_path.rglob("*.json"))) == len(review_server.requests)
-        return send(client, request, *args, **kwargs)
-
-    monkeypatch.setattr(httpx.Client, "send", checkpoint_before_next_request)
-    survey = SourceIdentitySurvey(
-        catalog_root="fixture",
-        snapshot_id="frozen",
-        generated_at="2026-11-13T00:00:00Z",
-        fingerprints=fingerprints,
-        reviews=[],
-        groups=[],
-        judge=None,
-    )
-    receipts = tmp_path / "scan.receipts.jsonl"
-    with pytest.raises(ValueError, match="1 source pairs remain unresolved"):
-        scan(survey, set(fingerprints), 3, endpoint, {}, [], receipts)
-    first, last = [DuplicateReview.model_validate_json(line) for line in receipts.read_text().splitlines()]
-    unresolved = UnresolvedDuplicatePair.model_validate_json(receipts.with_suffix(".unresolved.jsonl").read_text())
-    assert first.similarity == pairs[0] and last.similarity == pairs[2]
-    assert unresolved.similarity == pairs[1]
-    assert len(unresolved.response_receipts) == len(unresolved.validation_errors) == 3
-    saved = [json.loads(path.read_text())["choices"][0]["message"]["content"] for path in tmp_path.rglob("*.json")]
-    assert sorted(saved) == sorted(contents)
-    assert all(Path(path).exists() for path in unresolved.response_receipts)
-    assert len(review_server.requests) == 6
-    assert review_server.requests[0] == review_server.requests[1]
-    assert review_server.requests[2] == review_server.requests[3] == review_server.requests[4]
-
-
-def test_longest_retained_pair_prompt_fits_local_judge_context():
-    # All 745 frozen pairs were tokenized with Qwen revision 37561816e66b5b9153b1b64c10968c18c1e6f4a0.
-    # Receipt SHA-256: b4d6e4d62acf61757eea387acd9144ca9d98e3c9300de77cd299305f63297433
-    receipt = Path(__file__).parent / "fixtures/source-overlap-context-budget.json"
-    budget = json.loads(receipt.read_text())
-    model = load_model_config(DUPLICATE_MODEL_CONFIG)
-    assert model.serve.max_model_len is not None
-    assert budget["max_prompt_tokens"] + DUPLICATE_MAX_TOKENS <= model.serve.max_model_len
 
 
 @pytest.mark.parametrize("field", ["converter_revision", "task_specs_sha256"])
@@ -302,3 +178,98 @@ def test_frozen_survey_digest_survives_canonical_source_projection():
     survey = canonical_identity_survey(raw)
     assert set(survey.fingerprints) == {"HuggingFaceH4:aime24", "ChilleD:svamp"}
     assert canonical_sha256(identity_survey_payload(survey)) == canonical_sha256(raw)
+
+
+@pytest.mark.parametrize(
+    "cohort,expected,fraction",
+    [("permuted", "duplicate", 1.0), ("disjoint", "distinct", 0.0), ("subset", "partial_overlap", 0.5)],
+)
+def test_content_neighbors_ignore_permuted_ids_and_measure_both_populations(cohort, expected, fraction):
+    left = [task_document(str(index), f"Compute the square of {index}.") for index in range(100)]
+    if cohort == "disjoint":
+        right = [
+            task_document(str(index), f"Name the chemical element with atomic number {index}.") for index in range(100)
+        ]
+    else:
+        right = [
+            task_document(str(99 - index), f"Compute the square of {index}.")
+            for index in range(50 if cohort == "subset" else 100)
+        ]
+    fingerprints = {"left": fingerprint_source(left, {}), "right": fingerprint_source(right, {})}
+    pair = pair_similarity("left", fingerprints["left"], "right", fingerprints["right"])
+    review = compare_populations(
+        pair, PopulationIndex(list(content_rows(left))), PopulationIndex(list(content_rows(right)))
+    )
+    assert review.verdict.label == expected
+    assert review.verdict.overlap_fraction == pytest.approx(fraction)
+    assert review.measurement is not None
+    assert review.measurement.left_to_right.exact_fraction == pytest.approx(fraction)
+    if cohort == "permuted":
+        assert all(row.task_id != row.partner_task_id for row in review.measurement.left_to_right.neighbors)
+    if cohort == "subset":
+        assert review.measurement.right_to_left.fraction == 1
+
+
+def test_neighbor_integrity_reports_answer_swap_even_with_identical_id_sets():
+    rows = [TaskContent(str(index), str(index), f"Question {index}", f"answer-{index}", "test") for index in range(10)]
+    permuted = [
+        TaskContent(str(9 - index), row.instruction_hash, row.text, row.reference_hash, row.tests_hash)
+        for index, row in enumerate(rows)
+    ]
+    original, copy = PopulationIndex(rows), PopulationIndex(permuted)
+    assert exact_reference_integrity(original, copy)["mismatched"] == 0
+    swapped = [
+        TaskContent(row.task_id, row.instruction_hash, row.text, f"answer-{9 - index}", row.tests_hash)
+        for index, row in enumerate(permuted)
+    ]
+    result = exact_reference_integrity(original, PopulationIndex(swapped))
+    assert result["checked"] == result["mismatched"] == 10
+    assert result["examples"][0]["reference_sha256"] != result["examples"][0]["partner_reference_sha256"]
+
+
+def test_lsh_matches_full_population_after_shared_wrapper_is_stripped():
+    wrapper = (
+        "Follow these instructions carefully, explain all your reasoning, "
+        "then give the final answer in the required format."
+    )
+    question = " ".join(f"substance{index}" for index in range(100))
+    distractors = [
+        TaskContent(
+            str(index),
+            f"hash-{index}",
+            f"{wrapper}\nDescribe the unrelated chemical element with atomic number {index}",
+            None,
+            "test",
+        )
+        for index in range(20)
+    ]
+    target = PopulationIndex(
+        [*distractors, TaskContent("hidden-partner", "other", f"{wrapper}\n{question}", "reference", "test")]
+    )
+    query = TaskContent("query", "new", question.replace("substance50", "modified50"), "reference", "test")
+    neighbor = target.neighbors([query])[0]
+    assert neighbor.partner_task_id == "hidden-partner"
+    assert neighbor.method == "lsh" and neighbor.similarity >= 0.9
+    assert neighbor.reference_match and neighbor.tests_match
+
+
+def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_content(tmp_path, monkeypatch):
+    documents = [task_document(str(index), f"Compute the square of {index}.") for index in range(30)]
+    shard = tmp_path / "population.parquet"
+    pq.write_table(pa.Table.from_pylist([{"task_spec": json.dumps(row)} for row in documents]), shard)
+    fingerprint = fingerprint_source(
+        documents, {"s3://marin-us-east-02a/fixture/specs.parquet": hashlib.sha256(shard.read_bytes()).hexdigest()}
+    )
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.source_neighbor_survey.filesystem_for",
+        lambda uri: (fsspec.filesystem("file"), str(shard)),
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    population = read_population(cache_population("fixture", fingerprint, cache))
+    assert len(population.rows) == 30
+    assert {row.task_id for row in population.rows} == {str(index) for index in range(30)}
+    assert population.neighbors([population.rows[-1]])[0].partner_task_id == "29"
+    changed = fingerprint.model_copy(update={"inputs": {"s3://marin-us-east-02a/fixture/specs.parquet": "0" * 64}})
+    with pytest.raises(ValueError, match="Input digest differs"):
+        cache_population("fixture", changed, cache)

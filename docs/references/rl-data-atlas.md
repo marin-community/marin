@@ -546,44 +546,60 @@ requires their fingerprints. Generated CI input surveys are staged in private
 object storage under the run/attempt prefix; the code bundle carries only their
 SHA-256 manifest. The worker downloads and verifies those bytes before scanning,
 keeping input data outside Iris's workspace-bundle size limit.
-It ranks candidates mechanically and reviews only
-the top three per changed source. The runtime-selected `JudgeEndpoint` uses
-`Qwen/Qwen3.8-27B` at revision
-`37561816e66b5b9153b1b64c10968c18c1e6f4a0`, temperature 0.7 and prompt
-`source-overlap-v1`. Hosted endpoints must advertise that exact model. The local
-route owns one H100 through `remote_inference`, with compilation and CUDA graphs
-enabled, and releases it when the bounded batch exits. The local judge uses
-batch priority and a 65,536-token context, including up to 2,048 output tokens.
-The 4,200-second client read deadline covers worker readiness and one request,
-allowing managed batch-preemption recovery to finish before the caller times out.
-Every model response is checkpointed before opinion validation. Invalid opinions
-receive at most three attempts with unchanged request bytes and sampling settings.
-An exhausted pair is recorded as unresolved, including all response paths and
-validation errors; the scan continues through the remaining pairs. The CLI writes
-valid verdicts to `.receipts.jsonl`, raw responses beneath `.receipts.responses/`
-and unresolved pairs to `.receipts.unresolved.jsonl` beside the selected output.
-It fails after scanning if any pair remains unresolved. Unresolved pairs receive
-no duplicate/distinct label, group edge or acknowledgement. Transport and storage
-failures propagate. Identical complete requests reuse cached reviews without a
-model lease. Use a labelled duplicate/distinct fixture before
-accepting a new model or prompt.
+It ranks candidates mechanically and measures the top three per changed source on
+CPUs co-located with the TaskSpec inputs. Task IDs never select a partner or
+establish duplication. For each direction, the scan samples up to 4,096 task
+occurrences with seed 0, looks up their complete normalized instruction hashes
+in the other source's full population, then searches remaining queries with
+128-permutation character-5-gram MinHash and 32 LSH bands. Long whole wrapper
+lines shared by at least 90% of a source panel are removed before near matching.
+Retrieved candidates are scored with word-trigram Jaccard; a score of at least
+0.90 counts as a near duplicate. The partner ID, score, reference-hash agreement
+and test-hash agreement are retained as evidence. Reference-only matches, such
+as the same A–D answer letters in different MMLU subjects, do not count.
+
+Every review carries both directional fractions and 95% Wilson intervals, plus
+full-population exact-instruction match counts. Census panels have point
+intervals. Duplicate requires at least 98% overlap in both directions, using
+the larger of each direction's interval lower bound and exact census fraction.
+Partial overlap requires a lower bound of at least 1% in either direction.
+Remaining pairs are distinct at that reporting threshold. The scalar partial
+overlap fraction is the smaller positive directional estimate; the two
+explicit directions remain authoritative for asymmetric subsets. LSH is
+approximate, and the intervals describe sampling uncertainty, not retrieval
+recall. The labels use deterministic measurements; no model can downgrade them.
 
 ```bash
-uv run --extra dedup python -m experiments.post_training.task_curation.source_duplicates fingerprint \
+uv run --all-packages python -m experiments.post_training.task_curation.source_duplicates fingerprint \
   --manifest identity-inputs.json --output source-identities.json
-uv run --extra dedup python -m experiments.post_training.task_curation.source_duplicates scan \
+uv run --all-packages python -m experiments.post_training.task_curation.source_duplicates scan \
   --fingerprints source-identities.json --changed-sources changed-sources.json \
-  --top-k 3 --route local --labels labelled-pairs.json \
+  --manifest identity-inputs.json --top-k 3 --labels labelled-pairs.json \
   --acknowledgements experiments/post_training/task_curation/source_duplicate_acknowledgements.json \
   --require-acknowledged --output source-identities-reviewed.json
 ```
 
-Reviews label pairs `duplicate`, `partial_overlap` (with the estimated fraction
-of the smaller population present in the larger), or `distinct`, with a reason.
+Omit `--manifest` when fingerprints pin complete durable S3 TaskSpec inputs.
+The scan verifies each input SHA-256 and population count before matching.
+CI uses `cw-us-east-02a`, 16 CPUs, 64 GB RAM and a three-day job timeout.
+Measured receipts are written to `.receipts.jsonl` and `.receipts.neighbors/`.
 Non-distinct flags require resolution or an acknowledgement keyed by the exact
-request digest in `source_duplicate_acknowledgements.json`. Groups choose a
-stable canonical member for default collapsing; every source and its assessment
-remains available. These are advisory opinions, not deletion instructions.
+measurement digest in `source_duplicate_acknowledgements.json`. Old approvals
+remain attached to their old request; new content measurements need new approvals.
+Groups choose a stable canonical member for default collapsing; every source
+and assessment remains available. The flags are advisory.
+
+For a versioned survey rerun, use `source_neighbor_survey --survey URI
+--survey-sha256 SHA --output-root NEW_URI --allocated-cpus 16`. It retains every old pair, widens
+with full fingerprint hash evidence and a 256-task-per-source LSH discovery
+panel, then measures each selected pair against complete populations. It writes
+`source-identities-content-nn-v2.json`, `label-diff.json`, `openqa-integrity.json`
+and `result.json`. Complete per-sample neighbors live under `neighbors/`; the
+survey includes bounded examples and their receipt URIs. The diff preserves
+old labels, request digests and acknowledgements. Full exact-question reference
+checks for the OpenQA pairs are checkpointed under `integrity/` as soon as they
+complete. Cross-source agreement cannot exclude an answer defect shared by
+both sources. Use a fresh output root; old evidence is never overwritten.
 
 The staged loader selects fingerprints, pair reviews and groups atomically with
 the catalog and backend map. Pass the scan's reviewed output to the loader's
