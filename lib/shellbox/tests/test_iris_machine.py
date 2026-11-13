@@ -651,3 +651,37 @@ def test_prepared_iris_task_requires_kubernetes_even_without_declared_disk(monke
         with pytest.raises(UnsupportedMachineSpec, match="Kubernetes"):
             asyncio.run(factory.create(spec))
         assert not client.submitted
+
+
+class HeldCleanupRpc(LocalRpc):
+    def __init__(self):
+        self.cleaning = threading.Event()
+        self.release = threading.Event()
+
+    def exec_in_container(self, request, timeout_ms):
+        if request.command[-1].startswith("rm -rf "):
+            self.cleaning.set()
+            assert self.release.wait(timeout=10)
+        return super().exec_in_container(request, timeout_ms)
+
+
+def test_cancellation_during_iris_command_cleanup_propagates_and_retains_machine(tmp_path):
+    async def scenario():
+        rpc = HeldCleanupRpc()
+        machine, job = local_machine(tmp_path, rpc)
+        artifact = tmp_path / "answer"
+        try:
+            running = asyncio.create_task(machine.run(Command(("sh", "-c", f"echo answer > {artifact}"))))
+            assert await asyncio.to_thread(rpc.cleaning.wait, 5)
+            running.cancel()
+            rpc.release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await running
+            assert not job.cancelled
+            verifier = await machine.run(Command(("cat", str(artifact))))
+            assert verifier.stdout == b"answer\n"
+        finally:
+            rpc.release.set()
+            await machine.close()
+
+    asyncio.run(scenario())

@@ -52,6 +52,7 @@ from shellbox.machine import (
 from shellbox.process_session import (
     PROBE_PROCESS_GROUP_COMMAND,
     PROCESS_GROUP_ABSENT_EXIT_CODE,
+    await_cleanup,
     finish_owned,
     own_cleanup,
 )
@@ -278,7 +279,7 @@ class IrisMachine:
                 return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
         finally:
             if not self._closed:
-                await finish_owned(own_cleanup(self._remove_command_files(prefix)))
+                await await_cleanup(own_cleanup(self._remove_command_files(prefix)))
 
     async def _remove_command_files(self, prefix: str) -> None:
         await self._checked(f"rm -rf {shlex.quote(prefix)}")
