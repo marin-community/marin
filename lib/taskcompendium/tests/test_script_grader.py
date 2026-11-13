@@ -608,11 +608,13 @@ async def test_script_grader_reward_kinds(reward, script, expected):
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+@pytest.mark.parametrize("answer_format", [PlainText(), JsonAnswer()])
 @pytest.mark.asyncio
-async def test_verifyit_grader_with_environment_runs_verifyit_cli_in_grading_machine(answer, reward):
+async def test_verifyit_grader_receives_extracted_conversation_answer_without_actor_files(answer, reward, answer_format):
     package = verifyit_package(NumericSpec("12", tolerance_abs=0, tolerance_rel=0), environment=GRADER_ENVIRONMENT)
-    task = arithmetic_task(package.grader)
+    task = arithmetic_task(package.grader).model_copy(update={"answer_format": answer_format})
+    response = json.dumps({"answer": answer}) if isinstance(answer_format, JsonAnswer) else answer
 
-    result = await grade_in_sandbox(task, answered(task, answer), FixtureImageFactory(), GRADER_MACHINE)
+    result = await grade_in_sandbox(task, answered(task, response), FixtureImageFactory(), GRADER_MACHINE)
 
     assert (result.status, result.reward) == (Outcome.GRADED, reward), result.error

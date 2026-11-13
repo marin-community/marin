@@ -244,7 +244,11 @@ def test_review_cache_tracks_spec_but_reuses_capacity_changes(tmp_path):
     more_capacity = replace(reviewer, max_concurrent=64)
     more_capacity.review([task], rubric)
     assert len(chat.requests) == 1
-    for settings in ({"base_rubric_version": "task-quality-v2"}, {"temperature": 0.8}, {"reasoning_effort": "medium"}):
+    for settings in (
+        {"base_rubric_version": reviewer.spec.base_rubric_version + "-changed"},
+        {"temperature": 0.8},
+        {"reasoning_effort": "medium"},
+    ):
         changed = replace(reviewer, spec=replace(reviewer.spec, **settings))
         changed.review([task], rubric)
     reviewer.review([task], replace(rubric, version="2"))

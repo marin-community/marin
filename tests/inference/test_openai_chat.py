@@ -21,6 +21,18 @@ def chat_server(monkeypatch):
             status = 503 if body["model"] == "unavailable" else 200
             payload = json.dumps({"choices": [{"message": {"content": None, "tool_calls": []}}]}).encode()
             self.send_response(status)
+            if body["model"] == "truncated_chunked":
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self.wfile.write(b'10\r\n{"choice')
+                self.close_connection = True
+                return
+            if body["model"] == "truncated_length":
+                self.send_header("Content-Length", str(len(payload) + 10))
+                self.end_headers()
+                self.wfile.write(payload)
+                self.close_connection = True
+                return
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
@@ -49,3 +61,12 @@ def test_direct_chat_preserves_nullable_tool_response_and_sends_once(chat_server
     with pytest.raises(ConnectionError, match="HTTP 503"):
         client.complete({"model": "unavailable"})
     assert len(requests) == 2
+
+
+@pytest.mark.parametrize("model", ["truncated_chunked", "truncated_length"])
+def test_interrupted_response_is_a_retryable_transport_failure(chat_server, model):
+    url, requests = chat_server
+    client = OpenAIChatClient(url, "fixture-token", timeout=2)
+    with pytest.raises(ConnectionError, match="response ended"):
+        client.complete({"model": model})
+    assert len(requests) == 1
