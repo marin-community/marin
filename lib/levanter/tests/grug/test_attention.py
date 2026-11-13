@@ -16,6 +16,7 @@ from levanter.grug.attention import (
     reference_attention,
     token_validity_from_attention_mask,
 )
+from levanter.testing.devices import use_test_devices
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -130,6 +131,38 @@ def test_real_tpu_splash_attention_matches_reference():
         expected = jax.jit(lambda q, k, v: reference_attention(q, k, v, mask, logits_dtype=jnp.float32))(q, k, v)
 
     np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize("batched_ids", [False, True])
+@pytest.mark.parametrize("ids_context_sharded", [False, True])
+def test_tpu_splash_traces_packed_attention_with_context_sharded_queries(batched_ids, ids_context_sharded):
+    # Trace the real Splash kernel on CPU: q IDs and mask metadata must be local,
+    # while KV IDs must cover the full sequence even when the input IDs are sharded.
+    with use_test_devices(8) as devices:
+        mesh = jax.sharding.Mesh(
+            np.asarray(devices).reshape(2, 4),
+            ("model", "context"),
+            axis_types=(AxisType.Explicit, AxisType.Explicit),
+        )
+        q_sharding = NamedSharding(mesh, P(None, "context", "model", None))
+        kv_sharding = NamedSharding(mesh, P(None, None, "model", None))
+        q = jax.ShapeDtypeStruct((2, 512, 4, 128), jnp.float32, sharding=q_sharding)
+        kv = jax.ShapeDtypeStruct(q.shape, q.dtype, sharding=kv_sharding)
+        sequence_axis = "context" if ids_context_sharded else None
+        ids_shape = (2, 512) if batched_ids else (512,)
+        ids_spec = P(None, sequence_axis) if batched_ids else P(sequence_axis)
+        ids = jax.ShapeDtypeStruct(ids_shape, jnp.int32, sharding=NamedSharding(mesh, ids_spec))
+
+        def attend(q, k, v, segment_ids):
+            mask = AttentionMask.causal().with_segment_ids(segment_ids)
+            return attention(q, k, v, mask, implementation="tpu_splash")
+
+        with jax.set_mesh(mesh):
+            output = jax.eval_shape(attend, q, kv, kv, ids)
+
+        assert output.shape == q.shape
+        assert output.sharding.spec == q_sharding.spec
 
 
 def test_token_validity_uses_padding_ids_without_excluding_packed_boundaries():

@@ -13,7 +13,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding, auto_axes
+from jax.sharding import NamedSharding, PartitionSpec, auto_axes
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -401,13 +401,19 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
-            q_seg_sharding = _named_sharding_of(q_segment_ids, label="segment_ids.q")
-            kv_seg_sharding = _named_sharding_of(kv_segment_ids, label="segment_ids.kv")
+            # Segment IDs must follow the tokens consumed by each local kernel: queries
+            # are context-sharded, while Splash requires the complete KV sequence.
+            q_segment_axes = (
+                PartitionSpec(q_pspec[0], q_pspec[2]) if q_segment_ids.ndim == 2 else PartitionSpec(q_pspec[2])
+            )
+            kv_segment_axes = (
+                PartitionSpec(k_pspec[0], k_pspec[2]) if kv_segment_ids.ndim == 2 else PartitionSpec(k_pspec[2])
+            )
             segment_id_lowering = lower_splash_segment_ids(
-                q_segment_ids=q_segment_ids,
-                kv_segment_ids=kv_segment_ids,
-                q_segment_ids_axes=q_seg_sharding.spec,
-                kv_segment_ids_axes=kv_seg_sharding.spec,
+                q_segment_ids=jax.sharding.reshard(q_segment_ids, NamedSharding(mesh, q_segment_axes)),
+                kv_segment_ids=jax.sharding.reshard(kv_segment_ids, NamedSharding(mesh, kv_segment_axes)),
+                q_segment_ids_axes=q_segment_axes,
+                kv_segment_ids_axes=kv_segment_axes,
                 q_segment_batch_axis=0 if q_segment_ids.ndim == 2 else None,
                 kv_segment_batch_axis=0 if kv_segment_ids.ndim == 2 else None,
             )
@@ -430,11 +436,13 @@ def _tpu_splash_attention(
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
+    kernel_specs = splash_kernel.manual_sharding_spec(NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2])))
+    splash_kernel = jax.sharding.reshard(splash_kernel, kernel_specs)
 
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, None),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, kernel_specs),
         out_specs=q_pspec,
         check_vma=False,
     )
