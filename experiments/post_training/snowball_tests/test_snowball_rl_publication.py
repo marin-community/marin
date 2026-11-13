@@ -32,7 +32,7 @@ from experiments.post_training import publish_rl_progress as publisher
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_publication as publication
-from experiments.post_training.snowball_rl_scoring import GateInputs
+from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME, GateInputs
 from experiments.post_training.snowball_tests.fixtures import append_metrics, write_json, write_metrics, write_receipt
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
@@ -423,7 +423,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     historical_row = stored()["native-1"]
     assert historical_row["gate_result"] is None and historical_row["optimizer_steps"] == preset.updates
     for root in controls:
-        (root / gate.GATE_INPUTS_FILENAME).unlink()
+        (root / GATE_INPUTS_FILENAME).unlink()
     invalid_command = CliRunner().invoke(publication.main, ["--preset", "train-long"])
     assert invalid_command.exit_code == 2
     with pytest.raises(click.UsageError):
