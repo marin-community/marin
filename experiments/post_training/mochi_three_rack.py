@@ -50,9 +50,9 @@ ROLE_PLAN = SkyRLRolePlan(
 )
 MEGATRON_GEOMETRY = {
     "tensor_model_parallel_size": 1,
-    "pipeline_model_parallel_size": 4,
-    "context_parallel_size": 16,
-    "expert_model_parallel_size": 16,
+    "pipeline_model_parallel_size": 16,
+    "context_parallel_size": 4,
+    "expert_model_parallel_size": 4,
     "expert_tensor_parallel_size": 1,
 }
 
@@ -63,10 +63,14 @@ def build_run(
     data_root: str,
     data_sha256: str,
     updates: int = 3,
-    max_new_tokens: int = 8192,
+    max_new_tokens: int = 1024,
     resume_version: str | None = None,
     resume_step: int = 0,
 ) -> ArtifactStep[SkyRLRun]:
+    if 48 % MEGATRON_GEOMETRY["pipeline_model_parallel_size"]:
+        raise ValueError("Mochi's 48 layers must divide evenly across pipeline stages")
+    if 12 % MEGATRON_GEOMETRY["context_parallel_size"]:
+        raise ValueError("Mochi's sliding-window all-to-all attention requires CP to divide its 12 KV heads")
     hf_root = str(StoragePath(TRIAL_ROOT) / "hf-sft")
     model = ArtifactHfModel(
         step=ArtifactStep.adopt(
@@ -201,7 +205,7 @@ def build_run(
     "--data-sha256", required=True, help="SHA-256 of train.parquet; checked before launch and in its artifact name."
 )
 @click.option("--updates", type=click.IntRange(min=1), default=3)
-@click.option("--max-new-tokens", type=click.IntRange(min=1, max=CONTEXT_CAP - 1), default=8192)
+@click.option("--max-new-tokens", type=click.IntRange(min=1, max=CONTEXT_CAP - 1), default=1024)
 @click.option("--resume-version", default=None, help="Completed three-rack run artifact; starts fresh when omitted.")
 @click.option("--resume-step", type=click.IntRange(min=1), default=None)
 @rl_build_options
