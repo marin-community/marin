@@ -35,7 +35,7 @@ class DaytonaConnection:
         api_key, api_url, target = self.api_key, self.api_url, self.target
 
         def client() -> Any:
-            from daytona import AsyncDaytona, DaytonaConfig  # guard the optional SDK dependency
+            from daytona import AsyncDaytona, DaytonaConfig  # noqa: PLC0415  # optional SDK, loaded at client creation
 
             return AsyncDaytona(DaytonaConfig(api_key=api_key, api_url=api_url, target=target))
 
