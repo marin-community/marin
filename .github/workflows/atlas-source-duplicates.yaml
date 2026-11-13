@@ -12,11 +12,6 @@ on:
         description: Source declaration baseline
         required: true
         default: origin/main
-      route:
-        description: JudgeEndpoint route
-        type: choice
-        options: [local, hosted]
-        default: local
 
 permissions:
   contents: read
@@ -35,9 +30,6 @@ jobs:
       CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
       CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      ATLAS_DUPLICATE_JUDGE_API_KEY: ${{ secrets.ATLAS_DUPLICATE_JUDGE_API_KEY }}
-      ATLAS_DUPLICATE_JUDGE_BASE_URL: ${{ vars.ATLAS_DUPLICATE_JUDGE_BASE_URL }}
-      ROUTE: ${{ inputs.route || vars.ATLAS_DUPLICATE_JUDGE_ROUTE || 'local' }}
       BASE_REF: ${{ inputs.base_ref || github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@v5
@@ -60,17 +52,8 @@ jobs:
             --index experiments/post_training/task_curation/source_fingerprint_index.json \
             --output atlas-overlap-inputs/fingerprints.json --changed-output atlas-overlap-inputs/changed.json
           echo "changed=$(python -c 'import json; print("true" if json.load(open("atlas-overlap-inputs/changed.json")) else "false")')" >> "$GITHUB_OUTPUT"
-      - name: Review shortlisted pairs on hosted endpoint
-        if: steps.prepare.outputs.changed == 'true' && env.ROUTE == 'hosted'
-        run: |
-          uv run --no-sync python -m experiments.post_training.task_curation.source_duplicates scan \
-            --fingerprints atlas-overlap-inputs/fingerprints.json --changed-sources atlas-overlap-inputs/changed.json \
-            --top-k 3 --route hosted --base-url "$ATLAS_DUPLICATE_JUDGE_BASE_URL" \
-            --api-key-env ATLAS_DUPLICATE_JUDGE_API_KEY \
-            --acknowledgements experiments/post_training/task_curation/source_duplicate_acknowledgements.json \
-            --require-acknowledged --output atlas-overlap-inputs/review.json
       - name: Review shortlisted pairs in an owned local-model lease
-        if: steps.prepare.outputs.changed == 'true' && env.ROUTE == 'local'
+        if: steps.prepare.outputs.changed == 'true'
         run: |
           uv run --no-sync iris --config lib/iris/config/marin.yaml job run \
             --target-cluster cw-rno2a --job-name atlas-overlap-${{ github.run_id }}-${{ github.run_attempt }} \
