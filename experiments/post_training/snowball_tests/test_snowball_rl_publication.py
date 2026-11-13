@@ -20,6 +20,7 @@ from finestore.rl.run_records import (
     update_attempt,
 )
 from finestore.store import DataStore
+from fsspec.core import url_to_fs
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.rl_progress import RunSummary
@@ -248,7 +249,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     controls = [
         recorded_runs(
             preset.name,
-            presets.control_name(pin.preset, pin.commit, i),
+            gate.control_name(pin.preset, pin.commit, i),
             speed=100 + i,
             score=0.49 + i * 0.01,
             attempt_id=f"pinned-{i}",
@@ -292,10 +293,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
         )
         rejected = publish(first_gate, issue="invalid")
         assert len(rejected.unserved_records) == 2 and all("issue" in error for error in rejected.errors)
-    report_file = Path(first_gate) / gate.GATE_REPORT_FILENAME
+    report_file = Path(first_gate) / RECORD_FILENAME
     original = report_file.read_bytes()
     invalid_count = json.loads(original)
-    invalid_count["run"]["replicates"] = 3
+    invalid_count["result"]["run"]["replicates"] = 3
     write_json(report_file, invalid_count)
     try:
         rejected = publish(first_gate)
@@ -372,10 +373,10 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     assert stored()["native-0"]["elapsed_seconds"] is None
     assert any("Checkpoint lineage timing is unknown" in note for note in stored()["native-0"]["evidence"])
     write_receipt(sources[0], receipt)
-    report_file = Path(second_gate) / gate.GATE_REPORT_FILENAME
+    report_file = Path(second_gate) / RECORD_FILENAME
     original = report_file.read_bytes()
     legacy = json.loads(original)
-    legacy["invariants"][0].pop("comparator")
+    legacy["result"]["invariants"][0].pop("comparator")
     write_json(report_file, legacy)
     try:
         assert publish(second_gate).unserved_records == []
@@ -429,15 +430,16 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
     failed_second["result"]["state"] = "failed"
     write_receipt(sources[1], failed_second)
     (sources[1] / "terminal.json").unlink()
-    stored_exists = StoragePath.exists
+    filesystem = type(url_to_fs(fresh_gate, use_listings_cache=False)[0])
+    stored_exists = filesystem.exists
 
-    def gate_marker_unavailable(path):
+    def gate_marker_unavailable(self, path, **kwargs):
         if str(path) == str(StoragePath(fresh_gate) / RECORD_FILENAME):
             raise OSError("Gate storage unavailable")
-        return stored_exists(path)
+        return stored_exists(self, path, **kwargs)
 
     with monkeypatch.context() as storage_fault:
-        storage_fault.setattr(StoragePath, "exists", gate_marker_unavailable)
+        storage_fault.setattr(filesystem, "exists", gate_marker_unavailable)
         blocked = publish(fresh_gate)
     assert blocked.unserved_records == [(receipt["config"]["run"]["id"], "native-retry")]
     assert blocked.errors == ["Gate storage unavailable"]
