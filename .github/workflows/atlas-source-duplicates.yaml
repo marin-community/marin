@@ -52,6 +52,12 @@ jobs:
             --index experiments/post_training/task_curation/source_fingerprint_index.json \
             --output atlas-overlap-inputs/fingerprints.json --changed-output atlas-overlap-inputs/changed.json
           echo "changed=$(python -c 'import json; print("true" if json.load(open("atlas-overlap-inputs/changed.json")) else "false")')" >> "$GITHUB_OUTPUT"
+      - name: Stage generated overlap inputs outside the workspace bundle
+        if: steps.prepare.outputs.changed == 'true'
+        run: |
+          sha256sum atlas-overlap-inputs/fingerprints.json atlas-overlap-inputs/changed.json > atlas-overlap-inputs/sha256.txt
+          uv run --no-sync fsutil cp -n atlas-overlap-inputs/fingerprints.json atlas-overlap-inputs/changed.json \
+            s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/ci/${{ github.run_id }}-${{ github.run_attempt }}/
       - name: Review shortlisted pairs in an owned local-model lease
         if: steps.prepare.outputs.changed == 'true'
         run: |
@@ -59,8 +65,15 @@ jobs:
             --target-cluster cw-rno2a --job-name atlas-overlap-${{ github.run_id }}-${{ github.run_attempt }} \
             --cpu 2 --memory 8G --disk 16G --enable-extra-resources --extra cpu \
             --timeout 3600 --max-retries 0 --priority production \
-            --include 'atlas-overlap-inputs/*.json' \
-            -- bash -lc 'uv run --no-sync python -m experiments.post_training.task_curation.source_duplicates scan \
+            --exclude '^atlas-overlap-inputs/.*[.]json$' --include 'atlas-overlap-inputs/sha256.txt' \
+            -- bash -lc 'set -e
+              mkdir -p atlas-overlap-inputs
+              uv run --no-sync fsutil cp \
+                s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/ci/${{ github.run_id }}-${{ github.run_attempt }}/fingerprints.json \
+                s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/ci/${{ github.run_id }}-${{ github.run_attempt }}/changed.json \
+                atlas-overlap-inputs/
+              sha256sum --check atlas-overlap-inputs/sha256.txt
+              uv run --no-sync python -m experiments.post_training.task_curation.source_duplicates scan \
               --fingerprints atlas-overlap-inputs/fingerprints.json --changed-sources atlas-overlap-inputs/changed.json \
               --top-k 3 --route local \
               --acknowledgements experiments/post_training/task_curation/source_duplicate_acknowledgements.json \

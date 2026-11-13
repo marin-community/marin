@@ -338,7 +338,11 @@ Catalog titles, counts and assessment
 evidence can change while reusing an unchanged population's fingerprint.
 
 The `Atlas source overlap` workflow detects added or changed declarations and
-requires their fingerprints. It ranks candidates mechanically and reviews only
+requires their fingerprints. Generated CI input surveys are staged in private
+object storage under the run/attempt prefix; the code bundle carries only their
+SHA-256 manifest. The worker downloads and verifies those bytes before scanning,
+keeping input data outside Iris's workspace-bundle size limit.
+It ranks candidates mechanically and reviews only
 the top three per changed source. The runtime-selected `JudgeEndpoint` uses
 `Qwen/Qwen3.8-27B` at revision
 `37561816e66b5b9153b1b64c10968c18c1e6f4a0`, temperature 0.7 and prompt
