@@ -69,6 +69,33 @@ curriculum matrix in worker memory and scores batches exactly. A curriculum edit
 reuses task vectors. Atlas imports precomputed counts and samples; the full task
 release and vectors stay in object storage.
 
+For a retained-population coverage backfill, `curriculum_backfill prepare`
+accepts a JSON list of `FrozenCoverageSource` records. Freeze each current
+declaration, exact population receipt and hash, TaskSpec column and directory,
+Use, and any complete exclusion manifest and hash. Preparation verifies the
+receipt, preserves task identities, accounts for every exclusion, and writes
+only public semantic inputs. Stored-stream hashes are recorded separately from
+historical aggregate TaskSpec hashes, whose original iteration order can differ.
+Run preparation beside the private inputs; its output root may stage public
+inputs in the embedding worker's region. The existing embedding graph accepts
+that prepared input artifact and retains its normal vector cache and release format.
+
+```bash
+uv run python -m experiments.post_training.task_curation.curriculum_backfill prepare \
+  --selection FROZEN_SELECTION.json --output-root PUBLIC_INPUT_ROOT --workers 8
+uv run python -m experiments.post_training.task_curation.curriculum_backfill embed \
+  --corpus PUBLIC_INPUT_ROOT/corpus.json --artifact-root ARTIFACT_ROOT \
+  --cache-root VECTOR_CACHE_ROOT --stage descriptions --device cpu --workers 16 --run
+```
+
+Then run `task_embeddings` and `curriculum_embeddings` with one CUDA worker
+inside a batch GPU job, followed by `coverage` on CPU workers. Use the same
+corpus, artifact root and cache for every stage. The final receipt binds the
+release and coverage hashes, source/task counts and embedding specification.
+Changed selections require a new output root; interrupted source attempts are
+preserved and completed source projections can be reused. Coverage measures
+converted populations and supplies no training admission or quality review.
+
 | Part | Implementation and data models |
 |---|---|
 | Source selection and graph execution | [driver.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/driver.py), [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [TaskSpec](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py) |

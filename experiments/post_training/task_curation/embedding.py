@@ -450,12 +450,13 @@ def curation_embedding_pipeline(
     sample_size: int | None,
     seed: int,
     inventory: list[SourceDeclaration],
+    prepared_inputs: ArtifactStep[SemanticArtifact] | None = None,
 ) -> CurationEmbeddingStages:
     """Bind independent task and curriculum embeddings before the assignment pass."""
     # Preserve artifact addresses; resolve public IDs at execution boundaries.
     curated = {original_source_id(key): value for key, value in canonical_source_map(curated).items()}
     inventory = [row.model_copy(update={"id": original_source_id(row.id)}) for row in inventory]
-    inputs = _named(
+    inputs = prepared_inputs or _named(
         apply(
             "rl-semantics/inputs",
             partial(_prepare, runtime),
