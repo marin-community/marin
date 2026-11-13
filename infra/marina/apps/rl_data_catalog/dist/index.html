@@ -35,11 +35,24 @@
       <button id="clear-filters" class="text-button" type="button">Reset</button>
     </form>
     <div class="table-scroller" tabindex="0" aria-label="Sources">
-      <table class="source-table"><caption class="sr-only">Sources with examples, use, quality, result, contamination, Daytona safety, curriculum area, last update and evidence</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
+      <table class="source-table"><caption class="sr-only">Sources with examples, use, quality, result, issue rate, contamination, overlapping tasks, Daytona safety, curriculum area, last update and evidence</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
       <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search, reset the filters, or show QUICK and BAD sources.</p></div>
     </div>
     <footer class="table-footer"><span id="visible-count"></span><span>Select a column title to sort · Open Evidence for everything behind a label</span></footer>
   </section>
+  <details class="contamination-legend" id="contamination-legend">
+    <summary>Result and contamination legend</summary>
+    <p><span class="chip quality-some_issues result-provisional">Some issues · provisional</span> Result chips marked provisional use incomplete content reviews. Issue rate has its own numeric column. Review progress is on the source Evidence page.</p>
+    <p>Lexical overlap with the evaluation corpus. Counts describe the measured input; retained releases can have fewer tasks.</p>
+    <dl>
+      <dt><span class="chip contamination-chip quality-good">NO ISSUES</span></dt><dd>Measured with zero overlapping tasks.</dd>
+      <dt><span class="chip contamination-chip contamination-remediated">REMEDIATED</span></dt><dd>TRAIN overlap was excluded in a new pinned private TaskCompendium release.</dd>
+      <dt><span class="chip contamination-chip quality-some_issues">MEASURED, EVAL</span></dt><dd>EVAL or benchmark overlap is measured and retained by policy. The count remains visible.</dd>
+      <dt><span class="chip contamination-chip quality-bad contamination-required">REMEDIATION REQUIRED</span></dt><dd>TRAIN overlap lacks a remediation receipt for the current private pin. This violates the ingestion requirement.</dd>
+      <dt><span class="chip contamination-chip quality-unassessed">NOT MEASURED</span></dt><dd>No lexical measurement is recorded. Cleanliness is unknown.</dd>
+    </dl>
+    <a href="guide.html#contamination">Read the contamination definitions</a>
+  </details>
   <footer class="page-footer"><span>OPEN ATHENA / RL DATA ATLAS</span><span id="snapshot-info"></span></footer>
 </main>
 <dialog id="details" aria-labelledby="detail-name">
