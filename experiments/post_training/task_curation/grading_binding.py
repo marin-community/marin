@@ -9,11 +9,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence
-from finestore.rl.source_identity import SourceId
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.source import RlDataSource
+from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
 
 class GradingCensusReceipt(BaseModel):

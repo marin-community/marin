@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.source_identity import canonical_source_id, original_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from huggingface_hub import HfApi, hf_hub_download
@@ -28,6 +27,7 @@ from zephyr.context import ZephyrContext
 from experiments.post_training.task_curation.datasets.native_harbor import VERSION, hub_rows, native_task, unpack_native
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 LOGGER = logging.getLogger(__name__)
 RETIRED = Path(__file__).with_name("retired-inventory-only.json")

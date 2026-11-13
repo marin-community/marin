@@ -7,7 +7,10 @@ import json
 import logging
 from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from dataclasses import asdict, dataclass
+from itertools import islice
 from uuid import uuid4
 
 import pyarrow as pa
@@ -40,6 +43,7 @@ from experiments.post_training.task_curation.published_census import population_
 
 logger = logging.getLogger(__name__)
 REVIEW_BATCH_SIZE = 32
+SHARD_REQUEST_CONCURRENCY = 32
 MAX_SUMMARY_ISSUES = 50
 RECORD_SCHEMA = pa.schema(
     [
@@ -304,6 +308,30 @@ def write_source_result(
     return result
 
 
+@dataclass(frozen=True)
+class ShardBatchResult:
+    receipt: BatchReviewReceipt
+    first_statuses: Counter[str]
+    statuses: Counter[str]
+
+
+def review_shard_batch(
+    batch: ContractBatch, reviewer: Reviewer, rubric: ReviewRubric, output: StoragePath, max_passes: int
+) -> ShardBatchResult:
+    """Finish one original batch's bounded passes against its resumable receipts."""
+    records, path = review_batch(batch.tasks, batch.contracts, rubric, reviewer, output)
+    first_statuses = Counter(str(row.status) for row in records)
+    for _ in range(1, max_passes):
+        if all(row.status is ReviewStatus.REVIEWED for row in records):
+            break
+        records, path = review_batch(batch.tasks, batch.contracts, rubric, reviewer, output)
+    return ShardBatchResult(
+        BatchReviewReceipt(batch_index=batch.index, path=path, sha256=file_sha256(StoragePath(path))),
+        first_statuses,
+        Counter(str(row.status) for row in records),
+    )
+
+
 def review_shard(
     inputs: FullQCInputs,
     reviewer: Reviewer,
@@ -315,28 +343,42 @@ def review_shard(
     shard_count: int,
     batch_offset: int,
     max_passes: int,
+    batch_workers: int,
     worker_jobs: Sequence[str],
 ) -> FullQCReviewShard:
     """Review one disjoint assignment of original batches, retaining every unsuccessful attempt."""
     if not 0 <= shard_index < shard_count or max_passes < 1:
         raise ValueError("Invalid review shard assignment or retry count")
+    if not 1 <= batch_workers <= SHARD_REQUEST_CONCURRENCY:
+        raise ValueError(f"Batch workers must be between one and {SHARD_REQUEST_CONCURRENCY}")
     receipts = []
-    attempted = reviewed = 0
     first_statuses = Counter()
     statuses = Counter()
-    for batch in contract_batches(inputs):
-        if (batch_offset + batch.index) % shard_count != shard_index:
-            continue
-        records, path = review_batch(batch.tasks, batch.contracts, rubric, reviewer, StoragePath(batch_output_path))
-        first_statuses.update(str(row.status) for row in records)
-        for _ in range(1, max_passes):
-            if all(row.status is ReviewStatus.REVIEWED for row in records):
+    batches = (batch for batch in contract_batches(inputs) if (batch_offset + batch.index) % shard_count == shard_index)
+    with ThreadPoolExecutor(max_workers=batch_workers) as executor:
+        pending = set()
+        while True:
+            for batch in islice(batches, batch_workers - len(pending)):
+                pending.add(
+                    executor.submit(
+                        copy_context().run,
+                        review_shard_batch,
+                        batch,
+                        reviewer,
+                        rubric,
+                        StoragePath(batch_output_path),
+                        max_passes,
+                    )
+                )
+            if not pending:
                 break
-            records, path = review_batch(batch.tasks, batch.contracts, rubric, reviewer, StoragePath(batch_output_path))
-        statuses.update(str(row.status) for row in records)
-        attempted += len(records)
-        reviewed += sum(row.status is ReviewStatus.REVIEWED for row in records)
-        receipts.append(BatchReviewReceipt(batch_index=batch.index, path=path, sha256=file_sha256(StoragePath(path))))
+            completed, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                result = future.result()
+                first_statuses.update(result.first_statuses)
+                statuses.update(result.statuses)
+                receipts.append(result.receipt)
+    receipts.sort(key=lambda receipt: receipt.batch_index)
     result = FullQCReviewShard(
         path=str(StoragePath(output_path) / "attempts" / uuid4().hex),
         inputs=inputs,
@@ -346,8 +388,8 @@ def review_shard(
         shard_index=shard_index,
         shard_count=shard_count,
         batch_offset=batch_offset,
-        attempted_count=attempted,
-        reviewed_count=reviewed,
+        attempted_count=sum(statuses.values()),
+        reviewed_count=statuses[ReviewStatus.REVIEWED.value],
         first_pass_status_counts=dict(first_statuses),
         status_counts=dict(statuses),
         receipts=receipts,

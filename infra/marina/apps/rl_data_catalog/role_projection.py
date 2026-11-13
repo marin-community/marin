@@ -8,7 +8,6 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from finestore.rl.source_identity import SourceId, canonical_source_id, original_source_id
 from marina.client import AppletQuery
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
@@ -16,6 +15,7 @@ from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from infra.marina.apps.rl_data_catalog.server.quality import intended_use
+from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId, canonical_source_id, original_source_id
 
 
 class ManifestReference(BaseModel):
