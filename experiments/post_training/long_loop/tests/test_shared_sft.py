@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import json
 from pathlib import Path
 
@@ -61,6 +62,24 @@ def test_legacy_grug_requires_acknowledgement_and_keeps_original_recipe(tmp_path
     assert actual.recipe["optimizer"] == recipe["optimizer"]
     assert actual.recipe["trainer"] == recipe["trainer"]
     assert actual.recipe["model"] == recipe["model"]
+
+
+def test_native_sft_validates_real_multinode_layout_before_submitting(tmp_path):
+    resolved = resolve_spec(SPEC, smoke=True)
+    recipe = resolved["sft"]
+    broken = copy.deepcopy(recipe)
+    broken["mesh"]["axes"]["context"] = 32
+    broken["mesh"]["dcn_axes"] = {"replica_dcn": -1}
+    with pytest.raises(ValueError, match="ICI product 256 must equal devices_per_slice 8"):
+        shared_sft_spec("test/sft", "2026.11.13.4", broken)
+    spec = shared_sft_spec("test/sft", "2026.11.13.4", recipe)
+    step = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
+    config = step.build_config(StepContext.for_run(str(tmp_path), str(tmp_path), runtime_args=step.runtime_args))
+    ici, dcn = config.train_config.trainer.mesh.axis_shapes(num_devices=256, num_slices=32)
+    assert ici["expert"] == 8
+    assert dcn["context"] == 32
+    assert dcn["replica_dcn"] == 1
+    assert config.train_config.trainer.compute_axis_mapping["position"] == "context"
 
 
 def test_native_handoff_preserves_exported_weights_and_declares_rl_context(tmp_path):

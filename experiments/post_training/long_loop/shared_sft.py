@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass, replace
 
 import draccus
-from fray.types import ResourceConfig
+from fray.types import GpuConfig, ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -74,6 +74,13 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     """Use the checked-in Snowball defaults with the pinned historical sources."""
     if recipe["profile"] != "snowball_h100":
         raise ValueError("The long-loop shared SFT adapter requires the snowball_h100 profile")
+    mesh = draccus.decode(MeshConfig, recipe["mesh"])
+    resources = draccus.decode(ResourceConfig, recipe["resources"])
+    if not isinstance(resources.device, GpuConfig):
+        raise ValueError("The Snowball H100 profile requires GPU resources")
+    # Iris presents one eight-GPU node as a JAX slice. Validate the actual
+    # hybrid layout, rather than a flat virtual CPU mesh, before allocation.
+    mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
     data = copy.deepcopy(recipe["data"])
     steps = min(
         math.ceil(recipe["target_positions"] / (recipe["seq_len"] * recipe["batch_size"])),
@@ -107,7 +114,7 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         num_train_steps=steps,
         seq_len=recipe["seq_len"],
         batch_size=recipe["batch_size"],
-        mesh=draccus.decode(MeshConfig, recipe["mesh"]),
+        mesh=mesh,
         pack=recipe["pack"],
         wandb_project=recipe["wandb_project"],
     )

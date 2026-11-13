@@ -77,7 +77,6 @@ mesh:
     data: 1
     replica: 1
     model: 1
-    context: 32
     expert: 8
   compute_mapping:
     batch:
@@ -85,3 +84,6 @@ mesh:
     - data
     - expert
     position: context
+  dcn_axes:
+    replica_dcn: 1
+    context: 32
