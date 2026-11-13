@@ -37,19 +37,20 @@ from experiments.post_training.task_curation.full_qc_review import (
 from experiments.post_training.task_curation.judges import PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.sample_qc_artifacts import (
+    PINNED_REVIEWER_SHA256,
     SAMPLE_SEED,
     SAMPLE_SIZE,
+    SampleInventory,
     SamplePanel,
     SampleQCReview,
 )
 
 LOGGER = logging.getLogger(__name__)
-PINNED_REVIEWER_SHA256 = "a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea"
 
 
 def panel_tasks(panel: SamplePanel) -> tuple[list[TaskSpec], list[dict]]:
     """Check source and panel bytes before constructing exact task/runtime contracts."""
-    if SamplePanel.model_validate_json(StoragePath(panel.evidence_url).read_text()) != panel:
+    if SampleInventory.model_validate_json(StoragePath(panel.evidence_url).read_text()).qc_panel() != panel:
         raise ValueError("Sample panel differs from its complete-population census")
     population = SourceTextPopulation.raw_load(panel.input_artifact)
     if (
@@ -132,7 +133,7 @@ def main() -> None:
     queue = StoragePath(args.queue)
     if file_sha256(queue) != args.queue_sha256:
         raise ValueError("Frozen sample queue changed")
-    panels = [SamplePanel.model_validate(row) for row in json.loads(queue.read_text())]
+    panels = [SampleInventory.model_validate(row).qc_panel() for row in json.loads(queue.read_text())]
     if not panels or len({row.source_id for row in panels}) != len(panels):
         raise ValueError("Sample queue requires distinct source populations")
     spec = local_reviewer(ReviewerVersion.V3)
