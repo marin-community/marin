@@ -1,20 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a short Snowball SFT from the pre-trained base, then RL on the Snowball 100k selection.
-
---stage rl skips SFT and starts RL from the frozen Datakit SFT checkpoint, which gives a
-fixed reference for comparing runs. --init-from replaces the weights the first stage starts from.
-"""
+"""Train Datakit SFT on the Snowball 100k selection and evaluate before and after RL."""
 
 from dataclasses import replace
-from enum import StrEnum
 
 import click
 import yaml
-from click.core import ParameterSource
 from iris.rpc import job_pb2
-from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
@@ -37,27 +30,13 @@ from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
 from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
-from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
-from experiments.sft.launcher import resources_from_accelerator, sft_step
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-DEFAULT_RL_STEPS = 25
-DEFAULT_SFT_STEPS = 10
-SFT_NODE_ACCELERATOR = "8xH100"
-SFT_NODES = 4
-# Experts shard across the eight GPUs of a node and context across nodes. With context inside a
-# node, the 67B weights and Adam moments shard over only eight GPUs and exhaust their memory.
-SFT_MESH = MeshConfig(
-    axes={"data": 1, "replica": 1, "model": 1, "expert": 8},
-    compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
-    dcn_axes={"replica_dcn": 1, "context": SFT_NODES},
-)
+DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
-SFT_ARTIFACT_NAME = "checkpoints/snowball-inventory-sft"
-INIT_ARTIFACT_NAME = "checkpoints/snowball-inventory-init"
 SELECTION_PREFIX = "rl-data/task-selection"
 DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
 CLUSTER = "cw-us-east-02a"
@@ -69,20 +48,6 @@ REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
-
-
-class Stage(StrEnum):
-    ALL = "all"  # SFT from the pre-trained base, then RL from that SFT
-    SFT = "sft"  # SFT only
-    RL = "rl"  # RL only, from the frozen Datakit SFT checkpoint
-
-
-# Options a stage never reads; passing one is rejected so a setting cannot be silently dropped.
-UNUSED_OPTIONS = {
-    Stage.ALL: (),
-    Stage.SFT: ("rl_steps", "export_hf", "reproducible_serving"),
-    Stage.RL: ("sft_steps",),
-}
 
 
 def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLRecipe:
@@ -192,49 +157,31 @@ def build_run(
     version: str,
     *,
     selection: ArtifactStep[Artifact],
-    stage: Stage = Stage.ALL,
-    init_from: str | None = None,
-    rl_steps: int = DEFAULT_RL_STEPS,
-    sft_steps: int = DEFAULT_SFT_STEPS,
+    model: ArtifactHfModel | None = None,
+    steps: int = DEFAULT_STEPS,
     export_hf: bool = False,
     reproducible_serving: bool = False,
-) -> ArtifactStep[SkyRLRun] | ArtifactStep[LevanterCheckpoint]:
-    """Bind the stage's model source, selected canonical tasks and terminal outputs.
+) -> ArtifactStep[SkyRLRun]:
+    """Bind selected canonical tasks, starting weights and terminal outputs.
 
     Args:
-        init_from: Weights the first stage starts from. SFT accepts a Hugging Face ``repo@revision``
-            or an export directory and defaults to the pre-trained base. The RL-only stage accepts
-            an export directory and defaults to the frozen Datakit SFT checkpoint.
+        model: Weights RL starts from. Defaults to the pinned Datakit SFT checkpoint.
     """
-    if stage is Stage.RL:
-        if init_from is None:
-            start = ArtifactStep.adopt(
-                f"models/snowball-datakit-sft-{MODEL_REVISION}", MODEL_VERSION, MODEL_URI, kind=LevanterCheckpoint
-            )
-        else:
-            start = ArtifactStep.adopt(user_owned_name(INIT_ARTIFACT_NAME), version, init_from, kind=LevanterCheckpoint)
-        model = ArtifactHfModel(step=start, tokenizer_uri=MODEL_ID, tokenizer_revision=MODEL_REVISION, relative_path="")
-    else:
-        sft = sft_step(
-            replace(
-                SNOWBALL_SFT,
-                name=user_owned_name(SFT_ARTIFACT_NAME),
-                version=version,
-                model=replace(SNOWBALL_SFT.model, model_ref=init_from or SNOWBALL_SFT.model.model_ref),
-                num_train_steps=sft_steps,
-                mesh=SFT_MESH,
-            ),
-            replace(resources_from_accelerator(SFT_NODE_ACCELERATOR), replicas=SFT_NODES),
+    if model is None:
+        pinned = ArtifactStep.adopt(
+            f"models/snowball-datakit-sft-{MODEL_REVISION}",
+            MODEL_VERSION,
+            MODEL_URI,
+            kind=LevanterCheckpoint,
         )
-        # Without a relative path, RL reads the SFT run's terminal HF export.
-        model = ArtifactHfModel(step=sft, tokenizer_uri=MODEL_ID, tokenizer_revision=MODEL_REVISION)
+        model = ArtifactHfModel(step=pinned, tokenizer_uri=MODEL_ID, tokenizer_revision=MODEL_REVISION, relative_path="")
     plan = SNOWBALL_RECIPE.role_plan
-    rl = skyrl_step(
+    return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
             config_yaml=yaml.safe_dump(
-                training_recipe(rl_steps, reproducible_serving=reproducible_serving).to_skyrl(),
+                training_recipe(steps, reproducible_serving=reproducible_serving).to_skyrl(),
                 sort_keys=False,
             ),
             model=model,
@@ -267,34 +214,13 @@ def build_run(
         ),
         export_hf=export_hf,
     )
-    if stage is not Stage.SFT:
-        return rl
-    # The RL CLI routes its coordinator from the RL step's execution, so the SFT-only stage carries it too.
-    (sft,) = model.deps()
-    return replace(sft, runtime_args={**sft.runtime_args, **rl.runtime_args})
 
 
 @click.command(help=__doc__)
 @click.option(
     "--selection-uri", default=DEFAULT_SELECTION_URI, show_default=True, help="Published task-selection artifact root."
 )
-@click.option(
-    "--stage",
-    type=click.Choice([stage.value for stage in Stage]),
-    default=Stage.ALL.value,
-    show_default=True,
-    help="all: SFT from the pre-trained base, then RL from it. sft: SFT only. "
-    "rl: RL only, from the frozen Datakit SFT checkpoint.",
-)
-@click.option(
-    "--init-from",
-    help="Weights the first stage starts from. all/sft: a Hugging Face repo@revision or export directory "
-    "[default: the pre-trained base]. rl: an export directory [default: the frozen Datakit SFT checkpoint].",
-)
-@click.option(
-    "--sft-steps", type=click.IntRange(min=1), default=DEFAULT_SFT_STEPS, show_default=True, help="SFT updates."
-)
-@click.option("--rl-steps", type=click.IntRange(min=1), default=DEFAULT_RL_STEPS, show_default=True, help="RL updates.")
+@click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
 @click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
 @click.option(
     "--reproducible-serving",
@@ -302,21 +228,18 @@ def build_run(
     help="Use batch-invariant serving with one sequence per rank and greedy evaluation.",
 )
 @rl_build_options
-def main(
-    selection_uri: str,
-    stage: str,
-    init_from: str | None,
-    sft_steps: int,
-    rl_steps: int,
-    export_hf: bool,
-    reproducible_serving: bool,
-) -> ArtifactStep[SkyRLRun] | ArtifactStep[LevanterCheckpoint]:
-    context = click.get_current_context()
-    for option in UNUSED_OPTIONS[Stage(stage)]:
-        if context.get_parameter_source(option) is not ParameterSource.DEFAULT:
-            flag = f"--{option.replace('_', '-')}"
-            raise click.BadParameter(f"{flag} has no effect with --stage {stage}", param_hint=flag)
-    name = user_owned_name(ARTIFACT_NAME)
+def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: bool) -> ArtifactStep[SkyRLRun]:
+    return build_run(
+        resolve_version(user_owned_name(ARTIFACT_NAME), None),
+        selection=selection_step(selection_uri),
+        steps=steps,
+        export_hf=export_hf,
+        reproducible_serving=reproducible_serving,
+    )
+
+
+def selection_step(selection_uri: str) -> ArtifactStep[Artifact]:
+    """Adopt a published task-selection artifact root given on the command line."""
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
     parts = identity.split("/")
@@ -326,17 +249,7 @@ def main(
             param_hint="--selection-uri",
         )
     selection_name, selection_version = parts
-    selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
-    return build_run(
-        resolve_version(name, None),
-        selection=selection,
-        stage=Stage(stage),
-        init_from=init_from,
-        rl_steps=rl_steps,
-        sft_steps=sft_steps,
-        export_hf=export_hf,
-        reproducible_serving=reproducible_serving,
-    )
+    return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
 
 
 if __name__ == "__main__":
