@@ -322,8 +322,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     }
     config["trainer"] = {
         "strategy": "megatron",
-        # Keep Transformer Engine's attention backend; true forces the flash-attn package
-        # (NVTE_FUSED_ATTN=0).
+        # The Megatron worker selects FlashAttention for BF16 Grug even with this flag false.
         "flash_attn": False,
         # One sequence per row; packing changes the micro-step shape.
         "use_sample_packing": False,

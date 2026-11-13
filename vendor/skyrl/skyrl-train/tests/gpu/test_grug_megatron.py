@@ -116,7 +116,6 @@ def embedding_preprocess_model(request, tmp_path):
             expert_model_parallel_size=1,
             expert_tensor_parallel_size=1,
             bf16=provider.bf16,
-            attention_backend="fused" if provider.bf16 else "unfused",
         )
         provider.recompute_granularity = "full"
         provider.recompute_method = "uniform"

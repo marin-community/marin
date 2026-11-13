@@ -505,7 +505,7 @@ class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
         # Stack the existing parameters so autograd and checkpoint names stay intact.
         weights = torch.stack([getattr(self, f"weight{i}") for i in range(self.num_gemms)])
         offsets = torch.as_tensor(m_splits, dtype=torch.int32, device=x.device).cumsum(0, dtype=torch.int32)
-        return torch._grouped_mm(x, weights.transpose(1, 2), offs=offsets), None
+        return F.grouped_mm(x, weights.transpose(1, 2), offs=offsets), None
 
 
 class GrugMoELayer(MoELayer):

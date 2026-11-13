@@ -1,6 +1,20 @@
 # CUDA 13.2 native wheels
 
-`build_native.sh` builds the existing FlashAttention, causal-conv1d, Mamba, and
+The adopted native extensions for Torch 2.14.1+cu132 / CUDA 13.2.2 use the
+[frozen MarinSkyRL recipes](https://github.com/marin-community/MarinSkyRL/tree/604f2c1463032ffc1f47da114f43cf1d550dd473/scripts/wheels).
+Those recipes include the source commits, build dependencies and patches.
+Core and Bridge come from stock PyPI; their patched targets in that archive are unused.
+The [SkyRL lockfile](../../uv.lock) pins the installed wheel URLs and SHA-256 hashes.
+[FA2.md](FA2.md) describes the additional FA4 exclusion and preservation proofs
+for the adopted FlashAttention package.
+
+The local `build_native.sh` and `native-cu132.txt` are historical recipes for
+Torch 2.13.0+cu132 / CUDA 13.2.1. They cannot rebuild the adopted Torch 2.14.1
+wheels. The instructions below apply to that older build environment.
+
+## Historical Torch 2.13 builds
+
+`build_native.sh` builds FlashAttention, causal-conv1d, Mamba, and
 Transformer Engine Torch releases against Torch 2.13.0+cu132. It checks each
 upstream source commit and builds locally instead of downloading an upstream
 wheel compiled for a different Torch version. `native-cu132.txt` pins the build
@@ -39,6 +53,7 @@ Builds passed with two CPU cores, 16 GiB memory and 64 GiB disk, using the Pytho
 GCC and uv versions above and glibc `2.41-12+deb13u4`. Pinned packages supply
 NVCC `13.2.78` and setuptools `80.10.2`.
 
+Run these historical commands from `vendor/skyrl/` in the Marin checkout.
 Invoke through `bash` because Iris bundles do not retain executable modes:
 
 ```bash
@@ -60,9 +75,10 @@ tracked changes and unexpected untracked files; Git-ignored build outputs remain
 available for cache reuse.
 
 Before publishing a wheel, install its exact bytes in the proposed runtime and
-run its native forward and backward checks on each target architecture. Megatron also needs a
-context-parallel forward and backward with the FlashAttention backend selected;
-native attention checks alone cannot detect a Transformer Engine version cap.
+run its native forward and backward checks on each target architecture. Megatron also needs
+[`test_megatron_flash_attention_cp2_forward_backward`](../../skyrl-train/tests/gpu/test_megatron_worker.py)
+with the FlashAttention backend selected. Native attention checks alone cannot
+detect Transformer Engine's FlashAttention version cap.
 Publish the source commits, build environment, and checksums with the wheel
 assets. Adoption URLs and wheel hashes belong in the root dependency manifest
 and lock.
