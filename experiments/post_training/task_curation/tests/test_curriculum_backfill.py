@@ -9,24 +9,24 @@ import shutil
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.commit import CommitCoordinator, CommitDelta
-from finestore.layout import FineStoreLayout
-from finestore.reader import ReadView
-from finestore.store import DataStore
+from finestore.schema import arrow_schema
+from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from marin.execution.lazy import ArtifactStep, run
+from marin.processing.embeddings.harrier import HARRIER_REPO, HARRIER_REVISION
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Source
+from taskcompendium.pipeline.curriculum.alignment import CurriculumAnchor
 from taskcompendium.pipeline.curriculum.embedding import TextEmbedder
 from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
 from taskcompendium.pipeline.models import RawRow
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
+from experiments.post_training.task_curation import curriculum_backfill
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.curriculum_backfill import (
     FrozenCoverageSource,
-    fork_copied_cache_partition,
     prepare_source,
     prepare_sources,
     run_stage,
@@ -43,7 +43,104 @@ from experiments.post_training.task_curation.tests.numbers_pipeline import (
     NumbersConfig,
     numbers_pipeline,
 )
+from experiments.post_training.task_curriculum.models import CurriculumCatalog
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
+
+
+def semantic_record(root, paths, identity):
+    artifact = SemanticArtifact(path=str(root), paths=[str(path) for path in paths])
+    write_record(
+        ArtifactRecord(
+            name="prepared",
+            version="2026.11.13.1",
+            fingerprint=identity,
+            output_path=str(root),
+            result_type=result_type_name(SemanticArtifact),
+            result=artifact.result_payload(),
+        )
+    )
+
+
+@pytest.fixture
+def prepared_stages(tmp_path, monkeypatch):
+    catalog = CurriculumCatalog.model_validate(
+        {
+            "catalog_version": "fixture",
+            "curricula": [
+                {
+                    "routing_facet": "subject_domain",
+                    "curriculum": {
+                        "version": "1",
+                        "subject_id": "D01",
+                        "subject_name": "Mathematics",
+                        "sections": [
+                            {
+                                "kind": "group",
+                                "id": "math",
+                                "parent_id": None,
+                                "name": "Arithmetic",
+                                "scope": "Work with numbers",
+                                "includes": ["calculate"],
+                                "excludes": ["algebra"],
+                            },
+                            {
+                                "kind": "capability",
+                                "id": "math.add",
+                                "parent_id": "math",
+                                "name": "Addition",
+                                "outcome": "Add numbers",
+                                "includes": ["addition"],
+                                "excludes": ["unrelated work"],
+                                "prerequisites": [],
+                                "sample_tasks": [],
+                            },
+                        ],
+                    },
+                }
+            ],
+        }
+    )
+    requested = tmp_path / "requested-catalog"
+    requested.mkdir()
+    (requested / "curriculum.json").write_text(catalog.model_dump_json())
+    monkeypatch.setattr(
+        curriculum_backfill,
+        "TASK_CURRICULUM",
+        ArtifactStep.adopt("fixture-catalog", "2026.11.13.1", source=str(requested)),
+    )
+    instructions = tmp_path / "shared-instructions"
+    instructions.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"content_hash": "input", "description": "Add integers", "status": "ready", "reason": ""}]
+        ),
+        instructions / "texts.parquet",
+    )
+    semantic_record(instructions, [instructions / "texts.parquet"], "instructions-1")
+    anchors = tmp_path / "shared-anchors"
+    anchors.mkdir()
+    (anchors / "curriculum.json").write_text(catalog.model_dump_json())
+    (anchors / "nodes.json").write_text(json.dumps([node.model_dump(mode="json") for node in catalog.atlas_nodes()]))
+    spec = EmbeddingSpec(
+        model=HARRIER_REPO,
+        revision=HARRIER_REVISION,
+        tokenizer_revision=HARRIER_REVISION,
+        dimensions=1024,
+        max_tokens=16384,
+        compute_dtype="bfloat16",
+    )
+    (anchors / "embedding_spec.json").write_text(spec.model_dump_json())
+    path = anchors / "anchors.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [anchor.model_dump(mode="json") for anchor in catalog.embedding_anchors()],
+            schema=arrow_schema(CurriculumAnchor),
+        ),
+        path,
+    )
+    (anchors / "anchor_paths.json").write_text(json.dumps([str(path)]))
+    semantic_record(anchors, [], "anchors-1")
+    return instructions, anchors, requested
 
 
 @pytest.fixture
@@ -176,7 +273,9 @@ def test_completed_corpus_revalidates_frozen_exclusions(tmp_path, frozen_source)
     assert (output / "corpus.json").read_bytes() == original
 
 
-def test_new_source_lineage_forks_assignments_while_reusing_numeric_stages(tmp_path, frozen_source, caplog):
+def test_new_source_lineage_forks_assignments_while_reusing_numeric_stages(
+    tmp_path, frozen_source, caplog, prepared_stages
+):
     source, _ = frozen_source
     evidence = tmp_path / "new-receipt.json"
     shutil.copyfile(source.input_evidence, evidence)
@@ -211,6 +310,101 @@ def test_new_source_lineage_forks_assignments_while_reusing_numeric_stages(tmp_p
         assert before[stage] != after[stage]
 
 
+@pytest.mark.parametrize("changed_stage", ["prepared_descriptions", "prepared_curriculum_embeddings"])
+def test_changed_adopted_content_forks_downstream_artifacts(
+    tmp_path, frozen_source, caplog, prepared_stages, changed_stage
+):
+    instructions, anchors, requested = prepared_stages
+    source, _ = frozen_source
+    output = tmp_path / "public"
+    prepare_sources([source], str(output), workers=1)
+    corpus_path = output / "corpus.json"
+    corpus = json.loads(corpus_path.read_text())
+    corpus.update(prepared_descriptions=str(instructions), prepared_curriculum_embeddings=str(anchors))
+    plans = []
+    caplog.set_level(logging.INFO)
+    for index in range(2):
+        if index:
+            replacement = tmp_path / "replacement"
+            shutil.copytree(instructions if changed_stage == "prepared_descriptions" else anchors, replacement)
+            if changed_stage == "prepared_descriptions":
+                pq.write_table(
+                    pa.Table.from_pylist(
+                        [{"content_hash": "input", "description": "Compare integers", "status": "ready", "reason": ""}]
+                    ),
+                    replacement / "texts.parquet",
+                )
+                semantic_record(replacement, [replacement / "texts.parquet"], "instructions-2")
+            else:
+                document = json.loads((requested / "curriculum.json").read_text())
+                document["curricula"][0]["curriculum"]["sections"][-1]["outcome"] = "Subtract numbers"
+                catalog = CurriculumCatalog.model_validate(document)
+                (requested / "curriculum.json").write_text(catalog.model_dump_json())
+                with pytest.raises(ValueError, match="Adopted anchors differ"):
+                    run_stage(
+                        str(corpus_path),
+                        str(tmp_path / "artifacts"),
+                        str(tmp_path / "cache"),
+                        "coverage",
+                        "cpu",
+                        1,
+                        "8g",
+                        False,
+                    )
+                (replacement / "curriculum.json").write_text(catalog.model_dump_json())
+                (replacement / "nodes.json").write_text(
+                    json.dumps([node.model_dump(mode="json") for node in catalog.atlas_nodes()])
+                )
+                path = replacement / "anchors.parquet"
+                pq.write_table(
+                    pa.Table.from_pylist(
+                        [anchor.model_dump(mode="json") for anchor in catalog.embedding_anchors()],
+                        schema=arrow_schema(CurriculumAnchor),
+                    ),
+                    path,
+                )
+                (replacement / "anchor_paths.json").write_text(json.dumps([str(path)]))
+                semantic_record(replacement, [], "anchors-2")
+            corpus[changed_stage] = str(replacement)
+        corpus_path.write_text(json.dumps(corpus))
+        caplog.clear()
+        run_stage(
+            str(corpus_path), str(tmp_path / "artifacts"), str(tmp_path / "cache"), "coverage", "cpu", 1, "8g", False
+        )
+        plans.append(
+            json.loads(
+                next(
+                    row.message.removeprefix("Stage plan: ")
+                    for row in caplog.records
+                    if row.message.startswith("Stage plan: ")
+                )
+            )
+        )
+    before, after = plans
+    assert before["inputs"] == after["inputs"]
+    if changed_stage == "prepared_descriptions":
+        assert before["task_embeddings"] != after["task_embeddings"]
+        assert before["curriculum_embeddings"] == after["curriculum_embeddings"]
+    else:
+        assert before["task_embeddings"] == after["task_embeddings"]
+    for stage in ("assignments", "publication", "coverage"):
+        assert before[stage] != after[stage]
+
+
+def test_cuda_run_requires_a_parity_receipt_before_reading_inputs(tmp_path):
+    with pytest.raises(ValueError, match="requires an accepted --parity-receipt"):
+        run_stage(
+            str(tmp_path / "missing-corpus.json"),
+            str(tmp_path / "artifacts"),
+            str(tmp_path / "cache"),
+            "task_embeddings",
+            "cuda",
+            1,
+            "8g",
+            True,
+        )
+
+
 def test_unknown_exclusion_prevents_publication_and_keeps_partial_evidence(tmp_path, frozen_source):
     source, _ = frozen_source
     drops = tmp_path / "other-drops.parquet"
@@ -228,39 +422,6 @@ def test_unknown_exclusion_prevents_publication_and_keeps_partial_evidence(tmp_p
 
 def unavailable_embedder() -> TextEmbedder:
     raise AssertionError("Instruction preparation must not run model inference")
-
-
-@pytest.mark.parametrize("separator", ["", "/"])
-def test_copied_cache_fork_reads_locally_and_accepts_new_vectors(tmp_path, separator):
-    original = tmp_path / "original"
-    with DataStore.open(str(original)) as store:
-        store.write_object("existing", b"first")
-        store.flush()
-        store.write_object("existing", b"latest")
-        store.write_object("second", b"preserved")
-    intermediate = tmp_path / "intermediate"
-    shutil.copytree(original, intermediate)
-    CommitCoordinator(FineStoreLayout(str(intermediate))).commit(CommitDelta())
-    copied = tmp_path / "copied"
-    shutil.copytree(intermediate, copied)
-    original.rename(tmp_path / "historical")
-    intermediate.rename(tmp_path / "historical-intermediate")
-    output = tmp_path / "fork"
-    fork_copied_cache_partition(
-        str(original) + separator,
-        str(copied) + separator,
-        str(output) + separator,
-        reference_roots=(str(intermediate) + separator,),
-    )
-    with DataStore.open(str(output)) as store:
-        store.write_object("new", b"GPU vector")
-    assert ReadView(str(output)).read_blobs(["existing", "second", "new"]) == {
-        "existing": b"latest",
-        "second": b"preserved",
-        "new": b"GPU vector",
-    }
-    with pytest.raises(ValueError, match="Preserve existing cache forks"):
-        fork_copied_cache_partition(str(original), str(copied), str(output))
 
 
 def test_prepared_public_corpus_runs_direct_text_graph_without_private_views(tmp_path, frozen_source, monkeypatch):
