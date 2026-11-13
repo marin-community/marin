@@ -206,8 +206,8 @@ def _input(source: str, name: str, category: str) -> dict:
     return {"source": source, "name": name, "category": category}
 
 
-def _scan_wandb_history(run_path: str, directory: Path) -> dict:
-    run = wandb.Api(api_key=require_secret("WANDB_API_KEY")).run(run_path)
+def _scan_wandb_history(run_path: str, directory: Path, base_url: str) -> dict:
+    run = wandb.Api(api_key=require_secret("WANDB_API_KEY"), overrides={"base_url": base_url}).run(run_path)
     # The exporter crosses a process boundary. Confirm its reported cause with
     # the typed provider exception before taking the only permitted fallback.
     try:
@@ -267,7 +267,11 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
         with tempfile.TemporaryDirectory() as directory:
             local = Path(directory)
             config = {
-                "source": {"entity": ref["entity"], "projects": {"include": [ref["project"]]}},
+                "source": {
+                    "entity": ref["entity"],
+                    "projects": {"include": [ref["project"]]},
+                    "base_url": settings["base_url"],
+                },
                 "destination": {"type": "local", "path": str(local / "archive")},
                 "archive": {
                     "strict": True,
@@ -277,8 +281,22 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
             }
             path = local / "config.yaml"
             path.write_text(yaml.safe_dump(config))
-            command = ["uv", "tool", "run", "--from", settings["package"], "wandb-archive", "--quiet"]
-            env = {**os.environ, "WANDB_API_KEY": require_secret("WANDB_API_KEY")}
+            command = [
+                "uv",
+                "tool",
+                "run",
+                "--from",
+                settings["package"],
+                "--with",
+                f"wandb=={settings['sdk_version']}",
+                "wandb-archive",
+                "--quiet",
+            ]
+            env = {
+                **os.environ,
+                "WANDB_API_KEY": require_secret("WANDB_API_KEY"),
+                "WANDB_BASE_URL": settings["base_url"],
+            }
             backup = subprocess.run([*command, "backup", str(path), "--run", run_path], env=env, capture_output=True)
             if backup.returncode:
                 # The pinned CLI serializes exception types as traceback lines.
@@ -295,7 +313,7 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
                         detail = detail.replace(env["WANDB_API_KEY"], "[REDACTED]")
                         error.add_note("Strict W&B export stderr: " + redact_string(detail))
                         raise
-                receipt = _scan_wandb_history(run_path, local)
+                receipt = _scan_wandb_history(run_path, local, settings["base_url"])
                 files = []
                 for name in ("scan-history.jsonl", "scan-history-receipt.json"):
                     raw = (local / name).read_bytes()

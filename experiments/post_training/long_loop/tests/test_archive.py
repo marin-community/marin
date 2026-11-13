@@ -274,22 +274,27 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
                 yield from rows
 
         class Client:
-            def __init__(self, *, api_key):
+            def __init__(self, *, api_key, overrides):
                 assert api_key == "fake-for-offline-test"
+                assert overrides == {"base_url": settings["wandb"]["base_url"]}
 
             def run(self, path):
                 assert path == "test-entity/test/sft-id"
                 return Run()
 
         monkeypatch.setattr(archive_stage.wandb, "Api", Client)
-        monkeypatch.setattr(
-            archive_stage.subprocess,
-            "run",
-            lambda args, **kwargs: subprocess.CompletedProcess(
+
+        def exporter(args, *, env, **kwargs):
+            config = yaml.safe_load(Path(args[args.index("backup") + 1]).read_text())
+            assert args[args.index("--with") + 1] == "wandb==" + settings["wandb"]["sdk_version"]
+            assert config["source"]["base_url"] == env["WANDB_BASE_URL"] == settings["wandb"]["base_url"]
+            return subprocess.CompletedProcess(
                 args, 1, stdout=b"", stderr=b"wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError\n"
-            ),
-        )
+            )
+
+        monkeypatch.setattr(archive_stage.subprocess, "run", exporter)
         monkeypatch.setenv("WANDB_API_KEY", "fake-for-offline-test")
+        monkeypatch.setenv("WANDB_BASE_URL", "https://api.forge.coreweave.com")
     document(
         Path(roots["sft"]) / "consumed-config.json",
         {
@@ -389,7 +394,12 @@ def test_wandb_export_propagates_unrelated_export_failure(tmp_path, monkeypatch)
     with pytest.raises(subprocess.CalledProcessError) as caught:
         archive_stage._wandb_export(
             [{"stage": "sft", "entity": "test", "project": "test", "id": "run"}],
-            {"package": "fake-exporter", "include": {}},
+            {
+                "package": "fake-exporter",
+                "include": {},
+                "base_url": "https://api.wandb.ai",
+                "sdk_version": "0.31.0",
+            },
             str(tmp_path),
         )
     details = "\n".join(caught.value.__notes__)
@@ -406,7 +416,7 @@ def test_wandb_history_fallback_propagates_provider_failure(tmp_path, monkeypatc
             raise PermissionError("provider denied history")
 
     class Client:
-        def __init__(self, *, api_key):
+        def __init__(self, *, api_key, overrides):
             assert api_key == "fake-for-offline-test"
 
         def run(self, path):
@@ -414,5 +424,5 @@ def test_wandb_history_fallback_propagates_provider_failure(tmp_path, monkeypatc
 
     monkeypatch.setattr(archive_stage.wandb, "Api", Client)
     with pytest.raises(PermissionError, match="provider denied history"):
-        archive_stage._scan_wandb_history("test/project/run", tmp_path)
+        archive_stage._scan_wandb_history("test/project/run", tmp_path, "https://api.wandb.ai")
     assert not list(tmp_path.glob("scan-history*"))

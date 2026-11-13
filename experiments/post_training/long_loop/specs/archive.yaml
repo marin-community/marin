@@ -35,7 +35,9 @@ stage_files:
   - {path: timing-sources.json, category: timing}
 additional_evidence: []
 wandb:
-  package: https://github.com/Open-Athena/wandb-archive/archive/2e38b721856b67e7a8ee1d7ba6f8b6dccbee7a8a.tar.gz
+  base_url: https://api.wandb.ai
+  sdk_version: 0.31.0
+  package: git+https://github.com/Open-Athena/wandb-archive.git@2e38b721856b67e7a8ee1d7ba6f8b6dccbee7a8a
   include:
     histories: true
     system_metrics: true
