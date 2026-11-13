@@ -285,7 +285,7 @@ def _nix_system_mounts() -> tuple[Mount, ...]:
         return ()
     profile = NIX_SYSTEM_PROFILE.resolve()
     closure = subprocess.run(
-        ["nix-store", "--query", "--requisites", str(profile)],
+        [str(profile / "bin/nix-store"), "--query", "--requisites", str(profile)],
         check=True,
         capture_output=True,
         text=True,

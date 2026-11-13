@@ -130,7 +130,8 @@ def test_local_factory_reports_unsupported_host(monkeypatch):
 
 
 @pytest.mark.skipif(not Path("/run/current-system/sw").is_dir(), reason="Requires a NixOS system profile")
-def test_nixos_system_programs_execute_and_transfer_files(tmp_path):
+def test_nixos_system_programs_execute_and_transfer_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
     factory = LocalMachineFactory()
 
     async def check():
