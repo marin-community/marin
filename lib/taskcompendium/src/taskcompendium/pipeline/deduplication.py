@@ -131,7 +131,7 @@ def retained_row(record: DeduplicationRecord) -> dict[str, Any] | None:
     }
 
 
-def dropped_row(record: DeduplicationRecord) -> dict[str, Any] | None:
+def dropped_row(record: DeduplicationRecord) -> dict[str, str] | None:
     if record["duplicate_of"] is None:
         return None
     return {"task_id": record["row"].raw.id, "kept_id": record["duplicate_of"], "reason": DUPLICATE_WITHIN_SOURCE}

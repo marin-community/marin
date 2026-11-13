@@ -76,6 +76,10 @@ With `object_store_load_mode: stage_local`, each serving worker downloads the we
 starting vLLM. Multi-host workers use the same job-specific local path on every host and retain
 the files through server shutdown. Size each worker's disk for a complete checkpoint copy.
 
+The GLM-5.3 configuration uses `--block-size 64`, which both its sparse MLA and DSA indexer
+backends support. With vLLM 0.28, automatic selection can instead choose 32 on a pipeline follower
+and fail during CUDA graph memory profiling.
+
 For a GPU model whose architecture is supplied by a vLLM plugin, set `vllm_source: upstream`,
 an exact `vllm_version`, and a plugin requirement pinned to a release or commit. These fields are
 part of the model catalog and the recorded effective serving configuration. The plugin is installed

@@ -1208,6 +1208,12 @@ timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
 of its allocated capacity. A bare exit 137 does not establish OOM, and unavailable
 CPU counters do not establish CPU saturation.
 
+Verifier counter collection has a host-side deadline of five seconds, capped by
+the declared verifier timeout, plus the trial's cleanup grace. A pre-verifier
+measurement timeout is an unscored infrastructure failure. Final measurements
+are best effort and preserve the grader's result or primary failure; incomplete
+command cleanup still prevents a completed trial receipt.
+
 Stop increasing at 16 CPU, 64 GiB memory, 128 GiB disk, a four-hour agent timeout
 and a 30-minute verifier timeout. A resource failure at its applicable cap becomes an
 exclusion with its resource signal and trial evidence. Without retry history or a
