@@ -666,6 +666,35 @@ evidence. An archived all-source cut is distinct from a newer selected catalog:
 prepare a separate release and coverage pair with consistent source lineage for
 that selection instead of relabelling the archived manifests or changing their pins.
 
+`experiments.post_training.task_curation.curriculum_projection` produces this
+separate pair from existing scored assignments. Its immutable inputs manifest
+binds the archived release, coverage and verification receipt, the exact current
+declarations and retirement ledger, and any replacement public-input manifests.
+It requires the live source set to equal the archived set minus retired sources.
+QC metadata updates are recorded separately from task-producing inputs. Changed
+pins require a complete task-ID and public-input comparison; only an exact match
+permits reusing scores while rebinding TaskSpec hashes and source keys.
+
+The CPU pass filters full assignment files, verifies every retained value after
+readback, and rebuilds statistics and deterministic review samples for the selected
+population. Selected-source statistics must equal the archived statistics. This
+replenishes area samples whose old candidates came from retired sources. It does
+not compute vectors or matching scores and never overwrites archived artifacts.
+Run it in the data's region with a new artifact prefix:
+
+```bash
+uv run python -m experiments.post_training.task_curation.curriculum_projection \
+  --inputs IMMUTABLE_PROJECTION_INPUTS_JSON --inputs-sha256 INPUTS_SHA256 \
+  --artifact-root REGIONAL_NEW_ARTIFACT_PREFIX --workers 2 --worker-memory 64g
+```
+
+The dry run prints the identity-bound output path. Add `--run` inside a CPU Iris
+job with an explicit co-located `--target-cluster`, production priority and
+`--timeout 259200`. The output contains `release.json`, `coverage.json` and
+`projection-receipt.json`; pass the two manifests to the maintained loader above
+after validating them against the selected catalog. Keep the original manifests
+for historical reads.
+
 A metadata-only TRAIN-to-EVAL correction requires `--role-projection RECEIPT_URI
 RECEIPT_SHA256`. Set `--release` and `--coverage` to the receipt's exact corrected
 manifest URIs. The loader verifies the receipt and referenced artifact hashes,
