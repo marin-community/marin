@@ -350,6 +350,7 @@ class DaytonaMachine:
             raise ValueError("Output limit must be nonnegative")
         prefix = f"/tmp/.shellbox-{uuid.uuid4().hex}"
         stdin_path, stdout_path, stderr_path = (f"{prefix}/{part}" for part in ("in", "out", "err"))
+        script_path = f"{prefix}/command.sh"
         pidfile, completed_path = f"{prefix}/pid", f"{prefix}/completed"
         started = False
         primary_error = None
@@ -389,9 +390,12 @@ class DaytonaMachine:
                     raise RuntimeError(f"Cannot create private command directory: {prepared.result}")
                 if command.stdin:
                     await self.sandbox.fs.upload_file_stream(command.stdin, stdin_path)
+                # Nested shell quoting can exceed execve's single-argument limit
+                # even when every original command argument fits.
+                await self.sandbox.fs.upload_file_stream(script.encode(), script_path)
                 started = True
                 response = await self.sandbox.process.exec(
-                    _control_command(script),
+                    _control_command(shlex.join(("/bin/sh", script_path))),
                     cwd=command.cwd or self.spec.workdir or None,
                     env=environment,
                     timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,

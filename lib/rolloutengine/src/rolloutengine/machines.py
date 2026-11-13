@@ -215,6 +215,20 @@ class _AttemptMachineFactory:
 
 
 @asynccontextmanager
+async def _machine_ownership(cleanup_timeout: float) -> AsyncIterator[tuple[_Cleanup, AsyncExitStack]]:
+    cleanup = _Cleanup(cleanup_timeout)
+    try:
+        async with AsyncExitStack() as owned:
+            yield cleanup, owned
+    except BaseException as error:
+        if cleanup.errors:
+            error.add_note(f"Machine cleanup failed: {[failure.operation for failure in cleanup.errors]}")
+        raise
+    if cleanup.errors:
+        raise RuntimeError(f"Machine cleanup failed: {[error.operation for error in cleanup.errors]}")
+
+
+@asynccontextmanager
 async def grading_machine_factory(
     factory: MachineFactory, runtime: MachineRuntimeSpec, *, cleanup_timeout: float
 ) -> AsyncIterator[MachineFactory]:
@@ -223,16 +237,8 @@ async def grading_machine_factory(
     Cleanup failures raise after a successful body or attach a note to its exception.
     A runtime cleanup deadline overrides the caller's fallback deadline.
     """
-    cleanup = _Cleanup(cleanup_timeout)
-    try:
-        async with AsyncExitStack() as owned:
-            yield _AttemptMachineFactory(runtime, {runtime.backend: factory}, cleanup, owned)
-    except BaseException as error:
-        if cleanup.errors:
-            error.add_note(f"Machine cleanup failed: {[failure.operation for failure in cleanup.errors]}")
-        raise
-    if cleanup.errors:
-        raise RuntimeError(f"Machine cleanup failed: {[error.operation for error in cleanup.errors]}")
+    async with _machine_ownership(cleanup_timeout) as (cleanup, owned):
+        yield _AttemptMachineFactory(runtime, {runtime.backend: factory}, cleanup, owned)
 
 
 @asynccontextmanager
@@ -270,17 +276,7 @@ async def prepare_machine(
     Cleanup failures propagate after a successful body, or are attached to its exception as a note.
     ``runtime.cleanup_timeout`` overrides the supplied cleanup deadline when set.
     """
-    cleanup = _Cleanup(cleanup_timeout)
-    try:
-        async with AsyncExitStack() as owned:
-            machine = await _prepare_machine(
-                requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned
-            )
-            assert machine is not None
-            yield machine
-    except BaseException as error:
-        if cleanup.errors:
-            error.add_note(f"Machine cleanup failed: {[failure.operation for failure in cleanup.errors]}")
-        raise
-    if cleanup.errors:
-        raise RuntimeError(f"Machine cleanup failed: {[error.operation for error in cleanup.errors]}")
+    async with _machine_ownership(cleanup_timeout) as (cleanup, owned):
+        machine = await _prepare_machine(requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned)
+        assert machine is not None
+        yield machine

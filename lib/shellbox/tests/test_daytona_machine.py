@@ -10,6 +10,7 @@ import shlex
 import shutil
 import signal
 import stat
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack
 from dataclasses import replace
@@ -161,6 +162,14 @@ class LocalFiles:
         return Path(source).read_bytes()
 
 
+def command_script(command: str) -> str:
+    script = shlex.split(command)[2].partition("export PATH; ")[2]
+    argv = shlex.split(script)
+    if len(argv) == 2 and argv[0] == "/bin/sh" and argv[1].endswith("/command.sh"):
+        return Path(argv[1]).read_text()
+    return script
+
+
 class LocalProcess:
     def __init__(self):
         self.processes = []
@@ -186,6 +195,49 @@ class LocalProcess:
                 except ProcessLookupError:
                     pass
             await process.wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux execve per-argument limit regression")
+@pytest.mark.parametrize("shell", ["/bin/bash", "/bin/sh"])
+def test_daytona_large_argument_preserves_process_contract(tmp_path: Path, shell: str) -> None:
+    class RecordedFiles(LocalFiles):
+        def __init__(self):
+            self.staging = set()
+
+        async def upload_file_stream(self, data: bytes, target: str) -> None:
+            self.staging.add(Path(target).parent)
+            await super().upload_file_stream(data, target)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.fs = RecordedFiles()
+        workdir = tmp_path / "work with spaces"
+        workdir.mkdir()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(source=RegistryImage("fixture@sha256:" + "a" * 64), workdir=str(workdir))
+        )
+        body = '/bin/cat; printf "|%s|%s|%s|%s" "$VALUE" "$PWD" "$PATH" "$0"; printf "error" >&2; exit 23'
+        # The reported setup fits one Linux argument; nested control quoting did not.
+        padding = 130712 - len(body.encode()) - 2
+        source = "#" + "x" * padding + "\n" + body
+        try:
+            result = await machine.run(
+                Command(
+                    (shell, "-c", source),
+                    stdin=b"input\x00\xff",
+                    env={"VALUE": "quoted '\" value", "PATH": "/nonexistent"},
+                    timeout=10,
+                )
+            )
+            assert result.exit_code == 23
+            assert result.stdout == b"input\x00\xff" + f"|quoted '\" value|{workdir}|/nonexistent|{shell}".encode()
+            assert result.stderr == b"error"
+            assert not result.stdout_truncated and not result.stderr_truncated
+            assert all(not path.exists() for path in client.sandbox.fs.staging)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
 
 
 class LocalSnapshots:
@@ -513,7 +565,7 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
 
     class FailedStop(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-block" in command:
+            if "candidate-block" in command_script(command):
                 entered.set()
                 await asyncio.Future()
             if "stop-command" in command:
@@ -603,7 +655,7 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
 
     class FailedRequest(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-request" in command:
+            if "candidate-request" in command_script(command):
                 raise provider_error
             return await super().exec(command, **kwargs)
 
@@ -629,7 +681,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
 
     class BlockedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-fail" in command:
+            if "candidate-fail" in command_script(command):
                 raise OSError("Provider command failed")
             if "rm -rf /tmp/.shellbox-" in command:
                 entered.set()
@@ -723,8 +775,8 @@ def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_pat
 
     class CompletionDuringStop(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-finished" in command:
-                argv = shlex.split(shlex.split(command)[2].partition("export PATH; ")[2])
+            if "candidate-finished" in command_script(command):
+                argv = shlex.split(command_script(command))
                 index = argv.index("shellbox-command")
                 paths.extend(Path(path) for path in argv[index + 1 : index + 3])
                 await super().exec(command, **kwargs)
@@ -765,7 +817,7 @@ def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_pat
 def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error(primary_failure, cleanup_failure):
     class FailedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-fail" in command and primary_failure:
+            if "candidate-fail" in command_script(command) and primary_failure:
                 raise OSError("Provider command failed")
             if "rm -rf /tmp/.shellbox-" in command:
                 if cleanup_failure == "timeout":
@@ -810,6 +862,12 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
                 return SimpleNamespace(exit_code=result.exit_code, result=result.stdout.decode())
 
         class GuestFiles:
+            async def upload_file_stream(self, data, target):
+                result = await guest.run(
+                    Command(("/bin/sh", "-c", '/bin/cat > "$1"', "upload", target), stdin=data, user="root")
+                )
+                assert result.exit_code == 0
+
             async def download_file(self, source):
                 result = await docker("exec", "--user", "0", guest.name, "cat", source)
                 assert result.exit_code == 0
