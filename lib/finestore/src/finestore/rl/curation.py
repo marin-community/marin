@@ -236,7 +236,7 @@ class CurationMode(StrEnum):
     """How much of a source a curation pass examined."""
 
     QUICK = "quick"
-    """Inventory or a spot check. Never admits tasks and never selects for training."""
+    """Conversion without execution qualification. Never admits tasks or selects for training."""
 
     SAMPLE = "sample"
     """A documented sample was executed end to end, including its verifiers."""
@@ -690,7 +690,7 @@ class CurationSummary(CatalogRecord):
 
     @model_validator(mode="after")
     def _quick_curation_admits_nothing(self) -> "CurationSummary":
-        """A spot check has no admitted tasks to report."""
+        """QUICK conversion has no admitted tasks to report."""
         if self.mode is CurationMode.QUICK and self.admission_counts.admitted:
             raise ValueError("QUICK curation cannot carry admitted tasks")
         return self

@@ -650,17 +650,22 @@ with its pytest child running as a separate UID, 10002.
 
 Before agent access, the harness captures the task-reference tests and conftests,
 pytest and its declared plugin implementations, the test interpreter and the
-control program. On every grading launch it kills agent-UID processes, overwrites
-the reference tests, removes added conftests, and supplies a protected pytest
-configuration with an explicit root directory. The runner imports protected
-pytest/plugins first, disables plugin autoload, and clears the test environment,
+control program. It discovers the source's own pytest configuration and root
+directory using the task interpreter and preserves its configuration and addopts.
+On every grading launch it kills agent-UID processes, restores those source files,
+and removes added tests and local-plugin initializers. Installed entrypoint plugins
+load from the protected runner; source conftest plugins load through pytest's
+normal test-path handling from restored files. The runner disables plugin autoload
+and clears the test environment,
 including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
 classifies missing candidate modules using its exception-provenance rules.
 
 The root controller owns the structured verdict directory. Test stdout is
 retained as diagnostic output and cannot serve as the verdict. Per-trial
 `site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
-and startup hooks to the pre-agent baseline. The contract records these audit
+and startup hooks to the pre-agent baseline. `source-environment.json` records the
+pytest and pytest-metadata versions captured with the protected runner before
+agent access. The contract records these audit
 probes and the known open `.pth` and `sitecustomize` hook gaps.
 
 This policy temporarily gives greater weight to avoiding bad RL signal from
@@ -1214,15 +1219,65 @@ failure at its declared memory or disk limit stops calibration without increasin
 the actor's allocation; a shared grader uses the task's container budget.
 
 `SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` identifies a measured source-environment defect.
-The current signature requires a source setup explicitly installing
-`pytest==6.2.5`, an oracle `solve.sh` exit of zero, and a verifier startup
-failure in `pytest_metadata/plugin.py` because `pytest.StashKey` is absent.
-That plugin implementation was captured before the agent ran.
-The exclusion records the signature and hashes of the unchanged setup and raw
-verdict. Preserve the declared environment and the raw infrastructure verdict;
+The measured conflict requires an oracle `solve.sh` exit of zero and a verifier
+startup failure in `pytest_metadata/plugin.py` because `pytest.StashKey` is absent.
+New controller receipts also require protected pre-agent versions showing pytest
+before 7 and an installed pytest-metadata plugin. Historical receipts without that
+observation require the measured explicit `pytest==6.2.5` setup line.
+The exclusion records hashes of the unchanged setup, raw verdict and, when
+available, the protected version observation. Preserve the declared environment and the raw infrastructure verdict;
 this exclusion does not establish an oracle score of zero. Unrecognized
 infrastructure failures remain unscored after the retry budget, while other
 population tasks continue. The summary counts exclusions by typed reason.
+
+#### Replaying our infrastructure failures
+
+A backend failure is pending evidence, not a source negative. Before replay,
+obtain an explicit per-task decision classifying the failure as our infrastructure.
+Each approval records `classification="our_infrastructure"`, the exact parent
+`parent_result_sha256`, a `failure_signature`, and a `decision_ref`. Source setup
+failures and scored source negatives do not authorize infrastructure replay.
+
+Freeze the fixed backend from a committed checkout:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter backend-fix \
+  --revision <40-hex-fixed-commit> --output backend-fix.json
+```
+
+The manifest hashes the locked Harbor runtime and its maintained dependencies.
+Include it with the approved task list on the CPU worker. Restore the original
+native packages, parent maps and trial artifacts at their exact absolute paths.
+Create a fresh partition and run one approved fixed-backend phase:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter retry-plan \
+  --cohort ORIGINAL_COHORT --task-map ORIGINAL_FULL_CALIBRATED_MAP \
+  --approvals APPROVED_TASKS.json --backend-fix backend-fix.json --output-dir NEW_PLAN
+uv run python -m experiments.post_training.task_curation.oracle_filter retry \
+  --plan NEW_PLAN/plan.json --output-dir NEW_PHASE --concurrency APPROVED_CONCURRENCY
+uv run python -m experiments.post_training.task_curation.oracle_filter merge-retries \
+  --task-map ORIGINAL_FULL_CALIBRATED_MAP --retry-map NEW_PHASE/task-map.json --output NEW_FULL_MAP
+```
+
+Use a fresh phase directory under the existing calibration root so `collect` can
+inspect both phases through one `--jobs-dir`. No prior file is overwritten.
+The runner verifies the task, native files, declared limits, original backend
+configuration and pinned backend source before dispatch. The existing budget of
+three infrastructure attempts applies independently to this approved phase.
+New attempts record that approved context; historical failure classifications
+remain unchanged, including old phases that stopped after one unknown error.
+Further phases require another explicit decision; the runner never schedules them
+automatically. A failed replay remains unscored for review even if its final raw
+verdict contains zero.
+
+Collect the original full cohort with `NEW_FULL_MAP`. Receipts retain every
+parent phase, its map and result hashes, the approved partition and backend-fix
+identity. Collection checks all original and replayed native packages and results,
+and rejects substituted parent files, input changes or reused attempts. Keep the
+plan, its cohort and parent map, all attempts and the backend manifest in the
+release's private evidence archive. `infrastructure_pending` counts unscored
+cases separately from source oracle failures.
 
 For tasks without original solutions, write calibration-only `solve.sh` scripts
 under `CALIBRATION_SOLUTIONS/TASK_ID/` and supply `--calibration-solutions`.

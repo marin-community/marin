@@ -4,6 +4,7 @@
 """Full-population Harbor oracle receipts bound to the converted task contents."""
 
 import hashlib
+import math
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -47,6 +48,21 @@ def oracle_recipe_identity(recipe: SourceRecipe) -> str:
     )
 
 
+class InfrastructureRetryContext(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    parent_result_sha256: str
+    decision_ref: str
+    backend_fix_revision: str
+
+
+class SourcePytestEnvironment(BaseModel):
+    """Versions frozen with the protected runner before the agent starts."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    pytest_version: str = Field(pattern=r"^\d+\.\d+")
+    pytest_metadata_version: str | None
+
+
 class OracleTrialReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     path: str
@@ -58,6 +74,8 @@ class OracleTrialReceipt(BaseModel):
     resource_usage: ResourceUsage = Field(default_factory=ResourceUsage)
     verifier_resource_usage: ResourceUsage = Field(default_factory=ResourceUsage)
     failure_log: str = ""
+    infrastructure_retry: InfrastructureRetryContext | None = None
+    source_environment: SourcePytestEnvironment | None = None
 
     @model_validator(mode="after")
     def validate_result_hash(self):
@@ -92,25 +110,37 @@ class OracleTrialReceipt(BaseModel):
         usage = self.resource_usage.model_copy(
             update={"oom_kills": self.resource_usage.oom_kills + self.verifier_resource_usage.oom_kills}
         )
-        return failure_signal(self.result.get("exception_info"), self.failure_log, usage)
+        signal = failure_signal(self.result.get("exception_info"), self.failure_log, usage)
+        if self.infrastructure_retry is not None and not self.scored and signal is FailureSignal.NON_RESOURCE:
+            return FailureSignal.INFRASTRUCTURE
+        return signal
 
-    def passed(self, task_checksum: str) -> bool:
+    @property
+    def scored(self) -> bool:
         result = self.result
         verdict = self.verdict or {}
         reward = verdict.get("reward")
         return (
-            result.get("agent_info", {}).get("name") == "oracle"
+            (result.get("agent_info") or {}).get("name") == "oracle"
             and result.get("config", {}).get("agent", {}).get("name") == "oracle"
             and result.get("config", {}).get("environment", {}).get("type") in {"local", "daytona"}
-            and result.get("task_checksum") == task_checksum
             and result.get("exception_info") is None
             and result.get("finished_at") is not None
             and result.get("completion") is not None
-            and self.oracle_exit_code == 0
+            and self.oracle_exit_code is not None
             and verdict.get("status") == "scored"
+            and isinstance(reward, (int, float))
             and not isinstance(reward, bool)
-            and reward == 1
-            and ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward") == 1
+            and math.isfinite(reward)
+            and ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward") == reward
+        )
+
+    def passed(self, task_checksum: str) -> bool:
+        return (
+            self.scored
+            and self.result.get("task_checksum") == task_checksum
+            and self.oracle_exit_code == 0
+            and (self.verdict or {}).get("reward") == 1
         )
 
 
@@ -221,6 +251,77 @@ class NoOracleLivenessReceipt(BaseModel):
         )
 
 
+class BackendFixIdentity(BaseModel):
+    """Pinned source bytes executed by an approved infrastructure retry phase."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+    files_sha256: dict[str, str] = Field(min_length=1)
+
+
+class InfrastructureRetryApproval(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    classification: Literal["our_infrastructure"]
+    parent_result_sha256: str
+    failure_signature: str = Field(min_length=1)
+    decision_ref: str = Field(min_length=1)
+
+
+class InfrastructureRetryPlan(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    cohort_path: str
+    cohort_sha256: str
+    parent_map_path: str
+    parent_map_sha256: str
+    source_parent_map_path: str
+    source_parent_map_sha256: str
+    backend_fix: BackendFixIdentity
+    environment: Literal["local", "daytona"]
+    environment_kwargs: dict
+    approvals: dict[str, InfrastructureRetryApproval] = Field(min_length=1)
+
+
+def require_infrastructure_retry_parent(
+    calibration: ResourceCalibrationReceipt, approval: InfrastructureRetryApproval
+) -> None:
+    final = calibration.attempts[-1]
+    if calibration.oracle_kind != "original" or calibration.declared_requirements is None:
+        raise ValueError("Infrastructure retries require an original oracle with explicit immutable limits")
+    if any(
+        (attempt.result.get("agent_info") or {}).get("name") != "oracle"
+        or attempt.result.get("config", {}).get("agent", {}).get("name") != "oracle"
+        for attempt in calibration.attempts
+    ):
+        raise ValueError("Infrastructure retries require production oracle attempts")
+    if final.scored:
+        raise ValueError("Infrastructure retry approval cannot replace a scored source result")
+    if approval.parent_result_sha256 != final.result_sha256:
+        raise ValueError("Infrastructure approval belongs to another parent attempt")
+
+
+class InfrastructureRetryTransition(BaseModel):
+    """Retain the preceding phase and its immutable inputs before applying a backend fix."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    task_sha256: str
+    runtime_sha256: str | None
+    source_task_checksum: str
+    plan_path: str
+    plan_sha256: str
+    parent_map_path: str
+    parent_map_sha256: str
+    parent_mapping_sha256: str
+    parent_history_sha256: str
+    parent_calibration: ResourceCalibrationReceipt
+    backend_fix: BackendFixIdentity
+    approval: InfrastructureRetryApproval
+
+    @model_validator(mode="after")
+    def validate_parent_failure(self):
+        require_infrastructure_retry_parent(self.parent_calibration, self.approval)
+        return self
+
+
 class OracleExclusionReason(StrEnum):
     ORACLE_FAILED = "oracle_failed"
     OOM = "resource_calibration:oom"
@@ -235,9 +336,12 @@ class OracleExclusionReason(StrEnum):
 
 class SourceEnvironmentIncompatibility(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    signature: Literal["pytest-6.2.5/pytest-metadata-stashkey"] = "pytest-6.2.5/pytest-metadata-stashkey"
+    signature: Literal["pytest-6.2.5/pytest-metadata-stashkey", "pytest-before-7/pytest-metadata-stashkey"] = (
+        "pytest-6.2.5/pytest-metadata-stashkey"
+    )
     source_setup_sha256: str
     verdict_sha256: str
+    source_environment_sha256: str | None = None
 
 
 def source_environment_incompatibility(
@@ -249,11 +353,22 @@ def source_environment_incompatibility(
     if (
         trial.oracle_exit_code != 0
         or verdict.get("status") != "infra_error"
-        or "pip install -q pytest==6.2.5" not in source_setup.splitlines()
         or "pytest wrote no json report (exit 1)" not in error
         or "/opt/taskcompendium-shared/runner/pytest_metadata/plugin.py" not in error
         or "AttributeError: module 'pytest' has no attribute 'StashKey'" not in error
     ):
+        return None
+    observation = trial.source_environment
+    if observation is not None:
+        if int(observation.pytest_version.partition(".")[0]) >= 7 or observation.pytest_metadata_version is None:
+            return None
+        return SourceEnvironmentIncompatibility(
+            signature="pytest-before-7/pytest-metadata-stashkey",
+            source_setup_sha256=hashlib.sha256(source_setup.encode()).hexdigest(),
+            verdict_sha256=canonical_sha256(verdict),
+            source_environment_sha256=canonical_sha256(observation.model_dump(mode="json")),
+        )
+    if "pip install -q pytest==6.2.5" not in source_setup.splitlines():
         return None
     return SourceEnvironmentIncompatibility(
         source_setup_sha256=hashlib.sha256(source_setup.encode()).hexdigest(),
@@ -272,6 +387,7 @@ class OracleTaskReceipt(BaseModel):
     no_oracle_liveness: NoOracleLivenessReceipt | None = None
     exclusion_reason: OracleExclusionReason | None = None
     source_environment_incompatibility: SourceEnvironmentIncompatibility | None = None
+    infrastructure_retries: tuple[InfrastructureRetryTransition, ...] = ()
 
     @model_validator(mode="after")
     def validate_source_environment_exclusion(self):
@@ -281,9 +397,76 @@ class OracleTaskReceipt(BaseModel):
         ):
             raise ValueError("Source environment exclusions require their measured incompatibility evidence")
         if evidence is not None:
-            verdict = self.calibration.attempts[-1].verdict
+            trial = self.calibration.attempts[-1]
+            verdict = trial.verdict
             if verdict is None or evidence.verdict_sha256 != canonical_sha256(verdict):
                 raise ValueError("Source environment evidence belongs to another verdict")
+            observation_hash = (
+                canonical_sha256(trial.source_environment.model_dump(mode="json"))
+                if trial.source_environment is not None
+                else None
+            )
+            if evidence.source_environment_sha256 != observation_hash:
+                raise ValueError("Source environment evidence differs from the frozen pre-agent versions")
+            if evidence.signature == "pytest-before-7/pytest-metadata-stashkey" and observation_hash is None:
+                raise ValueError("General pytest incompatibility evidence requires frozen pre-agent versions")
+        return self
+
+    @model_validator(mode="after")
+    def validate_infrastructure_retry_chain(self):
+        history = self.infrastructure_retries
+        if not history:
+            if any(attempt.infrastructure_retry is not None for attempt in self.calibration.attempts):
+                raise ValueError("Infrastructure attempt context requires its approved phase history")
+            return self
+        phases = [*(transition.parent_calibration for transition in history), self.calibration]
+        seen_paths = set()
+        seen_results = set()
+        backend = phases[0].attempts[0].result["config"]["environment"]
+        for index, transition in enumerate(history):
+            if (
+                transition.task_sha256 != self.task_sha256
+                or transition.runtime_sha256 != self.runtime_sha256
+                or transition.source_task_checksum != self.harbor_task_checksum
+            ):
+                raise ValueError("Infrastructure retry changed the task or its native environment")
+            if transition.parent_history_sha256 != canonical_sha256(
+                {"phases": [previous.model_dump(mode="json") for previous in history[:index]]}
+            ):
+                raise ValueError("Infrastructure retry history does not extend its exact parent")
+            previous, current = phases[index : index + 2]
+            if (
+                previous.declared_requirements != current.declared_requirements
+                or previous.preserved_requirements != current.preserved_requirements
+                or previous.verifier != current.verifier
+                or previous.oracle_kind != current.oracle_kind
+            ):
+                raise ValueError("Infrastructure retry changed declared limits or the verifier environment")
+        for phase_index, phase in enumerate(phases):
+            transition = history[phase_index - 1] if phase_index else None
+            expected_context = (
+                InfrastructureRetryContext(
+                    parent_result_sha256=transition.approval.parent_result_sha256,
+                    decision_ref=transition.approval.decision_ref,
+                    backend_fix_revision=transition.backend_fix.revision,
+                )
+                if transition is not None
+                else None
+            )
+            for trial in phase.attempts:
+                if trial.infrastructure_retry != expected_context:
+                    raise ValueError("Infrastructure attempt context differs from its approved fixed-backend phase")
+                actual = trial.result["config"]["environment"]
+                if actual["type"] != backend["type"] or actual.get("kwargs", {}) != backend.get("kwargs", {}):
+                    raise ValueError("Infrastructure retry changed the original backend configuration")
+            paths = {trial.path for trial in phase.attempts}
+            results = {trial.result_sha256 for trial in phase.attempts}
+            if seen_paths.intersection(paths) or seen_results.intersection(results):
+                raise ValueError("Infrastructure retry repeats a prior attempt")
+            seen_paths.update(paths)
+            seen_results.update(results)
+        if not self.calibration.passed and self.exclusion_reason is not OracleExclusionReason.INFRASTRUCTURE:
+            raise ValueError("An unresolved infrastructure retry must remain unscored")
         return self
 
     @property
