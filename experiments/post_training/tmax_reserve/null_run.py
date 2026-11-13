@@ -222,6 +222,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--policy", type=Path, required=True, help="The pilot Harbor policy (local dataset path).")
     parser.add_argument("--wave-size", type=int, required=True, help="Tasks per wave (see waves.py).")
+    parser.add_argument("--max-sandbox-hours", type=float, required=True, help="Stop after the wave that passes it.")
     parser.add_argument("--controls", type=Path, help="JSON {task name: known-good shell commands}.")
     parser.add_argument("--output", type=Path, required=True, help="New local directory for jobs and the summary.")
     parser.add_argument("--upload", help="Remote directory that receives a copy of --output at the end.")
@@ -254,7 +255,15 @@ def main() -> None:
     driver_env = {"DAYTONA_API_KEY": require_secret("DAYTONA_API_KEY"), CANDIDATE_API_KEY_ENV: "EMPTY"}
     driver_env.update({key: os.environ[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in os.environ})
     try:
-        run_in_waves(config, overlay, driver_env, lambda: InferenceBackendState.READY, args.wave_size, args.output)
+        run_in_waves(
+            config,
+            overlay,
+            driver_env,
+            lambda: InferenceBackendState.READY,
+            args.wave_size,
+            args.output,
+            args.max_sandbox_hours,
+        )
     finally:
         trials = trial_results(sorted((args.output / "waves").glob("w*/jobs")))
         summary = summarize(trials, scripted.probes, set(controls))

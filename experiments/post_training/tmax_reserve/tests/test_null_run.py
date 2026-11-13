@@ -4,7 +4,7 @@
 import json
 
 from experiments.post_training.tmax_reserve.null_run import ALLOWED_HOST, PROBE_KEYSTROKES, ScriptedModel, summarize
-from experiments.post_training.tmax_reserve.waves import waves
+from experiments.post_training.tmax_reserve.waves import wave_usage, waves
 
 INSTRUCTIONS = {"a": "Count the lines in data.txt.", "b": "Sort the CSV by date."}
 
@@ -60,3 +60,16 @@ def test_waves_cover_every_task_once_within_the_size():
     tasks = [f"t{i:02d}" for i in range(45)]
     split = waves(list(reversed(tasks)), 20)
     assert [len(w) for w in split] == [20, 20, 5] and [t for w in split for t in w] == tasks
+
+
+def test_wave_usage_counts_live_sandbox_time_and_lane_errors(tmp_path):
+    def trial(name, data):
+        (tmp_path / "job" / name).mkdir(parents=True)
+        (tmp_path / "job" / name / "result.json").write_text(json.dumps(data))
+
+    span = {"started_at": "2026-11-13T00:00:00+00:00", "finished_at": "2026-11-13T00:02:00+00:00"}
+    trial("ran", {"agent_setup": span, "agent_execution": span, "verifier": None, "exception_info": None})
+    quota = "Failed to create snapshot: Snapshot quota exceeded. Maximum allowed: 45"
+    trial("quota", {"exception_info": {"exception_message": quota}})
+    seconds, errors = wave_usage(tmp_path)
+    assert seconds == 60 + 240 and len(errors) == 1
