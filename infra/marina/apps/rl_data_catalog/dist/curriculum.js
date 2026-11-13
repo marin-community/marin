@@ -2,6 +2,7 @@
 const number = new Intl.NumberFormat('en-US');
 const compact = new Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1});
 const percent = value => `${(100 * value).toFixed(1)}%`;
+const useLabels = {train: 'Training', eval: 'Evaluation'};
 const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', out_of_scope: 'Outside cutoff', insufficient_context: 'Insufficient context', skipped: 'Embedding skipped'};
 const state = { data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null};
 
@@ -43,7 +44,13 @@ async function loadCoverage() {
     renderCoverage();
     const processed = data.sources.filter(source => source.alignment?.basis === 'matched').length;
     $('message').textContent = `${number.format(processed)} of ${number.format(data.sources.length)} sources included · ${new Date(data.created_at).toLocaleDateString()}`;
-    $('provenance').textContent = JSON.stringify({release_id: data.release_id, curriculum_key: data.curriculum_key, population: data.population, sample_size: data.sample_size, lineage: data.lineage}, null, 2);
+    $('provenance').textContent = JSON.stringify({release_id: data.release_id, curriculum_key: data.curriculum_key, population: data.population, sample_size: data.sample_size, lineage: data.lineage, role_projection: data.role_projection}, null, 2);
+    $('role-note').hidden = !data.role_projection;
+    if (data.role_projection) {
+      const link = node('a', 'Role-correction receipt ↗');
+      link.href = `https://filer.marina.oa.dev/#${encodeURIComponent(data.role_projection.uri)}`;
+      $('role-note').replaceChildren('Source Use includes an approved metadata correction. Sampled evidence preserves its historical role. ', link);
+    }
     const area = state.nodes.get(`${state.subject}/${state.parent}`);
     if (area) await showTasks(area);
   } catch (error) { if (request === state.request) $('message').textContent = `Coverage could not be loaded. ${error.message}`; }
@@ -250,7 +257,8 @@ async function openDetail(task) {
         status: candidate.similarity >= 1 - state.data.thresholds.capability_distance ? 'Alternative within capability cutoff' : 'Outside capability cutoff'})), alternatives);
       $('detail-matches').append(alternatives);
     }
-    $('detail-provenance').textContent = JSON.stringify({source_id: detail.source_id, task_id: detail.task_id, source_key: detail.source_key, task_hash: detail.task_hash, content_hash: detail.content_hash, intended_use: detail.intended_use, population: detail.population, release_id: state.data.release_id}, null, 2);
+    $('detail-use').textContent = `Use: ${useLabels[detail.intended_use] || 'Unknown'}` + (detail.recorded_intended_use !== detail.intended_use ? ` · Historical recorded Use: ${useLabels[detail.recorded_intended_use] || 'Unknown'}` : '');
+    $('detail-provenance').textContent = JSON.stringify({source_id: detail.source_id, task_id: detail.task_id, source_key: detail.source_key, task_hash: detail.task_hash, content_hash: detail.content_hash, intended_use: detail.intended_use, recorded_intended_use: detail.recorded_intended_use, population: detail.population, release_id: state.data.release_id}, null, 2);
   } catch (error) { $('detail-description').textContent = `Task could not be loaded. ${error.message}`; }
 }
 function scoreTable(scores, target = $('detail-matches')) {

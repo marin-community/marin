@@ -511,6 +511,16 @@ compact export. Failed loads preserve the selected release; the current and
 previous releases are retained. Run one curriculum loader per app at a time.
 APIs read Postgres without cloud scans.
 
+A metadata-only TRAIN-to-EVAL correction requires `--role-projection RECEIPT_URI
+RECEIPT_SHA256`. Set `--release` and `--coverage` to the receipt's exact corrected
+manifest URIs. The loader verifies the receipt and referenced artifact hashes,
+recomputes release identities, and requires each correction to match the current
+catalog's exact dataset pin and EVAL policy. Only the listed source roles and
+release identities may change; paths, counts and frozen data remain identical.
+Ordinary imports still require matching sample roles. Corrected task details show
+the effective Use alongside the historical `recorded_intended_use`, and the
+curriculum page links to the correction receipt.
+
 Start the local stack as shown in [Updating Atlas](#updating-atlas), then use the
 same curriculum-loader command with its printed ID and origin. Stop the stack
 with Ctrl-C when finished.
