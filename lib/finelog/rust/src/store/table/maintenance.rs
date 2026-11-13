@@ -70,7 +70,9 @@ pub enum TableWork {
     /// a table whose policy disables them.
     IndexArtifacts,
     /// Collect superseded state documents and unreferenced objects.
-    ObjectCollection,
+    /// `backlogged` selects the longer interval of a table that still owes
+    /// compaction.
+    ObjectCollection { backlogged: bool },
     /// Upload legacy segments to the archive and delete its orphans.
     LegacyArchive,
     /// Trim the local cache to the table's retention policy.
@@ -186,8 +188,8 @@ async fn run_one(runtime: &Arc<TableRuntime>, work: TableWork) -> Result<WorkOut
             .await;
             Ok(WorkOutcome::Complete)
         }
-        TableWork::ObjectCollection => {
-            collect_objects(runtime).await?;
+        TableWork::ObjectCollection { backlogged } => {
+            collect_objects(runtime, backlogged).await?;
             Ok(WorkOutcome::Complete)
         }
         TableWork::LegacyArchive => {
@@ -272,7 +274,7 @@ async fn cycle(
         if runtime.policy().object_backed() {
             run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
             runtime.controller.gc_objects().await?;
-            run_one(runtime, TableWork::ObjectCollection).await?;
+            run_one(runtime, TableWork::ObjectCollection { backlogged: false }).await?;
         }
         return Ok(WorkOutcome::Continue(MaintenanceClass::SpecMigration));
     }
@@ -280,7 +282,7 @@ async fn cycle(
         runtime.controller.publish_owed().await?;
         if runtime.maintenance_profile().is_relay() {
             runtime.controller.gc_objects().await?;
-            run_one(runtime, TableWork::ObjectCollection).await?;
+            run_one(runtime, TableWork::ObjectCollection { backlogged: false }).await?;
             return Ok(WorkOutcome::Complete);
         }
         let mut steps = CycleSteps::new(started);
@@ -300,9 +302,7 @@ async fn cycle(
         // remain, hand the slot back: collection waits out its backlog interval
         // and index backfill waits for the backlog to clear.
         let backlogged = compaction.has_more_work();
-        if !backlogged || backlog_collection_due(runtime) {
-            run_one(runtime, TableWork::ObjectCollection).await?;
-        }
+        run_one(runtime, TableWork::ObjectCollection { backlogged }).await?;
         steps.mark("object_collection");
         if !backlogged {
             run_one(runtime, TableWork::IndexArtifacts).await?;
@@ -327,7 +327,7 @@ async fn cycle(
         .has_more_work();
     run_one(runtime, TableWork::Compaction { force_compact_l0 }).await?;
     run_one(runtime, TableWork::LegacyArchive).await?;
-    run_one(runtime, TableWork::ObjectCollection).await?;
+    run_one(runtime, TableWork::ObjectCollection { backlogged: false }).await?;
     // Relocate archived segments after local outputs are durable.
     run_one(runtime, TableWork::ArchivePlacement).await?;
     run_one(runtime, TableWork::Eviction).await?;
@@ -425,22 +425,6 @@ async fn drain_object_compaction(
     }
 }
 
-/// Whether a table with a compaction backlog owes object collection this visit.
-///
-/// A table that has not collected since this process started begins its
-/// interval now instead of collecting at once, so a restart during a backlog
-/// does not put every table's first visit through a full collection.
-fn backlog_collection_due(runtime: &TableRuntime) -> bool {
-    let mut last = runtime.last_object_gc.lock().unwrap();
-    match *last {
-        Some(collected) => collected.elapsed() >= OBJECT_GC_BACKLOG_INTERVAL,
-        None => {
-            *last = Some(Instant::now());
-            false
-        }
-    }
-}
-
 /// Per-step wall time of one object-backed maintenance cycle, reported when the
 /// cycle is slow so a long turn shows which step held its shared slot.
 struct CycleSteps {
@@ -500,15 +484,28 @@ pub async fn sync_archive(runtime: &Arc<TableRuntime>) -> Result<(), StatsError>
 }
 
 /// Collect superseded state documents and the objects no retained state names.
-async fn collect_objects(runtime: &Arc<TableRuntime>) -> Result<(), StatsError> {
+///
+/// A `backlogged` table collects on the longer interval. One that has not
+/// collected since this process started begins that interval now instead of
+/// collecting at once, so a restart during a backlog does not put every table's
+/// first visit through a full collection.
+async fn collect_objects(runtime: &Arc<TableRuntime>, backlogged: bool) -> Result<(), StatsError> {
     if !runtime.controller.is_object_backed() {
         return Ok(());
     }
+    let interval = if backlogged {
+        OBJECT_GC_BACKLOG_INTERVAL
+    } else {
+        OBJECT_GC_INTERVAL
+    };
     let due = {
-        let mut last = runtime.last_object_gc.lock().unwrap();
-        let due = last.is_none_or(|instant| instant.elapsed() >= OBJECT_GC_INTERVAL);
-        if due {
-            *last = Some(Instant::now());
+        let mut interval_start = runtime.object_gc_interval_start.lock().unwrap();
+        let due = match *interval_start {
+            Some(instant) => instant.elapsed() >= interval,
+            None => !backlogged,
+        };
+        if due || interval_start.is_none() {
+            *interval_start = Some(Instant::now());
         }
         due
     };
