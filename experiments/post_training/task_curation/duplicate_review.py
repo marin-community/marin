@@ -72,7 +72,7 @@ class LocalDuplicateEndpoint:
             model,
             AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=1, target_cluster="cw-rno2a"),
             env_vars={},
-            priority=job_pb2.PRIORITY_BAND_PRODUCTION,
+            priority=job_pb2.PRIORITY_BAND_BATCH,
             api_model=DUPLICATE_MODEL,
         )
         started = time.monotonic()
