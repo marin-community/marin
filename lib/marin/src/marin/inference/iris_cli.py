@@ -273,6 +273,16 @@ def _resolve_chat_template(spec: str | None) -> str | None:
     return path.read_text()
 
 
+def _parse_env_assignments(assignments: tuple[str, ...]) -> dict[str, str]:
+    env_vars = {}
+    for assignment in assignments:
+        name, separator, value = assignment.partition("=")
+        if not name or not separator:
+            raise click.ClickException(f"--env expects NAME=VALUE, got {assignment!r}.")
+        env_vars[name] = value
+    return env_vars
+
+
 def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout_seconds: float) -> str:
     """Poll the controller registry until the endpoint registers; return its address."""
     deadline = time.monotonic() + timeout_seconds
@@ -479,6 +489,12 @@ def _wait_and_report_endpoint(
     help="Deliver a named secret to the serving job as a file (NAME SOURCE), e.g. "
     "--secret PARALLEL_API_KEY env:PARALLEL_API_KEY. Can be repeated.",
 )
+@click.option(
+    "--env",
+    "env_assignments",
+    multiple=True,
+    help="Environment variable for the serving job as NAME=VALUE, e.g. --env VLLM_BATCH_INVARIANT=1. Can be repeated.",
+)
 @click.option("--dry-run", is_flag=True, help="Print resources, gang placement and named ports without submitting.")
 @click.option("--wait/--no-wait", default=True, help="Wait for readiness and mint a capability URL before blocking.")
 @click.option(
@@ -524,6 +540,7 @@ def main(
     extras: tuple[str, ...],
     task_image: str | None,
     secret_sources: tuple[tuple[str, str], ...],
+    env_assignments: tuple[str, ...],
     dry_run: bool,
     wait: bool,
     wait_timeout: float,
@@ -615,6 +632,7 @@ def main(
             regions=worker_regions,
         )
 
+    env_vars = _parse_env_assignments(env_assignments)
     setup_scripts = None
     if workspace_dir is None:
         setup_scripts = [_checkout_free_setup_script(_marin_core_version(), plan.worker_extras)]
@@ -622,6 +640,7 @@ def main(
         workspace=str(workspace_dir or Path.cwd()),
         extras=plan.worker_extras,
         setup_scripts=setup_scripts,
+        env_vars=env_vars,
     )
     model_config = ServedModelConfig(
         weights=model,
@@ -654,9 +673,14 @@ def main(
         environment = EnvironmentSpec(
             setup_scripts=[_checkout_free_setup_script(_marin_core_version(), outer_extras)],
             secrets=secrets,
+            env_vars=env_vars,
         )
     else:
-        environment = EnvironmentSpec(extras=() if brokered else plan.worker_extras, secrets=secrets)
+        environment = EnvironmentSpec(
+            extras=() if brokered else plan.worker_extras,
+            secrets=secrets,
+            env_vars=env_vars,
+        )
 
     # Broker workers carry their own device constraints. Leaving the lightweight broker job
     # region-free prevents Iris from implicitly pinning its child workers to a region that may not
