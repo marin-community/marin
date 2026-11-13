@@ -12,7 +12,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 
-from daytona import DaytonaError, DaytonaValidationError
+from daytona import DaytonaError
 from daytona.common.errors import DaytonaConnectionError, DaytonaTimeoutError
 from rigging.timing import ExponentialBackoff, active_timeout, suspend_active_time
 
@@ -113,11 +113,7 @@ async def _retry_provider_call[T](
                 isinstance(error, (DaytonaConnectionError, DaytonaTimeoutError))
                 or status in (408, 429)
                 or (status is not None and 500 <= status < 600)
-                or (
-                    isinstance(error, DaytonaValidationError)
-                    and status == 400
-                    and PENDING_SANDBOX_IP_MESSAGE in str(error).lower()
-                )
+                or (status == 400 and PENDING_SANDBOX_IP_MESSAGE in str(error).lower())
             )
             if not transient:
                 raise

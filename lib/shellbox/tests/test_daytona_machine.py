@@ -1620,7 +1620,16 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux process and setsid contract")
 @pytest.mark.parametrize(
     "failure",
-    ["setsid", "output_size", "output_read", "command_cleanup", "sandbox_cleanup", "slow_read", "source_ambiguous"],
+    [
+        "setsid",
+        "output_size",
+        "output_read",
+        "upload_pending_ip",
+        "command_cleanup",
+        "sandbox_cleanup",
+        "slow_read",
+        "source_ambiguous",
+    ],
 )
 def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, monkeypatch, failure):
     async def scenario():
@@ -1657,6 +1666,13 @@ def test_daytona_job_wait_recovers_controls_without_replaying_source(tmp_path, m
         class Files(LocalFiles):
             async def upload_file_stream(self, data, target):
                 staged.add(Path(target).parent)
+                if failure == "upload_pending_ip" and failure not in failed:
+                    failed.add(failure)
+                    # SDK multipart uploads expose this response as the base exception class.
+                    raise DaytonaError(
+                        "Failed to upload file: 400: failed to resolve container IP after 3 attempts",
+                        status_code=400,
+                    )
                 await super().upload_file_stream(data, target)
 
             async def download_file(self, source):
