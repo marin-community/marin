@@ -48,7 +48,7 @@ from marin.rl.skyrl import (
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
-    read_skyrl_launch_receipt,
+    read_skyrl_attempt,
     run_skyrl,
     skyrl_cpu_command,
     skyrl_step,
@@ -59,8 +59,8 @@ from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.rl.skyrl_records import (
     attempt_tracking,
     read_skyrl_metrics,
+    read_stored_skyrl_attempt,
     read_stored_skyrl_attempts,
-    read_stored_skyrl_receipt,
     recorded_launch,
 )
 from marin.training.training import LevanterCheckpoint
@@ -540,17 +540,7 @@ def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
         expert_block_sync={"verify": True},
         engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
     )
-    if entrypoint == "generate":
-        plan = SkyRLGenerationPlan(
-            gpus_per_node=plan.policy_num_gpus_per_node,
-            num_inference_engines=plan.num_inference_engines,
-            inference_engine_tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
-            inference_engine_pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
-            inference_engine_data_parallel_size=plan.inference_engine_data_parallel_size,
-            inference_engine_expert_parallel_size=plan.inference_engine_expert_parallel_size,
-            n_samples_per_prompt=plan.n_samples_per_prompt,
-        )
-    elif entrypoint is not None:
+    if entrypoint is not None:
         plan = dataclasses.replace(plan, entrypoint=entrypoint)
 
     return dataclasses.replace(
@@ -961,14 +951,14 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     )
     assert result.returncode == 0, result.stdout + result.stderr
     monkeypatch.setattr("marin.rl.skyrl.connect_controller", lambda **kwargs: pytest.fail("unexpected Iris lookup"))
-    receipt = read_stored_skyrl_receipt(str(tmp_path))
+    receipt = read_stored_skyrl_attempt(str(tmp_path))
     assert receipt is not None and receipt.native.result.model is not None
     assert receipt.native.result.model.global_step == 8
-    assert read_skyrl_launch_receipt(str(tmp_path)) == receipt
+    assert read_skyrl_attempt(str(tmp_path)) == receipt
     current_id, attempts = read_stored_skyrl_attempts(str(tmp_path))
     assert current_id == config.attempt_id
     assert set(attempts) == {config.attempt_id, "earlier-failed-attempt", "interrupted-attempt"}
-    assert attempts["earlier-failed-attempt"].native.result.failure == "Iris job reached failed"
+    assert attempts["earlier-failed-attempt"].native.result.state == LaunchState.FAILED
     interrupted = attempts["interrupted-attempt"]
     assert interrupted.native.result.state == LaunchState.SUBMITTED
     assert interrupted.native.result.iris_job_id == "/local/interrupted"
@@ -978,7 +968,7 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     with DataStore.open(run_records_root(str(tmp_path / "exports"))) as store:
         update_attempt(store, AttemptRecord(run_id=receipt.run_id, attempt_id=receipt.attempt_id, result=None))
     assert read_attempt(str(tmp_path / "exports"), receipt.attempt_id).result is None
-    fallback = read_stored_skyrl_receipt(str(tmp_path))
+    fallback = read_stored_skyrl_attempt(str(tmp_path))
     assert fallback.native.result.state == LaunchState.SUCCEEDED
     assert fallback.started_at == receipt.started_at and fallback.vllm_version == receipt.vllm_version
     assert fallback.native.config["skyrl"]["runtime"]["iris_job_id"] == "/local/training"
@@ -1026,7 +1016,7 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     export_root = str(tmp_path / "exports")
     assert read_attempt_metrics(export_root, "failed-direct")[1]["loss"] == 0.9
     (tmp_path / "terminal.json").unlink()
-    assert read_stored_skyrl_receipt(str(tmp_path)) == receipt
+    assert read_stored_skyrl_attempt(str(tmp_path)) == receipt
     assert read_stored_skyrl_attempts(str(tmp_path))[0] == config.attempt_id
     pending = AttemptRecord(
         run_id=receipt.run_id,
@@ -1050,7 +1040,7 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     with monkeypatch.context() as network:
         network.setattr("marin.rl.skyrl.connect_controller", controller)
         network.setattr("marin.rl.skyrl.rpc_client", rpc)
-        refreshed = read_skyrl_launch_receipt(str(tmp_path))
+        refreshed = read_skyrl_attempt(str(tmp_path))
     assert refreshed is not None and refreshed.native.result.state == "failed"
     assert refreshed.started_at == startup.started_at and refreshed.vllm_version == "fixture-vllm"
     with DataStore.open(run_records_root(export_root)) as store:
@@ -1059,11 +1049,11 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
         yaml.safe_dump({"config": attempts["earlier-failed-attempt"].native.config})
     )
     (tmp_path / "terminal.json").write_text(receipt.native.model_dump_json())
-    assert read_stored_skyrl_receipt(str(tmp_path)) == attempts["earlier-failed-attempt"]
+    assert read_stored_skyrl_attempt(str(tmp_path)) == attempts["earlier-failed-attempt"]
     (tmp_path / "resolved-launch.yaml").unlink()
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
-    assert read_skyrl_launch_receipt(str(tmp_path)) is None
+    assert read_skyrl_attempt(str(tmp_path)) is None
 
 
 def test_run_skyrl_succeeds_without_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:

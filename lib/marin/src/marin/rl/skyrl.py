@@ -42,8 +42,8 @@ from marin.rl.skyrl_records import (
     EXPORTS_SUBDIRECTORY,
     RESOLVED_LAUNCH_FILENAME,
     TERMINAL_RECEIPT_FILENAME,
-    read_skyrl_launch_config,
-    read_stored_skyrl_receipt,
+    read_skyrl_attempt_config,
+    read_stored_skyrl_attempt,
 )
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
@@ -1125,22 +1125,18 @@ class SkyRLReceiptLookupError(ValueError):
     """The recorded Iris job cannot be identified uniquely."""
 
 
-def read_skyrl_launch_receipt(run_output: str) -> AttemptRecord | None:
-    """Read a launch's terminal or attempt receipt, or build one from its Iris job's state.
+def read_skyrl_attempt(run_output: str) -> AttemptRecord | None:
+    """Read a stored attempt or its current Iris job state.
 
     Returns None when the output has no resolved launch. Without a receipt file, the job state comes from the Iris
     controller and may be running. Raises SkyRLReceiptLookupError when the job name matches no job or several.
     """
-    record = read_stored_skyrl_receipt(run_output)
+    record = read_stored_skyrl_attempt(run_output)
     if record is not None and record.native.result.state in {LaunchState.SUCCEEDED, LaunchState.FAILED}:
         return record
-    if record is not None:
-        config = record.native.config
-    else:
-        try:
-            config = read_skyrl_launch_config(run_output)
-        except FileNotFoundError:
-            return None
+    config = read_skyrl_attempt_config(run_output, record)
+    if config is None:
+        return None
     name = config["iris"]["job_name"]
     info = get_job_info()
     with ExitStack() as stack:

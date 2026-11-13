@@ -35,7 +35,7 @@ from skyrl_train.evaluation_profiles import (
     validate_evaluation_schedule,
     EvaluationProfile,
     evaluation_profile_due,
-    evaluation_profiles,
+    resolve_evaluation_profiles,
     named_evaluation_metrics,
 )
 from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
@@ -1245,7 +1245,7 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
     if callbacks_config is None:
         return []
 
-    profiles = evaluation_profiles(cfg)
+    profiles = resolve_evaluation_profiles(cfg)
     validate_evaluation_schedule(cfg, profiles)
     callbacks = []
     for callback_config in callbacks_config:

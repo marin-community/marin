@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional, Protocol
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig, OmegaConf
 
-from skyrl_train.evaluation_profiles import evaluation_profiles
+from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
 
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.rollouts.harbor_settings import concurrent_trials
@@ -411,6 +411,6 @@ def apply_task_local_values(config: DictConfig, values: TaskLocalSkyRLValues) ->
             continue
         for path in paths:
             OmegaConf.update(updated, path, list(value) if isinstance(value, tuple) else value, force_add=False)
-    evaluation_profiles(updated, evaluation_data=values.evaluation_data)
+    resolve_evaluation_profiles(updated, evaluation_data=values.evaluation_data)
     OmegaConf.resolve(updated)
     return updated

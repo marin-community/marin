@@ -26,7 +26,8 @@ from finestore.store import DataStore, DataTable
 RUN_RECORDS_SUBDIRECTORY = "run-records"
 METRICS_TABLE = "metrics"
 ATTEMPTS_TABLE = "attempts"
-METRIC_METADATA_KEYS = frozenset(("step", "attempt_id", "metric_attempt_ids"))
+METRIC_ATTEMPT_IDS = "metric_attempt_ids"
+METRIC_METADATA_KEYS = frozenset(("step", "attempt_id", METRIC_ATTEMPT_IDS))
 
 
 class LaunchState(StrEnum):
@@ -161,6 +162,12 @@ def update_attempt(store: DataStore, record: AttemptRecord) -> None:
     store.flush()
 
 
+def write_attempt(export_root: str, record: AttemptRecord) -> None:
+    """Commit one attempt update to its export root."""
+    with DataStore.open(run_records_root(export_root)) as store:
+        update_attempt(store, record)
+
+
 def _records(rows: Iterable[dict[str, Any]]) -> dict[str, AttemptRecord]:
     records: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -209,7 +216,7 @@ def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> t
 
 
 def attempt_lineage(export_root: str, attempt_id: str) -> tuple[AttemptHistory, ...]:
-    """Read bounded checkpoint receipts for native history and timing consumers."""
+    """Return newest-first checkpoint ancestry with inclusive through_step bounds."""
     return _lineage(export_root, attempt_id, {})
 
 
@@ -229,8 +236,8 @@ def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[st
             step = row["step"]
             if entry.through_step is not None and step > entry.through_step:
                 continue
-            values = metrics.setdefault(step, {"step": step, "metric_attempt_ids": {}})
+            values = metrics.setdefault(step, {"step": step, METRIC_ATTEMPT_IDS: {}})
             values["attempt_id"] = entry.record.attempt_id
-            values["metric_attempt_ids"][row["name"]] = entry.record.attempt_id
+            values[METRIC_ATTEMPT_IDS][row["name"]] = entry.record.attempt_id
             values[row["name"]] = row["value"]
     return dict(sorted(metrics.items()))
