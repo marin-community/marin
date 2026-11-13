@@ -112,7 +112,10 @@ Set `SELECTION_URI` to the printed artifact root, including its selection name
 and version. Add `--run` to submit the graph through the maintained artifact
 entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
 `--steps 25` for the normal iteration. Each run version trains its own SFT
-continuation from the pinned SFT model before RL starts.
+continuation from the pinned SFT model before RL starts. Add `--stage sft` to
+plan or run only the SFT continuation; a later `--stage rl` run with the same
+version reuses it. Use `--sft-steps 0` to skip SFT and start RL directly from
+the pinned SFT model.
 The selected data stays cached; training does not curate or resample it.
 
 The launcher binds `train.parquet` and `validation.parquet` from that artifact.

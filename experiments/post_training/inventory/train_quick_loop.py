@@ -3,7 +3,7 @@
 
 """Continue Datakit SFT briefly, then train on the Snowball 100k selection and evaluate before and after RL."""
 
-from dataclasses import replace
+from dataclasses import dataclass, fields, replace
 
 import click
 import yaml
@@ -24,6 +24,7 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     skyrl_step,
 )
+from marin.training.training import LevanterCheckpoint
 from skyrlrecipe import RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.sampling import EvalSamplingParams
 
@@ -34,6 +35,7 @@ from experiments.sft.launcher import resources_from_accelerator, sft_step
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
+MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 DEFAULT_STEPS = 25
 DEFAULT_SFT_STEPS = 10
@@ -51,6 +53,15 @@ REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
+
+
+@dataclass(frozen=True)
+class QuickLoop:
+    sft: ArtifactStep[LevanterCheckpoint]
+    rl: ArtifactStep[SkyRLRun]
+
+
+STAGES = tuple(field.name for field in fields(QuickLoop))
 
 
 def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLRecipe:
@@ -164,20 +175,46 @@ def build_run(
     sft_steps: int = DEFAULT_SFT_STEPS,
     export_hf: bool = False,
     reproducible_serving: bool = False,
-) -> ArtifactStep[SkyRLRun]:
+) -> QuickLoop:
     """Bind selected canonical tasks, continued SFT weights and terminal outputs."""
-    model = sft_step(
-        replace(
-            SNOWBALL_SFT,
-            name=user_owned_name(SFT_ARTIFACT_NAME),
-            version=version,
-            model=replace(SNOWBALL_SFT.model, model_ref=MODEL_URI, tokenizer_path=MODEL_ID),
-            num_train_steps=sft_steps,
-        ),
-        resources_from_accelerator(SFT_ACCELERATOR),
+    execution = IrisSkyRLExecution(
+        cluster=CLUSTER,
+        cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+        cpu=32,
+        memory=SNOWBALL_RECIPE.host_memory,
+        disk="2TB",
+        priority="interactive",
+        max_retries=0,
+        target_cluster=CLUSTER,
+        parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+        coordinator_timeout_hours=36,
+        job_timeout_seconds=24 * 60 * 60,
+        container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+        wandb_entity="marin-community",
+        required_env_vars=(EVALUATION_API_KEY_ENV, JUDGE_API_KEY_ENV),
     )
+    if sft_steps == 0:
+        sft = ArtifactStep.adopt(
+            f"models/snowball-datakit-sft-{MODEL_REVISION}",
+            MODEL_VERSION,
+            MODEL_URI,
+            kind=LevanterCheckpoint,
+        )
+    else:
+        sft = sft_step(
+            replace(
+                SNOWBALL_SFT,
+                name=user_owned_name(SFT_ARTIFACT_NAME),
+                version=version,
+                model=replace(SNOWBALL_SFT.model, model_ref=MODEL_URI, tokenizer_path=MODEL_ID),
+                num_train_steps=sft_steps,
+            ),
+            resources_from_accelerator(SFT_ACCELERATOR),
+        )
+        # The RL CLI routes its coordinator from this execution, so an SFT-only stage needs it too.
+        sft = replace(sft, runtime_args={**sft.runtime_args, "skyrl_execution": execution})
     plan = SNOWBALL_RECIPE.role_plan
-    return skyrl_step(
+    rl = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),
             version=version,
@@ -186,9 +223,11 @@ def build_run(
                 sort_keys=False,
             ),
             model=ArtifactHfModel(
-                step=model,
+                step=sft,
                 tokenizer_uri=MODEL_ID,
                 tokenizer_revision=MODEL_REVISION,
+                # The adopted export is the artifact root; a trained step exposes its terminal HF export.
+                relative_path="" if sft_steps == 0 else None,
             ),
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
@@ -201,24 +240,10 @@ def build_run(
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
         ),
-        IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=32,
-            memory=SNOWBALL_RECIPE.host_memory,
-            disk="2TB",
-            priority="interactive",
-            max_retries=0,
-            target_cluster=CLUSTER,
-            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
-            coordinator_timeout_hours=36,
-            job_timeout_seconds=24 * 60 * 60,
-            container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
-            wandb_entity="marin-community",
-            required_env_vars=(EVALUATION_API_KEY_ENV, JUDGE_API_KEY_ENV),
-        ),
+        execution,
         export_hf=export_hf,
     )
+    return QuickLoop(sft=sft, rl=rl)
 
 
 @click.command(help=__doc__)
@@ -228,10 +253,17 @@ def build_run(
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
 @click.option(
     "--sft-steps",
-    type=click.IntRange(min=1),
+    type=click.IntRange(min=0),
     default=DEFAULT_SFT_STEPS,
     show_default=True,
-    help="SFT updates continued from the pinned Datakit SFT weights before RL.",
+    help="SFT updates continued from the pinned Datakit SFT weights before RL; 0 starts RL from those weights.",
+)
+@click.option(
+    "--stage",
+    type=click.Choice(STAGES),
+    default="rl",
+    show_default=True,
+    help="Terminal stage to plan or run; rl includes sft.",
 )
 @click.option("--export-hf", is_flag=True, help="Export the final Hugging Face model after training.")
 @click.option(
@@ -241,8 +273,10 @@ def build_run(
 )
 @rl_build_options
 def main(
-    selection_uri: str, steps: int, sft_steps: int, export_hf: bool, reproducible_serving: bool
-) -> ArtifactStep[SkyRLRun]:
+    selection_uri: str, steps: int, sft_steps: int, stage: str, export_hf: bool, reproducible_serving: bool
+) -> ArtifactStep:
+    if stage == "sft" and sft_steps == 0:
+        raise click.BadParameter("--stage sft requires at least one SFT step", param_hint="--sft-steps")
     name = user_owned_name(ARTIFACT_NAME)
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
@@ -254,7 +288,7 @@ def main(
         )
     selection_name, selection_version = parts
     selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
-    return build_run(
+    loop = build_run(
         resolve_version(name, None),
         selection=selection,
         steps=steps,
@@ -262,6 +296,7 @@ def main(
         export_hf=export_hf,
         reproducible_serving=reproducible_serving,
     )
+    return getattr(loop, stage)
 
 
 if __name__ == "__main__":
