@@ -7,10 +7,10 @@ Measurement runs the production naming path. Native cohort tars are
 materialized to a build context and mapped through Harbor's task-config
 mapping; lowered TaskCompendium specs build the shellbox ``MachineSpec``
 directly from their declared requirements. Either way the snapshot name comes
-from ``shellbox.backends.daytona.machine.snapshot_identity`` — the same
-function the Daytona factory uses to name and create snapshots. A task the
-production validation rejects is counted as a failure and reported; it is not
-Daytona-safe. No Daytona API calls are made.
+from ``shellbox.backends.daytona.snapshot.snapshot_request_for_spec`` — the
+same derivation the Daytona factory uses to name and create snapshots. A task
+the production validation rejects is counted as a failure and reported; it is
+not Daytona-safe. No Daytona API calls are made.
 """
 
 import base64
@@ -21,21 +21,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from daytona import Resources
 from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import EnvironmentConfig
-from shellbox.backends.daytona.machine import (
-    DaytonaMachineFactory,
-    UnsupportedMachineSpec,
-    snapshot_identity,
-    snapshot_resources,
-)
+from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import (
-    HostImage,
-    MachineSpec,
-    NetworkPolicy,
-)
+from shellbox.machine import HostImage, MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader, require_resolved_environment
 
 from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
@@ -104,7 +95,7 @@ def _unpack_environment(payload: bytes) -> tuple[list[EnvironmentEntry], bytes |
 
 def _registry_identity(reference: str) -> str:
     """Production snapshot name for a registry reference with default resources."""
-    return snapshot_identity(RegistryImage(reference), Resources())
+    return snapshot_request_for_spec(MachineSpec(source=RegistryImage(reference))).name
 
 
 def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentityCount:
@@ -128,7 +119,7 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
                     memory_mb=config.memory_mb,
                     storage_mb=config.storage_mb,
                 )
-                name = snapshot_identity(spec.source, snapshot_resources(spec))
+                name = snapshot_request_for_spec(spec).name
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
                 continue
@@ -263,9 +254,7 @@ def _declared_identity(
         if not isinstance(machine.source, RegistryImage | DockerfileSource):
             return _DeclaredIdentity(execution_error=execution_error)
         try:
-            return _DeclaredIdentity(
-                snapshot_identity(machine.source, snapshot_resources(machine)), execution_error=execution_error
-            )
+            return _DeclaredIdentity(snapshot_request_for_spec(machine).name, execution_error=execution_error)
         except UnsupportedMachineSpec as error:
             return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=execution_error)
 

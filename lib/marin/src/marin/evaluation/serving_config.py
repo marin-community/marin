@@ -19,7 +19,7 @@ from iris.cluster.tpu_topology import get_tpu_topology
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+from marin.evaluation.eval_env import EVALUATION_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
@@ -108,7 +108,7 @@ def _auto_serve_overrides_from_config(
             merged.extend((option, value))
 
     native_max_model_len = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
-    if isinstance(native_max_model_len, int | float) and max_model_len is not None:
+    if max_model_len is not None and isinstance(native_max_model_len, int | float):
         max_model_len = min(max_model_len, int(native_max_model_len))
     return tuple(merged), max_model_len
 
@@ -265,7 +265,7 @@ def inference_config_for_model(
     api_model: str | None = None,
     instances: int | None = None,
     broker: BrokerConfig | None = None,
-    request_timeout_seconds: float = EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
+    request_timeout_seconds: float = EVALUATION_REQUEST_TIMEOUT_SECONDS,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     serve = resolved_serve_config(model)

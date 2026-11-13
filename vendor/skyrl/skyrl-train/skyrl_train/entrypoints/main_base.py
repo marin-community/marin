@@ -21,7 +21,6 @@ import ray
 import os
 import signal
 import time
-import hydra
 from loguru import logger
 import asyncio
 import multiprocessing as mp
@@ -267,7 +266,6 @@ def create_remote_inference_engines_from_config(cfg: DictConfig):
     return create_remote_inference_engines(
         urls=cfg.generator.remote_inference_engine_urls,
         model_name=cfg.trainer.policy.model.path,
-        engine_backend=cfg.generator.backend,
         tensor_parallel_size=cfg.generator.inference_engine_tensor_parallel_size,
         pipeline_parallel_size=cfg.generator.inference_engine_pipeline_parallel_size,
         data_parallel_size=cfg.generator.inference_engine_data_parallel_size,
@@ -783,12 +781,3 @@ def run_ray_driver(
 
 def run(cfg: DictConfig) -> None:
     run_ray_driver(cfg, skyrl_entrypoint)
-
-
-@hydra.main(config_path=config_dir, config_name="ppo_base_config", version_base=None)
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
-if __name__ == "__main__":
-    main()

@@ -10,12 +10,10 @@ import tarfile
 
 import pytest
 
-pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
-
-
-from daytona import Resources
-from shellbox.backends.daytona.machine import snapshot_identity
+from harbor.environments.daytona import machine_spec
+from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 
 from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
@@ -24,6 +22,8 @@ from experiments.post_training.task_curation.daytona_identity import (
 )
 from experiments.post_training.task_curation.lowered_envelope import LoweredSpec
 from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar
+
+pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
 
 
 def lowered(document: dict) -> LoweredSpec:
@@ -52,6 +52,46 @@ def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
         **{f"environment/{name}": content for name, content in files.items()},
     }
     return pack_tar(members)
+
+
+def test_snapshot_identity_names_are_stable_and_formatted():
+    first = snapshot_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
+    second = snapshot_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
+    assert first == second
+    assert first.startswith("shellbox-") and len(first) == len("shellbox-") + 40
+
+
+def test_snapshot_identity_rejects_add_dockerfiles(tmp_path):
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM ubuntu:24.04\nADD archive.tar /app\n")
+    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
+        snapshot_request_for_spec(MachineSpec(source=DockerfileSource(context, context / "Dockerfile")))
+
+
+def test_machine_spec_maps_a_registry_source():
+    class Config:
+        docker_image = "registry.example/image@sha256:aa"
+        workdir = "/app"
+        allow_internet = True
+
+    spec = machine_spec(Config(), "/unused", {}, cpus=4, memory_mb=32768, storage_mb=10240)
+    assert spec.source.reference == "registry.example/image@sha256:aa"
+    assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (4, 32768, 10240)
+
+
+def test_machine_spec_maps_a_dockerfile_source(tmp_path):
+    class Config:
+        docker_image = None
+        workdir = "/app"
+        allow_internet = False
+
+    context = tmp_path / "environment"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    spec = machine_spec(Config(), context, {}, cpus=None, memory_mb=None, storage_mb=None)
+    assert isinstance(spec.source, DockerfileSource)
+    assert spec.source.context == context
 
 
 def test_identical_native_tars_share_one_snapshot_and_add_tars_fail():
@@ -124,7 +164,7 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
         _write.parent.mkdir(parents=True, exist_ok=True)
         _write.write_bytes(content)
         _write.chmod(mode)
-    expected = snapshot_identity(DockerfileSource(staged, staged / "Dockerfile"), Resources())
+    expected = snapshot_request_for_spec(MachineSpec(source=DockerfileSource(staged, staged / "Dockerfile"))).name
 
     count = count_task_identities([("task", payload)])
     assert list(count.sizes) == [expected]
@@ -165,8 +205,8 @@ def test_grader_environment_is_counted_independently_and_lock_refusals_are_retai
     )
     separate = count_lowered_spec_identities([("separate", spec)])
     assert set(separate.sizes) == {
-        snapshot_identity(RegistryImage(actor), Resources()),
-        snapshot_identity(RegistryImage(grader), Resources()),
+        snapshot_request_for_spec(MachineSpec(source=RegistryImage(actor))).name,
+        snapshot_request_for_spec(MachineSpec(source=RegistryImage(grader))).name,
     }
     locked = lowered(
         {
