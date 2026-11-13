@@ -34,6 +34,14 @@ pub const MIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// How often an object-backed table collects superseded state documents.
 pub const OBJECT_GC_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
+/// How often an object-backed table collects while it has a compaction backlog.
+///
+/// Collection reads remote state and took 47 to 315 seconds per visit on the
+/// marin hub, all of it inside a shared maintenance slot that backlogged tables
+/// were queued for. The longer interval keeps superseded state documents from
+/// accumulating without bound while most of a visit goes to compaction.
+pub const OBJECT_GC_BACKLOG_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 /// How often state collection also sweeps for unreferenced data objects.
 /// The sweep re-reads every retained state document to build the referenced
 /// set, so it runs far less often than the state trim; orphans only appear
@@ -63,7 +71,7 @@ pub const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
 /// Wall-clock budget one maintenance cycle spends compacting an object-backed
 /// table's runs.
 ///
-/// Every query-serving table shares the same two maintenance-cycle slots, so a
+/// Every query-serving table shares the same four maintenance-cycle slots, so a
 /// table visits a slot once per round of every table. On the marin hub a round
 /// took about 12 minutes across 35 tables, and one 32-input run per visit
 /// drained 32 L0s per round while a busy table flushed several hundred.
@@ -96,7 +104,7 @@ pub struct MaintenanceLimits {
     spec_migration: tokio::sync::Mutex<()>,
     /// Object-backed relays perform catalog publication and object collection,
     /// but no compaction or index construction. Keep that I/O backlog out of the
-    /// two query-serving maintenance slots.
+    /// four query-serving maintenance slots.
     relay_io: tokio::sync::Semaphore,
     /// How many tables may flush concurrently. Flushes are short and are the
     /// durability path, so this is looser than the maintenance limit.
@@ -104,7 +112,7 @@ pub struct MaintenanceLimits {
 }
 
 /// Concurrent maintenance cycles across all tables.
-const MAX_CONCURRENT_MAINTENANCE_CYCLES: usize = 2;
+const MAX_CONCURRENT_MAINTENANCE_CYCLES: usize = 4;
 // Physical relay collection is intentionally low priority. A cycle can walk a
 // large remote catalog tree; concurrent walks compete with durability flushes
 // and forwarding settlements for the same object-store budget.

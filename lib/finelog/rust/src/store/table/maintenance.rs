@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
 use crate::maintenance::{
-    OBJECT_COMPACTION_BUDGET, OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE,
+    OBJECT_COMPACTION_BUDGET, OBJECT_GC_BACKLOG_INTERVAL, OBJECT_GC_INTERVAL, OBJECT_ORPHAN_GRACE,
     OBJECT_ORPHAN_SWEEP_INTERVAL, REWRITE_LAYOUT_BUDGET,
 };
 use crate::policies::{physical_partition_policy_for, segment_indexes_enabled_for};
@@ -295,9 +295,18 @@ async fn cycle(
         steps.mark("compaction");
         runtime.controller.gc_objects().await?;
         steps.mark("state_gc");
-        run_one(runtime, TableWork::ObjectCollection).await?;
+        // Collection and index backfill do not shrink a compaction backlog, yet
+        // they hold the shared slot for minutes on a large table. While runs
+        // remain, hand the slot back: collection waits out its backlog interval
+        // and index backfill waits for the backlog to clear.
+        let backlogged = compaction.has_more_work();
+        if !backlogged || backlog_collection_due(runtime) {
+            run_one(runtime, TableWork::ObjectCollection).await?;
+        }
         steps.mark("object_collection");
-        run_one(runtime, TableWork::IndexArtifacts).await?;
+        if !backlogged {
+            run_one(runtime, TableWork::IndexArtifacts).await?;
+        }
         steps.mark("index_artifacts");
         steps.report(runtime.name(), runs);
         return Ok(WorkOutcome::from_pending(
@@ -412,6 +421,22 @@ async fn drain_object_compaction(
         attempts += 1;
         if !outcome.has_more_work() || started.elapsed() >= OBJECT_COMPACTION_BUDGET {
             return Ok((outcome, attempts));
+        }
+    }
+}
+
+/// Whether a table with a compaction backlog owes object collection this visit.
+///
+/// A table that has not collected since this process started begins its
+/// interval now instead of collecting at once, so a restart during a backlog
+/// does not put every table's first visit through a full collection.
+fn backlog_collection_due(runtime: &TableRuntime) -> bool {
+    let mut last = runtime.last_object_gc.lock().unwrap();
+    match *last {
+        Some(collected) => collected.elapsed() >= OBJECT_GC_BACKLOG_INTERVAL,
+        None => {
+            *last = Some(Instant::now());
+            false
         }
     }
 }
