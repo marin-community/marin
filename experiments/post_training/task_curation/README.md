@@ -496,6 +496,44 @@ completion writes task-level observations, computed Result and repair guidance,
 and a campaign record identifying serving jobs and pending qualification. This
 command does not publish datasets or alter Atlas admission.
 
+### Review frozen SAMPLE content panels
+
+[`admission_inventory`](../../../docs/references/task-curation.md#declarations)
+counts each pinned source population and selects at most 100 TaskSpecs by
+seed-zero task-ID ordering. The queue is a JSON array of complete, unchanged rows
+selected from its `inventory.json` by the source IDs assigned to SAMPLE.
+Record the queue file's SHA-256 before submission.
+
+`sample_qc` verifies the frozen panel bytes, dataset revision, converter version
+and full-population digest. It uses the GLM-5.3 v3 profile described above and
+writes each selected TaskSpec hash, deployment-runtime hash, review observation
+and batch receipt. Computed Results describe content quality; the artifacts
+record `scope=sample_content` and `qualification_status=pending`.
+[Full-population oracle filtering and empty-submission verifier liveness](../../../docs/references/task-curation.md#full-population-oracle-filter)
+remain prerequisites for execution admission.
+
+Launch the batch coordinator on `cw-us-east-08a`. Its GB200 serving children
+inherit that regional controller, with batch priority and three-day timeouts.
+Compilation and CUDA graphs remain enabled. Panels and evidence stay in their
+original storage region.
+
+```bash
+uv run --no-sync iris --cluster marin job run \
+  --job-name atlas-sample-qc-VERSION --target-cluster cw-us-east-08a \
+  --priority batch --timeout 259200 --cpu 4 --memory 16G --disk 40G \
+  --sync-package marin-core --extra dedup --no-wait -- \
+  uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.sample_qc \
+  --queue s3://bucket/campaign/sample-queue.json --queue-sha256 QUEUE_SHA256 \
+  --output-root s3://bucket/campaign/sample-content-v3 \
+  --review-cache s3://bucket/campaign/request-cache-v3 --run
+```
+
+Run the inner command without `--run` to inspect the queue size and pinned
+reviewer without reserving GPUs. A resume reuses reviewed batch receipts only
+when task/runtime contracts, rubric and reviewer identity match exactly.
+Unavailable observations and unsuccessful attempts remain recorded.
+
 ### Audit reviewer errors
 
 `audit_harness` freezes a stratified sample of Prism issue-positive reviews and
