@@ -512,6 +512,13 @@ trials:
     logit_soft_cap: '10'
   commit: 7f34bf9c58
   priority: batch
+  loss:
+  - 2.4006
+  delta:
+  - -0.01
+  steps: 39210
+  baseline: s7n-d1024 2.4106 (same commit, seed 0)
+  step_time_change: 0%
 - id: t028
   variant: lm_head tanh soft-cap 10
   rung: competitive-d1280
@@ -586,6 +593,12 @@ trials:
   commit: 591fcf5821
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.4006
+  delta:
+  - -0.01
+  steps: 39210
+  baseline: s7n-d1024 2.4106 (same commit, seed 0)
 - id: t032
   variant: lm_head tanh soft-cap 10
   rung: competitive-d1280
