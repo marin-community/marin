@@ -137,7 +137,10 @@ generator:
       memory_limit: 8589934592
     compilation_config:
       mode: 3
-      cudagraph_mode: PIECEWISE
+      # Variable-size DP/EP collectives can fail under graph replay. Keep
+      # compilation enabled; retest PIECEWISE after a graph fix is qualified.
+      # https://github.com/vllm-project/vllm/pull/59646
+      cudagraph_mode: NONE
       splitting_ops:
       - vllm::unified_attention_with_output
       - vllm::unified_kv_cache_update
