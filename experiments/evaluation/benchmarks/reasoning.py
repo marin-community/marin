@@ -118,7 +118,7 @@ def completion_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 template=bbh_cot_template(subject),
                 metrics=("exact_match,get-answer",),
                 sampling=Sampling(
-                    temperature=None,
+                    temperature=0,
                     top_p=None,
                     top_k=None,
                     max_tokens=1024,
@@ -140,6 +140,7 @@ def choice_dataset(
     converter: Converter,
     population: int,
     trials: int,
+    temperature: float,
     inputs: dict[str, HfSource],
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
@@ -163,17 +164,17 @@ def choice_dataset(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.02",
+                version="2026.11.13",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=None,
+                    temperature=temperature,
                     top_p=None,
                     top_k=None,
                     max_tokens=None,
                     stop=(),
                     chat_template_kwargs={"enable_thinking": True},
                 ),
-                trials=TrialPolicy(count=trials, seed=None),
+                trials=TrialPolicy(count=trials, seed=0 if temperature else None),
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
                 summary=SummaryKind.MEAN,
@@ -195,6 +196,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             converter=convert_gpqa,
             population=198,
             trials=3,
+            temperature=0.7,
             inputs={},
         ),
         choice_dataset(
@@ -204,6 +206,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             converter=convert_mmlu,
             population=12032,
             trials=1,
+            temperature=0,
             inputs={
                 "fewshot": HfSource(
                     "TIGER-Lab/MMLU-Pro",

@@ -111,10 +111,10 @@ def mrcr_source(*, name: str, max_context: int) -> RlDataSource[EvaluationCorpus
             ),
             EvaluationProtocol(
                 benchmark=name,
-                version="2026.11.02",
+                version="2026.11.13",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=None,
+                    temperature=0,
                     top_p=None,
                     top_k=None,
                     max_tokens=4096,
@@ -164,10 +164,10 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 ),
                 EvaluationProtocol(
                     benchmark="GraphWalks",
-                    version="2026.11.02",
+                    version="2026.11.13",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
-                        temperature=None,
+                        temperature=0,
                         top_p=None,
                         top_k=None,
                         max_tokens=131072,

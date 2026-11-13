@@ -75,14 +75,14 @@ def instruction_following_evaluation(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.02",
+                version="2026.11.13",
                 operation=(
                     OperationKind.TEXT_GENERATION
                     if profile is InstructionProfile.HARNESS
                     else OperationKind.CHAT_GENERATION
                 ),
                 sampling=Sampling(
-                    temperature=None,
+                    temperature=0,
                     top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,

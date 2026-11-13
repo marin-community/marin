@@ -48,7 +48,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
                     template=gsm8k_cot_template(),
                     metrics=("exact_match,flexible-extract", "exact_match,strict-match"),
                     sampling=Sampling(
-                        temperature=None,
+                        temperature=0,
                         top_p=None,
                         top_k=None,
                         max_tokens=None,

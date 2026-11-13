@@ -44,6 +44,7 @@ def python_source(
     source: HfSource,
     population: int,
     max_tokens: int | None,
+    temperature: float,
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     completion = suite == "humaneval"
     return RlDataSource(
@@ -66,17 +67,17 @@ def python_source(
             ),
             protocol=EvaluationProtocol(
                 benchmark=name,
-                version="2026.11.02",
+                version="2026.11.13",
                 operation=OperationKind.TEXT_GENERATION if completion else OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
-                    temperature=None,
+                    temperature=temperature,
                     top_p=None,
                     top_k=None,
                     max_tokens=max_tokens,
                     stop=HUMANEVAL_REQUEST_STOPS if completion else (),
                     chat_template_kwargs={} if completion else {"enable_thinking": False},
                 ),
-                trials=TrialPolicy(count=1, seed=None),
+                trials=TrialPolicy(count=1, seed=0 if temperature else None),
                 num_fewshot=0 if completion else None,
                 metrics=(Metrics.ACCURACY,),
                 primary_metric="accuracy",
@@ -102,6 +103,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             ),
             population=164,
             max_tokens=1024,
+            temperature=0,
         ),
         python_source(
             name="HumanEvalPlus",
@@ -114,6 +116,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             ),
             population=164,
             max_tokens=None,
+            temperature=0,
         ),
         python_source(
             name="MBPPPlus",
@@ -127,6 +130,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             ),
             population=378,
             max_tokens=None,
+            temperature=0,
         ),
         python_source(
             name="CruxEval",
@@ -140,6 +144,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             ),
             population=1600,
             max_tokens=2048,
+            temperature=0.2,
         ),
     ]
 

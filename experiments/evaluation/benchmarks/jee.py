@@ -48,10 +48,10 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 ),
                 protocol=EvaluationProtocol(
                     benchmark="JEEBench",
-                    version="2026.11.02",
+                    version="2026.11.13",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
-                        temperature=None,
+                        temperature=0,
                         top_p=None,
                         top_k=None,
                         max_tokens=32768,

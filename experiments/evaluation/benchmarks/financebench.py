@@ -53,10 +53,10 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 EvaluationProtocol(
                     benchmark="FinanceBench",
                     requires_judge=True,
-                    version="2026.11.05.2",
+                    version="2026.11.13",
                     operation=OperationKind.CHAT_GENERATION,
                     sampling=Sampling(
-                        temperature=None,
+                        temperature=0,
                         top_p=None,
                         top_k=None,
                         max_tokens=4096,
