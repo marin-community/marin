@@ -27,6 +27,7 @@ from taskcompendium.pipeline.oracle_filter import has_oracle_solution
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.environment import dockerfile_lines
+from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.full_qc_review import load_inputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.native_quick import source_slug
@@ -162,11 +163,7 @@ def inventory_source(plan: ReleasePlan, output_root: str, prepared_path: str | N
                 rows = []
                 for row in batch.to_pylist():
                     task = TaskSpec.model_validate_json(row["task_spec"])
-                    contract = {
-                        "task_id": task.id,
-                        "task_sha256": canonical_sha256(task.model_dump(mode="json")),
-                        "runtime_sha256": canonical_sha256(json.loads(row["runtime"])),
-                    }
+                    contract = task_contract(task, json.loads(row["runtime"]))
                     if expected_contracts is not None and expected_contracts.get(task.id) != contract:
                         raise ValueError(f"Task or runtime differs from prepared contract: {task.id}")
                     blockers = task_blockers(task)
