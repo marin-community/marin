@@ -72,6 +72,7 @@ from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, pr
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
+from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 pytestmark = pytest.mark.usefixtures("isolated_admission_census")
@@ -761,6 +762,64 @@ def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalo
         load_catalog(CurationCatalog(root), catalog_query)
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/sources").json()["snapshot_id"] == "reviewed"
+
+
+def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "lexical-catalog")
+    cases = [
+        (
+            expected,
+            declaration.model_copy(
+                update={
+                    "actor_census_input": register_admission_census(
+                        declaration.id,
+                        declaration.dataset_id,
+                        declaration.dataset_revision,
+                        declaration.pipeline.version,
+                        declaration.within_source_dedup.unique_count,
+                    )
+                }
+            ),
+        )
+        for expected, declaration in contamination_declarations()
+    ]
+    with DataStore.open(root, writer_id="lexical") as store:
+        register_catalog(store)
+        with store.transaction() as tx:
+            tx.table(INVENTORY).extend(
+                SnapshotSource(
+                    snapshot_id="lexical",
+                    id=declaration.id,
+                    declaration=declaration,
+                    assessment_key=None,
+                    latest_attempt_key=None,
+                    latest_attempt_status="skipped",
+                    reason=None,
+                    curation=None,
+                ).model_dump(mode="json")
+                for _, declaration in cases
+            )
+            tx.table(SNAPSHOTS).add(
+                CatalogSnapshot(
+                    snapshot_id="lexical",
+                    created_at="2026-11-13T00:00:00Z",
+                    source_count=len(cases),
+                ).model_dump()
+            )
+            tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="lexical").model_dump())
+    load_catalog(CurationCatalog(root), catalog_query)
+    shutil.rmtree(root)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        sources = {row["id"]: row for row in client.get("/sources").json()["sources"]}
+        for expected, declaration in cases:
+            source = sources[declaration.id]
+            detail = client.get("/source", params={"source_id": declaration.id}).json()
+            assert source["contamination_status"] == detail["contamination_status"] == expected
+            assert detail["declaration"]["lexical_contamination"] == source["lexical_contamination"]
+        assert sources["Marin:eval"]["lexical_contamination"]["contaminated_tasks"] == 1
+        assert sources["Marin:unmeasured"]["lexical_contamination"] is None
+        assert sources["Marin:unmeasured"]["issue_rate"] is None
+        assert sources["Marin:eval"]["issue_rate"] == 0.0
 
 
 def test_a_competing_atlas_cutover_prevents_an_older_load_from_being_selected(catalog_query, tmp_path):
