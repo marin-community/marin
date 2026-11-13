@@ -135,14 +135,16 @@ through Fray. Use a unique `IRIS_PORT_JAX` per concurrent gang. The timeout
 includes queueing, and stopping the coordinator stops its children.
 `SchedulingGated` means Kueue has not admitted the gang. See [CoreWeave](docs/coreweave.md).
 
-### Sandbox disk limits
+### Sandbox prepared-image workdirs
 
-Kubernetes composition advertises `sandbox-image-workdir` as a task capability.
-It guarantees that SANDBOX pods without explicitly staged workdir inputs preserve
-the prepared image's `/app`, without an empty workdir volume hiding it. Harbor
-requires that capability before submission even when disk is unset. It is
-independent of the unqualified storage capability described below; old controllers
-must be upgraded through a separately authorized rollout before using this route.
+The Kubernetes backend advertises `sandbox-image-workdir` as a task capability.
+SANDBOX pods without a bundle, inline workdir files, or workdir file references
+preserve the prepared image's `/app`; an empty workdir volume would hide those
+files. Explicitly staged inputs and non-sandbox jobs retain their workdir mounts.
+Harbor requires this capability before submitting prepared-image tasks. Older
+controllers need a separately authorized rollout before submitting prepared-image tasks.
+
+### Sandbox disk limits
 
 Kubernetes sandbox pod manifests set CPU and memory container limits. A nonzero
 `ResourceSpec.disk` sets the storage request and limit in exact bytes; omitting
