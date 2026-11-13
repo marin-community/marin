@@ -1596,6 +1596,10 @@ and `mkfs.ext4`, `mount`, `umount`, `losetup`, `findmnt` and `umoci`. The disk r
 must be root-owned mode 0700 in a private or slave mount namespace. Missing
 capabilities fail before task acquisition; an unconfigured LOCAL worker continues
 to reject storage declarations. This route requires no controller change or gVisor.
+Harbor runs verification in a worker thread before sandbox acquisition and reuses
+the verified pool for concurrent trials in the same worker process, mount
+namespace and disk root. Each allocation also reclaims abandoned leases, without
+repeating the full host probe.
 
 Each container gets a sparse image of exactly `storage_mb * 1024 * 1024` bytes,
 formatted as ext4 with no reserved root blocks. Filesystem metadata and journal
@@ -1612,14 +1616,42 @@ This accounting differs by backend: Daytona requests whole GiB rounded up throug
 its service API, whose image/filesystem accounting is provider-controlled. Docker
 passes `--storage-opt size` to a supporting storage driver for the writable layer;
 its separate tmpfs and bind/volume mounts are outside that layer. LOCAL's ext4
-filesystem includes its scratch and shared-memory directories. A failed allocation
-with ENOSPC or EDQUOT produces Shellbox `DiskLimitExceeded` with `ResourceLimit.DISK`,
-translated by Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during
-the agent phase). Calibration classifies the explicit disk signal before
-infrastructure verdicts and doubles only missing disk limits. A declared fixed
-disk limit remains fixed and records a resource exclusion when exceeded.
-Successfully using the final block or inode remains within the declared quota;
-fullness alone does not mark a sandbox terminal.
+filesystem includes its scratch and shared-memory directories. For a foreground
+command, a disk-limit outcome requires a failed exit (nonzero or signal) and
+either zero available inodes or fewer available bytes than the larger of 1 MiB
+and 0.5% of the declared filesystem size. The trusted host launcher samples the task's ext4
+filesystem immediately after reaping the command, before command spools close.
+Successful commands remain successful while full. With inodes available,
+failed commands at or above that byte headroom threshold remain ordinary failures,
+including commands that reclaim sufficient space before exiting. Guest stderr text never establishes exhaustion, and output
+truncation or a zero output limit cannot hide the capacity sample. A private
+one-byte host report records the sample; guest code does not inherit its FD.
+Block capacity uses `f_bavail`; `f_bfree` also includes ext4's
+[reserved metadata pool](https://raw.githubusercontent.com/torvalds/linux/master/fs/ext4/super.c),
+which remains reserved even with `mkfs.ext4 -m 0`.
+`DISK_FAILURE_MIN_HEADROOM_BYTES` and `DISK_FAILURE_HEADROOM_FRACTION` define the
+classification threshold: a bulk allocation can fail while a smaller write
+still fits. Treating that near-capacity failure as disk pressure lets calibration
+double its current trial disk allocation when the task has no declared disk limit.
+A failed or signalled command near capacity (zero available inodes, or available bytes < max(1 MiB, 0.5% of `storage_mb` MiB)) is classified DISK even if its failure is unrelated, because doubling disk on an ambiguous near-full failure is cheap during calibration, while missing a real limit causes oracle qualification to wrongly exclude the task instead of retrying with more disk.
+The threshold classifies failures; it adds no bytes to the filesystem and gives
+command spools no extra storage allowance.
+
+Shellbox reports `DiskLimitExceeded` with `ResourceLimit.DISK`, translated by
+Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during the agent phase).
+Calibration classifies the explicit disk signal before infrastructure verdicts
+and doubles only missing disk limits. A declared fixed disk limit remains fixed
+and records a resource exclusion when exceeded.
+
+Command spools remain inside the quota, with no extra storage allowance. A
+`run()` command can successfully consume the final inode while its three
+anonymous spools are open. Closing those spools releases their inodes for the
+next command. If an `open_process()` command consumes every inode using pipe
+output, the next `run()` may fail to create its spool before guest execution.
+The host samples that failure before closing other spools already created for
+the same `run()`; a failure within the capacity threshold is a typed disk failure. The host report
+is trusted launcher control metadata, like namespace configuration, outside the
+task filesystem; stdout, stderr and stdin payloads remain charged.
 
 A guardian owns each filesystem until task teardown unmounts OverlayFS and ext4
 and releases the autoclear loop device. Closing the owner pipe on driver death

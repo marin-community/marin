@@ -3,6 +3,7 @@
 
 """Verified per-sandbox ext4 filesystems for privileged LOCAL workers."""
 
+import asyncio
 import errno
 import fcntl
 import os
@@ -11,8 +12,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import ExitStack
+import threading
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import BinaryIO
 
@@ -20,7 +24,30 @@ from shellbox.backends.local import disk_lifecycle
 from shellbox.machine import DiskLimitExceeded, UnsupportedMachineSpec
 
 PROBE_STORAGE_MB = 64
+DISK_FAILURE_MIN_HEADROOM_BYTES = 1024 * 1024
+DISK_FAILURE_HEADROOM_FRACTION = 0.005
 GUARD_SOURCE = Path(disk_lifecycle.__file__).read_text()
+POOL_LOCK = threading.Lock()
+
+
+async def verified_local_disk_pool(root: Path) -> "LocalDiskPool":
+    """Reuse one verified pool per worker process, mount namespace and disk root."""
+    return await asyncio.to_thread(_verified_local_disk_pool, root)
+
+
+def _verified_local_disk_pool(root: Path) -> "LocalDiskPool":
+    try:
+        mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
+    except FileNotFoundError as error:
+        raise UnsupportedMachineSpec("LOCAL disk enforcement requires a privileged Linux mount namespace") from error
+    key = (os.getpid(), mount_namespace, root.resolve())
+    with POOL_LOCK:
+        return _host_pool(key)
+
+
+@cache
+def _host_pool(key: tuple[int, int, Path]) -> "LocalDiskPool":
+    return LocalDiskPool(key[2])
 
 
 @dataclass
@@ -31,11 +58,16 @@ class LocalDisk:
     guardian: subprocess.Popen[bytes]
     errors: BinaryIO
     resources: ExitStack
+    storage_mb: int
     _exhausted: bool = field(default=False, init=False)
 
     @property
     def data(self) -> Path:
         return self.directory / "data"
+
+    @property
+    def failure_headroom_bytes(self) -> float:
+        return max(DISK_FAILURE_MIN_HEADROOM_BYTES, self.storage_mb * 1024 * 1024 * DISK_FAILURE_HEADROOM_FRACTION)
 
     def overlay(self, lower: Path) -> Path:
         """Mount a writable root with all copy-up and metadata charged to this disk."""
@@ -56,19 +88,38 @@ class LocalDisk:
         )
         return root
 
-    def check_limit(self, stderr: bytes = b"", *, allocation_errno: int | None = None) -> None:
-        """Raise a sticky disk limit after an observed failed allocation."""
-        # Consuming the final block or inode is within the budget. Latch only a
-        # failed allocation, including guest diagnostics after partial cleanup.
+    def record_failure(self) -> None:
+        """Sample capacity immediately after a failed command or scoped host allocation."""
+        filesystem = os.statvfs(self.data)
         self._exhausted = self._exhausted or (
-            allocation_errno in (errno.ENOSPC, errno.EDQUOT)
-            or any(
-                marker in stderr.lower()
-                for marker in (b"no space left on device", b"enospc", b"disk quota exceeded", b"edquot")
-            )
+            filesystem.f_favail == 0 or filesystem.f_bavail * filesystem.f_bsize < self.failure_headroom_bytes
         )
+
+    @contextmanager
+    def spool(self) -> Iterator[BinaryIO]:
+        """Create a quota-charged spool, sampling failure before earlier spools close."""
+        with ExitStack() as resources:
+            try:
+                output = resources.enter_context(tempfile.TemporaryFile(dir=self.data))
+            except OSError as error:
+                if error.errno in (errno.ENOSPC, errno.EDQUOT):
+                    self.record_failure()
+                    self.check_limit()
+                raise
+            yield output
+
+    def record_report(self, report: BinaryIO) -> None:
+        """Retain a trusted launcher's outcome before its report descriptor closes."""
+        payload = os.pread(report.fileno(), 1, 0)
+        assert payload in (b"", b"\x00", b"\x01")
+        self._exhausted = self._exhausted or payload == b"\x01"
+
+    def check_limit(self, report: BinaryIO | None = None) -> None:
+        """Raise the disk outcome recorded by a failure-time capacity sample."""
+        if report is not None:
+            self.record_report(report)
         if self._exhausted:
-            raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: LOCAL sandbox filesystem allocation failed (ENOSPC/EDQUOT)")
+            raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: LOCAL command failed at the filesystem capacity threshold")
 
     def close(self) -> None:
         """Release the filesystem and surface any guardian cleanup failure."""
@@ -134,6 +185,7 @@ class LocalDiskPool:
         """Allocate exactly storage_mb MiB and wait for the ext4 mount."""
         with (self.root / "pool.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
+            self._reclaim()
             directory = Path(tempfile.mkdtemp(prefix="sandbox-", dir=self.root))
             with ExitStack() as resources:
                 errors = resources.enter_context(tempfile.TemporaryFile())
@@ -143,7 +195,7 @@ class LocalDiskPool:
                     stdout=subprocess.PIPE,
                     stderr=errors,
                 )
-                disk = LocalDisk(directory, guardian, errors, resources.pop_all())
+                disk = LocalDisk(directory, guardian, errors, resources.pop_all(), storage_mb)
                 assert guardian.stdout is not None
                 try:
                     if not select.select([guardian.stdout], [], [], disk_lifecycle.COMMAND_TIMEOUT)[0]:

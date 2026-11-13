@@ -25,10 +25,11 @@ import tarfile
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import BinaryIO, cast
 
 from shellbox.backends.local import launch, nix
 from shellbox.backends.local.cgroup import MachineCgroup, check_cgroup_parent, delegated_cgroup_parent
@@ -725,21 +726,6 @@ class LocalMachine:
         self._scopes.add(scope)
         return scope
 
-    async def _execute(
-        self, command: Command, environment: dict[str, str], *, scope: LocalProcessScope | None = None
-    ) -> Result:
-        try:
-            return await self._execute_command(command, environment, scope=scope)
-        except OSError as error:
-            if self._disk is not None and error.errno in (errno.ENOSPC, errno.EDQUOT):
-                # Configuration files live on the host, outside the sandbox's
-                # quota. A host ENOSPC alone must not become a task disk failure.
-                if error.filename is None or not Path(error.filename).is_relative_to(self._disk.data):
-                    self._disk.check_limit()
-                    raise
-                self._disk.check_limit(allocation_errno=error.errno)
-            raise
-
     async def open_process(self, command: Command) -> SubprocessSession:
         """Start a foreground process in the same pinned namespaces as run."""
         if command.stdin or command.timeout is not None:
@@ -749,72 +735,96 @@ class LocalMachine:
         config = self._command_config(command, environment)
 
         async def acquire() -> SubprocessSession:
-            group = self._new_command_cgroup()
-            config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
-            # Keep all private descriptors alive until asyncio returns the child
-            # handle. The launcher closes them before executing guest code.
-            try:
-                with tempfile.TemporaryFile() as configuration:
-                    configuration.write(json.dumps(config).encode())
-                    configuration.seek(0)
-                    assert self._root_fd is not None
-                    process = await asyncio.create_subprocess_exec(
-                        sys.executable,
-                        "-I",
-                        "-S",
-                        "-c",
-                        LAUNCH_SOURCE,
-                        str(configuration.fileno()),
-                        pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
-                        env=CONTROL_ENVIRONMENT,
-                        stdin=asyncio.subprocess.PIPE,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        start_new_session=True,
-                    )
-            except BaseException:
-                if group is not None:
-                    await finish_owned(own_cleanup(group.close()))
-                    self._command_cgroups.discard(group)
-                raise
-            self._commands.add(process)
+            with ExitStack() as resources:
+                group = None
+                # Keep all private descriptors alive until asyncio returns the child
+                # handle. The launcher closes them before executing guest code.
+                try:
+                    allocation_file = resources.enter_context(tempfile.TemporaryFile())
+                    if self._disk is not None:
+                        config["disk_status"] = allocation_file.fileno()
+                        config["disk_root"] = str(self._disk.data)
+                        config["disk_failure_headroom"] = self._disk.failure_headroom_bytes
+                    group = self._new_command_cgroup()
+                    config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
+                    with tempfile.TemporaryFile() as configuration:
+                        configuration.write(json.dumps(config).encode())
+                        configuration.seek(0)
+                        assert self._root_fd is not None
+                        process = await asyncio.create_subprocess_exec(
+                            sys.executable,
+                            "-I",
+                            "-S",
+                            "-c",
+                            LAUNCH_SOURCE,
+                            str(configuration.fileno()),
+                            pass_fds=(
+                                configuration.fileno(),
+                                *((allocation_file.fileno(),) if self._disk is not None else ()),
+                                self._root_fd,
+                                *dict.fromkeys(self._namespaces),
+                            ),
+                            env=CONTROL_ENVIRONMENT,
+                            stdin=asyncio.subprocess.PIPE,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            start_new_session=True,
+                        )
+                except BaseException:
+                    resources.close()
+                    if group is not None:
+                        await finish_owned(own_cleanup(group.close()))
+                        self._command_cgroups.discard(group)
+                    raise
+                self._commands.add(process)
 
-            async def stop() -> None:
-                if group is not None:
+                async def stop() -> None:
+                    if group is not None:
+                        try:
+                            await self._stop_command(process, group)
+                            await session.drain_output()
+                        finally:
+                            self._commands.discard(process)
+                            self._sessions.discard(session)
+                            with resources:
+                                if self._disk is not None:
+                                    self._disk.record_report(allocation_file)
+                        return
                     try:
-                        await self._stop_command(process, group)
-                        await session.drain_output()
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        async with asyncio.timeout(PROCESS_STOP_TIMEOUT):
+                            await process.wait()
+                            await session.drain_output()
+                    except TimeoutError:
+                        # A command can detach from its launcher's process group
+                        # and retain the pipes. Reclaim its entire task namespace.
+                        await self.close()
                     finally:
                         self._commands.discard(process)
                         self._sessions.discard(session)
-                    return
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                try:
-                    async with asyncio.timeout(PROCESS_STOP_TIMEOUT):
-                        await process.wait()
-                        await session.drain_output()
-                except TimeoutError:
-                    # A command can detach from its launcher's process group
-                    # and retain the pipes. Reclaim its entire task namespace.
-                    await self.close()
-                finally:
-                    self._commands.discard(process)
-                    self._sessions.discard(session)
+                        with resources:
+                            if self._disk is not None:
+                                self._disk.record_report(allocation_file)
 
-            async def wait() -> int:
-                code = await process.wait()
-                if self._disk is not None:
-                    self._disk.check_limit(session.stderr if code else b"")
-                return code
+                async def wait() -> int:
+                    code = await process.wait()
+                    self._check_disk_report(allocation_file)
+                    return code
 
-            session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes, wait=wait)
-            self._sessions.add(session)
-            return session
+                session = SubprocessSession(process, stop=stop, stderr_limit=command.output_limit_bytes, wait=wait)
+                self._sessions.add(session)
+                resources = resources.pop_all()
+                return session
 
         return await acquire_owned(asyncio.create_task(acquire()))
+
+    def _check_disk_report(self, report: BinaryIO) -> None:
+        if self._disk is None:
+            return
+        self._disk.check_limit(None if report.closed else report)
 
     async def _control(
         self,
@@ -909,7 +919,7 @@ class LocalMachine:
 
         await await_cleanup(own_cleanup(cleanup()))
 
-    async def _execute_command(
+    async def _execute(
         self, command: Command, environment: dict[str, str], *, scope: LocalProcessScope | None = None
     ) -> Result:
         if scope is not None and scope._closed:
@@ -922,11 +932,16 @@ class LocalMachine:
             os.fdopen(status_read, "rb", buffering=0) as status,
             os.fdopen(status_write, "wb", buffering=0) as status_writer,
             tempfile.TemporaryFile() as configuration,
-            tempfile.TemporaryFile(dir=self._disk.data if self._disk is not None else None) as stdout_file,
-            tempfile.TemporaryFile(dir=self._disk.data if self._disk is not None else None) as stderr_file,
-            tempfile.TemporaryFile(dir=self._disk.data if self._disk is not None else None) as stdin_file,
+            tempfile.TemporaryFile() as allocation_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stdout_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stderr_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stdin_file,
         ):
             config["status"] = status_write
+            if self._disk is not None:
+                config["disk_status"] = allocation_file.fileno()
+                config["disk_root"] = str(self._disk.data)
+                config["disk_failure_headroom"] = self._disk.failure_headroom_bytes
             # Reports are written before the launcher exits. A nonblocking read
             # cannot be held open by a process that inherited another pipe end.
             os.set_blocking(status_read, False)
@@ -934,8 +949,9 @@ class LocalMachine:
                 stdin_file.write(command.stdin)
                 stdin_file.seek(0)
             except OSError as error:
-                if self._disk is not None:
-                    self._disk.check_limit(allocation_errno=error.errno)
+                if self._disk is not None and error.errno in (errno.ENOSPC, errno.EDQUOT):
+                    self._disk.record_failure()
+                    self._disk.check_limit()
                 raise
             assert self._root_fd is not None
             group = scope.group.create_child() if scope is not None else self._new_command_cgroup()
@@ -950,7 +966,13 @@ class LocalMachine:
                     "-c",
                     LAUNCH_SOURCE,
                     str(configuration.fileno()),
-                    pass_fds=(configuration.fileno(), status_write, self._root_fd, *dict.fromkeys(self._namespaces)),
+                    pass_fds=(
+                        configuration.fileno(),
+                        status_write,
+                        *((allocation_file.fileno(),) if self._disk is not None else ()),
+                        self._root_fd,
+                        *dict.fromkeys(self._namespaces),
+                    ),
                     env=CONTROL_ENVIRONMENT,
                     stdin=stdin_file,
                     stdout=stdout_file,
@@ -1021,8 +1043,7 @@ class LocalMachine:
             stderr_file.seek(0)
             stdout = stdout_file.read(command.output_limit_bytes + 1)
             stderr = stderr_file.read(command.output_limit_bytes + 1)
-            if self._disk is not None:
-                self._disk.check_limit(stderr if process.returncode else b"")
+            self._check_disk_report(allocation_file)
         assert process.returncode is not None
         code = process.returncode
         return Result(
