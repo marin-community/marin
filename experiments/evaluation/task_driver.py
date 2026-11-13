@@ -4,10 +4,12 @@
 """Run published evaluation corpora through the standard TaskSpec driver."""
 
 import argparse
+import json
 import logging
 import uuid
 from pathlib import Path
 
+from finestore.reader import ReadView
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, Job
 from iris.cluster.setup_scripts import default_setup_script
@@ -25,14 +27,24 @@ from marin.evaluation.task_worker import (
     execution_config,
     run_worker,
 )
-from marin.rollouts.evaluation import EvaluationRunConfig
+from marin.rollouts.evaluation import RUN_OBJECT, EvaluationRunConfig
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from rigging.timing import Duration
 from verifyit.modes.grade_judge import JudgeConnection
 
 DEFAULT_CLUSTER = "cw-us-east-02a"
+
+
+def stored_config(root: str) -> EvaluationRunConfig:
+    """The run configuration recorded in a result root."""
+    configure_coreweave_s3()
+    saved = ReadView(root).read_blob(RUN_OBJECT)
+    if saved is None:
+        raise ValueError(f"No evaluation run is stored in {root}")
+    return EvaluationRunConfig.model_validate(json.loads(saved)["config"])
 
 
 def submit_evaluation(
@@ -46,14 +58,19 @@ def submit_evaluation(
     timeout: int,
     secrets: dict[str, str],
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    responses_from: str | None = None,
 ) -> Job:
     """Submit a disposable privileged CPU worker; Shellbox contains every grader command."""
-    if any(not StoragePath(root).is_remote for root in (*datasets, output)):
+    roots = (*datasets, output, *((responses_from,) if responses_from else ()))
+    if any(not StoragePath(root).is_remote for root in roots):
         raise ValueError(
-            "Iris evaluation requires shared object-storage corpus and output roots; use --local for local files"
+            "Iris evaluation requires shared object-storage corpus, output and --responses-from roots; "
+            "use --local for local files"
         )
     return client.submit(
-        entrypoint=Entrypoint.from_callable(run_worker, datasets, output, execution_config(config), max_attempts),
+        entrypoint=Entrypoint.from_callable(
+            run_worker, datasets, output, execution_config(config), max_attempts, responses_from
+        ),
         name=name,
         resources=resources,
         environment=EnvironmentSpec(
@@ -73,10 +90,15 @@ def main() -> None:
     )
     parser.add_argument("--output", required=True, help="FineStore archive root, including an existing run to resume.")
     parser.add_argument(
-        "--config", required=True, help="EvaluationRunConfig JSON, including immutable model/tokenizer IDs."
+        "--config",
+        help="EvaluationRunConfig JSON, including immutable model/tokenizer IDs; defaults to --responses-from's.",
     )
-    endpoint = parser.add_mutually_exclusive_group(required=True)
-    endpoint.add_argument("--endpoint", help="OpenAI-compatible base URL.")
+    parser.add_argument(
+        "--responses-from",
+        help="Result root whose stored model responses answer identical requests, as when regrading a corrected corpus.",
+    )
+    endpoint = parser.add_mutually_exclusive_group()
+    endpoint.add_argument("--endpoint", help="OpenAI-compatible base URL; optional with --responses-from.")
     endpoint.add_argument(
         "--endpoint-file", type=Path, help="Read the base URL, including any scoped credential, from a file."
     )
@@ -103,10 +125,17 @@ def main() -> None:
     arguments = parser.parse_args()
     if arguments.max_attempts < 1:
         parser.error("--max-attempts must be positive")
-    config = EvaluationRunConfig.model_validate_json(StoragePath(arguments.config).read_text())
-    base_url = arguments.endpoint_file.read_text().strip() if arguments.endpoint_file else arguments.endpoint
+    responses_from = arguments.responses_from
+    base_url = (arguments.endpoint_file.read_text().strip() if arguments.endpoint_file else arguments.endpoint) or None
+    if not responses_from and (arguments.config is None or base_url is None):
+        parser.error("--config and an endpoint are required without --responses-from")
+    config = (
+        EvaluationRunConfig.model_validate_json(StoragePath(arguments.config).read_text())
+        if arguments.config
+        else stored_config(responses_from)
+    )
     datasets = tuple(arguments.dataset)
-    api_key = require_secret(arguments.api_key_env)
+    api_key = require_secret(arguments.api_key_env) if base_url else None
     if arguments.local:
         judge = (
             JudgeConnection(arguments.judge_endpoint, require_secret(arguments.judge_api_key_env))
@@ -117,10 +146,17 @@ def main() -> None:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
         execute_with_retries(
-            datasets, arguments.output, config, base_url, api_key, judge, max_attempts=arguments.max_attempts
+            datasets,
+            arguments.output,
+            config,
+            base_url,
+            api_key,
+            judge,
+            max_attempts=arguments.max_attempts,
+            responses_from=responses_from,
         )
         return
-    secrets = {SOLVER_ENDPOINT: base_url, SOLVER_API_KEY: api_key}
+    secrets = {SOLVER_ENDPOINT: base_url, SOLVER_API_KEY: api_key} if base_url and api_key else {}
     if arguments.judge_endpoint:
         secrets[JUDGE_ENDPOINT] = arguments.judge_endpoint
         secrets[JUDGE_API_KEY] = require_secret(arguments.judge_api_key_env)
@@ -135,6 +171,7 @@ def main() -> None:
             timeout=arguments.timeout,
             secrets=secrets,
             max_attempts=arguments.max_attempts,
+            responses_from=responses_from,
         )
         print(job.job_id)
         if not arguments.no_wait:

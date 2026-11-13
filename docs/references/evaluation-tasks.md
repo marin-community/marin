@@ -15,9 +15,10 @@ remain separate work; this path produces no headline score or legacy
 | `taskcompendium.evaluation` | Typed metadata, corpus readers, response policy, and pure cohort selection |
 | `taskcompendium.pipeline.evaluation` | Population-preserving corpus publication |
 | `verifyit` | Shared comparisons, mathematical equivalence, judge transport, and structured verdicts |
-| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, and resume |
+| `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, resume, and reuse of stored model responses |
 | `rolloutengine` | Single-attempt execution, harnesses, and chat, completion, and likelihood transport |
 | `experiments.evaluation.task_driver` | CLI, endpoint and credential binding, retry/backoff, Shellbox factories, and Iris submission |
+| `experiments.evaluation.regrade_report` | Per-attempt grade comparison of a regraded run with the run it reused |
 | Shellbox | Machine isolation, resource access, and outer execution deadlines |
 
 `EvaluationCorpusRecipe` in `experiments.evaluation.preparation` binds source
@@ -222,6 +223,58 @@ source row, and trial to avoid counting retries twice. Terminal rows have
 `phase="finished"`; choose the highest `retry` index. Rows left at
 `phase="started"` have no terminal result. Exhausted infrastructure
 failures preserve evidence and raise `EvaluationInfrastructureError`.
+
+## Regrade stored model responses
+
+A grader correction publishes a new corpus, which an existing result root
+cannot resume. To grade the model responses that a run already stored on the
+new corpus, pass the run's result root as `--responses-from`:
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.task_driver --local \
+  --responses-from scratch/eval-run \
+  --dataset "$NEW_CORPUS_ROOT" \
+  --output scratch/eval-run-regraded
+```
+
+A generation attempt then takes the latest completed model response that the
+source run stored for the same benchmark, source row, and trial, provided the
+attempt sends the identical request: the same messages and sampling options,
+including the trial seed. The new corpus's response policy selects the graded
+text from the stored channels. Every other generation attempt asks the
+endpoint. With no endpoint those attempts fail as retryable infrastructure
+failures, and repeating the command with an endpoint generates only them;
+corpora scored by likelihood need an endpoint. The run settings default to the
+source run's. `--config` replaces them but must keep the source run's model
+identity. Judged tasks call the judge again, so judge variation also changes
+grades, and a source run with a recorded judge needs `--judge-endpoint`.
+
+Raw evidence names the source root, its run identity, and the evidence blob in
+`reused_response_from_run`. A reused attempt records zero tokens, as an attempt
+that reuses its own response after a grading failure does. The source root is
+not part of the run identity. Without `--local`, the run goes to Iris as usual,
+and the source root must be shared object storage as well.
+
+Compare the regraded run with its source:
+
+```bash
+uv run --package marin-core --group test python \
+  -m experiments.evaluation.regrade_report \
+  --source scratch/eval-run \
+  --regrade scratch/eval-run-regraded \
+  --changes scratch/eval-run-changes.jsonl
+```
+
+For each benchmark the report counts the regraded run's terminal attempts and
+those that reused the source attempt's own model response. Over the reused
+attempts scored in both runs, it gives the mean reward before and after and how
+many rewards rose or fell. `--changes` writes each reused attempt whose outcome,
+reward, or extracted answer changed, with both grades, as JSON lines. Attempts
+that needed a new model response are not compared. The grade before is that of
+the source attempt whose evidence blob the provenance names, so a source run
+resumed after the regrade still pairs. A run with two corpora of one benchmark
+is refused.
 
 ## Summary semantics
 

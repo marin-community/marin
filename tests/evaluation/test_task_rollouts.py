@@ -4,7 +4,9 @@
 import asyncio
 import json
 import threading
+from collections import Counter
 from dataclasses import dataclass, field
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
@@ -16,12 +18,15 @@ from fray.local_backend import LocalClient
 from marin.evaluation.records import JudgeIdentity
 from marin.rollouts.evaluation import (
     ATTEMPTS_TABLE,
+    REUSED_FROM_RUN,
     RUN_OBJECT,
     EvaluationInfrastructureError,
     EvaluationRunConfig,
     ModelIdentity,
     run_evaluation,
+    run_identity,
 )
+from marin.rollouts.evaluation_results import terminal_attempts
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
 from rolloutengine.likelihood import VllmLikelihood
@@ -1070,3 +1075,261 @@ async def test_model_rendering_overrides_preserve_published_corpus_identity(tmp_
     )
     saved = json.loads(ReadView(output).read_blob(RUN_OBJECT))
     assert saved["datasets"][0]["protocol"] == published.model_dump(mode="json")
+
+
+def convert_ignoring_case(row: RawRow, _context: ConversionContext):
+    task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=True)
+    return task.model_copy(update={"tags": ("eval",)})
+
+
+COLORS = ("colors/0", "colors/1", "colors/2")
+
+
+def publish_colors_corpus(tmp_path, name, *, converter=convert, questions=COLORS, trials=None, item=chat_item):
+    """A colors corpus; trials default to three unseeded greedy trials, which send identical requests."""
+    source = tmp_path / (name + "-source")
+    source.mkdir()
+    (source / "rows.jsonl").write_text("".join(json.dumps({"question": question}) + "\n" for question in questions))
+    recipe = SourceRecipe(
+        name="colors",
+        version=name,
+        source=SourceFiles("colors", "pinned", ("rows.jsonl",), SourceFormat.JSONL),
+        convert=converter,
+        rubric=None,
+        controls=None,
+        intended_use=IntendedUse.EVAL,
+    )
+    protocol = EvaluationProtocol(
+        benchmark="colors",
+        version="1",
+        operation="chat_generation",
+        sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}),
+        trials=trials or TrialPolicy(count=3, seed=None),
+        metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
+        primary_metric="accuracy",
+        summary=SummaryKind.MEAN,
+        expected_population=len(questions),
+    )
+    output = tmp_path / (name + "-corpus")
+    client = LocalClient()
+    try:
+        with ZephyrContext(
+            client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "colors-chunks")
+        ) as context:
+            publish_evaluation_corpus(recipe, protocol, item, context, str(source), str(output))
+    finally:
+        client.shutdown()
+    return str(output)
+
+
+class ScriptedModel:
+    """Answer each question with its message, or with the n-th of a list on the n-th request for it."""
+
+    def __init__(self, messages):
+        self.messages = messages
+        self.asked = Counter()
+
+    async def __call__(self, request):
+        question = request.messages[-1]["content"]
+        message = self.messages[question]
+        if isinstance(message, list):
+            message = message[self.asked[question]]
+        self.asked[question] += 1
+        message = message if isinstance(message, dict) else {"role": "assistant", "content": message}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(3, 1))
+
+
+async def no_model(_request):
+    raise ConnectionError("no endpoint")
+
+
+def terminal_evidence(root):
+    """The latest finished attempt row and raw evidence of each dataset, source row and trial."""
+    reader = ReadView(root)
+    return {
+        key: (row, json.loads(reader.read_blob(row["result_blob"]))) for key, row in terminal_attempts(reader).items()
+    }
+
+
+def stored_run_identity(root):
+    return run_identity(json.loads(ReadView(root).read_blob(RUN_OBJECT)))
+
+
+def stored_text(raw):
+    return raw["conversations"][0]["steps"][0]["turn"]["metadata"]["evaluation_raw_message"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_reuse_gives_each_unseeded_trial_its_own_stored_response(tmp_path, run_config):
+    config = run_config.model_copy(update={"source_limit": None})
+    strict = publish_colors_corpus(tmp_path, "strict")
+    lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    replies = ScriptedModel({question: ["red", "Red", "blue"] for question in COLORS})
+    await run_evaluation((strict,), source, config, replies, machine_factories={})
+    refusing = ScriptedModel({})
+
+    await run_evaluation((lenient,), output, config, refusing, machine_factories={}, reuse_from=source)
+
+    assert not refusing.asked
+    stored = {(row, trial): evidence for (_, row, trial), evidence in terminal_evidence(source).items()}
+    assert Counter(stored_text(raw) for _, raw in stored.values()) == {"red": 3, "Red": 3, "blue": 3}
+    for (_, source_row, trial), (attempt, raw) in terminal_evidence(output).items():
+        stored_attempt, stored_raw = stored[source_row, trial]
+        assert raw[REUSED_FROM_RUN] == {
+            "root": source,
+            "run": stored_run_identity(source),
+            "result_blob": stored_attempt["result_blob"],
+        }
+        assert stored_text(raw) == stored_text(stored_raw)
+        assert raw["grade"]["reward"] == float(stored_text(raw).lower() == "red")
+        assert (attempt["outcome"], attempt["prompt_tokens"], attempt["completion_tokens"]) == ("graded", 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_reuse_asks_the_model_for_changed_requests_and_keeps_them_retryable_without_one(tmp_path, run_config):
+    config = run_config.model_copy(update={"source_limit": None})
+    strict = publish_colors_corpus(tmp_path, "strict")
+    reworded = publish_colors_corpus(
+        tmp_path, "reworded", converter=convert_ignoring_case, questions=("colors/0", "colors/1?", "colors/2")
+    )
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    await run_evaluation((strict,), source, config, ScriptedModel(dict.fromkeys(COLORS, "red")), machine_factories={})
+
+    with pytest.raises(EvaluationInfrastructureError, match="3 evaluation attempts failed"):
+        await run_evaluation((reworded,), output, config, no_model, machine_factories={}, reuse_from=source)
+    model = ScriptedModel({"colors/1?": "red"})
+    await run_evaluation((reworded,), output, config, model, machine_factories={}, reuse_from=source)
+
+    assert model.asked == {"colors/1?": 3}
+    evidence = terminal_evidence(output).values()
+    assert {attempt["outcome"] for attempt, _ in evidence} == {"graded"}
+    assert Counter(raw[REUSED_FROM_RUN] is not None for _, raw in evidence) == {True: 6, False: 3}
+
+
+@pytest.mark.asyncio
+async def test_reuse_rejects_a_source_run_of_another_model(tmp_path, run_config):
+    strict = publish_colors_corpus(tmp_path, "strict")
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    await run_evaluation(
+        (strict,), source, run_config, ScriptedModel(dict.fromkeys(COLORS, "red")), machine_factories={}
+    )
+    other = run_config.model_copy(update={"model": run_config.model.model_copy(update={"revision": "other-commit"})})
+
+    with pytest.raises(ValueError, match="same model identity"):
+        await run_evaluation((strict,), output, other, no_model, machine_factories={}, reuse_from=source)
+
+    assert ReadView(output).read_blob(RUN_OBJECT) is None
+
+
+@pytest.mark.asyncio
+async def test_reuse_selects_the_graded_text_with_the_new_corpus_response_policy(tmp_path, run_config):
+    single = TrialPolicy(count=1, seed=None)
+    combined = publish_colors_corpus(tmp_path, "combined", trials=single)
+    final = publish_colors_corpus(
+        tmp_path, "final", trials=single, item=partial(chat_item, response_selection="final_or_complete_reasoning")
+    )
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    message = {"role": "assistant", "content": "red", "reasoning_content": "Maybe blue."}
+    await run_evaluation(
+        (combined,), source, run_config, ScriptedModel(dict.fromkeys(COLORS, message)), machine_factories={}
+    )
+
+    await run_evaluation((final,), output, run_config, no_model, machine_factories={}, reuse_from=source)
+
+    assert {raw["grade"]["reward"] for _, raw in terminal_evidence(source).values()} == {0}
+    assert {raw["grade"]["reward"] for _, raw in terminal_evidence(output).values()} == {1}
+
+
+@pytest.mark.asyncio
+async def test_mixed_reuse_regrades_generations_and_rescores_likelihoods(tmp_path, mixed_corpora, run_config):
+    endpoint = MixedEndpoint()
+    tokenizer = CharacterTokenizer()
+    config = run_config.model_copy(
+        update={"source_limit": None, "concurrency": 3, "verifier_machine": machine_runtime(backend="shellsim")}
+    )
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    async with openai.AsyncOpenAI(
+        api_key="test",
+        base_url="http://fixture.test/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(endpoint.handle)),
+    ) as client:
+        arguments = dict(
+            machine_factories={"shellsim": ShellSimMachineFactory()},
+            tokenizer=tokenizer,
+            completion_model=CompletionModel(client, "fixture"),
+            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
+        )
+        model = ChatModel(client, "fixture", 16)
+        with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
+            await run_evaluation(mixed_corpora, source, config, model, **arguments)
+        await run_evaluation(mixed_corpora, source, config, model, **arguments)
+        before = len(endpoint.requests)
+
+        await run_evaluation(mixed_corpora, output, config, model, reuse_from=source, **arguments)
+
+        assert endpoint.requests[before:]
+        assert all(isinstance(body.get("prompt"), list) for _, body in endpoint.requests[before:])
+    stored, regraded = terminal_evidence(source), terminal_evidence(output)
+    assert regraded.keys() == stored.keys()
+    for key, (attempt, raw) in regraded.items():
+        stored_attempt, stored_raw = stored[key]
+        assert attempt["outcome"] == stored_attempt["outcome"]
+        if "conversations" in raw:
+            assert raw[REUSED_FROM_RUN]["result_blob"] == stored_attempt["result_blob"]
+            assert (raw["grade"]["status"], raw["grade"]["reward"]) == (
+                stored_raw["grade"]["status"],
+                stored_raw["grade"]["reward"],
+            )
+            assert attempt["completion_tokens"] == 0
+        else:
+            assert raw.get(REUSED_FROM_RUN) is None
+
+
+@pytest.mark.asyncio
+async def test_judged_reuse_keeps_retried_responses_in_the_source_and_the_regrade(tmp_path, run_config, judge_endpoint):
+    corpus = publish_policy_corpus(
+        tmp_path,
+        [{"prompt": "explicit judge", "model": "source-judge"}, {"prompt": "default judge"}],
+        converter=convert_judged_row,
+    )
+    _, connection, _ = judge_endpoint
+    config = run_config.model_copy(
+        update={
+            "concurrency": 1,
+            "source_limit": None,
+            "judge": JudgeIdentity(
+                deployment="fixture-deployment",
+                models={"source-judge": "source-revision", "run-default": "default-revision"},
+                default_model="run-default",
+            ),
+        }
+    )
+    model_requests = []
+
+    async def model(request):
+        model_requests.append(request)
+        return ModelTurn({"role": "assistant", "content": r"\boxed{4}"}, (), (), None, "stop", usage=TokenUsage(10, 1))
+
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    with pytest.raises(EvaluationInfrastructureError):
+        await run_evaluation((corpus,), source, config, model, machine_factories={}, judge_connection=connection)
+    await run_evaluation((corpus,), source, config, model, machine_factories={}, judge_connection=connection)
+    unreachable = JudgeConnection("http://127.0.0.1:9/v1", "unreachable-key")
+
+    with pytest.raises(EvaluationInfrastructureError, match="2 evaluation attempts failed"):
+        await run_evaluation(
+            (corpus,), output, config, no_model, machine_factories={}, judge_connection=unreachable, reuse_from=source
+        )
+    await run_evaluation(
+        (corpus,), output, config, no_model, machine_factories={}, judge_connection=connection, reuse_from=source
+    )
+
+    assert len(model_requests) == 2
+    stored = terminal_evidence(source)
+    assert sorted(attempt["retry"] for attempt, _ in stored.values()) == [0, 1]
+    for key, (attempt, raw) in terminal_evidence(output).items():
+        assert (attempt["outcome"], attempt["retry"], attempt["completion_tokens"]) == ("graded", 1, 0)
+        assert raw["reused_response_from_retry"] == 0
+        assert raw[REUSED_FROM_RUN]["result_blob"] == stored[key][0]["result_blob"]
