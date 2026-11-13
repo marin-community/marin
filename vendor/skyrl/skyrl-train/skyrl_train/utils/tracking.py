@@ -285,7 +285,6 @@ class _RecordsAdapter(_TrackingAdapter):
         self.attempt_id = attempt_id
         self.store = DataStore.open(run_records_root(export_root))
         self.tables = register_run_tables(self.store)
-        self.started = False
 
     def start(self, *, resumed_step: int | None, checkpoint: CheckpointReference | None) -> None:
         record = read_attempt(self.export_root, self.attempt_id)
@@ -301,11 +300,8 @@ class _RecordsAdapter(_TrackingAdapter):
                 parent=checkpoint,
             ),
         )
-        self.started = True
 
     def log(self, data: dict[str, Any], step: int) -> None:
-        if not self.started:
-            raise RuntimeError("Start the records execution before logging metrics")
         rows = []
         for name, value in data.items():
             if name in METRIC_METADATA_KEYS:

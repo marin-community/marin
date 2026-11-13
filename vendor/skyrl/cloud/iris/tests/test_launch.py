@@ -12,7 +12,6 @@ import numpy as np
 import pytest
 import yaml
 from finestore.rl.run_records import read_attempt
-from finestore.testing.simulated_s3 import simulated_s3
 from rigging.filesystem.storage_path import StoragePath
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
@@ -24,19 +23,13 @@ from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
 from marinskyrl.speculative_decoding import SpeculatorModelConfig
 from cloud.iris.hf_model_cache import HuggingFaceSnapshot, load_model_manifest
-from cloud.iris.launch import ExportedPolicy, LaunchOutcome, LaunchState, execute_launch
+from cloud.iris.launch import LaunchOutcome, LaunchState, execute_launch
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
 from cloud.iris.iris_backend import supervise_iris_job
 from iris.resources.state import JobState
 from rigging.timing import Timestamp
 from marinskyrl.checkpoint_paths import policy_export_path
-
-
-@pytest.fixture
-def run_bucket():
-    with simulated_s3(latency=0.0) as filesystem:
-        yield filesystem
 
 
 @dataclass
@@ -170,13 +163,6 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(tmp_path: Pat
     else:
         config["run"]["export_hf"] = export_hf
     config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3)
-    config["artifacts"] = {
-        "checkpoint_root": str(tmp_path / "checkpoints"),
-        "export_root": str(tmp_path / "exports"),
-        "attempts_root": str(tmp_path / "attempts"),
-        "resolved_config_uri": str(tmp_path / "resolved.yaml"),
-        "terminal_manifest_uri": str(tmp_path / "terminal.json"),
-    }
     path.write_text(yaml.safe_dump(config))
     backend = LocalLaunchBackend(outcome=outcome)
 

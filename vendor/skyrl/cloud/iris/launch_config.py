@@ -11,8 +11,13 @@ from typing import Any, Mapping
 
 from omegaconf import MISSING, DictConfig, OmegaConf, open_dict
 
-from skyrl_train.evaluation_profiles import evaluation_profiles, validate_evaluation_data
+from skyrl_train.evaluation_profiles import evaluation_profiles, validate_evaluation_data, validate_evaluation_schedule
 
+from skyrl_train.config.validation import (
+    validate_training_settings,
+    validate_megatron_config,
+    validate_batch_invariant_config,
+)
 from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.callbacks import validate_hf_export_config
@@ -261,6 +266,13 @@ def load_launch_config(path: Path) -> DictConfig:
     normalize_logging_backends(config.skyrl)
     validate_launch_config(config)
     evaluation_profiles(config.skyrl)
+    if config.run.mode == RunMode.TRAIN:
+        validate_training_settings(config.skyrl)
+        validate_megatron_config(config.skyrl)
+        validate_batch_invariant_config(config.skyrl)
+        validate_evaluation_schedule(
+            config.skyrl, generation=config.runtime.entrypoint == RL_ENTRYPOINTS[RLEntrypoint.GENERATE]
+        )
     return config
 
 

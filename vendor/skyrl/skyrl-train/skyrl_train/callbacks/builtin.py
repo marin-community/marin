@@ -31,6 +31,8 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.evaluation_profiles import (
+    DEFAULT_EVALUATION_STEPS,
+    validate_periodic_evaluation_inputs,
     EvaluationProfile,
     evaluation_profile_due,
     evaluation_profiles,
@@ -376,7 +378,7 @@ class EvaluationCallback(TrainerCallback):
 
     def __init__(
         self,
-        eval_steps: int = 5,
+        eval_steps: int = DEFAULT_EVALUATION_STEPS,
         eval_on_train_end: bool = True,
         eval_before_train: bool = True,
         additional_evaluations: Dict[str, EvaluationProfile] | None = None,
@@ -1265,22 +1267,7 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             raise
 
     evaluations = [callback for callback in callbacks if isinstance(callback, EvaluationCallback)]
-    if any(callback.eval_steps > 0 for callback in evaluations):
-        final_prefixes = tuple(
-            f"eval/{name}/"
-            for callback in evaluations
-            for name, profile in callback.additional_evaluations.items()
-            if profile.schedule == "final"
-        )
-        for callback in evaluations:
-            inputs = set(callback.stop_when)
-            inputs.update(key for members in callback.metric_groups.values() for key in members)
-            final_inputs = sorted(key for key in inputs if key.startswith(final_prefixes))
-            if final_inputs:
-                raise ValueError(
-                    "final-only metrics in metric_groups or stop_when require eval_steps=0 on all evaluation callbacks "
-                    f"({', '.join(final_inputs)})"
-                )
+    validate_periodic_evaluation_inputs(evaluations)
 
     return callbacks
 

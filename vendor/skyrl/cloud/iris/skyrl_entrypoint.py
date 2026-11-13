@@ -40,6 +40,7 @@ def _start_attempt_record(config: DictConfig) -> None:
             AttemptRecord(
                 run_id=str(config.run.id),
                 attempt_id=attempt_id,
+                iris_job_id=config.skyrl.runtime.iris_job_id,
                 config=OmegaConf.to_container(config, resolve=True),
                 **facts,
             ),

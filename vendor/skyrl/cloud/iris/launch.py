@@ -37,7 +37,6 @@ from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
-from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
@@ -222,7 +221,15 @@ def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchRe
     export_root = str(config.artifacts.export_root)
     receipt = LaunchReceipt(config=OmegaConf.to_container(config, resolve=True), result=result)
     with DataStore.open(run_records_root(export_root)) as store:
-        update_attempt(store, AttemptRecord(run_id=str(config.run.id), attempt_id=str(config.run.attempt_id), result=result))
+        update_attempt(
+            store,
+            AttemptRecord(
+                run_id=str(config.run.id),
+                attempt_id=str(config.run.attempt_id),
+                **({"iris_job_id": result.iris_job_id} if result.iris_job_id is not None else {}),
+                result=result,
+            ),
+        )
     return receipt
 
 

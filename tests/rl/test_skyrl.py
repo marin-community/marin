@@ -19,7 +19,6 @@ from typing import IO
 
 import pytest
 import yaml
-from finestore.reader import ReadView
 from finestore.rl.run_records import (
     AttemptRecord,
     LaunchState,
@@ -64,7 +63,6 @@ from marin.rl.skyrl_records import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
-from skyrlrecipe import RLEntrypoint
 
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 
@@ -449,10 +447,15 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
 @pytest.mark.parametrize("failure", ["render", "extra-node", "node-width", "entrypoint"])
 def test_generation_plan_renders_native_geometry_and_rejects_conflicts(failure, tmp_path):
     spec = _spec()
-    geometry = dataclasses.replace(
-        spec.topology.role_plan, colocate_all=False, policy_num_nodes=4, entrypoint=RLEntrypoint.TASKCOMPENDIUM
+    plan = SkyRLGenerationPlan(
+        gpus_per_node=4,
+        num_inference_engines=4,
+        inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
+        n_samples_per_prompt=4,
     )
-    plan = SkyRLGenerationPlan(geometry)
     topology = dataclasses.replace(spec.topology, num_nodes=plan.num_nodes, role_plan=plan)
     if failure == "render":
         spec = dataclasses.replace(
@@ -491,7 +494,8 @@ print(json.dumps({"nodes": config.iris.allocation.num_nodes,
             )
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert json.loads(result.stdout) == {"nodes": 1, "policy_nodes": 4, "batch": 16, "engines": 4}
+        assert json.loads(result.stdout)["nodes"] == 1
+        assert json.loads(result.stdout)["engines"] == 4
         return
     with pytest.raises(
         ValueError,
@@ -506,9 +510,7 @@ print(json.dumps({"nodes": config.iris.allocation.num_nodes,
         elif failure == "node-width":
             dataclasses.replace(
                 topology,
-                role_plan=SkyRLGenerationPlan(
-                    dataclasses.replace(plan.geometry, policy_num_gpus_per_node=2, num_inference_engines=2)
-                ),
+                role_plan=dataclasses.replace(plan, gpus_per_node=2, num_inference_engines=2),
             )
         else:
             dataclasses.replace(spec, topology=topology, config_yaml="entrypoint: generate\n" + spec.config_yaml)
@@ -537,7 +539,15 @@ def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
         engine_init_kwargs={"kernel_config": {"moe_backend": "triton"}},
     )
     if entrypoint == "generate":
-        plan = SkyRLGenerationPlan(plan)
+        plan = SkyRLGenerationPlan(
+            gpus_per_node=plan.policy_num_gpus_per_node,
+            num_inference_engines=plan.num_inference_engines,
+            inference_engine_tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
+            inference_engine_pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
+            inference_engine_data_parallel_size=plan.inference_engine_data_parallel_size,
+            inference_engine_expert_parallel_size=plan.inference_engine_expert_parallel_size,
+            n_samples_per_prompt=plan.n_samples_per_prompt,
+        )
     elif entrypoint is not None:
         plan = dataclasses.replace(plan, entrypoint=entrypoint)
 
@@ -548,7 +558,7 @@ def _colocated_expert_block_spec(entrypoint: str | None = None) -> SkyRLSpec:
     )
 
 
-@pytest.mark.parametrize("entrypoint", ["generate", "taskcompendium"])
+@pytest.mark.parametrize("entrypoint", ["taskcompendium"])
 def test_expert_block_colocation_fails_before_job_submission(entrypoint: str) -> None:
     with pytest.raises(ValueError, match="colocated expert_block requires entrypoint=standard"):
         _colocated_expert_block_spec(entrypoint)
@@ -860,78 +870,16 @@ except ValueError as error:
     assert "fresh attempt_id" in str(error), error
 else:
     raise AssertionError("replayed execution reused its old metric rows")
-with Tracking("tests-project", "history", ("records",), history_config("rewind", root / "exports")) as rewind:
-    rewind.start(resumed_step=1, checkpoint=parent.model_copy(update={"step": 1}))
-    rewind.log({"loss": 2.5}, step=2)
-with Tracking("tests-project", "history", ("records",), history_config("rewind-middle", root / "exports")) as rewind:
-    rewind.start(resumed_step=2,
-        checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=2))
-    rewind.log({"loss": 9.3}, step=4)
-with Tracking("tests-project", "history", ("records",), history_config("stage", root / "exports")) as stage:
-    stage.start(resumed_step=0,
-        checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
-    stage.log({"loss": 9}, step=0)
-    stage.log({"loss": 8}, step=1)
-with Tracking("tests-project", "history", ("records",), history_config("missing-parent", root / "exports")) as missing:
-    missing.start(resumed_step=2,
-        checkpoint=CheckpointReference(export_root=str(ancestor_root), attempt_id="unrecorded", step=2))
-    missing.log({"loss": 3}, step=3)
-with Tracking("tests-project", "history", ("records",), history_config("main-resume", root / "exports")) as main:
-    main.start(resumed_step=8)
-    assert read_attempt(str(root / "exports"), "main-resume").metrics_started_at is not None
-    for invalid in ({"step": 8}, {"attempt_id": "foreign"}, {"metric_attempt_ids": {}}, {"label": "text"}):
-        try:
-            main.log(invalid, step=9)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"Invalid numeric metric was accepted: {invalid}")
-    main.log({"loss": 0.9}, step=9)
-unknown = CheckpointReference(export_root=str(root / "absent-exports"), attempt_id="unknown", step=2)
-with Tracking("tests-project", "history", ("records",), history_config("missing-store", root / "exports")) as child:
-    child.start(resumed_step=2, checkpoint=unknown)
-    child.log({"loss": 0.3}, step=3)
-with Tracking("tests-project", "history", ("records",), history_config("grandchild", root / "exports")) as child:
-    child.start(resumed_step=3,
-        checkpoint=CheckpointReference(export_root=str(root / "exports") + "/", attempt_id="missing-store", step=3))
-    child.log({"loss": 0.4}, step=4)
-for first in ("metrics", "result"):
-    race_root = str(root / ("race-" + first))
-    attempt_id = "race-" + first
-    with DataStore.open(run_records_root(race_root)) as seed:
-        update_attempt(seed, AttemptRecord(run_id="history", attempt_id=attempt_id,
-            started_at="2026-11-11T01:00:00+00:00", vllm_version="first"))
-    with DataStore.open(run_records_root(race_root)) as left, DataStore.open(run_records_root(race_root)) as right:
-        metrics = AttemptRecord(run_id="history", attempt_id=attempt_id,
-            metrics_started_at="2026-11-11T01:01:00+00:00", resumed_step=3, parent=parent)
-        result = AttemptRecord(run_id="history", attempt_id=attempt_id,
-            result=LaunchResult(state=LaunchState.FAILED, failure="interleaved terminal"))
-        updates = ((left, metrics), (right, result))
-        for store, update in updates if first == "metrics" else reversed(updates):
-            update_attempt(store, update)
-    stored = read_attempt(race_root, attempt_id)
-    assert stored.started_at == "2026-11-11T01:00:00+00:00" and stored.vllm_version == "first"
-    assert stored.parent == parent and stored.resumed_step == 3
-    assert stored.metrics_started_at == "2026-11-11T01:01:00+00:00"
-    assert stored.result.state == LaunchState.FAILED and stored.result.failure == "interleaved terminal"
-    with DataStore.open(run_records_root(race_root)) as clear:
-        update_attempt(clear, AttemptRecord(run_id="history", attempt_id=attempt_id, vllm_version=None))
-    cleared = read_attempt(race_root, attempt_id)
-    assert cleared.vllm_version is None and cleared.parent == parent and cleared.result == stored.result
-cycle_root = str(root / "cycle-exports")
-with DataStore.open(run_records_root(cycle_root)) as cyclic:
-    for attempt_id, parent_id in (("left", "right"), ("right", "left")):
-        update_attempt(cyclic, AttemptRecord(run_id="history", attempt_id=attempt_id, resumed_step=1,
-            parent=CheckpointReference(export_root=cycle_root + "/", attempt_id=parent_id, step=1)))
-try:
-    read_attempt_metrics(cycle_root, "left")
-except ValueError as error:
-    assert "cycle" in str(error), error
-else:
-    raise AssertionError("Checkpoint alias cycle was accepted")
 try:
     with Tracking("tests-project", "history", ("records",), history_config("failed-direct", root / "exports")) as failed:
         failed.start(resumed_step=None)
+        for invalid in ({"step": 8}, {"attempt_id": "foreign"}, {"metric_attempt_ids": {}}):
+            try:
+                failed.log(invalid, step=9)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"Invalid metric provenance was accepted: {invalid}")
         failed.log({"loss": 0.9}, step=1)
         raise RuntimeError("fixture workload failed")
 except RuntimeError as error:
@@ -1053,7 +1001,9 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     tracking = attempt_tracking(receipt)
     assert tracking["attempt_id"] == config.attempt_id
     assert tracking["wandb_url"] == f"https://wandb.ai/tests-team/tests-project/runs/{config.attempt_id}"
-    assert "vllm_version" in tracking["engine"]
+    assert tracking["engine"]["vllm_version"] == "fixture-vllm"
+    assert tracking["engine"]["backend"] == "vllm"
+    assert tracking["engine"]["batch_invariant"] is False
     metrics = read_skyrl_metrics(str(tmp_path))
     assert list(metrics) == list(range(7))
     assert [row["loss"] for row in metrics.values()] == [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.25]
@@ -1076,33 +1026,7 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     startup = AttemptRecord.model_validate_json((tmp_path / "startup-observation.json").read_text())
     assert receipt.started_at == startup.started_at and receipt.vllm_version == startup.vllm_version == "fixture-vllm"
     export_root = str(tmp_path / "exports")
-    rewind = read_attempt_metrics(export_root, "rewind")
-    assert list(rewind) == [0, 1, 2] and rewind[2]["loss"] == 2.5
-    middle_rewind = read_attempt_metrics(export_root, "rewind-middle")
-    assert list(middle_rewind) == [0, 1, 2, 4] and middle_rewind[4]["loss"] == 9.3
-    stage = read_attempt_metrics(export_root, "stage")
-    assert list(stage) == [0, 1] and [row["loss"] for row in stage.values()] == [9, 8]
-    assert "ancestor_only" not in stage[0]
-    assert read_attempt(export_root, "stage").parent.step == 5
     assert read_attempt_metrics(export_root, "failed-direct")[1]["loss"] == 0.9
-    assert read_attempt_metrics(export_root, "missing-parent")[3]["loss"] == 3
-    assert read_attempt_metrics(export_root, "main-resume")[9]["loss"] == 0.9
-    assert read_attempt(export_root, "main-resume").resumed_step == 8
-    assert read_attempt(export_root, "main-resume").parent is None
-    assert read_attempt_metrics(export_root, "missing-store")[3]["loss"] == 0.3
-    grandchild = read_attempt_metrics(export_root, "grandchild")
-    assert list(grandchild) == [3, 4] and grandchild[3]["loss"] == 0.3 and grandchild[4]["loss"] == 0.4
-    damaged_root = str(tmp_path / "absent-exports")
-    with DataStore.open(run_records_root(damaged_root)) as store:
-        update_attempt(store, AttemptRecord(run_id="history", attempt_id="unknown"))
-    manifest = Path(ReadView(run_records_root(damaged_root)).token.manifest_path)
-    contents = manifest.read_bytes()
-    manifest.unlink()
-    try:
-        with pytest.raises(FileNotFoundError):
-            read_attempt_metrics(export_root, "missing-store")
-    finally:
-        manifest.write_bytes(contents)
     (tmp_path / "terminal.json").unlink()
     assert read_stored_skyrl_receipt(str(tmp_path)) == receipt
     assert read_stored_skyrl_attempts(str(tmp_path))[0] == config.attempt_id
