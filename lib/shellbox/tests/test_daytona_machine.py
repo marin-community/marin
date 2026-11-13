@@ -33,6 +33,7 @@ from daytona import (
     DaytonaAuthorizationError,
     DaytonaConfig,
     DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
     Resources,
 )
@@ -267,6 +268,60 @@ def test_daytona_snapshot_recovers_transient_http_without_duplicate_images(monke
         assert set(snapshots) == {request.name}
         if failure == "accepted_create":
             assert attempts["create"] == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operation", ["prepare", "create_snapshot", "create_sandbox"])
+@pytest.mark.parametrize("status", [429, 502])
+def test_daytona_startup_retry_deadline_preserves_provider_diagnostics(operation, status):
+    async def scenario():
+        request = SnapshotRequest(RegistryImage("ubuntu:24.04"), Resources(cpu=1, memory=1, disk=1))
+
+        async def endpoint(http):
+            if http.path.startswith("/snapshots") and operation == "create_sandbox":
+                return web.json_response(
+                    {
+                        "id": request.name,
+                        "name": request.name,
+                        "general": False,
+                        "state": "active",
+                        "cpu": 1,
+                        "gpu": 0,
+                        "mem": 1,
+                        "disk": 1,
+                        "createdAt": "2026-11-13T15:00:00Z",
+                        "updatedAt": "2026-11-13T15:00:00Z",
+                    }
+                )
+            if http.method == "GET" and not http.path.startswith("/snapshots"):
+                return web.json_response({"message": "not created"}, status=404)
+            return web.json_response(
+                {"message": "provider outage"},
+                status=status,
+                headers={"Retry-After": "120", "X-RateLimit-Remaining": "0"},
+            )
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            factory = DaytonaMachineFactory(
+                lambda: AsyncDaytona(
+                    DaytonaConfig(
+                        api_key="fixture",
+                        api_url=str(server.make_url("")).rstrip("/"),
+                    )
+                )
+            )
+            spec = MachineSpec(request.source, startup_timeout=0.05)
+            with pytest.raises(DaytonaError) as failure:
+                if operation == "prepare":
+                    await factory.prepare(spec)
+                else:
+                    await factory.create(spec)
+            assert failure.value.status_code == status
+            assert failure.value.headers["X-RateLimit-Remaining"] == "0"
+            assert failure.value.headers["Retry-After"] == "120"
 
     asyncio.run(scenario())
 

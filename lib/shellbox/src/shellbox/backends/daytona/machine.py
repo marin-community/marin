@@ -80,7 +80,9 @@ def _control_command(script: str) -> str:
     )
 
 
-async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float) -> AsyncSandbox:
+async def _create_sandbox(
+    client: AsyncDaytona, params: CreateSandboxFromSnapshotParams, timeout: float, *, deadline: float | None = None
+) -> AsyncSandbox:
     """Recover transient or ambiguous creation under the caller-owned name."""
     assert params.name is not None
 
@@ -92,7 +94,7 @@ async def _create_sandbox(client: AsyncDaytona, params: CreateSandboxFromSnapsho
             await sandbox.wait_for_sandbox_start(timeout=timeout)
             return sandbox
 
-    return await retry_provider_call("sandbox.create", create)
+    return await retry_provider_call("sandbox.create", create, deadline=deadline)
 
 
 async def _delete_named_sandbox(client: AsyncDaytona, name: str) -> None:
@@ -544,9 +546,9 @@ class DaytonaMachineFactory:
             image_reference=reference,
         )
 
-    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
+    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec, deadline: float | None) -> str:
         self._check_spec(spec)
-        return await ensure_snapshot(client, snapshot_request_for_spec(spec))
+        return await ensure_snapshot(client, snapshot_request_for_spec(spec), deadline=deadline)
 
     async def prepare(self, spec: MachineSpec) -> str:
         """Prepare the snapshot used by create without starting a sandbox.
@@ -555,8 +557,8 @@ class DaytonaMachineFactory:
         """
         client_factory = self._clients()
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
-        async with client_factory() as client, asyncio.timeout(timeout):
-            return await self._prepare(client, spec)
+        async with client_factory() as client, asyncio.timeout(timeout) as deadline:
+            return await self._prepare(client, spec, deadline.when())
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (
@@ -567,8 +569,8 @@ class DaytonaMachineFactory:
         async with AsyncExitStack() as lifetime:
             client = await lifetime.enter_async_context(self._clients()())
             timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
-            async with asyncio.timeout(timeout):
-                snapshot = await self._prepare(client, spec)
+            async with asyncio.timeout(timeout) as deadline:
+                snapshot = await self._prepare(client, spec, deadline.when())
                 name = f"shellbox-{uuid.uuid4().hex}"
                 lifetime.push_async_callback(_delete_named_sandbox, client, name)
                 sandbox = await _create_sandbox(
@@ -582,6 +584,7 @@ class DaytonaMachineFactory:
                         ttl_minutes=self.ttl_minutes,
                     ),
                     timeout=timeout,
+                    deadline=deadline.when(),
                 )
             prepared = await sandbox.process.exec(
                 _control_command("command -v setsid"), cwd=CONTROL_CWD, timeout=INTERRUPT_TIMEOUT
