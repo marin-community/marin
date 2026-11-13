@@ -21,6 +21,8 @@ serve:
   vllm_source: upstream
   vllm_version: 0.28.0
   vllm_extra_args:
+    - --block-size
+    - '64'
     - --enable-auto-tool-choice
     - --enable-prefix-caching
     - --kv-cache-dtype
