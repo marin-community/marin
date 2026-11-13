@@ -225,6 +225,13 @@ def review_inputs(inputs: FullQCInputs, reviewer: Reviewer, rubric: ReviewRubric
     return write_review_result(inputs, reviewer.identity, rubric, output_path, observations())
 
 
+@dataclass(frozen=True)
+class WrittenObservations:
+    records_path: StoragePath
+    reviews: list[ReviewRecord]
+    batch_receipts: list[str]
+
+
 def write_review_result(
     inputs: FullQCInputs,
     reviewer: dict,
@@ -241,13 +248,15 @@ def write_review_result(
             reviewed += len(records)
             logger.info("%s: %d / %d retained contracts reviewed", inputs.source_id, reviewed, inputs.retained_count)
 
-    records_path, reviews, receipts = write_observations(output_path, logged_batches())
-    return write_source_result(inputs, reviewer, rubric, records_path, reviews, receipts)
+    observations = write_observations(output_path, logged_batches())
+    return write_source_result(
+        inputs, reviewer, rubric, observations.records_path, observations.reviews, observations.batch_receipts
+    )
 
 
 def write_observations(
     output_path: str, batches: Iterable[tuple[ContractBatch, list[ReviewRecord], str]]
-) -> tuple[StoragePath, list[ReviewRecord], list[str]]:
+) -> WrittenObservations:
     """Persist task contracts with their reviews and batch receipts."""
     records_path = StoragePath(output_path) / "attempts" / uuid4().hex / "reviews.parquet"
     reviews: list[ReviewRecord] = []
@@ -273,7 +282,7 @@ def write_observations(
                 )
                 reviews.extend(records)
                 receipts.append(receipt)
-    return records_path, reviews, receipts
+    return WrittenObservations(records_path, reviews, receipts)
 
 
 def write_source_result(

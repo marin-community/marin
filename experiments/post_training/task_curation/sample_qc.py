@@ -99,18 +99,18 @@ def review_panel(panel: SamplePanel, reviewer: Reviewer, output_root: str) -> Sa
             reviews, receipt = review_batch(batch.tasks, batch.contracts, REVIEW_RUBRIC, reviewer, output)
             yield batch, reviews, receipt
 
-    records_path, all_reviews, receipts = write_observations(str(output), batches())
+    observations = write_observations(str(output), batches())
     result = SampleQCReview(
-        path=str(records_path.parent),
+        path=str(observations.records_path.parent),
         panel=panel,
         reviewer=reviewer.identity,
         rubric=asdict(REVIEW_RUBRIC),
-        panel_coverage_complete=all(row.status is ReviewStatus.REVIEWED for row in all_reviews),
-        attempted_count=len(all_reviews),
-        result=quality_result(all_reviews),
-        records_path=str(records_path),
-        records_sha256=file_sha256(records_path),
-        batch_receipts=receipts,
+        panel_coverage_complete=all(row.status is ReviewStatus.REVIEWED for row in observations.reviews),
+        attempted_count=len(observations.reviews),
+        result=quality_result(observations.reviews),
+        records_path=str(observations.records_path),
+        records_sha256=file_sha256(observations.records_path),
+        batch_receipts=observations.batch_receipts,
     )
     write_record(
         ArtifactRecord(
