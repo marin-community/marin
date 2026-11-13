@@ -77,10 +77,9 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
 def unbudgeted_url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     """Like :func:`url_to_fs` without the GCS cross-region guard.
 
-    For a long-lived service reading its own state, where the caller bounds each
-    object's size. The guard's budget is cumulative and never resets, so charging
-    such reads eventually fails every later read in the process. ``mirror://``
-    URLs still charge their copies to the budget.
+    For a long-lived service reading state it wrote. The guard's budget is
+    cumulative and never resets, so these reads would eventually exhaust it.
+    ``mirror://`` URLs still charge their copies to the budget.
     """
     if url.startswith("s3://"):
         kwargs = _s3_filesystem_options(kwargs)

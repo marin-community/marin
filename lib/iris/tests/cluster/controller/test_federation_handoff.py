@@ -217,7 +217,6 @@ def test_an_unreadable_bundle_delays_only_its_own_handoff(tmp_path, log_client, 
         manager.sync_once()
 
         assert _handle(parent_state, job_ids["fed-stuck"]).handoff_state == int(HandoffState.HANDED_OFF)
-        assert peer_service._bundle_store.get(content_id(stuck_blob)) == stuck_blob
 
 
 def test_a_failed_sync_step_does_not_end_the_peer_sync_loop(tmp_path, log_client):

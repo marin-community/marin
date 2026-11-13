@@ -76,10 +76,9 @@ class BundleStore:
         self._content_locks_guard = threading.Lock()
         self._content_locks: dict[str, _ContentLock] = {}
 
-        # The controller's state bucket can sit in another region, and it serves every
-        # handoff and worker fetch from here for its whole lifetime. These are job
-        # payloads it stored itself, each read once per delivery, so they skip the
-        # process-wide budget meant for bulk data reads.
+        # The controller may read its own job payloads from another region throughout
+        # its lifetime; charging them to the cumulative budget would eventually block
+        # handoffs and worker fetches.
         self._fs, self._fs_path = unbudgeted_url_to_fs(storage_dir)
         self._fs.mkdirs(self._fs_path, exist_ok=True)
 
