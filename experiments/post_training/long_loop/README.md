@@ -377,3 +377,9 @@ CUDA graphs stay enabled. Cold tuning work may increase. The requested flags
 and accelerator environment are recorded in `consumed-config.json`; the run
 spec and that receipt are archived. This setting does not change the RL or
 final policy-evaluation runtime.
+
+A pinned HF export can be supplied as `adopted_sft` with `kind: hf_export`.
+The verifier checks the complete object inventory and SHA-256 values, model and
+expert geometry, tokenizer and EOS settings. The RL graph consumes that verified
+URI directly, without native checkpoint restoration, SFT or another export.
+HF-only adoption stops at `--through rl`; the archive requires native SFT evidence.

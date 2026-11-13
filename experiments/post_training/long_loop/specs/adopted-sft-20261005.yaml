@@ -1,0 +1,164 @@
+# The 2026-10-05 SFT cooldown release (step 161750), mirrored unchanged to RNO2A.
+# Object sizes and SHA-256 are from the 2026-10-28 full regional read-back.
+# The export uses stacked-expert schema 1; the loop's own exports use schema 2.
+kind: hf_export
+repository: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05
+revision: ac60d9401820953943f5a56e06f36e13c86b12d6
+uri: s3://marin-rno2a/marin/models/grug-datakit-sft-262k-20261005-ac60d940-r1
+files:
+  .gitattributes:
+    bytes: 1570
+    sha256: 34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930
+  LICENSE:
+    bytes: 2619
+    sha256: 2ab44b68365473c112f5092211a38f231cb23e50de68b75a13369adbd76a74df
+  README.md:
+    bytes: 6088
+    sha256: 88bda4109f5110da29a74f860076163f6f3d0fbaee0727d74e9000c8f267917e
+  chat_template.jinja:
+    bytes: 4427
+    sha256: b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a1209bff7d1de
+  config.json:
+    bytes: 1040
+    sha256: bf3da5aaf9ae83084fd704d53dea5eefa93bea5b4b8d300eff5c18f617fd878b
+  export_complete.json:
+    bytes: 417
+    sha256: 1d8dcb952cad2b9005a05782bd50032ee47c09f60f27cc66b17f5d2f4e2b39f9
+  generation_config.json:
+    bytes: 58
+    sha256: a31c5d33b68dc782a4565f365a438da8a57add8688bc67d442f7cf3679704dbb
+  model-00001-of-00039.safetensors:
+    bytes: 4672728440
+    sha256: 4120465dff5cd1a757958e730f8c8edede4f05f03cfc911308a2f19f4847e781
+  model-00002-of-00039.safetensors:
+    bytes: 3431580288
+    sha256: 78a4610d8ece2bbc739cc9e6778d2dc2e588eb1fd5d9a0f3b71711abf5d2ba9b
+  model-00003-of-00039.safetensors:
+    bytes: 3431580288
+    sha256: 4d1cfb741a968dc814e10961b50a0188a047a4b14379897bbf40f86c45312ed9
+  model-00004-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: dfd274f7e45ec99eaa44943b0d742ea26024db91118f327b12e6705d1380a754
+  model-00005-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 50abb47f64a6a59f701f4b0b420f6bc135f2f18f09b52b0961655cad36044645
+  model-00006-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 8f1bb0bfc3e8ae7883b5fcd50619feae24a90e3b8cb4a131da58527c4c8d208e
+  model-00007-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 5198b1dba4cc103fd650c658dcc1deec668f25512a2145d524654d1f5dce9d49
+  model-00008-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 3298f44d9d503bb9c5f9cb2e9ca901af7479fcd5cd5268a4f5a2d670d6c64b56
+  model-00009-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 76babd7ff04620bdcf3b573c7e1b1cf98d40404a75788325fe3a64059702bbe7
+  model-00010-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 207072b6958dd9b03e643d17f54b6f8dd21660da11ef668029c32f144746857c
+  model-00011-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 1de8d2a84b0a388a06a0f818e236f6bcea5a356ea1693335e77866d562d83459
+  model-00012-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 4200dfc6bdaaecf6379b5c1fb8627d2edf7a1366290891d43149be90400125f2
+  model-00013-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 6975eeae9baa21c3b6a6ac48d1c6503b9a8e123002448ff36c7ead189dc3f1ac
+  model-00014-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 7c5ad0af69270e78eae527b72071f9347ad6050fe539ebb9bbe4a9c724cef62f
+  model-00015-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 32deb7fa79dd84a414a4a7367210bdb6f7a5bafa6a42295a7e9bf7895b46024b
+  model-00016-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 2f69f14e5ea7738e377d4359372b289107db266619a07cb4ed3ed0f579b65972
+  model-00017-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 827a5b4e385bc855bb3c68a67b43e60d2712f1cee87759b4d0f74ac2fa88434a
+  model-00018-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: f0fd7b3dd0a46f1d5f49437a553029029c26a210e9106813b4135ddb4e37ac24
+  model-00019-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 3cfe19f6855fca54401cd3267b8ff7e780bb42850ab5f19f96ba62daa16e03cb
+  model-00020-of-00039.safetensors:
+    bytes: 3431580296
+    sha256: 3a415cf114d56f61c586af578431dd2576dd8e93c1753efcd0cd8bfb911cc4ce
+  model-00021-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 74475a7501d87101f0e32e924fa46f21f63bb6f0bcfb60cdff0019c4b9248879
+  model-00022-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: eee658b76cb3652c060cae06ec27b757c905850c4035f069d1ed0b8776544c18
+  model-00023-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 4d158651c893e66d2ce9ad88cc5d228c1d891a7c67a1e268aa7cfdfaec791c39
+  model-00024-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: b13c06ce1e314ef5fc67a63b6e69ef45b8de538eea1b909124a773d5ff45629c
+  model-00025-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 667560e746969fffa226eceb5e5da618583874b20310ab883167fe310be25b77
+  model-00026-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 98acf4cce2497bbdf3f4883c467c4e889c97d0ed9894a5fcf7c59fac429aec0f
+  model-00027-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: b624d4e91efeb5c668211ba1b1034fb016580e85ca51eef64b7a81fbd7d369fb
+  model-00028-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: b098f88b3e0a8a5e3dfdced25ef6d77f9bee2275a2dda79f68fb7ba69b9eb953
+  model-00029-of-00039.safetensors:
+    bytes: 3431580304
+    sha256: 7549c0929d67c494591f930b85ff9cfca6b4e059ef37446d399252912993c7a6
+  model-00030-of-00039.safetensors:
+    bytes: 3431580288
+    sha256: 957b2af8a2e79a7f09347585af71de7c19c9a11759fb91f10755c8ee910c8856
+  model-00031-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 52f49003bcc239d216da4b7691af70be6ef1a25bf081fa27668f90218aff48a4
+  model-00032-of-00039.safetensors:
+    bytes: 3431580288
+    sha256: ad77ec015b71b26f4d01e78356dc691c3eea845feb6a6bc84a19103bdd710737
+  model-00033-of-00039.safetensors:
+    bytes: 3431580288
+    sha256: 7f71397ae6dd3f2ed4df209fdde58e4dff7bc71c1a3117ee7b317173e41b11e9
+  model-00034-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 8b9b8801a92e01fb2e682c15fedff87f06dabf4ec07c2d311c50fdac7bde19b2
+  model-00035-of-00039.safetensors:
+    bytes: 3431580288
+    sha256: a24c07ba118e6bcdcb1e163f86b6cc1dea2bab1c737080d52d33e1cae4750d9f
+  model-00036-of-00039.safetensors:
+    bytes: 3431580288
+    sha256: 7dcbb22670a1bb5ce0ee0538633e74b31fa9c8b6d0d4c8d49030e12f9663100f
+  model-00037-of-00039.safetensors:
+    bytes: 3355443488
+    sha256: 88b4368c7023e80861eb9f0374f2309ba2a4c7907772853459bbdb1e9fd443c8
+  model-00038-of-00039.safetensors:
+    bytes: 3431580288
+    sha256: 5a3764c1792984a9a15dc38848816d47f70769b653245ea214eed8f5ca0c0368
+  model-00039-of-00039.safetensors:
+    bytes: 3430269304
+    sha256: 36511f5fd2e2c514834a9afff3b3addf041d8065c525bbce91c702350308be5f
+  model.safetensors.index.json:
+    bytes: 40953
+    sha256: 97804308c997e23e1e9c19726863122e48bf9a2a6de3a594435e69cfd0fcc3e8
+  pretraining_replay_mix.json:
+    bytes: 58936
+    sha256: 77553bc8ae297eac75ac9c2de0fe2044edca889432751ec5ceb9dfd9f7a2c0be
+  tokenizer.json:
+    bytes: 17209859
+    sha256: 6a61ca2105a54e9984169b409581f31cc50330d1b47104af13c221b05e462e45
+  tokenizer_config.json:
+    bytes: 4903
+    sha256: 7de6deb2effabd71d50db80095ba945ecb9b26a6b81f59fdd23a68a1bdf4fbb8
+  training_chat_template.jinja:
+    bytes: 4423
+    sha256: 6f55d2ce5974bbcc5d1636c564cddddc945465edecc56e3a391486268af4d930
+  training_data_mix.json:
+    bytes: 15702
+    sha256: adb0d229473e6ff747003c5165ceb9f764ad30b2eddee0079b0ada8e8b537625
