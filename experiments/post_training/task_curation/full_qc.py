@@ -50,7 +50,7 @@ def local_reviewer() -> ReviewerSpec:
     endpoint = LocalJudgeEndpoint(
         tier=JudgeTier.HEAVY,
         model_config=MODEL_CONFIG,
-        accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, target_cluster="cw-us-east-08a"),
+        accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, region="US-EAST-08A"),
         priority=job_pb2.PRIORITY_BAND_BATCH,
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
         worker_image=WORKER_IMAGE,

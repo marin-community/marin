@@ -1181,7 +1181,7 @@ remains in audit hashes rather than the content rubric. Exact requests can be
 reused after changes confined to those fields. Images, grader settings,
 instructions and resource bytes remain model-visible; modifying them invalidates
 the request, including edits to resource settings embedded in native task.toml.
-See the [campaign command](../../../experiments/post_training/task_curation/README.md#complete-retained-population-review).
+See the [campaign command](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#complete-retained-population-review).
 
 ### Full-population oracle filter
 
