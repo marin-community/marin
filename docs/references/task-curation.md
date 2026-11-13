@@ -650,27 +650,31 @@ with its pytest child running as a separate UID, 10002.
 
 Before agent access, the harness captures the task-reference tests and conftests,
 third-party pytest and plugin implementations, the test interpreter and the
-control program. It discovers the source's own pytest configuration and root
+control program. It discovers the task repository's pytest configuration and root
 directory using the task interpreter and preserves its configuration and addopts.
-On every grading launch it kills agent-UID processes, restores those source files,
-and removes added tests and local-plugin initializers. Installed entrypoint plugins
+On every grading launch it kills agent-UID processes, restores the captured reference
+files, and removes added tests and protected fixture-plugin initializers. Installed entrypoint plugins
 use frozen pre-agent entrypoint names and modules. Third-party implementations
 load from the protected runner; repository-owned distributions remain live
 product code, even when they register pytest plugins. Ownership is captured
 before agent access: distribution files resolve into the workspace, or its
-top-level packages match repository package roots in that census. A third-party
+top-level import names match repository package roots in that census. The census
+identifies Python packages, including `src` layouts, and single-module files outside
+test, docs, build, cache and repository-metadata trees. A third-party
 plugin's dependency on a repository-owned distribution does not pin that product.
 The runner registers entrypoint packages for assertion rewriting before imports,
 preserves plugin registration names and honors source `-p no:...` blocks.
 Configuration discovery reads the source settings without starting plugins;
 the grading session validates required plugins after loading the frozen baseline.
-Source conftest plugins load through pytest's normal test-path handling from
-restored files. The runner disables live plugin autoload
+Conftest plugin imports keep pytest's normal test-path handling.
+The runner disables live plugin autoload
 and clears the test environment,
 including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
-classifies missing candidate modules using its exception-provenance rules.
+scores missing editable candidate modules as zero. Missing dependencies, failures
+in protected code and failures with unresolved provenance remain unscored.
 
-The root controller owns the structured verdict directory. Test stdout is
+Protected control files and the verdict directory are root-owned; the agent UID
+has no write access. Test stdout is
 retained as diagnostic output and cannot serve as the verdict. Per-trial
 `site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
 and startup hooks to the pre-agent baseline. `source-environment.json` records the
@@ -687,6 +691,8 @@ ignoring dependency changes than to preventing sophisticated tampering. It is
 subject to change. Planned LLM tamper audits will examine the dependency/hook
 diffs and the submitted changes; the present harness does not certify those
 open hooks against deliberate manipulation.
+The test process still executes live dependency `.pth` and `sitecustomize` hooks,
+which can change test-process behavior.
 
 Ingestion renders the agent-facing preamble from the same contract and prepends
 it to the task instruction. It explains the restored tests and pinned grading
