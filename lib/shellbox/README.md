@@ -306,7 +306,7 @@ memory settings. Backends reject resource overrides that they cannot apply.
 LOCAL can enforce declared storage inside the existing privileged worker with
 `LocalMachineFactory(disk_pool=LocalDiskPool(Path("/cache/shellbox-disks")))`.
 Import `LocalDiskPool` from `shellbox.backends.local.disk`. Construction probes
-ext4 loop mounts, OverlayFS, kernel ENOSPC observation and cleanup on that host; ordinary factories
+ext4 loop mounts, OverlayFS, ENOSPC and cleanup on that host; ordinary factories
 continue rejecting `storage_mb`. The exact-size filesystem charges writable
 image layers, scratch, workdirs, `/dev/shm` and command spools, while shared
 read-only image layers remain outside it. See the [LOCAL route](../../docs/references/task-curation.md#full-population-oracle-filter)

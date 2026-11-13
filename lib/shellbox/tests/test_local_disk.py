@@ -109,7 +109,7 @@ async def test_local_disk_run_overflow_raises_disk_limit_and_preserves_image(tmp
 
 @pytest.mark.parametrize("output_limit", [0, 16])
 @pytest.mark.parametrize("process_session", [False, True], ids=["run", "session"])
-async def test_local_disk_kernel_evidence_ignores_text_and_output_limits(
+async def test_local_disk_failure_state_is_independent_of_text_and_output_limits(
     tmp_path, executable_oci_image, output_limit, process_session
 ):
     pool = LocalDiskPool(tmp_path / "disks")
@@ -124,7 +124,7 @@ async def test_local_disk_kernel_evidence_ignores_text_and_output_limits(
             "/bin/sh",
             "-c",
             "printf 'unrelated diagnostic before allocation failure' >&2; "
-            "/bin/dd if=/dev/zero of=/app/fill bs=1048576 count=128 2>/dev/null; exit 0",
+            "/bin/dd if=/dev/zero of=/app/fill bs=1048576 count=128 2>/dev/null",
         ),
         output_limit_bytes=output_limit,
     )
@@ -185,7 +185,7 @@ async def test_local_disk_run_final_inode_succeeds_with_charged_spools(tmp_path,
     assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
 
 
-@pytest.mark.parametrize("allocation", ["guest", "run-spool"])
+@pytest.mark.parametrize("allocation", ["guest", "run-spool", "killed"])
 async def test_local_disk_final_inode_succeeds_until_an_allocation_fails(tmp_path, executable_oci_image, allocation):
     pool = LocalDiskPool(tmp_path / "disks")
     factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
@@ -216,10 +216,14 @@ async def test_local_disk_final_inode_succeeds_until_an_allocation_fails(tmp_pat
                 await machine.run(Command(("/bin/sh", "-c", "true")))
             assert failure.value.resource is ResourceLimit.DISK
         else:
-            overflow = await machine.open_process(Command(("/bin/busybox", "touch", "/app/overflow")))
+            command = (
+                ("/bin/sh", "-c", "kill -KILL $$")
+                if allocation == "killed"
+                else ("/bin/busybox", "touch", "/app/overflow")
+            )
+            overflow = await machine.open_process(Command(command, output_limit_bytes=0))
             try:
                 await overflow.drain_output()
-                assert b"No space left on device" in overflow.stderr
                 with pytest.raises(DiskLimitExceeded) as failure:
                     await overflow.wait()
                 assert failure.value.resource is ResourceLimit.DISK
@@ -228,6 +232,29 @@ async def test_local_disk_final_inode_succeeds_until_an_allocation_fails(tmp_pat
         with pytest.raises(DiskLimitExceeded):
             await machine.run(Command(("/bin/sh", "-c", "true")))
         print(json.dumps({"final_inode": "success", "failed_allocation": allocation, "resource": "disk"}), flush=True)
+    finally:
+        await machine.close()
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+async def test_local_disk_failed_command_with_reclaimed_space_is_an_ordinary_failure(tmp_path, executable_oci_image):
+    pool = LocalDiskPool(tmp_path / "disks")
+    factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
+    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+    try:
+        result = await machine.run(
+            Command(
+                (
+                    "/bin/sh",
+                    "-c",
+                    "/bin/dd if=/dev/zero of=/app/fill bs=1048576 count=128 2>/dev/null; "
+                    "/bin/busybox rm /app/fill; exit 7",
+                ),
+                output_limit_bytes=0,
+            )
+        )
+        assert result.exit_code == 7
+        assert (await machine.run(Command(("/bin/sh", "-c", "true")))).exit_code == 0
     finally:
         await machine.close()
     assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}

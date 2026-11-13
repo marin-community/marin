@@ -660,19 +660,6 @@ class LocalMachine:
     async def run(self, command: Command) -> Result:
         return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
 
-    async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
-        try:
-            return await self._execute_command(command, environment)
-        except OSError as error:
-            if self._disk is not None and error.errno in (errno.ENOSPC, errno.EDQUOT):
-                # Configuration files live on the host, outside the sandbox's
-                # quota. A host ENOSPC alone must not become a task disk failure.
-                if error.filename is None or not Path(error.filename).is_relative_to(self._disk.data):
-                    self._disk.check_limit()
-                    raise
-                self._disk.check_limit(allocation_errno=error.errno)
-            raise
-
     async def open_process(self, command: Command) -> SubprocessSession:
         """Start a foreground process in the same pinned namespaces as run."""
         if command.stdin or command.timeout is not None:
@@ -689,8 +676,8 @@ class LocalMachine:
                 try:
                     allocation_file = resources.enter_context(tempfile.TemporaryFile())
                     if self._disk is not None:
-                        config["allocation_status"] = allocation_file.fileno()
-                        config["allocation_devices"] = (self.root.stat().st_dev, self._disk.data.stat().st_dev)
+                        config["disk_status"] = allocation_file.fileno()
+                        config["disk_root"] = str(self._disk.data)
                     group = self._new_command_cgroup()
                     config["cgroup"] = None if group is None else str(group.path / "cgroup.procs")
                     with tempfile.TemporaryFile() as configuration:
@@ -766,13 +753,7 @@ class LocalMachine:
     def _check_allocation(self, report: BinaryIO) -> None:
         if self._disk is None:
             return
-        payload = os.pread(report.fileno(), launch.ALLOCATION_REPORT.size, 0)
-        if not payload:
-            self._disk.check_limit()
-            return
-        syscall, allocation_errno = launch.ALLOCATION_REPORT.unpack(payload)
-        assert syscall >= 0 and allocation_errno in (errno.ENOSPC, errno.EDQUOT)
-        self._disk.check_limit(allocation_errno=allocation_errno)
+        self._disk.check_limit(report)
 
     async def _control(
         self,
@@ -867,7 +848,7 @@ class LocalMachine:
 
         await await_cleanup(own_cleanup(cleanup()))
 
-    async def _execute_command(self, command: Command, environment: dict[str, str]) -> Result:
+    async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
         config = self._command_config(command, environment)
         # Anonymous output files let a successful foreground command finish even
         # when its background services keep stdout open. RLIMIT_FSIZE bounds writers.
@@ -877,14 +858,14 @@ class LocalMachine:
             os.fdopen(status_write, "wb", buffering=0) as status_writer,
             tempfile.TemporaryFile() as configuration,
             tempfile.TemporaryFile() as allocation_file,
-            tempfile.TemporaryFile(dir=self._disk.data if self._disk is not None else None) as stdout_file,
-            tempfile.TemporaryFile(dir=self._disk.data if self._disk is not None else None) as stderr_file,
-            tempfile.TemporaryFile(dir=self._disk.data if self._disk is not None else None) as stdin_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stdout_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stderr_file,
+            self._disk.spool() if self._disk is not None else tempfile.TemporaryFile() as stdin_file,
         ):
             config["status"] = status_write
             if self._disk is not None:
-                config["allocation_status"] = allocation_file.fileno()
-                config["allocation_devices"] = (self.root.stat().st_dev, self._disk.data.stat().st_dev)
+                config["disk_status"] = allocation_file.fileno()
+                config["disk_root"] = str(self._disk.data)
             # Reports are written before the launcher exits. A nonblocking read
             # cannot be held open by a process that inherited another pipe end.
             os.set_blocking(status_read, False)
@@ -892,8 +873,9 @@ class LocalMachine:
                 stdin_file.write(command.stdin)
                 stdin_file.seek(0)
             except OSError as error:
-                if self._disk is not None:
-                    self._disk.check_limit(allocation_errno=error.errno)
+                if self._disk is not None and error.errno in (errno.ENOSPC, errno.EDQUOT):
+                    self._disk.record_failure()
+                    self._disk.check_limit()
                 raise
             assert self._root_fd is not None
             group = self._new_command_cgroup()
