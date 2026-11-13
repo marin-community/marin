@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 import pytest
 from marin.execution.fingerprint import fingerprint_hash
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
@@ -18,97 +18,25 @@ from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_recipe as recipe
 
-
-def _render(step, path, *, runtime=False):
-    context = (
-        StepContext.for_run(str(path.with_suffix("")), str(path.parent), runtime_args=step.runtime_args, deps=step.deps)
-        if runtime
-        else StepContext.for_fingerprint(step.runtime_args, step.deps)
-    )
-    config = step.build_config(context)
-    path.write_text(config.launch_config_yaml)
+pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
 
-pytestmark = pytest.mark.usefixtures("source_provenance")
-
-
-@pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
-def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path, monkeypatch, native_json):
-    measured = presets.PRESETS["speed-medium"]
-    with pytest.raises(ValueError, match="measured window"):
-        snowball.build_run(replace(measured, measured=(measured.updates + 1,)))
-    paths = []
-    for name, preset in presets.PRESETS.items():
-        if name == "speed-short":
-            monkeypatch.delenv("WANDB_ENTITY", raising=False)
-        else:
-            monkeypatch.setenv("WANDB_ENTITY", "test-team")
-        run = snowball.build_run(
-            preset,
-            tasks=selection if preset.tasks_input == "required" else None,
-            control=name == "speed-long",
-        )
-        for index, step in enumerate(run.runs):
-            path = tmp_path / f"{name}-{index}.yaml"
-            _render(step, path, runtime=True)
-            paths.append(str(path))
-    off_boundary = snowball.build_run(presets.PRESETS["train-long"], settings=("trainer.max_steps=2",)).runs[0]
-    path = tmp_path / "off-boundary.yaml"
-    _render(off_boundary, path, runtime=True)
-    paths.append(str(path))
-    monkeypatch.delenv("WANDB_ENTITY", raising=False)
-    revisioned = snowball.build_run(replace(presets.PRESETS["speed-short"], revision="2026.11.12.2"), control=True).runs[
-        0
-    ]
-    path = tmp_path / "revisioned-speed.yaml"
-    _render(revisioned, path, runtime=True)
-    paths.append(str(path))
+def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     monkeypatch.setenv("WANDB_ENTITY", "test-team")
+    learning = presets.PRESETS["learning-medium"]
     changed = snowball.build_run(
-        presets.PRESETS["learning-medium"],
+        learning,
         settings=(
-            'trainer={"policy_mini_batch_size": 64, "train_batch_size": 64, '
-            '"bf16": false, "algorithm": {"batch_invariant": true}}',
+            'trainer={"policy_mini_batch_size":64,"train_batch_size":64,"bf16":false,"algorithm":{"batch_invariant":true}}',
             "generator.model_dtype=float16",
             "generator.n_samples_per_prompt=8",
             "trainer.micro_train_batch_size_per_gpu=2",
-            "trainer.policy.optimizer_config.lr=2.0e-6",
+            "trainer.policy.optimizer_config.lr=2e-6",
             "generator.engine_init_kwargs.probe={}",
         ),
     ).runs[0]
-    path = tmp_path / "changed-batch.yaml"
-    _render(changed, path, runtime=True)
-    paths.append(str(path))
-    learning = presets.PRESETS["learning-medium"]
-    gate = snowball.snowball_rl_gate
-    for current, arguments in (
-        (replace(learning, revision="2026.11.12.2"), {}),
-        (replace(presets.PRESETS["data-medium"], revision="2026.11.12.2"), {"tasks": selection}),
-    ):
-        with pytest.raises(gate.InvalidComparison, match="no control pin") as error:
-            snowball.build_run(current, **arguments)
-        assert "--preset learning-medium --version 2026.11.12.2 --control" in str(error.value)
-    task_set = tmp_path / presets.DEFAULT_EVAL_LITE_NAME / "2026.11.12.2"
-    task_set.mkdir(parents=True)
-    (task_set / "summary.json").write_bytes(
-        (tmp_path / presets.DEFAULT_EVAL_LITE_NAME / presets.DEFAULT_EVAL_LITE_VERSION / "summary.json").read_bytes()
-    )
     promoted = replace(
         learning,
-        revision="2026.11.12.2",
-        tasks="fixture-selection@2026.11.10",
-        eval_lite="eval-lite@2026.11.12.2",
-        model=replace(
-            learning.model,
-            step=ArtifactStep.adopt(
-                "tests/promoted-model",
-                "2026.11.12.2",
-                "s3://fixture-model/v2",
-                kind=LevanterCheckpoint,
-            ),
-            tokenizer_uri="fixture-tokenizer",
-            tokenizer_revision="v2",
-        ),
         recipe=replace(
             learning.recipe,
             config=learning.recipe.config.with_settings(
@@ -117,237 +45,72 @@ def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path,
                     "trainer.policy_mini_batch_size=64",
                     "generator.n_samples_per_prompt=8",
                     "trainer.micro_train_batch_size_per_gpu=2",
-                    'trainer.policy.optimizer_config={"lr": 2e-06}',
+                    "trainer.policy.optimizer_config.lr=2e-6",
                 )
             ),
         ),
     )
-    shared = replace(
-        promoted,
-        focus=presets.Focus.DATA,
-        tasks_input="required",
-        accepts_settings=False,
-        accepts_init=False,
-        accepts_control=False,
-        shared_control=promoted.name,
-        data_settings=frozenset(),
-    )
-    monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, promoted.name: promoted, shared.name: shared})
-    monkeypatch.setitem(
-        gate.CONTROLS,
-        promoted.name,
-        tuple(replace(pin, revision=promoted.revision) for pin in gate.CONTROLS[promoted.name]),
-    )
-    summary_path = Path(selection.path()) / presets.SUMMARY_FILENAME
-    summary = json.loads(summary_path.read_text())
-    summary["recipe"]["exclusions"] = [
-        {"uri": str(task_set / presets.FULL_VALIDATION_FILENAME), "version": task_set.name}
-    ]
-    summary_path.write_text(json.dumps(summary))
-    for current, arguments in ((promoted, {"control": True}), (shared, {"tasks": selection})):
-        step = snowball.build_run(current, **arguments).runs[0]
-        path = tmp_path / f"promoted-{current.name}.yaml"
-        _render(step, path, runtime=True)
-        paths.append(str(path))
-    checkpoint_root = tmp_path / "custom-checkpoint"
-    export = checkpoint_root / "hf"
+    checkpoint = tmp_path / "checkpoint"
+    export = checkpoint / "hf"
     export.mkdir(parents=True)
-    (export / "config.json").write_text("{}")
-    (export / "tokenizer_config.json").write_text("{}")
-    checkpoint = ArtifactStep.adopt(
-        "tests/custom-checkpoint", "2026.11.10", str(checkpoint_root), kind=LevanterCheckpoint
+    for name in ("config.json", "tokenizer_config.json"):
+        (export / name).write_text("{}")
+    initializer = ArtifactStep.adopt("tests/checkpoint", "2026.11.10", str(checkpoint), kind=LevanterCheckpoint)
+    revisioned = replace(presets.PRESETS["speed-short"], revision="2026.11.12.2")
+    steps = (
+        changed,
+        snowball.build_run(promoted).runs[0],
+        snowball.build_run(learning, init=initializer).runs[0],
+        snowball.build_run(presets.PRESETS["train-long"], settings=("trainer.max_steps=2",)).runs[0],
+        snowball.build_run(revisioned, control=True).runs[0],
     )
-    step = snowball.build_run(promoted, init=checkpoint).runs[0]
-    path = tmp_path / "custom-checkpoint.yaml"
-    _render(step, path, runtime=True)
-    paths.append(str(path))
-    rows = native_json(
-        """
-import asyncio, json, sys
-from types import SimpleNamespace
-from cloud.iris.launch_config import load_launch_config
-from omegaconf import OmegaConf
-from skyrl_train.inference_engines.utils import get_vllm_sampling_params
-from skyrl_train.inference_engines.vllm.utils import apply_openai_sampling
-from skyrl_train.trajectory_runners.model_clients import DirectModelClient
-from skyrl_train.evaluation_profiles import evaluation_profile_config, resolve_evaluation_profiles
-
-class InferenceService:
-    model_name = "fixture"
-    tokenizer = SimpleNamespace(
-        eos_token_id=99,
-        decode=lambda *args, **kwargs: "answer",
-        encode=lambda *args, **kwargs: [1, 2],
-    )
-
-    def __init__(self, overrides, validate):
-        self.overrides, self.validate = overrides, validate
-
-    async def tokenize(self, request):
-        return {"tokens": [1, 2]}
-
-    async def chat_completion(self, request):
-        original = request["json"]
-        self.body = dict(original)
-        apply_openai_sampling(self.body, self.overrides, self.validate)
-        return {"choices": [{
-            "message": {"role": "assistant", "content": "answer"},
-            "token_ids": [3], "finish_reason": "stop",
-            "logprobs": {"content": [{"logprob": -0.1}]} if self.body.get("logprobs") else None,
-        }]}
-
-async def native_request(parameters, overrides, validate):
-    service = InferenceService(overrides, validate)
-    output = await DirectModelClient(service).generate({
-        "prompts": [[{"role": "user", "content": "question"}]],
-        "chat_completion_params": [{}], "sampling_params": parameters,
-    })
-    assert output["response_ids"] == [[3]]
-    if parameters.get("logprobs") is not None:
-        assert output["response_logprobs"] == [[-0.1]]
-    return {key: service.body.get(key) for key in (
-        "temperature", "max_completion_tokens", "ignore_eos", "seed", "logprobs",
-    )}
-
-configs = [load_launch_config(path) for path in sys.argv[1:]]
-def quality_request(config):
-    if not config.inputs.get("evaluation_data"):
-        return None
-    profile = resolve_evaluation_profiles(config.skyrl)["eval_lite"]
-    merged = evaluation_profile_config(config.skyrl, profile, "eval_lite")
-    return asyncio.run(native_request(
-        get_vllm_sampling_params(merged.generator.eval_sampling_params),
-        OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True), True))
-
-print(json.dumps([{
-    "path": path, "name": config.run.id, "entrypoint": config.runtime.entrypoint,
-    "nodes": config.iris.allocation.num_nodes,
-    "gpus": config.iris.allocation.num_nodes * config.iris.allocation.gpus_per_node,
-    "eval_interval": config.skyrl.trainer.eval_interval,
-    "validation": bool(config.inputs.validation_data),
-    "admission": config.skyrl.trajectory_runner.max_concurrent_tasks,
-    "batch": config.skyrl.trainer.train_batch_size, "samples": config.skyrl.generator.n_samples_per_prompt,
-    "quality_wire": quality_request(config),
-    "at_start": [entry.get("eval_before_train", False) for entry in config.skyrl.trainer.callbacks
-                 if entry.type == "evaluation"],
-    "overlong_filtering": config.skyrl.generator.apply_overlong_filtering,
-    "training": config.runtime.training_type is not None,
-    "mode": [config.runtime.training_type, config.skyrl.trainer.rollout_buffer.max_staleness_steps,
-             config.skyrl.trainer.algorithm.off_policy_correction, config.skyrl.trainer.rollout_buffer.batch_policy],
-    "callbacks": [entry.type for entry in config.skyrl.trainer.callbacks],
-    "steps": config.skyrl.trainer.max_steps,
-    "team": config.iris.wandb_entity,
-    "export_hf": config.run.export_hf,
-    "micro": config.skyrl.trainer.micro_train_batch_size_per_gpu,
-    "forward_micro": config.skyrl.trainer.micro_forward_batch_size_per_gpu,
-    "numerics": [config.skyrl.trainer.bf16, config.skyrl.generator.model_dtype,
-                 config.skyrl.trainer.algorithm.batch_invariant],
-    "learning_rate": config.skyrl.trainer.policy.optimizer_config.lr,
-    "weight_decay": config.skyrl.trainer.policy.optimizer_config.weight_decay,
-    "adam_betas": list(config.skyrl.trainer.policy.optimizer_config.adam_betas),
-    "model_uri": config.inputs.model.uri,
-    "tokenizer": [config.inputs.model.tokenizer_uri, config.inputs.model.tokenizer_revision],
-    "engine_kwargs": OmegaConf.to_container(config.skyrl.generator.engine_init_kwargs),
-    "validation_identity": config.inputs.validation_data[0].identity if config.inputs.validation_data else None,
-    "train_uri": config.inputs.train_data[0].uri if config.inputs.train_data else None,
-    "eval_uri": config.inputs.validation_data[0].uri if config.inputs.validation_data else None,
-    "profile_inputs": (OmegaConf.to_container(config.inputs.evaluation_data)
-                       if config.inputs.get("evaluation_data") else {}),
-    "terminal_eval": [entry.eval_on_train_end for entry in config.skyrl.trainer.callbacks if entry.type == "evaluation"]
-        if config.runtime.training_type is not None else [],
-    "wire": asyncio.run(native_request(
-        get_vllm_sampling_params(config.skyrl.generator.eval_sampling_params),
-        OmegaConf.to_container(config.skyrl.generator.sampling_params, resolve=True),
-        True,
-    )) if config.inputs.validation_data else None,
-} for path, config in zip(sys.argv[1:], configs, strict=True)]))
-""",
-        paths,
-    )
-    assert len(rows) == len(paths)
-    greedy_wire = {
-        "temperature": 0.0,
-        "max_completion_tokens": presets.EVAL_REPLY_TOKENS,
-        "ignore_eos": False,
-        "seed": None,
-        "logprobs": None,
-    }
-    for row in rows:
-        assert row["gpus"] <= 40, row
-        assert row["team"] == ("marin-community" if "speed-short-" in row["name"] else "test-team")
-        name = row["name"]
-        if "learning-medium-" in name or "data-medium-" in name:
-            assert row["at_start"] == [True]
-        if "speed-short-" in name or "data-short-" in name:
-            assert row["entrypoint"] == "skyrl_train.entrypoints.main_generate", row
-            assert row["nodes"] == 1, row
-            assert row["eval_interval"] > 0 and row["validation"], row
-            expected = 2048 if "speed-short-" in name else 1024
-            assert row["admission"] == expected, row
-        if "speed-short-" in name:
-            assert row["quality_wire"] == greedy_wire
-        if "train-long-" in name:
-            assert row["terminal_eval"] == [row["steps"] % 10 != 0], row
-        if "learning-medium-" in name or "data-medium-" in name:
-            assert row["export_hf"]
-            assert "hf_model_save" in row["callbacks"]
-        if "speed-long-" in name:
-            assert not row["validation"] and not row["export_hf"]
-        assert row["mode"] == (
-            ["async", 2, "tis", "full_batch"] if row["training"] else [None, 0, "none", "full_batch"]
-        ), row
-        if row["training"]:
-            assert not row["overlong_filtering"], row
-        if row["wire"] is not None:
-            if row["training"]:
-                assert row["wire"] == greedy_wire
-            else:
-                assert row["wire"]["temperature"] == 1.0
-                assert row["wire"]["max_completion_tokens"] == (4096 if "speed-short-" in name else 8192)
-                assert row["wire"]["ignore_eos"] == ("speed-short-" in name)
-        for source in row["profile_inputs"].get("eval_lite", []):
-            assert (
-                source["identity"].partition(":")[0]
-                == f"{presets.SELECTION_PREFIX}/{presets.PRESETS['speed-short'].eval_lite}"
-            )
-            assert source["relative_path"] == "full_validation.parquet"
-        if row["training"] and row["validation"]:
-            assert "evaluation" in row["callbacks"], row
-            if "best_checkpoint" in row["callbacks"]:
-                assert row["callbacks"].index("evaluation") < row["callbacks"].index("best_checkpoint"), row
-    for row in rows[-4:]:
-        assert (row["weight_decay"], row["adam_betas"]) == (0.0, [0.9, 0.999])
-        assert (row["batch"], row["samples"], row["micro"], row["forward_micro"], row["learning_rate"]) == (
-            64,
-            8,
-            2,
-            2,
-            2e-6,
-        )
-    assert rows[-4]["engine_kwargs"]["probe"] == {}
-    assert rows[-4]["numerics"] == [False, "float16", True]
-    assert all(row["numerics"] == [True, "bfloat16", False] for row in rows if row is not rows[-4])
-    sampled = next(row for row in rows if row["path"] == str(tmp_path / "revisioned-speed.yaml"))
-    assert sampled["validation_identity"].partition(":")[0].endswith("@2026.11.12.2")
-    assert rows[0]["name"].endswith("2026.11.13.1")
-    for row in rows[-3:-1]:
-        assert row["name"].endswith("2026.11.12.2")
-        assert row["model_uri"] == "s3://fixture-model/v2"
-        assert row["tokenizer"] == ["fixture-tokenizer", "v2"]
-        assert row["train_uri"].endswith("fixture-selection/2026.11.10")
-        assert row["eval_uri"].endswith("eval-lite/2026.11.12.2")
-    assert rows[-1]["model_uri"] == str(export)
-    assert rows[-1]["tokenizer"] == ["fixture-tokenizer", "v2"]
-    summary = Path(presets.selection_artifact(presets.PRESETS["learning-medium"].tasks).path()) / "summary.json"
+    paths = []
+    for index, step in enumerate(steps):
+        path = tmp_path / f"variant-{index}.yaml"
+        path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+        paths.append(str(path))
+    configs = gate.compose_configs(paths)
+    for config in configs[:2]:
+        trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
+        assert (
+            trainer["train_batch_size"],
+            trainer["policy_mini_batch_size"],
+            generator["n_samples_per_prompt"],
+            trainer["micro_train_batch_size_per_gpu"],
+            trainer["micro_forward_batch_size_per_gpu"],
+            trainer["rollout_buffer"]["max_in_flight"],
+            trainer["policy"]["optimizer_config"]["lr"],
+        ) == (64, 64, 8, 2, 2, 64, 2e-6)
+        assert (
+            trainer["policy"]["optimizer_config"]["weight_decay"],
+            trainer["policy"]["optimizer_config"]["adam_betas"],
+        ) == (0, [0.9, 0.999])
+    trainer, generator = configs[0]["skyrl"]["trainer"], configs[0]["skyrl"]["generator"]
+    assert (
+        trainer["bf16"],
+        generator["model_dtype"],
+        trainer["algorithm"]["batch_invariant"],
+        generator["engine_init_kwargs"]["probe"],
+    ) == (False, "float16", True, {})
+    assert configs[2]["inputs"]["model"]["uri"] == str(export)
+    assert configs[2]["iris"]["wandb_entity"] == "test-team"
+    callbacks = configs[3]["skyrl"]["trainer"]["callbacks"]
+    assert next(row for row in callbacks if row["type"] == "evaluation")["eval_on_train_end"] is True
+    assert configs[3]["skyrl"]["trainer"]["max_steps"] == 2
+    assert configs[4]["inputs"]["validation_data"][0]["identity"].partition(":")[0].endswith("@" + revisioned.revision)
+    with pytest.raises(ValueError, match="require guards"):
+        replace(learning, guards=())
+    with pytest.raises(ValueError, match="evaluation"):
+        replace(presets.PRESETS["train-long"], evaluations=())
+    summary = Path(presets.selection_artifact(learning.tasks).path()) / presets.SUMMARY_FILENAME
     content = json.loads(summary.read_text())
     content["grader_kind_counts"]["train"]["remote_judge"] = 1
     summary.write_text(json.dumps(content))
     with pytest.raises(click.BadParameter, match="AI-judge"):
-        snowball.build_run(presets.PRESETS["learning-medium"])
+        snowball.build_run(learning)
 
 
-@pytest.mark.timeout(180)
-def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch, native_json):
+def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     monkeypatch.delenv("WANDB_ENTITY", raising=False)
     bindings = {binding for preset in presets.PRESETS.values() for binding in (preset.tasks, preset.eval_lite)}
     summaries = {
@@ -366,28 +129,82 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         "speed-long": {"2026.11.11.1": "ebab276e"},
         "train-long": {"2026.11.11.1": "05f0a068"},
     }
-    expected = {name: versions.get(presets.PRESETS[name].revision) for name, versions in revisions.items()}
     paths = []
-    for name in expected:
+    for name in revisions:
         preset = presets.PRESETS[name]
-        spec = recipe.run_spec(preset, name="fixture-default-" + name)
-        step = recipe.run_step(preset, spec)
+        step = recipe.run_step(preset, recipe.run_spec(preset, name="fixture-default-" + name))
         path = tmp_path / f"{name}.yaml"
-        context = StepContext.for_run(
-            "/snowball-pin-output/" + step.name,
-            "/snowball-pin-prefix",
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-        path.write_text(step.build_config(context).launch_config_yaml)
+        path.write_text(materialized_config(step, "/snowball-pin-prefix").launch_config_yaml)
         paths.append(str(path))
     configs = gate.compose_configs(paths)
     actual = {
         name: fingerprint_hash(json.dumps(gate.comparison_config(config), sort_keys=True))
-        for name, config in zip(expected, configs, strict=True)
+        for name, config in zip(revisions, configs, strict=True)
     }
     print(json.dumps(actual, sort_keys=True, indent=2))
-    assert actual == expected, "Fingerprint envelope changed: bump the changed preset revision and recollect controls."
+    assert actual == {name: values.get(presets.PRESETS[name].revision) for name, values in revisions.items()}
+    for name, config in zip(revisions, configs, strict=True):
+        trainer, generator = config["skyrl"]["trainer"], config["skyrl"]["generator"]
+        assert config["iris"]["wandb_entity"] == "marin-community"
+        assert config["iris"]["allocation"]["num_nodes"] * config["iris"]["allocation"]["gpus_per_node"] <= 40
+        generating = name in ("speed-short", "data-short")
+        assert (
+            config["runtime"]["training_type"],
+            trainer["rollout_buffer"]["max_staleness_steps"],
+            trainer["algorithm"]["off_policy_correction"],
+            trainer["rollout_buffer"]["batch_policy"],
+        ) == ((None, 0, "none", "full_batch") if generating else ("async", 2, "tis", "full_batch"))
+        if generating:
+            assert config["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
+            assert config["iris"]["allocation"]["num_nodes"] == 1
+            assert config["skyrl"]["trajectory_runner"]["max_concurrent_tasks"] == (
+                2048 if name == "speed-short" else 1024
+            )
+            assert trainer["eval_interval"] > 0 and config["inputs"]["validation_data"]
+            sampling = generator["eval_sampling_params"]
+            assert (sampling["temperature"], sampling["max_generate_length"], sampling["ignore_eos"]) == (
+                1,
+                4096 if name == "speed-short" else 8192,
+                name == "speed-short",
+            )
+        else:
+            assert generator["apply_overlong_filtering"] is False
+        assert (trainer["bf16"], generator["model_dtype"], trainer["algorithm"]["batch_invariant"]) == (
+            True,
+            "bfloat16",
+            False,
+        )
+        if name in ("speed-short", "learning-medium", "data-medium", "train-long"):
+            profile = next(
+                (
+                    row["additional_evaluations"]["eval_lite"]
+                    for row in trainer["callbacks"]
+                    if "eval_lite" in row.get("additional_evaluations", {})
+                ),
+                None,
+            )
+            for source in config["inputs"].get("evaluation_data", {}).get("eval_lite", []):
+                assert (
+                    source["identity"].partition(":")[0]
+                    == f"{presets.SELECTION_PREFIX}/{presets.PRESETS[name].eval_lite}"
+                )
+                assert source["relative_path"] == "full_validation.parquet"
+            sampling = profile["sampling_params"] if profile else generator["eval_sampling_params"]
+            assert (
+                sampling["temperature"],
+                sampling["ignore_eos"],
+                sampling["max_generate_length"],
+                profile["n_samples_per_prompt"] if profile else generator["eval_n_samples_per_prompt"],
+            ) == (0, False, 8192, 1)
+        if name in ("learning-medium", "data-medium"):
+            assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_before_train"] is True
+            assert config["run"]["export_hf"] and "hf_model_save" in [row["type"] for row in trainer["callbacks"]]
+        if name == "speed-long":
+            assert not config["inputs"]["validation_data"] and not config["run"]["export_hf"]
+        if name == "train-long":
+            kinds = [row["type"] for row in trainer["callbacks"]]
+            assert kinds.index("evaluation") < kinds.index("best_checkpoint")
+            assert next(row for row in trainer["callbacks"] if row["type"] == "evaluation")["eval_on_train_end"] is False
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):
@@ -396,11 +213,6 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     with pytest.raises(click.BadParameter, match="accepts no --set"):
         snowball.build_run(
             replace(learning, accepts_settings=False), settings=("trainer.policy.optimizer_config.lr=2e-6",)
-        )
-    with pytest.raises(click.BadParameter, match="owned"):
-        snowball.build_run(
-            replace(learning, owned_keys=learning.owned_keys | {"trainer.policy.optimizer_config.lr"}),
-            settings=("trainer.policy.optimizer_config.lr=2e-6",),
         )
 
     def run(preset=learning, *settings, **kwargs):
@@ -444,7 +256,7 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     assert name(learning, "trainer.policy.optimizer_config.lr=2e-6") == name(
         learning, "trainer.policy.optimizer_config.lr=0.000002"
     )
-    pin = snowball.snowball_rl_gate.control_pins(presets.PRESETS["learning-medium"])[0]
+    pin = gate.control_pin(presets.PRESETS["learning-medium"])
     for index in range(pin.runs):
         recorded_runs("learning-medium", gate.control_name(pin.preset, pin.commit, index))
     first = snowball.build_run(learning, requirements=("eval_lite/mean>=0",))

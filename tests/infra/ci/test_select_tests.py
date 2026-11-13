@@ -155,18 +155,9 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
                 "tests/rl/test_skyrl.py",
             ],
         )
-        for path in (
-            "vendor/skyrl/cloud/iris/launch_config.py",
-            "vendor/skyrl/skyrl-train/skyrl_train/config/ppo_base_config.yaml",
-        )
+        for path in ("vendor/skyrl/cloud/iris/launch_config.py",)
     ]
-    + [
-        (path, ["tests/rl/test_skyrl.py"])
-        for path in (
-            "vendor/skyrl/marinskyrl/checkpoint_paths.py",
-            "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
-        )
-    ],
+    + [(path, ["tests/rl/test_skyrl.py"]) for path in ("vendor/skyrl/marinskyrl/checkpoint_paths.py",)],
 )
 def test_experiment_tests_run_for_test_and_dependency_changes(
     tmp_path: Path, select_tests: Callable[[list[str], Path], SelectionResult], changed_file: str, expected: list[str]

@@ -13,13 +13,19 @@ import click
 from finestore.rl.run_records import AttemptRecord, attempt_lineage
 from marin.execution.artifact import read_record
 from marin.rl import skyrl_records
-from marin.rl.rl_progress import GateResult, RunSummary
+from marin.rl.rl_progress import ComparisonRole, GateResult, RunSummary
 from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts, recorded_launch
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.post_training import publish_rl_progress
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
+from experiments.post_training.snowball_rl_scoring import (
+    GateInputs,
+    InvalidComparison,
+    read_gate_inputs,
+    training_invariants,
+)
 
 
 @dataclass
@@ -38,7 +44,7 @@ class PublicationOutcome:
         } | ({"retry": self.retry} if self.retry is not None else {})
 
 
-def label(inputs: gate.GateInputs) -> str:
+def label(inputs: GateInputs) -> str:
     parts = [inputs.preset_name, *inputs.settings]
     if inputs.tasks:
         parts.append(f"tasks={inputs.tasks}")
@@ -67,9 +73,9 @@ def build_record(
         raise ValueError("A progress record requires a terminal native attempt")
     evidence = []
     try:
-        inputs = gate.read_gate_inputs(run_output)
+        inputs = read_gate_inputs(run_output)
     except FileNotFoundError:
-        inputs = gate.GateInputs(preset_name=preset.name)
+        inputs = GateInputs(preset_name=preset.name)
         evidence.append("Stored Snowball inputs are unavailable; using the supplied preset.")
     preset = presets.PRESETS[inputs.preset_name]
     if launch.max_steps is None:
@@ -88,7 +94,7 @@ def build_record(
         and history[-1].record.resumed_step in (None, 0)
     )
     metrics = skyrl_records.read_skyrl_metrics(run_output, attempt_id=attempt_id)
-    invariants = gate.training_invariants(preset, metrics) if receipt.metrics_started_at is not None else ()
+    invariants = training_invariants(preset, metrics) if receipt.metrics_started_at is not None else ()
     failed = [fact.name for fact in invariants if not fact.holds]
     if result.state != "succeeded":
         failed.insert(0, "native_attempt")
@@ -138,9 +144,7 @@ def build_record(
                 reason=report.reason,
                 invariants=list(report.invariants),
                 comparisons=list(
-                    report.rows(
-                        gate.ComparisonRole.OBJECTIVE, gate.ComparisonRole.CONSTRAINT, gate.ComparisonRole.REQUIREMENT
-                    )
+                    report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.CONSTRAINT, ComparisonRole.REQUIREMENT)
                 ),
                 attempt_ids=list(report.run.attempt_ids),
                 replicates=report.run.replicates,
@@ -236,21 +240,15 @@ def publish_runs(
 def publish_controls(preset_name: str, *, service_url: str | None = None) -> PublicationOutcome:
     """Publish the exact pinned controls from their stored native outputs."""
     preset = presets.PRESETS[preset_name]
-    result = PublicationOutcome()
     try:
-        pins = gate.control_pins(preset)
-    except gate.InvalidComparison as error:
+        pin = gate.control_pin(preset)
+    except InvalidComparison as error:
         raise click.UsageError(str(error)) from error
-    for pin in pins:
-        outcome = publish_runs(
-            [gate.control_path(preset, pin, index) for index in range(pin.runs)],
-            presets.PRESETS[pin.preset],
-            service_url=service_url,
-        )
-        result.served_records.extend(outcome.served_records)
-        result.unserved_records.extend(outcome.unserved_records)
-        result.errors.extend(outcome.errors)
-        result.urls.update(outcome.urls)
+    result = publish_runs(
+        [gate.control_path(preset, pin, index) for index in range(pin.runs)],
+        presets.PRESETS[pin.preset],
+        service_url=service_url,
+    )
     if result.unserved_records:
         result.retry = f"Repeat python -m experiments.post_training.snowball_rl_publication --preset {preset_name}."
     return result

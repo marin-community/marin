@@ -19,8 +19,6 @@ import click
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from marin.execution.artifact import read_record
-from marin.execution.lazy import ArtifactStep
 from marin.rl.rl_progress import Invariant
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
@@ -37,7 +35,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import snowball_rl_presets as presets
-from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN, TRAIN_FILENAME
+from experiments.post_training.task_curation.selection import TASK_MANIFEST_FILENAME, TASK_SPEC_COLUMN
 
 SLICE_COLUMNS = ("family", "aaii_category", "agentic")
 
@@ -47,12 +45,11 @@ EVAL_SCORE_SCHEMA = pa.schema(
         ("step", pa.int32()),
         ("item", pa.string()),
         ("attempt", pa.int32()),
-        *((column, pa.bool_() if column == "agentic" else pa.string()) for column in SLICE_COLUMNS),
+        *((column, pa.bool_() if column == SLICE_COLUMNS[-1] else pa.string()) for column in SLICE_COLUMNS),
         ("score", pa.float64()),
         ("scored", pa.bool_()),
     ]
 )
-TRAIN_STEM = PurePosixPath(TRAIN_FILENAME).stem
 
 
 class InvalidComparison(ValueError):
@@ -108,13 +105,6 @@ def recorded_sources(launch: RecordedLaunch, name: str) -> list[RecordedSource]:
 
 def native_prefix(launch: RecordedLaunch, name: str) -> str:
     return f"eval/{name}/" if name in launch.evaluation_data else "eval/"
-
-
-def recorded_identity(source: RecordedSource) -> tuple[str, str]:
-    name, separator, version = source.identity.partition(":")[0].rpartition("@")
-    if not name or not separator or not version:
-        raise ValueError("expected NAME@VERSION")
-    return name, version
 
 
 class RecordedTaskSet(NamedTuple):
@@ -209,9 +199,7 @@ def evaluation_scores(
                 "step": step,
                 "item": item,
                 "attempt": attempts[step, item],
-                "family": metadata.get("family"),
-                "aaii_category": metadata.get("aaii_category"),
-                "agentic": metadata.get("agentic"),
+                **{column: metadata.get(column) for column in SLICE_COLUMNS},
                 "score": score,
                 "scored": verified and not row.get("exception_type") and not row.get("error_treatment"),
             }
@@ -230,13 +218,13 @@ def score_slices(scores: pa.Table) -> dict[str, list[dict]]:
         for column in SLICE_COLUMNS:
             value = row[column]
             if value is not None:
-                value = str(value).lower() if column == "agentic" else value
+                value = str(value).lower() if column == SLICE_COLUMNS[-1] else value
                 key = f"{evaluation}/{column}/{value}"
                 keys.append(key + "/mean")
         for key in keys:
             groups[key].append(row)
     for evaluation in {key.split("/", 1)[0] for key in groups}:
-        agentic = [key for key in groups if key.startswith(f"{evaluation}/agentic/")]
+        agentic = [key for key in groups if key.startswith(f"{evaluation}/{SLICE_COLUMNS[-1]}/")]
         if len(agentic) == 1:
             # A task set without both kinds of task has no agentic split; its one slice repeats the overall mean.
             del groups[agentic[0]]
@@ -276,7 +264,9 @@ def evaluation_statistics(scores: pa.Table) -> dict[str, float]:
             if name == "all_right" or any(n > 1 for n in Counter(row["item"] for row in rows).values()):
                 result[f"{evaluation}/{name}_fraction"] = sum(accepts(right, n) for right, n in counts) / len(counts)
         families = [
-            value for key, value in result.items() if key.startswith(f"{evaluation}/family/") and key.count("/") == 3
+            value
+            for key, value in result.items()
+            if key.startswith(f"{evaluation}/{SLICE_COLUMNS[0]}/") and key.count("/") == 3
         ]
         if families:
             result[f"{evaluation}/family_mean"] = math.fsum(families) / len(families)
@@ -366,11 +356,7 @@ def _window_values(preset: presets.Preset, metrics: Mapping[int, Mapping[str, fl
         else:
             series = [row[key] for row in rows if key in row]
         if series and len(series) == len(rows):
-            reducer = (
-                statistics.median
-                if window in (presets.WindowStatistic.MEDIAN, presets.WindowStatistic.PHASE_SUM_MEDIAN)
-                else statistics.mean
-            )
+            reducer = statistics.median if window == presets.WindowStatistic.PHASE_SUM_MEDIAN else statistics.mean
             values[key] = float(reducer(series))
     return values
 
@@ -429,52 +415,15 @@ class RunData:
     config: dict
     recorded: RecordedLaunch
     path: str
-    version: str
     eval_lite: str | None
     provenance: dict
     values: dict[str, float]
-    task_set_ids: dict[str, frozenset[str]]
     invariants: tuple[Invariant, ...]
-    missing_tokens: bool
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
     h100_hours: float | None
     engine: dict
     attempt_id: str
-
-
-def _recorded_selection(launch: RecordedLaunch, evaluation: presets.Evaluation) -> str:
-    try:
-        identities = {"@".join(recorded_identity(source)) for source in recorded_sources(launch, evaluation.name)}
-        if len(identities) != 1:
-            raise ValueError("expected one task selection identity")
-        identity = identities.pop()
-        return identity
-    except (KeyError, TypeError, AttributeError, ValueError) as error:
-        raise InvalidComparison(f"recorded task set version is missing or malformed: {error}") from error
-
-
-def _eval_lite_identity(
-    preset: presets.Preset, launch: RecordedLaunch, default: ArtifactStep, selection: ArtifactStep, seed: int
-) -> str | None:
-    evaluation = presets.eval_lite_evaluation(preset)
-    if evaluation is None:
-        return None
-    selected = evaluation.tasks(selection, default, preset.eval_lite)
-    task_set = f"{selected.name.removeprefix(presets.SELECTION_PREFIX + '/')}@{selected.version}"
-    binding = evaluation.bound_tasks(selected, seed, revision=preset.revision)
-    expected = f"{binding.name}@{binding.version}"
-    sources = recorded_sources(launch, evaluation.name)
-    recorded = _recorded_selection(launch, evaluation)
-    if recorded != expected:
-        raise InvalidComparison(
-            f"recorded task set differs from preset: expected {task_set} ({expected}); recorded {recorded}"
-        )
-    if evaluation.held_out and any(source.relative_path != f"{evaluation.file}.parquet" for source in sources):
-        raise InvalidComparison(
-            f"recorded task set file differs from preset {task_set}: expected {evaluation.file}.parquet"
-        )
-    return task_set
 
 
 def training_invariants(preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]]) -> tuple[Invariant, ...]:
@@ -522,8 +471,8 @@ def load_run(
     default, selection = presets.task_selections(
         preset, presets.selection_artifact(inputs.tasks) if inputs.tasks else None
     )
-    task_set = _eval_lite_identity(preset, launch, default, selection, launch.seed)
-    scores, initial_scores, task_set_ids = [EVAL_SCORE_SCHEMA.empty_table()], [], {}
+    task_set = preset.eval_lite if preset.held_out is not None else None
+    scores, initial_scores = [EVAL_SCORE_SCHEMA.empty_table()], []
     for evaluation in preset.evaluations:
         quality = evaluation.held_out and evaluation == preset.guarded
         expected = presets.evaluation_answer_count(evaluation, evaluation.tasks(selection, default, preset.eval_lite))
@@ -533,8 +482,6 @@ def load_run(
         scores.append(table)
         initial_scores.append(initial)
         ids = frozenset(table["item"].to_pylist())
-        if evaluation.held_out:
-            task_set_ids[evaluation.name] = ids
         sessions = [(evaluation.name, table, workload.metric_step(preset.updates))]
         if evaluation.at_start:
             if initial.num_rows and frozenset(initial["item"].to_pylist()) != ids:
@@ -562,11 +509,6 @@ def load_run(
     if fixed is not None:
         holds = workload.fixed_reply_holds(fixed, training, answers)
         invariants.append(Invariant(name="fixed_reply_tokens", value=holds, limit=True, comparator="==", holds=holds))
-    missing = any(
-        metric.window == presets.WindowStatistic.SELECTED_TOKEN_WEIGHTED_MEAN
-        and _mismatch_counts([metrics.get(step, {}) for step in preset.measured], metric.key.rsplit("/", 1)[0]) is None
-        for metric in preset.guards
-    )
     final = pa.concat_tables(scores)
     values = {
         **_window_values(preset, metrics),
@@ -583,20 +525,14 @@ def load_run(
         if seconds > 0:
             h100_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
     slices = {key: len({row["item"] for row in rows}) for key, rows in score_slices(final).items()}
-    record = read_record(path)
-    if record is None:
-        raise FileNotFoundError(f"no artifact record at {path}")
     return RunData(
         config=terminal.native.config,
         recorded=launch,
         path=path,
-        version=record.version,
         eval_lite=task_set,
         provenance=terminal.native.result.provenance,
         values=values,
-        task_set_ids=task_set_ids,
         invariants=tuple(invariants),
-        missing_tokens=missing,
         slices=slices,
         evaluation_identity=identities,
         h100_hours=h100_hours,

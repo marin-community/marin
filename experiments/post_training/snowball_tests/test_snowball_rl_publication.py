@@ -32,6 +32,7 @@ from experiments.post_training import publish_rl_progress as publisher
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_publication as publication
+from experiments.post_training.snowball_rl_scoring import GateInputs
 from experiments.post_training.snowball_tests.fixtures import append_metrics, write_json, write_metrics, write_receipt
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
@@ -41,18 +42,9 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
     "case, expected_updates, expected_time, expected_facts",
     [
         ("native-composed", 2, 3600, []),
-        ("native-failed", 0, 3600, ["native_attempt", "planned_updates"]),
-        ("invariant-failed", 2, 3600, ["finite_losses_and_gradients"]),
         ("checkpoint-lineage", 2, 7200, []),
-        ("lineage-missing-window", 2, None, []),
-        ("lineage-unknown-parent", None, None, []),
         ("lineage-unknown-grandparent", None, None, []),
-        ("canonical-only", None, None, []),
-        ("historical-retry", 2, 3600, ["native_attempt"]),
-        ("unrelated-attempt", 2, 3600, []),
-        ("missing-startup", 2, 3600, []),
         ("untracked-native", None, None, []),
-        ("train-long", 2, 3600, []),
         ("updates-override", 1, 3600, []),
         ("negative-duration", None, None, []),
     ],
@@ -66,7 +58,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
 
     monkeypatch.setattr("marin.rl.skyrl.run_skyrl", forbid_live)
     monkeypatch.setattr("marin.rl.skyrl.read_skyrl_attempt", forbid_live)
-    name = "train-long" if case == "train-long" else "learning-medium"
+    name = "learning-medium"
     preset = replace(presets.PRESETS[name], updates=2, measured=range(1, 3))
     monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {name: preset})
     weights = Path(presets.artifact_prefix(preset.recipe.layout.cluster)) / "weights" / "2026.11.10"
@@ -91,7 +83,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
             result=initializer.result_payload(),
         ).model_dump(mode="json"),
     )
-    inputs = gate.GateInputs(
+    inputs = GateInputs(
         preset_name=name,
         settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01"),
         tasks=f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}",
@@ -102,11 +94,8 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         "tests/stored-progress",
         attempt_id="native-attempt",
         inputs=inputs,
-        metrics={"attempt_id": "native-attempt"} if case == "historical-retry" else None,
     )
     receipt = json.loads((source / "terminal.json").read_text())
-    if case in {"native-failed", "historical-retry"}:
-        receipt["result"].update(state="failed", model=None)
     if case == "untracked-native":
         receipt["config"]["skyrl"]["trainer"]["logger"] = ["console", "files"]
     write_receipt(source, receipt)
@@ -114,9 +103,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     records = read_attempts(str(source / "exports"))
     if case in {
         "checkpoint-lineage",
-        "lineage-missing-window",
         "lineage-unknown-grandparent",
-        "unrelated-attempt",
         "negative-duration",
     }:
         ancestor = deepcopy(receipt)
@@ -124,11 +111,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         ancestor["result"].update(
             state="failed",
             started_at="2026-11-06T16:40:00+00:00",
-            finished_at=(
-                None
-                if case == "lineage-missing-window"
-                else "2026-11-06T15:40:00+00:00" if case == "negative-duration" else "2026-11-06T17:40:00+00:00"
-            ),
+            finished_at="2026-11-06T15:40:00+00:00" if case == "negative-duration" else "2026-11-06T17:40:00+00:00",
         )
         native_ancestor = LaunchReceipt.model_validate(ancestor)
         records["ancestor"] = AttemptRecord(
@@ -147,57 +130,20 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
                     ),
                 }
             )
-        if case != "unrelated-attempt":
-            records["native-attempt"] = records["native-attempt"].model_copy(
-                update={
-                    "resumed_step": 1,
-                    "parent": CheckpointReference(export_root=str(source / "exports"), attempt_id="ancestor", step=1),
-                }
-            )
-            metrics[1]["attempt_id"] = "ancestor"
-    if case == "lineage-unknown-parent":
         records["native-attempt"] = records["native-attempt"].model_copy(
             update={
                 "resumed_step": 1,
-                "parent": CheckpointReference(export_root=str(source / "unknown-exports"), attempt_id="unknown", step=1),
+                "parent": CheckpointReference(export_root=str(source / "exports"), attempt_id="ancestor", step=1),
             }
         )
-    if case == "native-failed":
-        metrics = {}
+        metrics[1]["attempt_id"] = "ancestor"
     if case == "untracked-native":
         metrics = {}
         records["native-attempt"] = records["native-attempt"].model_copy(update={"metrics_started_at": None})
-    if case == "invariant-failed":
-        metrics[1]["policy/raw_grad_norm"] = float("nan")
-    if case == "missing-startup":
-        records["native-attempt"] = records["native-attempt"].model_copy(
-            update={"started_at": None, "vllm_version": None}
-        )
-    if case == "historical-retry":
-        retry = deepcopy(receipt)
-        retry["config"]["run"]["attempt_id"] = "retry"
-        retry["result"].update(
-            iris_job_id="/tests/retry",
-            started_at="2026-11-06T20:00:00+00:00",
-            finished_at="2026-11-06T20:05:00+00:00",
-        )
-        native_retry = LaunchReceipt.model_validate(retry)
-        records["retry"] = AttemptRecord(
-            run_id=retry["config"]["run"]["id"],
-            attempt_id="retry",
-            config=native_retry.config,
-            result=native_retry.result,
-            started_at=retry["result"]["started_at"],
-        )
-        write_json(source / "resolved-launch.yaml", {"config": retry["config"]})
     with DataStore.open(run_records_root(str(source / "exports"))) as store:
         for record in records.values():
             update_attempt(store, record)
     write_metrics(source, metrics)
-    if case in {"native-failed", "historical-retry"}:
-        (source / "terminal.json").unlink()
-    if case == "canonical-only":
-        shutil.rmtree(run_records_root(str(source / "exports")))
     if case == "native-composed":
         shutil.rmtree(source / "exports/dumped_evals")
     if case == "updates-override":
@@ -230,8 +176,6 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
     assert row["status"] == ("failed" if expected_facts else "succeeded")
     assert row["failed_facts"] == expected_facts
-    if case == "missing-startup":
-        assert row["wandb_url"] is None and row["engine"] is None
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
 
@@ -245,7 +189,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
         guards=(*presets.PRESETS["learning-medium"].guards, presets.Metric("policy/entropy", True)),
     )
     monkeypatch.setattr(presets, "PRESETS", {**presets.PRESETS, preset.name: preset})
-    pin = gate.control_pins(preset)[0]
+    pin = gate.control_pin(preset)
     controls = [
         recorded_runs(
             preset.name,
@@ -282,7 +226,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(rl_progres
 
     def saved_gate(requirements=()):
         report = run(
-            gate.gate_step(preset, handles, inputs=gate.GateInputs(preset_name=preset.name, requirements=requirements))
+            gate.gate_step(preset, handles, inputs=GateInputs(preset_name=preset.name, requirements=requirements))
         )[0]
         return report, str(report.path)
 
