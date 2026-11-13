@@ -225,6 +225,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--long-lengths", default="4096,32768,65536")
     parser.add_argument("--vllm-arg", action="append", default=[], help="Extra vLLM flag; repeat per token")
     parser.add_argument("--drop-arg", action="append", default=[], help="Remove a baseline flag and its value")
+    parser.add_argument(
+        "--overlay-wheel",
+        help="FILE:SHA256 - replace the release's aarch64 wheel with the URL stored in FILE (Python overlay)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -268,10 +272,21 @@ def main() -> None:
         serving_geometry=geometry,
         cache_ttl_days=0,
     )
+    release = RELEASES[args.release]
+    if args.overlay_wheel:
+        url_file, sha256 = args.overlay_wheel.rsplit(":", 1)
+        url = Path(url_file).read_text().strip()
+        release = replace(
+            release,
+            wheels=tuple(
+                replace(wheel, url=url, sha256=sha256) if wheel.architecture == "aarch64" else wheel
+                for wheel in release.wheels
+            ),
+        )
     engine = VllmEngineConfig(
         launcher=VllmLauncherType.CUDA,
         source=VllmSource.MARIN_FORK,
-        gpu_release=RELEASES[args.release],
+        gpu_release=release,
         startup_timeout_seconds=3600,
         extra_args=(*_baseline_args(args.drop_arg), *args.vllm_arg),
     )
