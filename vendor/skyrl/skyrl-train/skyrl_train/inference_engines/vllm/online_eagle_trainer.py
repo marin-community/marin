@@ -615,9 +615,11 @@ def _evaluate(
 
 def _candidate_state(model: nn.Module, *, serving_dtype: torch.dtype) -> dict[str, torch.Tensor]:
     trainable_names = {name for name, parameter in model.named_parameters() if parameter.requires_grad}
+    # Vocabulary maps are persistent buffers needed to reload an embedding-free draft.
+    buffer_names = {name for name, _ in model.named_buffers()}
     state = {}
     for name, value in model.state_dict().items():
-        if name in trainable_names:
+        if name in trainable_names or name in buffer_names:
             if value.is_floating_point() and value.dtype != serving_dtype:
                 raise ValueError(
                     f"Online EAGLE candidate tensor {name} has dtype {value.dtype}, expected {serving_dtype}"
