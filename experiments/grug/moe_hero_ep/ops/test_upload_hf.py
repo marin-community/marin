@@ -9,10 +9,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import draccus
+import httpx
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from huggingface_hub import RepoFile
+from huggingface_hub.errors import HfHubHTTPError
 from levanter.compat.hf_export import HFShardRecord
 from safetensors.numpy import save_file
 
@@ -75,18 +77,43 @@ USE THEREOF OR OTHER DEALINGS THEREIN.
 BASE_REVISION = "a" * 40
 
 
+class FakeClock:
+    def __init__(self, status_path: Path):
+        self.current = 0.0
+        self.waits = []
+        self.status_path = status_path
+        self.statuses = []
+
+    def time(self):
+        return self.current
+
+    def advance(self, seconds):
+        self.current += seconds
+
+    def wait(self, seconds):
+        self.waits.append(seconds)
+        if self.status_path.exists():
+            self.statuses.append(json.loads(self.status_path.read_text()))
+        self.advance(seconds)
+
+
 class FakeHub:
     """Immutable commit snapshots at the external Hub boundary."""
 
-    def __init__(self, baseline: dict[str, bytes]):
+    def __init__(self, baseline: dict[str, bytes], clock: FakeClock):
         self.snapshots: dict[str, dict[str, bytes]] = {BASE_REVISION: baseline}
         self.branches: dict[str, str] = {}
         self.uploads = []
         self.fail_filename = None
         self.token = "test-token"
+        self.clock = clock
+        self.attempts = []
+        self.batches = []
+        self.errors = []
+        self.private = True
 
     def model_info(self, repo_id):
-        return SimpleNamespace(private=True)
+        return SimpleNamespace(private=self.private)
 
     def create_branch(self, repo_id, *, branch, revision, **kwargs):
         if branch not in self.branches:
@@ -102,14 +129,19 @@ class FakeHub:
         self.branches[branch] = oid
         return SimpleNamespace(oid=oid)
 
-    def upload_file(self, *, revision, path_in_repo, path_or_fileobj, **kwargs):
-        if path_in_repo == self.fail_filename:
-            raise ConnectionError("Interrupted external upload")
-        data = path_or_fileobj if isinstance(path_or_fileobj, bytes) else Path(path_or_fileobj).read_bytes()
-        self.uploads.append(path_in_repo)
-        return self._commit(revision, {path_in_repo: data})
-
     def create_commit(self, *, revision, operations, **kwargs):
+        filenames = tuple(op.path_in_repo for op in operations)
+        started = self.clock.time()
+        # Model preupload/API work, so assertions distinguish response-anchored
+        # spacing from a limiter anchored before a slow request.
+        self.clock.advance(9)
+        self.attempts.append((started, self.clock.time(), filenames))
+        if self.errors:
+            raise self.errors.pop(0)
+        if self.fail_filename in filenames:
+            raise ConnectionError("Interrupted external upload")
+        self.uploads.extend(filenames)
+        self.batches.append(filenames)
         return self._commit(
             revision,
             {
@@ -164,7 +196,8 @@ def upload_fixture(tmp_path, monkeypatch):
     card_path.write_bytes(card)
     license_path = tmp_path / "LICENSE"
     license_path.write_text(LICENSE_TEXT)
-    hub = FakeHub({"README.md": b"Card for another checkpoint", "LICENSE": b"Unreviewed baseline license"})
+    clock = FakeClock(root.parent / (root.name + ".upload-status.json"))
+    hub = FakeHub({"README.md": b"Card for another checkpoint", "LICENSE": b"Unreviewed baseline license"}, clock)
     monkeypatch.setattr(upload_hf, "HfApi", lambda token: hub)
     monkeypatch.setattr(upload_hf, "require_secret", lambda name: "test-token")
 
@@ -180,18 +213,18 @@ def upload_fixture(tmp_path, monkeypatch):
     monkeypatch.setattr(upload_hf, "hf_hub_download", hub_download)
     monkeypatch.setattr(upload_hf, "snapshot_download", tokenizer_download)
 
-    def build(dtype=jnp.bfloat16):
+    def build(dtype=jnp.bfloat16, *, shards=2, version=EXPORT_VERSION):
         request = {
-            "export_version": EXPORT_VERSION,
+            "export_version": version,
             "implementation": "cpu",
-            "config": artifact_config(draccus.encode(config)),
+            "config": draccus.encode(config) if version == 2 else artifact_config(draccus.encode(config)),
             "hf_config": bf16_hf_config(model),
         }
         export_id = digest(request)
         records = []
         total = 0
-        for number in (1, 2):
-            filename = f"model-{number:05d}-of-00002.safetensors"
+        for number in range(1, shards + 1):
+            filename = f"model-{number:05d}-of-{shards:05d}.safetensors"
             name = f"model.layers.{number - 1}.weight"
             tensor = np.arange(12, dtype=np.float32).reshape(3, 4).astype(dtype)
             save_file({name: tensor}, root / filename, metadata={"format": "pt"})
@@ -221,12 +254,12 @@ def upload_fixture(tmp_path, monkeypatch):
 
 def test_upload_resumes_verified_shards_and_pins_complete_weights(upload_fixture):
     build, hub = upload_fixture
-    config = build()
+    config = dataclasses.replace(build(), max_files_per_commit=1)
     root = Path(config.export.destination)
     source_files = {path.name for path in root.iterdir()}
     hub.fail_filename = "model-00002-of-00002.safetensors"
     with pytest.raises(ConnectionError):
-        upload_hf.upload(config)
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     assert "hf-upload-manifest.json" not in hub.files(config.branch)
     assert hub.files(config.branch)["README.md"] == Path(config.model_card).read_bytes()
     assert hub.files(config.branch)["LICENSE"] == Path(config.license_file).read_bytes()
@@ -242,7 +275,7 @@ def test_upload_resumes_verified_shards_and_pins_complete_weights(upload_fixture
             request_concurrency=2,
         ),
     )
-    result = upload_hf.upload(config)
+    result = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     pinned = hub.files(result["weights_commit"])
     for number in (1, 2):
         filename = f"model-{number:05d}-of-00002.safetensors"
@@ -257,29 +290,29 @@ def test_upload_resumes_verified_shards_and_pins_complete_weights(upload_fixture
     assert result["generation_parity_tested"] is False
     assert {path.name for path in root.iterdir()} == source_files
     commits = len(hub.snapshots)
-    reused = upload_hf.upload(config)
+    reused = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     assert reused["weights_commit"] == result["weights_commit"] and len(hub.snapshots) == commits
 
     changed_card = Path(config.model_card)
     changed_card.write_text(changed_card.read_text() + "\nA different reviewed card.\n")
     with pytest.raises(ValueError, match="another upload request"):
-        upload_hf.upload(config)
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     assert hub.files(config.branch)["README.md"] == pinned["README.md"]
 
 
 def test_upload_refuses_corrupted_existing_hub_weights(upload_fixture):
     build, hub = upload_fixture
-    config = build()
+    config = dataclasses.replace(build(), max_files_per_commit=1)
     hub.fail_filename = "model-00002-of-00002.safetensors"
     with pytest.raises(ConnectionError):
-        upload_hf.upload(config)
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     first = "model-00001-of-00002.safetensors"
     original = hub.files(config.branch)[first]
     damaged = original[:-1] + bytes([original[-1] ^ 1])
     hub._commit(config.branch, {first: damaged})
     hub.fail_filename = None
     with pytest.raises(ValueError, match="identity differs"):
-        upload_hf.upload(config)
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     assert hub.files(config.branch)[first] == damaged
     assert "hf-upload-manifest.json" not in hub.files(config.branch)
 
@@ -288,6 +321,142 @@ def test_upload_rejects_fp32_source_before_publishing_weights(upload_fixture):
     build, hub = upload_fixture
     config = build(dtype=np.float32)
     with pytest.raises(ValueError, match="Non-BF16"):
-        upload_hf.upload(config)
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
     assert not any(name.endswith(".safetensors") for name in hub.files(config.branch))
+    assert "hf-upload-manifest.json" not in hub.files(config.branch)
+
+
+def test_upload_groups_ten_files_into_two_throttled_atomic_batches(upload_fixture):
+    build, hub = upload_fixture
+    config = build(shards=10)
+    result = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    weight_batches = [batch for batch in hub.batches if any(name.endswith(".safetensors") for name in batch)]
+    assert [len(batch) for batch in weight_batches] == [8, 2]
+    assert hub.attempts[0][0] >= 75
+    for previous, following in zip(hub.attempts, hub.attempts[1:], strict=False):
+        assert following[0] - previous[1] >= 75
+    assert len(hub.attempts) == 5  # Request, two weight batches, metadata, completion.
+    pinned = hub.files(result["weights_commit"])
+    for path in Path(config.export.destination).glob("*.safetensors"):
+        assert pinned[path.name] == path.read_bytes()
+    commits = len(hub.snapshots)
+    reused = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert reused["weights_commit"] == result["weights_commit"] and len(hub.snapshots) == commits
+
+
+@pytest.mark.parametrize("version", [2, EXPORT_VERSION])
+def test_upload_resumes_an_interrupted_second_batch_without_rewriting_identity(upload_fixture, version):
+    build, hub = upload_fixture
+    config = build(shards=10, version=version)
+    root = Path(config.export.destination)
+    source_manifest = (root / "export-manifest.json").read_bytes()
+    hub.fail_filename = "model-00009-of-00010.safetensors"
+    with pytest.raises(ConnectionError):
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    remote_request = hub.files(config.branch)["hf-upload-request.json"]
+    first_batch = {name: data for name, data in hub.files(config.branch).items() if name.endswith(".safetensors")}
+    assert len(first_batch) == 8
+    assert "hf-upload-manifest.json" not in hub.files(config.branch)
+    if version == 2:
+        changed = dataclasses.replace(config, export=dataclasses.replace(config.export, request_concurrency=2))
+        with pytest.raises(ValueError, match="pinned export configuration"):
+            upload_hf.upload(changed, clock=hub.clock.time, wait=hub.clock.wait)
+    hub.fail_filename = None
+    hub.private = False
+    config = dataclasses.replace(config, expected_visibility=upload_hf.RepositoryVisibility.PUBLIC)
+    result = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert hub.files(config.branch)["hf-upload-request.json"] == remote_request
+    assert (root / "export-manifest.json").read_bytes() == source_manifest
+    assert result["export_id"] == json.loads(source_manifest)["export_id"]
+    for name, data in first_batch.items():
+        assert hub.files(result["weights_commit"])[name] == data
+        assert hub.uploads.count(name) == 1
+    commits = len(hub.snapshots)
+    reused = upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert reused["weights_commit"] == result["weights_commit"] and len(hub.snapshots) == commits
+
+
+@pytest.mark.parametrize("expected", list(upload_hf.RepositoryVisibility))
+def test_upload_refuses_unexpected_visibility_before_branch_setup(upload_fixture, expected):
+    build, hub = upload_fixture
+    config = dataclasses.replace(build(), expected_visibility=expected)
+    hub.private = expected != upload_hf.RepositoryVisibility.PRIVATE
+    with pytest.raises(ValueError):
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert not hub.branches and not hub.attempts
+
+
+@pytest.mark.parametrize("expected", list(upload_hf.RepositoryVisibility))
+def test_upload_stops_if_visibility_changes_before_a_weight_commit(upload_fixture, expected):
+    build, hub = upload_fixture
+    config = dataclasses.replace(build(), expected_visibility=expected)
+    hub.private = expected == upload_hf.RepositoryVisibility.PRIVATE
+
+    def change_visibility_during_wait(seconds):
+        hub.clock.wait(seconds)
+        if hub.batches:
+            hub.private = expected != upload_hf.RepositoryVisibility.PRIVATE
+
+    with pytest.raises(ValueError):
+        upload_hf.upload(config, clock=hub.clock.time, wait=change_visibility_during_wait)
+    assert len(hub.attempts) == 1
+    assert "hf-upload-request.json" in hub.files(config.branch)
+    assert not any(name.endswith(".safetensors") for name in hub.files(config.branch))
+    assert "hf-upload-manifest.json" not in hub.files(config.branch)
+
+
+def hub_error(status, message, headers=None):
+    response = httpx.Response(
+        status,
+        headers=headers,
+        text=message,
+        request=httpx.Request("POST", "https://huggingface.co/api/models/test/model/commit/step-17"),
+    )
+    return HfHubHTTPError(message, response=response)
+
+
+@pytest.mark.parametrize(
+    "message,reset,expected_delay",
+    [
+        ("You have exceeded the limit of 256 commits per hour on this repository", 159, 3600),
+        ("Generic API rate limit reached", 300, 300),
+    ],
+)
+def test_upload_honors_repository_quota_before_generic_api_reset(upload_fixture, message, reset, expected_delay):
+    build, hub = upload_fixture
+    config = build()
+    hub.errors = [hub_error(429, message, {"Retry-After": "159", "RateLimit": f'"api";r=0;t={reset}'})]
+    upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert hub.attempts[1][0] - hub.attempts[0][1] == expected_delay
+    retry = next(status for status in hub.clock.statuses if status["phase"] == "rate_limited")
+    assert retry["retry_after_seconds"] == expected_delay
+
+
+def test_upload_backs_off_repeated_api_rate_limits(upload_fixture):
+    build, hub = upload_fixture
+    config = build()
+    hub.errors = [hub_error(429, "Generic API rate limit reached") for _ in range(2)]
+    upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert hub.attempts[1][0] - hub.attempts[0][1] == 75
+    assert hub.attempts[2][0] - hub.attempts[1][1] == 150
+
+
+def test_upload_stops_after_four_rate_limit_retries(upload_fixture):
+    build, hub = upload_fixture
+    config = build()
+    hub.errors = [hub_error(429, "Repository commit quota exceeded") for _ in range(5)]
+    with pytest.raises(HfHubHTTPError):
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert len(hub.attempts) == 5
+    assert hub.clock.waits.count(3600) == 4
+    assert "hf-upload-manifest.json" not in hub.files(config.branch)
+
+
+def test_upload_does_not_retry_other_hub_errors(upload_fixture):
+    build, hub = upload_fixture
+    config = build()
+    hub.errors = [hub_error(403, "Permission denied")]
+    with pytest.raises(HfHubHTTPError):
+        upload_hf.upload(config, clock=hub.clock.time, wait=hub.clock.wait)
+    assert len(hub.attempts) == 1
     assert "hf-upload-manifest.json" not in hub.files(config.branch)

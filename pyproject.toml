@@ -293,7 +293,7 @@ members = [
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
 # experiments/mlx_export is a Mac-only MLX project with its own lock.
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "experiments/mlx_export", "vendor/skyrl", "vendor/skyrl/**", "vendor/evalchemy", "vendor/evalchemy/**", "vendor/harbor", "vendor/harbor/**"]
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "experiments/mlx_export", "vendor/skyrl", "vendor/skyrl/**", "vendor/harbor", "vendor/harbor/**"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
@@ -366,7 +366,6 @@ extend-exclude = """
 (
     scripts/
     | vendor/skyrl/
-    | vendor/evalchemy/
     | vendor/harbor/
 )
 """
@@ -379,7 +378,7 @@ target-version = "py312"
 # Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
 # `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
 # and stay under ruff.
-extend-exclude = ["scripts/", "vendor/skyrl/", "vendor/evalchemy/", "vendor/harbor/"]
+extend-exclude = ["scripts/", "vendor/skyrl/", "vendor/harbor/"]
 extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
@@ -559,7 +558,6 @@ project-excludes = [
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifeval/**",
     "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     "vendor/skyrl/**",
-    "vendor/evalchemy/**",
     "vendor/harbor/**",
     "scripts/debug/**",
     "scripts/ferries/**",

@@ -7,6 +7,7 @@ Adopted from Marin's Evalchemy fork and lm-evaluation-harness v0.4.12 (MIT).
 Keep source stops separate from the smaller set safe to send to a chat endpoint.
 """
 
+import re
 import threading
 
 from math_verify import parse, verify
@@ -18,6 +19,38 @@ from .amc import last_boxed_answer
 from .minerva import is_equiv, normalize_final_answer
 
 CHAT_REQUEST_STOPS = END_OF_TURN[:4]
+
+
+def normalize_numeric_answer(value: str) -> str:
+    return re.sub(r",|\$|(?s:.*#### )|\.$", "", value).lower()
+
+
+def grade_gsm8k_cot(document: dict, response: str) -> Reward:
+    expected = document["answer"].rsplit("####", 1)[-1].strip()
+    strict = re.findall(r"The answer is (\-?[0-9\.\,]+).", response)
+    flexible = re.findall(r"(-?[$0-9.,]{2,})|(-?[0-9]+)", response)
+    extracted = {
+        "strict-match": strict[0] if strict else "[invalid]",
+        "flexible-extract": next((value for value in flexible[-1] if value), "[invalid]") if flexible else "[invalid]",
+    }
+    metrics = {
+        f"exact_match,{name}": float(normalize_numeric_answer(value) == normalize_numeric_answer(expected))
+        for name, value in extracted.items()
+    }
+    return scored(metrics["exact_match,flexible-extract"], metrics=metrics, extracted=extracted)
+
+
+def grade_minerva_completion(document: dict, response: str) -> Reward:
+    matches = re.findall(
+        r"Final Answer: The final answer is(.*?). I hope it is correct.", response + "I hope it is correct."
+    )
+    answer = normalize_final_answer(matches[0].strip() if matches else "[invalidanswer]")
+    expected = normalize_final_answer(last_boxed_answer(document["solution"]))
+    metrics = {
+        "exact_match,none": float(is_equiv(answer, expected)),
+        "math_verify,none": float(bool(verify(gold=parse(document["solution"]), target=parse(response)))),
+    }
+    return scored(metrics["exact_match,none"], metrics=metrics, extracted=answer)
 
 
 def _symbol_free_relation(parsed: list) -> bool:
