@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Render the issue's exact prompts and select teacher-forced target scores."""
+"""Render classification prompts for the VEP pilot."""
 
 from pathlib import Path
 
