@@ -255,7 +255,6 @@ def _compute_flops(
     flops_summary: dict[str, float] = {
         "throughput/flops_per_token_analytic": flops_per_token,
         "throughput/flops_per_example_analytic": flops_per_example,
-        # The attention-map part of flops_per_example, as it charges it and with causal masking counted exactly.
         ATTENTION_FLOPS_PER_EXAMPLE_KEY: 3 * attention.noncausal * model_config.max_seq_len,
         CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY: 3 * attention.causal * model_config.max_seq_len,
         "throughput/num_full_attention_layers": float(num_full_attention_layers),

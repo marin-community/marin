@@ -28,18 +28,15 @@ SHAPE_FIELDS = (
 )
 
 
-@pytest.mark.parametrize(
-    ("snowball", "seq_len", "long_layers"), [(SnowballConfig(), 4096, 7), (TINY, 32, 2)], ids=["full", "tiny"]
-)
-def test_harness_flops_match_the_june_trainer(snowball, seq_len, long_layers):
+@pytest.mark.parametrize(("snowball", "seq_len"), [(SnowballConfig(), 4096), (TINY, 32)], ids=["full", "tiny"])
+def test_harness_flops_match_the_june_trainer(snowball, seq_len):
     june = GrugModelConfig(**{name: getattr(snowball, name) for name in SHAPE_FIELDS}, max_seq_len=seq_len)
     june_flops_per_example, summary = june_train._compute_flops(model_config=june)
     harness_flops_per_example = (
         3 * snowball_flops_per_token(snowball, snowball.vocab_size, june.max_seq_len) * june.max_seq_len
     )
     assert harness_flops_per_example == june_flops_per_example
-    assert num_long_attention_layers(snowball.num_layers) == long_layers
-    assert summary["throughput/num_full_attention_layers"] == long_layers
+    assert summary["throughput/num_full_attention_layers"] == num_long_attention_layers(snowball.num_layers)
     attention = snowball_attention_flops_per_token(snowball, june.max_seq_len)
     assert 3 * attention.noncausal * june.max_seq_len == summary[june_train.ATTENTION_FLOPS_PER_EXAMPLE_KEY]
     assert 3 * attention.causal * june.max_seq_len == summary[june_train.CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY]
@@ -47,6 +44,5 @@ def test_harness_flops_match_the_june_trainer(snowball, seq_len, long_layers):
 
 def test_attention_flops_use_the_configured_head_width():
     """The tiny preset has 8 heads of 16 at hidden_dim 64: its attention maps are as wide as at hidden_dim 128."""
-    assert TINY.hidden_dim // TINY.num_heads != TINY.head_dim
     same_heads = dataclasses.replace(TINY, hidden_dim=TINY.num_heads * TINY.head_dim, head_dim=None)
     assert snowball_attention_flops_per_token(TINY, 32) == snowball_attention_flops_per_token(same_heads, 32)

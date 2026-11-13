@@ -199,7 +199,7 @@ def build_trainer_config(args: argparse.Namespace, preset: Preset, run_id: str, 
             start_step=args.profile_start,
             num_steps=args.profile_steps,
             upload=XprofUploadConfig(enabled=False),
-            # The HLO modules let trace tools attribute kernels to HLO ops (spurix's xplane buckets).
+            # HLO protos add /host:metadata so trace tools can identify ragged_dot kernels.
             profile_options=ProfileOptionsConfig(enable_hlo_proto=True),
         ),
         jax_compilation_cache_dir=args.compilation_cache_dir,
@@ -209,7 +209,6 @@ def build_trainer_config(args: argparse.Namespace, preset: Preset, run_id: str, 
 
 
 def log_model_flops(flops_per_example: float, attention_per_token: AttentionFlops, seq_len: int) -> None:
-    """Log the FLOPs per example that MFU charges (3x forward) and their attention-map part, non-causal and causal."""
     if jax.process_index() != 0:
         return
     logger.info(
@@ -223,7 +222,6 @@ def log_model_flops(flops_per_example: float, attention_per_token: AttentionFlop
 def log_throughput_summary(
     step_durations: list[float], batch_size: int, seq_len: int, flops_per_example: float, num_steps: int
 ) -> None:
-    """Log the median step and its throughput, from rank 0 only: every process times its own steps."""
     if jax.process_index() != 0:
         return
     median = statistics.median(step_durations)
