@@ -47,7 +47,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Command
 from taskcompendium.grading_result import GradeResult
-from taskcompendium.models import ConversationTrace, GradingAttempt, TaskSpec, TextMessage, judge_spec
+from taskcompendium.models import ConversationTrace, GradingAttempt, NoGrader, TaskSpec, TextMessage, judge_spec
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.task_grading import grade_task
@@ -110,7 +110,10 @@ def lock_install(task: TaskSpec) -> dict:
     environment (``prepare_machine_spec`` builds the uv runtime from the 127-package
     hash lock) and the locked distributions import inside the sandbox.
     """
-    environment = task.grader.environment
+    grader = task.grader
+    if isinstance(grader, NoGrader):
+        raise ValueError(f"{task.id}: the task declares no grader")
+    environment = grader.environment
     if environment is None or environment.packages_lock != TAU_REPAIR_LOCK_URL:
         raise ValueError(f"{task.id}: the grader must declare the repaired packages lock")
     factory, machine_spec = LocalGraderMachines().machine(environment, EMPTY_CONTROL_MEMORY_MB)
@@ -141,9 +144,7 @@ def empty_control(task: TaskSpec) -> GradeResult:
         result,
         detail={
             **(result.detail or {}),
-            "empty_output_policy": (
-                judge.empty_output.value if hasattr(judge.empty_output, "value") else judge.empty_output
-            ),
+            "empty_output_policy": judge.empty_output.value,
         },
     )
 
