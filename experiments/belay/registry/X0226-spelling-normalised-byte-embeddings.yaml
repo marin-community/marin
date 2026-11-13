@@ -23,7 +23,8 @@ trials:
   batch: X0226
   date: '2026-11-13'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0226
-  wandb: []
+  wandb:
+  - belay-X0226-seed0
   settings:
     spelling_byte_embeds: 'true'
   commit: 4fed42ccfa
