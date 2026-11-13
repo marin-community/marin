@@ -12,14 +12,15 @@ from typing import Any
 
 import click
 import pyarrow.parquet as pq
-from finestore.rl.source_identity import canonical_source_id
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
+from experiments.post_training.task_curation.catalog_identity import canonical_declaration
 from infra.marina.apps.rl_data_catalog.load import batches, insert_rows
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, validated_role_projection
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 DELETE_BATCH_SIZE = 10_000
 TABLE_COLUMNS = {
@@ -106,6 +107,14 @@ def load_curriculum(
     """Load full-population statistics and bounded task examples, then select atomically."""
     started = time.monotonic()
     release = AlignmentRelease.model_validate_json(StoragePath(release_uri).read_text())
+    release = release.model_copy(
+        update={
+            "sources": [
+                row.model_copy(update={"source_id": canonical_source_id(row.source_id)}) for row in release.sources
+            ],
+            "inventory": [canonical_declaration(row) for row in release.inventory],
+        }
+    )
     coverage = CurriculumCoverage.model_validate_json(StoragePath(coverage_uri).read_text())
     if (coverage.alignment_release_id, coverage.curriculum_key, coverage.task_count) != (
         release.release_id,
@@ -241,7 +250,9 @@ def load_curriculum(
             with StoragePath(path).open("rb") as stream:
                 for batch in pq.ParquetFile(stream).iter_batches(batch_size=256):
                     for raw in batch.to_pylist():
-                        row = CurriculumStatistic.model_validate(raw)
+                        row = CurriculumStatistic.model_validate(
+                            {**raw, "source_id": canonical_source_id(raw["source_id"])}
+                        )
                         if row.source_id not in selected:
                             raise ValueError(f"Statistics contain an unknown source: {row.source_id}")
                         if row.metric in ("placement", "capability"):

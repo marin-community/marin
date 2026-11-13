@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Source retirements preserve declarations and artifacts in the historical ledger."""
+"""Look up sources retired from admission in the historical ledger."""
 
 from functools import cache
 from pathlib import Path
 
-from finestore.rl.source_identity import canonical_source_id
-
 from experiments.post_training.task_curation.registry import read_registry_json
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 RETIREMENTS_PATH = Path(__file__).with_name("retired-inventory-only.json")
 

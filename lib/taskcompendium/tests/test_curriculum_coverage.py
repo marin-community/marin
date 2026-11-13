@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.source_identity import canonical_source_id
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
@@ -99,6 +98,7 @@ def test_atlas_counts_full_instances_and_keeps_bounded_overlapping_samples(tmp_p
             capability_distance=0.25,
             source_sample_size=100,
             area_sample_size=10,
+            sampling_source_ids={source: source for source in ("a", "b", "c")},
         )
     statistics = {
         (row["source_id"], row["metric"], row["node_id"]): row["instances"]
@@ -119,9 +119,9 @@ def test_atlas_counts_full_instances_and_keeps_bounded_overlapping_samples(tmp_p
     assert sum(row["source_id"] == "c" for row in samples) == 200
 
     # A renamed source must retain the same deterministic review examples.
-    old = "MarinSkyRL:aime24"
+    old = "source-before-rename"
     sample_ids = []
-    for index, identifier in enumerate((old, canonical_source_id(old))):
+    for index, identifier in enumerate((old, "source-after-rename")):
         pq.write_table(pa.Table.from_pylist([{**row, "source_id": identifier} for row in tasks[:200]]), path)
         with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / f"alias-chunks-{index}")) as context:
             migrated = build_curriculum_coverage(
@@ -133,6 +133,7 @@ def test_atlas_counts_full_instances_and_keeps_bounded_overlapping_samples(tmp_p
                 capability_distance=0.25,
                 source_sample_size=7,
                 area_sample_size=3,
+                sampling_source_ids={identifier: old},
             )
         sample_ids.append(sorted(row["task_id"] for part in migrated.sample_paths for row in load_parquet(part)))
     assert len(sample_ids[0]) == 7

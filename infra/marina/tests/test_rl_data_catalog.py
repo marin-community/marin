@@ -40,7 +40,6 @@ from finestore.rl.curation import (
     SourceOrigin,
     register_catalog,
 )
-from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
 from marina.applets import (
     AppletServices,
@@ -61,21 +60,23 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
-from experiments.post_training.task_curation.datasets.admission_censuses import admission_census_receipts
+from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    actor_census_input,
+    grading_evidence,
+    with_declaration_admission_census,
+)
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
-from experiments.post_training.task_curation.tests.admission_fixtures import (
-    register_admission_census,
-    with_declaration_admission_census,
-)
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
-from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, prepare_preview
+from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -283,7 +284,7 @@ def publish_sample(
         daytona_machine_slots=0,
         daytona_execution_failures=0,
         daytona_count_basis="Fixture tasks contain no actor environment.",
-        grading_environment=grading_environment,
+        grading_environment=grading_environment or grading_evidence(3 - duplicates),
         family="Marin:math",
         tags=[],
         task_count=3 - duplicates,
@@ -301,7 +302,7 @@ def publish_sample(
         kind="Dataset",
         status="Available",
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
-        actor_census_input=register_admission_census(source_id, "fixture", "1", "1", 3 - duplicates),
+        actor_census_input=actor_census_input("fixture", "1", "1", 3 - duplicates),
     )
     curation = CurationSummary(
         status="completed",
@@ -773,24 +774,21 @@ def test_atlas_blocks_invalid_admission_census_without_replacing_selected_catalo
     load_catalog(CurationCatalog(root), catalog_query)
     publish_sample(root, "next")
     source_id = "Marin:math"
-    receipt = admission_census_receipts()[source_id]
+    catalog = CurationCatalog(root)
+    source = next(row for row in catalog.sources("next") if row.id == source_id)
+    declaration = source.declaration.model_dump(mode="json")
     if failure == "missing":
-        del admission_census_receipts()[source_id]
+        declaration["grading_environment"] = None
     elif failure == "stale":
-        admission_census_receipts()[source_id] = receipt.model_copy(
-            update={"input": receipt.input.model_copy(update={"dataset_revision": "stale"})}
-        )
+        declaration["actor_census_input"]["dataset_revision"] = "stale"
     else:
-        admission_census_receipts()[source_id] = type(receipt).model_validate(
-            {
-                **receipt.model_dump(),
-                "runnable_grader_tasks": 2,
-                "no_grader_tasks": 1,
-                "grader_kinds": {"verifyit": 2, "none": 1},
-                "missing_grader_reasons": {"No reward model": 1},
-            }
-        )
-    with pytest.raises(ValueError, match=r"Admission census|without runnable graders"):
+        declaration["grading_environment"]["reason_counts"] = {"No executable grader is declared": 3}
+    changed = {**source.model_dump(mode="json"), "declaration": declaration}
+    with DataStore.open(root) as store:
+        register_catalog(store)
+        with store.transaction() as transaction:
+            transaction.table(INVENTORY).add(changed)
+    with pytest.raises(ValueError, match=r"Admission census|Actor census input|without runnable graders"):
         load_catalog(CurationCatalog(root), catalog_query)
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         assert client.get("/sources").json()["snapshot_id"] == "reviewed"
@@ -1076,6 +1074,35 @@ def test_source_grade_uses_sample_fractions_and_zero_output(catalog_database, ve
 def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_database, catalog_query, tmp_path):
     old = "MarinSkyRL:aime24"
     current = canonical_source_id(old)
+    peer = "MarinSkyRL:math500"
+    group = {
+        "group_id": "historical-math",
+        "canonical_source_id": old,
+        "members": [
+            {"source_id": old, "overlap_with_canonical": None},
+            {"source_id": peer, "overlap_with_canonical": 0.8},
+        ],
+    }
+    duplicate_review = {
+        "similarity": {
+            "left": old,
+            "right": peer,
+            "rank_score": 0.8,
+            "instruction_similarity": 0.8,
+            "instruction_overlap": 0.8,
+            "reference_overlap": 0.8,
+            "test_overlap": 0.8,
+            "task_id_overlap": 0.8,
+            "url_overlap": 0.8,
+            "shared_lineage": False,
+        },
+        "verdict": {"label": "partial_overlap", "overlap_fraction": 0.8, "reason": "Shared math tasks"},
+        "prompt_sha256": "a" * 64,
+        "model": "fixture",
+        "completion_id": "legacy",
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+    }
     root = str(tmp_path / "catalog")
     publish_sample(root, "frozen", source_id=current, origin=SourceOrigin.HUGGINGFACEH4)
     with DataStore.open(root) as store:
@@ -1126,10 +1153,30 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
             {"old": old},
         )
         connection.execute(text("UPDATE atlas_assessments SET source_id=:old"), {"old": old})
+        connection.execute(
+            text("UPDATE atlas_sources SET duplicate_group=CAST(:duplicate_group AS JSONB)"),
+            {"duplicate_group": json.dumps(group)},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO atlas_duplicate_reviews SELECT load_id, :left, :right, CAST(:review AS JSONB) "
+                "FROM atlas_current WHERE name='latest'"
+            ),
+            {"left": old, "right": peer, "review": json.dumps(duplicate_review)},
+        )
     shutil.rmtree(root)
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         source = client.get("/sources").json()["sources"][0]
         assert source["id"] == source["backend_capabilities"]["source_id"] == current
+        assert source["duplicate_group"]["canonical_source_id"] == current
+        assert [member["source_id"] for member in source["duplicate_group"]["members"]] == [
+            current,
+            canonical_source_id(peer),
+        ]
+        duplicates = client.get("/source-duplicates").json()
+        assert duplicates["groups"] == [source["duplicate_group"]]
+        assert duplicates["reviews"][0]["similarity"]["left"] == current
+        assert duplicates["reviews"][0]["similarity"]["right"] == canonical_source_id(peer)
         for identifier in (old, current):
             report = client.get("/assessment", params={"source_id": identifier}).json()["report"]
             assert report["source_id"] == current and report["pipeline_key"] == "frozen"
@@ -1142,6 +1189,48 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
             assert detail["assessment"]["pipeline_key"] == "frozen"
             assert detail["backend_capabilities"]["basis"] == "unassessed"
             assert detail["result"] == "GOOD"
+
+    with catalog_database.connect() as connection:
+        assert connection.execute(text("SELECT duplicate_group FROM atlas_sources")).scalar_one() == group
+        assert connection.execute(text("SELECT review FROM atlas_duplicate_reviews")).scalar_one() == duplicate_review
+
+
+def test_historical_curriculum_artifacts_load_without_rewriting_inputs(catalog_database, catalog_query, tmp_path):
+    old = "MarinSkyRL:aime24"
+    current = canonical_source_id(old)
+    path = curriculum_release(tmp_path)
+    release = json.loads(path.read_text())
+    for row in release["sources"]:
+        if row["source_id"] == "Marin:a":
+            row["source_id"] = old
+    for row in release["inventory"]:
+        if row["id"] == "Marin:a":
+            row.update(id=old, origin=SourceOrigin.HUGGINGFACEH4, upstream_dataset="aime24")
+    path.write_text(json.dumps(release))
+    inputs = [path, tmp_path / "coverage.json", tmp_path / "tasks.parquet", tmp_path / "statistics.parquet"]
+    for parquet in inputs[2:]:
+        table = pq.read_table(parquet)
+        rows = table.to_pylist()
+        for row in rows:
+            if row["source_id"] == "Marin:a":
+                row["source_id"] = old
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), parquet)
+    original_bytes = {file: file.read_bytes() for file in inputs}
+    loaded = load_curriculum(str(path), str(tmp_path / "coverage.json"), catalog_query)
+    assert loaded["population_tasks"] == 400
+    assert {file: file.read_bytes() for file in inputs} == original_bytes
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        for identifier in (old, current):
+            coverage = client.get("/curriculum", params={"source_id": identifier}).json()
+            assert coverage["totals"]["denominator"] == 300
+            source = next(row for row in coverage["sources"] if row["source_id"] == current)
+            assert source["alignment"]["source_id"] == current
+            tasks = client.get("/curriculum/tasks", params={"source_id": identifier, "limit": 3}).json()["tasks"]
+            assert [(row["source_id"], row["task_id"]) for row in tasks] == [
+                (current, "one"),
+                (current, "three"),
+                (current, "two"),
+            ]
 
 
 def test_historical_curriculum_alias_keeps_counts_samples_and_pagination(catalog_database, catalog_query, tmp_path):
@@ -1210,25 +1299,27 @@ def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_p
     publish_sample(root, "frozen", source_id="HuggingFaceH4:aime24", origin=SourceOrigin.HUGGINGFACEH4)
     raw = catalog_backend_map(CurationCatalog(root)).model_dump(mode="json")
     raw["sources"][0]["source_id"] = "MarinSkyRL:aime24"
-    survey = BackendSurvey.model_validate(raw)
+    survey = canonical_backend_survey(raw)
     assert survey.sources[0].source_id == "HuggingFaceH4:aime24"
-    assert canonical_sha256(survey.identity_payload()) == canonical_sha256(raw)
+    assert canonical_sha256(backend_survey_payload(survey)) == canonical_sha256(raw)
 
 
-def test_preview_package_imports_canonical_models_without_new_shared_runtime_modules(tmp_path, monkeypatch):
+@pytest.mark.parametrize("preview", [False, True])
+def test_atlas_packages_resolve_aliases_without_repository_imports(tmp_path, monkeypatch, preview):
     checkout = Path(__file__).resolve().parents[3]
-    output = tmp_path / "preview"
-    prepare_preview(checkout, output)
+    output = checkout / "infra/marina/apps/rl_data_catalog"
+    if preview:
+        output = tmp_path / "preview"
+        prepare_preview(checkout, output)
     package = read_applet_package(package_applet(output))
-    assert package.manifest.applet_id == PREVIEW_APP_ID
+    assert package.manifest.applet_id == (PREVIEW_APP_ID if preview else PRODUCTION_APP_ID)
     original_import = builtins.__import__
 
     def old_runtime_import(name, global_namespace=None, local_namespace=None, fromlist=(), level=0):
-        if level == 0 and name in {
-            "finestore.rl.curation",
-            "finestore.rl.source_identity",
-            "taskcompendium.source_fingerprints",
-        }:
+        if level == 0 and (
+            name.startswith(("experiments.", "infra.marina.apps."))
+            or (preview and name in {"finestore.rl.curation", "taskcompendium.source_fingerprints"})
+        ):
             raise ModuleNotFoundError(name)
         return original_import(name, global_namespace, local_namespace, fromlist, level)
 

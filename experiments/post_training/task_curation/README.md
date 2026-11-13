@@ -638,9 +638,16 @@ children also use batch priority and three-day timeouts:
 uv run --no-sync --package marin-core --extra dedup python -m \
   experiments.post_training.task_curation.full_qc_shards review --reviewer-version v3 \
   --work s3://bucket/campaign/shard-work.json --shard-index 0 --shard-count 48 \
-  --max-passes 3 --review-cache s3://bucket/campaign/request-cache-v3 \
+  --max-passes 3 --batch-workers 8 --review-cache s3://bucket/campaign/request-cache-v3 \
   --campaign-output s3://bucket/campaign/worker-000 --run
 ```
+
+`--batch-workers` selects one through 32 concurrent original batches. Each batch
+uses at most `32 // batch_workers` concurrent requests, so a shard sends at most
+32 requests at once. Eight batch workers allow four requests per batch. A
+finished batch immediately frees its slot for another assigned batch while
+slower batches continue. Shard receipts remain ordered by original batch index.
+Scheduling does not change reviewer or request identities.
 
 Each pass retries invalid or unavailable observations under the pinned review
 protocol. Valid observations in partially completed batches are retained,

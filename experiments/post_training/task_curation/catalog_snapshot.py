@@ -36,26 +36,28 @@ from finestore.rl.curation import (
     DaytonaMeasurement,
     JudgmentStatus,
     SnapshotSource,
-    SourceDeclaration,
     SourceQualityResult,
     Verdict,
     register_catalog,
     validate_items,
 )
-from finestore.rl.source_identity import canonical_source_id, canonical_source_map
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.assessment import assessment_inputs, assessment_judgments, validate_coverage
 from zephyr.readers import load_parquet
 
-from experiments.post_training.task_curation.admission_binding import require_declaration_admission
+from experiments.post_training.task_curation.admission_binding import (
+    require_content_result,
+    require_declaration_admission,
+)
 from experiments.post_training.task_curation.campaign import CampaignStatus
+from experiments.post_training.task_curation.catalog_identity import canonical_attempt, canonical_snapshot_source
 from experiments.post_training.task_curation.curation_catalog import RUNS
-from experiments.post_training.task_curation.datasets.admission_censuses import admission_census_receipts
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 
 def assessment_quality_result(items: Iterable[AssessmentItem]) -> SourceQualityResult:
@@ -232,14 +234,21 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             existing = catalog.view.point(SNAPSHOTS, snapshot_id=run_id)
             if existing is not None:
                 return CatalogSnapshot.model_validate({key: existing[key] for key in CatalogSnapshot.model_fields})
-            attempts = list(catalog.attempts(run_id))
+            attempts = [canonical_attempt(attempt) for attempt in catalog.attempts(run_id)]
             if len(attempts) != run["source_count"]:
                 raise ValueError("Assessment attempts do not cover the terminal campaign")
             selected = {row.source_id: row for row in attempts}
             if len(selected) != len(attempts) or None in selected or not set(selected).issubset(by_id):
                 raise ValueError("Campaign sources must be unique members of the catalog inventory")
             pointer = catalog.view.point(CURRENT, name="latest")
-            previous = {row.id: row for row in catalog.sources(pointer["snapshot_id"])} if pointer else {}
+            previous = (
+                {
+                    canonical_source_id(row.id): canonical_snapshot_source(row)
+                    for row in catalog.sources(pointer["snapshot_id"])
+                }
+                if pointer
+                else {}
+            )
             if run["started_at"] is None:
                 raise ValueError(f"Campaign {run_id} has no start time")
             started = datetime.fromisoformat(run["started_at"])
@@ -256,7 +265,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                 and row.declaration.pipeline is not None
             )
             for declaration in declarations:
-                require_declaration_admission(declaration, admission_census_receipts())
+                require_declaration_admission(declaration)
             completed = set(catalog.view.keys(ASSESSMENTS))
             rows = []
             for declaration in declarations:
@@ -331,6 +340,8 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                         diagnostics=diagnostics,
                     )
                 )
+            for row in rows:
+                require_content_result(row.declaration, row.curation, row.assessment_key)
             snapshot = CatalogSnapshot(
                 snapshot_id=run_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )
@@ -381,9 +392,9 @@ def _refresh_snapshot(
                 for row in transform(prior)
             ]
             for row in rows:
-                require_declaration_admission(
-                    SourceDeclaration.model_validate(row["declaration"]), admission_census_receipts()
-                )
+                source = SnapshotSource.model_validate(row)
+                require_declaration_admission(source.declaration)
+                require_content_result(source.declaration, source.curation, source.assessment_key)
             snapshot = CatalogSnapshot(
                 snapshot_id=snapshot_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)
             )
