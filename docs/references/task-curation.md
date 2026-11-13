@@ -1632,8 +1632,10 @@ which remains reserved even with `mkfs.ext4 -m 0`.
 `DISK_FAILURE_MIN_HEADROOM_BYTES` and `DISK_FAILURE_HEADROOM_FRACTION` define the
 classification threshold: a bulk allocation can fail while a smaller write
 still fits. Treating that near-capacity failure as disk pressure lets calibration
-double its current trial disk allocation when the task has no declared disk limit. The threshold classifies failures; it adds no
-bytes to the filesystem and gives command spools no extra storage allowance.
+double its current trial disk allocation when the task has no declared disk limit.
+A failed or signalled command near capacity (zero available inodes, or available bytes < max(1 MiB, 0.5% of `storage_mb` MiB)) is classified DISK even if its failure is unrelated, because doubling disk on an ambiguous near-full failure is cheap during calibration, while missing a real limit causes oracle qualification to wrongly exclude the task instead of retrying with more disk.
+The threshold classifies failures; it adds no bytes to the filesystem and gives
+command spools no extra storage allowance.
 
 Shellbox reports `DiskLimitExceeded` with `ResourceLimit.DISK`, translated by
 Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during the agent phase).
