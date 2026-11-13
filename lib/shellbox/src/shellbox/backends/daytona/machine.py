@@ -547,10 +547,6 @@ class DaytonaMachineFactory:
             image_reference=reference,
         )
 
-    async def _prepare(self, client: AsyncDaytona, spec: MachineSpec) -> str:
-        self._check_spec(spec)
-        return await ensure_snapshot(client, snapshot_request_for_spec(spec))
-
     async def prepare(self, spec: MachineSpec) -> str:
         """Prepare the snapshot used by create without starting a sandbox.
 
@@ -560,8 +556,10 @@ class DaytonaMachineFactory:
             raise ValueError(f"{self.image_build} image builds create no snapshot to prepare")
         client_factory = self._clients()
         timeout = self.create_timeout if spec.startup_timeout is None else spec.startup_timeout
+        self._check_spec(spec)
+        request = snapshot_request_for_spec(spec)
         async with client_factory() as client, asyncio.timeout(timeout):
-            return await self._prepare(client, spec)
+            return await ensure_snapshot(client, request)
 
     async def create(self, spec: MachineSpec) -> DaytonaMachine:
         network = (

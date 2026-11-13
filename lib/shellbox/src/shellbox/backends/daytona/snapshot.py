@@ -149,7 +149,7 @@ def daytona_image(source: RegistryImage | DockerfileSource) -> str | Image:
 
 
 def snapshot_request_for_spec(spec: MachineSpec) -> SnapshotRequest:
-    """Derive the snapshot a machine spec will create."""
+    """Derive a machine spec's validated image source and provider resources."""
     source = spec.source
     if not isinstance(source, (RegistryImage, DockerfileSource)):
         raise UnsupportedMachineSpec("Daytona requires a registry image or Docker build context")
