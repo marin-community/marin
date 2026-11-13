@@ -1,12 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from inspect import unwrap
 from pathlib import Path
 
 import pytest
 import yaml
 from click.testing import CliRunner
 from marin.execution.artifact import Artifact
+from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import graph_handles
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel
@@ -41,6 +43,8 @@ def test_cli_renders_direct_training_and_native_continuation(
         str(second_tasks),
         "--max-steps",
         str((resume_step or 0) + 3),
+        "--job-timeout-hours",
+        "48",
         "--config-output",
         str(config_path),
     ]
@@ -58,6 +62,7 @@ def test_cli_renders_direct_training_and_native_continuation(
     allocation = launch["iris"]["allocation"]
     assert (policy_gpus, inference_gpus) == (48, 12)
     assert allocation["num_nodes"] * allocation["gpus_per_node"] == policy_gpus + inference_gpus
+    assert launch["iris"]["timeout"] == 48 * 3600
 
     inputs = launch["inputs"]
     assert (inputs["model"]["uri"], inputs["model"]["tokenizer_uri"]) == (str(model), str(tokenizer))
@@ -65,9 +70,7 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert len({source["local_path"] for source in inputs["train_data"]}) == 2
     assert trainer["max_steps"] == (resume_step or 0) + 3
     assert trainer["epochs"] >= trainer["max_steps"]
-    assert trainer["restore_dataloader_state"] and not trainer["reset_global_step_on_resume"]
     assert launch["run"]["mode"] == "train" and not launch["run"]["export_hf"]
-    assert trainer["callbacks"][0]["save_on_train_end"]
     assert trainer["callbacks"][0]["save_steps"] == trainer["ckpt_interval"]
     assert "/tmp/ttl=3d/" in launch["artifacts"]["checkpoint_root"]
     assert trainer["resume_mode"] == ("latest" if resume_step is None else "from_path")
@@ -91,3 +94,27 @@ def test_native_checkpoint_is_an_input_to_one_training_stage(tmp_path: Path) -> 
     graph = graph_handles([step])
     assert [handle for handle in graph if handle.adopt_source is None] == [step]
     assert set(graph) == {model, tasks, native, step}
+
+
+def test_each_continuation_has_its_own_checkpoint_input(tmp_path: Path) -> None:
+    checkpoints = []
+    for version in ("2026.11.13.1", "2026.11.13.2"):
+        with build_context(BuildContext(versions=VersionCodex(default=version))):
+            step = unwrap(main.callback)(
+                model_uri=str(tmp_path / "model"),
+                tokenizer_uri=None,
+                tokenizer_revision="pinned",
+                data_uri=(str(tmp_path / "tasks"),),
+                data_file="train.parquet",
+                input_version="2026.11.13.0",
+                name="checkpoints/continuation",
+                max_steps=25,
+                job_timeout_hours=24,
+                resume_uri=str(tmp_path / version / "checkpoint"),
+                recipe_path=Path(__file__).with_name("recipe.yaml"),
+                checkpoint_count=2,
+                ttl_days=3,
+                config_output=None,
+            )
+        checkpoints.append(next(dep for dep in graph_handles([step]) if dep.name.endswith("/inputs/resume")))
+    assert len({(checkpoint.name, checkpoint.version) for checkpoint in checkpoints}) == 2

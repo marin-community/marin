@@ -12,7 +12,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
@@ -55,7 +55,13 @@ TOPOLOGY = SkyRLTopology(
     gpu_variant="GB200",
     role_plan=ROLE_PLAN,
 )
-MEGATRON = MegatronGeometry(1, 12, 4, 4, 1)
+MEGATRON = MegatronGeometry(
+    tensor_model_parallel_size=1,
+    pipeline_model_parallel_size=12,
+    context_parallel_size=4,
+    expert_model_parallel_size=4,
+    expert_tensor_parallel_size=1,
+)
 EXECUTION = IrisSkyRLExecution(
     cluster="cw-us-east-08a",
     cluster_config="lib/iris/config/cw-us-east-08a.yaml",
@@ -67,7 +73,7 @@ EXECUTION = IrisSkyRLExecution(
     target_cluster="cw-us-east-08a",
     parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
     coordinator_timeout_hours=72,
-    job_timeout_seconds=18000,
+    job_timeout_seconds=24 * 60 * 60,
     wandb_entity="marin-community",
     required_env_vars=("DAYTONA_RL_API_KEY", "DAYTONA_EVAL_API_KEY", "MARIN_PREFIX"),
     container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
@@ -147,6 +153,13 @@ def build_run(
     "--name", default="checkpoints/mochi-rl-65k", show_default=True, help="Output name within your user namespace."
 )
 @click.option("--max-steps", type=click.IntRange(min=1), required=True, help="Stop at this absolute optimizer step.")
+@click.option(
+    "--job-timeout-hours",
+    type=click.IntRange(min=1),
+    default=EXECUTION.job_timeout_seconds // 3600,
+    show_default=True,
+    help="GPU job wall-clock limit. Resume from a completed checkpoint if reached.",
+)
 @click.option("--resume-uri", help="Exact native RL checkpoint directory, including model and optimizer state.")
 @click.option(
     "--recipe", "recipe_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=RECIPE_PATH
@@ -166,6 +179,7 @@ def main(
     input_version: str,
     name: str,
     max_steps: int,
+    job_timeout_hours: int,
     resume_uri: str | None,
     recipe_path: Path,
     checkpoint_count: int,
@@ -173,6 +187,7 @@ def main(
     config_output: Path | None,
 ) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(name)
+    version = resolve_version(name, None)
     model = ArtifactHfModel(
         step=ArtifactStep.adopt(f"{name}/inputs/model", input_version, source=model_uri, kind=LevanterCheckpoint),
         relative_path="",
@@ -185,22 +200,24 @@ def main(
         )
         for index, uri in enumerate(data_uri)
     )
-    resume = (
-        ArtifactStep.adopt(f"{name}/inputs/resume", input_version, source=resume_uri) if resume_uri is not None else None
-    )
+    resume = ArtifactStep.adopt(f"{name}/inputs/resume", version, source=resume_uri) if resume_uri is not None else None
     step = build_run(
         name=name,
-        version=resolve_version(name, None),
+        version=version,
         model=model,
         train_data=train_data,
         max_steps=max_steps,
         resume=resume,
         recipe_path=recipe_path,
+        execution=replace(
+            EXECUTION,
+            job_timeout_seconds=job_timeout_hours * 3600,
+            coordinator_timeout_hours=max(EXECUTION.coordinator_timeout_hours, job_timeout_hours + 1),
+        ),
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=checkpoint_count, temporary_storage_ttl_days=ttl_days),
     )
     if config_output is not None and get_job_info() is None:
-        ctx = StepContext.for_run(step.path(), marin_prefix(), runtime_args=step.runtime_args, deps=step.deps)
-        config_output.write_text(step.build_config(ctx).launch_config_yaml)
+        config_output.write_text(materialized_config(step, marin_prefix()).launch_config_yaml)
     return step
 
 

@@ -7,8 +7,9 @@ responses and tool observations; masked padding does not count.
 
 The allocation is 15 four-GPU GB200 hosts in `cw-us-east-08a`, at production
 priority: 48 trainer GPUs with TP1/PP12/CP4/EP4 and one 12-GPU inference engine
-with TP1/PP1/DP12/EP12. Check that the allocated hosts share one NVLink domain.
-The planner checks counts and parallelism; it does not enforce a rack boundary.
+with TP1/PP1/DP12/EP12. Iris keeps this 15-host GB200 gang in one NVLink domain.
+The role planner checks counts and parallelism; other layouts need their own
+placement check.
 Each host requests 120 CPUs, 900 GiB RAM and 2 TiB disk. Loading uses an 8 GiB
 buffer and four requests per inference worker. Compilation and piecewise CUDA
 graphs remain enabled with the required ShortConv exclusions.
@@ -17,6 +18,7 @@ The recipe retains Long Loop's eight-response RLOO-N groups, with two prompts
 per update, the reasoning-marker penalty and error masking. It selects Hero
 MuonH with `expert_normalization: all_experts`, FP32 masters and pinned CPU
 momentum. Supply ordinary mixed-task Parquet artifacts; no length probe is added.
+Each response turn can generate up to 8,192 tokens, with at most four turns.
 
 ## Prerequisites and inputs
 
@@ -85,6 +87,13 @@ scheduler, trainer counter and available rollout state. It writes new checkpoint
 under the new output version. To recover that continuation, select its latest
 completed checkpoint with a new version; `--resume-uri` always selects the exact
 checkpoint supplied. Keep the model, tokenizer, data and topology compatible.
+Find checkpoints under `artifacts.checkpoint_root` in the preview YAML, then
+append `/global_step_N` for the completed step.
+
+The GPU job defaults to a 24-hour limit. Set `--job-timeout-hours` for a longer
+run. A timeout ends the attempt without an automatic retry; recover from the
+latest completed checkpoint as above. Keep inputs and checkpoints for longer
+than the planned run and its recovery window.
 
 Outputs use your user namespace. Recovery checkpoints and traces default to
 the regional three-day TTL, with two rolling checkpoints. `--ttl-days` and
