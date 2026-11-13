@@ -768,6 +768,65 @@ hub, re-pin the sender's `signing_key` to the new version, run `deploy
 sync-secret`, update the sender's Pulumi stack, then drop the old public key and
 roll the hub again.
 
+## Deploying a change to the forwarding servers
+
+A change to Finelog ships to every server that takes part in forwarding, in this
+order: `marin-dev`, the hub `marin`, then the senders `cw-us-east-08a`,
+`cw-us-east-02a` and `cw-rno2a`. Wait about 15 minutes after each step.
+`lib/finelog/scripts/deploy_forwarding.py` runs one step per invocation. Run it
+from a clean checkout of `origin/main`; the image records whether the tree was dirty.
+
+```bash
+uv run python lib/finelog/scripts/deploy_forwarding.py preflight
+export KUBECONFIG=~/.kube/coreweave-iris        # for the senders
+uv run --all-packages --extra deploy python lib/finelog/scripts/deploy_forwarding.py rollout <server> --dry-run
+uv run --all-packages --extra deploy python lib/finelog/scripts/deploy_forwarding.py rollout <server>
+uv run python lib/finelog/scripts/deploy_forwarding.py after <server>
+```
+
+`preflight` reads each server's `/api/server` `.build` and compares it with the
+checkout. It stops on a server whose build commit is unknown or not fetched, and
+on a server whose catalog migrations differ from the checkout's: the older
+binary can't open a migrated catalog, so that deploy is roll-forward-only. It
+also stops on a sender whose `signing_key`, `remote_log_dir` or
+`object_storage_endpoint` changed, because its `<name>-env` Secret must be
+re-synced with `finelog deploy sync-secret` before the rollout. Its last line
+names the next server in the order that doesn't run the checkout.
+
+Both stops have a way through `rollout`. After re-syncing the Secret, pass
+`--secret-synced`. To ship a catalog migration, pass `--roll-forward-only`: the
+rollout then asks you to type `roll-forward` as well as `yes`, and prints that
+there is no rollback once the new binary boots. When rollback stays possible,
+the plan counts the store commits in range; skim them for an object-state
+format change, which a rollback can't cross either.
+
+`rollout` repeats that gate for one server and also requires every earlier
+server to run the checkout. The hub reuses marin-dev's image without
+rebuilding, so it also checks that `:latest` still resolves to the digest
+marin-dev runs. For a sender it checks `KUBECONFIG` and the `patch deployments`
+and `create pods/exec` permissions that Pulumi's `verify` step needs. It prints
+the plan and the rollback command, waits for a typed `yes`, logs Docker in to
+GHCR through `gh auth token`, and then runs `safe_deploy.py rollout` (GCE) or
+`marin-deploy finelog rollout` (Kubernetes). Both of those restore the previous
+version themselves when the new one fails its health check. `rollout` then
+confirms the new build commit, searches the sender's log for forwarder errors,
+waits 15 minutes and runs `after`. `--dry-run` stops after the plan and changes
+nothing.
+
+`after` runs the hub's forwarding checks one at a time, because the hub admits
+only two queries at once: failed or rejected batches (A), accepted volume per
+sender per 15 minutes (B), the newest forwarded `iris.task_state` row (C), and
+the newest forwarding counter (C2). It reports a failure when a sender has
+accepted nothing for two complete buckets, when a permanent outcome
+(`permanent_rejection`, `schema_conflict` or `retention_eviction`) appears, or
+when a sender's newest row or counter is more than 5 or 7 minutes old. C also
+times the hub: it normally answers in about 2 seconds, and the script warns
+above 10. If C hits the hub's 30-second deadline, read C2 instead.
+
+`secret-presence <sender>` is for the operator to run before a `sync-secret`.
+It reports whether the R2 shell variables and each expected Secret key are set,
+and never prints a value.
+
 ## Checking that a server is ingesting
 
 `/health` answers 200 whenever the process is listening, and it is also the

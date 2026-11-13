@@ -12,19 +12,25 @@ PersistentVolumeClaim. The `<config.name>-env` Kubernetes Secret (for example,
 
 ## Update a server
 
-Authenticate to GHCR and select the target cluster explicitly:
+To ship a Finelog change to all the forwarding servers in order, with a
+rollback gate before each step and forwarding checks after it, use
+`lib/finelog/scripts/deploy_forwarding.py`; see
+[Deploying a change to the forwarding servers](../../lib/finelog/OPS.md#deploying-a-change-to-the-forwarding-servers).
+To update one stack directly, authenticate to GHCR and select the target cluster
+explicitly:
 
 ```bash
 uv sync --all-packages --extra deploy
 pulumi login gs://marin-iac-state
 export KUBECONFIG=~/.kube/coreweave-iris
-export R2_KEY_ID=...
-export R2_KEY_SECRET=...
-docker login ghcr.io
+gh auth token | docker login ghcr.io -u "$(gh api user -q .login)" --password-stdin
 
-uv run finelog deploy sync-secret <cluster>
 uv run marin-deploy finelog rollout <cluster>
 ```
+
+Run `finelog deploy sync-secret <cluster>` first, with `R2_KEY_ID` and
+`R2_KEY_SECRET` exported, only when the Secret's inputs change: the forwarding
+`signing_key`, `remote_log_dir`, `object_storage_endpoint`, or rotated R2 keys.
 
 `marin-deploy finelog rollout` captures the active Kubernetes Deployment revision before
 running `pulumi up` for the matching stack. Pulumi builds
