@@ -26,9 +26,11 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
+from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.numbers_pipeline import (
     NUMBERS_DATASET,
@@ -40,20 +42,30 @@ from lib.taskcompendium.tests.deduplication_fixtures import deduplication_eviden
 
 
 @pytest.fixture(autouse=True)
-def numeric_actor_census(monkeypatch):
-    sources = driver.all_sources()
-    source = sources["HuggingFaceH4:aime24"]
-    sources[source.info.id] = replace(
-        source,
-        info=replace(
-            source.info,
-            daytona_machine_slots=0,
-            daytona_snapshot_count=0,
-            daytona_execution_failures=0,
-            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
-        ),
-    )
+def numeric_actor_census(request, monkeypatch):
+    if request.node.get_closest_marker("data_integration") is not None:
+        sources = driver.all_sources()
+    else:
+        sources = {}
+        for source in skyrl_math.sources():
+            if source.info.id not in {"HuggingFaceH4:aime24", "OpenAI:gsm8k"}:
+                continue
+            sources[source.info.id] = replace(
+                source,
+                info=replace(
+                    source.info,
+                    count=1,
+                    within_source_dedup=deduplication_evidence(
+                        source.dataset.name, source.dataset.revision, source.version
+                    ),
+                    daytona_machine_slots=0,
+                    daytona_snapshot_count=0,
+                    daytona_execution_failures=0,
+                    daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+                ),
+            )
     monkeypatch.setattr(driver, "all_sources", lambda: sources)
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: sources)
 
 
 @pytest.fixture(autouse=True)
@@ -448,6 +460,7 @@ def test_publication_retains_registered_sources_without_placement(tmp_path, desc
     assert release["task_count"] == 1
 
 
+@pytest.mark.data_integration
 def test_corpus_resume_refreshes_registered_source_metadata(tmp_path, monkeypatch, description_server):
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.load_harrier",
@@ -505,5 +518,5 @@ def test_corpus_resume_refreshes_registered_source_metadata(tmp_path, monkeypatc
     assert sources["HuggingFaceH4:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
-    retired = json.loads((Path(__file__).parents[1] / "retired-inventory-only.json").read_text())
+    retired = read_registry_json(Path(__file__).parents[1] / "retired-inventory-only.json")
     assert {row["id"] for row in retired["entries"] if row["disposition"] != "quick_converted"}.isdisjoint(sources)

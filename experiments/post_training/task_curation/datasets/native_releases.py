@@ -3,7 +3,6 @@
 
 """Executed QUICK releases recovered from the retired source ledger."""
 
-import json
 from pathlib import Path
 
 from finestore.rl.curation import (
@@ -21,6 +20,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.native_release import import_native_quick
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_REASON, CROSSCODE_EVAL_SOURCE_IDS
 
@@ -42,7 +42,7 @@ PYTHON_QC_ARTIFACT = (
 
 def sources() -> list[RlDataSource[PrebuiltCohort]]:
     result = []
-    for entry in json.loads(LEDGER.read_text())["entries"]:
+    for entry in read_registry_json(LEDGER)["entries"]:
         if entry["disposition"] != "quick_converted":
             continue
         release = entry["disposition_release"]
