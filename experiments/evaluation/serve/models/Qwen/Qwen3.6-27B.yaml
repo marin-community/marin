@@ -1,0 +1,22 @@
+name: qwen3.6-27b
+location: Qwen/Qwen3.6-27B
+revision: 8f33b98937c6031bb49e713dee3e8e185aafd26f
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+serve:
+  # The model card's recipe: tensor parallel over 8 GPUs.
+  tensor_parallel_size: 8
+  # The TBLite eval context window (ot-tblite-recovery gives terminus-2 32k), matching Qwen3.6-35B-A3B.
+  max_model_len: 32768
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  vllm_extra_args:
+  - --enable-prefix-caching
+  # The card's thinking-mode sampling, also the card's Terminal-Bench 2.0 (Harbor/Terminus-2) setting.
+  - --override-generation-config
+  - '{"temperature":1.0,"top_p":0.95,"top_k":20,"min_p":0.0,"presence_penalty":0.0,"repetition_penalty":1.0}'
+agent:
+  agent_kwargs:
+    thinking_format: qwen-chat-template
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
