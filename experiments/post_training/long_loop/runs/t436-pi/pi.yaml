@@ -1,0 +1,56 @@
+name: long-loop/t436-pi-1005
+marin_revision: 4d8b788a32ce01b967448b8c5425ce0f77cced28
+datasets:
+  sft:
+    path: sft-contrib-data.yaml
+    sha256: b655f8e8e263ca29f24f6cdd76648aa55732e963a09d0329e3bc19900c83a4ae
+  nonagentic:
+    path: nonagentic.yaml
+    sha256: c0ed43ff6f46efb553a7fdccba9a574880d545978899d2c0cd84bbfca717b08c
+  agentic:
+    path: agentic.yaml
+    sha256: b10b4b9bf3921c1b0d6b8a67aceb717302e291d7414658a287c178ace66736d3
+  heldout:
+    path: heldout.yaml
+    sha256: a1d1d03ee1c8c074ea9d49830dc41276e6e95848e9ee9420c5a8a528c117f3cc
+  exclusions:
+    path: exclusions.yaml
+    sha256: fa32d39277ca0d9590aac8fcd30d95df9ecb694d5608fb4e9166463484d69cb2
+  evaluation:
+    path: evaluation-data.yaml
+    sha256: 0064c4384975ab758a89d27533a32c958192ff4c06f12ffd91354aa6289934e0
+sft:
+  path: sft-contrib.yaml
+  sha256: 0c8e0aa4d4e83e72ac18a411686cd83e7c7e499ddf351005943d5ebbb8c79768
+initializer:
+  path: initializer-1005.yaml
+  sha256: a82aea18830b0346df9977fd6c66034660994f91a7428c7b43aa2961383544a6
+tokenizer:
+  path: tokenizer.yaml
+  sha256: cb277633176646056eb4dcf43e9d5bb88cfe321597cf3e704340335176a15bf1
+endpoint:
+  path: endpoint.yaml
+  sha256: 8368803744d250e8c2f86ca0c959214ef386876a18a8d4a598827da2f61d276d
+execution:
+  path: execution.yaml
+  sha256: 5b42d8716aac45db7e7a3fe27982d70fdbabee0fba6bc95a7ce106b004474f12
+archive:
+  path: archive.yaml
+  sha256: 10412b80e40f1431eb03aec445ae93746f209e7adc5aa552f69b4cb2ce843724
+rl:
+  path: rl.yaml
+  sha256: 5f3d75e6991dbc791b5ed0920b88c486380ac1f3ad7aa00a6ab38bae03361d5c
+evaluation:
+  path: evaluation.yaml
+  sha256: ed20c76e201ac51b129ff6df250dbf89e4ba9ee5b18e2bbdb52dc7db4f8b30d1
+smoke_overrides:
+  sft_steps: 2
+  rl_steps: 2
+  eval_tasks_per_benchmark: 1
+  eval_replicas: 1
+storage:
+  output_prefix: s3://marin-rno2a/tmp/ttl=14d/long-loop-t436-micro
+  temporary_prefix: s3://marin-rno2a/tmp/ttl=3d/long-loop-t436-micro
+adopted_sft:
+  path: adopted-sft-20261005.yaml
+  sha256: 527a15b0f93f7586ce48c166521940309e60fde5842948ca42608579d933b198

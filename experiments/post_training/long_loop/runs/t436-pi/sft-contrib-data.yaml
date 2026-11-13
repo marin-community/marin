@@ -1,0 +1,67 @@
+data:
+  tokenizer: s3://marin-us-east-02a/marin/grug_sft/tokenizer/2026.09.18
+  vocab_size: null
+  cache_dir: null
+  enforce_eos: false
+  auto_build_caches: false
+  chat_template: null
+  shuffle: false
+  block_cross_document_attention: true
+  stop_strategy: restart
+  mixture_block_size: 2
+  components:
+    epoch-0:
+      type: cached
+      cache_dir: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-0/train
+      format: &id001
+        type: prebuilt
+        input_ids_key: input_ids
+        loss_weights_key: loss_weights
+      pack: false
+      split: train
+      flat_cache: true
+    epoch-1:
+      type: cached
+      cache_dir: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-1/train
+      format: *id001
+      pack: false
+      split: train
+      flat_cache: true
+    epoch-2:
+      type: cached
+      cache_dir: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-2/train
+      format: *id001
+      pack: false
+      split: train
+      flat_cache: true
+  train_weights:
+  - - 0
+    - epoch-0: 1.0
+      epoch-1: 0.0
+      epoch-2: 0.0
+  - - 226
+    - epoch-0: 0.0
+      epoch-1: 1.0
+      epoch-2: 0.0
+  - - 452
+    - epoch-0: 0.0
+      epoch-1: 0.0
+      epoch-2: 1.0
+files:
+- uri: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-0/train/shard_ledger.json
+  sha256: 232477641413cd7858417e7b575fe97e3b1d00aa6845cb4913b68a267b0be63a
+- uri: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-1/train/shard_ledger.json
+  sha256: 232477641413cd7858417e7b575fe97e3b1d00aa6845cb4913b68a267b0be63a
+- uri: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/epoch-2/train/shard_ledger.json
+  sha256: 232477641413cd7858417e7b575fe97e3b1d00aa6845cb4913b68a267b0be63a
+- uri: s3://marin-rno2a/tmp/ttl=14d/long-loop-436/contrib-v01-packed262k/summary.json
+  sha256: 2d848c515a37d007832c3509c6e95631a72daab080f6ef0f67b0ba11b1a67209
+provenance:
+  source: s3://marin-us-east-02a/marin/experiments/sft-shootout/rows/t202-contrib-v01-20261022/plain
+  manifest_sha256_prefix: 507e73f0
+  packing: 8 consecutive 32,768-token rows per 262,144-token row; runs/t436/build_packed_cache.py
+  rows_per_epoch: 3616
+  packed_rows_per_epoch: 452
+  updates_per_epoch: 226
+  supervised_tokens_per_epoch: 16137263
+sections: {}
