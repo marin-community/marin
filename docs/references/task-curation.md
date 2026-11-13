@@ -18,9 +18,10 @@ Building the catalog performs no downloads, inference or job submission.
 [Evaluation tasks](evaluation-tasks.md) use population-preserving publication and
 carry execution protocols beside canonical tasks. Name them explicitly with
 `--source` and `--mode quick`; the default selection contains training sources.
-`experiments.post_training.task_curation.evaluation.EvalDataset` binds the recipe,
-protocol, and item builder. TaskCompendium owns the reusable source importers and
-corpus publisher; the experiment owns acquisition and artifact graphs.
+`experiments.evaluation.preparation.EvaluationCorpusRecipe` binds the recipe,
+protocol, and item builder. Evaluation owns shot selection and prompt preparation;
+shared curation code supplies acquisition and catalog publication. TaskCompendium
+owns reusable source importers and the corpus publisher.
 
 ## Pipeline overview
 
@@ -200,8 +201,8 @@ reference semantics requires a separate decision.
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
 The implementation is
 [`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
-It depends on the recipe's admitted source artifacts and a pinned heldout
-Parquet. Selection reads only `final/*.parquet` from training sources whose
+It depends on the recipe's admitted source artifacts and a list of pinned heldout
+inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
@@ -219,11 +220,12 @@ this small recipe selects 100 calendar tasks from two admitted sources:
     "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
   },
   "family_limits": {"calendar": 100},
-  "heldout": {
+  "heldout": [{
     "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
     "version": "2026.10.23.1",
-    "rows": 910
-  },
+    "rows": 910,
+    "format": "historical"
+  }],
   "validation_per_family": 20,
   "seed": 20261023
 }
@@ -261,12 +263,88 @@ a shortfall fails before publishing the training files. These rules provide
 exact overlap checks, not semantic decontamination.
 
 The artifact contains `train.parquet`, the per-family evaluation sample in
-`validation.parquet`, the complete exclusion set in `full_validation.parquet`,
-and `summary.json` with the recipe, source paths, eligible/overlap/duplicate/selected
-counts and evaluation IDs. Each Parquet has a `task_spec` JSON column. Source
-TaskSpecs retain their private graders and resources. The historical structural
-heldout tasks use the shared closure converter. SkyRL chooses rollout limits,
-harnesses and verifier backends when it loads these canonical tasks.
+`validation.parquet`, and the complete exclusion set in `full_validation.parquet`.
+These files have a `task_spec` JSON column. `summary.json` records the recipe,
+source paths, eligible/overlap/duplicate/selected counts, evaluation IDs and
+grader-kind counts for each file.
+
+`task_manifest.parquet` records every heldout task's `task_id`, `family`,
+`aaii_category`, `agentic` flag, `grader_kind` and `upstream_pass_rate` (NVIDIA's
+eight-sample rate where available). The evaluation sample is a subset of this
+complete heldout manifest. Historical Nemotron panel tasks use the package
+environment from an admitted task in their matching training component; their
+private grader resources and command stay attached to each task. The historical
+structural heldout tasks use the shared closure converter. SkyRL chooses rollout
+limits, harnesses and verifier backends when it loads these canonical tasks.
+
+### EvalLite
+
+EvalLite is a fixed sample of 1,500 public benchmark tasks that RL runs
+grade on the training job's own machines, with no container image or judge
+service. It draws only from evaluation sources and skips any task that matches
+training data or the 910-task development panel, which tuning looks at. It
+compares checkpoints of one model; it is not a headline benchmark (use
+[`experiments/evaluation`](https://github.com/marin-community/marin/tree/main/experiments/evaluation) for that) and does not
+cover multi-turn agent work or long context.
+
+| family | sources (tasks) | fast subset |
+|---|---|---|
+| scientific_reasoning | MATH500 (500), AIME24 (20) | 35 |
+| general | MMLU-Pro (200), GPQA-Diamond (50) | 17 |
+| competitive_coding | HumanEval+ (164), MBPP+ (111) | 18 |
+| structural | IFEval (150), IFBench (140) | 19 |
+| agents | NeMo next tool call (165) | 11 |
+
+Benchmark tasks come from the catalog's Evalchemy corpora, asked once in chat
+form without examples. An agents task shows a tool-use conversation and asks for
+the next tool call; only the exact function name with exact JSON arguments
+scores 1. It measures tool-call accuracy, not agent ability. The agents part
+stays only while the starting model passes 5%–95% of its answers; the published
+panel measured 19.2%.
+
+To change the panel:
+
+1. Edit the parts of
+   [`recipes/eval-lite.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/eval-lite.json)
+   (`source_id`, `family`, `count`, `fast_counts`) and its `version`. A new source
+   is a `SourceInfo` plus `CurationRecipe(HfSource(...), convert,
+   intended_use=IntendedUse.EVAL)` registered in `sources.py`, as in
+   [`nemo_tool_calls.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/nemo_tool_calls.py).
+   Its tasks need the `eval` tag and an in-process or package grader.
+2. Set `CORPUS_URI` to the converted corpus artifact from the campaign, then build it:
+
+   ```bash
+   uv run --package marin-core --extra cpu python -m experiments.post_training.task_curation.driver \
+     --corpus "$CORPUS_URI" \
+     --eval-lite experiments/post_training/task_curation/recipes/eval-lite.json --run
+   ```
+
+3. Measure the starting model with eight answers per task (temperature 1.0,
+   24,576-token window, at most 8,192 generated tokens), add the result as
+   `pass_rates`, and publish that as the final version. Rows bind a task by the
+   SHA-256 of its TaskSpec, so rows of unchanged tasks can be reused. A separate
+   greedy evaluation must score at least 99% of tasks with zero grading errors.
+
+The artifact contains `full_validation.parquet` (all tasks), `validation.parquet`
+(fast subset), `task_manifest.parquet` (family, category, grader kind, source,
+license and difficulty per task) and `summary.json`.
+
+### Rebuild a Snowball training selection
+
+`recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
+admitted training sources, with a quota for each source. It excludes the
+development panel (`heldout`) and EvalLite (`exclusions`) by task ID, full
+conversation and whitespace-normalized final user statement, and refuses tasks
+that need a container image or a judge service.
+
+The checked-in recipe names version `2026.11.10.1`, which is not yet published;
+build it before training on it. The published `snowball-100k@2026.11.04.1` was
+built before EvalLite and has no `exclusions`; the panel build excludes it
+instead, and existing Snowball controls use it. Published versions are frozen;
+any recipe change takes a new version.
+
+Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
+`--run`. Use a separate `--artifact-root` for an independent rebuild.
 
 ## Dataset-owned invocation
 

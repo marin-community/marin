@@ -13,7 +13,7 @@ from typing import cast
 
 import click
 from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
-from finestore.rl.source_identity import canonical_source_id, original_source_id
+from finestore.rl.source_identity import canonical_source_id
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -63,7 +63,13 @@ from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     curation_embedding_pipeline,
 )
-from experiments.post_training.task_curation.inventory import SelectionRecipe, task_selection_step
+from experiments.post_training.task_curation.inventory import (
+    SELECTION_INPUT_PREFIX,
+    EvalLiteRecipe,
+    SelectionRecipe,
+    eval_lite_step,
+    task_selection_step,
+)
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
@@ -268,19 +274,19 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
     return _CorpusSources(roots, inventory, document["population"])
 
 
-def _selection_pass(corpus: _CorpusSources, recipe: SelectionRecipe, *, cache_dir: Path | None, do_run: bool) -> None:
-    if corpus.population != "admitted":
-        raise click.UsageError("Task selection requires an admitted corpus from SAMPLE or FULL curation")
-    curated = {
-        source_id: ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/source-{index}", recipe.version, root)
-        for index, (source_id, root) in enumerate(
-            sorted(corpus.roots.items(), key=lambda item: original_source_id(item[0]))
-        )
+def _corpus_inputs(corpus: _CorpusSources, population: str, name: str, version: str) -> dict[str, ArtifactStep]:
+    if corpus.population != population:
+        raise click.UsageError("EvalLite requires a converted corpus; training selection requires an admitted corpus")
+    return {
+        source_id: ArtifactStep.adopt(f"{SELECTION_INPUT_PREFIX}/{name}/{source_id}", version, root)
+        for source_id, root in sorted(corpus.roots.items())
     }
+
+
+def _selection_pass(step: ArtifactStep, *, cache_dir: Path | None, do_run: bool) -> None:
     with ExitStack() as scope:
         if cache_dir is not None:
             scope.enter_context(artifact_prefix(str(cache_dir)))
-        step = task_selection_step(curated, recipe)
         if do_run:
             result = run(step, max_concurrent=1)[0]
             click.echo(json.dumps({TASK_SELECTION_KEY: result.path}, indent=2))
@@ -402,6 +408,7 @@ def _embedding_pass(
 @click.option("--corpus", help="Run embedding or selection from a completed corpus.json without rerunning curation.")
 @click.option("--embed", type=click.Choice(EMBEDDING_STAGES), help="Run this embedding stage after curation.")
 @click.option("--selection", help="Selection recipe JSON: append task-selection after FULL or an admitted --corpus.")
+@click.option("--eval-lite", help="EvalLite recipe JSON: select from a completed converted --corpus.")
 @click.option("--representation", type=click.Choice(["direct", "rewrite"]), default="direct", show_default=True)
 @click.option("--embedding-sample-size", type=click.IntRange(min=1), help="Seeded embedding sample per source.")
 @click.option("--catalog-root", help="Immutable directory containing curriculum.json; defaults to TASK_CURRICULUM.")
@@ -510,6 +517,7 @@ def main(
     corpus: str | None,
     embed: str | None,
     selection: str | None,
+    eval_lite: str | None,
     representation: str,
     embedding_sample_size: int | None,
     catalog_root: str | None,
@@ -551,8 +559,10 @@ def main(
         )
     if mode is None and corpus is None:
         raise click.UsageError("Supply --mode or --corpus")
-    if corpus is not None and embed is None and selection is None:
-        raise click.UsageError("--corpus requires --embed or --selection")
+    if corpus is not None and embed is None and selection is None and eval_lite is None:
+        raise click.UsageError("--corpus requires --embed, --selection or --eval-lite")
+    if eval_lite is not None and (corpus is None or selection is not None or embed is not None):
+        raise click.UsageError("--eval-lite requires --corpus and cannot combine with --selection or --embed")
     if corpus is not None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("--corpus uses completed conversions; omit local input overrides")
     configure_coreweave_s3()
@@ -563,7 +573,7 @@ def main(
     selection_recipe = (
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
-    selected = _selected_sources(sources, processing_mode)
+    selected = _selected_sources(sources, processing_mode) if corpus is None else {}
     if decontamination_receipt is not None:
         decontamination = LexicalContaminationEvidence.model_validate_json(
             StoragePath(decontamination_receipt).read_text()
@@ -589,8 +599,15 @@ def main(
     if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require local execution")
     if corpus is not None and embed is None:
-        assert selection_recipe is not None
-        _selection_pass(_corpus_sources(corpus), selection_recipe, cache_dir=cache_dir, do_run=do_run)
+        if eval_lite is not None:
+            panel = EvalLiteRecipe.model_validate_json(StoragePath(eval_lite).read_text())
+            inputs = _corpus_inputs(_corpus_sources(corpus), "converted", panel.name, panel.version)
+            step = eval_lite_step(inputs, panel)
+        else:
+            assert selection_recipe is not None
+            inputs = _corpus_inputs(_corpus_sources(corpus), "admitted", selection_recipe.name, selection_recipe.version)
+            step = task_selection_step(inputs, selection_recipe)
+        _selection_pass(step, cache_dir=cache_dir, do_run=do_run)
         return
     if embed is not None:
         review_cache = review_cache or (str(cache_dir / "review-cache") if cache_dir else None)

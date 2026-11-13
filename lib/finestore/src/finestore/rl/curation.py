@@ -115,6 +115,7 @@ class SourceOrigin(StrEnum):
     GRETEL = "Gretel"
     HARBOR_HUB = "Harbor Hub"
     HUGGINGFACEH4 = "HuggingFaceH4"
+    LM_EVAL = "lm-eval"
     MARIN = "Marin"
     NEMOTRON = "Nemotron"
     OPEN_R1 = "Open-R1"

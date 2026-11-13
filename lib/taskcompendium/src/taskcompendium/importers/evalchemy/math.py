@@ -12,11 +12,47 @@ from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.importers.evalchemy.grader import source_package
 from taskcompendium.importers.evalchemy.judge_prompts import EQUIVALENCE_JUDGE_TEMPLATE
 from taskcompendium.importers.evalchemy.scorers.olympiad import reference_answers
+from taskcompendium.importers.fewshot import Document, FewshotPolicy, FewshotSampling, GenerationTemplate, pinned_prompts
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import ImportRejection, RawRow
 
 MATH_PROMPT = "Problem: {problem}\nMark your solution with \\boxed\nAnswer:"
+
+
+def gsm8k_cot_prompt(doc: Document) -> str:
+    return "Q: " + doc["question"] + "\nA:"
+
+
+def gsm8k_cot_demonstration(doc: Document) -> str:
+    return gsm8k_cot_prompt(doc) + " " + doc["target"] + "\n\n"
+
+
+def gsm8k_cot_template() -> GenerationTemplate:
+    return GenerationTemplate(
+        "gsm8k_cot",
+        gsm8k_cot_prompt,
+        gsm8k_cot_demonstration,
+        FewshotPolicy(8, FewshotSampling.FIRST, examples=tuple(pinned_prompts()["gsm8k_cot"])),
+    )
+
+
+def minerva_prompt(doc: Document) -> str:
+    return "Problem:\n" + doc["problem"] + "\n\nSolution:"
+
+
+def minerva_demonstration(doc: Document) -> str:
+    return minerva_prompt(doc) + " " + doc["solution"] + "\n\n"
+
+
+def minerva_template(subject: str = "") -> GenerationTemplate:
+    return GenerationTemplate(
+        "minerva_math",
+        minerva_prompt,
+        minerva_demonstration,
+        FewshotPolicy(4, FewshotSampling.FIRST, examples=tuple(pinned_prompts()["minerva_math"])),
+        subject=subject,
+    )
 
 
 def boxed_math_task(
