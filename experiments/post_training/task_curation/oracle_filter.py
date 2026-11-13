@@ -122,7 +122,13 @@ def trial_receipt(path: Path) -> OracleTrialReceipt:
     document = decode_json_value(path.read_text())
     native = Path(document["config"]["task"]["path"])
     package = harbor_inspection("tasks", [str(native)])[str(native)]
-    if package["task_checksum"] != document["task_checksum"]:
+    return receipt_from_trial(path, document, package["task_checksum"])
+
+
+def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> OracleTrialReceipt:
+    """Read a trial's evidence against its measured native checksum."""
+    native = Path(document["config"]["task"]["path"])
+    if native_checksum != document["task_checksum"]:
         raise ValueError(f"Native task changed after its oracle trial: {native}")
     verdict_path = path.parent / "verifier/verdict.json"
     verdict = decode_json_value(verdict_path.read_text()) if verdict_path.exists() else None
@@ -189,6 +195,7 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
     seen = {}
     paths = sorted(jobs.rglob("result.json"))
     validated = harbor_inspection("results", [str(path) for path in paths])
+    documents = {}
     for path in paths:
         document = decode_json_value(path.read_text())
         if str(path) not in validated:
@@ -201,7 +208,12 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
         seen[document["id"]] = digest
         if document["config"]["agent"]["name"] != "oracle":
             raise ValueError(f"Non-oracle trial in filter job: {path}")
-        receipt = trial_receipt(path)
+        documents[path] = document
+    native_paths = sorted({document["config"]["task"]["path"] for document in documents.values()})
+    packages = harbor_inspection("tasks", native_paths) if native_paths else {}
+    for path, document in documents.items():
+        native = document["config"]["task"]["path"]
+        receipt = receipt_from_trial(path, document, packages[native]["task_checksum"])
         trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
 
