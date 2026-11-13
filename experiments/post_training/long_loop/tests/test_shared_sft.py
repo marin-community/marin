@@ -3,13 +3,19 @@
 
 import copy
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import draccus
+import numpy as np
 import pytest
 import yaml
 from fray.types import ResourceConfig
+from haliax import Axis
 from levanter.checkpoint import save_checkpoint
+from levanter.data.text.datasets import dataset_for_component
+from levanter.store.cache import SerialCacheWriter
+from levanter.utils.thread_utils import blocking_wait
 from marin.execution.lazy import ArtifactStep, StepContext
 
 from experiments.post_training.long_loop.run_spec import resolve_spec
@@ -113,6 +119,40 @@ def test_native_handoff_preserves_exported_weights_and_declares_rl_context(tmp_p
     assert json.loads((tmp_path / "handoff/handoff.json").read_text())["native_checkpoint"] == str(
         root / "checkpoints/step-2"
     )
+
+
+def test_chat_recipe_packs_256_documents_without_changing_replay_or_loss_masks(tmp_path):
+    resolved = resolve_spec(SPEC, smoke=True)
+    spec = shared_sft_spec("test/sft", "2026.11.13.6", resolved["sft"])
+    data = spec.prepared_data
+    component = data.components["sft/source/identity-data"]
+    document = np.asarray([128006, 78191, 128007, 198, 40, 41, 128009], dtype=np.int32)
+    with SerialCacheWriter(str(tmp_path), {"input_ids": np.empty(0, dtype=np.int32)}) as writer:
+        writer.write_batch([{"input_ids": document} for _ in range(257)])
+    native = dataset_for_component(
+        replace(component, cache_dir=str(tmp_path)),
+        Axis("position", spec.seq_len),
+        writer.result(),
+        eos_id=None,
+        block_cross_document_attention=True,
+    )
+    first, second = blocking_wait(native.get_batch([0, 1]))
+    np.testing.assert_array_equal(np.asarray(first.tokens)[: 256 * len(document)], np.tile(document, 256))
+    np.testing.assert_array_equal(
+        np.asarray(first.attn_mask.segment_ids[0])[: 256 * len(document)], np.repeat(np.arange(256), len(document))
+    )
+    expected = np.zeros(spec.seq_len)
+    for index in range(256):
+        expected[index * len(document) + 3 : index * len(document) + 6] = 1
+    np.testing.assert_array_equal(np.asarray(first.loss_weight), expected)
+    np.testing.assert_array_equal(np.asarray(second.tokens)[: len(document)], document)
+    assert np.count_nonzero(np.asarray(second.loss_weight)) == 3
+    encoded = draccus.encode(data)
+    for name, parent in encoded["components"].items():
+        leaves = parent["children"].values() if parent["type"] == "concat" else [parent]
+        for leaf in leaves:
+            if name.startswith("pretrain/"):
+                assert leaf["pack"] is None and leaf["format"]["type"] == "text"
 
 
 @pytest.mark.parametrize("per_device_parallelism", [1, 2])
