@@ -814,7 +814,6 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     qb_beta = router_metrics.get("qb_beta_per_layer")  # per-layer per-expert beta; router_bias = -qb_beta
     num_layers = int(routing_entropy.shape[0])
 
-    # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
     assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
     capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
     sender_overflow_rate = sender_capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)

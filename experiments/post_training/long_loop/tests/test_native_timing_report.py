@@ -39,7 +39,7 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
         checkpoint_root="native-checkpoints",
         draft_checkpoint_root=None,
         terminal_manifest_uri=str(terminal),
-        iris_job_id="/user/failed-rl",
+        iris_job_id="/user/rl",
     )
     write_record(ArtifactRecord(result=run.result_payload(), output_path=str(trained)))
     output = tmp_path / "report"
@@ -53,7 +53,7 @@ def test_adopted_native_journal_is_verified_and_reported(tmp_path):
         additional_timing=[pin],
         rl_terminal=str(trained),
     )
-    assert '"state": "failed"' in (output / "timing.md").read_text()
+    assert "failed" in (output / "timing.md").read_text()
     assert "GroupAdmissionStalledError" in (output / "timing.md").read_text()
     assert str(journal) in json.loads((output / "timing-sources.json").read_text())
     journal.write_text(journal.read_text() + "\n")

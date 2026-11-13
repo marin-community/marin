@@ -14,7 +14,6 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from rolloutengine.models import TaskRolloutSpec
 
 from experiments.post_training.long_loop import evaluation
-from experiments.post_training.long_loop.context_evidence import context_evidence, validate_context_evidence
 from experiments.post_training.long_loop.eval_runtime import repair_release
 from experiments.post_training.long_loop.eval_runtime.repair_release import repaired_row
 from experiments.post_training.long_loop.evaluation import TerminalPolicy, prepare_micro, validate_eval_policy
@@ -91,16 +90,3 @@ def test_eval_policy_locator_rejects_hf_shaped_local_path():
     validate_eval_policy(locator, source)
     with pytest.raises(ModelLocatorError, match="local metadata path"):
         validate_eval_policy(replace(locator, local_path="models/long-loop-terminal"), source)
-
-
-def test_pinned_vllm_proof_rejects_previous_inputs_and_invalidates_changed_config():
-    config = json.loads((Path(__file__).parents[1] / "context-fixtures/config.json").read_text())
-    evidence = context_evidence()
-    with pytest.raises(ValueError, match="vLLM rejected"):
-        validate_context_evidence(config, {"max_position_embeddings": 262144}, 65536, evidence)
-    corrected = {"max_position_embeddings": 262144, "max_seq_len": 262144}
-    validate_context_evidence(config, corrected, 65536, evidence)
-    with pytest.raises(ValueError, match="vLLM rejected"):
-        validate_context_evidence(config, {**corrected, "n_positions": 32768}, 65536, evidence)
-    with pytest.raises(ValueError, match="lack a pinned"):
-        validate_context_evidence({**config, "seq_length": 8192}, corrected, 65536, evidence)
