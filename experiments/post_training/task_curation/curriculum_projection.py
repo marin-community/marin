@@ -16,7 +16,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.curation import SourceDeclaration
 from fray.types import ResourceConfig
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -459,11 +459,27 @@ def project_curriculum(
         ],
         "vectors_recomputed": 0,
         "scores_recomputed": 0,
+        "embedding_cache_reads": 0,
+        "embedding_cache_misses": 0,
         "samples_rebuilt_from_selected_population": True,
         "all_selected_statistics_unchanged": True,
     }
     (root / "projection-receipt.json").write_text(json.dumps(receipt, indent=2))
     return SemanticArtifact(path=output_root, paths=data.paths)
+
+
+def curriculum_projection_step(
+    inputs: ProjectionInputs, reference: ManifestReference, runtime: CampaignRuntime
+) -> ArtifactStep[SemanticArtifact]:
+    return apply(
+        f"rl-semantics/live-projection-{reference.sha256[:16]}",
+        partial(project_curriculum, runtime),
+        version=PROJECTION_VERSION,
+        artifact_type=SemanticArtifact,
+        inputs=inputs,
+        inputs_reference=reference,
+        output_root=OUT,
+    )
 
 
 def main() -> None:
@@ -481,19 +497,7 @@ def main() -> None:
     inputs = ProjectionInputs.model_validate_json(manifest_bytes(reference))
     runtime = CampaignRuntime()
     with artifact_prefix(args.artifact_root):
-        step: ArtifactStep[SemanticArtifact] = ArtifactStep(
-            name=f"rl-semantics/live-projection-{reference.sha256[:16]}",
-            version=PROJECTION_VERSION,
-            artifact_type=SemanticArtifact,
-            run=lambda config: project_curriculum(**config),
-            build_config=lambda ctx: {
-                "runtime": ctx.runtime_arg("runtime"),
-                "inputs": inputs,
-                "inputs_reference": reference,
-                "output_root": ctx.output_path,
-            },
-            runtime_args={"runtime": runtime},
-        )
+        step = curriculum_projection_step(inputs, reference, runtime)
         LOGGER.info("Projection output: %s", step.path())
         if not args.run:
             return

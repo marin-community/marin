@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import SourceDeclaration, SourceOrigin, source_identifier
 from finestore.schema import arrow_schema
+from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
@@ -21,12 +23,12 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.curriculum_projection import (
     ProjectionInputs,
     SourceReplacement,
-    project_curriculum,
+    curriculum_projection_step,
     projection_selection,
     task_rebinding,
 )
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
-from experiments.post_training.task_curation.local import local_client
+from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from infra.marina.apps.rl_data_catalog.role_projection import CurriculumManifests, ManifestReference
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -297,18 +299,16 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
     saved = (tmp_path / "archive-assignments.parquet").read_bytes()
     runtime = CampaignRuntime()
     with (
+        artifact_prefix(str(tmp_path / "artifacts")),
         local_client() as client,
         ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context,
         runtime.activate(context),
     ):
-        project_curriculum(
-            runtime,
-            inputs=inputs,
-            inputs_reference=reference(tmp_path / "inputs.json"),
-            output_root=str(tmp_path / "projected"),
-        )
-    release = AlignmentRelease.model_validate_json((tmp_path / "projected/release.json").read_text())
-    coverage = CurriculumCoverage.model_validate_json((tmp_path / "projected/coverage.json").read_text())
+        step = curriculum_projection_step(inputs, reference(tmp_path / "inputs.json"), runtime)
+        result = run(step, max_concurrent=1)[0]
+    projected_root = Path(result.path)
+    release = AlignmentRelease.model_validate_json((projected_root / "release.json").read_text())
+    coverage = CurriculumCoverage.model_validate_json((projected_root / "coverage.json").read_text())
     projected = [row for path in release.paths for row in load_parquet(path)]
     expected = [dict(row) for row in original_rows[:2]]
     expected[1].update(source_key=new_source.source_key, task_hash="repaired-task")
