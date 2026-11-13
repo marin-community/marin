@@ -346,6 +346,35 @@ def test_merge_cli_writes_the_bound_artifact(tmp_path, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["shards"] == 2
 
 
+def test_merge_projects_historical_spellings_before_dedup(tmp_path, monkeypatch):
+    canonical = _shard_survey(tmp_path, "first", ["HuggingFaceH4:aime24"])
+    (tmp_path / "shard-1.json").write_text(canonical.model_dump_json())
+    historical = _shard_survey(tmp_path, "second", ["MarinSkyRL:aime24"])
+    document = json.loads(historical.model_dump_json())
+    # An older producer recorded the same source under its original spelling.
+    document["sources"][0]["source_id"] = "MarinSkyRL:aime24"
+    (tmp_path / "shard-2.json").write_text(json.dumps(document))
+    output = tmp_path / "backend-map.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "backend_capabilities",
+            "--merge",
+            str(tmp_path / "shard-1.json"),
+            str(tmp_path / "shard-2.json"),
+            "--catalog-root",
+            "selected:catalog",
+            "--snapshot-id",
+            "selected-snapshot",
+            "--output",
+            str(output),
+        ],
+    )
+    with pytest.raises(ValueError, match="more than one shard"):
+        main()
+
+
 def test_actor_capacity_preserves_independent_separate_grader_profile():
     environment = {"command_semantics": "linux_process", "docker_image": "example/image@sha256:" + "0" * 64}
     task = {

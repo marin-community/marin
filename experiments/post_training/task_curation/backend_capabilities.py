@@ -27,6 +27,7 @@ from shellbox.backends.local.disk import LocalDiskPool
 from shellbox.machine import UnsupportedMachineSpec
 from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell, Checker, capability_matrix, production_checkers
+from experiments.post_training.task_curation.catalog_identity import canonical_backend_survey
 from taskcompendium.backend_requirements import (
     BackendFit,
     BackendSourceMap,
@@ -283,14 +284,17 @@ def build_survey(manifest: dict, checkers: dict[str, Checker], revision: str) ->
 def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_id: str) -> BackendSurvey:
     """Combine shard surveys into one artifact bound to the selected snapshot.
 
-    Rejects shards that disagree on the matrix, runtime profile, deployment
-    limits, schema, revision or verified disk pool, and sources measured in
-    more than one shard. A source that is unassessed in every shard keeps its
-    declared reason in the merged artifact; a measured row overrides shard
-    placeholders. The selected snapshot's coverage is checked again at load
-    time.
+    Projects every partial through the canonical source-ID boundary before
+    deduplication, so historical and current spellings of one source cannot
+    evade the overlap check. Rejects shards that disagree on the matrix,
+    runtime profile, deployment limits, schema, revision or verified disk
+    pool, and sources measured in more than one shard. A source that is
+    unassessed in every shard keeps its declared reason in the merged
+    artifact; a measured row overrides shard placeholders. The selected
+    snapshot's coverage is checked again at load time.
     """
-    first = partials[0]
+    projected = [canonical_backend_survey(partial.model_dump(mode="json")) for partial in partials]
+    first = projected[0]
     identity = (
         first.schema_sha256,
         first.git_revision,
@@ -299,7 +303,7 @@ def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_
         {role: profile.model_dump(mode="json") for role, profile in first.runtime_defaults.items()},
         first.deployment_limits,
     )
-    for partial in partials[1:]:
+    for partial in projected[1:]:
         other = (
             partial.schema_sha256,
             partial.git_revision,
@@ -312,7 +316,7 @@ def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_
             raise ValueError(f"Shard {partial.snapshot_id} does not share the survey identity")
     rows: dict[str, BackendSourceMap] = {}
     unassessed: dict[str, BackendSourceMap] = {}
-    for partial in partials:
+    for partial in projected:
         for source in partial.sources:
             if source.basis == "unassessed":
                 if source.source_id not in rows:
