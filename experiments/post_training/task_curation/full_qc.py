@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+from fray.types import ANY_REGION
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.inference.openai_chat import OpenAIChatClient
@@ -50,7 +51,7 @@ def local_reviewer() -> ReviewerSpec:
     endpoint = LocalJudgeEndpoint(
         tier=JudgeTier.HEAVY,
         model_config=MODEL_CONFIG,
-        accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, region="US-EAST-08A"),
+        accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, region=ANY_REGION),
         priority=job_pb2.PRIORITY_BAND_BATCH,
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
         worker_image=WORKER_IMAGE,

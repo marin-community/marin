@@ -407,9 +407,11 @@ does not establish execution admission. Qualification and repairs use the
 Provide a JSON list with `inputs_path` and `output_path` for each source. Run
 inside a CPU Iris job with batch priority, a three-day timeout, and an explicit
 target cluster. Launch this coordinator with --target-cluster cw-us-east-08a.
-Local GLM children inherit its regional controller and pin US-EAST-08A, with
-batch priority and a three-day timeout. A cluster target on these local children
-would request another federation handoff. The immutable public checkpoint, serving image, precision, model
+Local GLM children inherit its regional controller and use the ANY_REGION marker
+to suppress inherited region selectors, with batch priority and a three-day
+timeout. Iris removes this marker before scheduling; CoreWeave nodes need not
+advertise an iris.region label. A cluster target on these local children would
+request another federation handoff. The immutable public checkpoint, serving image, precision, model
 YAML digest, sampling settings, and endpoint identity participate in reviewer
 evidence and request caches. The existing relay retains its separate unverified
 checkpoint identity.
