@@ -166,6 +166,48 @@ class StalledResourceFactory(ProcessTaskFactory):
         return Task({spec.primary: machine}, spec, machine.close)
 
 
+class StalledTransferMachine(ProcessMachine):
+    """Keep one external transfer pending while guest commands run normally."""
+
+    def __init__(self, root, spec, *, phase):
+        super().__init__(root, spec)
+        self.phase = phase
+        self.release_transfer = asyncio.Event()
+
+    async def upload(self, source, target):
+        if self.phase == "upload" and target == "/logs/agent":
+            await self.release_transfer.wait()
+        await super().upload(source, target)
+
+    async def download(self, source, target):
+        if (self.phase == "download" and source == "/logs/agent") or (
+            self.phase.startswith("artifacts") and source == "/logs/artifacts"
+        ):
+            try:
+                await self.release_transfer.wait()
+            except asyncio.CancelledError:
+                if self.phase != "artifacts-resistant":
+                    raise
+                await self.release_transfer.wait()
+        await super().download(source, target)
+
+    async def run(self, command):
+        if self.phase == "hook" and "collect-marker" in command.argv[-1]:
+            await self.release_transfer.wait()
+        return await super().run(command)
+
+
+class StalledTransferFactory(ProcessTaskFactory):
+    def __init__(self, root, *, phase):
+        super().__init__(root)
+        self.phase = phase
+
+    async def create_task(self, spec):
+        machine = StalledTransferMachine(self.root, spec.primary_container.machine, phase=self.phase)
+        self.machine = machine
+        return Task({spec.primary: machine}, spec, machine.close)
+
+
 def trial_config(
     root: Path, name: str, *, guest_root: Path, waiting: bool = False
 ) -> TrialConfig:
@@ -274,6 +316,40 @@ async def test_stalled_resource_probe_does_not_hold_trial_or_replace_verdict(
         assert factory.machine.closed
     finally:
         factory.machine.release_probe.set()
+        await run
+
+
+@pytest.mark.parametrize("phase", ["download", "upload", "hook", "artifacts", "artifacts-resistant"])
+async def test_stalled_output_transfer_finishes_without_false_grading(tmp_path, monkeypatch, phase):
+    factory = StalledTransferFactory(tmp_path / "guest", phase=phase)
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    config = trial_config(tmp_path, "stalled-transfer", guest_root=tmp_path / "guest")
+    config.agent = AgentConfig(name="test-CompletedAnswerAgent", override_timeout_sec=5)
+    config.trial_cleanup_grace_sec = 0.1
+    if phase == "hook":
+        with (config.task.path / "task.toml").open("a") as stream:
+            stream.write('\n[[verifier.collect]]\ncommand="printf collect-marker"\ntimeout_sec=0.1\n')
+    script = config.task.path / "tests/test.sh"
+    script.write_text('#!/bin/sh\nset -eu\ntouch graded\nprintf 1 > "$TEST_REWARD_PATH"\n')
+    trial = await Trial.create(config)
+    run = asyncio.create_task(trial.run())
+    try:
+        done, _ = await asyncio.wait({run}, timeout=3)
+        assert done, "Host output transfer blocked trial completion"
+        run.result()
+        native = TrialResult.model_validate_json(trial.paths.result_path.read_text())
+        if phase.startswith("artifacts"):
+            assert native.verifier_result is None
+            assert error_category(native.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE
+            assert not factory.machine.path("/workspace/graded").exists()
+            if phase == "artifacts-resistant":
+                assert native.completion is None
+        else:
+            assert native.verifier_result.rewards == {"reward": 1.0}
+            assert native.exception_info is None
+        assert factory.machine.closed
+    finally:
+        factory.machine.release_transfer.set()
         await run
 
 
