@@ -186,16 +186,19 @@ checks visibility before branch setup and every commit, and stops on a mismatch.
 It does not change repository visibility. This delivery setting may change when
 resuming the same artifact inputs; it is outside the pinned upload identity.
 New branches start from the pinned metadata-only commit. The uploader binds each
-branch to its export, card, license and tokenizer through `hf-upload-request.json`, then stages at most
-eight missing shards per commit. It validates source BF16 headers and hashes and
-checks Hub sizes and hashes before reusing uploaded files. Eight largest Hero
-shards need about 58 GB of staging disk per worker; use a 128 GB disk-backed
-scratch volume for each worker.
+branch to its export, card, license and tokenizer through `hf-upload-request.json`,
+then stages at most eight missing shards per commit. It validates source BF16
+headers and hashes and checks Hub sizes and hashes before reusing uploaded files.
+Eight largest Hero shards need about 58 GB of staging disk per worker; use a
+128 GB disk-backed scratch volume for each worker. Hugging Face also documents a
+separate [preupload workflow](https://huggingface.co/docs/huggingface_hub/en/guides/upload#preupload-lfs-files-before-commit)
+for pre-staging LFS files when a future uploader needs a smaller working set.
 
 Every commit, including request and completion metadata, shares a per-worker
-limiter. The default 75-second interval also delays the first commit. At most
-four simultaneous uploaders stay below the repository commit limit of 256 per
-hour observed for Mochi when no other clients are creating commits there.
+limiter. The default 75-second interval also delays the first commit. Before
+starting uploads, coordinate the workers so that no more than four are active
+and no other job or client is creating commits in the repository. This keeps the
+workers below the repository commit limit of 256 per hour observed for Mochi.
 Increase the interval when running more uploaders, sharing the quota with other
 writers, or using a lower quota.
 
