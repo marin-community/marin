@@ -451,8 +451,12 @@ def test_final_composition_binds_grading_evidence_measured_on_the_retained_censu
     """
     source, receipt = retained_receipt
     original_input = source.info.actor_census_input
-    encoded = TaskSpec.model_validate(
-        json.loads(prebuilt_task("retained")["lowered_task_spec"])["task"]
+    spec = TaskSpec.model_validate(json.loads(prebuilt_task("retained")["lowered_task_spec"])["task"])
+    encoded = spec.model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(),
+            "grader": NoGrader(reason="Inspection fixture has no grader"),
+        }
     ).model_dump_json()
     specs = tmp_path / "published/specs"
     specs.mkdir(parents=True)
