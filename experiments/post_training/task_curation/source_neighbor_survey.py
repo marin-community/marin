@@ -170,6 +170,7 @@ def rerun(
     only_openqa: bool,
     allocated_cpus: int,
 ) -> dict:
+    output = StoragePath(output_root)
     started = time.monotonic()
     fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
     pairs = widened_pairs(survey)
@@ -215,7 +216,7 @@ def rerun(
                     "method": "content-nn-v2",
                 }
             )
-            receipt_uri = f"{output_root}/neighbors/{direction_key}.json"
+            receipt_uri = str(output / "neighbors" / f"{direction_key}.json")
             if StoragePath(receipt_uri).exists():
                 direction = DirectionalOverlap.model_validate_json(StoragePath(receipt_uri).read_bytes())
             else:
@@ -238,7 +239,7 @@ def rerun(
                     **exact_reference_integrity(source, target),
                 }
                 integrity.append(result)
-                write_json(f"{output_root}/integrity/{direction_key}.json", result)
+                write_json(str(output / "integrity" / f"{direction_key}.json"), result)
                 logger.warning("OPENQA INTEGRITY %s", json.dumps(result))
             del source
         del target
@@ -278,11 +279,11 @@ def rerun(
             "judge": None,
         }
     )
-    uri = f"{output_root}/source-identities-content-nn-v2.json"
+    uri = str(output / "source-identities-content-nn-v2.json")
     sha = write_json(uri, identity_survey_payload(result))
-    diff_sha = write_json(f"{output_root}/label-diff.json", {"pairs": diff})
+    diff_sha = write_json(str(output / "label-diff.json"), {"pairs": diff})
     integrity_sha = write_json(
-        f"{output_root}/openqa-integrity.json",
+        str(output / "openqa-integrity.json"),
         {
             "directions": integrity,
             "limitation": (
@@ -294,9 +295,9 @@ def rerun(
     summary = {
         "survey_uri": uri,
         "survey_sha256": sha,
-        "label_diff_uri": f"{output_root}/label-diff.json",
+        "label_diff_uri": str(output / "label-diff.json"),
         "label_diff_sha256": diff_sha,
-        "integrity_uri": f"{output_root}/openqa-integrity.json",
+        "integrity_uri": str(output / "openqa-integrity.json"),
         "integrity_sha256": integrity_sha,
         "source_snapshot": survey.snapshot_id,
         "population": "exact archived fingerprint.inputs; exclusions are not newly applied",
@@ -310,7 +311,7 @@ def rerun(
         "cpu_hours_upper_bound": allocated_cpus * elapsed / 3600,
         "gpu_hours": 0,
     }
-    write_json(f"{output_root}/result.json", summary)
+    write_json(str(output / "result.json"), summary)
     logger.info("RESULT %s", json.dumps(summary))
     return summary
 
