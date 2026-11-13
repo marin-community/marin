@@ -71,6 +71,7 @@ def write_report(
     text = report([replace(event, run=output) for event in events], synthetic=False)
     text += "\nOriginal stage run IDs: " + ", ".join(original_runs) + ". Raw events retain these IDs.\n"
     text += "\n" + sft_geometry + "\n"
+    outcome = None
     if rl_terminal is not None:
         outcome = terminal_outcome(rl_terminal)
         text += "\nRL terminal outcome (preserved independently of finalization): " + json.dumps(outcome) + ".\n"
@@ -80,6 +81,8 @@ def write_report(
         "Iris/SkyRL/SFT telemetry for this run. Missing measurements are not counted as zero.\n"
     )
     fs, root = filesystem_for(output)
+    if outcome is not None:
+        fs.pipe_file(prefix_join(root, "rl-terminal.json"), json.dumps(outcome, indent=2).encode())
     fs.pipe_file(prefix_join(root, "timing.md"), text.encode())
     fs.pipe_file(prefix_join(root, "timing-sources.json"), json.dumps(sources, indent=2).encode())
     expected_by_data_source = None

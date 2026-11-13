@@ -86,9 +86,8 @@ def seal_archive(root: str, inputs: list[ArchiveInput], provenance: dict) -> dic
 
 
 def verify_archive(root: str) -> dict:
-    fs, key = filesystem_for(root)
-    raw = fs.cat_file(prefix_join(key, "manifest.json"))
-    marker = json.loads(fs.cat_file(prefix_join(key, "VERIFIED.json")))
+    raw = (StoragePath(root) / "manifest.json").read_bytes()
+    marker = json.loads((StoragePath(root) / "VERIFIED.json").read_bytes())
     if hashlib.sha256(raw).hexdigest() != marker["manifest_sha256"]:
         raise ValueError("Archive manifest does not match completion marker")
     manifest = json.loads(raw)

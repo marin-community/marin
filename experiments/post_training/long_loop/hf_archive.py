@@ -223,10 +223,8 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     """Publish the selected HF export and return its verified commit/file receipt."""
     if not config.repo_id.startswith("open-athena/") or config.workers < 1:
         raise ValueError("Use an open-athena repository and positive upload worker count")
-    card_fs, card_key = filesystem_for(config.model_card)
-    license_fs, license_key = filesystem_for(config.license_file)
-    card = card_fs.cat_file(card_key)
-    license_text = license_fs.cat_file(license_key)
+    card = StoragePath(config.model_card).read_bytes()
+    license_text = StoragePath(config.license_file).read_bytes()
     validate_model_card(card, license_text)
     audit_public_bytes("README.md", card)
     audit_public_bytes("LICENSE", license_text)

@@ -71,6 +71,8 @@ def legacy_sft_step(
 
 def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     """Use the checked-in Snowball defaults with the pinned historical sources."""
+    if recipe["profile"] != "snowball_h100":
+        raise ValueError("The long-loop shared SFT adapter requires the snowball_h100 profile")
     data = copy.deepcopy(recipe["data"])
     steps = min(
         math.ceil(recipe["target_positions"] / (SNOWBALL_SFT.seq_len * SNOWBALL_SFT.batch_size)),

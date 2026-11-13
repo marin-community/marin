@@ -24,6 +24,7 @@ from experiments.sft.launcher import HFModel, SFTSpec
 
 @pytest.mark.parametrize("override", [None, 345600])
 def test_native_sft_dispatch_has_generous_default_and_explicit_timeout(monkeypatch, override):
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://marin-us-east-08a/tmp")
     submitted = []
 
     def capture_remote(fn, **execution):
@@ -39,6 +40,7 @@ def test_native_sft_dispatch_has_generous_default_and_explicit_timeout(monkeypat
     model.run(pod)
     assert submitted[0][0]["timeout"] == Duration.from_seconds(259200 if override is None else override)
     assert submitted[0][1] is pod
+    assert submitted[0][0]["env_vars"]["MARIN_TEMP_PREFIX"] == "s3://marin-us-east-08a/tmp"
 
 
 @pytest.fixture

@@ -67,6 +67,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -280,11 +281,28 @@ def _levanter_train_job(pod_config: TrainLmOnPodConfig, *, task_timeout_seconds:
     if pod_config.output_path is not None:
         pod_config = replace(pod_config, train_config=apply_output_path(pod_config.train_config, pod_config.output_path))
         (StoragePath(pod_config.output_path) / "consumed-config.json").write_text(
-            json.dumps({"format": "SFTSpec", **draccus.encode(pod_config)}, indent=2)
+            json.dumps(
+                {
+                    "format": "SFTSpec",
+                    "train_config": draccus.encode(pod_config.train_config),
+                    "resources": draccus.encode(pod_config.resources),
+                    "output_path": pod_config.output_path,
+                },
+                indent=2,
+            )
         )
-    remote(run_levanter_train_lm, resources=pod_config.resources, timeout=Duration.from_seconds(task_timeout_seconds))(
-        pod_config
-    )
+    environment = {
+        key: os.environ[key]
+        for key in ("MARIN_PREFIX", "MARIN_TEMP_PREFIX", "JAX_COMPILATION_CACHE_DIR")
+        if key in os.environ
+    }
+    environment["JAX_PLATFORMS"] = "cuda,cpu" if isinstance(pod_config.resources.device, GpuConfig) else "cpu"
+    remote(
+        run_levanter_train_lm,
+        resources=pod_config.resources,
+        timeout=Duration.from_seconds(task_timeout_seconds),
+        env_vars=environment,
+    )(pod_config)
 
 
 @dataclass(frozen=True)

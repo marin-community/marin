@@ -34,8 +34,7 @@ SMOKE_CONFIG = Path(__file__).with_name("sft-smoke.yaml")
 
 
 def read_json(uri: str) -> dict:
-    fs, key = filesystem_for(uri)
-    return json.loads(fs.cat_file(key))
+    return json.loads(StoragePath(uri).read_bytes())
 
 
 def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str) -> GrugRunConfig:
