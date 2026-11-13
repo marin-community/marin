@@ -11,6 +11,7 @@ import pytest
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import ImportRejection
 
+from experiments.post_training.task_curation.datasets.lean import proofs
 from experiments.post_training.task_curation.datasets.lean.lean_grade import (
     Contract,
     GraderFailure,
@@ -213,6 +214,10 @@ def test_a_well_formed_verdict_scores_only_a_proof_with_the_standard_axioms(verd
 def test_a_malformed_verdict_is_a_grader_failure(verdict):
     with pytest.raises(GraderFailure):
         accepted(verdict, "t")
+
+
+def test_the_proofnet_eval_is_left_out_of_default_campaigns():
+    assert proofs.sources()[0].declaration.type == "eval"
 
 
 def test_root_copies_only_a_regular_file_the_candidate_left_and_never_fails_as_the_grader(tmp_path):
