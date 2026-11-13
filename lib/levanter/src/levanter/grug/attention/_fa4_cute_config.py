@@ -23,7 +23,6 @@ class Flash4CuteSm100BackwardConfig:
     """Validated native Blackwell backward schedule."""
 
     tile: tuple[int, int]
-    zero_fill_threads: int
     postprocess_threads: int
 
 
@@ -115,7 +114,6 @@ def sm100_flash4_cute_kernel_config() -> Flash4CuteKernelConfig:
         sm100_forward=Flash4CuteSm100ForwardConfig(tile=(128, 128), q_stage=2),
         sm100_backward=Flash4CuteSm100BackwardConfig(
             tile=(128, 128),
-            zero_fill_threads=512,
             postprocess_threads=128,
         ),
     )
