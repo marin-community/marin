@@ -3,6 +3,7 @@
 
 """Execute prepared Harbor tasks in persistent private bubblewrap sandboxes."""
 
+import asyncio
 from pathlib import Path
 from typing import cast
 
@@ -10,7 +11,7 @@ from harbor.environments.capabilities import EnvironmentResourceCapabilities
 from harbor.environments.prepared import PreparedEnvironment
 from harbor.environments.resource_policies import validate_local_resources
 from harbor.models.environment_type import EnvironmentType
-from shellbox.backends.local.disk import LocalDiskPool
+from shellbox.backends.local.disk import LocalDiskPool, verified_local_disk_pool
 from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
 
 
@@ -31,7 +32,8 @@ class LocalEnvironment(PreparedEnvironment):
         **kwargs,
     ):
         self.cgroup_parent = Path(cgroup_parent) if cgroup_parent is not None else None
-        self.disk_pool = LocalDiskPool(Path(disk_root)) if disk_root is not None else None
+        self.disk_root = Path(disk_root) if disk_root is not None else None
+        self.disk_pool: LocalDiskPool | None = None
         super().__init__(*args, **kwargs)
         self.factory = LocalMachineFactory(
             bwrap=Path(bwrap) if bwrap is not None else None,
@@ -53,12 +55,23 @@ class LocalEnvironment(PreparedEnvironment):
         return EnvironmentResourceCapabilities(cpu_limit=True, memory_limit=True)
 
     def _validate_task_resources(self) -> None:
+        task = self.task_env_config
+        if self.disk_root is not None and self.disk_pool is None:
+            # Storage admission completes asynchronously before any acquisition.
+            task = task.model_copy(update={"storage_mb": None})
         validate_local_resources(
-            self.task_env_config,
+            task,
             cpu_enforcement_policy=self._cpu_resource_mode,
             memory_enforcement_policy=self._memory_resource_mode,
             disk_pool=self.disk_pool,
         )
+
+    async def start(self, force_build: bool, *, service_tasks: asyncio.TaskGroup) -> None:
+        if self.disk_root is not None:
+            self.disk_pool = await verified_local_disk_pool(self.disk_root)
+            cast(LocalMachineFactory, self.factory).disk_pool = self.disk_pool
+            self._validate_task_resources()
+        await super().start(force_build, service_tasks=service_tasks)
 
     async def quiesce_agent_commands(self) -> None:
         if self.machine is not None:

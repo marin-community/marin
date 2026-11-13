@@ -1455,6 +1455,11 @@ and `mkfs.ext4`, `mount`, `umount`, `losetup`, `findmnt` and `umoci`. The disk r
 must be root-owned mode 0700 in a private or slave mount namespace. Missing
 capabilities fail before task acquisition; an unconfigured LOCAL worker continues
 to reject storage declarations. This route requires no controller change or gVisor.
+Harbor runs verification in a worker thread before sandbox acquisition and reuses
+the verified pool for concurrent trials in the same worker process, mount
+namespace and disk root. The kernel must support `PTRACE_SEIZE` and
+`PTRACE_GET_SYSCALL_INFO` (Linux 5.3 or later, x86-64 or AArch64); the host probe checks observation
+of a real failed allocation as well as filesystem enforcement.
 
 Each container gets a sparse image of exactly `storage_mb * 1024 * 1024` bytes,
 formatted as ext4 with no reserved root blocks. Filesystem metadata and journal
@@ -1479,6 +1484,28 @@ infrastructure verdicts and doubles only missing disk limits. A declared fixed
 disk limit remains fixed and records a resource exclusion when exceeded.
 Successfully using the final block or inode remains within the declared quota;
 fullness alone does not mark a sandbox terminal.
+
+Disk outcomes use kernel syscall exit results or quota-scoped host `OSError`
+errno values. Guest stderr text never establishes exhaustion. The trusted
+launcher observes the foreground command and its descendants through ptrace,
+writing the first ENOSPC/EDQUOT result to a private binary control descriptor
+that guest code does not inherit. Output truncation and a zero output limit
+cannot hide it. FD-based allocation failures must belong to the task filesystem;
+device errors such as writing `/dev/full` do not establish quota exhaustion.
+Observation adds syscall-tracing overhead and occupies the
+process's tracer slot; guest debuggers cannot attach concurrently. Surviving
+services are detached when the foreground exits and retain their cgroup and
+filesystem ownership.
+
+Command spools remain inside the quota, with no extra storage allowance. A
+`run()` command can successfully consume the final inode while its three
+anonymous spools are open. Closing those spools releases their inodes for the
+next command. If an `open_process()` command consumes every inode using pipe
+output, the next `run()`
+may fail to create its spool before guest execution; that necessary allocation
+really returned ENOSPC and is a typed disk failure. The fixed-size errno report
+is trusted launcher control metadata, like namespace configuration, outside
+the task filesystem; stdout, stderr and stdin payloads remain charged.
 
 A guardian owns each filesystem until task teardown unmounts OverlayFS and ext4
 and releases the autoclear loop device. Closing the owner pipe on driver death

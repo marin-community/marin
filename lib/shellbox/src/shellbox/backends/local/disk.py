@@ -3,6 +3,7 @@
 
 """Verified per-sandbox ext4 filesystems for privileged LOCAL workers."""
 
+import asyncio
 import errno
 import fcntl
 import os
@@ -11,16 +12,36 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
-from shellbox.backends.local import disk_lifecycle
+from shellbox.backends.local import disk_lifecycle, launch
 from shellbox.machine import DiskLimitExceeded, UnsupportedMachineSpec
 
 PROBE_STORAGE_MB = 64
 GUARD_SOURCE = Path(disk_lifecycle.__file__).read_text()
+POOL_LOCK = threading.Lock()
+VERIFIED_POOLS: dict[tuple[int, int, Path], "LocalDiskPool"] = {}
+
+
+async def verified_local_disk_pool(root: Path) -> "LocalDiskPool":
+    """Reuse one verified pool per worker process, mount namespace and disk root."""
+    return await asyncio.to_thread(_verified_local_disk_pool, root)
+
+
+def _verified_local_disk_pool(root: Path) -> "LocalDiskPool":
+    try:
+        mount_namespace = os.stat("/proc/self/ns/mnt").st_ino
+    except FileNotFoundError as error:
+        raise UnsupportedMachineSpec("LOCAL disk enforcement requires a privileged Linux mount namespace") from error
+    key = (os.getpid(), mount_namespace, root.resolve())
+    with POOL_LOCK:
+        if key not in VERIFIED_POOLS:
+            VERIFIED_POOLS[key] = LocalDiskPool(root)
+        return VERIFIED_POOLS[key]
 
 
 @dataclass
@@ -56,17 +77,11 @@ class LocalDisk:
         )
         return root
 
-    def check_limit(self, stderr: bytes = b"", *, allocation_errno: int | None = None) -> None:
+    def check_limit(self, *, allocation_errno: int | None = None) -> None:
         """Raise a sticky disk limit after an observed failed allocation."""
         # Consuming the final block or inode is within the budget. Latch only a
-        # failed allocation, including guest diagnostics after partial cleanup.
-        self._exhausted = self._exhausted or (
-            allocation_errno in (errno.ENOSPC, errno.EDQUOT)
-            or any(
-                marker in stderr.lower()
-                for marker in (b"no space left on device", b"enospc", b"disk quota exceeded", b"edquot")
-            )
-        )
+        # failed allocation reported by the kernel or a quota-scoped host syscall.
+        self._exhausted = self._exhausted or allocation_errno in (errno.ENOSPC, errno.EDQUOT)
         if self._exhausted:
             raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: LOCAL sandbox filesystem allocation failed (ENOSPC/EDQUOT)")
 
@@ -134,6 +149,7 @@ class LocalDiskPool:
         """Allocate exactly storage_mb MiB and wait for the ext4 mount."""
         with (self.root / "pool.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
+            self._reclaim()
             directory = Path(tempfile.mkdtemp(prefix="sandbox-", dir=self.root))
             with ExitStack() as resources:
                 errors = resources.enter_context(tempfile.TemporaryFile())
@@ -174,5 +190,19 @@ class LocalDiskPool:
                         raise
                 else:
                     raise RuntimeError("Fixed-size ext4 filesystem did not return ENOSPC")
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-c",
+                    Path(launch.__file__).read_text(),
+                    "--probe-allocations",
+                    str(root / "observed-overflow"),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=disk_lifecycle.COMMAND_TIMEOUT,
+            )
         finally:
             disk.close()

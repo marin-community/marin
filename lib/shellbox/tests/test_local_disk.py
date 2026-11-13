@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from shellbox.backends.local.disk import LocalDiskPool
+from shellbox.backends.local.disk import LocalDiskPool, verified_local_disk_pool
 from shellbox.backends.local.machine import LocalMachineFactory, check_local_environment
 from shellbox.machine import (
     Command,
@@ -34,6 +34,14 @@ def disk_state(root: Path) -> dict:
         "mounts": [row for row in Path("/proc/self/mountinfo").read_text().splitlines() if str(root) in row],
         "allocations": [str(path) for path in root.glob("sandbox-*")],
     }
+
+
+async def test_local_disk_verified_pool_is_shared_by_concurrent_host_requests(tmp_path):
+    first, second = await asyncio.gather(
+        verified_local_disk_pool(tmp_path / "disks"), verified_local_disk_pool(tmp_path / "disks")
+    )
+    assert first is second
+    assert disk_state(first.root) == {"loops": [], "mounts": [], "allocations": []}
 
 
 @pytest.mark.parametrize("path", ["/app/fill", "/tmp/fill", "/dev/shm/fill", "/usr/fill"])
@@ -99,7 +107,86 @@ async def test_local_disk_run_overflow_raises_disk_limit_and_preserves_image(tmp
     assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
 
 
-async def test_local_disk_final_inode_succeeds_until_an_allocation_fails(tmp_path, executable_oci_image):
+@pytest.mark.parametrize("output_limit", [0, 16])
+@pytest.mark.parametrize("process_session", [False, True], ids=["run", "session"])
+async def test_local_disk_kernel_evidence_ignores_text_and_output_limits(
+    tmp_path, executable_oci_image, output_limit, process_session
+):
+    pool = LocalDiskPool(tmp_path / "disks")
+    factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
+    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+    diagnostic = Command(
+        ("/bin/sh", "-c", "printf 'ENOSPC EDQUOT No space left on device Disk quota exceeded' >&2; exit 1"),
+        output_limit_bytes=output_limit,
+    )
+    overflow = Command(
+        (
+            "/bin/sh",
+            "-c",
+            "printf 'unrelated diagnostic before allocation failure' >&2; "
+            "/bin/dd if=/dev/zero of=/app/fill bs=1048576 count=128 2>/dev/null; exit 0",
+        ),
+        output_limit_bytes=output_limit,
+    )
+    try:
+        if process_session:
+            session = await machine.open_process(diagnostic)
+            try:
+                await session.drain_output()
+                assert await session.wait() == 1
+            finally:
+                await session.close()
+        else:
+            assert (await machine.run(diagnostic)).exit_code == 1
+        # ENOSPC from a device is not an allocation failure on the task disk.
+        device = Command(
+            ("/bin/dd", "if=/dev/zero", "of=/dev/full", "bs=1024", "count=1"),
+            output_limit_bytes=output_limit,
+        )
+        assert (await machine.run(device)).exit_code != 0
+        assert (await machine.run(Command(("/bin/sh", "-c", "true")))).exit_code == 0
+        if process_session:
+            session = await machine.open_process(overflow)
+            try:
+                await session.drain_output()
+                with pytest.raises(DiskLimitExceeded):
+                    await session.wait()
+            finally:
+                await session.close()
+        else:
+            with pytest.raises(DiskLimitExceeded):
+                await machine.run(overflow)
+    finally:
+        await machine.close()
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+async def test_local_disk_run_final_inode_succeeds_with_charged_spools(tmp_path, executable_oci_image):
+    pool = LocalDiskPool(tmp_path / "disks")
+    factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
+    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+    fill_inodes = (
+        "free=$(/bin/busybox stat -f -c %d /app); i=0; "
+        'while [ "$i" -lt "$free" ]; do : > "/app/inode$i" || exit; i=$((i+1)); done; '
+        'test "$(/bin/busybox stat -f -c %d /app)" = 0'
+    )
+    try:
+        # run() already holds its three anonymous spool inodes. The final guest
+        # allocation succeeds; closing those spools frees them for the next run.
+        assert (await machine.run(Command(("/bin/sh", "-c", fill_inodes), output_limit_bytes=0))).exit_code == 0
+        result = await machine.run(Command(("/bin/busybox", "stat", "-f", "-c", "%d", "/app")))
+        assert (result.exit_code, result.stdout) == (0, b"0\n")
+        # Those same spool allocations are legitimate quota usage. No inode
+        # remains for another guest file while the next run holds its spools.
+        with pytest.raises(DiskLimitExceeded):
+            await machine.run(Command(("/bin/busybox", "touch", "/app/overflow")))
+    finally:
+        await machine.close()
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+@pytest.mark.parametrize("allocation", ["guest", "run-spool"])
+async def test_local_disk_final_inode_succeeds_until_an_allocation_fails(tmp_path, executable_oci_image, allocation):
     pool = LocalDiskPool(tmp_path / "disks")
     factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
     machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
@@ -124,18 +211,23 @@ async def test_local_disk_final_inode_succeeds_until_an_allocation_fails(tmp_pat
             assert await reader.wait() == 0
         finally:
             await reader.close()
-        overflow = await machine.open_process(Command(("/bin/busybox", "touch", "/app/overflow")))
-        try:
-            await overflow.drain_output()
-            assert b"No space left on device" in overflow.stderr
+        if allocation == "run-spool":
             with pytest.raises(DiskLimitExceeded) as failure:
-                await overflow.wait()
+                await machine.run(Command(("/bin/sh", "-c", "true")))
             assert failure.value.resource is ResourceLimit.DISK
-        finally:
-            await overflow.close()
+        else:
+            overflow = await machine.open_process(Command(("/bin/busybox", "touch", "/app/overflow")))
+            try:
+                await overflow.drain_output()
+                assert b"No space left on device" in overflow.stderr
+                with pytest.raises(DiskLimitExceeded) as failure:
+                    await overflow.wait()
+                assert failure.value.resource is ResourceLimit.DISK
+            finally:
+                await overflow.close()
         with pytest.raises(DiskLimitExceeded):
             await machine.run(Command(("/bin/sh", "-c", "true")))
-        print(json.dumps({"final_inode": "success", "subsequent_allocation": "typed_disk_failure"}), flush=True)
+        print(json.dumps({"final_inode": "success", "failed_allocation": allocation, "resource": "disk"}), flush=True)
     finally:
         await machine.close()
     assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
