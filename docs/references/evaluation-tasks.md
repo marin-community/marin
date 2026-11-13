@@ -14,6 +14,7 @@ remain separate work; this path produces no headline score or legacy
 | `taskcompendium.importers.evalchemy` | Source parsing, prompts, conversion, item builders, rubrics, and source grading programs |
 | `taskcompendium.evaluation` | Typed metadata, corpus readers, response policy, and pure cohort selection |
 | `taskcompendium.pipeline.evaluation` | Population-preserving corpus publication |
+| `taskcompendium.pipeline.trivial_replies` | Trivial-reply floor audit of published corpora |
 | `verifyit` | Shared comparisons, mathematical equivalence, judge transport, and structured verdicts |
 | `marin.rollouts.evaluation` | Corpus scheduling, attempt bookkeeping, FineStore writes, and resume |
 | `rolloutengine` | Single-attempt execution, harnesses, and chat, completion, and likelihood transport |
@@ -222,6 +223,45 @@ source row, and trial to avoid counting retries twice. Terminal rows have
 `phase="finished"`; choose the highest `retry` index. Rows left at
 `phase="started"` have no terminal result. Exhausted infrastructure
 failures preserve evidence and raise `EvaluationInfrastructureError`.
+
+## Trivial-reply floor
+
+A benchmark's trivial-reply floor is the mean score its own graders give to
+replies that ignore the task. Evaluation publication checks conversion
+integrity and grades no replies. Curation controls, which do not run on
+evaluation corpora, grade one submission per sampled task: the source's golden
+or negative one, else an empty reply. A grader can still credit a short nonempty
+reply: one word satisfies instruction constraints that only restrict the reply,
+and `0` matches numeric answers of zero. `taskcompendium.pipeline.trivial_replies`
+grades these replies on every task of one or more published corpora through
+`grade_task`, which calls the in-process and machine graders that evaluation
+rollouts call, with each reply in the task's answer format.
+
+| Reply | Text |
+| --- | --- |
+| `empty` | the empty string |
+| `word` | `hello` |
+| `zero` | `0` |
+| `abstain` | `I don't know.` |
+| `echo` | the task's last user message |
+
+```bash
+uv run python -m taskcompendium.pipeline.trivial_replies CORPUS_ROOT [CORPUS_ROOT ...] \
+  --output /tmp/trivial-replies --grading-machines local --workers 8
+```
+
+`--grading-machines local` grades tasks whose graders need a machine in local
+bubblewrap machines built from each grader's packages, as local curation does;
+`none` skips those tasks. The command also skips corpora scored by likelihood,
+tasks graded by a judge, tasks answered with files or state, graders that
+collect inputs from the task's machine, and environments the grading machines
+cannot run. It writes one row per graded task and reply to `grades.jsonl`, one
+row per skipped task with its reason to `skips.jsonl`, and each corpus's floor to
+`floors.json`, keyed by the corpus root and its manifest digest. A score is the
+grader's reward: a rejected submission scores 0, and a grade that ends without a
+verdict, such as an infrastructure error, is counted apart from the mean. The
+printed table shows each reply's mean score and the number of tasks it earned
+credit on.
 
 ## Summary semantics
 
