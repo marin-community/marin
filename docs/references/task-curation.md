@@ -119,6 +119,14 @@ write new regional pointer records instead of rewriting historical records.
 A regional corpus can supply `prepared_descriptions` and
 `prepared_curriculum_embeddings` so the graph adopts those completed stages.
 All referenced runtime paths must point into the destination region.
+FineStore HEADs, manifests and table metadata also contain absolute paths;
+copying the cache bytes alone leaves reads pointed at the original region and
+prevents registering the relocated table for writes. After verifying the copy,
+`fork_copied_cache_partition` creates a fresh regional archive manifest over the
+copied immutable shards. It preserves row-commit bounds and sequences, writes
+canonical table metadata under the new root, and accepts explicit prior roots
+for caches that have moved more than once. Keep the historical cache and failed
+attempts intact and use the fresh root for subsequent vector writes.
 
 | Part | Implementation and data models |
 |---|---|

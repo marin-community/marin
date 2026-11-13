@@ -15,6 +15,8 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.commit import ArchiveSnapshot, CommitCoordinator, CommitDelta, initialize_archive, write_schema
+from finestore.layout import FineStoreLayout, HeadMetadata, Manifest, ManifestTable, TableMetadata
 from finestore.rl.curation import SourceDeclaration
 from finestore.schema import arrow_schema
 from fray.types import ResourceConfig
@@ -44,6 +46,58 @@ from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURR
 LOGGER = logging.getLogger(__name__)
 BATCH_SIZE = 4096
 STAGES = ("descriptions", "task_embeddings", "curriculum_embeddings", "coverage")
+
+
+def fork_copied_cache_partition(
+    original_root: str, copied_root: str, output_root: str, *, reference_roots: tuple[str, ...] = ()
+) -> dict:
+    """Fork copied immutable shards into a writable archive with regional references."""
+    output = FineStoreLayout(output_root)
+    if StoragePath(output.head_path).exists():
+        raise ValueError("Preserve existing cache forks; use a new output root")
+
+    def relocated(path: str) -> str:
+        for root in (original_root, copied_root, *reference_roots):
+            if path.startswith(root + "/"):
+                return copied_root + path[len(root) :]
+        raise ValueError(f"Cache reference is outside the frozen source: {path}")
+
+    copied = FineStoreLayout(copied_root)
+    head = HeadMetadata.model_validate_json(StoragePath(copied.head_path).read_bytes())
+    manifest_bytes = StoragePath(relocated(head.manifest_path)).read_bytes()
+    manifest = Manifest.model_validate_json(manifest_bytes)
+    tables = {}
+    for name, table in manifest.tables.items():
+        metadata = TableMetadata.model_validate_json(StoragePath(relocated(table.metadata_path)).read_bytes())
+        tables[name] = ManifestTable(
+            metadata_path=write_schema(output, metadata),
+            shards=tuple(shard.model_copy(update={"path": relocated(shard.path)}) for shard in table.shards),
+        )
+    initialize_archive(output)
+    # Preserve row-commit bounds and sequence numbers when the immutable shards move.
+    seed = manifest.model_copy(
+        update={"commit_id": uuid4().hex, "parent_commit_id": None, "tables": tables, "maintainer_epoch": 0}
+    )
+    StoragePath(output.manifest_path(seed.commit_id)).write_text(seed.model_dump_json(indent=2))
+    token = CommitCoordinator(output).commit(CommitDelta(), base=ArchiveSnapshot(manifest=seed, token=None))
+    return {
+        "original_root": original_root,
+        "copied_root": copied_root,
+        "reference_roots": list(reference_roots),
+        "output_root": output_root,
+        "source_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "commit_id": token.commit_id,
+        "sequence": token.sequence,
+        "tables": len(tables),
+        "shards": sum(len(table.shards) for table in tables.values()),
+        "rows": sum(shard.rows for table in tables.values() for shard in table.shards),
+        "all_metadata_paths_regional": all(
+            table.metadata_path.startswith(output_root + "/") for table in tables.values()
+        ),
+        "all_shard_paths_regional": all(
+            shard.path.startswith(copied_root + "/") for table in tables.values() for shard in table.shards
+        ),
+    }
 
 
 class FrozenCoverageSource(BaseModel):

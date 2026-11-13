@@ -3,10 +3,15 @@
 
 import hashlib
 import json
+import shutil
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.commit import CommitCoordinator, CommitDelta
+from finestore.layout import FineStoreLayout
+from finestore.reader import ReadView
+from finestore.store import DataStore
 from marin.execution.lazy import ArtifactStep, run
 from taskcompendium.convert.answers import numeric_answer_task
 from taskcompendium.identity import canonical_sha256
@@ -18,7 +23,12 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.curriculum_backfill import FrozenCoverageSource, prepare_sources, run_stage
+from experiments.post_training.task_curation.curriculum_backfill import (
+    FrozenCoverageSource,
+    fork_copied_cache_partition,
+    prepare_sources,
+    run_stage,
+)
 from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     SemanticArtifact,
@@ -131,6 +141,34 @@ def test_unknown_exclusion_prevents_publication_and_keeps_partial_evidence(tmp_p
 
 def unavailable_embedder() -> TextEmbedder:
     raise AssertionError("Instruction preparation must not run model inference")
+
+
+def test_copied_cache_fork_reads_locally_and_accepts_new_vectors(tmp_path):
+    original = tmp_path / "original"
+    with DataStore.open(str(original)) as store:
+        store.write_object("existing", b"first")
+        store.flush()
+        store.write_object("existing", b"latest")
+        store.write_object("second", b"preserved")
+    intermediate = tmp_path / "intermediate"
+    shutil.copytree(original, intermediate)
+    CommitCoordinator(FineStoreLayout(str(intermediate))).commit(CommitDelta())
+    copied = tmp_path / "copied"
+    shutil.copytree(intermediate, copied)
+    original.rename(tmp_path / "historical")
+    intermediate.rename(tmp_path / "historical-intermediate")
+    output = tmp_path / "fork"
+    receipt = fork_copied_cache_partition(str(original), str(copied), str(output), reference_roots=(str(intermediate),))
+    assert receipt["all_metadata_paths_regional"] and receipt["all_shard_paths_regional"]
+    with DataStore.open(str(output)) as store:
+        store.write_object("new", b"GPU vector")
+    assert ReadView(str(output)).read_blobs(["existing", "second", "new"]) == {
+        "existing": b"latest",
+        "second": b"preserved",
+        "new": b"GPU vector",
+    }
+    with pytest.raises(ValueError, match="Preserve existing cache forks"):
+        fork_copied_cache_partition(str(original), str(copied), str(output))
 
 
 def test_prepared_public_corpus_runs_direct_text_graph_without_private_views(tmp_path, frozen_source, monkeypatch):
