@@ -159,14 +159,14 @@ neither is available.
    declarative image builds, so a Dockerfile-only task must be prepared as a
    digest-pinned registry image before preflight. The worked example above does
    not clear this bar as-is: `ot-tblite` resolves only Dockerfile-based tasks
-   (`docker_image` is null in every emitted spec), so running `ensure` with that
-   output in the RL account fails with the declarative-build rejection. Prebuild
-   those environments, publish them as registry images, and repin the task
-   configs to the digest-pinned references before relying on `ensure` in the RL
-   account; a dataset whose tasks already use registry images needs no extra
-   step. Do not create trial snapshots in the eval account. If validation
-   creates declarative snapshots there, purge that account with the same
-   commands and `--api-key-env DAYTONA_EVAL_API_KEY`.
+   (every emitted spec names a `dockerfile`, not an image), so running `ensure`
+   with that output in the RL account fails with the declarative-build
+   rejection. Prebuild those environments, publish them as registry images, and
+   repin the task configs to the digest-pinned references before relying on
+   `ensure` in the RL account; a dataset whose tasks already use registry
+   images needs no extra step. Do not create trial snapshots in the eval
+   account. If validation creates declarative snapshots there, purge that
+   account with the same commands and `--api-key-env DAYTONA_EVAL_API_KEY`.
 3. On every snapshot check, classify a snapshot as stale when its last use was
    more than one hour ago (`now_utc - last_used_utc > 3600 seconds`). Use actual
    last-use evidence, not creation time, snapshot state, or an unfamiliar name.
