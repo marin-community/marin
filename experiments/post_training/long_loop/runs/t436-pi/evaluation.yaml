@@ -39,9 +39,9 @@ config:
     placement:
       colocate_all: true
       colocate_policy_ref: true
-      policy_num_nodes: 8
+      policy_num_nodes: 2
       policy_num_gpus_per_node: 8
-      ref_num_nodes: 8
+      ref_num_nodes: 2
       ref_num_gpus_per_node: 8
     train_batch_size: 1
     policy_mini_batch_size: 1
@@ -84,7 +84,7 @@ config:
       - 128001
       - 128009
     eval_n_samples_per_prompt: 1
-    num_inference_engines: 8
+    num_inference_engines: 2
     inference_engine_tensor_parallel_size: 1
     inference_engine_pipeline_parallel_size: 1
     inference_engine_data_parallel_size: 8
@@ -115,14 +115,14 @@ config:
   terminal_bench:
     harbor:
       environment_type: daytona
-      daytona_provisioning: snapshot
+      daytona_provisioning: declarative
       daytona_api_key_env: DAYTONA_EVAL_API_KEY
       eval_daytona_api_key_env: DAYTONA_EVAL_API_KEY
       verifier_override_timeout_sec: 300
       override_timeout_sec: 1800
       eval_timeout_override_sec: 1800
       trial_attempt_timeout_sec: 2460
-      n_concurrent_trials: 4
+      n_concurrent_trials: 8
       max_retries: 0
     installed_agent:
       agent:
@@ -165,9 +165,9 @@ data_relative_path: rollouts.parquet
 judge_gpu_count: 8
 role_plan:
   colocate_all: true
-  policy_num_nodes: 8
+  policy_num_nodes: 2
   policy_num_gpus_per_node: 8
-  num_inference_engines: 8
+  num_inference_engines: 2
   inference_engine_tensor_parallel_size: 1
   inference_engine_pipeline_parallel_size: 1
   inference_engine_data_parallel_size: 8
