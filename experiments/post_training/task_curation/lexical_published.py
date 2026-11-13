@@ -4,7 +4,6 @@
 """Normalize exact published TaskSpec artifacts without repeating their converters."""
 
 import argparse
-import hashlib
 import json
 import logging
 from collections.abc import Iterable
@@ -17,6 +16,7 @@ from finestore.rl.source_identity import canonical_source_id, original_source_id
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
@@ -47,9 +47,7 @@ class PublishedTextConfig:
 
 def published_documents(config: PublishedTextConfig) -> Iterable[tuple[dict, dict]]:
     source = StoragePath(config.tasks_path)
-    with source.open("rb") as stream:
-        actual = hashlib.file_digest(stream, "sha256").hexdigest()
-    if actual != config.population.tasks_parquet_sha256:
+    if file_sha256(source) != config.population.tasks_parquet_sha256:
         raise ValueError(f"Published TaskSpec bytes changed: {config.population.source_id}")
     with source.open("rb") as stream:
         for batch in pq.ParquetFile(stream).iter_batches(batch_size=32, columns=["task_spec"]):
