@@ -117,6 +117,7 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         mesh=mesh,
         pack=bool(recipe["pack"]),
         wandb_project=recipe["wandb_project"],
+        xla_flags=tuple(recipe["xla_flags"]),
     )
 
 

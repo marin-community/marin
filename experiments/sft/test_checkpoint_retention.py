@@ -40,12 +40,20 @@ def test_native_sft_dispatch_preserves_accelerator_platform_and_timeout(monkeypa
     monkeypatch.setattr(launcher, "remote", capture_remote)
     kwargs = {} if override is None else {"task_timeout_seconds": override}
     model = HFModel("unused-no-download", **kwargs)
-    pod = TrainLmOnPodConfig(train_config=None, resources=ResourceConfig(device=device))
+    pod = TrainLmOnPodConfig(
+        train_config=None,
+        resources=ResourceConfig(device=device),
+        env_vars={"XLA_FLAGS": "--xla_gpu_shard_autotuning=false"},
+    )
     model.run(pod)
     assert submitted[0][0]["timeout"] == Duration.from_seconds(259200 if override is None else override)
     assert submitted[0][1] is pod
     assert submitted[0][0]["env_vars"]["MARIN_TEMP_PREFIX"] == "s3://marin-us-east-08a/tmp"
     assert submitted[0][0]["env_vars"].get("JAX_PLATFORMS") == platform
+    flags = submitted[0][0]["env_vars"]["XLA_FLAGS"].split()
+    assert "--xla_gpu_shard_autotuning=false" in flags
+    if isinstance(device, GpuConfig):
+        assert any(flag.startswith("--xla_gpu_nccl_termination_timeout_seconds=") for flag in flags)
 
 
 @pytest.fixture
