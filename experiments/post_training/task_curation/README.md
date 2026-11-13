@@ -599,6 +599,8 @@ before loading a model. To replace a coordinator, stop its writers, then pass
 `--resume-root /owner/retired-coordinator` to reuse its completed source shards.
 Repeat the option for multiple retired roots. Reuse verifies the immutable
 record digest, exact inputs, reviewer, rubric and batch assignment. A completed
+record with a digest or configuration mismatch raises an error before model
+loading. A completed
 primary shard remains frozen even when it contains invalid or uncertain
 observations. Invalid or unavailable observations use the separate repair
 procedure below; completed uncertain observations remain unchanged. Changing
