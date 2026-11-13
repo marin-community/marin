@@ -57,9 +57,7 @@ class LocalDisk:
         return root
 
     def check_limit(self, stderr: bytes = b"", *, allocation_errno: int | None = None) -> None:
-        """Raise a sticky disk limit after an observed failed allocation."""
-        # Consuming the final block or inode is within the budget. Latch only a
-        # failed allocation, including guest diagnostics after partial cleanup.
+        """Raise a sticky disk limit after an allocation errno or stderr marker."""
         self._exhausted = self._exhausted or (
             allocation_errno in (errno.ENOSPC, errno.EDQUOT)
             or any(

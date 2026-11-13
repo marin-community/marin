@@ -65,7 +65,6 @@ async def test_local_disk_overflow_is_typed_and_neighbor_survives(tmp_path, exec
         assert failure.value.resource is ResourceLimit.DISK
         result = await neighbor.run(Command(("/bin/sh", "-c", "echo retained > /app/answer; cat /app/answer")))
         assert (result.exit_code, result.stdout) == (0, b"retained\n")
-        # Both overlays still expose their pinned image's read-only contents.
         assert (await neighbor.run(Command(("/bin/cat", "/etc/hosts")))).exit_code == 0
         print(
             json.dumps(
