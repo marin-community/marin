@@ -250,6 +250,26 @@ def run_stage(
                 source=corpus["prepared_inputs"],
                 kind=SemanticArtifact,
             ),
+            prepared_descriptions=(
+                ArtifactStep.adopt(
+                    "rl-semantics/regional-instructions",
+                    "2026.11.13.1",
+                    source=corpus["prepared_descriptions"],
+                    kind=SemanticArtifact,
+                )
+                if "prepared_descriptions" in corpus
+                else None
+            ),
+            prepared_curriculum_embeddings=(
+                ArtifactStep.adopt(
+                    "rl-semantics/regional-anchors",
+                    "2026.11.13.1",
+                    source=corpus["prepared_curriculum_embeddings"],
+                    kind=SemanticArtifact,
+                )
+                if "prepared_curriculum_embeddings" in corpus
+                else None
+            ),
         )
         paths = {name: getattr(stages, name).path() for name in ("inputs", *STAGES, "assignments", "publication")}
         LOGGER.info("Stage plan: %s", json.dumps(paths, sort_keys=True))

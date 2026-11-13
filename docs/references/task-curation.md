@@ -102,6 +102,24 @@ below that baseline forces two-way spill merges even when the enclosing job has
 free memory. Choose the budget from measured reducer payloads and preserve the
 shuffle's existing memory-safety model.
 
+Harrier uses PyTorch SDPA with Flash, memory-efficient and math attention enabled.
+cuDNN attention is excluded because its execution-plan selection can fail on
+padded GB200 batches. Model/tokenizer pins, BF16 precision, pooling and cache
+keys stay the same. Record cross-device vector agreement against the reference
+cache before extending a CPU-produced population on GPU.
+The `harrier_parity` entry point checks a frozen 2,048-key reference bundle and
+writes a receipt before accepting the backend. Every vector must have cosine
+similarity at least 0.999 to its CPU BF16 reference, and both primary area
+assignments must agree for at least 99.9% of sampled tasks. A failed gate stops
+the run; preserve its receipt rather than changing the thresholds.
+
+For a regional move, copy public Parquet and cache objects without clobbering,
+then verify sizes and checksums. Preserve source manifests and source keys;
+write new regional pointer records instead of rewriting historical records.
+A regional corpus can supply `prepared_descriptions` and
+`prepared_curriculum_embeddings` so the graph adopts those completed stages.
+All referenced runtime paths must point into the destination region.
+
 | Part | Implementation and data models |
 |---|---|
 | Source selection and graph execution | [driver.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/driver.py), [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [TaskSpec](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py) |

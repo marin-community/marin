@@ -18,7 +18,7 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.curriculum_backfill import FrozenCoverageSource, prepare_sources
+from experiments.post_training.task_curation.curriculum_backfill import FrozenCoverageSource, prepare_sources, run_stage
 from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     SemanticArtifact,
@@ -133,7 +133,7 @@ def unavailable_embedder() -> TextEmbedder:
     raise AssertionError("Instruction preparation must not run model inference")
 
 
-def test_prepared_public_corpus_runs_direct_text_graph_without_private_views(tmp_path, frozen_source):
+def test_prepared_public_corpus_runs_direct_text_graph_without_private_views(tmp_path, frozen_source, monkeypatch):
     source, _ = frozen_source
     output = tmp_path / "prepared"
     prepare_sources([source], str(output), workers=1)
@@ -175,3 +175,16 @@ def test_prepared_public_corpus_runs_direct_text_graph_without_private_views(tmp
     assert len(rows) == 1  # The two retained tasks have identical public instructions.
     assert rows[0]["status"] == "ready"
     assert "Add two and three." in rows[0]["description"]
+    corpus["prepared_descriptions"] = result.path
+    (output / "corpus.json").write_text(json.dumps(corpus))
+    monkeypatch.setattr("experiments.post_training.task_curation.embedding._instructions", unavailable_embedder)
+    run_stage(
+        str(output / "corpus.json"),
+        str(tmp_path / "regional-artifacts"),
+        str(tmp_path / "regional-cache"),
+        "descriptions",
+        "cpu",
+        1,
+        "8g",
+        True,
+    )
