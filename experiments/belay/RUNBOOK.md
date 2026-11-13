@@ -385,8 +385,11 @@ against that finished run (table below) and no control is launched.
 
 **Ladder.** `Track: ladder` means all four `competitive-*` rungs, launched together. Each rung has its own spec and
 runs, with the rung in their id (`runs/X0037d768.yaml`, `belay-X0037d768-seed0`); every rung's trial and results
-go on the one `X####` entry and thread. The idea stays running until its last rung finishes, and that rung scores
-the entry.
+go on the one `X####` entry and thread. The idea stays running until its last rung finishes. That rung's
+`run-finished` then carries the ladder to hero compute: it fits the variant's four rungs with the recipe's scaling
+form (`config.PROJECTION_BASIS`), records the projected Δ, compute multiplier and fitted exponent on the entry as
+its `projection`, and judges the ladder by the projected Δ, not by any one rung. `B project X####` records it for a
+ladder finished before this rule.
 
 **Ladders and hero-mfu.** An idea usually goes `speedrun` first (a quick compatibility check), then `hero-mfu`
 when it will move MFU a lot (a maintainer runs it), then `ladder`. A radical idea, or one that needs a stronger
