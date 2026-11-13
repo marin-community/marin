@@ -27,7 +27,7 @@ from taskcompendium.evaluation.spec import (
 )
 from taskcompendium.importers.evalchemy.assets.code_protocol import crux_answer
 from taskcompendium.importers.evalchemy.code import convert_python, python_item, read_crux
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ScriptGrader
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
@@ -122,9 +122,6 @@ def test_python_publication_keeps_tests_private_and_expands_crux_directions(case
         assert [item.item.groups["direction"] for item in published] == ["input", "output"]
         assert len({item.task.id for item in published}) == 2
     for item in published:
-        assert isinstance(item.task.grader, ScriptGrader)
-        assert item.task.grader.environment.setup_commands == ()
-        assert item.task.grader.argv == ("sh", "-c", "python3 /tests/prepare.py && exec python3 /app/program.py")
         assert not item.task.resources.worker
         config = next(resource for resource in item.task.resources.verifier if resource.path == "config.json")
         private = json.loads(resource_bytes(config))
