@@ -219,7 +219,7 @@ def build_run(
 @click.option(
     "--reproducible-serving",
     is_flag=True,
-    help="Use the one-sequence-per-rank serving profile from the fixed100 qualification.",
+    help="Use batch-invariant serving with one sequence per rank and a fixed evaluation seed.",
 )
 @rl_build_options
 def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: bool) -> ArtifactStep[SkyRLRun]:
