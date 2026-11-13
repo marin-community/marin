@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from finestore.rl.curation import SourceDeclaration
 from finestore.rl.difficulty import Solver
 from marina.applets import applet_schema
 from marina.db import DatabaseSpec, engine_for
@@ -52,6 +53,23 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
             ]:
                 if declaration.name in {"clean", "eval"}:
                     declaration = with_declaration_admission_census(declaration)
+                if declaration.id == "Marin:clean":
+                    declaration = SourceDeclaration.model_validate(
+                        {
+                            **declaration.model_dump(mode="json"),
+                            "daytona_safety": "unsafe",
+                            "daytona_snapshot_count": 11,
+                            "daytona_machine_slots": 3,
+                            "daytona_execution_failures": 1,
+                            "daytona_count_basis": "Complete actor census",
+                            "daytona_unsafe_reasons": ["too_many_snapshots", "unbuilt_image"],
+                            "daytona_unsafe_details": {
+                                "too_many_snapshots": "Eleven distinct actor snapshots",
+                                "unbuilt_image": "One actor declares an unbuilt image",
+                            },
+                            "daytona_unsafe_counts": {"too_many_snapshots": 3, "unbuilt_image": 1},
+                        }
+                    )
                 connection.execute(
                     text(
                         "INSERT INTO atlas_sources (load_id,id,declaration,latest_attempt_status,"
