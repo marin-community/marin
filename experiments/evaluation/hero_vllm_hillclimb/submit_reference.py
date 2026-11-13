@@ -35,6 +35,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True)
     parser.add_argument("--long-lengths", default="4096,32768,65536")
+    parser.add_argument(
+        "--cluster",
+        default="cw-us-east-08a",
+        help="Controller to submit to; 'marin' federates to cw-us-east-08a through the hub",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -44,7 +49,7 @@ def main() -> None:
         disk="1t",
         device=GpuConfig(variant="GB200", count=GPUS_PER_NODE),
         replicas=NODES,
-        target_cluster="cw-us-east-08a",
+        target_cluster="cw-us-east-08a" if args.cluster == "marin" else None,
     )
     output = f"{OUTPUT_ROOT}/{args.name}"
     command = Entrypoint(
@@ -73,10 +78,13 @@ def main() -> None:
         resources=resources,
     )
     native = convert_resources(resources)
-    print(f"output={output} replicas={resources.replicas} coscheduling={resolve_coscheduling(resources, NODES)}")
+    print(
+        f"cluster={args.cluster} target_cluster={resources.target_cluster} output={output} "
+        f"replicas={resources.replicas} coscheduling={resolve_coscheduling(resources, NODES)}"
+    )
     if args.dry_run:
         return
-    with connect_controller(cluster_name="marin") as endpoint:
+    with connect_controller(cluster_name=args.cluster) as endpoint:
         with IrisClient.remote(endpoint.url, credentials=endpoint.credentials, workspace=Path.cwd()) as client:
             job = client.submit(
                 wrap_multiprocess(command, native, GPUS_PER_NODE),
