@@ -31,7 +31,6 @@ from daytona import (
     Resources,
 )
 from daytona_api_client_async import SnapshotState
-from shellbox.backends.daytona.environment import DaytonaTaskEnvironment
 from shellbox.backends.daytona.machine import (
     DaytonaMachine,
     DaytonaMachineFactory,
@@ -44,6 +43,7 @@ from shellbox.backends.daytona.snapshot import (
     list_snapshots,
     purge_stale_snapshots,
     snapshot_name,
+    snapshot_request_for_spec,
     snapshot_resources,
     task_snapshot_source,
 )
@@ -1132,16 +1132,15 @@ def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_pat
         task_snapshot_source(None, tmp_path / "absent")
 
 
-def test_task_environment_uses_known_snapshot_identity(tmp_path) -> None:
-    environment = DaytonaTaskEnvironment(
-        environment_dir=tmp_path,
-        docker_image="fixture:tag",
+def test_machine_spec_uses_known_snapshot_identity(tmp_path) -> None:
+    spec = MachineSpec(
+        source=RegistryImage("fixture:tag"),
         cpus=2,
         memory_mb=2049,
         storage_mb=1025,
     )
 
-    request = environment.snapshot_request()
+    request = snapshot_request_for_spec(spec)
     assert request.name == "shellbox-63d11f0b74739ee18b90a963a6db6e078db4e468"
 
 

@@ -32,18 +32,17 @@ from harbor.environments.model_relay import (
 )
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
-from shellbox.backends.daytona.environment import (
-    DaytonaTaskEnvironment,
-    DaytonaTaskEnvironmentSpec,
-)
 from shellbox.backends.daytona.machine import (
     DEFAULT_SANDBOX_TTL_MINUTES,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkPolicy,
 )
-from shellbox.backends.daytona.snapshot import task_snapshot_source
-from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.backends.daytona.snapshot import (
+    SnapshotRequest,
+    snapshot_request_for_spec,
+    task_snapshot_source,
+)
 from shellbox.machine import MachineSpec, NetworkPolicy
 from shellbox.process_session import (
     acquire_owned,
@@ -60,13 +59,8 @@ def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *,
     factory prepares, so measurement code can derive snapshot identities from
     the same inputs production uses.
     """
-    source = (
-        RegistryImage(task_env_config.docker_image)
-        if task_env_config.docker_image
-        else DockerfileSource(environment_dir, environment_dir / "Dockerfile")
-    )
     return MachineSpec(
-        source=source,
+        source=task_snapshot_source(task_env_config.docker_image, environment_dir),
         workdir=task_env_config.workdir or "",
         env=env or {},
         network=NetworkPolicy.ALLOW if task_env_config.allow_internet else NetworkPolicy.DENY,
@@ -148,9 +142,7 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Shellbox Daytona supports single-container tasks; use local for Compose service groups"
             )
-        task_snapshot_source(
-            self.task_env_config.docker_image, self.environment_dir
-        )
+        task_snapshot_source(self.task_env_config.docker_image, self.environment_dir)
         paths = EnvironmentPaths()
         allowed = {
             str(path)
@@ -163,31 +155,8 @@ class DaytonaEnvironment(BaseEnvironment):
         if any(str(mount["target"]) not in allowed for mount in self._mounts):
             raise ValueError("Shellbox Daytona does not support custom host mounts")
 
-    def _task_environment(self) -> DaytonaTaskEnvironment:
-        return DaytonaTaskEnvironment(
-            environment_dir=self.environment_dir,
-            docker_image=self.task_env_config.docker_image,
-            workdir=self.task_env_config.workdir or "",
-            env=self._merge_env(None) or {},
-            allow_internet=self.task_env_config.allow_internet,
-            cpus=self._effective_cpus,
-            memory_mb=self._effective_memory_mb,
-            storage_mb=self._effective_storage_mb,
-            gpus=self._effective_gpus,
-        )
-
-    def snapshot_spec(self) -> DaytonaTaskEnvironmentSpec:
-        """Return the effective environment that selects this task's snapshot."""
-        return self._task_environment().as_spec()
-
-    async def start(
-        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
-    ) -> None:
-        if force_build:
-            raise ValueError(
-                "Shellbox snapshots are immutable; change the prepared image or build inputs"
-            )
-        spec = machine_spec(
+    def _machine_spec(self) -> MachineSpec:
+        return machine_spec(
             self.task_env_config,
             self.environment_dir,
             self._merge_env(None),
@@ -196,6 +165,19 @@ class DaytonaEnvironment(BaseEnvironment):
             storage_mb=self._effective_storage_mb,
             gpus=self._effective_gpus,
         )
+
+    def snapshot_request(self) -> SnapshotRequest:
+        """The snapshot that this task's sandbox starts from."""
+        return snapshot_request_for_spec(self._machine_spec())
+
+    async def start(
+        self, force_build: bool, *, service_tasks: asyncio.TaskGroup
+    ) -> None:
+        if force_build:
+            raise ValueError(
+                "Shellbox snapshots are immutable; change the prepared image or build inputs"
+            )
+        spec = self._machine_spec()
         judge, candidate = task_model_relays(
             model_endpoint=self.model_endpoint,
             model_name=self.model_name,

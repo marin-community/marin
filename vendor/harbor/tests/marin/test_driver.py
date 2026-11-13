@@ -17,6 +17,8 @@ from harbor.models.task.task import Task
 from harbor.utils.env import resolve_env_vars
 from harbor_config import JobConfig
 from harbor_config.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from shellbox.backends.daytona.snapshot import SnapshotRequest
+from shellbox.image import RegistryImage
 from marin.evaluation.harbor.trial_driver import (
     RuntimeOverlay,
     _model_authentication,
@@ -637,13 +639,8 @@ async def test_snapshot_specs_apply_job_resource_overrides(tmp_path, prepared_ta
 
     specs = await _snapshot_specs(config)
 
-    assert specs == [
-        {
-            "environment_dir": str(prepared_task / "environment"),
-            "docker_image": "example.test/task@sha256:" + "a" * 64,
-            "cpus": 1,
-            "memory_mb": 4096,
-            "storage_mb": 4096,
-            "gpus": 0,
-        }
-    ]
+    request = SnapshotRequest.from_dict(specs[0])
+    assert specs == [request.as_dict()]
+    assert request.source == RegistryImage("example.test/task@sha256:" + "a" * 64)
+    assert (request.resources.cpu, request.resources.memory, request.resources.disk) == (1, 4, 4)
+    assert request.resources.gpu is None

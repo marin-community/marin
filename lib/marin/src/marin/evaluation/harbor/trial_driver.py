@@ -61,10 +61,6 @@ from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyre
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.filesystem.s3_compat import s3_credential_options
-from shellbox.backends.daytona.environment import (
-    DaytonaTaskEnvironment,
-    DaytonaTaskEnvironmentSpec,
-)
 
 from marin.evaluation.harbor.agent_context import (
     CANDIDATE_API_KEY_ENV,
@@ -720,14 +716,14 @@ def _preflight(request_path: Path, *, host_environment: Mapping[str, str]) -> No
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
-async def _snapshot_specs(config: JobConfig) -> list[DaytonaTaskEnvironmentSpec]:
-    """Resolve a job's effective Daytona inputs without allocating sandboxes."""
+async def _snapshot_specs(config: JobConfig) -> list[dict[str, Any]]:
+    """Resolve a job's effective Daytona snapshot requests without allocating sandboxes."""
     if config.environment.type is not EnvironmentType.DAYTONA:
         raise ValueError("Snapshot specs require the daytona environment")
-    specs: dict[str, DaytonaTaskEnvironmentSpec] = {}
+    requests: dict[str, dict[str, Any]] = {}
     with tempfile.TemporaryDirectory(prefix="marin-harbor-snapshot-specs-") as jobs_dir:
         trial_paths = TrialPaths(Path(jobs_dir) / "trial")
-        for task_config in await Job._resolve_task_configs(config):
+        for task_config in await Job.resolve_task_configs(config):
             task = Task(
                 task_config.get_local_path(),
                 disable_verification=config.verifier.disable or config.verifier.import_path is not None,
@@ -745,10 +741,9 @@ async def _snapshot_specs(config: JobConfig) -> list[DaytonaTaskEnvironmentSpec]
                 guest_environment={},
             )
             assert isinstance(environment, DaytonaEnvironment)
-            spec = environment.snapshot_spec()
-            name = DaytonaTaskEnvironment.from_spec(spec).snapshot_request().name
-            specs[name] = spec
-    return list(specs.values())
+            request = environment.snapshot_request()
+            requests[request.name] = request.as_dict()
+    return list(requests.values())
 
 
 async def _run(config: JobConfig, *, host_capabilities: HostCapabilities) -> None:
