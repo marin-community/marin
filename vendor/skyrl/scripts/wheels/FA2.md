@@ -4,6 +4,9 @@
 2.14.1/CUDA 13.2.2 native builds on ARM and x86. It excludes the 21 optional
 `flash_attn/cute` Python files. Stock Megatron Core 0.18 probes that bundled FA4
 code even when using FA2; the old FA4 code cannot import with CUTLASS DSL 4.7.
+Core's `megatron/core/transformer/attention.py` catches the missing module's
+`ImportError` and sets `HAVE_FA4`
+to false. Exclusion takes that fallback without importing the bundled FA4 code.
 Core can then select the installed FA2 backend without changes to Core itself.
 
 The input wheels come from
@@ -14,6 +17,7 @@ changes four C++17 build flags to C++20 for Torch 2.14 headers. It does not chan
 kernel arithmetic. The release also retains each architecture's `BUILD_INFO`
 and `BUILD_REQUIREMENTS.txt`.
 
+The output distribution version is `2.8.3.post2+marin.fa2.cu132torch2141.1`.
 Download the wheel for each architecture from that release, then run:
 
 ```bash
