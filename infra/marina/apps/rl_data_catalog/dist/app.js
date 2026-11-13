@@ -6,7 +6,7 @@ const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
   ['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
-  ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['daytona', 'Daytona'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'],
+  ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['daytona', 'Daytona'], ['backends', 'Backends'], ['grading', 'Grading'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'],
 ];
 const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
 const state = {sources: [], sort: 'examples', direction: -1, origin: 'all', syncedAt: null};
@@ -16,13 +16,15 @@ const originLabels = {tasktrove: 'TaskTrove', evalchemy: 'Evalchemy', harbor_hub
 function originOf(row) { return originLabels[row.origin] || row.origin; }
 function resultKey(row) { return row.result || 'none'; }
 function value(row, key) {
-  if (key === 'examples') return row.within_source_dedup?.unique_count;
+  if (key === 'examples') return null; // A retained conversion count is not post-oracle admission evidence.
   if (key === 'use') return row.intended_use || 'unknown';
   if (key === 'quality') return qualityOrder[row.quality];
   if (key === 'result') return resultKey(row);
   if (key === 'contamination') return row.contamination_status;
   if (key === 'overlap') return row.contamination_status === 'NOT MEASURED' ? null : row.lexical_contamination?.contaminated_tasks;
   if (key === 'daytona') return row.daytona.state;
+  if (key === 'backends') return backendLabels(row).map(item => item.label).join('; ');
+  if (key === 'grading') return Object.keys(row.grading_environment?.required_counts || {}).join('; ');
   if (key === 'area') return row.coverage?.top_area?.name;
   if (key === 'updated') return row.updated_at;
   return row[key];
@@ -157,8 +159,8 @@ function sourceRow(row, others, canonical) {
       toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); render(); });
       name.prepend(toggle);
     }
-    const examples = node('td', row.within_source_dedup?.unique_count != null ? number.format(row.within_source_dedup.unique_count) : 'Unknown', 'num');
-    examples.title = row.coverage?.basis || 'No coverage measurement in this catalog';
+    const examples = node('td', 'Pending', 'num');
+    examples.title = 'Post-oracle admitted count is not measured. Open Evidence for the retained converted population and pending filtration steps.';
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
     const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
     if (row.quality_review_status) quality.firstElementChild.title = row.quality_review_status;
@@ -182,7 +184,9 @@ function sourceRow(row, others, canonical) {
     updated.title = row.updated_at ? 'Load time of the selected catalog snapshot (UTC)' : 'Catalog load time unavailable';
     const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
     const contamination = contaminationCell(row);
-    tr.append(name, examples, use, quality, result, issueRate, contamination, overlap, daytonaCell(row), area, updated, evidence); return tr;
+    const backends = node('td'); backends.append(backendChips(row));
+    const grading = node('td'); grading.append(gradingChips(row));
+    tr.append(name, examples, use, quality, result, issueRate, contamination, overlap, daytonaCell(row), backends, grading, area, updated, evidence); return tr;
 }
 function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
@@ -190,25 +194,31 @@ function details(row) {
   const fields = [
     ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
     ['Content review', row.quality_review_status],
-    ['Unique examples', row.within_source_dedup?.unique_count], ['Raw converted tasks', row.within_source_dedup?.raw_count], ['Within-source duplicates dropped', row.within_source_dedup?.within_source_duplicates], ['Use', useLabels[value(row, 'use')]],
+    ...filtrationRows(row), ['Use', useLabels[value(row, 'use')]],
     ['Coverage basis', row.coverage?.basis], ['Coverage gap', row.coverage?.unavailable_reason],
-    ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],
+    ['Sampled grader qualification', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],
     ['Daytona', daytonaLabel(row.daytona)], ['Daytona evidence', row.daytona.reason || row.daytona.basis],
     ['Contamination', contaminationChip(row.contamination_status)], ['Lexical measurement', contaminationText(row)],
     ['Last updated', row.updated_at ? day(row.updated_at) : null], ['Input rows', row.task_count], ['Source ID', row.id],
     ['Dataset revision', row.dataset_revision], ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
-    ['Admission counts', row.curation?.admission_counts], ['Control status', controls?.status], ['Control counts', controls?.counts],
+    ['Control status', controls?.status], ['Control counts', controls?.counts],
     ['Duplicate group', row.duplicate_group && `${row.duplicate_group.group_id}; canonical ${row.duplicate_group.canonical_source_id}; overlap ${sourceOverlap(row) == null ? "unknown" : `${Math.round(100 * sourceOverlap(row))}%`}`],
-    ['Backend capabilities', row.backend_capabilities],
+    ['Grading boundary required', gradingChips(row)], ['Grading census', row.grading_environment],
+    ['Backend fit by role', backendDetails(row)],
+    ['Lexical measurement method', row.lexical_contamination && `${row.lexical_contamination.ngram_length}-gram overlap`],
+    ['Matched evaluation sets', row.lexical_contamination?.matched_evals],
   ];
   $('detail-fields').replaceChildren(...fields.filter(([, item]) => item !== null && item !== undefined).map(([title, item]) => {
     const field = node('dl', undefined, 'field');
     const value = node('dd');
-    value.append(item instanceof Node ? item : typeof item === 'object' ? JSON.stringify(item) : String(item));
+    value.append(readableRecord(item));
     field.append(node('dt', title), value);
     return field;
   }));
   const links = [];
+  const remediated = remediatedReleaseLink(row); if (remediated) links.push(remediated);
+  if (row.lexical_contamination?.evidence_url) links.push(receiptLink(row.lexical_contamination.evidence_url, 'Lexical measurement receipt ↗'));
+  if (row.oracle_inventory) links.push(receiptLink(row.oracle_inventory.evidence_url, 'Full-population oracle inventory ↗'));
   const evidence = node('a', 'All quality evidence'); evidence.href = evidenceLink(row); links.push(evidence);
   if (row.coverage?.top_area) { const anchor = node('a', 'Curriculum coverage'); anchor.href = curriculumLink(row); links.push(anchor); }
   if (row.assessment.status === 'complete') { const anchor = node('a', 'Sampled review'); anchor.href = `assessment.html?source=${encodeURIComponent(row.id)}`; links.push(anchor); }
@@ -223,15 +233,15 @@ function details(row) {
 }
 function metrics(displayed) {
   const total = collapsed(state.sources).map(entry => entry.row);
-  const samples = rows => rows.reduce((sum, row) => sum + (row.within_source_dedup?.unique_count ?? 0), 0);
+  const samples = rows => rows.length ? 'Pending' : '0';
   $('metric-sources').textContent = `${number.format(total.length)} / ${number.format(displayed.length)}`;
-  $('metric-examples').textContent = `${number.format(samples(total))} / ${number.format(samples(displayed))}`;
+  $('metric-examples').textContent = `${samples(total)} / ${samples(displayed)}`;
   $('metric-quality').textContent = ['QUICK', 'SAMPLE', 'FULL'].map(level => number.format(displayed.filter(row => row.quality === level).length)).join(' / ');
   $('metric-date').textContent = day(state.syncedAt);
 }
 async function load() {
-  const data = await json('api/sources');
-  state.sources = data.sources;
+  const [data, inventory] = await Promise.all([json('api/sources'), json('measurements/oracle-inventory.json')]);
+  state.sources = data.sources.map(source => ({...source, oracle_inventory: boundOracleInventory(source, inventory)}));
   state.syncedAt = data.synced_at;
   $('message').hidden = true;
   $('snapshot-info').textContent = `Last updated ${day(data.synced_at)}`;

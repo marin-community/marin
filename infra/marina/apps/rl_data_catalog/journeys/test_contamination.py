@@ -151,6 +151,21 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     expect(page.locator("#rows tr")).to_have_count(23)
     chip = page.locator('tr[data-source-id="Marin:clean"] td:nth-child(9) .chip')
     expect(chip).to_have_text("UNSAFE: too_many_snapshots, unbuilt_image")
+    expect(page.get_by_role("columnheader", name="Backends")).to_be_visible()
+    expect(page.get_by_role("columnheader", name="Grading")).to_be_visible()
+    expect(page.get_by_role("columnheader", name="Oracle pass")).to_have_count(0)
+    clean = page.locator('tr[data-source-id="Marin:clean"]')
+    assert set(clean.locator(".backend-chips .chip").all_text_contents()) == {
+        "Docker",
+        "LOCAL: PARTIAL: docker_image",
+        "Daytona: UNSUPPORTED: packages_lock",
+    }
+    expect(clean.locator(".grading-chips .chip")).to_have_text("SEPARATE")
+    expect(clean.locator("td").nth(1)).to_have_text("Pending")
+    assert page.locator(".enum-chips").evaluate_all(
+        "groups => groups.every(g => [...g.children].every(c => c.classList.contains('chip')) && "
+        "g.textContent === [...g.children].map(c => c.textContent).join(''))"
+    )
     scroller = page.locator(".table-scroller")
     assert scroller.evaluate("element => element.scrollWidth > element.clientWidth")
     for right_edge in (False, True):
@@ -185,6 +200,27 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     page.locator('tr[data-source-id="Marin:clean"] .source-name').click()
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels")).to_contain_text("too_many_snapshots, unbuilt_image")
+    ledger = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
+    expect(ledger).to_contain_text("N/A: complete census found no shipped oracle solutions")
+    expect(ledger).to_contain_text("Pending: post-oracle admission is not measured")
+    expect(page.locator(".backend-table tbody tr")).to_have_count(3)
+    expect(page.locator(".backend-table")).to_contain_text("packages lock")
+    expect(page.locator(".backend-table")).to_contain_text("docker image")
+    for right_edge in (False, True):
+        page.locator(".backend-table").locator("xpath=..").evaluate(
+            "(element, right) => element.scrollLeft = right ? element.scrollWidth : 0", right_edge
+        )
+        assert page.locator(".backend-table").evaluate(
+            """table => {
+          const headers = [...table.tHead.rows[0].cells].map(cell => cell.getBoundingClientRect());
+          return [...table.tBodies[0].rows].every(row => [...row.cells].every((cell, index, cells) => {
+            const bounds = cell.getBoundingClientRect(), next = cells[index + 1]?.getBoundingClientRect();
+            return (!next || bounds.right <= next.left + 1) &&
+              Math.abs(bounds.left - headers[index].left) <= 1 &&
+              Math.abs(bounds.right - headers[index].right) <= 1;
+          }));
+        }"""
+        )
     assert page.locator(".field").evaluate_all(
         """fields => fields.every(field => {
       const label = field.querySelector('dt').getBoundingClientRect();
@@ -194,3 +230,10 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     journey.shoot(f"wide-evidence-{theme}-{width}")
+    page.get_by_role("link", name="By source", exact=True).click()
+    page.locator("#show-all").check()
+    page.locator('tr[data-source-id="Marin:stale-clean"] .source-name').click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    stale_ledger = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
+    expect(stale_ledger).to_contain_text("Pending: no complete population-wide oracle-filter receipt is recorded")
+    expect(stale_ledger).not_to_contain_text("N/A: complete census found no shipped oracle solutions")

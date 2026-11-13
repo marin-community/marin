@@ -83,7 +83,7 @@ not declared*. Edit the rules in the reference first, then the page text in
 
 ## Browsing sources
 
-**By source** lists each source's unique example count, training/evaluation use,
+**By source** lists each source's post-filtration admitted example count, training/evaluation use,
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
 curriculum area. The levels define required content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
@@ -126,6 +126,11 @@ pins, deduplication ledgers, lexical measurements, QC and archived assessment pa
 Counts describe the measured input before duplicate and lexical exclusions. They do
 not describe residual overlap in the retained release or semantic decontamination.
 The source table legend and Getting started guide define the same five states.
+Backends shows each measured backend's fit, with partial or unsupported requirement
+variants inside its chip. Evidence separates agent and grader support and blockers.
+Grading shows the required SHARED or SEPARATE boundary from the complete census;
+a declaration mismatch uses a warning variant and remains explicit in Evidence.
+N/A requires an applicable measured absence; missing evidence remains unmeasured.
 Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
 Result from incomplete content review carries a provisional variant within its
 chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
@@ -139,17 +144,20 @@ remediation lineage; changed task bytes require new qualification. Package-lock
 graders run on LOCAL with separate compatibility evidence. A source without a measured actor verdict cannot enter
 new ingestion. The backend map records each role's demands and blockers.
 
-Example counts describe unique converted task contracts after mandatory within-source
-deduplication, before training selection. Source details include the raw converted count,
+Examples requires completed oracle filtration and admission evidence, after oracle
+failures, within-source duplicates and training lexical overlap have been removed.
+Without that proof, Examples and admitted totals remain pending. Evidence and
+curriculum coverage separately show the retained converted population; content QA
+Results and sampled controls do not certify execution or admission. Source details include the raw converted count,
 duplicates dropped, and the exclusion manifest.
 Every entry has a registered conversion pipeline; there is no inventory-only
 path that substitutes a declared count for conversion.
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
 completed assessment without enough conclusive judgments. Curation never re-grades
-independent QC; the **Independent QC** column and the source details present the
-release's own admission evidence — verdict, method, reviewed count, admitted count
-where the release claims one, and a link to its pinned manifest — beside, and
-distinct from, the sampled quality. Open a source for
+independent QC; source details present the release's reported verdict, method,
+reviewed count and pinned manifest beside the sampled quality. The manifest
+retains the full historical record; it does not substitute for current filtration
+and admission evidence. Open a source for
 pipeline details and links to its original dataset, assessment and curriculum
 coverage. The leading curriculum domain links directly to that source's coverage
 within the domain. Columns size to their contents, and enum chips stay on one line
@@ -216,8 +224,9 @@ Before selecting a new catalog load:
    Controller deployment/restart requires separate user authorization. Service
    groups and model relays remain unsupported on this environment.
 4. Verify every source has a complete, exact-pin `within_source_dedup` receipt and
-   Examples equals its `unique_count`, including QUICK sources. Check raw and duplicate
-   counts against the drop manifest, then verify version-bound lexical evidence.
+   Evidence and curriculum retained counts equal its `unique_count`, including QUICK
+   sources. Examples requires the separate post-oracle admission proof. Check raw and
+   duplicate counts against the drop manifest, then verify version-bound lexical evidence.
    New or changed admissions require a private TaskCompendium clean/remediated
    receipt after [lexical decontamination](task-curation.md#lexical-decontamination-before-publication);
    preserve grandfathered selection until explicitly approved.
@@ -270,6 +279,16 @@ replace `dist/measurements/content-progress.json`. Its JSON object contains
 `dataset_revision`, `retained_count`, `valid_reviews_lower_bound` and `evidence_uri`.
 The renderer requires an exact current ID, pin and unique-count match. Progress
 never determines FULL or Result.
+
+An optional `dist/measurements/oracle-inventory.json` carries a `sources` list
+of frozen population observations: `source_id`, the complete `ActorCensusInput`
+object as `input`, `oracle_tasks`, `execution_qualification` and `evidence_url`.
+The renderer requires the entire actor input, current dataset pin, converter
+version and retained count to match. A measured zero establishes no shipped
+oracle solutions; it does not establish calibration, execution or admission.
+Missing and stale rows leave oracle filtering pending. No full-population
+oracle-filter receipt is currently attached to the catalog, so admitted counts
+remain pending even where the no-oracle census is complete.
 
 After the package release, load the complete catalog with the
 [catalog loader](#updating-atlas), using the explicit preview app ID above.
@@ -698,9 +717,11 @@ source shape requires every task to have passed at that shape.
 
 Every source declaration must contain a complete `within_source_dedup` receipt for the configured
 dataset pin and converter version, including QUICK sources. The receipt records raw converted
-TaskSpecs, unique contracts, duplicates dropped, and the duplicate-to-kept manifest. Atlas Examples
-uses the unique count; source details retain the raw count, duplicate count and exclusion manifest URI,
-with a Filer link beside S3 URIs.
+TaskSpecs, unique contracts, duplicates dropped, and the duplicate-to-kept manifest.
+Source details and curriculum coverage retain this converted-population count;
+Examples requires completed post-oracle admission evidence. Details also retain
+the raw count, duplicate count and exclusion manifest URI, with a Filer link
+beside S3 URIs.
 
 Ingest in this order: conversion → exact within-source deduplication → lexical decontamination →
 resource calibration and full-population oracle filtering → SAMPLE/FULL QA. Keep the lowest task
