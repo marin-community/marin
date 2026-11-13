@@ -232,6 +232,11 @@ def _parse_args() -> argparse.Namespace:
         help="FILE:SHA256 - replace the release's aarch64 wheel with the URL stored in FILE (Python overlay)",
     )
     parser.add_argument("--env", action="append", default=[], help="KEY=VALUE for every vLLM process")
+    parser.add_argument(
+        "--direct",
+        action="store_true",
+        help="Submit to the cw-us-east-08a controller directly instead of federating through the marin hub",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -322,13 +327,15 @@ def main() -> None:
         ),
         env=tuple(tuple(item.split("=", 1)) for item in args.env),
     )
-    submission = replace(resources, target_cluster=TARGET_CLUSTER)
+    submission = resources if args.direct else replace(resources, target_cluster=TARGET_CLUSTER)
+    cluster = TARGET_CLUSTER if args.direct else CLUSTER
     coscheduling = resolve_coscheduling(submission, submission.replicas)
     print(json.dumps({"name": name, "output": config.output_uri, "args": list(engine.extra_args), "env": args.env}, indent=1))
     print(f"replicas={submission.replicas} coscheduling={coscheduling}")
     if args.dry_run:
         return
-    with connect_controller(cluster_name=CLUSTER) as endpoint:
+    print(f"controller={cluster} target_cluster={submission.target_cluster}")
+    with connect_controller(cluster_name=cluster) as endpoint:
         with IrisClient.remote(endpoint.url, workspace=workspace, credentials=endpoint.credentials) as client:
             job = client.submit(
                 entrypoint=Entrypoint.from_callable(run_arm, config),
