@@ -1,0 +1,13 @@
+experiment: X0226
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: space/case-normalised byte rows on input embeddings
+    flags:
+    - --model-set
+    - spelling_byte_embeds=true
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
