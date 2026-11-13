@@ -21,6 +21,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import click
@@ -85,6 +86,14 @@ LOADER_CONFIG = {"distributed": True, "concurrency": 4, "memory_limit": 16 * 102
 SMOKE_PROMPT = "What is 2 + 2? Answer briefly."
 
 
+class Quantization(StrEnum):
+    """Weight quantization that vLLM applies to the BF16 export while loading it."""
+
+    NONE = "none"
+    # Online FP8 (vllm#112): projections and experts in FP8; the FP32 QB router stays unquantized.
+    FP8 = "fp8"
+
+
 @dataclass(frozen=True)
 class HeroDashboardConfig:
     """One Hero dashboard deployment: weights, tokenizer, served name, endpoint, gang size and lifetime."""
@@ -97,6 +106,7 @@ class HeroDashboardConfig:
     tokenizer: str
     tokenizer_revision: str
     lifetime_hours: float
+    quantization: Quantization
 
     @property
     def data_parallel_size(self) -> int:
@@ -128,6 +138,8 @@ def _vllm_args(config: HeroDashboardConfig, task_index: int, primary_host: str, 
         "--api-server-count",
         "1" if task_index == 0 else "0",
     )
+    if config.quantization is Quantization.FP8:
+        args += ("--quantization", "fp8")
     if task_index:
         args += ("--headless", "--data-parallel-start-rank", str(task_index * GPUS_PER_NODE))
     return args
@@ -215,7 +227,7 @@ def _serve_dashboard(config: HeroDashboardConfig, environment: VllmEnvironment, 
         backend="vllm",
         tensor_parallel_size=1,
         max_model_len=config.max_model_len,
-        dtype="bfloat16",
+        dtype="fp8" if config.quantization is Quantization.FP8 else "bfloat16",
         has_chat_template=True,
         endpoint=config.endpoint,
         chat_template_protocol=protocol_for_chat_template(MARIN_CHAT_TEMPLATE),
@@ -237,6 +249,7 @@ def _serve_dashboard(config: HeroDashboardConfig, environment: VllmEnvironment, 
         "task_count": str(config.nodes),
         "cuda_graph_mode": COMPILATION_CONFIG["cudagraph_mode"],
         "max_model_len": str(config.max_model_len),
+        "quantization": config.quantization.value,
         "streaming": "true",
         PROXY_TIMEOUT_METADATA_KEY: str(REQUEST_TIMEOUT_SECONDS),
     }
@@ -282,6 +295,12 @@ _PRIORITIES = {
 @click.option("--max-model-len", type=int, required=True)
 @click.option("--tokenizer", required=True, help="Hugging Face tokenizer repository.")
 @click.option("--tokenizer-revision", required=True, help="Pinned tokenizer commit.")
+@click.option(
+    "--quantization",
+    type=click.Choice([q.value for q in Quantization]),
+    required=True,
+    help="Online weight quantization; fp8 needs no separate export.",
+)
 @click.option("--lifetime-hours", type=float, default=24.0, show_default=True)
 @click.option("--cluster", default="marin", show_default=True)
 @click.option("--target-cluster", default="cw-us-east-08a", show_default=True)
@@ -302,6 +321,7 @@ def main(
     max_model_len: int,
     tokenizer: str,
     tokenizer_revision: str,
+    quantization: str,
     lifetime_hours: float,
     cluster: str,
     target_cluster: str,
@@ -322,6 +342,7 @@ def main(
         tokenizer=tokenizer,
         tokenizer_revision=tokenizer_revision,
         lifetime_hours=lifetime_hours,
+        quantization=Quantization(quantization),
     )
     resources = ResourceConfig.with_gpu(
         "GB200",
