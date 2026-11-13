@@ -31,3 +31,10 @@ def test_grug_checkpoint_rope_theta_aliases_resolve_to_the_stored_theta(tmp_path
     assert loaded.rope_theta == 500000.0
     loaded.save_pretrained(tmp_path / "exported")
     assert AutoConfig.from_pretrained(tmp_path / "exported").rope_theta == 500000.0
+
+
+@pytest.mark.parametrize("field", ["rope_parameters", "rope_scaling"])
+def test_grug_checkpoint_with_yarn_cannot_train_as_default_rope(tmp_path, field):
+    parameters = {"rope_type": "yarn", "factor": 2.0, "original_max_position_embeddings": 8}
+    with pytest.raises(ValueError, match=f"{field} requires unscaled RoPE"):
+        load(tmp_path, **{field: parameters})

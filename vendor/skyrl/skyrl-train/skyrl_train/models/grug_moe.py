@@ -276,6 +276,15 @@ class GrugMoeConfig(PretrainedConfig):
             label="maximum sequence length (max_position_embeddings or max_seq_len)",
         )
         rope_theta = _resolve_rope_theta(rope_theta, rope_parameters, rope)
+        for key, parameters in (
+            ("rope_parameters", rope_parameters),
+            ("rope_scaling", kwargs.pop("rope_scaling", None)),
+        ):
+            if parameters is not None and (
+                parameters.get("rope_type", parameters.get("type", "default")) != "default"
+                or parameters.get("factor", 1.0) != 1.0
+            ):
+                raise ValueError(f"Grug {key} requires unscaled RoPE")
         rms_norm_eps = float(
             rms_norm_eps if rms_norm_eps is not None else layer_norm_eps if layer_norm_eps is not None else 1e-5
         )
