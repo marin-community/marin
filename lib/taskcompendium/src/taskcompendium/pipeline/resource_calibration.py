@@ -36,7 +36,7 @@ class ResourceDimension(StrEnum):
 
 
 class ResourceUsage(BaseModel):
-    """Backend measurements; CPU time and elapsed time cover the agent phase."""
+    """Backend measurements for one agent or verifier phase."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
