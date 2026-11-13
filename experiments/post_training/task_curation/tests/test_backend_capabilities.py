@@ -241,8 +241,14 @@ def _docker_task(task_id: str) -> dict:
 def _shard_survey(tmp_path: Path, name: str, source_id: str) -> BackendSurvey:
     path = tmp_path / f"{name}.parquet"
     _write_spec_parquet(path, [{"task": _docker_task(f"{name}-task"), "runtime": {}}])
-    manifest = _survey_manifest([source_id], [_census_entry(source_id, path)])
-    manifest["snapshot_id"] = name
+    profile = RUNTIME.model_dump(mode="json")
+    manifest = {
+        "catalog_root": "test:catalog",
+        "snapshot_id": name,
+        "source_ids": [source_id],
+        "runtime_defaults": {"agent": profile, "grader": profile},
+        "inputs": [_census_entry(source_id, path)],
+    }
     return build_survey(manifest, _unit_checkers(), "rev")
 
 
