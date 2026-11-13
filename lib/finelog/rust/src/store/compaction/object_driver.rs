@@ -62,11 +62,12 @@ struct LeasedCompaction<'context, 'resources> {
 
 /// Most L0 objects one compaction job merges.
 ///
-/// Every input is a separate object read, upload of its replacement, and catalog
-/// commit amortized over the job, so on a hub where one 32-input job cost about
-/// 17 s under CPU contention, taking more inputs per job is what lets a flush
-/// backlog drain. 512 of the marin hub's ~135 KB flushes is about 70 MB, well
-/// under the executor's Arrow budget, which merges only the prefix that fits.
+/// Each job pays a fixed upload, index build, and catalog commit. On the marin
+/// hub a 32-input job took about 17 s under CPU contention, which drained fewer
+/// L0s than busy tables flushed. 512 of the hub's ~135 KB flushes is about
+/// 70 MB, under the executor's Arrow budget, which merges only the prefix that
+/// fits. A larger cap lengthens a job, and a job in flight holds one of the two
+/// shared maintenance slots until it finishes.
 pub(crate) const OBJECT_MAX_L0_INPUTS: usize = 512;
 
 struct MergeResult {
