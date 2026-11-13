@@ -129,26 +129,6 @@ def test_local_factory_reports_unsupported_host(monkeypatch):
         LocalMachineFactory()
 
 
-@pytest.mark.skipif(not Path("/run/current-system/sw").is_dir(), reason="Requires a NixOS system profile")
-def test_nixos_system_programs_execute_and_transfer_files(tmp_path, monkeypatch):
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    factory = LocalMachineFactory()
-
-    async def check():
-        machine = await factory.create(SPEC)
-        root = machine.root
-        try:
-            result = await machine.run(Command(("sh", "-c", "sleep 0 && mkdir result && printf answer > result/value")))
-            assert result.exit_code == 0
-            await machine.download("/app/result", tmp_path / "result")
-            assert (tmp_path / "result/value").read_text() == "answer"
-        finally:
-            await machine.close()
-        assert not root.exists()
-
-    asyncio.run(check())
-
-
 def test_local_numeric_limits_allow_execution_without_delegation(undelegated_factory):
     async def check():
         machine = await undelegated_factory.create(MachineSpec(HostImage(), workdir="/app", cpus=2, memory_mb=256))
@@ -993,15 +973,26 @@ def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, 
     assert not (outside_dir / "planted.txt").exists() and not (tmp_path / "stolen.txt").exists()
 
 
-def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
-    python_environment, python_factory, monkeypatch
-):
-    script = "import sys, six; print(sys.prefix); print(sys.base_prefix)"
-    result = run_command(python_factory, Command(("python3", "-c", script)))
-    assert result.exit_code == 0, result.stderr.decode()
-    prefix, base_prefix = map(Path, result.stdout.decode().split())
-    assert prefix == python_environment.bin_dir.parent
-    assert base_prefix.is_relative_to(python_environment.root)
+@pytest.mark.skipif(sys.platform != "linux", reason="The local bubblewrap backend requires Linux")
+def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(python_environment, monkeypatch, tmp_path):
+    script = (
+        "import sys, six; from pathlib import Path; print(sys.prefix); print(sys.base_prefix); "
+        "Path('answer').write_text(six.text_type(42))"
+    )
+
+    async def scenario(machine):
+        result = await machine.run(Command(("python3", "-c", script)))
+        assert result.exit_code == 0, result.stderr.decode()
+        prefix, base_prefix = map(Path, result.stdout.decode().split())
+        assert prefix == python_environment.bin_dir.parent
+        assert base_prefix.is_relative_to(python_environment.root)
+        await machine.download("/app/answer", tmp_path / "answer")
+        assert (tmp_path / "answer").read_text() == "42"
+
+    with monkeypatch.context() as host:
+        host.setenv("PATH", "/usr/bin:/bin")
+        factory = make_factory(read_only=(python_environment.root,), bin_dirs=(python_environment.bin_dir,))
+        on_machine(factory, SPEC, scenario)
 
     packages = PackageSpec(pypi_packages=("six==1.17.0",), tools=("python3",))
     factory = make_factory(python_version=PYTHON_VERSION, hash_seed="23")

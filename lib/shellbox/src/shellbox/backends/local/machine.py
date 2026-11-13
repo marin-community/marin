@@ -280,12 +280,19 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
 
 
 def _nix_system_mounts() -> tuple[Mount, ...]:
-    """Expose the NixOS system programs and their store closure read-only."""
+    """Expose NixOS programs, ELF loaders and their store closures read-only."""
     if not NIX_SYSTEM_PROFILE.is_dir():
         return ()
     profile = NIX_SYSTEM_PROFILE.resolve()
+    roots = [profile]
+    # Managed executables use FHS loaders that may sit outside the program profile's closure.
+    for directory in ("/lib", "/lib32", "/lib64", "/libx32"):
+        for loader in Path(directory).glob("ld*.so*"):
+            target = loader.resolve()
+            if target.is_relative_to("/nix/store"):
+                roots.append(target)
     closure = subprocess.run(
-        [str(profile / "bin/nix-store"), "--query", "--requisites", str(profile)],
+        [str(profile / "bin/nix-store"), "--query", "--requisites", *map(str, roots)],
         check=True,
         capture_output=True,
         text=True,
