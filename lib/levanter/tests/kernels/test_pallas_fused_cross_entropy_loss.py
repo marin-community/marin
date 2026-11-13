@@ -1173,6 +1173,24 @@ def test_batched_xla_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: py
     assert batched_xla._h100_full_vocab_b_tiled_block_size(x, w) is None
 
 
+@pytest.mark.parametrize(
+    ("amd_instinct", "vocab", "expected_v_block"),
+    [
+        (True, 65536, 4096),
+        (True, 65535, BlockSizes.get_default().v_block_size),
+        (False, 65536, BlockSizes.get_default().v_block_size),
+    ],
+)
+def test_batched_xla_custom_backward_v_block_on_amd_instinct_large_vocab(
+    monkeypatch: pytest.MonkeyPatch, amd_instinct: bool, vocab: int, expected_v_block: int
+):
+    x = jax.ShapeDtypeStruct((1024, 16), jnp.bfloat16)
+    w = jax.ShapeDtypeStruct((16, vocab), jnp.bfloat16)
+    monkeypatch.setattr(batched_xla.jax_utils, "is_amd_instinct", lambda: amd_instinct)
+
+    assert batched_xla._custom_backward_v_block_size(x, w, None) == expected_v_block
+
+
 def test_fused_cross_entropy_batched_xla_custom_backward_grad_matches_xla():
     if jax.default_backend() != "gpu":
         pytest.skip("requires GPU backend")

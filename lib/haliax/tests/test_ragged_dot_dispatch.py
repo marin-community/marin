@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
+from haliax.jax_utils import GpuFamily
 from haliax.nn import ragged_dot
 
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
@@ -292,3 +293,27 @@ def test_triton_ragged_dot_value_and_gradients_match_reference_with_device_block
     _assert_close_to_reference(out, expected_out, 1e-2)
     _assert_close_to_reference(dlhs, expected_dlhs, 1e-2)
     _assert_close_to_reference(drhs, expected_drhs, 1e-2)
+
+
+@pytest.mark.parametrize(
+    ("family", "expected_kernels"),
+    [
+        (GpuFamily.AMD_INSTINCT, ragged_dot_module.TritonKernelFamily.TILE_MAP),
+        (GpuFamily.NVIDIA_HOPPER, ragged_dot_module.TritonKernelFamily.TILE_MAP),
+        (GpuFamily.NVIDIA_BLACKWELL, ragged_dot_module.TritonKernelFamily.TILE_MAP),
+        (GpuFamily.OTHER, ragged_dot_module.TritonKernelFamily.GROUP_GRID),
+    ],
+)
+def test_triton_kernel_family_follows_gpu_family(monkeypatch, family, expected_kernels):
+    monkeypatch.setattr(ragged_dot_module, "gpu_family", lambda: family)
+
+    assert ragged_dot_module._triton_kernel_family() is expected_kernels
+
+
+@pytest.mark.skipif(not ragged_dot_module._has_pallas_triton, reason="Pallas Triton unavailable")
+def test_tile_map_block_config_uses_amd_instinct_config(monkeypatch):
+    monkeypatch.setattr(ragged_dot_module, "gpu_family", lambda: GpuFamily.AMD_INSTINCT)
+
+    config = ragged_dot_module._tile_map_block_config(ragged_dot_module.RaggedLayout.FWD, 256, 256, 256, 4)
+
+    assert (config.block_m, config.block_n, config.block_k, config.num_stages) == (256, 256, 64, 2)
