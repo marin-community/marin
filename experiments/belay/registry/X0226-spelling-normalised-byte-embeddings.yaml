@@ -29,3 +29,9 @@ trials:
     spelling_byte_embeds: 'true'
   commit: 4fed42ccfa
   priority: batch
+potential:
+  score: 5
+  rationale: 'No result yet: control and variant still pending on cw-us-east-02a (not accepted by peer) → 5'
+  model: claude-opus-5-5
+  date: '2026-11-13'
+  inputs_digest: d1d3099d1563
