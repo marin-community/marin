@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Review disjoint retained batches and assemble full-source evidence without model calls."""
+"""Review disjoint retained batches; assemble source evidence from their receipts."""
 
 import argparse
 import json
