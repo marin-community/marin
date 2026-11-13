@@ -316,3 +316,9 @@ and stopped-run evidence remain unchanged.
 The published task package is exactly the one whose controls ran. Sealing adds
 no untested dependency constraints; the observed package versions remain available
 for reproduction, while each new trial freezes its own grading environment.
+
+A pinned HF export can be supplied as `adopted_sft` with `kind: hf_export`.
+The verifier checks the complete object inventory and SHA-256 values, model and
+expert geometry, tokenizer and EOS settings. The RL graph consumes that verified
+URI directly, without native checkpoint restoration, SFT or another export.
+HF-only adoption stops at `--through rl`; the archive requires native SFT evidence.
