@@ -52,6 +52,7 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    ProcessScope,
     Result,
     UnsupportedMachineSpec,
     check_execution_requirements,
@@ -347,6 +348,9 @@ class DaytonaMachine:
                 await finish_owned(own_cleanup(self.close()))
             except BaseException as close_error:
                 cancellation.add_note(f"Daytona machine cleanup failed ({type(close_error).__name__})")
+
+    async def open_process_scope(self) -> ProcessScope:
+        raise UnsupportedMachineSpec("Daytona does not provide confirmed scoped descendant teardown")
 
     async def run(self, command: Command) -> Result:
         if self._closed:

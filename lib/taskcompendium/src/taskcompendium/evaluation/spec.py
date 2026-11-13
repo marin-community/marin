@@ -158,7 +158,8 @@ class EvaluationItem(EvaluationModel):
 
 
 class Sampling(EvaluationModel):
-    temperature: float = Field(ge=0)
+    temperature: float | None = Field(ge=0)
+    """None preserves the served model's generation default."""
     top_p: float | None = Field(gt=0, le=1)
     """None preserves the served model's generation default."""
     top_k: int | None
@@ -169,7 +170,7 @@ class Sampling(EvaluationModel):
 
 
 class TrialPolicy(EvaluationModel):
-    """Legacy source repetitions use the same base-plus-trial seed for every source row."""
+    """An explicit base seed advances by trial; None inherits the serving default."""
 
     count: int = Field(gt=0)
     seed: int | None
@@ -240,6 +241,8 @@ class EvaluationProtocol(EvaluationModel):
     trials: TrialPolicy
     metrics: tuple[Metric, ...]
     primary_metric: str
+    num_fewshot: int | None = Field(default=None, ge=0)
+    requires_judge: bool = False
     summary: SummaryKind
     expected_population: int = Field(gt=0)
     context_window: int | None = Field(default=None, gt=0)
