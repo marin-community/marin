@@ -241,6 +241,8 @@ flash-attn = [
 ]
 harbor = { path = "../harbor", editable = true }
 hs-connectors = { git = "https://github.com/marin-community/speculators.git", rev = "ecac1b16278063e9640004135153882c02de5801", subdirectory = "hs_connectors" }
+# This wheel adds only version/dependency metadata to ecac1b1; runtime code is unchanged.
+# https://github.com/marin-community/MarinSkyRL/blob/604f2c1463032ffc1f47da114f43cf1d550dd473/scripts/wheels/patches/speculators.patch
 speculators = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/speculators-0.9.0a16.post1-py3-none-any.whl" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },

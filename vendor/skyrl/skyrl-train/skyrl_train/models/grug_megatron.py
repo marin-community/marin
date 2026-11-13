@@ -498,6 +498,9 @@ class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
         ):
             return super().forward(x, m_splits)
 
+        # Torch autograd does not populate TE's delayed weight-gradient store.
+        if self.delay_wgrad_compute:
+            raise ValueError("Grug's Blackwell BF16 grouped matmul does not support delayed weight gradients")
         assert not self.use_bias, "Grug expert projections do not use bias"
         # Stack the existing parameters so autograd and checkpoint names stay intact.
         weights = torch.stack([getattr(self, f"weight{i}") for i in range(self.num_gemms)])
