@@ -109,6 +109,7 @@ _DEFAULT_PATCH = RecipePatch(
         policy_train_spans=True,
         algorithm=sections.Algorithm(
             advantage_estimator="rloo_n",
+            off_policy_correction="none",
             policy_loss_type="regular",
             loss_reduction="token_mean",
             use_kl_loss=False,

@@ -610,6 +610,7 @@ def test_gate_compares_recorded_configuration_and_defaults(recorded_runs, tmp_pa
             tokenizer_uri=preset.model.tokenizer_uri,
             tokenizer_revision=preset.model.tokenizer_revision,
             checkpoint_root=str(root / "checkpoints"),
+            draft_checkpoint_root=None,
             terminal_manifest_uri=str(root / "terminal.json"),
             iris_job_id="/test-user/initializer",
         )
