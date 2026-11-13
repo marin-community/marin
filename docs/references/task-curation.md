@@ -1241,8 +1241,15 @@ still requires production calibration, provider quota checks and complete receip
 uv run --package marin-core --extra dedup python -m \
   experiments.post_training.task_curation.calibration_inventory \
   --retention-plans FROZEN_PLANS.json --source-ids SOURCE_IDS.json \
+  --prepared-inputs FROZEN_INPUT_ARTIFACTS.json \
   --output-root REGIONAL_VERSIONED_URL --workers 4
 ```
+
+`--prepared-inputs` maps source IDs to previously frozen FULL-QC input artifacts.
+Their per-task and runtime hashes bind the inventory to the reviewed contracts.
+Without a prior index, hashes are observations and every task records a missing
+frozen-index blocker. Legacy aggregate digests identify population metadata;
+they cannot verify a reordered stream of stored TaskSpecs.
 
 Use an explicit data-local Iris target, the campaign's authorized priority and a
 three-day timeout. The command preserves all input TaskSpecs and writes per-task

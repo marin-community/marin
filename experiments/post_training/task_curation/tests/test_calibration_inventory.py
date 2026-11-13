@@ -12,15 +12,20 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
+from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 
 from experiments.post_training.task_curation.calibration_inventory import inventory_source, task_blockers
 from experiments.post_training.task_curation.datasets.native_harbor import native_task
+from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.remediation_publish import ReleasePlan
+from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 
 
@@ -122,7 +127,39 @@ def test_inventory_accounts_for_frozen_drops_and_rejects_changed_source_bytes(tm
         lexical_use="train",
         census_evidence_url="fixture",
     )
-    summary = inventory_source(plan, str(tmp_path / "inventory"))
+    index_path = tmp_path / "contracts.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "task_id": "keep",
+                    "task_sha256": canonical_sha256(TaskSpec.model_validate(documents[0]).model_dump(mode="json")),
+                    "runtime_sha256": canonical_sha256({}),
+                }
+            ]
+        ),
+        index_path,
+    )
+    inputs = FullQCInputs(
+        path=str(tmp_path / "inputs"),
+        source_id=plan.source_id,
+        population=population,
+        retention=RetentionPlan.model_validate(plan.model_dump()),
+        drop_manifest_sha256=file_sha256(StoragePath(str(drops))),
+        index_path=str(index_path),
+        index_sha256=file_sha256(StoragePath(str(index_path))),
+        retained_count=1,
+        task_bytes=1,
+        oracle_tasks=0,
+        missing_execution_requirements=0,
+        grading_environments={},
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=inputs.path, result_type=result_type_name(FullQCInputs), result=inputs.result_payload()
+        )
+    )
+    summary = inventory_source(plan, str(tmp_path / "inventory"), inputs.path)
     assert summary["retained_count"] == 1
     assert summary["oracle_tasks"] == 0
     assert summary["qualification_status"] == "pending"
@@ -130,9 +167,10 @@ def test_inventory_accounts_for_frozen_drops_and_rejects_changed_source_bytes(tm
 
     shard = next(Path(files.specs_output_dir).glob("*.parquet"))
     rows = pq.read_table(shard).to_pylist()
-    document = json.loads(rows[0]["task_spec"])
+    index = next(i for i, row in enumerate(rows) if row["id"] == "keep")
+    document = json.loads(rows[index]["task_spec"])
     document["context"]["events"][0]["content"] = "Changed instruction"
-    rows[0]["task_spec"] = json.dumps(document)
+    rows[index]["task_spec"] = json.dumps(document)
     pq.write_table(pa.Table.from_pylist(rows), shard)
-    with pytest.raises(ValueError, match="Frozen TaskSpec bytes changed"):
-        inventory_source(plan, str(tmp_path / "changed-inventory"))
+    with pytest.raises(ValueError, match="Task or runtime differs from prepared contract"):
+        inventory_source(plan, str(tmp_path / "changed-inventory"), inputs.path)
