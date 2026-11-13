@@ -11,24 +11,34 @@
     by the build and read by the test), applied to the Harbor layout;
 - every task shipping an ``_fixtures/.../oracle`` file;
 - exact overlap (normalized instruction or test_final_state.py hash) with the TMax SFT environments.
+- verifiers that import a third-party module the task's setup never installs (``missing_test_imports``): the
+  pilot sandbox has no egress, so such a verifier cannot pass;
+- instructions that tell the agent to install Python packages the setup never installs
+  (``missing_instruction_packages``, a heuristic), for the same reason.
 
 It then runs pool P's DataKit decon (13-gram, overlap 0.5, >= 2 features) of the screened tasks against SWE-bench
 Verified, Terminal-Bench 2.1, TBLite 2.0 and, as a near-duplicate check, the TMax SFT environments.
 
 ``select`` then takes a seeded sample stratified by ``metadata.domain`` from the screened, decon-clean tasks.
 
+``rescreen`` re-runs the screen with the current rules on a previous ``select`` output, reuses its decon marks, and
+replaces each drawn task the new rules exclude with a seeded pick from the same domain.
+
 ``package`` writes the sampled tasks as local Harbor task folders, unchanged except for ``TMUX_BAKE``.
 """
 
 import argparse
+import ast
 import collections
 import hashlib
 import json
 import random
 import re
+import sys
 import tempfile
 import tomllib
 import urllib.request
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -95,6 +105,164 @@ def hidden_assets(task: str, files: set[str], archive: zipfile.ZipFile) -> dict[
     return {"image_path": image_path, "answer_name": answer_name}
 
 
+# Import name -> PyPI/apt distribution names, for imports whose distribution is named differently.
+DISTRIBUTIONS = {
+    "yaml": ("pyyaml",),
+    "jwt": ("pyjwt",),
+    "sklearn": ("scikit-learn",),
+    "skimage": ("scikit-image",),
+    "bs4": ("beautifulsoup4",),
+    "cv2": ("opencv-python", "opencv-python-headless", "opencv"),
+    "PIL": ("pillow", "pil"),
+    "dateutil": ("python-dateutil",),
+    "Crypto": ("pycryptodome", "pycrypto"),
+    "dotenv": ("python-dotenv",),
+    "grpc_tools": ("grpcio-tools",),
+    "attr": ("attrs",),
+    "OpenSSL": ("pyopenssl", "openssl"),
+    "magic": ("python-magic",),
+    "serial": ("pyserial",),
+    "docx": ("python-docx",),
+    "fitz": ("pymupdf",),
+    "google": ("protobuf", "google-cloud-storage"),
+    "grpc": ("grpcio",),
+    "psycopg2": ("psycopg2-binary", "psycopg2"),
+    "MySQLdb": ("mysqlclient",),
+    "zmq": ("pyzmq",),
+    "websocket": ("websocket-client",),
+    "Levenshtein": ("python-levenshtein", "levenshtein"),
+}
+TEST_RUNNER_MODULES = {"pytest", "_pytest"}
+# Standard library in the images' Python 3.10 (ubuntu:22.04) but removed from newer Pythons.
+INSTALL_SENTENCE = re.compile(
+    r"[^\n]*(?:\bpip3? install\b|virtual environment|\bvenv\b|Python (?:package|librar)"
+    r"|\binstall\b[^\n]*\b(?:package|librar)(?:y|ies|s)?\b)[^\n]*",
+    re.IGNORECASE,
+)
+# A back-quoted package, optionally with `pip install`, extras or a version pin.
+PACKAGE_NAME = re.compile(r"`(?:pip3? install )?([A-Za-z][A-Za-z0-9_-]*)(?:\[[^\]]*\])?(?:[=<>~!]=?[0-9][^`]*)?`")
+NOT_PACKAGES = {"pip", "pip3", "python", "python3", "venv", "virtualenv", "pytest", "activate", "install", "nan", "none"}
+# Protobuf/gRPC modules the agent generates with protoc.
+GENERATED_SUFFIXES = ("_pb2", "_pb2_grpc")
+PYTHON310_STDLIB = {"asynchat", "asyncore", "distutils", "imp", "smtpd"}
+# Import names a distribution installs as its own dependencies (pytest on Python 3.10 pulls tomli).
+DEPENDENCIES = {
+    "pytest": {"tomli", "exceptiongroup", "iniconfig", "pluggy", "packaging"},
+    "requests": {"urllib3", "idna", "certifi", "charset_normalizer"},
+    "flask": {"werkzeug", "jinja2", "markupsafe", "itsdangerous", "click", "blinker"},
+    "pandas": {"numpy", "dateutil", "pytz"},
+    "scipy": {"numpy"},
+    "mlflow": {"yaml", "numpy", "pandas", "sqlalchemy", "flask", "requests"},
+    "grpcio-tools": {"grpc", "google"},
+    "scikit-learn": {"numpy", "scipy", "joblib", "threadpoolctl"},
+    "matplotlib": {"numpy", "PIL", "dateutil", "pyparsing", "cycler", "kiwisolver"},
+}
+
+
+def _imported_modules(source: str) -> set[str]:
+    """Top-level modules imported by ``source``, except fallbacks imported in an ``except`` clause."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)  # invalid escapes in the task's own test code
+            tree = ast.parse(source)
+    except SyntaxError:
+        return set(re.findall(r"^\s*(?:import|from)\s+([A-Za-z_][A-Za-z0-9_]*)", source, re.MULTILINE))
+    fallbacks = {
+        id(node) for handler in ast.walk(tree) if isinstance(handler, ast.ExceptHandler) for node in ast.walk(handler)
+    }
+    modules = set()
+    for node in ast.walk(tree):
+        if id(node) in fallbacks:
+            continue
+        if isinstance(node, ast.Import):
+            modules |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules.add(node.module.split(".")[0])
+    return modules
+
+
+def _local_module_pattern(module: str) -> str:
+    """A file or folder of that name, an extension's ``PyInit_``, or the name as a quoted string (setup.py, Cargo)."""
+    name = re.escape(module)
+    return rf"(?<![\w.-]){name}\.(?:py|c|pyx|rs)\b|/{name}/|PyInit_{name}\b|[\"']{name}[\"']"
+
+
+def _installed_by(setup: str, module: str) -> bool:
+    names = {module, module.lower(), *DISTRIBUTIONS.get(module, ())}
+    for name in names:
+        word = re.escape(name)
+        pip = rf"pip3?\s+install\b[^\n]*?(?<![\w.-]){word}(?![\w.-])"
+        apt = rf"(?:apt-get|apt)\s+install\b[^\n]*?\bpython3-{word}(?![\w.-])"
+        if re.search(pip, setup, re.IGNORECASE) or re.search(apt, setup, re.IGNORECASE):
+            return True
+    return False
+
+
+def missing_test_imports(task: str, files: set[str], archive: zipfile.ZipFile) -> list[str]:
+    """Third-party modules the verifier imports that the task's own setup never installs.
+
+    With no egress in the sandbox, such a verifier fails on import whatever the agent does. Standard-library
+    modules, pytest, and modules the task itself provides (named as a file, folder, ``PyInit_`` or quoted string in the
+    instruction or setup, e.g. an extension the agent must build) are exempt, as are fallback imports in an ``except``.
+    """
+
+    instruction, setup = _instruction_and_setup(task, files, archive)
+    tests = _read(archive, task, files, "tests/test_final_state.py")
+    context = instruction + setup  # not the tests: they quote the modules they check
+    candidates = _imported_modules(tests) - sys.stdlib_module_names - PYTHON310_STDLIB - TEST_RUNNER_MODULES
+    missing = []
+    for module in sorted(candidates - _implied(setup)):
+        local = module.endswith(GENERATED_SUFFIXES) or re.search(_local_module_pattern(module), context)
+        if not local and not _installed_by(setup, module):
+            missing.append(module)
+    return missing
+
+
+def missing_instruction_packages(task: str, files: set[str], archive: zipfile.ZipFile) -> list[str]:
+    """Back-quoted names in the instruction's Python-install sentences that the setup never installs.
+
+    Such a task asks the agent to fetch packages (e.g. numpy and scipy into a venv), which a sandbox with no egress
+    cannot do. A heuristic: it also flags tools the agent may use but does not need, so it trades a little yield for
+    not spending sandbox time on tasks that cannot pass.
+    """
+    instruction, setup = _instruction_and_setup(task, files, archive)
+    implied = _implied(setup)
+    missing = set()
+    for line in INSTALL_SENTENCE.findall(instruction):
+        for name in PACKAGE_NAME.findall(line):
+            module = name.replace("-", "_")
+            if (
+                name.lower() in NOT_PACKAGES
+                or name.isupper()
+                or module in sys.stdlib_module_names
+                or {name, name.lower(), module} & implied
+                or re.search(_local_module_pattern(name), setup)
+                or _installed_by(setup, name)
+                or _installed_by(setup, module)
+                or re.search(rf"\b{re.escape(name)}\b", setup)  # installed some other way (apt, a source build)
+            ):
+                continue
+            missing.add(name)
+    return sorted(missing)
+
+
+def _read(archive: zipfile.ZipFile, task: str, files: set[str], rel: str) -> str:
+    return archive.read(f"{task}/{rel}").decode(errors="ignore") if rel in files else ""
+
+
+def _instruction_and_setup(task: str, files: set[str], archive: zipfile.ZipFile) -> tuple[str, str]:
+    """The instruction and the build text: the Dockerfile plus the install scripts it runs, continued lines joined."""
+    dockerfile = _read(archive, task, files, "environment/Dockerfile")
+    # A script counts only when the Dockerfile runs it (many tasks ship an unused base_install.sh).
+    scripts = [rel for rel in BUILD_FILES[1:] if rel.rsplit("/", 1)[-1] in dockerfile]
+    setup = re.sub(r"\\\n", " ", dockerfile + "".join(_read(archive, task, files, rel) for rel in scripts))
+    return _read(archive, task, files, "instruction.md"), setup
+
+
+def _implied(setup: str) -> set[str]:
+    return set().union(*(deps for dist, deps in DEPENDENCIES.items() if _installed_by(setup, dist)))
+
+
 def sft_hashes(archive: zipfile.ZipFile) -> set[str]:
     hashes = set()
     for name in archive.namelist():
@@ -118,11 +286,19 @@ def screen(reserve: zipfile.ZipFile, sft: zipfile.ZipFile) -> list[dict]:
             reasons.append("oracle_fixture")
         if _normalized_hash(instruction) in known or hashlib.sha256(tests).hexdigest() in known:
             reasons.append("sft_overlap")
+        missing = missing_test_imports(task, files, reserve)
+        if missing:
+            reasons.append("test_import_not_installed")
+        packages = missing_instruction_packages(task, files, reserve)
+        if packages:
+            reasons.append("instruction_package_not_installed")
         rows.append(
             {
                 "task": task,
                 "domain": metadata["domain"],
                 "excluded": reasons,
+                "missing_test_imports": missing,
+                "missing_instruction_packages": packages,
                 **{f"hidden_{k}": v for k, v in hidden.items()},
             }
         )
@@ -158,10 +334,7 @@ def tmax_docs(archive: zipfile.ZipFile, tasks: list[str], layout: str) -> list[d
 
 def draw(rows: list[dict], decon: dict[str, dict], size: int, seed: int) -> list[str]:
     """Seeded sample stratified by domain (largest remainder) from the screened, decon-clean tasks."""
-    eligible: dict[str, list[str]] = collections.defaultdict(list)
-    for row in rows:
-        if not row["excluded"] and not decon[row["task"]]["contaminated"]:
-            eligible[row["domain"]].append(row["task"])
+    eligible = eligible_tasks(rows, decon)
     total = sum(len(v) for v in eligible.values())
     quotas = {d: size * len(v) / total for d, v in eligible.items()}
     counts = {d: int(q) for d, q in quotas.items()}
@@ -172,6 +345,65 @@ def draw(rows: list[dict], decon: dict[str, dict], size: int, seed: int) -> list
     for domain in sorted(eligible):
         picked += rng.sample(sorted(eligible[domain]), counts[domain])
     return sorted(picked)
+
+
+def eligible_tasks(rows: list[dict], decon: dict[str, dict]) -> dict[str, list[str]]:
+    eligible: dict[str, list[str]] = collections.defaultdict(list)
+    for row in rows:
+        if not row["excluded"] and not decon[row["task"]]["contaminated"]:
+            eligible[row["domain"]].append(row["task"])
+    return eligible
+
+
+def replace_ineligible(rows: list[dict], decon: dict[str, dict], previous: list[str], seed: int) -> dict[str, str]:
+    """Map each previously drawn task that is no longer eligible to a seeded replacement from its own domain.
+
+    The rest of the previous draw stays, so only the replacements need new checks, and domain counts are unchanged.
+    """
+    eligible = eligible_tasks(rows, decon)
+    domain = {row["task"]: row["domain"] for row in rows}
+    keep = set(previous)
+    rng = random.Random(seed)
+    replacements = {}
+    for task in sorted(t for t in previous if t not in eligible[domain[t]]):
+        pool = sorted(set(eligible[domain[task]]) - keep)
+        replacements[task] = rng.choice(pool)
+        keep.add(replacements[task])
+    return replacements
+
+
+def rescreen(previous: str, output: str, seed: int) -> None:
+    """Re-run the screen with the current rules, reusing ``previous``'s decon, and replace newly excluded draws."""
+    prev = StoragePath(previous)
+    decon = json.loads((prev / "decon.json").read_text())
+    old = json.loads((prev / "draw.json").read_text())
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        rows = screen(hub_zip(*RESERVE, work / "reserve.zip"), hub_zip(*SFT_ENVS, work / "sft.zip"))
+    # The new rules only add exclusions, so every task they leave in was screened clean before and has decon marks.
+    missing = {row["task"] for row in rows if not row["excluded"]} - set(decon)
+    if missing:
+        raise ValueError(f"{len(missing)} screened tasks have no decon marks; run select instead")
+    replacements = replace_ineligible(rows, decon, old["tasks"], seed)
+    picked = sorted((set(old["tasks"]) - set(replacements)) | set(replacements.values()))
+    reasons = collections.Counter(reason for row in rows for reason in row["excluded"])
+    eligible = sum(len(v) for v in eligible_tasks(rows, decon).values())
+    summary = {
+        "reserve": f"{RESERVE[0]}@{RESERVE[1]}",
+        "previous": previous,
+        "reserve_tasks": len(rows),
+        "excluded_any": sum(bool(row["excluded"]) for row in rows),
+        "excluded_by_reason": dict(reasons),
+        "eligible": eligible,
+        "seed": seed,
+        "replacements": replacements,
+        "drawn": len(picked),
+    }
+    out = StoragePath(output)
+    (out / "screen.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    (out / "decon.json").write_text(json.dumps(decon, indent=1))
+    (out / "draw.json").write_text(json.dumps({"tasks": picked, **summary}, indent=1))
+    print(json.dumps(summary, indent=1))
 
 
 def select(output: str, size: int, seed: int) -> None:
@@ -240,12 +472,21 @@ def main() -> None:
     select_parser.add_argument("--output", required=True, help="Directory (local or remote) for the outputs.")
     select_parser.add_argument("--size", type=int, default=200)
     select_parser.add_argument("--seed", type=int, default=20261113)
+    rescreen_parser = commands.add_parser(
+        "rescreen", help="Re-screen with the current rules and replace newly excluded draws from the same domain."
+    )
+    rescreen_parser.add_argument("--previous", required=True, help="Directory a previous select wrote.")
+    rescreen_parser.add_argument("--output", required=True, help="Directory (local or remote) for the outputs.")
+    rescreen_parser.add_argument("--seed", type=int, default=20261114)
     package_parser = commands.add_parser("package", help="Write the drawn tasks as local Harbor task folders.")
     package_parser.add_argument("--draw", required=True, help="draw.json written by select (local or remote).")
     package_parser.add_argument("--dest", required=True, type=Path, help="New directory for the task folders.")
     args = parser.parse_args()
     if args.command == "select":
         select(args.output, args.size, args.seed)
+        return
+    if args.command == "rescreen":
+        rescreen(args.previous, args.output, args.seed)
         return
     tasks = json.loads(StoragePath(args.draw).read_text())["tasks"]
     with tempfile.TemporaryDirectory() as tmp:

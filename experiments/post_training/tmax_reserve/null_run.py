@@ -165,10 +165,12 @@ def serve(app: Starlette) -> str:
     return f"http://127.0.0.1:{sock.getsockname()[1]}/v1"
 
 
-def null_policy(policy: Path, dest: Path) -> Path:
-    """The pilot policy with one attempt per task, next to it so its relative dataset path still resolves."""
+def null_policy(policy: Path, dest: Path, dataset: str | None) -> Path:
+    """The pilot policy with one attempt per task, optionally on another dataset; written next to it."""
     config = yaml.safe_load(policy.read_text())
     config["n_attempts"] = 1
+    if dataset:
+        config["datasets"][0]["path"] = dataset
     dest.write_text(yaml.safe_dump(config, sort_keys=False))
     return dest
 
@@ -217,13 +219,14 @@ def summarize(trials: list[dict], probes: dict[str, list[dict]], controls: set[s
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--policy", type=Path, required=True, help="The pilot Harbor policy (local dataset path).")
+    parser.add_argument("--dataset", help="Dataset path, relative to the policy, in place of the policy's own.")
     parser.add_argument("--controls", type=Path, help="JSON {task name: known-good shell commands}.")
     parser.add_argument("--output", type=Path, required=True, help="New local directory for jobs and the summary.")
     parser.add_argument("--upload", help="Remote directory that receives a copy of --output at the end.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args.output.mkdir(parents=True)
-    policy = null_policy(args.policy, args.policy.with_name(f"{args.policy.stem}-null.yaml"))
+    policy = null_policy(args.policy, args.policy.with_name(f"{args.policy.stem}-null.yaml"), args.dataset)
     model_kwargs = {"model_info": served_model_info(32768, 4096)}
     (config,) = preflight_harbor_configs([(policy, model_kwargs)], judge_model=None)
     dataset = (policy.parent / yaml.safe_load(policy.read_text())["datasets"][0]["path"]).resolve()

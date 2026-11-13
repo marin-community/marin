@@ -5,17 +5,30 @@ import io
 import json
 import zipfile
 
-from experiments.post_training.tmax_reserve.reserve import TMUX_BAKE, draw, package, screen
+from experiments.post_training.tmax_reserve.reserve import (
+    TMUX_BAKE,
+    draw,
+    missing_instruction_packages,
+    missing_test_imports,
+    package,
+    replace_ineligible,
+    screen,
+)
 
 TOML = '[metadata]\ndomain = "{domain}"\n'
 
 
-def _task(z: zipfile.ZipFile, name: str, instruction: str, tests: str, *, domain: str = "debugging", extra=()) -> None:
+SETUP = "mkdir -p /app/verifier && cp ref /app/verifier/truth.txt\n"
+
+
+def _task(
+    z: zipfile.ZipFile, name: str, instruction: str, tests: str, *, domain="debugging", setup=SETUP, extra=()
+) -> None:
     z.writestr(f"{name}/instruction.md", instruction)
     z.writestr(f"{name}/task.toml", TOML.format(domain=domain))
     z.writestr(f"{name}/tests/test_final_state.py", tests)
     z.writestr(f"{name}/environment/Dockerfile", "FROM ubuntu:22.04\nRUN bash /tmp/post_install.sh\n")
-    z.writestr(f"{name}/environment/post_install.sh", "mkdir -p /app/verifier && cp ref /app/verifier/truth.txt\n")
+    z.writestr(f"{name}/environment/post_install.sh", setup)
     for path in extra:
         z.writestr(f"{name}/{path}", "x")
 
@@ -73,3 +86,40 @@ def test_package_bakes_tmux_and_keeps_every_other_byte(tmp_path):
     for rel in ("instruction.md", "tests/test_final_state.py", "environment/post_install.sh", "task.toml"):
         assert (tmp_path / "tasks" / "t1" / rel).read_bytes() == archive.read(f"t1/{rel}")
     assert package(archive, ["t1"], tmp_path / "again")["sha256"] == manifest["sha256"]
+
+
+def _check(rule, instruction: str, tests: str, setup: str) -> list[str]:
+    archive = _archive(lambda z: _task(z, "t", instruction, tests, setup=setup))
+    return rule("t", {n.partition("/")[2] for n in archive.namelist()}, archive)
+
+
+def test_missing_test_imports_flags_only_modules_nothing_provides():
+    tests = """
+import json, pytest, requests, urllib3, yaml, fib_ext, calc_pb2
+try:
+    import zoneinfo
+except ImportError:
+    from backports import zoneinfo
+import jwt
+"""
+    setup = "pip3 install pytest \\\n    requests pyyaml\ncat > setup.py <<EOF\nExtension('fib_ext', ['fib.c'])\nEOF\n"
+    assert _check(missing_test_imports, "Build the extension.", tests, setup) == ["jwt"]
+
+
+def test_missing_instruction_packages_flags_packages_the_agent_must_download():
+    instruction = (
+        "Create a Python virtual environment at `/home/user/env` and install `numpy` and `scipy`.\n"
+        "You may use `jq` for this.\n"
+    )
+    setup = "pip3 install pytest numpy\n"
+    assert _check(missing_instruction_packages, instruction, "assert True", setup) == ["scipy"]
+
+
+def test_replace_ineligible_keeps_the_rest_of_the_draw_and_replaces_within_domain():
+    rows = [{"task": f"a{i}", "domain": "a", "excluded": []} for i in range(5)]
+    rows += [{"task": f"b{i}", "domain": "b", "excluded": []} for i in range(5)]
+    rows[0]["excluded"] = ["test_import_not_installed"]
+    decon = {row["task"]: {"contaminated": False} for row in rows}
+    replacements = replace_ineligible(rows, decon, ["a0", "a1", "b0"], seed=3)
+    assert list(replacements) == ["a0"] and replacements["a0"] in {"a2", "a3", "a4"}
+    assert replacements == replace_ineligible(rows, decon, ["a0", "a1", "b0"], seed=3)
