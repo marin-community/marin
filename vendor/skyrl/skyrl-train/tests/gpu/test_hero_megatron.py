@@ -3,7 +3,6 @@ import posixpath
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
 import ray
 import torch
 from safetensors.torch import load_file, save_file
@@ -34,16 +33,10 @@ def write_tiny_hero_checkpoint(path: Path):
         head_dim=16,
         sliding_window=8,
     )
-    write_tiny_checkpoint(path, shape=shape, num_experts_per_tok=8)
+    write_tiny_checkpoint(path, shape=shape, num_experts_per_tok=8, vocab_size_multiple=128)
     config = GrugMoeConfig.from_pretrained(path)
     state = load_file(str(path / "model.safetensors"))
     torch.manual_seed(23)
-    # The borrowed tokenizer has an odd vocabulary; Hero's real vocabulary is
-    # divisible by the supported tensor-parallel sizes.
-    vocab_size = (config.vocab_size + 127) // 128 * 128
-    for name in ("model.embed_tokens.weight", "lm_head.weight"):
-        state[name] = torch.nn.functional.pad(state[name], (0, 0, 0, vocab_size - config.vocab_size))
-    config.vocab_size = vocab_size
     latent = 64
     for layer in range(config.num_hidden_layers):
         prefix = f"model.layers.{layer}"
@@ -79,8 +72,7 @@ def write_tiny_hero_checkpoint(path: Path):
     return state
 
 
-@pytest.mark.parametrize("remote_read_mode", ["default", "per_key"], ids=["remote-default-prefetch", "remote-per-key"])
-def test_hero_remote_load_preserves_checkpoint_weights_and_trains(tmp_path, request, remote_read_mode):
+def test_hero_remote_load_preserves_checkpoint_weights_and_trains(tmp_path, request):
     require_hoppers(1)
     checkpoint_prefix = os.environ.get("MARIN_TEMP_PREFIX", os.environ.get("MARIN_PREFIX", ""))
     if not checkpoint_prefix.startswith("s3://"):
@@ -96,8 +88,6 @@ def test_hero_remote_load_preserves_checkpoint_weights_and_trains(tmp_path, requ
     stage_model_metadata(source_uri, manifest, str(policy_path))
     cfg = _config(str(policy_path), world_size=1, pp=1, ep=1)
     cfg.trainer.policy.model.source_uri = source_uri
-    if remote_read_mode == "per_key":
-        cfg.trainer.policy.model.remote_read_mode = remote_read_mode
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     batch = _padded_batch(tokenizer.pad_token_id, prompt_length=48, response_length=48, variable_lengths=True)
     validate_cfg(cfg)
@@ -111,8 +101,7 @@ def test_hero_remote_load_preserves_checkpoint_weights_and_trains(tmp_path, requ
             ]
         )
         assert all(stat.prefetch_misses == stat.prefetch_unused == 0 for stat in stats)
-        if remote_read_mode != "per_key":
-            assert all(stat.individual_reads == 0 for stat in stats)
+        assert all(stat.individual_reads == 0 for stat in stats)
         before = rank0_validation_snapshot(policy, list(original))
         for name in original:
             expected = original[name] if name.endswith("router.bias") else original[name].to(torch.bfloat16).float()
