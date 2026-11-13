@@ -189,6 +189,12 @@ redact those as well as named API keys before publication.
 
 ## Cleanup and verifier failures
 
+Shellbox disables provider idle auto-stop and auto-pause at sandbox creation.
+Daytona's default container auto-stop interval is 15 minutes; guest processes
+do not refresh that timer, so an agent can lose its sandbox during a long
+command. The sandbox TTL and normal teardown still apply. See Daytona's
+[lifecycle documentation](https://www.daytona.io/docs/en/sandboxes/).
+
 An `AddTestsDirError` caused by `Machine is closed` can follow failed agent
 cleanup; it does not establish that the task package lacks tests. Shellbox logs
 `Daytona cleanup request failed` with the control operation, its credential-free

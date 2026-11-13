@@ -628,7 +628,17 @@ class DaytonaMachineFactory:
             if self.network_policy is None
             else self.network_policy.parameters()
         )
-        return dict(name=name, os_user="root", env_vars=spec.env, ttl_minutes=self.ttl_minutes, **network)
+        # Guest processes do not refresh Daytona's idle timer. The owning
+        # lifetime and TTL must govern long commands and their verifier phase.
+        return dict(
+            name=name,
+            os_user="root",
+            env_vars=spec.env,
+            ttl_minutes=self.ttl_minutes,
+            auto_stop_interval=0,
+            auto_pause_interval=0,
+            **network,
+        )
 
     async def _create_parameters(
         self, client: AsyncDaytona, spec: MachineSpec, name: str

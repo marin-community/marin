@@ -241,6 +241,48 @@ class LocalDaytona:
         self.closed = True
 
 
+@pytest.mark.parametrize("factory_type", [DaytonaMachineFactory, DaytonaDeclarativeMachineFactory])
+def test_daytona_long_guest_command_remains_available_for_verification(tmp_path, factory_type):
+    class IdleStoppingClient(LocalDaytona):
+        async def create(self, params, *, timeout):
+            self.params = params
+            self.timeout = timeout
+            process = self.sandbox.process
+            execute = process.exec
+            elapsed_minutes = 0
+
+            async def execute_with_idle_timeout(command, **kwargs):
+                nonlocal elapsed_minutes
+                # Advance provider inactivity without sleeping or shortening a
+                # production deadline. Guest work is not a provider event.
+                if command.endswith("guest-work"):
+                    elapsed_minutes += 30
+                stop = 15 if params.auto_stop_interval is None else params.auto_stop_interval
+                pause = params.auto_pause_interval or 0
+                if any(interval and elapsed_minutes >= interval for interval in (stop, pause)):
+                    raise DaytonaValidationError("Sandbox is not running", status_code=400)
+                return await execute(command, **kwargs)
+
+            process.exec = execute_with_idle_timeout
+            return self.sandbox
+
+    async def scenario():
+        client = IdleStoppingClient()
+        machine = await factory_type(lambda: client).create(MachineSpec(RegistryImage("ubuntu:24.04")))
+        try:
+            await client.sandbox.process.exec("true guest-work", cwd="/")
+            workspace = tmp_path / "answer"
+            result = await machine.run(Command(("sh", "-c", 'printf answer > "$1"', "sh", str(workspace))))
+            assert result.exit_code == 0
+            verified = await machine.run(Command(("cat", str(workspace))))
+            assert verified.stdout == b"answer"
+        finally:
+            await machine.close()
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
 def test_daytona_failed_creation_deletes_an_accepted_sandbox(error_type):
     class AcceptedThenFailed(LocalDaytona):
