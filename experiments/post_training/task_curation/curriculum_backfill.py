@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import logging
+from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from multiprocessing import get_context
@@ -108,12 +109,30 @@ class FrozenCoverageSource(BaseModel):
     task_column: str
     raw_count: int
     task_specs_sha256: str
+    task_spec_scan_sha256: str
     input_record_sha256: str
     intended_use: Literal["train", "eval"]
     input_evidence: str
     drop_manifest_uri: str | None = None
     drop_manifest_sha256: str | None = None
     drop_count: int = 0
+
+
+def verified_task_spec_rows(source: FrozenCoverageSource) -> Iterator[str]:
+    """Verify exact stored JSON cells in sorted Parquet-path and physical row order."""
+    digest = hashlib.sha256()
+    count = 0
+    for path in sorted((StoragePath(source.specs_dir) / "*.parquet").glob(), key=str):
+        with path.open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=16, columns=[source.task_column]):
+                for encoded in batch.column(0).to_pylist():
+                    if encoded is None:
+                        raise ValueError(f"Frozen converted population contains a rejected row: {source.declaration.id}")
+                    digest.update(encoded.encode())
+                    count += 1
+                    yield encoded
+    if digest.hexdigest() != source.task_spec_scan_sha256 or count != source.raw_count:
+        raise ValueError(f"Frozen TaskSpec scan changed: {source.declaration.id}")
 
 
 def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
@@ -123,11 +142,6 @@ def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
     manifest_path = root / "manifest.json"
     if file_sha256(StoragePath(source.input_evidence)) != source.input_record_sha256:
         raise ValueError(f"Frozen population receipt changed: {source.declaration.id}")
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
-        if manifest["input"] != source.model_dump(mode="json"):
-            raise ValueError("Completed public input differs from its frozen source")
-        return {"source_id": source.declaration.id, "root": str(root), **manifest}
     drops = set()
     if source.drop_manifest_uri is not None:
         drop_path = StoragePath(source.drop_manifest_uri)
@@ -140,6 +154,18 @@ def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
             raise ValueError(f"Drop manifest does not reconcile: {source.declaration.id}")
     elif source.drop_count:
         raise ValueError("Exclusions require a frozen manifest")
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        if manifest["input"] != source.model_dump(mode="json"):
+            raise ValueError("Completed public input differs from its frozen source")
+        for _ in verified_task_spec_rows(source):
+            pass
+        public = json.loads((root / "public-inputs.json").read_text())
+        if public["stored_stream_sha256"] != source.task_spec_scan_sha256 or public["source_key"] != canonical_sha256(
+            manifest
+        ):
+            raise ValueError("Completed public input has a different verified TaskSpec scan")
+        return {"source_id": source.declaration.id, "root": str(root), **manifest}
     manifest = {
         "intended_use": source.intended_use,
         "input_rows": source.raw_count,
@@ -151,9 +177,8 @@ def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
     task_source = TaskInputFile(source.declaration.id, source_key, "", source.intended_use, "converted")
     attempt = root / "attempts" / uuid4().hex
     paths, seen, seen_drops = [], set(), set()
-    digest = hashlib.sha256()
     rows = []
-    raw_count = retained_count = 0
+    retained_count = 0
 
     def flush() -> None:
         path = attempt / f"part-{len(paths):06d}.parquet"
@@ -164,31 +189,23 @@ def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
         paths.append(str(path))
         rows.clear()
 
-    for path in sorted((StoragePath(source.specs_dir) / "*.parquet").glob(), key=str):
-        with path.open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(batch_size=16, columns=[source.task_column]):
-                for encoded in batch.column(0).to_pylist():
-                    if encoded is None:
-                        raise ValueError(f"Frozen converted population contains a rejected row: {source.declaration.id}")
-                    digest.update(encoded.encode())
-                    raw_count += 1
-                    task = TaskSpec.model_validate_json(encoded)
-                    if task.id in seen:
-                        raise ValueError(f"Repeated task ID: {source.declaration.id}/{task.id}")
-                    seen.add(task.id)
-                    if task.id in drops:
-                        seen_drops.add(task.id)
-                        continue
-                    rows.append(task_semantic_input(task, task_source).model_dump(mode="json"))
-                    retained_count += 1
-                    if len(rows) == BATCH_SIZE:
-                        flush()
+    for encoded in verified_task_spec_rows(source):
+        task = TaskSpec.model_validate_json(encoded)
+        if task.id in seen:
+            raise ValueError(f"Repeated task ID: {source.declaration.id}/{task.id}")
+        seen.add(task.id)
+        if task.id in drops:
+            seen_drops.add(task.id)
+            continue
+        rows.append(task_semantic_input(task, task_source).model_dump(mode="json"))
+        retained_count += 1
+        if len(rows) == BATCH_SIZE:
+            flush()
     if rows:
         flush()
     if (
-        raw_count != source.raw_count
-        or retained_count != source.declaration.task_count
-        or raw_count != retained_count + source.drop_count
+        retained_count != source.declaration.task_count
+        or source.raw_count != retained_count + source.drop_count
         or seen_drops != drops
     ):
         raise ValueError(f"Frozen task bytes or population accounting differs: {source.declaration.id}")
@@ -198,7 +215,7 @@ def prepare_source(source: FrozenCoverageSource, output_root: str) -> dict:
         "root": str(root),
         "source_key": source_key,
         "paths": paths,
-        "stored_stream_sha256": digest.hexdigest(),
+        "stored_stream_sha256": source.task_spec_scan_sha256,
     }
     (root / "public-inputs.json").write_text(json.dumps(result, indent=2))
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), auto_mkdir=True)
@@ -218,10 +235,14 @@ def prepare_sources(sources: list[FrozenCoverageSource], output_root: str, worke
     selection_key = canonical_sha256([source.model_dump(mode="json") for source in sources])
     root = StoragePath(output_root)
     corpus_path = root / "corpus.json"
-    if corpus_path.exists():
-        if json.loads(corpus_path.read_text())["selection_key"] != selection_key:
+    completed = json.loads(corpus_path.read_text()) if corpus_path.exists() else None
+    if completed is not None:
+        if completed["selection_key"] != selection_key:
             raise ValueError("A changed source selection requires a new output root")
-        return
+        for source in sources:
+            key = canonical_sha256(source.model_dump(mode="json"))
+            if not (root / "sources" / key / "manifest.json").exists():
+                raise ValueError("Completed corpus is missing a source manifest")
     with ProcessPoolExecutor(
         max_workers=workers, mp_context=get_context("spawn"), initializer=initialize_preparation_worker
     ) as pool:
@@ -232,11 +253,6 @@ def prepare_sources(sources: list[FrozenCoverageSource], output_root: str, worke
         public = json.loads((StoragePath(result["root"]) / "public-inputs.json").read_text())
         paths.extend(public["paths"])
     artifact = SemanticArtifact(path=str(root / "inputs"), paths=paths)
-    write_record(
-        ArtifactRecord(
-            output_path=artifact.path, result_type=result_type_name(SemanticArtifact), result=artifact.result_payload()
-        )
-    )
     corpus = {
         "selection_key": selection_key,
         "population": "converted",
@@ -244,6 +260,15 @@ def prepare_sources(sources: list[FrozenCoverageSource], output_root: str, worke
         "inventory": [source.declaration.model_dump(mode="json") for source in sources],
         "prepared_inputs": artifact.path,
     }
+    if completed is not None:
+        if completed != corpus or SemanticArtifact.raw_load(artifact.path).paths != paths:
+            raise ValueError("Completed corpus differs from its verified public inputs")
+        return
+    write_record(
+        ArtifactRecord(
+            output_path=artifact.path, result_type=result_type_name(SemanticArtifact), result=artifact.result_payload()
+        )
+    )
     corpus_path.write_text(json.dumps(corpus, ensure_ascii=False, indent=2), auto_mkdir=True)
 
 

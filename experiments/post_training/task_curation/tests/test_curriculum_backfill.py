@@ -26,6 +26,7 @@ from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.curriculum_backfill import (
     FrozenCoverageSource,
     fork_copied_cache_partition,
+    prepare_source,
     prepare_sources,
     run_stage,
 )
@@ -90,6 +91,7 @@ def frozen_source(tmp_path):
         task_column="task_spec",
         raw_count=3,
         task_specs_sha256=hashlib.sha256("".join(task.model_dump_json() for task in tasks).encode()).hexdigest(),
+        task_spec_scan_sha256=hashlib.sha256("".join(task.model_dump_json() for task in tasks).encode()).hexdigest(),
         intended_use="eval",
         input_evidence=str(evidence),
         input_record_sha256=hashlib.sha256(evidence.read_bytes()).hexdigest(),
@@ -122,6 +124,48 @@ def test_preparation_preserves_retained_identities_roles_and_reuses_completed_so
     assert len(list((root / "attempts").iterdir())) == 1
     expected = {task.id: canonical_sha256(task.model_dump(mode="json")) for task in tasks}
     assert all(row["task_hash"] == expected[row["task_id"]] for row in rows)
+
+
+@pytest.mark.parametrize("reuse", ["fresh", "source", "corpus"])
+def test_changed_task_bytes_with_same_identity_and_population_are_rejected(tmp_path, frozen_source, reuse):
+    source, _ = frozen_source
+    output = tmp_path / "public"
+    if reuse == "source":
+        prepare_source(source, str(output))
+    elif reuse == "corpus":
+        prepare_sources([source], str(output), workers=1)
+    original_manifests = {path: path.read_bytes() for path in output.glob("sources/*/manifest.json")}
+    path = next((tmp_path / "specs").glob("*.parquet"))
+    table = pq.read_table(path)
+    rows = table.to_pylist()
+    encoded = rows[0][source.task_column]
+    rows[0][source.task_column] = encoded.replace("Add two and three.", "Subtract two from three.")
+    assert rows[0][source.task_column] != encoded
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
+    with pytest.raises(ValueError, match="Frozen TaskSpec scan changed"):
+        if reuse == "corpus":
+            prepare_sources([source], str(output), workers=1)
+        else:
+            prepare_source(source, str(output))
+    assert {path: path.read_bytes() for path in output.glob("sources/*/manifest.json")} == original_manifests
+
+
+def test_scan_digest_has_an_explicit_convention_separate_from_historical_digest(tmp_path, frozen_source):
+    source, _ = frozen_source
+    source = source.model_copy(update={"task_specs_sha256": "f" * 64})
+    prepared = prepare_source(source, str(tmp_path / "public"))
+    assert prepared["stored_stream_sha256"] == source.task_spec_scan_sha256
+
+
+def test_completed_corpus_revalidates_frozen_exclusions(tmp_path, frozen_source):
+    source, _ = frozen_source
+    output = tmp_path / "public"
+    prepare_sources([source], str(output), workers=1)
+    original = (output / "corpus.json").read_bytes()
+    pq.write_table(pa.Table.from_pylist([{"task_id": "c"}]), source.drop_manifest_uri)
+    with pytest.raises(ValueError, match="Frozen drop manifest changed"):
+        prepare_sources([source], str(output), workers=1)
+    assert (output / "corpus.json").read_bytes() == original
 
 
 def test_unknown_exclusion_prevents_publication_and_keeps_partial_evidence(tmp_path, frozen_source):

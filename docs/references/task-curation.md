@@ -72,10 +72,16 @@ release and vectors stay in object storage.
 For a retained-population coverage backfill, `curriculum_backfill prepare`
 accepts a JSON list of `FrozenCoverageSource` records. Freeze each current
 declaration, exact population receipt and hash, TaskSpec column and directory,
-Use, and any complete exclusion manifest and hash. Preparation verifies the
-receipt, preserves task identities, accounts for every exclusion, and writes
-only public semantic inputs. Stored-stream hashes are recorded separately from
-historical aggregate TaskSpec hashes, whose original iteration order can differ.
+Use, and any complete exclusion manifest and hash. Also freeze
+`task_spec_scan_sha256`: SHA-256 of exact stored JSON cell bytes concatenated in
+lexicographically sorted Parquet-path and physical row order. Preparation checks
+that digest before publishing and rechecks raw inputs and exclusions before
+per-source or whole-corpus reuse. The expected scan digest is part of the frozen
+input and source key. Historical `task_specs_sha256` remains separate: some
+producers hash their original iteration order before sorting rows for storage.
+Do not equate those conventions or replace a frozen expectation with a new scan.
+Preparation preserves task identities, accounts for every exclusion, and writes
+only public semantic inputs.
 Run preparation beside the private inputs; its output root may stage public
 inputs in the embedding worker's region. The existing embedding graph accepts
 that prepared input artifact and retains its normal vector cache and release format.
