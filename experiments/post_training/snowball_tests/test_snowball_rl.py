@@ -34,6 +34,9 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
 
 @pytest.mark.timeout(180)  # The real bootstrap installs its independent, locked CPU environment.
 def test_presets_compose_and_preserve_measurement_contracts(selection, tmp_path, monkeypatch, native_json):
+    measured = presets.PRESETS["speed-medium"]
+    with pytest.raises(ValueError, match="measured window"):
+        snowball.build_run(replace(measured, measured=(measured.updates + 1,)))
     paths = []
     for name, preset in presets.PRESETS.items():
         if name == "speed-short":

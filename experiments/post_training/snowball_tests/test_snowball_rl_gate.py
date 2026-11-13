@@ -354,7 +354,12 @@ def test_current_generation_counters_compare_with_stored_controls(recorded_runs,
         for answer in answers[:20]:
             answer["verification"]["status"] = "error"
         task_set.write_text("".join(json.dumps(answer) + "\n" for answer in answers))
-        report = rescore(preset, "--candidate", "users/test/current-generation")
+        values["eval/eval_lite/all/outcome/graded"] = 1500
+        values["eval/eval_lite/all/outcome/unavailable"] = 0
+        write_metrics(root, {0: values})
+        coverage_run = root.parent.parent / "current-low-coverage" / root.name
+        shutil.copytree(root, coverage_run)
+        report = rescore(preset, "--candidate", "users/test/current-low-coverage")
         coverage = next(row for row in report["invariants"] if row["name"].endswith("/scored_fraction"))
         assert coverage["value"] < 0.99 and coverage["holds"] is False
 
