@@ -1138,10 +1138,12 @@ def _build_pod_manifest(
                 "kubernetes_provider.kueue.topologies or use a known level."
             )
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
-        _, pod_index = task_id.require_task()
+        pod_index = task_id.task_index
         group_size = run_req.num_tasks
         if run_req.coscheduling.group_sizes:
             _validate_locality_groups(run_req.coscheduling, run_req.num_tasks, gpu_count, config)
+            if pod_index is None:
+                raise PodManifestError("Locality groups require a task ordinal")
             for group_index, group_size in enumerate(run_req.coscheduling.group_sizes):
                 if pod_index < group_size:
                     # Explicit role hashes keep otherwise identical groups in separate
