@@ -5,8 +5,8 @@ import json
 from contextlib import asynccontextmanager
 
 import pytest
-from harbor.environments import daytona
-from harbor.host_capabilities import DaytonaConnection, HostCapabilities, task_model_environment
+from harbor.host_capabilities import HostCapabilities, task_model_environment
+from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig
 from harbor.utils.env import resolve_env_vars
@@ -105,7 +105,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     async def registered_endpoint(port, *, request_timeout):
         yield LocalEndpoint()
 
-    monkeypatch.setattr(daytona, "AsyncDaytona", UnavailableDaytona)
+    monkeypatch.setattr("daytona.AsyncDaytona", UnavailableDaytona)
     monkeypatch.setattr(agent_runtime, "registered_agent_endpoint", registered_endpoint)
     await runtime.startup()
     try:

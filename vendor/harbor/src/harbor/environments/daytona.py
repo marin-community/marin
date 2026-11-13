@@ -7,10 +7,9 @@ import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from enum import StrEnum
-from functools import partial
 from pathlib import Path
 
-from daytona import AsyncDaytona, DaytonaConfig
+from daytona import AsyncDaytona
 
 from harbor.environments.base import (
     BASE_ENVIRONMENT_ARGUMENTS,
@@ -39,11 +38,15 @@ from shellbox.backends.daytona.machine import (
     DaytonaDeclarativeMachineFactory,
     DaytonaMachine,
     DaytonaMachineFactory,
-    DaytonaNetworkMode,
     DaytonaNetworkPolicy,
 )
+from shellbox.backends.daytona.snapshot import (
+    SnapshotRequest,
+    snapshot_request_for_spec,
+    validate_source,
+)
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import MachineSpec, NetworkPolicy
+from shellbox.machine import MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 from shellbox.process_session import (
     acquire_owned,
     await_cleanup,
@@ -57,12 +60,24 @@ class DaytonaProvisioning(StrEnum):
     DECLARATIVE = "declarative"
 
 
-def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None) -> MachineSpec:
+def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
+    """Select a Harbor task's snapshot source from its image or environment."""
+    if docker_image:
+        return RegistryImage(docker_image)
+    dockerfile = environment_dir / "Dockerfile"
+    if not dockerfile.is_file():
+        raise UnsupportedMachineSpec("Daytona task requires a registry image or Dockerfile")
+    return validate_source(DockerfileSource(environment_dir, dockerfile))
+
+
+def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *, cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> MachineSpec:
     """The shellbox spec for one task environment.
 
-    Pure mapping from the task's environment config to the spec the Daytona
-    factory prepares, so measurement code can derive snapshot identities from
-    the same inputs production uses.
+    Pure projection from the task's environment config, so measurement code
+    can derive snapshot identities from the same inputs production uses.
+    Source validation happens once per boundary: environment construction
+    rejects unusable definitions, and snapshot preparation validates what it
+    is about to build.
     """
     source = (
         RegistryImage(task_env_config.docker_image)
@@ -77,6 +92,7 @@ def machine_spec(task_env_config, environment_dir: Path, env: dict[str, str], *,
         cpus=cpus,
         memory_mb=memory_mb,
         storage_mb=storage_mb,
+        gpus=gpus,
     )
 
 
@@ -105,30 +121,17 @@ class DaytonaEnvironment(BaseEnvironment):
             )
         policy = None
         if network_policy is not None:
-            if network_policy.keys() - {"mode", "value"}:
-                raise ValueError("Unknown Daytona network policy fields")
-            policy = DaytonaNetworkPolicy(
-                DaytonaNetworkMode(network_policy["mode"]), network_policy.get("value")
-            )
+            policy = DaytonaNetworkPolicy.from_config(network_policy)
         if client_factory is None:
             capabilities: HostCapabilities = kwargs.get(
                 "host_capabilities", HostCapabilities()
             )
             connection = capabilities.daytona
-            if (
-                connection is None
-                or not connection.api_key
-                or not connection.api_url
-                or not connection.target
-            ):
-                raise ValueError("Daytona requires an explicit host connection")
-            client_factory = partial(
-                AsyncDaytona,
-                DaytonaConfig(
-                    api_key=connection.api_key,
-                    api_url=connection.api_url,
-                    target=connection.target,
-                ),
+            # An absent connection keeps the environment constructible for
+            # callers that only inspect the task definition, such as snapshot
+            # preflight; the factory then fails when a sandbox is requested.
+            client_factory = (
+                connection.client_factory() if connection is not None else None
             )
         factory_type = {
             DaytonaProvisioning.SNAPSHOT: DaytonaMachineFactory,
@@ -170,11 +173,7 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Shellbox Daytona supports single-container tasks; use local for Compose service groups"
             )
-        if (
-            not self.task_env_config.docker_image
-            and not (self.environment_dir / "Dockerfile").is_file()
-        ):
-            raise ValueError("Daytona task requires a registry image or Dockerfile")
+        task_snapshot_source(self.task_env_config.docker_image, self.environment_dir)
         paths = EnvironmentPaths()
         allowed = {
             str(path)
@@ -187,6 +186,21 @@ class DaytonaEnvironment(BaseEnvironment):
         if any(str(mount["target"]) not in allowed for mount in self._mounts):
             raise ValueError("Shellbox Daytona does not support custom host mounts")
 
+    def _machine_spec(self) -> MachineSpec:
+        return machine_spec(
+            self.task_env_config,
+            self.environment_dir,
+            self._merge_env(None),
+            cpus=self._effective_cpus,
+            memory_mb=self._effective_memory_mb,
+            storage_mb=self._effective_storage_mb,
+            gpus=self._effective_gpus,
+        )
+
+    def snapshot_request(self) -> SnapshotRequest:
+        """The snapshot that this task's sandbox starts from."""
+        return snapshot_request_for_spec(self._machine_spec())
+
     async def start(
         self, force_build: bool, *, service_tasks: asyncio.TaskGroup
     ) -> None:
@@ -194,14 +208,7 @@ class DaytonaEnvironment(BaseEnvironment):
             raise ValueError(
                 "Shellbox snapshots are immutable; change the prepared image or build inputs"
             )
-        spec = machine_spec(
-            self.task_env_config,
-            self.environment_dir,
-            self._merge_env(None),
-            cpus=self._effective_cpus,
-            memory_mb=self._effective_memory_mb,
-            storage_mb=self._effective_storage_mb,
-        )
+        spec = self._machine_spec()
         judge, candidate = task_model_relays(
             model_endpoint=self.model_endpoint,
             model_name=self.model_name,

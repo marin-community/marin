@@ -12,10 +12,10 @@ import pytest
 
 pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
 
-from daytona import Resources
 from harbor.environments.daytona import machine_spec
-from shellbox.backends.daytona.machine import UnsupportedMachineSpec, snapshot_identity
+from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.machine import MachineSpec, UnsupportedMachineSpec
 
 from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
@@ -39,8 +39,8 @@ def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
 
 
 def test_snapshot_identity_names_are_stable_and_formatted():
-    first = snapshot_identity(RegistryImage("ubuntu:24.04"), Resources())
-    second = snapshot_identity(RegistryImage("ubuntu:24.04"), Resources())
+    first = snapshot_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
+    second = snapshot_request_for_spec(MachineSpec(source=RegistryImage("ubuntu:24.04"))).name
     assert first == second
     assert first.startswith("shellbox-") and len(first) == len("shellbox-") + 40
 
@@ -50,7 +50,7 @@ def test_snapshot_identity_rejects_add_dockerfiles(tmp_path):
     context.mkdir()
     (context / "Dockerfile").write_text("FROM ubuntu:24.04\nADD archive.tar /app\n")
     with pytest.raises(UnsupportedMachineSpec, match="ADD"):
-        snapshot_identity(DockerfileSource(context, context / "Dockerfile"), Resources())
+        snapshot_request_for_spec(MachineSpec(source=DockerfileSource(context, context / "Dockerfile")))
 
 
 def test_machine_spec_maps_a_registry_source():
@@ -145,7 +145,7 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
         _write.parent.mkdir(parents=True, exist_ok=True)
         _write.write_bytes(content)
         _write.chmod(mode)
-    expected = snapshot_identity(DockerfileSource(staged, staged / "Dockerfile"), Resources())
+    expected = snapshot_request_for_spec(MachineSpec(source=DockerfileSource(staged, staged / "Dockerfile"))).name
 
     count = count_task_identities([("task", payload)])
     assert list(count.sizes) == [expected]

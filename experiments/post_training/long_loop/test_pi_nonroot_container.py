@@ -11,9 +11,10 @@ import pytest
 
 pytest.importorskip("harbor", reason="Requires the SkyRL harbor-test runtime environment")
 from harbor.environments import daytona
-from harbor.host_capabilities import DaytonaConnection, HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from harbor.trial.trial import Trial
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.image import DockerfileSource
 from shellbox.machine import Command, MachineSpec

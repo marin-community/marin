@@ -20,18 +20,21 @@ from openai import (
     PermissionDeniedError,
 )
 
-from harbor.host_capabilities import (
-    HostCapabilities,
-    DaytonaConnection,
-    DAYTONA_API_URL,
+from harbor.host_capabilities import HostCapabilities
+from daytona import (
+    CreateSnapshotParams,
+    DaytonaNotFoundError,
+    Resources,
 )
+from daytona_api_client_async import SnapshotState
+from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
     TmuxSession,
 )
 from harbor.environments import model_relay
-from harbor.environments.daytona import DaytonaEnvironment
+from harbor.environments.daytona import DaytonaEnvironment, task_snapshot_source
 from harbor.environments.factory import EnvironmentFactory
 from harbor.models.environment_type import EnvironmentType
 from harbor.environments.local import LocalEnvironment
@@ -43,7 +46,8 @@ from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.verifier import Verifier
 from shellbox.http_service import HttpRequest, serve_http
-from shellbox.machine import Command, MachineSpec, PackageSpec
+from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.machine import Command, MachineSpec, NetworkPolicy, PackageSpec, UnsupportedMachineSpec
 from tests.unit.environments.transport import ProcessMachine, available_port
 
 
@@ -209,7 +213,7 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
                 host_capabilities=HostCapabilities(
                     daytona=DaytonaConnection(
                         api_key="host-daytona-private",
-                        api_url=DAYTONA_API_URL,
+                        api_url=DEFAULT_DAYTONA_API_URL,
                         target="test-target",
                     ),
                     model_authentication={
@@ -641,7 +645,7 @@ def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
                 host_capabilities=HostCapabilities(
                     daytona=DaytonaConnection(
                         api_key="explicit-key",
-                        api_url=DAYTONA_API_URL,
+                        api_url=DEFAULT_DAYTONA_API_URL,
                         target="test-target",
                     ),
                     model_authentication={},
@@ -710,3 +714,95 @@ async def test_declarative_harbor_starts_and_deletes_without_a_snapshot_service(
         assert provider.created.resources.cpu == 2
         await environment.stop(True)
     assert provider.deleted
+
+
+async def _provider_exec(command, **kwargs):
+    """Stand in for the guest's command probe with a successful no-op."""
+    return SimpleNamespace(exit_code=0, result="")
+
+
+async def _provider_work_dir():
+    return "/task"
+
+
+class RecordingSnapshotClient:
+    """Fake provider that records the snapshot and sandbox requests it receives."""
+
+    def __init__(self):
+        self.snapshot_params = None
+        self.sandbox_params = None
+        self.sandbox = SimpleNamespace(process=SimpleNamespace(exec=_provider_exec), get_work_dir=_provider_work_dir)
+        self.closed = False
+        self.snapshot = self
+
+    async def get(self, name):
+        raise DaytonaNotFoundError("Snapshot does not exist", status_code=404)
+
+    async def create(self, params, timeout=None):
+        if isinstance(params, CreateSnapshotParams):
+            self.snapshot_params = params
+            return SimpleNamespace(name=params.name, state=SnapshotState.ACTIVE, error_reason=None)
+        self.sandbox_params = params
+        return self.sandbox
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self.closed = True
+
+
+def test_daytona_adapter_launches_from_the_override_snapshot_request(tmp_path):
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    (environment_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    client = RecordingSnapshotClient()
+
+    adapter = DaytonaEnvironment(
+        environment_dir=environment_dir,
+        environment_name="task",
+        session_id="trial",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(
+            allow_internet=False,
+            cpus=1,
+            memory_mb=1024,
+            storage_mb=1024,
+        ),
+        override_cpus=2,
+        override_memory_mb=2049,
+        override_storage_mb=1025,
+        client_factory=lambda: client,
+    )
+
+    async def run():
+        async with asyncio.TaskGroup() as service_tasks:
+            await adapter.start(False, service_tasks=service_tasks)
+            await adapter.stop(True)
+
+    asyncio.run(run())
+
+    # The provider received the job's effective resources, rounded the way the
+    # snapshot identity requires, and the sandbox started from that snapshot.
+    assert client.snapshot_params is not None
+    assert client.snapshot_params.resources == Resources(cpu=2, memory=3, disk=2, gpu=None)
+    assert client.snapshot_params.name.startswith("shellbox-")
+    assert client.sandbox_params is not None
+    assert client.sandbox_params.snapshot == client.snapshot_params.name
+    assert client.sandbox_params.network_block_all is True
+    assert client.closed
+
+
+def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_path) -> None:
+    assert task_snapshot_source("fixture:tag", tmp_path) == RegistryImage("fixture:tag")
+
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM ubuntu:24.04\n")
+    assert task_snapshot_source(None, tmp_path) == DockerfileSource(tmp_path.resolve(), dockerfile.resolve())
+
+    dockerfile.write_text("FROM ubuntu:24.04\nADD payload /opt\n")
+    with pytest.raises(UnsupportedMachineSpec, match="ADD"):
+        task_snapshot_source(None, tmp_path)
+
+    with pytest.raises(UnsupportedMachineSpec, match="registry image or Dockerfile"):
+        task_snapshot_source(None, tmp_path / "absent")

@@ -10,9 +10,10 @@ import os
 import time
 from pathlib import Path
 
-from harbor.host_capabilities import DaytonaConnection, HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import TrialConfig
 from harbor.trial.trial import Trial
+from shellbox.backends.daytona.connection import DaytonaConnection
 from skyrl_train.dataset.harbor_import import restore_harbor_trial_task
 from taskcompendium.models import TaskSpec
 
