@@ -1,0 +1,27 @@
+{
+  "tau": {
+    "panel": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.2/admission/60953febea09837219f3/panel.parquet",
+    "task_sha256": "a480c057049709525d746f80fe70ec6dad30b095f33baa85ab63f3139856b0b3"
+  },
+  "language-mixing": {
+    "population": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e2649211bf6143e2d47e/2026.11.12.2",
+    "shard": "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/e2649211bf6143e2d47e/2026.11.12.2/specs/part-000000.parquet",
+    "task_sha256": "ce297b48f807aab571753cc6bdc7c48c8149b88b7009b56dea0bc4d04105ab21"
+  },
+  "tau-rlvr1-repaired": {
+    "repo": "open-athena/tau-pivot-rlvr1-taskcompendium-20261113",
+    "revision": "3a33359dec9905630d17cf702c068e30c8a59414",
+    "file": "tasks.parquet",
+    "row": 0,
+    "task_sha256": "71040495f4b4d685c151a4d500932e885cbf03c131e76d046f8ba46c85bcbec9",
+    "serialized_sha256": "71040495f4b4d685c151a4d500932e885cbf03c131e76d046f8ba46c85bcbec9"
+  },
+  "tau-rlvr2-repaired": {
+    "repo": "open-athena/tau-pivot-rlvr2-taskcompendium-20261113",
+    "revision": "bf91d652fc8f0085ea7d0e3fd90c58db12b3ae4e",
+    "file": "tasks.parquet",
+    "row": 0,
+    "task_sha256": "28cc0f4544126f401561563a5d83bc4441f2af7f9c8676370ad0298f3bf03a17",
+    "serialized_sha256": "28cc0f4544126f401561563a5d83bc4441f2af7f9c8676370ad0298f3bf03a17"
+  }
+}

@@ -14,8 +14,8 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
     VerifierResourceProfile,
-    has_oracle_solution,
 )
+from taskcompendium.runtime.resources import has_oracle_solution
 
 
 def oracle_receipt(

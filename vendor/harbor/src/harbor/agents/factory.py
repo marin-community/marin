@@ -1,3 +1,4 @@
+import importlib
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -21,18 +22,36 @@ from harbor.utils.env import resolve_env_vars
 class AgentFactory:
     _AGENT_MAP: dict[str, type[BaseAgent]] = {
         agent.name(): agent
-        for agent in (Pi, MiniSweAgent, Codex, OpenCode, Terminus2, TerminusKira, OracleAgent, NopAgent)
+        for agent in (
+            Pi,
+            MiniSweAgent,
+            Codex,
+            OpenCode,
+            Terminus2,
+            TerminusKira,
+            OracleAgent,
+            NopAgent,
+        )
+    }
+
+    _TASK_SPEC_AGENTS = {
+        "task-spec-chat": "TaskSpecChatAgent",
+        "task-spec-empty": "TaskSpecEmptyAgent",
+        "task-spec-response": "TaskSpecResponseAgent",
     }
 
     @classmethod
     def _unsupported(cls, name: str) -> ValueError:
         return ValueError(
             f"Agent {name!r} is not supported by Marin's vendored Harbor. "
-            f"Supported agents: {', '.join(cls._AGENT_MAP)}"
+            f"Supported agents: {', '.join((*cls._AGENT_MAP, *cls._TASK_SPEC_AGENTS))}"
         )
 
     @classmethod
     def get_agent_class(cls, name: str) -> type[BaseAgent]:
+        if name in cls._TASK_SPEC_AGENTS:
+            module = importlib.import_module("harbor.agents.taskcompendium")
+            return getattr(module, cls._TASK_SPEC_AGENTS[name])
         try:
             return cls._AGENT_MAP[name]
         except KeyError as exc:
