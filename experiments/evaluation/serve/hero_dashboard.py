@@ -67,6 +67,8 @@ STARTUP_TIMEOUT_SECONDS = 7200
 MAX_NUM_SEQS = 32
 MAX_NUM_BATCHED_TOKENS = 2048
 GPU_MEMORY_UTILIZATION = 0.90
+# The worker is pickled by value from __main__, and a protobuf enum wrapper cannot be pickled; keep the int.
+DASHBOARD_ACCESS = EndpointAccess.ENDPOINT_ACCESS_LINK
 # PIECEWISE graphs around attention, KV-cache updates and ShortConv; MoE stays inside the captured graph.
 COMPILATION_CONFIG = {
     "mode": 3,
@@ -240,7 +242,7 @@ def _serve_dashboard(config: HeroDashboardConfig, environment: VllmEnvironment, 
     address = f"http://{host}:{socket.getsockname()[1]}"
     with (
         serve_app_background(app, socket),
-        ctx.registry.registered(config.endpoint, address, metadata, access=EndpointAccess.ENDPOINT_ACCESS_LINK),
+        ctx.registry.registered(config.endpoint, address, metadata, access=DASHBOARD_ACCESS),
     ):
         logger.info(
             "READY endpoint=%s model=%s DP/EP=%d web_search=%s vllm=%s",
