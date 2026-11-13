@@ -63,7 +63,7 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
     )
     if result.returncode:
         return result.returncode
-    return subprocess.run(
+    result = subprocess.run(
         [
             *pytest_command,
             "--noconftest",
@@ -72,6 +72,38 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
         ],
         cwd=repo_root,
         env={**os.environ, "PYTHONPATH": str(repo_root / "lib/marin/src")},
+        check=False,
+    )
+    if result.returncode:
+        return result.returncode
+    # Census tests exercise Marin conversion as well as Harbor's native mapping.
+    return subprocess.run(
+        [
+            "uv",
+            "run",
+            "--frozen",
+            "--package",
+            "marin-core",
+            "--extra",
+            "cpu",
+            "--extra",
+            "dedup",
+            "--group",
+            "test",
+            "--prerelease",
+            "allow",
+            "--with-editable",
+            f"{repo_root / 'vendor/harbor'}[daytona]",
+            "python",
+            "-m",
+            "pytest",
+            "-q",
+            "--noconftest",
+            "experiments/post_training/task_curation/tests/test_daytona_census.py",
+            "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
+            *extra_args,
+        ],
+        cwd=repo_root,
         check=False,
     ).returncode
 
