@@ -72,6 +72,9 @@ class ReconcileRow:
     attempt_state: int
     job_id: JobName
     attempt_uid: AttemptUid
+    # True when a retry has moved the task to a newer attempt. The task state then
+    # describes the newer attempt, so this row's intent comes from its own state.
+    superseded: bool = False
 
 
 @dataclass(frozen=True)
@@ -147,6 +150,9 @@ def _reconcile_worker(
 
     for row in rows:
         wire_task_id = row.task_id.to_wire()
+        if row.superseded:
+            desired.append(_superseded_attempt_intent(row))
+            continue
         if row.task_state in _ASSIGNED_STATES:
             if hold_assigned_dispatch:
                 continue
@@ -250,6 +256,26 @@ def _reconcile_worker(
         ),
         attempts=tuple(rows),
     )
+
+
+def _superseded_attempt_intent(row: ReconcileRow) -> worker_pb2.Worker.DesiredAttempt:
+    """Intent for an unfinished attempt whose task has moved on to a newer attempt.
+
+    The task row describes the newer attempt, so copying its run intent would
+    target the wrong process. A terminal old attempt (normally PREEMPTED) gets a
+    stop matching its own state; the worker tears the process down and its terminal
+    or MISSING observation stamps ``finished_at_ms``, which releases the capacity
+    the attempt still holds. A nonterminal old attempt gets a bare status probe.
+    """
+    if row.attempt_state not in TERMINAL_TASK_STATES:
+        return worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, run=worker_pb2.Worker.AttemptSpec())
+    if row.attempt_state == job_pb2.TASK_STATE_PREEMPTED:
+        stop_reason = worker_pb2.Worker.STOP_REASON_PREEMPTED
+    elif row.attempt_state == job_pb2.TASK_STATE_KILLED:
+        stop_reason = worker_pb2.Worker.STOP_REASON_CANCELLED
+    else:
+        stop_reason = worker_pb2.Worker.STOP_REASON_JOB_TERMINATED
+    return worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, stop=stop_reason)
 
 
 # ---------------------------------------------------------------------------
