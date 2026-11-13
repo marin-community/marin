@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import (
     ActorCensusInput,
+    ContentEvidenceReference,
     OversightEvidence,
     OversightLevel,
     QualityResultFinalization,
@@ -33,7 +34,6 @@ from taskcompendium.pipeline.models import (
 from experiments.post_training.task_curation.full_content_binding import bind_full_content_result
 from experiments.post_training.task_curation.full_content_receipts import full_content_result_binding
 from experiments.post_training.task_curation.full_content_results import (
-    ContentEvidenceReference,
     FullContentResultBinding,
 )
 from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
@@ -142,7 +142,11 @@ def test_same_input_sample_cannot_replace_explicit_whole_source_finality(content
         "coverage_complete": binding.coverage_complete,
         "provisional": False,
     }
-    assert quality(restored.model_dump(mode="json"), None) == ("FULL" if binding.coverage_complete else "SAMPLE")
+    assert quality(restored.model_dump(mode="json"), None) == "FULL"
+    if finalization is QualityResultFinalization.ACCEPTED_INCOMPLETE:
+        without_waiver = restored.model_copy(update={"quality_result_waiver": None})
+        assert quality(without_waiver.model_dump(mode="json"), None) == "SAMPLE"
+        assert review_completeness(without_waiver, [], [])["provisional"] is True
 
 
 @pytest.mark.parametrize("change", ["dataset_revision", "task_specs_sha256", "evidence_url", "missing_binding"])
@@ -179,6 +183,7 @@ def test_changed_input_or_missing_binding_clears_stale_finality_before_fresh_sam
     bound = bind_full_content_result(bind_sample_result(changed, fresh), None)
     assert bound.info.quality_result == fresh.review.result
     assert bound.info.quality_result_finalization is None and bound.info.full_content_result_binding is None
+    assert bound.info.quality_result_waiver is None
     assert review_completeness(bound.declaration, [], []) == {
         "reviewed": 100,
         "required": 100,
@@ -285,6 +290,12 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
                     "contract_index_sha256": inputs.index_sha256,
                     "review_artifact_sha256": receipt.sha256,
                     "records_sha256": review.records_sha256,
+                    "qc_unreviewed": [
+                        {"task_id": row.task_id, "reason": f"QC unreviewed: {row.detail}"}
+                        for row in observations
+                        if row.status is not ReviewStatus.REVIEWED
+                    ],
+                    "result": review.result.model_dump(mode="json"),
                 }
             )
         )
@@ -307,6 +318,21 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
     assert review.result.issues
     assert binding.result.model_dump(exclude={"issues"}) == review.result.model_dump(exclude={"issues"})
     assert binding.input == actor_input
+    if incomplete:
+        original = path.read_text()
+        omitted = json.loads(original)
+        omitted["qc_unreviewed"] = []
+        path.write_text(json.dumps(omitted))
+        missing_task_waiver = ContentEvidenceReference(uri=str(path), sha256=file_sha256(StoragePath(str(path))))
+        with pytest.raises(ValueError, match="enumerate every unreviewed task"):
+            full_content_result_binding(receipt, finalization, missing_task_waiver, reviewer, actor_input, population)
+        changed_result = json.loads(original)
+        changed_result["result"]["uncertain_count"] += 1
+        path.write_text(json.dumps(changed_result))
+        changed_result_waiver = ContentEvidenceReference(uri=str(path), sha256=file_sha256(StoragePath(str(path))))
+        with pytest.raises(ValueError, match="Result and uncertainty counts"):
+            full_content_result_binding(receipt, finalization, changed_result_waiver, reviewer, actor_input, population)
+        path.write_text(original)
     table = pq.read_table(review.records_path)
     rows = table.to_pylist()
     rows[0]["runtime_sha256"] = "f" * 64

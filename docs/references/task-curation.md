@@ -1818,7 +1818,10 @@ records cache separation, resume commands and the preserved v2 repair policy.
 
 Whole-source content Result finality is recorded explicitly as `complete` or
 `accepted_incomplete`, independently of coverage. The latter requires a pinned
-waiver and preserves missing-review counts. Exact-input whole-source bindings
+waiver enumerating every unreviewed task and exact reason, and preserves
+missing-review and uncertainty counts. This accepted whole-source review displays
+Quality FULL and a final Result; strict coverage remains false on Evidence.
+Exact-input whole-source bindings
 take precedence over later SAMPLE panels; input changes invalidate that finality.
 See [final whole-source Results](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#final-whole-source-content-results)
 for offline evidence verification and transport. Completed SAMPLE panels retain

@@ -588,7 +588,9 @@ observations. A verified
 `FullContentResultBinding` records the exact dataset pin, converter, retained
 population digest/count, contract index, immutable review receipt and records.
 `COMPLETE` requires every retained task reviewed; `ACCEPTED_INCOMPLETE` requires
-SHA-pinned waiver evidence and retains each missing review in the Result counts.
+SHA-pinned waiver evidence enumerating every unreviewed task and exact reason,
+with matching Result and uncertainty counts. It displays Quality FULL and a final
+Result while retaining false strict coverage and every missing review.
 Completed uncertain observations remain separate from the conclusive denominator.
 Neither state changes execution qualification or drops tasks.
 
@@ -626,8 +628,10 @@ declaration's current full-population census (`ActorCensusInput`); changed pins,
 converters, counts or task digests clear stale Result/finality. Then attach SAMPLE
 and apply the verified matching whole-source binding afterward. A matching final
 Result survives later SAMPLE attachment. The
-declaration persists `quality_result_finalization`; Atlas uses it to keep an
-accepted incomplete Result final while still reporting incomplete coverage.
+declaration persists `quality_result_finalization` and `quality_result_waiver`.
+Atlas requires both accepted-incomplete finality and its typed waiver reference
+plus whole-population accounting to display FULL. Evidence shows false strict
+coverage, the unreviewed count, and the pinned receipt containing exact reasons.
 Completed SAMPLE panels keep their existing finality rules.
 
 ### Audit reviewer errors
