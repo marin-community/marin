@@ -483,7 +483,7 @@ class GrugSharedExperts(nn.Module):
 # TE 2.21 BF16 FC1 can change a fixed row when its expert's batch size changes.
 # Use this path only for explicitly requested batch invariance. Ordinary RL
 # checks scoring versus training at its existing tolerance instead of exact zero.
-# Remove once native grouped BF16 passes the explicit-BI peer-batch test.
+# Remove once native BF16 grouped matmul passes the peer test with BI enabled.
 class GrugColumnParallelGroupedLinear(TEColumnParallelGroupedLinear):
     """Keep Blackwell BF16 expert rows independent of peer-rank token counts."""
 

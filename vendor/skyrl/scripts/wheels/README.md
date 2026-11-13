@@ -50,8 +50,9 @@ digest alongside each wheel.
 Before adoption, install the exact wheel bytes and check attention values and
 gradients, packed GQA/masks, and
 [`test_megatron_flash_attention_cp2_forward_backward`](../../skyrl-train/tests/gpu/test_megatron_worker.py)
-on H100 and GB200. Also check Grug train/eval agreement, peer-batch invariance,
-a nonzero trainer update, native save/restore, and publication to vLLM. Native
+on H100 and GB200. Also check Grug train/eval agreement, a nonzero trainer
+update, native save/restore, and publication to vLLM. Run the peer-batch check
+with `trainer.algorithm.batch_invariant=true`. Native
 attention tests alone cannot detect TE's FA2 version cap. Update runtime URLs
 and hashes only after these checks pass.
 
