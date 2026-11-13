@@ -49,6 +49,9 @@ OUTPUT_ROOT = "s3://marin-rno2a/tmp/ttl="
 # The eval campaign's 10/05 serve config (eval-campaign-09-25-unlabeled/model-configs).
 REPO = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05"
 REVISION = "8c76b22afc38f5e95360c83ca88008f00b5ae1e0"
+# Ids from here up are special tokens (chat roles, think, tool and end markers). A base model never trained on
+# them, so rows also report the NLL of text targets only.
+FIRST_SPECIAL_ID = 128000
 GPUS = 8
 MAX_MODEL_LEN = 73728
 MAX_NUM_BATCHED_TOKENS = 7168
@@ -84,8 +87,8 @@ def score_row(url: str, api_model: str, row: dict) -> dict:
     if [_token_id(t) for t in choice["prompt_token_ids"]] != ids:
         raise ValueError(f"row {row['cell']}:{row['row']}: echoed prompt differs")
     prompt_logprobs = choice["prompt_logprobs"]
-    nll = 0.0
-    loss_tokens = 0.0
+    nll = text_nll = 0.0
+    loss_tokens = text_tokens = 0.0
     for position, weight in enumerate(weights):
         if not weight:
             continue
@@ -96,15 +99,25 @@ def score_row(url: str, api_model: str, row: dict) -> dict:
             raise ValueError(f"row {row['cell']}:{row['row']}: non-finite logprob at {position + 1}")
         nll -= weight * logprob
         loss_tokens += weight
+        if ids[position + 1] < FIRST_SPECIAL_ID:
+            text_nll -= weight * logprob
+            text_tokens += weight
     keys = ("cell", "source", "row", "family", "task_id", "trial", "kind")
-    return {**{k: row.get(k) for k in keys}, "tokens": len(ids), "loss_tokens": loss_tokens, "nll_sum": nll}
+    return {
+        **{k: row.get(k) for k in keys},
+        "tokens": len(ids),
+        "loss_tokens": loss_tokens,
+        "nll_sum": nll,
+        "text_loss_tokens": text_tokens,
+        "text_nll_sum": text_nll,
+    }
 
 
 def read_cell(uri: str) -> list[dict]:
     return [json.loads(line) for line in gzip.decompress(StoragePath(uri).read_bytes()).splitlines()]
 
 
-def run_job(cells: list[str], output: str, passes: int) -> None:
+def run_job(cells: list[str], output: str, passes: int, repo: str, revision: str) -> None:
     """Iris entrypoint: score every cell ``passes`` times, each pass in a fresh vLLM engine."""
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
@@ -114,14 +127,14 @@ def run_job(cells: list[str], output: str, passes: int) -> None:
         if too_long:
             raise ValueError(f"{uri}: rows longer than max_model_len: {too_long[:5]}")
     spec = ModelSpec(
-        weights=REPO,
+        weights=repo,
         api_model="student",
         num_chips=GPUS,
         tensor_parallel_size=None,
         dtype="bfloat16",
         max_model_len=MAX_MODEL_LEN,
         chat_template_content=None,
-        revision=REVISION,
+        revision=revision,
     )
     backend = VllmBackend(
         VllmEngineConfig(
@@ -135,7 +148,7 @@ def run_job(cells: list[str], output: str, passes: int) -> None:
                 '{"distributed":true}',
                 "--no-enable-prefix-caching",
                 "--revision",
-                REVISION,
+                revision,
             ),
         )
     )
@@ -174,13 +187,17 @@ def main() -> None:
     parser.add_argument("--cells", required=True, nargs="+", help="s3:// gzipped JSONL cell files")
     parser.add_argument("--output", required=True)
     parser.add_argument("--passes", type=int, default=1)
+    parser.add_argument("--repo", default=REPO, help="HF model repo to score under")
+    parser.add_argument("--revision", default=REVISION, help="pinned HF commit of --repo")
     parser.add_argument("--timeout-hours", type=float, default=4.0)
     args = parser.parse_args()
     if not args.output.startswith(OUTPUT_ROOT):
         raise ValueError(f"Outputs go under {OUTPUT_ROOT}<N>d/")
     request = JobRequest(
         name=f"teacher-nll-{os.urandom(4).hex()}",
-        entrypoint=Entrypoint.from_callable(run_job, args=[args.cells, args.output, args.passes]),
+        entrypoint=Entrypoint.from_callable(
+            run_job, args=[args.cells, args.output, args.passes, args.repo, args.revision]
+        ),
         resources=ResourceConfig.with_gpu(
             "H100", count=GPUS, cpu=64, ram="512g", disk="512g", target_cluster=GPU_CLUSTER
         ),
