@@ -25,6 +25,10 @@ from experiments.evaluation.curated import load_evaluations
 from experiments.post_training.task_curation.campaign import CampaignStatus, SourceOutcome, write_campaign_report
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.pipeline import source_recipe
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    isolated_admission_census as isolated_admission_census,
+)
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 
 
 @pytest.mark.parametrize(
@@ -36,6 +40,7 @@ from experiments.post_training.task_curation.pipeline import source_recipe
         *(("gsm8k", shots, form, 1 if shots == 0 else 2) for shots in (0, 5) for form in PromptFormat),
     ],
 )
+@pytest.mark.usefixtures("isolated_admission_census")
 def test_publication_compiles_selected_fewshots_and_deduplicates_exact_contracts(
     tmp_path, benchmark, shots, form, unique
 ):
@@ -138,6 +143,7 @@ def test_publication_compiles_selected_fewshots_and_deduplicates_exact_contracts
         ),
         config=replace(dataset, protocol=protocol),
     )
+    declared = with_admission_census(declared)
     write_campaign_report(
         str(tmp_path / "campaign.json"),
         CampaignStatus.COMPLETED,
