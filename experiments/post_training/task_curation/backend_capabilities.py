@@ -283,9 +283,10 @@ def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_
 
     Rejects shards that disagree on the matrix, runtime profile, deployment
     limits, schema, revision or verified disk pool, and sources measured in
-    more than one shard. A shard's unassessed placeholder rows are dropped: a
-    source is either measured here or absent, and the selected snapshot's
-    coverage is checked again at load time.
+    more than one shard. A source that is unassessed in every shard keeps its
+    declared reason in the merged artifact; a measured row overrides shard
+    placeholders. The selected snapshot's coverage is checked again at load
+    time.
     """
     first = partials[0]
     identity = (
@@ -308,14 +309,18 @@ def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_
         if other != identity:
             raise ValueError(f"Shard {partial.snapshot_id} does not share the survey identity")
     rows: dict[str, BackendSourceMap] = {}
+    unassessed: dict[str, BackendSourceMap] = {}
     for partial in partials:
         for source in partial.sources:
             if source.basis == "unassessed":
+                if source.source_id not in rows:
+                    unassessed.setdefault(source.source_id, source)
                 continue
             if source.source_id in rows:
                 raise ValueError(f"Source measured in more than one shard: {source.source_id}")
+            unassessed.pop(source.source_id, None)
             rows[source.source_id] = source
-    if not rows:
+    if not rows and not unassessed:
         raise ValueError("The shards measure no sources")
     return BackendSurvey(
         catalog_root=catalog_root,
@@ -327,7 +332,7 @@ def merge_surveys(partials: list[BackendSurvey], *, catalog_root: str, snapshot_
         deployment_limits=first.deployment_limits,
         local_disk_pool=first.local_disk_pool,
         runtime_defaults=first.runtime_defaults,
-        sources=list(rows.values()),
+        sources=[*rows.values(), *unassessed.values()],
     )
 
 

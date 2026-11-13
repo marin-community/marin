@@ -238,20 +238,6 @@ def _docker_task(task_id: str) -> dict:
     }
 
 
-def _shard_survey(tmp_path: Path, name: str, source_id: str) -> BackendSurvey:
-    path = tmp_path / f"{name}.parquet"
-    _write_spec_parquet(path, [{"task": _docker_task(f"{name}-task"), "runtime": {}}])
-    profile = RUNTIME.model_dump(mode="json")
-    manifest = {
-        "catalog_root": "test:catalog",
-        "snapshot_id": name,
-        "source_ids": [source_id],
-        "runtime_defaults": {"agent": profile, "grader": profile},
-        "inputs": [_census_entry(source_id, path)],
-    }
-    return build_survey(manifest, _unit_checkers(), "rev")
-
-
 def _census_entry(source_id: str, path: Path) -> dict:
     return {
         "source_id": source_id,
@@ -262,38 +248,78 @@ def _census_entry(source_id: str, path: Path) -> dict:
     }
 
 
+def _shard_survey(
+    tmp_path: Path,
+    name: str,
+    source_ids: list[str],
+    *,
+    measured_ids: list[str] | None = None,
+    checkers: dict[str, Checker] | None = None,
+) -> BackendSurvey:
+    """Build a real shard: every listed source appears, measured ones with inputs."""
+    measured_ids = measured_ids if measured_ids is not None else source_ids
+    inputs = []
+    for source_id in measured_ids:
+        path = tmp_path / f"{name}-{source_id}.parquet"
+        _write_spec_parquet(path, [{"task": _docker_task(f"{name}-task"), "runtime": {}}])
+        inputs.append(_census_entry(source_id, path))
+    profile = RUNTIME.model_dump(mode="json")
+    manifest = {
+        "catalog_root": "test:catalog",
+        "snapshot_id": name,
+        "source_ids": sorted(source_ids),
+        "runtime_defaults": {"agent": profile, "grader": profile},
+        "inputs": inputs,
+    }
+    if set(source_ids) - set(measured_ids):
+        manifest["unassessed_reason"] = "No converted population is bound to this source in the test fixture."
+    return build_survey(manifest, checkers or _unit_checkers(), "rev")
+
+
+def _rejecting_checkers() -> dict[str, Checker]:
+    def rejecting(requirements, spec) -> None:
+        raise UnsupportedMachineSpec("The drift shard rejects every requirement")
+
+    return {name: rejecting for name in ("docker", "gvisor", "qemu", "shellsim", "daytona", "iris", "local")}
+
+
 def test_merge_reconciles_binding_and_rejects_bad_shards(tmp_path):
-    first = _shard_survey(tmp_path, "first", "cohort-a")
-    second = _shard_survey(tmp_path, "second", "cohort-b")
+    first = _shard_survey(tmp_path, "first", ["cohort-a"])
+    second = _shard_survey(tmp_path, "second", ["cohort-b"])
     merged = merge_surveys([first, second], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
     assert [source.source_id for source in merged.sources] == ["cohort-a", "cohort-b"]
     assert merged.snapshot_id == "selected-snapshot"
     assert merged.matrix == first.matrix
-    stale = first.sources[0].model_copy(
-        update={
-            "basis": "unassessed",
-            "reason": "placeholder",
-            "task_count": 0,
-            "inputs": {},
-            "demands": {},
-            "resource_ranges": {},
-            "backends": {},
-            "role_backend_assignments": {},
-        }
-    )
-    placeholder = first.model_copy(update={"sources": [*first.sources, stale]})
-    merged = merge_surveys([placeholder, second], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
-    assert [source.source_id for source in merged.sources] == ["cohort-a", "cohort-b"]
+    duplicate = _shard_survey(tmp_path, "third", ["cohort-a", "cohort-y"])
     with pytest.raises(ValueError, match="more than one shard"):
-        merge_surveys([first, first], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
-    drifted = first.model_copy(update={"matrix": [first.matrix[0].model_copy(update={"support": Support.UNSUPPORTED})]})
+        merge_surveys([first, duplicate], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
+    drifted = _shard_survey(tmp_path, "drift", ["cohort-c"], checkers=_rejecting_checkers())
     with pytest.raises(ValueError, match="survey identity"):
-        merge_surveys([drifted, second], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
+        merge_surveys([first, drifted], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
+
+
+def test_merge_preserves_globally_unassessed_sources(tmp_path):
+    first = _shard_survey(tmp_path, "first", ["cohort-a", "cohort-z"], measured_ids=["cohort-a"])
+    second = _shard_survey(tmp_path, "second", ["cohort-b", "cohort-z"], measured_ids=["cohort-b"])
+    merged = merge_surveys([first, second], catalog_root="selected:catalog", snapshot_id="selected-snapshot")
+    rows = {source.source_id: source for source in merged.sources}
+    assert rows["cohort-z"].basis == "unassessed"
+    assert rows["cohort-z"].reason == "No converted population is bound to this source in the test fixture."
+    assert rows["cohort-z"].task_count == 0
+    assert rows["cohort-a"].basis == "converted_spec_census"
+    assert rows["cohort-b"].basis == "converted_spec_census"
+    measured_overrides = _shard_survey(tmp_path, "later", ["cohort-a", "cohort-z"], measured_ids=["cohort-a"])
+    merged = merge_surveys(
+        [measured_overrides, second], catalog_root="selected:catalog", snapshot_id="selected-snapshot"
+    )
+    rows = {source.source_id: source for source in merged.sources}
+    assert rows["cohort-a"].basis == "converted_spec_census"
+    assert rows["cohort-z"].basis == "unassessed"
 
 
 def test_merge_cli_writes_the_bound_artifact(tmp_path, monkeypatch, capsys):
-    first = _shard_survey(tmp_path, "first", "cohort-a")
-    second = _shard_survey(tmp_path, "second", "cohort-b")
+    first = _shard_survey(tmp_path, "first", ["cohort-a"])
+    second = _shard_survey(tmp_path, "second", ["cohort-b"])
     for index, survey in enumerate((first, second), start=1):
         (tmp_path / f"shard-{index}.json").write_text(survey.model_dump_json())
     output = tmp_path / "backend-map.json"
