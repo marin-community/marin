@@ -39,7 +39,7 @@ def quality(declaration: dict[str, Any], curation: dict[str, Any] | None) -> Qua
 
 
 def measured_result(declaration: dict[str, Any], review: dict[str, Any] | None) -> SourceQualityResult | None:
-    """Read the conclusive issue counts used by both Result and issue rate."""
+    """Return the current quality result, or None when no review is recorded."""
     stored = declaration.get("quality_result")
     if stored is not None:
         measured = SourceQualityResult.model_validate(stored)

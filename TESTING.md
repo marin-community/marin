@@ -19,6 +19,10 @@ uv run --no-project infra/ci/run_tests.py
 The affected-test runner checks Harbor's standalone lock and runs its offline
 runtime suite when vendored Harbor or its local Rigging or FineStore dependencies
 change. Run those checks directly with `uv run --no-project infra/ci/run_harbor_tests.py`.
+That entry point also runs curation census and rebuild tests in the Marin workspace
+with the local Harbor package and Daytona SDK available; their production imports
+require both environments. Snapshot identity and acquisition tests remain in the
+standalone Harbor environment.
 
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
