@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 import yaml
+from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -197,7 +198,7 @@ def main(
         recipe_path=recipe_path,
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=checkpoint_count, temporary_storage_ttl_days=ttl_days),
     )
-    if config_output is not None:
+    if config_output is not None and get_job_info() is None:
         ctx = StepContext.for_run(step.path(), marin_prefix(), runtime_args=step.runtime_args, deps=step.deps)
         config_output.write_text(step.build_config(ctx).launch_config_yaml)
     return step
