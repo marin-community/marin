@@ -391,3 +391,48 @@ uv run python -m experiments.post_training.task_curation.count_inputs \
 
 The command verifies HF download revision metadata and reads parquet footers.
 Sum only declared files; row selectors require their own complete count.
+
+## Complete retained-population review
+
+`full_qc_inputs` indexes the combined deduplication and lexical remainder against
+the frozen `SourceTextPopulation`. It records task and runtime hashes separately,
+and reports missing execution requirements. Indexing does not qualify execution
+or establish FULL quality.
+
+`full_qc` reviews content independently from execution qualification. Its
+artifacts record `qualification_status=pending`, so complete content coverage
+does not establish execution admission. Qualification and repairs use the
+[full-population oracle procedure](../../../docs/references/task-curation.md#full-population-oracle-filter).
+
+Provide a JSON list with `inputs_path` and `output_path` for each source. Run
+inside a CPU Iris job with batch priority, a three-day timeout, and an explicit
+target cluster. Launch this coordinator with --target-cluster cw-us-east-08a.
+Local GLM children inherit its regional controller and pin US-EAST-08A, with
+batch priority and a three-day timeout. A cluster target on these local children
+would request another federation handoff. The immutable public checkpoint, serving image, precision, model
+YAML digest, sampling settings, and endpoint identity participate in reviewer
+evidence and request caches. The existing relay retains its separate unverified
+checkpoint identity.
+
+Payload revision 4 omits top-level execution requirements and actor/grader lock
+artifact locations. Deployment runtime is retained in audit hashes rather than
+appended to the content rubric. Calibration-only changes to these fields reuse
+identical reviewer requests. Public instructions, grader settings, images and
+resource files remain visible: changes to those inputs select new requests.
+Native resource files are preserved, including any embedded resource settings;
+rewriting a native task.toml therefore invalidates its content request.
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc \
+  --work s3://bucket/campaign/work.json \
+  --campaign-output s3://bucket/campaign/review-v1 \
+  --review-cache s3://bucket/campaign/request-cache --run
+```
+
+Omit `--run` to inspect the source plan and pinned reviewer identity
+without reserving GPUs. Successful batches are reused by exact request identity;
+failed and preempted attempts remain in versioned output paths. Each source
+completion writes task-level observations, computed Result and repair guidance,
+and a campaign record identifying serving jobs and pending qualification. This
+command does not publish datasets or alter Atlas admission.
