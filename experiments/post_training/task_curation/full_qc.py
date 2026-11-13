@@ -51,6 +51,20 @@ class ReviewerVersion(StrEnum):
     V3 = "v3"
 
 
+@dataclass(frozen=True)
+class ReviewerPolicy:
+    model_config: Path
+    context_window_tokens: int
+    max_tokens: int
+    retry_max_tokens: int
+
+
+REVIEWER_POLICIES: Mapping[ReviewerVersion, ReviewerPolicy] = {
+    ReviewerVersion.V2: ReviewerPolicy(MODEL_CONFIG, 262_144, 4_096, 8_192),
+    ReviewerVersion.V3: ReviewerPolicy(V3_MODEL_CONFIG, 524_288, 8_192, 16_384),
+}
+
+
 class ReviewWork(BaseModel):
     inputs_path: str
     output_path: str
@@ -96,11 +110,11 @@ class ReadyChatReviewer:
 def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
     definition = JUDGE_TIERS[JudgeTier.HEAVY]
     assert definition.qa_reviewer is not None and definition.model_revision is not None
-    factor = 2 if version is ReviewerVersion.V3 else 1
+    policy = REVIEWER_POLICIES[version]
     endpoint = LocalJudgeEndpoint(
         tier=JudgeTier.HEAVY,
-        model_config=V3_MODEL_CONFIG if version is ReviewerVersion.V3 else MODEL_CONFIG,
-        context_window_tokens=factor * definition.context_window_tokens,
+        model_config=policy.model_config,
+        context_window_tokens=policy.context_window_tokens,
         accelerator=AcceleratorChoice(Platform.GPU, gpu_type="GB200", gpu_count=4, region=ANY_REGION),
         priority=job_pb2.PRIORITY_BAND_BATCH,
         env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-08a"},
@@ -115,8 +129,8 @@ def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
         model_revision=definition.model_revision,
         endpoint=endpoint,
         precision="native-fp8-e4m3;kv-cache-fp8-e4m3",
-        max_tokens=factor * definition.qa_reviewer.max_tokens,
-        retry_max_tokens=factor * definition.qa_reviewer.retry_max_tokens,
+        max_tokens=policy.max_tokens,
+        retry_max_tokens=policy.retry_max_tokens,
     )
 
 
