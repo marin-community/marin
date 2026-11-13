@@ -10,7 +10,7 @@ import tarfile
 
 import pytest
 
-pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
+pytest.importorskip("harbor", reason="Requires the isolated vendor/harbor runtime")
 
 from harbor.environments.daytona import machine_spec
 from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
@@ -22,6 +22,28 @@ from experiments.post_training.task_curation.daytona_identity import (
     count_registry_identities,
     count_task_identities,
 )
+from experiments.post_training.task_curation.lowered_envelope import LoweredSpec
+from experiments.post_training.task_curation.tests.task_tar_fixtures import pack_tar
+
+
+def lowered(document: dict) -> LoweredSpec:
+    """One lowered envelope as the rebuild publishes it, with task fields the counter ignores."""
+    task = dict(document.get("task") or {})
+    grader = task.get("grader") or {}
+    if grader.get("environment"):
+        grader = {"kind": "script", "argv": ("bash", "/tests/test.sh"), **grader}
+    else:
+        grader = {"kind": "none", "reason": "not measured"}
+    completed = {
+        "id": "fixture",
+        "context": {"events": ({"type": "message", "role": "user", "content": "do the task"},)},
+        "answer_type": "text",
+        "answer_format": {"kind": "plain_text"},
+        "source": {"dataset": "fixture", "revision": "1", "row": "fixture", "importer_revision": "1"},
+        **task,
+        "grader": grader,
+    }
+    return LoweredSpec.from_document({**document, "task": completed})
 
 
 def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
@@ -29,13 +51,7 @@ def _native_tar(dockerfile: str, files: dict[str, bytes]) -> bytes:
         "environment/Dockerfile": dockerfile.encode(),
         **{f"environment/{name}": content for name, content in files.items()},
     }
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name, content in members.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            archive.addfile(info, io.BytesIO(content))
-    return gzip.compress(buffer.getvalue(), mtime=0)
+    return pack_tar(members)
 
 
 def test_snapshot_identity_names_are_stable_and_formatted():
@@ -98,17 +114,20 @@ def test_data_baked_into_contexts_splits_identities():
 
 
 def test_lowered_specs_collapse_and_cite_the_registry_image():
-    def spec(dockerfile: str, mode: str | None) -> dict:
+    def spec(dockerfile: str, mode: str | None) -> LoweredSpec:
         resource = {
-            "path": "environment/Dockerfile",
+            "path": "Dockerfile",
             "source": {"kind": "inline_file", "content_base64": base64.b64encode(dockerfile.encode()).decode()},
         }
         if mode is not None:
             resource["mode"] = mode
-        return {
-            "task": {"environment_requirements": {"docker_image": None}, "resources": {"verifier": [resource]}},
-            "runtime": {"task_machine": None, "verifier_machine": None},
-        }
+        requirements = {"command_semantics": "linux_process", "docker_build": {"files": [resource]}}
+        return lowered(
+            {
+                "task": {"environment_requirements": requirements, "grader": {"environment": requirements}},
+                "runtime": {"task_machine": {}, "verifier_machine": {}},
+            }
+        )
 
     shared = spec("FROM aweaiteam/calibforge:tb2-verifier-base-v1@sha256:0f61\nWORKDIR /app\n", "644")
     null_mode = spec("FROM aweaiteam/calibforge:tb2-verifier-base-v1@sha256:0f61\nWORKDIR /app\n", None)
@@ -159,3 +178,50 @@ def test_counter_names_match_the_production_name_for_the_staged_tree(tmp_path):
             archive.addfile(info, io.BytesIO(content))
     plain = count_task_identities([("task", gzip.compress(non_executable.getvalue(), mtime=0))])
     assert list(plain.sizes) != [expected]  # the executable bit is part of the identity
+
+
+def test_a_task_needing_a_container_runtime_is_refused_on_daytona():
+    """Snapshot count is not enough: an unsupported capability blocks the verdict."""
+    image = "ubuntu:24.04@sha256:" + "a" * 64
+    requirements = {"capabilities": ["docker"], "command_semantics": "linux_process", "docker_image": image}
+    spec = lowered({"task": {"environment_requirements": requirements}, "runtime": {"task_machine": {}}})
+    count = count_lowered_spec_identities([("container-runtime", spec)])
+    assert count.distinct == 1
+    assert count.execution_failures == [("container-runtime", "agent: Unsupported capabilities: docker")]
+
+
+def test_grader_environment_is_counted_independently_and_lock_refusals_are_retained():
+    actor = "actor@sha256:" + "a" * 64
+    grader = "grader@sha256:" + "b" * 64
+    requirements = {"docker_image": actor, "command_semantics": "linux_process"}
+    spec = lowered(
+        {
+            "task": {
+                "environment_requirements": requirements,
+                "grader": {"environment": {**requirements, "docker_image": grader}},
+            },
+            "runtime": {"task_machine": {}, "verifier_machine": {}},
+        }
+    )
+    separate = count_lowered_spec_identities([("separate", spec)])
+    assert set(separate.sizes) == {
+        snapshot_request_for_spec(MachineSpec(source=RegistryImage(actor))).name,
+        snapshot_request_for_spec(MachineSpec(source=RegistryImage(grader))).name,
+    }
+    locked = lowered(
+        {
+            "task": {
+                "environment_requirements": requirements,
+                "grader": {
+                    "environment": {
+                        "packages_lock": "https://example.test/lock",
+                        "command_semantics": "linux_process",
+                    }
+                },
+            },
+            "runtime": {"task_machine": {}, "verifier_machine": {}},
+        }
+    )
+    count = count_lowered_spec_identities([("locked", locked)])
+    assert count.distinct == 1
+    assert [task_id for task_id, _ in count.execution_failures] == ["locked"]
