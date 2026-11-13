@@ -209,7 +209,7 @@ def pack_documents(
     max_segments_per_example: int | None = None,
     slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
     lookahead_window: int | None = None,
-) -> list[range] | list[list[int]]:
+) -> Sequence[Sequence[int]]:
     """
     Greedily pack documents into packs without storing full token ranges. Without a lookahead
     the packs are contiguous document ranges; with a lookahead they can be non-contiguous.
@@ -233,9 +233,11 @@ def pack_documents(
             of document indices (in pack order) instead of a list of ``range`` objects.
 
     Returns:
+    Returns:
         A list of packs. Without a lookahead, each pack is a ``range`` of document indices.
         With a lookahead, each pack is a list of document indices, in pack order. Either
-        way, the packs partition all documents (except those dropped by ``slice_strategy="drop"``).
+        way the packs partition all documents (except those dropped by
+        ``slice_strategy="drop"``), and every pack is a ``Sequence[int]``.
     """
     # Input validation
     if max_segments_per_example is not None and (
@@ -543,7 +545,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             # Using ts.Batch to group reads.
             with ts.Batch():
                 for dr in pack_doc_ranges:
-                    doc_ids = list(range(dr.start, dr.stop)) if isinstance(dr, range) else list(dr)
+                    doc_ids = list(dr)
                     spans = [self._sliced_doc_span(doc_idx, offsets, allowed) for doc_idx in doc_ids]
                     # A sliced (over-long) document always forms a singleton pack.
                     if any(
