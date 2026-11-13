@@ -45,8 +45,9 @@ from skyrlrecipe.declared import (
     EvaluationSampling,
     HFModelSaveCallback,
 )
-from skyrlrecipe.documents import MISSING, get_path, set_path
+from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
 from skyrlrecipe.sampling import EvalSamplingParams
+from skyrlrecipe.settings import parse_setting as typed_setting_value
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.task_curation.driver import CANONICAL_ARTIFACT_ROOT
@@ -426,7 +427,13 @@ class Metric:
 
 def override_document(settings: tuple[str, ...]) -> dict:
     """Canonical explicit user values for preset ownership and stored input identity."""
-    return RecipePatch().with_settings(settings).to_skyrl()
+    document = {}
+    for text in settings:
+        key, _, raw = text.partition("=")
+        patch = {}
+        set_path(patch, key, typed_setting_value(RecipePatch, key, raw))
+        document = merge_mappings(document, patch)
+    return document
 
 
 def configure_evaluation(

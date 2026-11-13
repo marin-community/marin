@@ -183,7 +183,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
                 ),
                 None,
             )
-            for source in config["inputs"]["evaluation_data"].get("eval_lite", []):
+            for source in config["inputs"].get("evaluation_data", {}).get("eval_lite", []):
                 assert (
                     source["identity"].partition(":")[0]
                     == f"{presets.SELECTION_PREFIX}/{presets.PRESETS[name].eval_lite}"
