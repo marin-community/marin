@@ -445,9 +445,9 @@ def test_final_composition_binds_grading_evidence_measured_on_the_retained_censu
 ):
     """The final all_sources chain keeps grading evidence from the retained census input.
 
-    A grading census measured on an earlier population input must not clear the retained
-    evidence, and one measured on the retained census must bind through the same
-    composition the catalog uses.
+    A grading census measured on an earlier population input must be rejected at the
+    final composition, and one measured on the retained census must bind through the
+    same composition the catalog uses.
     """
     source, receipt = retained_receipt
     original_input = source.info.actor_census_input
