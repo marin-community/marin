@@ -32,19 +32,35 @@ from experiments.post_training.snowball_isoflop.probes import (
 from experiments.post_training.snowball_isoflop.run import run_training_pod
 
 
-def classify_probe_failure(text: str, phase: str) -> str | None:
-    """Classify a failed probe's worker log tail, or None when unclassified.
+def classify_probe_failure(signals: str, phase: str, watchdog_exit: bool) -> str | None:
+    """Classify a failed probe from its job status, or None when unclassified.
 
     The batch search treats an optimizer-offload out-of-memory and a first-update
     progress-watchdog stall as bounded observations; every other failure is
-    fatal. Classification reads a client-side log tail because the server-side
-    substring search does not reliably cover fresh regional log entries.
+    fatal. Classification uses the failed job's status text and exit codes
+    because the regional log server serves nothing for terminal child jobs
+    from inside the cluster (in-cluster log tails come back empty).
     """
-    if "RESOURCE_EXHAUSTED" in text or "out of memory" in text:
+    if "RESOURCE_EXHAUSTED" in signals or "out of memory" in signals:
         return "memory_limit"
-    if "No progress after process_started" in text and phase.startswith("B"):
+    # Exit code 124 is the levanter progress-watchdog's stall signature.
+    if watchdog_exit and phase.startswith("B"):
         return "stall_limit"
     return None
+
+
+def _failure_signals(error: JobFailedError) -> tuple[str, bool]:
+    """Collect the failure text and watchdog exit signature from a job status."""
+    status = error.status
+    parts = [error.args[0] if error.args else "", status.error_message or "", status.status_message or ""]
+    watchdog = False
+    for task in status.tasks:
+        parts.append(task.error_message or "")
+        parts.append(task.status_message or "")
+        for attempt in task.attempts:
+            parts.append(attempt.error_message or "")
+            watchdog = watchdog or attempt.exit_code == 124
+    return "\n".join(part for part in parts if part), watchdog
 
 
 def run_probe(probe: Probe) -> dict:
@@ -65,9 +81,8 @@ def run_probe(probe: Probe) -> dict:
         assert context.job_id is not None and context.client is not None
         if not error.job_id.to_wire().startswith(f"{context.job_id.to_wire()}/"):
             raise ValueError("Probe failure belongs to another job tree") from error
-        tail = context.client.job(error.job_id).logs(max_lines=400, tail=True)
-        text = "\n".join((getattr(entry, "data", None) or repr(entry)) for entry in tail)
-        status = classify_probe_failure(text, probe.phase)
+        signals, watchdog_exit = _failure_signals(error)
+        status = classify_probe_failure(signals, probe.phase, watchdog_exit)
         if status is None:
             raise
         result.update(status=status, error=str(error))
