@@ -135,7 +135,9 @@ def test_sample_filter_proof_must_cover_unselected_retained_tasks(sample_panel, 
         }
     )
     StoragePath(inventory.evidence_url).write_text(inventory.model_dump_json())
-    dedup = deduplication_evidence(population.dataset_id, population.dataset_revision, "1", 101)
+    dedup = deduplication_evidence(population.dataset_id, population.dataset_revision, "1", 101).model_copy(
+        update={"drop_manifest_uri": str(tmp_path / "drops.parquet")}
+    )
     source = replace(
         source,
         info=replace(
@@ -152,7 +154,7 @@ def test_sample_filter_proof_must_cover_unselected_retained_tasks(sample_panel, 
             ),
         ),
     )
-    StoragePath(dedup.drop_manifest_uri).write_bytes(b"fixture drop manifest")
+    pq.write_table(pa.table({"task_id": pa.array([], type=pa.string())}), dedup.drop_manifest_uri)
     selected_ids = {row["task_id"] for row in selected}
     for name, cohort in (("partial", [task for task in tasks if task.id in selected_ids]), ("complete", tasks)):
         proof = oracle_receipt(cohort)
