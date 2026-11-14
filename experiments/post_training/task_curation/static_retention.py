@@ -5,6 +5,7 @@
 
 import argparse
 import json
+from bisect import bisect_left
 from collections import Counter
 from pathlib import Path
 
@@ -37,6 +38,7 @@ STATIC_REASONS = {
     "missing_docker_base": OracleExclusionReason.ENVIRONMENT_CONTRACT_UNRESOLVED,
     "missing_packages_lock": OracleExclusionReason.ENVIRONMENT_CONTRACT_UNRESOLVED,
 }
+PARQUET_BATCH_ROWS = 128
 
 
 def collect_static_retention(
@@ -103,7 +105,15 @@ def collect_static_retention(
     )
     kept = [index for index, task_id in enumerate(tasks) if task_id not in blocked]
     output.mkdir(parents=True, exist_ok=False)
-    pq.write_table(table.take(pa.array(kept, type=pa.int64())), output / "tasks.parquet", compression="zstd")
+    # A whole-table take combines string chunks and can exceed Arrow's 2 GB offset limit.
+    offset = 0
+    with pq.ParquetWriter(output / "tasks.parquet", table.schema, compression="zstd") as writer:
+        for batch in table.to_batches(max_chunksize=PARQUET_BATCH_ROWS):
+            end = offset + batch.num_rows
+            indices = [index - offset for index in kept[bisect_left(kept, offset) : bisect_left(kept, end)]]
+            if indices:
+                writer.write_batch(batch.take(pa.array(indices, type=pa.int64())))
+            offset = end
     (output / "oracle-filter.json").write_text(receipt.model_dump_json(indent=2) + "\n")
     (output / "static-exclusions.json").write_text(json.dumps(blocked, sort_keys=True, indent=2) + "\n")
     exclusion_counts = dict(Counter(NoOracleStaticBlocker(item["reason"].value) for item in blocked.values()))

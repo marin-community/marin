@@ -43,10 +43,10 @@ def no_oracle_answer(task_id):
     return task
 
 
-def frozen_cohort(tmp_path, tasks, use=SourceUse.TRAIN):
+def frozen_cohort(tmp_path, tasks, use=SourceUse.TRAIN, *, row_group_size=None):
     cohort = tmp_path / "input.parquet"
     rows = [{"task_spec": task.model_dump_json(), "runtime": json.dumps({"source": task.id})} for task in tasks]
-    pq.write_table(pa.Table.from_pylist(rows), cohort)
+    pq.write_table(pa.Table.from_pylist(rows), cohort, row_group_size=row_group_size)
     digest = hashlib.sha256(cohort.read_bytes()).hexdigest()
     release = DatasetRelease(
         repo="open-athena/static-fixture",
@@ -109,6 +109,34 @@ def test_static_collection_preserves_task_and_runtime_rows_without_trials_or_res
     summary = json.loads((output / "static-retention.json").read_text())
     assert (summary["static_retained_count"], summary["unique_static_excluded_count"]) == (2, 0)
     assert (summary["source_commands"], summary["provider_creations"], summary["model_requests"]) == (0, 0, 0)
+
+
+def test_static_collection_keeps_row_order_and_bytes_across_input_chunks_and_empty_selections(tmp_path):
+    excluded = {0, 6, 7, 127, 128, 255, 256, *range(14, 21)}
+    tasks = []
+    for index in range(257):
+        task = no_oracle_answer(f"chunked-{index}")
+        if index in excluded:
+            task = task.model_copy(
+                update={
+                    "tags": ("harbor",),
+                    "grader": NoGrader(reason="Original native verifier"),
+                    "resources": ResourceGroups(
+                        verifier=(inline_resource("task.toml", b'[environment]\ndocker_image="python:latest"\n'),)
+                    ),
+                }
+            )
+        tasks.append(task)
+    cohort, original, context, evidence = frozen_cohort(tmp_path, tasks, row_group_size=7)
+    output = tmp_path / "retained"
+    receipt = collect_static_retention(cohort, context, evidence, output)
+    actual = pq.read_table(output / "tasks.parquet")
+    assert actual.schema == pq.read_schema(cohort)
+    assert actual.to_pylist() == [row for index, row in enumerate(original) if index not in excluded]
+    assert pq.read_table(cohort).to_pylist() == original
+    assert {task_id for task_id, entry in receipt.tasks.items() if entry.outcome == "mechanical"} == {
+        tasks[index].id for index in excluded
+    }
 
 
 @pytest.mark.parametrize("field", ["source_id", "intended_use", "current_input", "policy"])
