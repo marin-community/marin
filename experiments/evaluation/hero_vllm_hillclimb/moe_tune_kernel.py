@@ -54,15 +54,15 @@ def _inputs(args, m: int, device: torch.device):
 
 
 def _clear_config_cache() -> None:
-    """Drop vLLM's cached config lookup so override_config takes effect for every candidate."""
+    """Drop any cached config lookup so override_config takes effect for every candidate.
+
+    The 0ac9dcb wheel does not cache try_get_optimal_moe_config; newer forks wrap it in lru_cache.
+    """
     function = fused_moe_module.try_get_optimal_moe_config
-    cleared = False
     while function is not None:
         if isinstance(function, functools._lru_cache_wrapper):
             function.cache_clear()
-            cleared = True
         function = getattr(function, "__wrapped__", None)
-    assert cleared, "try_get_optimal_moe_config has no lru_cache to clear"
 
 
 def _time(args, weights, inputs, config) -> float:
