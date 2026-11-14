@@ -18,7 +18,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.spec import ChoiceLikelihood, LikelihoodRequest
-from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.evalchemy.fewshot_grader import source_package
 from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import RawRow

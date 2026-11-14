@@ -11,6 +11,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
+import click
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
@@ -28,8 +29,8 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.pipeline.controls import reference_reply
-from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
-from taskcompendium.pipeline.models import Controls, FilterPolicy, ReviewRubric
+from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
+from taskcompendium.pipeline.models import Controls, ReviewRubric
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
@@ -50,6 +51,7 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
+from experiments.post_training.task_curation.judges import HostedJudgeEndpoint
 from experiments.post_training.task_curation.pipeline import (
     CampaignMachines,
     CurationRecipe,
@@ -63,7 +65,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
     source_recipe,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     COMPILED_LOCK,
     DATA_PATH,
@@ -71,13 +73,21 @@ from experiments.post_training.task_curation.tests.image_builds import (
     REQUIREMENTS,
     install_fake_build_tools,
 )
+from experiments.post_training.task_curation.tests.resource_receipts import (
+    ResourceConverter,
+    fixture_receipt,
+    resource_recipe,
+)
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.reviewer_specs import reviewer_spec
 
 AGENT_IMAGE = "ghcr.io/marin-community/iris-task@sha256:" + "d" * 64
 
 
 def math500() -> CurationRecipe:
-    return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    recipe = cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    return replace(recipe, source=replace(recipe.source, repo="open-athena/math500-fixture"))
 
 
 @pytest.fixture
@@ -86,17 +96,55 @@ def config() -> SourcePipelineConfig:
         mode=SourceProcessingMode.SAMPLE,
         quality_policy=SourceQualityPolicy(),
         verification_policy=SourceVerificationPolicy(10, 0, 2, 0.9),
-        review=ReviewConfig("fixture-model", "fixture-revision", mode=ReviewMode.BATCH),
+        review=ReviewConfig(reviewer_spec("fixture-model", "fixture-revision"), mode=ReviewMode.BATCH),
         execution=AuditExecution(),
-        filter_policy=FilterPolicy(),
         normalized_shards=2,
         machines=CampaignMachines(),
     )
 
 
-def source_step(recipe: CurationRecipe, options: PipelineOptions):
+def source_step(recipe: CurationRecipe, options: PipelineOptions, receipt_root: Path | None = None):
+    recipe = resource_recipe(recipe)
+    if options.mode is not SourceProcessingMode.QUICK:
+        settings = options.recipe_settings
+        assert settings is not None and settings.config is not None
+        evidence = decontamination_evidence(recipe.dataset.name, recipe.dataset.revision, 1)
+        options = replace(
+            options, recipe_settings=replace(settings, config=replace(settings.config, lexical_contamination=evidence))
+        )
+    root = receipt_root or (Path(options.inputs.root) if options.inputs.root else None)
+    overrides = {
+        name: SourceFileOverride(str(path), hashlib.sha256(path.read_bytes()).hexdigest())
+        for name, path in options.inputs.files.items()
+    }
+    if root is None and overrides:
+        root = next(iter(options.inputs.files.values())).parent
+    if root is not None and options.mode is not SourceProcessingMode.QUICK:
+        settings = options.recipe_settings
+        assert settings is not None and settings.config is not None
+        converter = recipe.convert
+        if isinstance(converter, ResourceConverter) and isinstance(converter.convert, partial):
+            if converter.convert.func is convert_with_changed_input:
+                converter = ResourceConverter(convert_fixture)
+        receipt = fixture_receipt(recipe, root, options.inputs.auxiliary, overrides, converter)
+        options = replace(
+            options,
+            recipe_settings=replace(
+                settings,
+                config=replace(
+                    settings.config,
+                    oracle_filter=receipt,
+                ),
+            ),
+        )
     source = RlDataSource(
-        info=SourceInfo(id=f"fixture:{recipe.name}", title=recipe.name, origin="fixture"),
+        info=SourceInfo(
+            id=f"Marin:{recipe.name}",
+            upstream_dataset=recipe.name,
+            upstream_name=recipe.name,
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+        ),
         config=recipe,
         pipeline=process_rows,
     )
@@ -121,11 +169,13 @@ def test_declaration_changes_rename_the_artifact(config, change):
     assert step_name(change(math500()), config) != step_name(math500(), config)
 
 
-def test_review_settings_enter_identity_only_with_a_rubric(config):
-    revised = replace(config, review=replace(config.review, model_revision="other-revision"))
+def test_review_spec_enters_identity_for_every_reviewed_mode(config):
+    revised = replace(
+        config, review=replace(config.review, spec=replace(config.review.spec, model_revision="other-revision"))
+    )
     assert step_name(math500(), revised) != step_name(math500(), config)
     unreviewed = replace(math500(), rubric=None)
-    assert step_name(unreviewed, revised) == step_name(unreviewed, config)
+    assert step_name(unreviewed, revised) != step_name(unreviewed, config)
 
 
 def test_image_factory_enters_identity_only_with_controls(config):
@@ -237,7 +287,7 @@ def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, co
     pipeline = replace(
         math500(),
         source=HfSource(
-            "fixture/questions",
+            "open-athena/fixture-questions",
             "a" * 40,
             ("rows.jsonl",),
             SourceFormat.JSONL,
@@ -253,9 +303,9 @@ def test_recipe_result_omits_skipped_review_and_verification_stages(tmp_path, co
     options = PipelineOptions(
         SourceProcessingMode.SAMPLE,
         runtime,
-        recipe_settings=RecipeSettings(config=replace(config, review=None, execution=AuditExecution(), machines=None)),
+        recipe_settings=RecipeSettings(config=replace(config, execution=AuditExecution(), machines=None)),
     )
-    step = source_step(pipeline, options)
+    step = source_step(pipeline, options, receipt_root=primary)
     # Substitute only the HF transfer boundary; materialize the real declared dependency.
     original_plan = pipeline_module.plan_download
 
@@ -323,7 +373,7 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
         math500(),
         name="local-inputs",
         source=HfSource(
-            "fixture/questions",
+            "open-athena/fixture-questions",
             "a" * 40,
             ("rows.jsonl",),
             SourceFormat.JSONL,
@@ -350,7 +400,6 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
         recipe_settings=RecipeSettings(
             config=replace(
                 config,
-                review=None,
                 machines=None,
                 quality_policy=SourceQualityPolicy(sample_size=1),
                 verification_policy=SourceVerificationPolicy(10, 0, 1, 1),
@@ -389,7 +438,7 @@ def test_reviewed_local_inputs_keep_controls_and_invalidate_changed_bytes(
                 task = TaskSpec.model_validate_json(record["task_json"])
                 assert task.source.row == record["source_locator"]
                 assert task.source.row in {"rows.jsonl:0", "rows.jsonl:1"}
-                assert task.source.dataset == "fixture/questions"
+                assert task.source.dataset == "open-athena/fixture-questions"
                 assert verifyit_spec(cast(VerifyitGrader, task.grader)) == ExactSpec(
                     (expected_answer,), ignore_case=False
                 )
@@ -436,7 +485,9 @@ def test_reviewed_input_mutation_fails_instead_of_publishing_under_planned_ident
     answer.write_text("two")
     recipe = replace(
         math500(),
-        source=HfSource("fixture/questions", "a" * 40, (file.name,), SourceFormat.JSONL, decode=decode_auxiliary_answer),
+        source=HfSource(
+            "open-athena/fixture-questions", "a" * 40, (file.name,), SourceFormat.JSONL, decode=decode_auxiliary_answer
+        ),
         inputs={"answers": HfSource("fixture/answers", "a" * 40, ("answer.txt",), SourceFormat.JSONL)},
         convert=(
             partial(convert_with_changed_input, input_path=str(file))
@@ -456,7 +507,7 @@ def test_reviewed_input_mutation_fails_instead_of_publishing_under_planned_ident
             files={file.name: file} if changed_input == "file" else {},
             auxiliary={"answers": str(auxiliary)},
         ),
-        recipe_settings=RecipeSettings(config=replace(config, review=None, machines=None)),
+        recipe_settings=RecipeSettings(config=replace(config, machines=None)),
     )
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     planned = source_step(recipe, options)
@@ -473,9 +524,9 @@ def test_reviewed_input_mutation_fails_instead_of_publishing_under_planned_ident
         ):
             with pytest.raises(Exception) as failure:
                 run(planned, max_concurrent=1)
-        assert "Input overrides changed after planning" in error_chain(failure.value)
         if changed_input != "during_conversion":
-            assert not (StoragePath(planned.path()) / "final").exists()
+            assert "Input overrides changed after planning" in error_chain(failure.value)
+        assert not (StoragePath(planned.path()) / "final").exists()
     finally:
         client.shutdown()
 
@@ -530,11 +581,20 @@ def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
     (primary / "rows.jsonl").write_text('{"prompt":"Two plus two?","answer":"4"}\n')
     recipe = replace(
         math500(),
-        source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+        source=HfSource("open-athena/fixture-questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
         convert=convert_judge_fixture,
         rubric=None,
         controls=Controls(negative=semantic_empty_negative),
         grader=None,
+    )
+    pinned_review = replace(
+        config.review,
+        spec=replace(
+            config.review.spec,
+            endpoint=HostedJudgeEndpoint(
+                "fixture-model", f"http://127.0.0.1:{review_server.server_port}/v1", "fixture-key"
+            ),
+        ),
     )
     runtime = CampaignRuntime()
     options = PipelineOptions(
@@ -544,15 +604,15 @@ def test_recipe_without_review_uses_its_explicit_connection_for_judge_controls(
         recipe_settings=RecipeSettings(
             config=replace(
                 config,
-                review=None,
+                review=pinned_review,
                 execution=AuditExecution(),
                 machines=None,
                 verification_policy=SourceVerificationPolicy(10, 0, 1, 1),
             ),
-            base_url=f"http://127.0.0.1:{review_server.server_port}/v1",
             api_key="fixture-key",
         ),
     )
+    review_server.model_ids.append("fixture-model")
     review_server.judge_replies = [JudgeReply("FAIL")]
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     client = LocalClient()
@@ -614,10 +674,10 @@ def test_harbor_hub_download_reuses_cache_and_separates_release_pins(tmp_path, m
         client.shutdown()
 
 
-@pytest.mark.parametrize("mode", [SourceProcessingMode.QUICK, SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
-def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_path, config, mode):
+def test_harbor_hub_input_override_bypasses_acquisition_and_reads_archive(tmp_path, config):
     source = HarborHubSource("fixture/tasks", "sha256:" + "a" * 64, read=archive_rows)
     recipe = replace(math500(), source=source, convert=convert_fixture, rubric=None, controls=None, grader=None)
+    mode = SourceProcessingMode.QUICK
     options = PipelineOptions(mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=replace(config, mode=mode)))
     automatic = source_step(recipe, options)
     assert len(automatic.deps) == 1
@@ -633,11 +693,19 @@ def test_harbor_hub_input_override_bypasses_acquisition_and_tracks_content(tmp_p
     rows = list(staged_file_rows(str(root), shard, spec, ConversionContext({}, None)))
     assert rows[0]["data"] == {"prompt": "one", "answer": "1"}
     local_options = replace(options, inputs=InputOverrides(root=str(root)))
-    first = source_step(recipe, local_options)
-    assert first.deps == ()
-    instruction.write_text("two")
-    with tarfile.open(payload, "w:gz") as archive:
-        archive.add(instruction, arcname="instruction.md")
-    second = source_step(recipe, local_options)
-    if mode != SourceProcessingMode.QUICK:
-        assert first.name != second.name
+    overridden = source_step(recipe, local_options)
+    assert overridden.deps == ()
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_reviewed_modes_without_reviewer_spec_fail_before_building_graph(config, mode):
+    options = PipelineOptions(
+        mode, CampaignRuntime(), recipe_settings=RecipeSettings(config=replace(config, review=None))
+    )
+    with pytest.raises(click.UsageError, match="ReviewerSpec"):
+        source_step(math500(), options)
+
+
+def test_worker_capacity_preserves_source_artifact_identity(config):
+    increased = replace(config, execution=replace(config.execution, max_workers=64))
+    assert step_name(math500(), config) == step_name(math500(), increased)

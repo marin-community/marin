@@ -15,7 +15,11 @@ import httpx
 import pytest
 
 from harbor.environments import local, model_relay
+from harbor.environments.base import SandboxDiskFullError
+from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.local import LocalEnvironment
+from harbor.environments.factory import EnvironmentFactory
+from harbor.models.environment_type import EnvironmentType
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode
@@ -24,8 +28,10 @@ from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.image import ImageCache
 from shellbox.machine import (
     Command,
+    DiskLimitExceeded,
     ExitReason,
     MachineTerminated,
+    NetworkPolicy,
     Result,
     UnsupportedMachineSpec,
 )
@@ -48,8 +54,9 @@ class ProcessTaskFactory:
 
 
 @pytest.mark.parametrize("workdir_source", ["task", "compose", "image"])
+@pytest.mark.parametrize("allow_internet", [False, True])
 async def test_imported_plan_freezes_sources_and_executes_workdir_and_environment_precedence(
-    tmp_path, monkeypatch, workdir_source
+    tmp_path, monkeypatch, workdir_source, allow_internet
 ):
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
@@ -76,7 +83,7 @@ async def test_imported_plan_freezes_sources_and_executes_workdir_and_environmen
     compose.write_text(json.dumps({"services": {"main": service}}))
     task_values = {"workdir": "/workspace/task"} if workdir_source == "task" else {}
     task_config = EnvironmentConfig(
-        allow_internet=False,
+        allow_internet=allow_internet,
         env={"SELECTED": "task", "PATH": "/workspace/task/bin:/usr/bin:/bin"},
         **task_values,
     )
@@ -112,6 +119,8 @@ async def test_imported_plan_freezes_sources_and_executes_workdir_and_environmen
     async with asyncio.TaskGroup() as service_tasks:
         await adapter.start(False, service_tasks=service_tasks)
         try:
+            expected_network = NetworkPolicy.ALLOW if allow_internet else NetworkPolicy.DENY
+            assert adapter.execution.spec.primary_container.machine.network is expected_network
             response = await adapter.exec('pwd; worktool; printf " %s" "$SELECTED"')
             assert response.return_code == 0, response.stderr
             assert (
@@ -524,3 +533,34 @@ async def test_local_interrupted_command_preserves_task_until_trial_cleanup(
             )
         finally:
             await machine.close()
+
+
+@pytest.mark.parametrize("environment_type", [EnvironmentType.LOCAL, EnvironmentType.IRIS_SANDBOX])
+def test_unqualified_storage_is_rejected_by_the_selected_environment(tmp_path, environment_type):
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    (environment_dir / "shellbox-images.json").write_text(json.dumps({
+        "main": {"image": "fixture@sha256:" + "a" * 64, "workdir": "/app"}
+    }))
+    capabilities = EnvironmentFactory.resource_capabilities(environment_type)
+    assert capabilities.storage_limit is False
+    kwargs = {"cluster": "cw-fixture"} if environment_type is EnvironmentType.IRIS_SANDBOX else {}
+    with pytest.raises(ValueError, match="storage"):
+        EnvironmentFactory.create_environment(
+            type=environment_type,
+            environment_dir=environment_dir, environment_name="storage", session_id="fixture",
+            trial_paths=TrialPaths(tmp_path / "trial"),
+            task_env_config=EnvironmentConfig(cpus=1, memory_mb=2048, storage_mb=2048),
+            **kwargs,
+        )
+
+
+async def test_iris_disk_resource_limit_remains_a_harbor_disk_failure():
+    class EvictedMachine:
+        async def run(self, command):
+            raise DiskLimitExceeded("RESOURCE_LIMIT_DISK: exceeded ephemeral storage")
+
+    with pytest.raises(SandboxDiskFullError):
+        await execute_shellbox_command(
+            EvictedMachine(), "dd if=/dev/zero of=/tmp/full", cwd="/", env={}, timeout_sec=60, user="root"
+        )

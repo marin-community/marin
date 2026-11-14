@@ -34,6 +34,7 @@ from taskcompendium.models import (
     TaskSpec,
     validate_output_paths,
 )
+from taskcompendium.repository_shell import SHELL_ACTION_INTERFACE, shell_tool_definition
 from taskcompendium.runtime.environment import prepare_machine_spec, setup_user, validate_machine_spec
 from taskcompendium.runtime.models import RuntimeEvidence
 from taskcompendium.runtime.output_capture import captured_output_files
@@ -62,6 +63,13 @@ class BoundShellTool:
 
 def resolve_shell_tool(task: TaskSpec, config: ShellToolConfig) -> BoundShellTool | None:
     """Preserve an explicit task interface, or bind the harness shell capability."""
+    if any(
+        requirement.action_interface == SHELL_ACTION_INTERFACE
+        for requirement in task.environment_requirements.tool_providers.values()
+    ):
+        if task.tool_bindings:
+            raise ValueError("shell:v1 cannot replace an explicit task-owned shell binding")
+        return None
     names = {tool.name for tool in task.final_tools}
     if isinstance(task.answer_format, AnswerCall):
         names.add(ANSWER_CALL_NAME)
@@ -100,16 +108,7 @@ def resolve_shell_tool(task: TaskSpec, config: ShellToolConfig) -> BoundShellToo
     if config.name in names:
         raise ValueError(f"Shell tool collides with a task-owned tool: {config.name}")
     return BoundShellTool(
-        FunctionDefinition(
-            name=config.name,
-            description="Run a Bash command in the task workspace. Files persist between commands.",
-            parameters={
-                "type": "object",
-                "properties": {config.command_parameter: {"type": "string"}},
-                "required": [config.command_parameter],
-                "additionalProperties": False,
-            },
-        ),
+        shell_tool_definition(config.name, config.command_parameter),
         config.command_parameter,
     )
 
@@ -161,9 +160,6 @@ async def upload_resources(
     if not resources:
         return
     with TemporaryDirectory() as directory:
-        for resource in resources:
-            if resource.mtime_ns is not None:
-                raise ValueError("Shell factory cannot mount resource timestamps")
         archive = Path(directory) / "resources.tar"
         target = f"/tmp/taskcompendium-resources-{uuid.uuid4().hex}.tar"
         # Batch resources into one upload to avoid a machine RPC for every file.

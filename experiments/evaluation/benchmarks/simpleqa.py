@@ -20,7 +20,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 SIMPLEQA_REVISION = "e319282ab125c3dbd0c7fd00be2e4dd54e7e8f94"
 
@@ -31,8 +31,11 @@ def simpleqa_source(benchmark: str, *, mini: bool) -> RlDataSource[EvaluationCor
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + name,
-            title=benchmark,
-            origin="Evalchemy",
+            upstream_dataset=name,
+            upstream_name=name,
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="judged-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
             count=rows,

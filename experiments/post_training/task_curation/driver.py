@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import click
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
@@ -26,7 +26,7 @@ from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.assessment import AssessmentSampling
-from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC, AssessmentModel
+from taskcompendium.pipeline.assessment_review import ASSESSMENT_RUBRIC
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.curriculum.models import EmbeddingSpec
 from taskcompendium.pipeline.query_cache import compact_query_cache
@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.campaign import (
     campaign_plan,
     run_campaign,
 )
+from experiments.post_training.task_curation.catalog_identity import canonical_declaration
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.config import (
     InputOverrides,
@@ -69,18 +70,25 @@ from experiments.post_training.task_curation.inventory import (
     eval_lite_step,
     task_selection_step,
 )
+from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
-from experiments.post_training.task_curation.pipeline import CampaignMachines
+from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOCAL_MAX_WORKERS = 4
 LOCAL_MEMORY = "4g"
 LOCAL_NORMALIZED_SHARDS = 4
+IRIS_MAX_WORKERS = 64
+IRIS_COORDINATOR_MEMORY = "16g"
+IRIS_NORMALIZED_SHARDS = 32
+REVIEW_CACHE_DIRECTORY = "rl-data/review-cache"
+"""Shared model-request cache under the artifact root; request keys carry the model, revision and prompt."""
 WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
-CORPUS_CONVERSION_VERSION = "2026.10.14.1"
+CORPUS_CONVERSION_VERSION = "2026.11.12.1"
 CANONICAL_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin"
 TASK_SELECTION_KEY = "task_selection"
 EMBEDDING_STAGES = (
@@ -94,16 +102,23 @@ EMBEDDING_STAGES = (
 )
 
 
-def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
+def _selected_sources(sources: tuple[str, ...], mode: SourceProcessingMode) -> dict[str, RlDataSource]:
     """Select named sources, or training sources when no names are supplied."""
     catalog = runnable_sources()
+    if sources or mode is SourceProcessingMode.QUICK:
+        registered = {
+            source.name: source
+            for source in all_sources().values()
+            if source.pipeline is not None and not {"deprecated", "excluded"}.intersection(source.info.tags)
+        }
+        catalog = {**registered, **catalog}
     unknown = set(sources) - catalog.keys()
     if unknown:
         raise click.UsageError(f"Unknown source: {', '.join(sorted(unknown))}")
     return {
         name: pipeline
         for name, pipeline in catalog.items()
-        if (name in sources if sources else pipeline.declaration.type != "eval")
+        if (name in sources if sources else "eval" not in pipeline.info.tags)
     }
 
 
@@ -132,7 +147,9 @@ def _publish_campaign(report_path: str, selected: dict[str, RlDataSource], catal
     report = json.loads(path.read_text())
     # Selected recipes may supply declarations absent from the default inventory.
     sources = {**all_sources(), **{source.info.id: source for source in selected.values()}}
-    publish_catalog(catalog_root, report["run_id"], sources.values())
+    publish_catalog(
+        catalog_root, report["run_id"], (source for source in sources.values() if source.catalog_declaration is not None)
+    )
 
 
 def _conversion_steps(
@@ -141,11 +158,10 @@ def _conversion_steps(
     steps = {}
     for source in sources.values():
         step = cast(CurationPipeline, source.pipeline)(source, options)
-        declaration = source.declaration
-        assert declaration.pipeline is not None
+        reference = source.pipeline_reference
         identity = canonical_sha256(
             {
-                "pipeline": declaration.pipeline.model_dump(),
+                "pipeline": reference.model_dump(),
                 "step": f"{step.name}@{step.version}",
                 "dependencies": step.fingerprint(),
             }
@@ -225,9 +241,12 @@ def _write_corpus(roots: dict[str, str], inventory: list[SourceDeclaration], rep
             "intended_use": manifest["intended_use"],
         }
         if population == "converted":
-            if manifest["input_rows"] != manifest["converted_rows"] + sum(manifest["rejections"].values()):
+            duplicates = manifest["within_source_dedup"]["within_source_duplicates"]
+            if manifest["input_rows"] != manifest["converted_rows"] + duplicates + sum(manifest["rejections"].values()):
                 raise ValueError(f"Conversion does not account for all input rows: {identifier}")
-            row.update({key: manifest[key] for key in ("input_rows", "converted_rows", "rejections")})
+            row.update(
+                {key: manifest[key] for key in ("input_rows", "converted_rows", "rejections", "within_source_dedup")}
+            )
         sources.append(row)
     result = {
         "version": CORPUS_CONVERSION_VERSION,
@@ -248,15 +267,16 @@ class _CorpusSources:
 
 def _corpus_sources(corpus: str) -> _CorpusSources:
     document = json.loads(StoragePath(corpus).read_text())
-    inventory = [SourceDeclaration.model_validate(row) for row in document["inventory"]]
+    inventory = [canonical_declaration(SourceDeclaration.model_validate(row)) for row in document["inventory"]]
     roots = {}
     for row in document["sources"]:
         manifest = json.loads((StoragePath(row["root"]) / "manifest.json").read_text())
         if canonical_sha256(manifest) != row["source_key"]:
             raise ValueError(f"Corpus source manifest changed: {row['source_id']}")
-        if row["source_id"] in roots:
-            raise ValueError(f"Duplicate corpus source: {row['source_id']}")
-        roots[row["source_id"]] = row["root"]
+        source_id = canonical_source_id(row["source_id"])
+        if source_id in roots:
+            raise ValueError(f"Duplicate corpus source: {source_id}")
+        roots[source_id] = row["root"]
     return _CorpusSources(roots, inventory, document["population"])
 
 
@@ -374,12 +394,17 @@ def _embedding_pass(
 
 
 @click.command(help=__doc__)
-@click.option("--model", default=GLM_MODEL, show_default=True)
-@click.option("--model-revision", help="Required when a recipe uses model review.")
-@click.option("--base-url", help="OpenAI-compatible review endpoint; defaults to the relay job's endpoint.")
-@click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True, help="Iris GLM relay job to resolve.")
-@click.option("--review-cache", help="Required when a recipe uses model review.")
-@click.option("--review-mode", type=click.Choice(["batch", "chat"]), help="Required when a recipe uses model review.")
+@click.option("--description-model", "model", default=GLM_MODEL, show_default=True)
+@click.option("--description-model-revision", "model_revision", help="Required for description rewrites.")
+@click.option("--description-base-url", "base_url", help="OpenAI-compatible description rewrite endpoint.")
+@click.option("--description-relay-job", "relay_job", default=DEFAULT_GLM_RELAY_JOB, show_default=True)
+@click.option(
+    "--review-cache",
+    help=f"Model-request cache; defaults to CACHE_DIR/review-cache locally or ARTIFACT_ROOT/{REVIEW_CACHE_DIRECTORY}.",
+)
+@click.option(
+    "--reviewer-tier", type=click.Choice([tier.value for tier in JudgeTier]), default="HEAVY", show_default=True
+)
 @click.option(
     "--review-concurrency",
     type=click.IntRange(min=1, max=MAX_DIRECT_CONCURRENT_REQUESTS),
@@ -396,13 +421,21 @@ def _embedding_pass(
 @click.option("--representation", type=click.Choice(["direct", "rewrite"]), default="direct", show_default=True)
 @click.option("--embedding-sample-size", type=click.IntRange(min=1), help="Seeded embedding sample per source.")
 @click.option("--catalog-root", help="Immutable directory containing curriculum.json; defaults to TASK_CURRICULUM.")
-@click.option("--max-workers", type=click.IntRange(min=1), help="Local default: 4; required for Iris execution.")
+@click.option(
+    "--max-workers",
+    type=click.IntRange(min=1),
+    help=f"Default: {LOCAL_MAX_WORKERS} locally, {IRIS_MAX_WORKERS} on Iris.",
+)
 @click.option("--worker-cpu", type=click.FloatRange(min=0, min_open=True), help="CPU cores per Zephyr worker.")
 @click.option("--worker-memory", help="RAM per Zephyr worker; defaults to 8g for embeddings.")
-@click.option("--coordinator-memory", help="Iris coordinator RAM, e.g. 16g; required for Iris execution.")
-@click.option("--normalized-shards", type=click.IntRange(min=1), help="Local default: 4; required for Iris recipes.")
+@click.option("--coordinator-memory", help=f"Iris coordinator RAM; default {IRIS_COORDINATOR_MEMORY}.")
+@click.option(
+    "--normalized-shards",
+    type=click.IntRange(min=1),
+    help=f"Default: {LOCAL_NORMALIZED_SHARDS} locally, {IRIS_NORMALIZED_SHARDS} on Iris.",
+)
 @click.option("--concurrent-sources", type=click.IntRange(min=1), default=10, show_default=True)
-@click.option("--worker-image", help="Zephyr worker image; required for Iris execution.")
+@click.option("--worker-image", help="Zephyr worker image override; defaults to the cluster's task image.")
 @click.option(
     "--container-profile",
     default=None,
@@ -429,6 +462,8 @@ def _embedding_pass(
     show_default=True,
 )
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
+@click.option("--oracle-filter-receipt", type=str)
+@click.option("--decontamination-receipt", type=str)
 @click.option(
     "--curation-attempt",
     type=click.IntRange(min=0),
@@ -445,7 +480,6 @@ def _embedding_pass(
 @click.option(
     "--assessment-rubric", type=click.Path(exists=True, dir_okay=False, path_type=Path), help="Extra rubric criteria."
 )
-@click.option("--assessment-model-revision", help="Grading model revision; defaults to the curation review revision.")
 @click.option("--report-path", help="SAMPLE/FULL report; defaults under --cache-dir. QUICK writes under --output-root.")
 @click.option(
     "--publish-catalog",
@@ -494,7 +528,7 @@ def main(
     base_url: str | None,
     relay_job: str,
     review_cache: str | None,
-    review_mode: str | None,
+    reviewer_tier: str,
     review_concurrency: int,
     mode: str | None,
     corpus: str | None,
@@ -518,12 +552,13 @@ def main(
     seed: int,
     quality_sample_size: int,
     verification_sample_size: int,
+    oracle_filter_receipt: str | None,
+    decontamination_receipt: str | None,
     curation_attempt: int,
     assess: bool | None,
     assessment_sample_size: int,
     excluded_sample_size: int,
     assessment_rubric: Path | None,
-    assessment_model_revision: str | None,
     report_path: str | None,
     publication_catalog: str | None,
     sources: tuple[str, ...],
@@ -555,10 +590,16 @@ def main(
     selection_recipe = (
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
-    selected = _selected_sources(sources)
-    if processing_mode != SourceProcessingMode.QUICK and any(
-        source.declaration.type == "eval" for source in selected.values()
-    ):
+    selected = _selected_sources(sources, processing_mode) if corpus is None else {}
+    if decontamination_receipt is not None:
+        decontamination = LexicalContaminationEvidence.model_validate_json(
+            StoragePath(decontamination_receipt).read_text()
+        )
+        selected = {
+            name: replace(source, info=replace(source.info, lexical_contamination=decontamination))
+            for name, source in selected.items()
+        }
+    if processing_mode != SourceProcessingMode.QUICK and any("eval" in source.info.tags for source in selected.values()):
         raise click.UsageError("Evaluation sources use --mode quick to publish their full benchmark population")
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
@@ -574,6 +615,10 @@ def main(
         cache_dir = Path.home() / ".cache/marin"
     if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require local execution")
+    if review_cache is None:
+        review_cache = (
+            str(cache_dir / "review-cache") if cache_dir else str(StoragePath(artifact_root) / REVIEW_CACHE_DIRECTORY)
+        )
     if corpus is not None and embed is None:
         if eval_lite is not None:
             panel = EvalLiteRecipe.model_validate_json(StoragePath(eval_lite).read_text())
@@ -585,12 +630,8 @@ def main(
             step = task_selection_step(inputs, selection_recipe)
         _selection_pass(step, cache_dir=cache_dir, do_run=do_run)
         return
-    if embed is not None:
-        review_cache = review_cache or (str(cache_dir / "review-cache") if cache_dir else None)
-        if review_cache is None:
-            raise click.UsageError("Embedding requires --review-cache (or --cache-dir)")
-        if representation == "rewrite" and model_revision is None:
-            raise click.UsageError("Rewrites require --model-revision")
+    if embed is not None and representation == "rewrite" and model_revision is None:
+        raise click.UsageError("Rewrites require --description-model-revision")
     description_model = (
         DescriptionModel(model, model_revision) if representation == "rewrite" and model_revision else None
     )
@@ -611,9 +652,7 @@ def main(
             else None
         ),
     )
-    max_workers = max_workers if max_workers is not None else (LOCAL_MAX_WORKERS if cache_dir else None)
-    if max_workers is None:
-        raise click.UsageError("Iris execution requires --max-workers")
+    max_workers = max_workers if max_workers is not None else (LOCAL_MAX_WORKERS if cache_dir else IRIS_MAX_WORKERS)
     pool = CampaignPool(
         max_workers,
         concurrent_sources,
@@ -623,7 +662,7 @@ def main(
         # must request the profile the workers will run under.
         coordinator_resources=ResourceConfig(
             cpu=1,
-            ram=coordinator_memory or LOCAL_MEMORY,
+            ram=coordinator_memory or (LOCAL_MEMORY if cache_dir else IRIS_COORDINATOR_MEMORY),
             preemptible=False,
             container_profile=worker_resources.container_profile,
         ),
@@ -635,7 +674,6 @@ def main(
     )
     embedding = None
     if embed is not None:
-        assert review_cache is not None
         embedding = partial(
             _embedding_pass,
             catalog_root=catalog_root,
@@ -649,7 +687,11 @@ def main(
             pool=pool,
             stage=embed,
         )
-    declarations = {source.declaration.id: source.declaration for source in {**all_sources(), **selected}.values()}
+    declarations = {
+        declaration.id: declaration
+        for source in {**all_sources(), **selected}.values()
+        if (declaration := source.catalog_declaration) is not None
+    }
     inventory = list(declarations.values())
     if corpus is not None:
         restored = _corpus_sources(corpus)
@@ -664,8 +706,7 @@ def main(
             do_run=do_run,
         )
         if selection_recipe is not None:
-            inputs = _corpus_inputs(restored, "admitted", selection_recipe.name, selection_recipe.version)
-            _selection_pass(task_selection_step(inputs, selection_recipe), cache_dir=cache_dir, do_run=do_run)
+            _selection_pass(restored, selection_recipe, cache_dir=cache_dir, do_run=do_run)
         return
     if input_root is not None and local_files:
         raise click.UsageError("Choose either --input-root or --input-file")
@@ -721,26 +762,21 @@ def main(
         raise click.UsageError(
             "Local execution does not accept --worker-image, --container-profile or --coordinator-memory"
         )
-    if coordinator_memory is None and cache_dir is None:
-        raise click.UsageError("SAMPLE/FULL requires --coordinator-memory")
-    if worker_image is None and cache_dir is None:
-        raise click.UsageError("SAMPLE/FULL requires --worker-image")
     if report_path is None and cache_dir is None:
         raise click.UsageError("SAMPLE/FULL requires --report-path")
-    review = (
-        ReviewConfig(model=model, model_revision=model_revision, mode=ReviewMode(review_mode))
-        if model_revision is not None and review_mode is not None
-        else None
-    )
+    reviewer_spec = JUDGE_TIERS[JudgeTier(reviewer_tier)].qa_reviewer
+    if reviewer_spec is None:
+        raise click.UsageError(f"No QA ReviewerSpec is pinned for tier {reviewer_tier}")
+    review = ReviewConfig(reviewer_spec, mode=ReviewMode.CHAT)
     recipe_settings = RecipeSettings(
         review=review,
-        review_cache=review_cache or (str(cache_dir / "review-cache") if cache_dir else None),
-        base_url=base_url,
+        review_cache=review_cache,
         api_key=os.environ.get(GLM_BULK_TOKEN_ENV),
-        relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=(
-            normalized_shards if normalized_shards is not None else (LOCAL_NORMALIZED_SHARDS if cache_dir else None)
+            normalized_shards
+            if normalized_shards is not None
+            else (LOCAL_NORMALIZED_SHARDS if cache_dir else IRIS_NORMALIZED_SHARDS)
         ),
         machines=CampaignMachines(
             image_factory=_image_factory(Backend(image_backend) if image_backend is not None else None, controller_url),
@@ -749,24 +785,33 @@ def main(
         seed=seed,
         quality_sample_size=quality_sample_size,
         verification_sample_size=verification_sample_size,
+        oracle_filter_receipt=oracle_filter_receipt,
+        decontamination_receipt=decontamination_receipt,
         curation_attempt=curation_attempt,
         execution=AuditExecution(max_workers=max_workers, worker_resources=worker_resources),
     )
     options = PipelineOptions(processing_mode, runtime, inputs=inputs, recipe_settings=recipe_settings)
     assessment = None
     if assess:
-        if review is None or recipe_settings.review_cache is None:
+        if recipe_settings.review_cache is None:
             raise click.UsageError(
-                "Assessment requires --model-revision, --review-mode and a review cache; use --skip-assessment to skip"
+                "Assessment requires a ReviewerSpec and a review cache; use --skip-assessment to skip"
             )
         rubric = ASSESSMENT_RUBRIC
         if assessment_rubric is not None:
             rubric += "\nAdditional criteria:\n" + assessment_rubric.read_text()
         assessment = AssessmentSettings(
             AssessmentSampling(assessment_sample_size, excluded_sample_size, seed),
-            AssessmentModel(review.model, assessment_model_revision or review.model_revision),
+            review.spec,
             rubric,
         )
+    needs_review = assess or any(
+        isinstance(source.config, CurationRecipe) and source.config.rubric is not None for source in selected.values()
+    )
+    if do_run and needs_review and recipe_settings.api_key is None:
+        raise click.UsageError("QA review requires an API key")
+    if do_run and needs_review and recipe_settings.review_cache is None:
+        raise click.UsageError("QA review requires --review-cache")
     with ExitStack() as scope:
         if cache_dir is not None:
             scope.enter_context(artifact_prefix(str(cache_dir)))
@@ -802,6 +847,7 @@ def main(
             plan = campaign_plan(steps, pool)
             plan["cache_dir"] = str(cache_dir) if cache_dir else None
             plan["report_path"] = report_path
+            plan["review_cache"] = review_cache
             plan["publication_catalog"] = publication_root
             plan["quality_policy"] = {"sample_size": quality_sample_size, "seed": seed}
             plan["embedding_stage"] = embed
@@ -832,7 +878,12 @@ def main(
         else:
             _publish_campaign(report_path, selected, publication_root)
         if selection_step is not None or embedding is not None:
-            roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
+            roots = {
+                source.info.id: str(
+                    StoragePath(step.artifact_type.raw_load(step.path()).result.evidence["manifest"]).parent
+                )
+                for source, step in zip(selected.values(), curation_steps, strict=True)
+            }
             _write_corpus(roots, inventory, report_path, "admitted")
         if selection_step is not None:
             result = run(selection_step, max_concurrent=1)[0]

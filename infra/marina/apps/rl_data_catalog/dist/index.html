@@ -4,36 +4,65 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Sources · RL Data Atlas</title>
   <link rel="stylesheet" href="style.css">
-  <script src="common.js" defer></script><script src="app.js" defer></script>
+  <script src="common.js" defer></script><script src="difficulty.js" defer></script><script src="app.js" defer></script>
 </head>
 <body>
+<header class="masthead"><a class="brand" href="./"><span class="brandmark">a<span>•</span></span><span>open athena <b>/</b> research tools</span></a><span class="private-label">MARINA APP <span class="live-dot"></span> CURATED CATALOG</span></header>
 <main>
-  <header class="atlas-header"><a class="atlas-name" href="./">RL Data Atlas</a><a href="archive.html">Review archive</a></header>
-  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./" aria-current="page">By source</a><a href="curriculum.html">By curriculum</a></nav>
-  <section class="page-heading">
-    <div><h1>Sources</h1><p id="message" role="status" aria-live="polite">Loading sources…</p></div>
-    <button id="export" class="secondary">Export CSV</button>
+  <section class="hero">
+    <div><p class="eyebrow">POST-TRAINING / DATA INVENTORY</p><h1 class="hero-title">RL Data Atlas<span>.</span></h1>
+</div>
+    <div class="hero-actions"><a class="secondary" href="guide.html">Getting started</a><button id="export" class="secondary">Export CSV</button></div>
   </section>
-  <form id="filters" class="browse-controls" role="search">
-    <label class="search-control"><span>Find a source</span><input id="search" type="search" placeholder="Search names, datasets, or tags…" aria-label="Search sources"></label>
-    <label><span>Catalog</span><select id="origin"><option value="all">All catalogs</option></select></label>
-    <label><span>Use</span><select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unprocessed">Not processed</option></select></label>
-    <label><span>Quality</span><select id="quality"><option value="all">All quality</option><option value="good">Good</option><option value="some_issues">Some issues</option><option value="bad">Bad</option><option value="unknown">Unknown</option><option value="unassessed">Not assessed</option></select></label>
-    <button id="clear-filters" class="text-button" type="button">Clear filters</button>
-  </form>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./" aria-current="page">By source</a><a href="curriculum.html">By curriculum</a><a href="guide.html">Getting started</a><a href="archive.html">Review archive</a></nav>
+  <section class="metrics" aria-label="Catalog totals">
+    <div title="Task populations across the catalog and displayed rows. Final-empty releases include their receipt's excluded input tasks; other releases use the current deduplicated population. Counts describe task instances across sources, which can overlap."><span class="metric-label">TASKS (TOTAL / SHOWN)</span><strong id="metric-sources" class="metric-summary">— / —</strong></div>
+    <div title="All counts are tasks. Admitted includes TRAIN and EVAL; EVAL stays excluded from TRAIN selection. Excluded includes unique static blockers and final-empty receipt exclusions. Shown follows filters and duplicate folding."><span class="metric-label">TASK ADMISSION</span><strong id="metric-examples" class="metric-summary">—</strong><span id="metric-examples-shown" class="metric-detail">Shown —</span></div>
+    <div title="Tasks grouped by their source's QUICK / SAMPLE / FULL quality label. Shown follows filters and duplicate folding. A source label does not imply every task was reviewed."><span class="metric-label">TASKS BY QUALITY (QUICK / SAMPLE / FULL)</span><strong id="metric-quality" class="metric-summary">— / — / —</strong><span id="metric-quality-shown" class="metric-detail">Shown — / — / —</span></div>
+    <div class="freshness"><span class="metric-label">DATE</span><strong id="metric-date">—</strong></div>
+  </section>
+  <p id="task-reconciliation" class="task-reconciliation" aria-live="polite"></p>
+  <p id="message" class="sync-banner" role="status" aria-live="polite">Loading sources…</p>
   <section class="catalog">
-    <div class="table-scroller" tabindex="0" aria-label="Source inventory">
-      <table class="source-table"><caption class="sr-only">Individual sources, example counts, quality, and curriculum coverage</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
-      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search or clear the filters.</p></div>
+    <div class="catalog-top">
+      <div id="origin-tabs" class="tabs" role="group" aria-label="Origin"></div>
+      <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search names, datasets, or tags…" aria-label="Search sources"></label>
     </div>
-    <footer class="table-footer"><span id="visible-count"></span><span>Open a source for details and evidence.</span></footer>
+    <form id="filters" class="filters" role="search">
+      <label>Use<select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unknown">Unknown</option></select></label>
+      <label>Quality<select id="quality"><option value="all">All quality</option><option value="FULL">FULL</option><option value="SAMPLE">SAMPLE</option><option value="QUICK">QUICK</option></select></label>
+      <label>Result<select id="result"><option value="all">All results</option><option value="GOOD">Good</option><option value="SOME_ISSUES">Some issues</option><option value="BAD">Bad</option><option value="UNKNOWN">Unknown</option><option value="none">Not assessed</option></select></label>
+      <label>Difficulty model<select id="difficulty-model"><option value="all">All Difficulty</option><option value="small">Small</option><option value="large">Large</option><option value="hosted">Hosted</option><option value="snowball">Snowball v0.1</option></select></label>
+      <label class="checkbox"><input id="show-all" type="checkbox"> Show QUICK-quality and BAD-result sources</label>
+      <button id="clear-filters" class="text-button" type="button">Reset</button>
+      <button id="show-everything" class="text-button" type="button">Show everything</button>
+    </form>
+    <div class="table-scroller" tabindex="0" aria-label="Sources">
+      <table class="source-table"><caption class="sr-only">Sources with examples, use, quality, result, issue rate, contamination, overlapping tasks, Daytona safety, backend fit, grading environment, curriculum area, last update, evidence and model difficulty</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>
+      <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search, reset the filters, or show QUICK and BAD sources.</p></div>
+    </div>
+    <footer class="table-footer"><span id="visible-count"></span><span>Select a column title to sort · Open Evidence for everything behind a label</span></footer>
   </section>
-  <details class="data-notes"><summary>About examples and quality</summary><p>Examples are successfully converted tasks before curation admission. A dash means the source has no processed examples in this release. Quality is the current sampled assessment of retained tasks; older reviews are in the archive.</p><p id="snapshot-info"></p></details>
+  <details class="contamination-legend" id="contamination-legend">
+    <summary>Result, filtration and contamination legend</summary>
+    <p><span class="chip quality-unassessed">EXCLUDED</span> A complete current-pin filtration receipt retained no tasks; Examples is 0. <span class="chip quality-unassessed">IN PROGRESS</span> Current admission proof is pending; Examples stays Pending. Open Evidence for the current admission state, pre-filtration population, typed exclusions and receipt hashes.</p>
+    <p><span class="chip quality-some_issues result-provisional">Some issues · provisional</span> Provisional means the required review is incomplete, including unreviewed or uncertain tasks. A completed SAMPLE review is final for its sample. Issue rate has its own numeric column. Review progress is on the source Evidence page.</p>
+    <p>Lexical overlap with the evaluation corpus. Counts describe the measured input; retained releases can have fewer tasks.</p>
+    <dl>
+      <dt><span class="chip contamination-chip quality-good">NO ISSUES</span></dt><dd>Zero overlap measured for the current input or certified retained release.</dd>
+      <dt><span class="chip contamination-chip contamination-remediated">REMEDIATED</span></dt><dd>TRAIN overlap was excluded in a new pinned private TaskCompendium release.</dd>
+      <dt><span class="chip contamination-chip quality-some_issues">MEASURED, EVAL</span></dt><dd>EVAL or benchmark overlap is measured and retained by policy. The count remains visible.</dd>
+      <dt><span class="chip contamination-chip quality-bad contamination-required">REMEDIATION REQUIRED</span></dt><dd>TRAIN overlap lacks a remediation receipt for the current private pin. This violates the ingestion requirement.</dd>
+      <dt><span class="chip contamination-chip quality-unassessed">NOT MEASURED</span></dt><dd>No applicable current-pin lexical measurement is recorded. Cleanliness is unknown.</dd>
+    </dl>
+    <a href="guide.html#contamination">Read the contamination definitions</a>
+  </details>
+  <footer class="page-footer"><span>OPEN ATHENA / RL DATA ATLAS</span><span id="snapshot-info"></span></footer>
 </main>
 <dialog id="details" aria-labelledby="detail-name">
   <div class="drawer-header"><span>Source details</span><button id="close-details" class="close" aria-label="Close source details">×</button></div>
   <h2 id="detail-name"></h2><p id="detail-notes"></p>
-  <div id="detail-links" class="detail-links"></div><div id="detail-fields"></div>
+  <div id="detail-links" class="detail-links"></div><section id="detail-difficulty"><h3>Difficulty</h3><div id="detail-difficulty-bars"></div></section><div id="detail-fields"></div>
 </dialog>
 </body>
 </html>

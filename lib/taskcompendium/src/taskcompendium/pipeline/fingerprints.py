@@ -16,8 +16,8 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import SCHEMA_VERSION, NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import SourceRecipe
 
-NORMALIZATION_STAGE_REVISION = "12"
-VERIFICATION_STAGE_REVISION = "5"
+NORMALIZATION_STAGE_REVISION = "13"
+VERIFICATION_STAGE_REVISION = "6"
 REVIEW_STAGE_REVISION = "4"
 
 

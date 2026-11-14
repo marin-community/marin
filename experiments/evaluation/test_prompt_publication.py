@@ -9,7 +9,7 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import CurationCatalog
+from finestore.rl.curation import CurationCatalog, WithinSourceDedupEvidence
 from fray.local_backend import LocalClient
 from marin.evaluation.records import PromptFormat
 from shellbox.machine import PackageSpec
@@ -25,18 +25,25 @@ from experiments.evaluation.curated import load_evaluations
 from experiments.post_training.task_curation.campaign import CampaignStatus, SourceOutcome, write_campaign_report
 from experiments.post_training.task_curation.catalog_snapshot import publish_catalog
 from experiments.post_training.task_curation.pipeline import source_recipe
+from experiments.post_training.task_curation.tests.admission_fixtures import (
+    isolated_admission_census as isolated_admission_census,
+)
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 
 
 @pytest.mark.parametrize(
-    "benchmark,shots,form",
+    "benchmark,shots,form,unique",
     [
-        ("mmlu", 5, None),
-        ("arc-easy", 0, None),
-        ("arc-easy", 10, None),
-        *(("gsm8k", shots, form) for shots in (0, 5) for form in PromptFormat),
+        ("mmlu", 5, None, 1),
+        ("arc-easy", 0, None, 1),
+        ("arc-easy", 10, None, 2),
+        *(("gsm8k", shots, form, 1 if shots == 0 else 2) for shots in (0, 5) for form in PromptFormat),
     ],
 )
-def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_path, benchmark, shots, form):
+@pytest.mark.usefixtures("isolated_admission_census")
+def test_publication_compiles_selected_fewshots_and_deduplicates_exact_contracts(
+    tmp_path, benchmark, shots, form, unique
+):
     selection = tmp_path / "eval.yaml"
     format_line = f"    prompt_format: {form.value}\n" if form is not None else ""
     selection.write_text(
@@ -99,9 +106,12 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
     cases = list(evaluation_cases(str(output)))
     published_protocol, _ = evaluation_protocol(str(output))
     assert published_protocol.num_fewshot == shots
-    assert manifest.rows == 2
-    assert [case.item.source_ordinal for case in cases] == [0, 1]
-    assert cases[0].task.id != cases[1].task.id
+    conversion = json.loads((output / "manifest.json").read_text())
+    measurement = conversion["within_source_dedup"]
+    assert manifest.rows == len(cases) == unique
+    assert measurement["raw_count"] == 2
+    assert measurement["within_source_duplicates"] == 2 - unique
+    assert cases[0].item.source_ordinal in {0, 1}
     for case in cases:
         operation = case.item.operation
         context = operation.requests[0].context if benchmark != "gsm8k" else case.task.context.events[0].content
@@ -110,7 +120,30 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
         assert context.count("AUXILIARY_SENTINEL") == shots
         assert document["question"].strip() in context
     catalog_root = str(tmp_path / "catalog")
-    declared = replace(source, info=replace(source.info, count=2), config=replace(dataset, protocol=protocol))
+    declared = replace(
+        source,
+        info=replace(
+            source.info,
+            count=manifest.rows,
+            within_source_dedup=WithinSourceDedupEvidence(
+                raw_count=measurement["raw_count"],
+                unique_count=measurement["unique_count"],
+                within_source_duplicates=measurement["within_source_duplicates"],
+                source_dataset_id=source.dataset.name,
+                source_revision=source.dataset.revision,
+                converter_version=source.version,
+                converter_revision="fixture-converter",
+                drop_manifest_uri=measurement["drop_manifest_uri"],
+                evidence_url=str(output / "manifest.json"),
+            ),
+            daytona_snapshot_count=0,
+            daytona_machine_slots=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Published fixture tasks contain no actor machine.",
+        ),
+        config=replace(dataset, protocol=protocol),
+    )
+    declared = with_admission_census(declared)
     write_campaign_report(
         str(tmp_path / "campaign.json"),
         CampaignStatus.COMPLETED,
@@ -126,7 +159,7 @@ def test_publication_compiles_selected_fewshots_and_retains_duplicate_rows(tmp_p
     (published,) = CurationCatalog(catalog_root).sources(snapshot.snapshot_id)
     assert published.curation is not None
     assert published.curation.status == "completed"
-    assert published.curation.processed_rows == 2
+    assert published.curation.processed_rows == unique
     assert published.curation.raw_population_count == 2
     assert published.declaration.type == "eval"
 

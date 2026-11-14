@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass
 from functools import cache
+from threading import Lock
 from typing import Literal, cast
 
 import numpy as np
@@ -13,6 +14,7 @@ from transformers import AutoModel, AutoTokenizer, PreTrainedTokenizerBase
 HARRIER_REPO = "microsoft/harrier-oss-v1-0.6b"
 HARRIER_REVISION = "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee"
 HARRIER_DIM = 1024
+_HARRIER_LOAD_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -75,7 +77,17 @@ class HarrierEmbedder:
             lengths = inputs["attention_mask"].sum(dim=1)
             inputs = inputs.to(config.device)
             positions = (lengths - 1).to(config.device)
-            with torch.inference_mode():
+            # cuDNN SDPA rejects some padded GB200 batches without trying another backend.
+            with (
+                torch.inference_mode(),
+                torch.nn.attention.sdpa_kernel(
+                    [
+                        torch.nn.attention.SDPBackend.FLASH_ATTENTION,
+                        torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION,
+                        torch.nn.attention.SDPBackend.MATH,
+                    ]
+                ),
+            ):
                 hidden = self.model(**inputs, use_cache=False).last_hidden_state
                 pooled = hidden[torch.arange(len(lengths), device=config.device), positions].float()
                 vectors.append(torch.nn.functional.normalize(pooled, dim=1).cpu().numpy())
@@ -87,6 +99,13 @@ class HarrierEmbedder:
 
 
 @cache
-def load_harrier(config: HarrierConfig) -> HarrierEmbedder:
-    """Initialize one inference backend per worker process and configuration."""
+def _harrier_embedder(config: HarrierConfig) -> HarrierEmbedder:
     return HarrierEmbedder(config)
+
+
+def load_harrier(config: HarrierConfig) -> HarrierEmbedder:
+    """Initialize one inference backend per process and configuration."""
+    # Transformers changes the process-wide default dtype during initialization.
+    # Lock the cache lookup too: functools.cache can construct concurrent misses.
+    with _HARRIER_LOAD_LOCK:
+        return _harrier_embedder(config)

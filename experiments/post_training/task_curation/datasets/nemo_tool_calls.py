@@ -11,7 +11,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 
 def convert(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -28,9 +28,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
     return [
         RlDataSource(
             info=SourceInfo(
-                id="NeMo:predicted-action",
-                title="NeMo conversational tool-use next actions",
-                origin="NeMo",
+                upstream_dataset=DATASET,
+                upstream_name="Nemotron conversational tool use",
+                subset="predicted-action",
+                build_path="NeMo",
+                origin=SourceOrigin.NEMOTRON,
                 family="function-calling",
                 tags=("eval", "agentic", "single-turn", "license:cc-by-4.0"),
                 task_format=TaskFormat.TASKCOMPENDIUM,

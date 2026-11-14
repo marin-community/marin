@@ -152,6 +152,7 @@ class SourceRecipe:
     inputs: Mapping[str, str] = field(default_factory=dict)
     grader_environment: EnvironmentRequirements | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
+    oracle_solutions: bool = False
 
 
 class CheckStatus(StrEnum):
@@ -293,14 +294,7 @@ class QualityBasis(StrEnum):
     UNREVIEWED = "unreviewed"
     DIRECT_REVIEW = "direct_review"
     INFERRED_FROM_SOURCE = "inferred_from_source"
-    SOURCE_REJECTED = "source_rejected"
     SOURCE_INCOMPLETE = "source_incomplete"
-
-
-@dataclass(frozen=True)
-class FilterPolicy:
-    id: str = "evidence-static-v2"
-    minimum_confidence: Confidence = Confidence.MEDIUM
 
 
 class Decision(BaseModel):

@@ -15,7 +15,7 @@ import json
 import re
 import subprocess
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from functools import cached_property, partial
 from pathlib import Path
@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import click
 import requests
+from finestore.rl.curation import ContentEvidenceReference, LexicalContaminationEvidence
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -46,6 +47,7 @@ from shellbox.machine import (
     PackageSpec,
     UnsupportedMachineSpec,
 )
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, require_resolved_environment
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, recipe_code_identity
@@ -54,12 +56,12 @@ from taskcompendium.pipeline.models import (
     RESOURCE_BUDGET_BYTES,
     Controls,
     Converter,
-    FilterPolicy,
     IntendedUse,
     ReviewRubric,
     SourceRecipe,
     SourceStatus,
 )
+from taskcompendium.pipeline.oracle_filter import load_oracle_filter
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, Reviewer
 from taskcompendium.pipeline.source_processing import (
     SOURCE_PIPELINE_REVISION,
@@ -73,15 +75,16 @@ from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION, Sour
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION, SourceVerificationPolicy
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext
 from taskcompendium.runtime.local import LOCK_FILE, LocalGraderMachines
-from verifyit.modes.grade_judge import JudgeConnection
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.runners import SubprocessRunner
 
-from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
+from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
+from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
@@ -91,8 +94,8 @@ from experiments.post_training.task_curation.images.build import (
 from experiments.post_training.task_curation.source import RlDataSource
 
 PIPELINE_VERSION = "2026.10.07.1"
-CURATION_VERSION = "2026.10.12.1"
-QUICK_VERSION = "2026.10.14.1"
+CURATION_VERSION = "2026.11.12.1"
+QUICK_VERSION = "2026.11.12.1"
 URL_CHUNK_BYTES = 1024 * 1024
 URL_TIMEOUT = 60
 IMAGE_MACHINE_CPUS = 4
@@ -258,6 +261,7 @@ class CurationRecipe:
     inputs: Mapping[str, RecipeSource] = field(default_factory=dict)
     grader: Environment | None = None
     resource_budget_bytes: int = RESOURCE_BUDGET_BYTES
+    oracle_solutions: bool = False
 
     @property
     def dataset(self) -> RecipeSource:
@@ -342,16 +346,14 @@ def _reviewer(
     if review.mode == ReviewMode.CHAT:
         return ChatReviewer(
             OpenAIChatClient(base_url, api_key, timeout=GLM_REQUEST_TIMEOUT),
-            review.model,
-            review.model_revision,
+            review.spec,
             query_cache_root=review_cache,
             max_concurrent=review_concurrency,
             max_batch_bytes=review.max_batch_bytes,
         )
     return BatchReviewer(
         OpenAIBatchClient(base_url, api_key, timeout=GLM_REQUEST_TIMEOUT, request_attempts=GLM_REQUEST_ATTEMPTS),
-        review.model,
-        review.model_revision,
+        review.spec,
         query_cache_root=review_cache,
         max_batch_bytes=review.max_batch_bytes,
     )
@@ -384,25 +386,46 @@ def _pipeline_config(
             # worker so its request semaphore enforces the worker's provider cap.
             review_task_resources=worker_resources,
         ),
-        filter_policy=FilterPolicy(),
         normalized_shards=normalized_shards,
         machines=machines,
     )
 
 
 def _source_config(
-    settings: RecipeSettings, mode: SourceProcessingMode, controls: Controls | None, rubric: str | None
+    settings: RecipeSettings,
+    mode: SourceProcessingMode,
+    controls: Controls | None,
+    *,
+    source_context: NoOracleSourceContext | None = None,
+    receipt_evidence: ContentEvidenceReference | None = None,
 ) -> SourcePipelineConfig:
+    receipt_path = settings.oracle_filter_receipt or (receipt_evidence.uri if receipt_evidence is not None else None)
+    receipt_sha256 = receipt_evidence.sha256 if receipt_evidence is not None else None
     review = settings.config.review if settings.config is not None else settings.review
-    if rubric is not None and review is None:
-        raise click.UsageError("Recipe review configuration requires --model-revision and --review-mode")
+    decontamination = (
+        LexicalContaminationEvidence.model_validate_json(StoragePath(settings.decontamination_receipt).read_text())
+        if settings.decontamination_receipt
+        else settings.config.lexical_contamination if settings.config else None
+    )
+    if mode != SourceProcessingMode.QUICK and review is None:
+        raise click.UsageError("SAMPLE/FULL require a ReviewerSpec from --reviewer-tier")
     if settings.config is not None:
-        return replace(settings.config, mode=mode)
+        return replace(
+            settings.config,
+            mode=mode,
+            lexical_contamination=decontamination,
+            no_oracle_source_context=source_context,
+            oracle_filter=(
+                load_oracle_filter(receipt_path, source_context=source_context, expected_sha256=receipt_sha256)
+                if receipt_path
+                else settings.config.oracle_filter
+            ),
+        )
     if settings.normalized_shards is None:
         raise click.UsageError("Recipe conversion requires --normalized-shards")
     if settings.execution.worker_resources is None:
         raise ValueError("Recipe execution requires worker resources")
-    return _pipeline_config(
+    config = _pipeline_config(
         mode,
         review,
         None,
@@ -414,10 +437,24 @@ def _source_config(
         worker_resources=settings.execution.worker_resources,
         normalized_shards=settings.normalized_shards,
     )
+    return replace(
+        config,
+        lexical_contamination=decontamination,
+        no_oracle_source_context=source_context,
+        oracle_filter=(
+            load_oracle_filter(receipt_path, source_context=source_context, expected_sha256=receipt_sha256)
+            if receipt_path
+            else None
+        ),
+    )
 
 
 def _execution_config(
-    settings: RecipeSettings, config: SourcePipelineConfig, rubric: str | None, controls: Controls | None
+    settings: RecipeSettings,
+    config: SourcePipelineConfig,
+    rubric: str | None,
+    controls: Controls | None,
+    scope: ExitStack,
 ) -> SourcePipelineConfig:
     needs_reviewer = rubric is not None and config.execution.reviewer is None
     needs_judge = controls is not None and settings.api_key is not None and config.judge_connection is None
@@ -425,20 +462,22 @@ def _execution_config(
         return config
     if settings.api_key is None:
         raise click.UsageError("Recipe review and judge controls require an API key")
-    base_url = settings.base_url if settings.base_url is not None else resolve_glm_base_url(settings.relay_job)
+    assert config.review is not None
+    connection = scope.enter_context(config.review.spec.endpoint.connect(settings.api_key))
+    base_url = connection.base_url
     if needs_reviewer:
         if settings.review_cache is None:
             raise click.UsageError("Recipe review requires --review-cache")
         reviewer = _reviewer(
             cast(ReviewConfig, config.review),
             base_url,
-            settings.api_key,
+            connection.api_key,
             review_cache=settings.review_cache,
             review_concurrency=settings.review_concurrency,
         )
         config = replace(config, execution=replace(config.execution, reviewer=reviewer))
     if needs_judge:
-        config = replace(config, judge_connection=JudgeConnection(base_url, settings.api_key))
+        config = replace(config, judge_connection=connection)
     return config
 
 
@@ -450,7 +489,39 @@ def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions)
         return _quick_step(recipe, options)
     if options.recipe_settings is None:
         raise ValueError(f"Source processing requires recipe settings: {source.name}")
-    config = _source_config(options.recipe_settings, options.mode, recipe.controls, recipe.rubric)
+    static = source.info.no_oracle_static_retention
+    source_context = None
+    if static is not None:
+        policy = source.info.no_oracle_executability_policy
+        if (
+            policy is None
+            or static.policy_sha256 != policy.sha256
+            or static.source_id != source.info.id
+            or static.source_release != source.current_release
+            or static.current_input != source.info.actor_census_input
+            or static.intended_use != source.intended_use
+        ):
+            raise ValueError("Static retention source metadata differs from the configured input")
+        source_context = NoOracleSourceContext(
+            source_id=source.info.id,
+            source_release=source.current_release,
+            input_cohort_sha256=static.retained_cohort.sha256,
+            current_input=static.current_input,
+            intended_use=source.intended_use,
+            policy=policy,
+        )
+    config = _source_config(
+        options.recipe_settings,
+        options.mode,
+        recipe.controls,
+        source_context=source_context,
+        receipt_evidence=static.oracle_filter if static is not None else None,
+    )
+    if config.lexical_contamination is None:
+        config = replace(config, lexical_contamination=source.info.lexical_contamination)
+    dataset = source.dataset
+    assert dataset is not None
+    require_private_release(config.lexical_contamination, dataset.name, dataset.revision)
     if recipe.controls is None:
         config = replace(config, machines=None)
     return cast(ArtifactStep[CampaignArtifact], _reviewed_step(recipe, config, options))
@@ -541,6 +612,7 @@ def source_recipe(
         inputs=dict(inputs),
         grader_environment=grader_environment,
         resource_budget_bytes=pipeline.resource_budget_bytes,
+        oracle_solutions=pipeline.oracle_solutions,
     )
 
 
@@ -565,6 +637,10 @@ def _run_curation(
     missing = pipeline.inputs.keys() - inputs.keys()
     if missing:
         raise ValueError(f"Missing staged auxiliary inputs for {pipeline.name}: {sorted(missing)}")
+    if mode is not SourceProcessingMode.QUICK:
+        if config is None:
+            raise ValueError("Reviewed modes require source pipeline settings")
+        require_private_release(config.lexical_contamination, pipeline.dataset.name, pipeline.dataset.revision)
     if mode == SourceProcessingMode.QUICK:
         if config is not None:
             raise ValueError("QUICK conversion does not take review or verification settings")
@@ -626,7 +702,7 @@ def pipeline_identity(
         "grader": environment_record(pipeline.grader, grader) if pipeline.grader is not None else None,
         "resource_budget_bytes": pipeline.resource_budget_bytes,
         "rubric": pipeline.rubric,
-        "review": asdict(config.review) if pipeline.rubric is not None else None,
+        "review": config.review.identity if config.review is not None else None,
         "controls": controls_identity(pipeline.controls) if pipeline.controls is not None else None,
         "machines": (
             config.machines.identity() if pipeline.controls is not None and config.machines is not None else None
@@ -638,7 +714,12 @@ def pipeline_identity(
         "normalized_shards": config.normalized_shards,
         "quality_policy": asdict(config.quality_policy),
         "verification_policy": asdict(config.verification_policy),
-        "filter_policy": asdict(config.filter_policy),
+        "lexical_contamination": (
+            config.lexical_contamination.model_dump(mode="json") if config.lexical_contamination else None
+        ),
+        "oracle_filter_sha256": (
+            canonical_sha256(config.oracle_filter.model_dump(mode="json")) if config.oracle_filter else None
+        ),
         "revisions": {
             "procedure": SOURCE_PIPELINE_REVISION,
             "quality": SOURCE_QUALITY_REVISION,
@@ -813,27 +894,28 @@ def _run_source(
         built = EnvironmentArtifact.raw_load(run.grader_artifact) if run.grader_artifact is not None else None
         grader_environment = environment_requirements(pipeline.grader, built)
     assert options.recipe_settings is not None
-    config = _execution_config(options.recipe_settings, config, pipeline.rubric, pipeline.controls)
-    validate_input_identity(pipeline, options.inputs, run.identity)
-    file_overrides = (
-        {name: SourceFileOverride(**file) for name, file in run.identity["input_overrides"]["files"].items()}
-        if options.inputs.files
-        else {}
-    )
-    if options.inputs.root is not None and not options.inputs.files:
-        file_overrides = _staged_file_overrides(run.source_input, run.identity["input_overrides"]["root"]["files"])
-    result = _run_curation(
-        pipeline,
-        mode=options.mode,
-        context=options.runtime.context,
-        source_input=run.source_input,
-        output_path=run.output_path,
-        inputs=run.inputs,
-        config=config,
-        grader_environment=grader_environment,
-        source_overrides=file_overrides,
-    )
-    validate_input_identity(pipeline, options.inputs, run.identity)
+    with ExitStack() as scope:
+        config = _execution_config(options.recipe_settings, config, pipeline.rubric, pipeline.controls, scope)
+        validate_input_identity(pipeline, options.inputs, run.identity)
+        file_overrides = (
+            {name: SourceFileOverride(**file) for name, file in run.identity["input_overrides"]["files"].items()}
+            if options.inputs.files
+            else {}
+        )
+        if options.inputs.root is not None and not options.inputs.files:
+            file_overrides = _staged_file_overrides(run.source_input, run.identity["input_overrides"]["root"]["files"])
+        result = _run_curation(
+            pipeline,
+            mode=options.mode,
+            context=options.runtime.context,
+            source_input=run.source_input,
+            output_path=run.output_path,
+            inputs=run.inputs,
+            config=config,
+            grader_environment=grader_environment,
+            source_overrides=file_overrides,
+        )
+        validate_input_identity(pipeline, options.inputs, run.identity)
     envelope = _pipeline_result(result)
     return RlDataArtifact(path=run.output_path, status=envelope.status, manifest=asdict(result), result=envelope)
 

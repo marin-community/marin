@@ -37,6 +37,7 @@ from taskcompendium.pipeline.models import (
     RawRow,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from verifyit.modes.grade_math import _is_expression, _parse, _parsed_members
 from verifyit.spec import DEFAULT_OUTPUT, MathSpec, MathType
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
@@ -47,7 +48,14 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_files,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import (
+    OversightEvidence,
+    OversightLevel,
+    RlDataSource,
+    SourceInfo,
+    SourceOrigin,
+    TaskFormat,
+)
 
 SCORER_RUNNERS = {
     "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7": (
@@ -167,6 +175,12 @@ class MathConverter:
         # parenthesized tuple as an interval, so use verifyit's ordered-member comparator.
         if math_type is MathType.TUPLE:
             math_type = MathType.LIST
+        # The production grader parses the typed reference before grading; reject rows whose
+        # reference it cannot parse (same check as grade_math, after the type mapping) so
+        # admission never sees them.
+        reference_members = _parsed_members(expected) if math_type is MathType.LIST else [_parse(expected)]
+        if not all(_is_expression(member) for member in reference_members):
+            return unsupported("unparsable_reference", "math-verify cannot parse the typed reference")
         package = verifyit_package(
             MathSpec(expected=expected, math_type=math_type),
             resources=(
@@ -229,14 +243,35 @@ SOURCES = (
         convert_tasktrove_math,
         GYM_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-v5",
-            title="laion/nemotron-gym-math-v5",
-            origin="Task Trove",
+            id="TaskTrove:laion__nemotron-gym-math-v5",
+            upstream_dataset="laion__nemotron-gym-math-v5",
+            upstream_name="laion__nemotron-gym-math-v5",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=4096,
             notes=(
-                "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
+                "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at "
+                "conversion. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; "
+                "155 references the production math-verify parser rejects are rejected at conversion; "
+                "contained grader controls 72/72 on the seeded sample; blinded review 7/7 attempted agree."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 4,096 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 155 unparsable-reference rows rejected at "
+                    "conversion. Contained grader controls on the 24-task seeded sample: golden 24/24, "
+                    "empty 24/24, wrong 24/24. Blinded review of 20 seeded cases: 7 solved blind, all 7 "
+                    "agree with the reference (13 excluded as competition-difficulty, coverage reported). "
+                    "Evidence: atlas-env-audit qa-knowledge/ (fidelity, controls, blinded)"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=24,
+                admitted=3941,
             ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
@@ -247,13 +282,39 @@ SOURCES = (
         convert_openreasoning,
         OPENREASONING_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-openmathreasoning-v2",
-            title="laion/nemotron-gym-math-openmathreasoning-v2",
-            origin="Task Trove",
+            id="TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2",
+            upstream_dataset="laion__nemotron-gym-math-openmathreasoning-v2",
+            upstream_name="laion__nemotron-gym-math-openmathreasoning-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=42636,
-            notes=("Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."),
+            notes=(
+                "Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), "
+                "oracle present. QA (RL Data Atlas): every row re-converted with zero fidelity "
+                "discrepancies; 15 unparsable-reference rows rejected at conversion; contained grader "
+                "controls 72/72; blinded review 16/16 attempted agree. 2 of 20 sampled rows are "
+                "underdetermined; both verified against the raw archive where the converted statements "
+                "match the upstream instructions verbatim, so the defects are in the source data, not "
+                "the conversion (2 of the 20-case blinded panel; exactly the inclusive 10% boundary)."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 42,636 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 15 unparsable-reference rows rejected at "
+                    "conversion. Contained grader controls on the 24-task seeded sample: golden 24/24, "
+                    "empty 24/24, wrong 24/24. Blinded review of 20 seeded cases: 16 addressed, all 16 "
+                    "agree; 2 rows flagged as suspected conversion defects (underdetermined statements), "
+                    "2 competition-difficulty cases excluded with reasons. Evidence: atlas-env-audit qa-knowledge/"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=24,
+                admitted=42621,
+            ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
@@ -263,13 +324,37 @@ SOURCES = (
         convert_tasktrove_math,
         ORACLE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:SankalpKJ__nemotron-math-oracle-filtered-v2",
-            title="SankalpKJ/nemotron-math-oracle-filtered-v2",
-            origin="Task Trove",
+            id="TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2",
+            upstream_dataset="SankalpKJ__nemotron-math-oracle-filtered-v2",
+            upstream_name="SankalpKJ__nemotron-math-oracle-filtered-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=57777,
-            notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
+            notes=(
+                "Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; "
+                "subsample. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; "
+                "353 unparsable-reference rows rejected at conversion; contained grader controls "
+                "golden 23/24 (the failing task is the one unparseable-reference row, now rejected), "
+                "empty 24/24, wrong 24/24; blinded review 19/19 attempted agree."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 57,777 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 353 unparsable-reference rows rejected at "
+                    "conversion. Contained grader controls on the 24-task seeded sample: golden 23/24 (the "
+                    "one failing task is the unparseable-reference row, now rejected at conversion), empty "
+                    "24/24, wrong 24/24. Blinded review of 20 seeded cases: 19 solved blind, all 19 agree "
+                    "(1 figure-dependent case excluded). Evidence: atlas-env-audit qa-knowledge/"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=24,
+                admitted=57424,
+            ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
@@ -279,13 +364,43 @@ SOURCES = (
         convert_tasktrove_math,
         PRISM_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemo-prism-math-v3",
-            title="laion/nemo-prism-math-v3",
-            origin="Task Trove",
+            id="TaskTrove:laion__nemo-prism-math-v3",
+            upstream_dataset="laion__nemo-prism-math-v3",
+            upstream_name="laion__nemo-prism-math-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=2404,
-            notes="Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion.",
+            notes=(
+                "Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion. "
+                "QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 2 "
+                "unparsable-reference rows rejected at conversion and 181 exact-duplicate rows "
+                "collapse under the pipeline dedup key (2,221 published). Contained grader controls "
+                "72/72 on the 24-task sample. Blinded review: 8 of 20 sampled cases solvable blind; "
+                "after adjudication all 8 references verified correct (3 reviewer solver errors, "
+                "each confirmed by independent recomputation), leaving 12 sampled references "
+                "unverified by blind solve (review-coverage caveat). Admitted at SAMPLE."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 2,404 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row with zero discrepancies; 2 unparsable-reference rows rejected at "
+                    "conversion; 181 exact duplicates collapse under the pipeline dedup key, 2,221 retained. "
+                    "Contained grader controls on the 24-task seeded sample: golden 24/24, empty 24/24, "
+                    "wrong 24/24. Blinded review of 20 seeded cases: 8 solvable blind; after adjudication "
+                    "all 8 references verified correct (3 solver errors on the reviewer's side, each "
+                    "confirmed by independent recomputation), 12 cases unsolved blind so their references "
+                    "remain unverified by this method (review-coverage caveat). "
+                    "Evidence accompanies tasks.parquet at the pinned private revision"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=24,
+                admitted=2221,
+            ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
@@ -295,13 +410,35 @@ SOURCES = (
         convert_tasktrove_math,
         STACK_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-stack-overflow-v3",
-            title="laion/nemotron-gym-math-stack-overflow-v3",
-            origin="Task Trove",
+            id="TaskTrove:laion__nemotron-gym-math-stack-overflow-v3",
+            upstream_dataset="laion__nemotron-gym-math-stack-overflow-v3",
+            upstream_name="laion__nemotron-gym-math-stack-overflow-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=110730,
-            notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
+            notes=(
+                "Typed sympy comparison with oracle per task. Remove the non-boxed fallback "
+                "extraction. QA (RL Data Atlas): every row re-converted (the single pre-existing "
+                "reviewed defect unchanged); 125 unparsable-reference rows rejected at conversion; "
+                "contained grader controls 72/72; blinded review 20/20 attempted agree."
+            ),
+            oversight=OversightEvidence(
+                campaign="RL Data Atlas",
+                recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
+                verification=(
+                    "All 110,730 rows re-converted through the production recipe and compared against the "
+                    "archive row-by-row (the single pre-existing reviewed defect unchanged); 125 "
+                    "unparsable-reference rows rejected at conversion. Contained grader controls on the "
+                    "24-task seeded sample: golden 24/24, empty 24/24, wrong 24/24. Blinded review of 20 "
+                    "seeded cases: 20 solved blind, all 20 agree. Evidence: atlas-env-audit qa-knowledge/"
+                ),
+                level=OversightLevel.SAMPLE,
+                reviewed=24,
+                admitted=110604,
+            ),
             task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
@@ -317,7 +454,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name=source.name,
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
-                version="2",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=MATH_CONTROLS,

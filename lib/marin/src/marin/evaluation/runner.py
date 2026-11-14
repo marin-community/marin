@@ -6,7 +6,7 @@
 import logging
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from functools import partial
 from typing import NoReturn, Protocol
@@ -47,7 +47,6 @@ from marin.evaluation.records import (
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_runner import StepRunner, check_cache
 from marin.execution.step_spec import StepSpec
-from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import (
     InferenceBackendState,
@@ -708,17 +707,11 @@ def _inference_session(stack: ExitStack, config: RemoteInferenceConfig) -> Remot
 def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceSession:
     """Return an eval session that reaches the serving endpoint directly."""
     try:
-        address = iris_ctx().client.resolve_endpoint(session.endpoint_name).rstrip("/")
+        return session.direct_session()
     except ConnectError as exc:
         if exc.code != Code.NOT_FOUND:
             raise
         raise InferenceUnavailable("inference endpoint registration is unavailable") from exc
-    endpoint = replace(session.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
-    return replace(
-        session,
-        model=replace(session.model, endpoint=endpoint),
-        metrics_url=f"{address}/metrics" if session.metrics_url is not None else None,
-    )
 
 
 def _print_record(record: EvalRunRecord) -> None:

@@ -3,28 +3,29 @@
 
 """TaskTrove competitive-programming sources: stdin/stdout programs graded by verifyit ``stdio``.
 
-Code Contests and TACO retain their source image recipes for the actor and its independent grader.
-The remaining sources run in the environment their archives specify, lowered onto a pinned base.
-Controls run an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
-empty submission.
+Code Contests and TACO use digest-pinned builds of their archived actor and grader environments.
+The remaining sources use the campaign executable image and compiler grader packages. Controls run
+an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an empty submission.
 """
 
 import json
+import shlex
 
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.models import ScriptGrader
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
-from verifyit.spec import Compare, StdioSpec
+from taskcompendium.runtime.resources import inline_resource
+from verifyit.spec import Compare, StdioSpec, render_spec
 
-from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES, VERIFYIT_PACKAGE
+from experiments.post_training.task_curation.datasets.environments import COMPILER_GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
+from experiments.post_training.task_curation.datasets.tasktrove.built_images import archive_build_environment
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     INSTRUCTION,
     VERIFIER_DATA,
+    VERIFYIT_VERDICT_REWARD,
     TaskFiles,
-    archive_requirements,
-    archive_resources,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.codeforces import convert_codeforces
@@ -47,15 +48,17 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.stdio
     hidden_case_rejection,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.taco import convert_taco
-from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import verifyit_build_context
 from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.environment_fidelity import archive_environment
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 EXECUTABLE_CONTROLS = Controls(golden=solve_script)
+SOURCE_VERIFIER_CONFIG = "taskcompendium-verifier.toml"
+SOURCE_GRADER_TIMEOUT = 600.0
 
 ANSWERABILITY_CRITERIA = """
 Judge whether the underlying request is comprehensible and answerable using the public inputs.
@@ -116,7 +119,7 @@ def stdio_task(row: RawRow, context: ConversionContext, convert: ConvertFn) -> N
     return tasktrove_archive_task(
         row,
         convert=convert,
-        environment=archive_requirements(row.data),
+        environment=archive_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
@@ -127,8 +130,7 @@ def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | Impor
     converted = archive_conversion(row.data, convert)
     if isinstance(converted, ImportRejection):
         return converted
-    build = verifyit_build_context(converted.dockerfile, archive_resources(row.data).oracle, package=VERIFYIT_PACKAGE)
-    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=build)
+    environment = archive_build_environment(row.data)
     task = converted_workspace_task(
         row,
         converted,
@@ -136,6 +138,28 @@ def source_stdio_task(row: RawRow, convert: ConvertFn) -> NormalizedTask | Impor
         environment=environment,
         grader_environment=environment,
         output_paths=SOLUTION_PATHS,
+    )
+    assert isinstance(converted.spec, StdioSpec)
+    # The archived build installs Verifyit as a uv tool, outside system Python.
+    # Declare its installed command so candidate programs keep the source interpreter.
+    command = ("/usr/local/bin/verifyit", f"/tests/{SOURCE_VERIFIER_CONFIG}")
+    verifier = (
+        *task.resources.verifier,
+        inline_resource(SOURCE_VERIFIER_CONFIG, render_spec(converted.spec).encode()),
+        inline_resource("test.sh", f"#!/bin/sh\nexec {shlex.join(command)}\n".encode()),
+    )
+    task = task.model_copy(
+        update={
+            "grader": ScriptGrader(
+                argv=("bash", "/tests/test.sh"),
+                cwd=converted.spec.workspace,
+                environment=environment,
+                answer_path=None,
+                reward=VERIFYIT_VERDICT_REWARD,
+                timeout=SOURCE_GRADER_TIMEOUT,
+            ),
+            "resources": task.resources.model_copy(update={"verifier": verifier}),
+        }
     )
     return NormalizedTask(task, ())
 
@@ -179,7 +203,7 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     return tasktrove_archive_task(
         row,
         convert=convert_competitive_coding,
-        environment=archive_requirements(row.data),
+        environment=archive_environment(row.data["files"]),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
@@ -206,6 +230,7 @@ def stdio_source(
             intended_use=IntendedUse.TRAIN,
             rubric=rubric,
             controls=EXECUTABLE_CONTROLS,
+            oracle_solutions=True,
             grader=grader,
         ),
     )
@@ -218,16 +243,22 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "DCAgent__code-contests-noblock",
             convert_code_contests_task,
             CODE_CONTESTS_RUBRIC,
-            version="2",
+            version="4",
             grader=None,
             info=SourceInfo(
-                id="Task Trove:DCAgent__code-contests-noblock",
-                title="DCAgent/code-contests-noblock",
-                origin="Task Trove",
+                id="TaskTrove:DCAgent__code-contests-noblock",
+                upstream_dataset="DCAgent__code-contests-noblock",
+                upstream_name="DCAgent__code-contests-noblock",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "excluded"),
                 count=8728,
-                notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
+                notes=(
+                    "Excluded pending SAMPLE/FULL QA of converter version 4. "
+                    "Hidden test_data.json, only the first case is shown. Exact-line compare; fine."
+                ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
@@ -237,9 +268,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert_codeforces_task,
             CODEFORCES_RUBRIC,
             info=SourceInfo(
-                id="Task Trove:laion__codeforces-v3",
-                title="laion/codeforces-v3",
-                origin="Task Trove",
+                id="TaskTrove:laion__codeforces-v3",
+                upstream_dataset="laion__codeforces-v3",
+                upstream_name="laion__codeforces-v3",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=10000,
@@ -257,9 +291,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             COMPETITIVE_CODING_RUBRIC,
             version="2",
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
-                title="laion/nemotron-gym-competitive-coding-v2",
-                origin="Task Trove",
+                id="TaskTrove:laion__nemotron-gym-competitive-coding-v2",
+                upstream_dataset="laion__nemotron-gym-competitive-coding-v2",
+                upstream_name="laion__nemotron-gym-competitive-coding-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=15713,
@@ -272,16 +309,20 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__exp_rpt_taco-v2",
             convert_taco_task,
             TACO_RUBRIC,
-            version="2",
+            version="5",
             grader=None,
             info=SourceInfo(
-                id="Task Trove:laion__exp_rpt_taco-v2",
-                title="laion/exp_rpt_taco-v2",
-                origin="Task Trove",
+                id="TaskTrove:laion__exp_rpt_taco-v2",
+                upstream_dataset="laion__exp_rpt_taco-v2",
+                upstream_name="laion__exp_rpt_taco-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="stdin-stdout",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "excluded"),
                 count=10000,
                 notes=(
+                    "Excluded pending SAMPLE/FULL QA of converter version 5. "
                     "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
                     "aware compare where the prompt promises one."
                 ),

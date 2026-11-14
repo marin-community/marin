@@ -3,20 +3,36 @@
 
 """TaskTrove executable, structured-output and repository sources turn archives into graded tasks."""
 
+import asyncio
 import json
 import os
+import shlex
+import shutil
 import subprocess
+import sys
 import tomllib
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
-from taskcompendium.models import TaskSpec, VerifyitGrader, verifyit_spec
-from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask
+from shellbox.image import RegistryImage
+from shellbox.machine import MachineSpec
+from taskcompendium.grading_result import Outcome
+from taskcompendium.models import (
+    ConversationTrace,
+    GradingAttempt,
+    ScriptGrader,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+    verifyit_spec,
+)
+from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, NormalizedTask, RawRow
+from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.grade import Status, grade
-from verifyit.spec import ScriptSpec, StdioSpec
+from verifyit.spec import ScriptSpec, StdioSpec, parse_spec
 
 from experiments.post_training.task_curation.datasets.environments import VERIFYIT_PACKAGE
 from experiments.post_training.task_curation.datasets.tasktrove import (
@@ -46,13 +62,14 @@ from experiments.post_training.task_curation.tests.conversion import (
     fixture_context,
     tasktrove_row,
 )
+from experiments.post_training.task_curation.tests.test_tasktrove_executable import GradingMachines
 
 pytest_plugins = ("lib.verifyit.tests.test_judge",)
 
 RECIPES = {
     source.name: cast(CurationRecipe, source.config)
-    for module in (code, python_tests, nl2bash, structured_outputs)
-    for source in module.sources()
+    for candidates in (code.sources, python_tests.sources, nl2bash.sources, structured_outputs.candidate_sources)
+    for source in candidates()
 }
 
 CODENET = (Path(__file__).parent / "fixtures/codenet.tar.gz").read_bytes()
@@ -68,6 +85,29 @@ STRUCTURED_PROMPT = (
     "Extract the person's name from the note below as JSON.\n\nNote: Ada wrote this.\n\n"
     "Write your final JSON to `/app/answer.txt`."
 )
+
+
+TIMEOUT_SHIM = """#!/usr/bin/env python3
+import subprocess
+import sys
+
+try:
+    sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+"""
+"""GNU ``timeout`` semantics for hosts without coreutils: exit status of the command, or 124 on expiry."""
+
+
+def source_runner_env(tmp_path: Path) -> dict[str, str]:
+    """Host environment for an archived runner, which calls coreutils ``timeout`` as its container provides."""
+    if shutil.which("timeout") is not None:
+        return dict(os.environ)
+    shim = tmp_path / "bin/timeout"
+    shim.parent.mkdir(parents=True)
+    shim.write_text(TIMEOUT_SHIM)
+    shim.chmod(0o755)
+    return {**os.environ, "PATH": f"{shim.parent}{os.pathsep}{os.environ['PATH']}"}
 
 
 def archive(instruction: str, files: dict[str, bytes]) -> dict:
@@ -235,7 +275,6 @@ def test_python_directory_source_requires_building_setup_before_harbor_export():
     row = {"task_json": task.model_dump_json(), "source_row": "fixture/tasks.parquet:0", "original_path": "fixture"}
     options = {
         "grader_image": BASE_IMAGE,
-        "fallback_actor_image": BASE_IMAGE,
         "family": "python",
         "verifyit_package_root": VERIFYIT_PACKAGE,
     }
@@ -247,8 +286,11 @@ def test_python_directory_source_requires_building_setup_before_harbor_export():
 
 
 def local_stdio(task: TaskSpec, workspace: Path) -> StdioSpec:
-    assert isinstance(task.grader, VerifyitGrader)
-    spec = verifyit_spec(task.grader)
+    if isinstance(task.grader, ScriptGrader):
+        spec = parse_spec(resource_map(task.resources.verifier)[code.SOURCE_VERIFIER_CONFIG].decode())
+    else:
+        assert isinstance(task.grader, VerifyitGrader)
+        spec = verifyit_spec(task.grader)
     assert isinstance(spec, StdioSpec)
     return replace(spec, workspace=str(workspace))
 
@@ -286,6 +328,8 @@ def test_codeforces_source_runner_and_converted_grader_agree_on_exit_status(tmp_
         f"import sys\nanswers={answers!r}\nsys.stdout.write(answers[sys.stdin.read()])\nsys.exit({exit_code})\n"
     )
     runner = source.text(TEST_SH)
+    # Bound the whole fixture runner on hosts without GNU timeout.
+    runner = runner.replace("timeout 30 python3", shlex.quote(sys.executable))
     for old, new in (
         ("/logs/verifier", str(tmp_path / "logs")),
         ("/tmp/codenet-actual.txt", str(tmp_path / "actual.txt")),
@@ -293,7 +337,7 @@ def test_codeforces_source_runner_and_converted_grader_agree_on_exit_status(tmp_
         ("/app", str(workspace)),
     ):
         runner = runner.replace(old, new)
-    subprocess.run(["bash", "-c", runner], check=False, capture_output=True)
+    subprocess.run(["bash", "-c", runner], check=False, capture_output=True, env=source_runner_env(tmp_path), timeout=30)
     assert float((tmp_path / "logs/reward.txt").read_text()) == expected_reward
     assert grade(local_stdio(task, workspace), tests, workspace).reward == expected_reward
 
@@ -416,7 +460,6 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
     record = harbor_record(
         {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
         grader_image=None,
-        fallback_actor_image=BASE_IMAGE,
         family="competitive-programming",
     )
     files = archive_files(
@@ -439,3 +482,76 @@ def test_source_stdio_keeps_shared_recipe_and_grades_single_hidden_case(name, tm
     assert grade(spec, tests, workspace).reward == 1.0
     (workspace / "solution.py").write_text("print('wrong')\n")
     assert grade(spec, tests, workspace).reward == 0.0
+
+
+@pytest.mark.parametrize(
+    "name, dockerfile",
+    [
+        (
+            "code_contests",
+            b"FROM ubuntu:24.04\n\nWORKDIR /app\nRUN mkdir -p /output && chmod 777 /output\n\n"
+            b"RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*\n\n"
+            b"# Pre-install test deps so the verifier works fully offline\n"
+            b"RUN pip3 install --break-system-packages pytest==8.4.1 pytest-json-ctrf==0.3.5\n",
+        ),
+        ("taco", b"FROM python:3.10-slim\nWORKDIR /app\nRUN pip install --no-cache-dir pytest\n"),
+    ],
+)
+def test_archived_build_pin_requires_matching_recipe_and_permissions(name, dockerfile):
+    row = archive(
+        SUM_PROMPT,
+        {
+            "environment/Dockerfile": dockerfile,
+            "tests/test_data.json": json.dumps(SUM_CASES).encode(),
+            **stdio_dirs(SUM_CASES["inputs"], SUM_CASES["outputs"]),
+            "solution/solution.py": SUM_SOLUTION,
+        },
+    )
+    recipe = RECIPES[f"tasktrove-{name}"]
+    task = converted_task(recipe, row)
+    assert task.environment_requirements.docker_image is not None
+    assert task.environment_requirements.docker_build is None
+    assert task.grader.environment.docker_image == task.environment_requirements.docker_image
+    attempt = GradingAttempt(
+        ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="done"))),
+        files={"/app/solution.py": b""},
+    )
+    for status, expected in (("invalid_task", Outcome.INVALID_TASK), ("infra_error", Outcome.INFRA_ERROR)):
+        result = asyncio.run(
+            grade_in_sandbox(
+                task,
+                attempt,
+                GradingMachines(verdict_status=status),
+                MachineSpec(RegistryImage(task.grader.environment.docker_image)),
+            )
+        )
+        assert (result.status, result.reward) == (expected, None)
+    record = harbor_record(
+        {"task_json": task.model_dump_json(), "original_path": "fixture", "source_row": f"{name}/tasks.parquet:0"},
+        grader_image=None,
+        family="competitive-programming",
+    )
+    exported = archive_files(
+        unpack_task_binary({"path": "fixture", "task_binary": record.task_binary}, fixture_context(recipe))
+    ).files
+    assert exported["environment/Dockerfile"] == f"FROM {task.environment_requirements.docker_image}\n".encode()
+
+    changed = archive(
+        SUM_PROMPT,
+        {
+            **archive_files(unpack_task_binary(row, fixture_context(recipe))).files,
+            "environment/Dockerfile": dockerfile + b"RUN mkdir /additional-source-dependency\n",
+        },
+    )
+    rebuilt = converted_task(recipe, changed)
+    assert rebuilt.environment_requirements.docker_image is None
+    assert rebuilt.environment_requirements.docker_build is not None
+    assert rebuilt.grader.environment.docker_build == rebuilt.environment_requirements.docker_build
+
+    # The bytes are unchanged, but archived permissions are also part of the build.
+    decoded = unpack_task_binary(row, fixture_context(recipe))
+    decoded["file_metadata"]["environment/Dockerfile"]["mode"] = "0600"
+    result = recipe.convert(RawRow(task.id, task.source, decoded), fixture_context(recipe))
+    assert isinstance(result, NormalizedTask)
+    assert result.task.environment_requirements.docker_image is None
+    assert result.task.environment_requirements.docker_build is not None

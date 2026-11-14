@@ -35,7 +35,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.repository_pytes
 )
 from experiments.post_training.task_curation.datasets.tasktrove.swe_rebench import convert_swe_rebench_task
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 REPOSITORY_CRITERIA = """
 The public repository and checkout identify necessary context; unavailable local checkout is a runtime
@@ -127,11 +127,14 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "DCAgent__swe_rebench_v2_patched_oracle-v2",
             SWE_REBENCH_RUBRIC,
             convert=convert_swe_rebench_task,
-            version="3",
+            version="4",
             info=SourceInfo(
-                id="Task Trove:DCAgent__swe_rebench_v2_patched_oracle-v2",
-                title="DCAgent/swe_rebench_v2_patched_oracle-v2",
-                origin="Task Trove",
+                id="TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2",
+                upstream_dataset="DCAgent__swe_rebench_v2_patched_oracle-v2",
+                upstream_name="DCAgent__swe_rebench_v2_patched_oracle-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
                 tags=(
                     "agentic",
@@ -156,13 +159,16 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 count=18319,
                 notes=(
                     "Patched trusted repository tests with deferred Docker builds. Python uses pytest; "
-                    "retained non-Python sources keep their parser with exit-code credit disabled."
+                    "retained non-Python sources keep their parser with exit-code credit disabled. "
+                    "Inventory: Docker builds require exact pinning and oracle qualification is incomplete."
                 ),
-                daytona_snapshot_count=17706,
+                daytona_snapshot_count=13162,
                 daytona_count_basis=(
-                    "pinned release per-task build-context inventory from the conversion ledger, "
-                    "resources defaulted; production-named recount runs with the conversion program"
+                    "Production converted agent and grader snapshot_identity census of all 13,562 retained rows "
+                    "at TaskTrove 02923004846e4e73862c20962f823a6d05100e7a; each role uses 2 CPUs, "
+                    "4096 MB RAM and 10240 MB storage. Raw archive identities are not this count."
                 ),
+                daytona_execution_failures=13562,
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
@@ -173,15 +179,21 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert=convert_swesmith_task,
             version="4",
             info=SourceInfo(
-                id="Task Trove:laion__swesmith-oracle-filtered-v2",
-                title="laion/swesmith-oracle-filtered-v2",
-                origin="Task Trove",
+                id="TaskTrove:laion__swesmith-oracle-filtered-v2",
+                upstream_dataset="laion__swesmith-oracle-filtered-v2",
+                upstream_name="laion__swesmith-oracle-filtered-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "language:python"),
+                tags=("agentic", "multi-turn", "language:python", "deprecated"),
                 count=12927,
                 notes=(
-                    "Trusted repository pytest tests with unresolved Docker build contexts; "
-                    "original config patches remain oracle-only."
+                    "Deprecated: this upstream SWE-smith conversion predates the hardened "
+                    "bug-zero/reference-one admission and retains unresolved Docker contexts. "
+                    "The long-loop repair campaign found scratch, generated-metadata and verifier "
+                    "infrastructure defects in the derived Smartie cohort. Use its pinned repaired "
+                    "release with exact per-task control receipts."
                 ),
                 daytona_snapshot_count=12932,
                 daytona_count_basis=(

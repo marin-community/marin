@@ -9,13 +9,14 @@
 <body>
 <main>
   <header class="atlas-header"><a class="atlas-name" href="./">RL Data Atlas</a><a href="archive.html">Review archive</a></header>
-  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html" aria-current="page">By curriculum</a></nav>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html" aria-current="page">By curriculum</a><a href="guide.html">Getting started</a></nav>
   <section class="page-heading">
     <div><h1>Curriculum</h1><p id="message" role="status" aria-live="polite">Loading coverage…</p></div>
     <div class="coverage-totals"><span><strong id="task-count">—</strong> examples</span><span id="source-count"></span></div>
   </section>
   <form id="controls" class="browse-controls" role="search">
     <label class="search-control"><span>Find an area</span><input id="search" type="search" placeholder="Search subjects or skills…" aria-label="Search the curriculum"></label>
+    <label><span>Coverage population</span><select id="release"><option value="">Selected population</option></select></label>
     <label><span>Domain</span><select id="domain"><option value="">All domains</option></select></label>
     <label><span>Source</span><select id="source"><option value="">All sources</option></select></label>
     <label><span>Use</span><select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option></select></label>
@@ -33,17 +34,17 @@
     <div id="task-list" class="task-list"></div><p id="task-message" class="status-line" role="status" aria-live="polite"></p><button id="more-tasks" class="secondary" hidden>Load more</button>
   </section>
   <details class="data-notes"><summary>About counts and matching</summary>
-    <p>Counts cover converted examples before curation admission, including repeated instances. Domain counts include broad subject matches; topic and skill counts require a capability match. Empty areas remain visible.</p>
+    <p>Counts cover converted examples before curation admission, including repeated instances. Domain counts include broad subject matches; topic and skill counts require a capability match. Other/unlisted shows subject-only matches and any subcategories hidden by search, so every parent equals its displayed children plus that remainder. Empty areas remain visible.</p>
     <p><strong id="mapped-count">—</strong> have a curriculum match. <strong id="capability-count">—</strong> have a capability match; <span id="broad-count"></span>.</p>
-    <p id="sample-note"></p><p id="source-ledger" hidden></p>
+    <p id="sample-note"></p><p id="role-note" hidden></p><p id="source-ledger" hidden></p>
     <details><summary>Release record</summary><pre id="provenance"></pre></details>
   </details>
 </main>
 <dialog id="task-detail" aria-labelledby="detail-title">
   <div class="drawer-header"><span>Sampled example</span><button id="close-detail" class="close" aria-label="Close task details">×</button></div>
-  <h2 id="detail-title">Task details</h2><span id="detail-status" class="population-chip"></span><p id="detail-source"></p><p id="detail-task-id"></p>
+  <h2 id="detail-title">Task details</h2><span id="detail-status" class="population-chip"></span><p id="detail-source"></p><p id="detail-use" class="status-line"></p><p id="detail-task-id"></p>
   <h3>Public instructions</h3><p id="preview-note"></p><pre id="detail-instructions"></pre>
-  <h3>Curriculum matches</h3><div id="detail-matches"></div>
+  <h3>Curriculum matches</h3><div id="detail-matches" class="table-wrap" tabindex="0" aria-label="Curriculum match scores"></div>
   <details><summary>Embedding text</summary><p id="detail-description" class="description"></p></details>
   <details><summary>Task lineage</summary><pre id="detail-provenance"></pre></details>
 </dialog>

@@ -7,20 +7,57 @@ import json
 import time
 import uuid
 from collections.abc import Iterable
+from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import click
-from finestore.rl.curation import MAX_UNAVAILABLE_JUDGMENT_SHARE, CurationCatalog, JudgmentStatus, validate_items
+from finestore.rl.curation import (
+    MAX_UNAVAILABLE_JUDGMENT_SHARE,
+    CurationCatalog,
+    JudgmentStatus,
+    validate_items,
+)
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sha256
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.source_fingerprints import SourceIdentitySurvey
+
+from experiments.post_training.task_curation.admission_binding import (
+    require_content_result,
+    require_declaration_admission,
+)
+from experiments.post_training.task_curation.catalog_identity import (
+    backend_survey_payload,
+    canonical_assessment,
+    canonical_backend_survey,
+    canonical_identity_survey,
+    canonical_snapshot_source,
+    identity_survey_payload,
+)
+from experiments.post_training.task_curation.retirement import retired_admission_source_ids
+from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
+from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
+from infra.marina.apps.rl_data_catalog.server.filtration import filtration
+from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
+REVIEW_COMPLETENESS_VERSION = 5
+
+
+class CatalogDisplayPolicy(StrEnum):
+    STRICT = "strict"
+    PREVIEW = "preview"
+
+
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
-        "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB"
+        "latest_attempt_status TEXT, reason TEXT, curation JSONB, diagnostics JSONB, "
+        "source_fingerprint JSONB, duplicate_group JSONB, review_completeness JSONB"
     ),
     "assessments": (
         "pipeline_key TEXT, source_id TEXT, scope TEXT, model JSONB, rubric TEXT, "
@@ -32,6 +69,11 @@ TABLE_COLUMNS = {
         "evidence_ids JSONB, packet_uri TEXT, has_task BOOLEAN, omissions JSONB, exclusion_reason TEXT"
     ),
     "packets": "pipeline_key TEXT, task_id TEXT, packet TEXT",
+    "backend_surveys": "survey_id TEXT, survey JSONB",
+    "backend_sources": "source_id TEXT, capabilities JSONB",
+    "backend_cells": "backend TEXT, requirement TEXT, cell JSONB",
+    "identity_surveys": "survey_id TEXT, metadata JSONB",
+    "duplicate_reviews": "left_source TEXT, right_source TEXT, review JSONB",
 }
 
 
@@ -68,18 +110,52 @@ def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows
     return count
 
 
-def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]:
+def load_catalog(
+    catalog: CurationCatalog,
+    query: AppletQuery,
+    backend_map: BackendSurvey,
+    identities: SourceIdentitySurvey,
+    *,
+    display_policy: CatalogDisplayPolicy = CatalogDisplayPolicy.STRICT,
+) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
+    backend_map = canonical_backend_survey(backend_map.model_dump(mode="json"))
+    identities = canonical_identity_survey(identities.model_dump(mode="json"))
     snapshot = catalog.current()
+    if (backend_map.catalog_root, backend_map.snapshot_id) != (catalog.root, snapshot.snapshot_id):
+        raise ValueError("Backend map belongs to another catalog snapshot; survey the selected catalog")
+    if backend_map.schema_sha256 != backend_schema_sha256():
+        raise ValueError("Backend map uses another requirement schema; rerun the survey")
+    if (identities.catalog_root, identities.snapshot_id) != (catalog.root, snapshot.snapshot_id):
+        raise ValueError("Source identity map belongs to another catalog snapshot")
+    identity_id = canonical_sha256(identity_survey_payload(identities))
+    survey_id = canonical_sha256(backend_survey_payload(backend_map))
     current = query(
         """
-        SELECT c.load_id, l.catalog_root, l.snapshot_id FROM atlas_current c
-        JOIN atlas_loads l USING (load_id) WHERE c.name = 'latest'
+        SELECT c.load_id, l.catalog_root, l.snapshot_id, l.review_completeness_version, l.display_policy,
+            b.survey_id, i.survey_id AS identity_id FROM atlas_current c
+        JOIN atlas_loads l USING (load_id)
+        LEFT JOIN atlas_backend_surveys b USING (load_id)
+        LEFT JOIN atlas_identity_surveys i USING (load_id) WHERE c.name = 'latest'
     """,
         {},
     )["rows"]
-    if current and (current[0]["catalog_root"], current[0]["snapshot_id"]) == (catalog.root, snapshot.snapshot_id):
+    if current and (
+        current[0]["catalog_root"],
+        current[0]["snapshot_id"],
+        current[0]["survey_id"],
+        current[0]["identity_id"],
+        current[0]["review_completeness_version"],
+        current[0]["display_policy"],
+    ) == (
+        catalog.root,
+        snapshot.snapshot_id,
+        survey_id,
+        identity_id,
+        REVIEW_COMPLETENESS_VERSION,
+        display_policy,
+    ):
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
     obsolete_load_ids = json.dumps([row["load_id"] for row in query("SELECT load_id FROM atlas_loads", {})["rows"]])
@@ -96,35 +172,99 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
 
     execute(
         """
-        INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at)
-        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at)
+        INSERT INTO atlas_loads
+            (load_id, catalog_root, snapshot_id, created_at, review_completeness_version, display_policy)
+        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :review_completeness_version, :display_policy)
     """,
         {
             "load_id": load_id,
             "catalog_root": catalog.root,
             "snapshot_id": snapshot.snapshot_id,
             "created_at": snapshot.created_at,
+            "review_completeness_version": REVIEW_COMPLETENESS_VERSION,
+            "display_policy": display_policy,
         },
     )
-    sources = list(catalog.sources(snapshot.snapshot_id))
+    sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
+    if retired := {source.id for source in sources} & retired_admission_source_ids():
+        raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
+    for source in sources:
+        if filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded":
+            require_declaration_admission(source.declaration)
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
+    if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:
+        raise ValueError("Backend map does not cover the selected catalog inventory")
+    if {source.id for source in sources} != set(identities.fingerprints):
+        raise ValueError("Source identity map does not cover the selected catalog inventory")
+    source_declarations = {source.id: source.declaration for source in sources}
+    for source in backend_map.sources:
+        evidence = source_declarations[source.source_id].grading_environment
+        expected = evidence.model_dump(mode="json") if evidence is not None else None
+        if source.grading_environment != expected:
+            raise ValueError(f"Backend map grading evidence differs from the catalog: {source.source_id}")
+    groups = {member.source_id: group.model_dump(mode="json") for group in identities.groups for member in group.members}
     metadata: dict[str, list[dict[str, Any]]] = {
-        "sources": [row.model_dump(mode="json", exclude={"snapshot_id"}) for row in sources],
+        "sources": [
+            {
+                **row.model_dump(mode="json", exclude={"snapshot_id"}),
+                "source_fingerprint": (
+                    identities.fingerprints[row.id].model_dump(mode="json")
+                    if identities.fingerprints[row.id] is not None
+                    else None
+                ),
+                "duplicate_group": groups.get(row.id),
+            }
+            for row in sources
+        ],
         "assessments": [],
         "populations": [],
         "items": [],
+        "identity_surveys": [
+            {
+                "survey_id": identity_id,
+                "metadata": identities.model_dump(mode="json", exclude={"fingerprints", "reviews", "groups"}),
+            }
+        ],
+        "duplicate_reviews": [
+            {
+                "left_source": row.similarity.left,
+                "right_source": row.similarity.right,
+                "review": row.model_dump(mode="json"),
+            }
+            for row in identities.reviews
+        ],
+        "backend_surveys": [
+            {"survey_id": survey_id, "survey": backend_map.model_dump(mode="json", exclude={"sources", "matrix"})}
+        ],
+        "backend_cells": [
+            {"backend": cell.backend, "requirement": cell.requirement.value, "cell": cell.model_dump(mode="json")}
+            for cell in backend_map.matrix
+        ],
+        "backend_sources": [
+            {"source_id": source.source_id, "capabilities": source.model_dump(mode="json")}
+            for source in backend_map.sources
+        ],
     }
     all_items = []
-    for source in sources:
+    for source, record in zip(sources, metadata["sources"], strict=True):
         key = source.assessment_key
+        record["review_completeness"] = review_completeness(source.declaration, [], [])
         if key is None:
+            display = quality_display(
+                source.declaration.model_dump(mode="json"),
+                source.curation.model_dump(mode="json") if source.curation else None,
+                key,
+            )
+            if display_policy is CatalogDisplayPolicy.STRICT or display.quality is not Quality.QUICK:
+                require_content_result(source.declaration, source.curation, key)
             continue
-        assessment = catalog.assessment(key)
+        assessment = canonical_assessment(catalog.assessment(key))
         if assessment.source_id != source.id:
             raise ValueError("Selected assessment belongs to another source")
         populations, items = catalog.populations(key), list(catalog.items(key))
         validate_items(populations, items)
+        record["review_completeness"] = review_completeness(source.declaration, populations, items)
         unavailable = sum(1 for item in items if item.status != JudgmentStatus.REVIEWED)
         if items and unavailable / len(items) > MAX_UNAVAILABLE_JUDGMENT_SHARE:
             raise ValueError(f"Selected assessment exceeds the unavailable-judgment threshold: {key}")
@@ -133,6 +273,12 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
         metadata["items"].extend(row.model_dump(mode="json") for row in items)
         all_items.extend(items)
     counts = {table: insert(table, rows) for table, rows in metadata.items()}
+    if (
+        counts["backend_sources"] != len(sources)
+        or counts["backend_surveys"] != 1
+        or counts["backend_cells"] != len(backend_map.matrix)
+    ):
+        raise ValueError("Backend survey import is incomplete")
 
     def packet_rows() -> Iterable[dict[str, Any]]:
         for offset in range(0, len(all_items), PACKET_READ_BATCH):
@@ -146,6 +292,9 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
                 }
 
     counts["packets"] = insert("packets", packet_rows())
+    if expected_load_id is not None:
+        for table, copied in retain_prior_assessments(execute, TABLE_COLUMNS, expected_load_id, load_id).items():
+            counts[table] += copied
     packet_sizes = execute(
         """
         SELECT COALESCE(SUM(octet_length(packet)), 0) AS packet_bytes,
@@ -189,9 +338,25 @@ def load_catalog(catalog: CurationCatalog, query: AppletQuery) -> dict[str, Any]
 )
 @click.option("--app-id", "applet_id", required=True)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
-def main(catalog_root: str, applet_id: str, service_url: str) -> None:
+@click.option("--backend-map", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option("--source-identities", type=click.Path(exists=True, path_type=Path), required=True)
+def main(catalog_root: str, applet_id: str, service_url: str, backend_map: Path, source_identities: Path) -> None:
     configure_coreweave_s3()
-    click.echo(json.dumps(load_catalog(CurationCatalog(catalog_root), applet_query(service_url, applet_id))))
+    survey = canonical_backend_survey(json.loads(backend_map.read_text()))
+    identities = canonical_identity_survey(json.loads(source_identities.read_text()))
+    click.echo(
+        json.dumps(
+            load_catalog(
+                CurationCatalog(catalog_root),
+                applet_query(service_url, applet_id),
+                survey,
+                identities,
+                display_policy=(
+                    CatalogDisplayPolicy.PREVIEW if applet_id == PREVIEW_APP_ID else CatalogDisplayPolicy.STRICT
+                ),
+            )
+        )
+    )
 
 
 if __name__ == "__main__":

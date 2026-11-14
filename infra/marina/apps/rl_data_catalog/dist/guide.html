@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Getting started · RL Data Atlas</title>
+  <link rel="stylesheet" href="style.css"><link rel="stylesheet" href="guide.css">
+  <script src="common.js" defer></script><script src="guide.js" defer></script>
+</head>
+<body class="guide">
+<main>
+  <header class="atlas-header"><a class="atlas-name" href="./">RL Data Atlas</a><a href="archive.html">Review archive</a></header>
+  <nav class="atlas-tabs" aria-label="Atlas views"><a href="./">By source</a><a href="curriculum.html">By curriculum</a><a href="guide.html" aria-current="page">Getting started</a></nav>
+
+  <section class="page-heading guide-heading">
+    <div>
+      <h1>From a candidate dataset to an Atlas source</h1>
+      <p id="message" role="status" aria-live="polite">Loading the catalog…</p>
+    </div>
+  </section>
+
+  <div class="guide-body">
+  <section class="lede">
+    <p>The RL Data Atlas lists every RL task source that <em>Marin</em> — the open training project whose job scheduler, dataset processing and app host this Atlas runs on — has declared, with its review state and evidence. A <em>source</em> is one pinned population of tasks, for example one Hugging Face dataset revision. A <em>task</em> is one RL problem stored as a <a href="https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py">TaskSpec</a>: the prompt, the machine environment the agent works in, the answer contract and the grader (also called the verifier).</p>
+    <p>This page shows each path a dataset can take into the Atlas and what each outcome lets you rely on. Being listed is not the same as being approved for training: see the <a href="#eligibility">eligibility matrix</a>, and the <a href="#use-a-source">reader workflow</a> for using an existing source. The counts come from the catalog snapshot that the Atlas currently serves, so they change when an operator loads a new snapshot. The normative rules live in the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md">task curation reference</a>; the steps below link to the maintained procedures. This page was synced with Atlas preview revision 15 (2026-11-14).</p>
+  </section>
+
+  <section aria-labelledby="policy-title" id="policy">
+    <h2 id="policy-title">Current admission policy</h2>
+    <p><strong>Examples</strong> is the number of admitted tasks after filtration. There is no separate oracle column. Every header count is in tasks: admitted (TRAIN plus EVAL), pending oracle filtration, excluded, total population and tasks by quality. Shown follows filters and duplicate folding; the note accounts for hidden, filtered and folded tasks. Show everything clears filters, includes QUICK/BAD and expands every duplicate group. A source without an oracle shows its retained count minus typed static blockers. A source with an oracle shows Examples Pending until its current admission receipt exists.</p>
+    <ul>
+      <li><strong>Sources with oracles.</strong> The original oracle solution runs on every task through the production Harbor trial path. Tasks whose oracle fails are dropped before ingestion. When the grader reads the agent's workspace, a <code>nop</code> agent that does nothing must also fail: a task is admitted only if its oracle passes and its nop does not. A nop pass excludes the task as <code>NEGATIVE_CONTROL_PASSED</code>. A nop run killed by a signal or an interrupted producer gets one re-drive at the same budget. A 600-second verifier deadline or a source error on the unsolved state counts as not passing. Tasks graded only on their answer need no nop control.</li>
+      <li><strong>Sources without oracles.</strong> Examples is the count retained after deduplication and lexical decontamination, minus tasks with a typed static blocker such as <code>tool_provider_required</code>. No per-task execution proof is required for now.</li>
+      <li><strong>EVAL sources</strong> are admitted to Atlas as evaluation data after applicable filtration, and remain excluded from TRAIN selection. Deduplication and lexical measurement still apply; EVAL overlap is not remediated.</li>
+      <li><strong>Non-agentic tasks</strong> have no actor, harness or workspace: the model answers and the grader checks the answer. They skip every check that only makes sense for an agent: resource and timeout specs, calibration, package locks, Docker bases and image builds, tool providers, shared executors, backend fit, network policy and nop controls. A grader verdict, oracle filtering where an oracle exists, content QA, deduplication, decontamination, cross-source overlap and the EVAL rules still apply. This is decided per task from its TaskSpec, never by source name.</li>
+      <li><strong>Agentic tasks</strong> run in exactly their own environment; a substitute image needs a mechanical no-op proof and a new dataset version. Declared limits are kept. Missing limits are calibrated from 1 CPU, 2 GiB memory, 2 GiB disk, a 300-second agent timeout and a 60-second verifier timeout, doubling only the limit that failed. The whole task contract must run on a production backend, with each task's declared network policy.</li>
+      <li><strong>Releases.</strong> Remediation publishes one new private <code>open-athena</code> pinned version per source. Prepared images go in a new GHCR package per source with internal visibility, never public. Artifacts are never deleted; changes get a new version.</li>
+      <li><strong>Overlap and contamination.</strong> Exact duplicate contracts are dropped in every source. Lexical 13-gram overlap is removed from TRAIN sources and only measured for EVAL sources. Cross-source overlap matches each task to its most similar task in the other source, never by task ID, and a model cannot downgrade a measured overlap.</li>
+      <li><strong>Quality.</strong> Result is GOOD when at least 90% of reviewed tasks are clean, BAD when at least 50% have issues, and SOME_ISSUES otherwise. QC never rejects tasks. A FULL review can be finalized with at most 1% of tasks unreviewed under a pinned waiver. Judges run at temperature 0.7 through the production judge service.</li>
+      <li><strong>Jobs.</strong> Curation jobs use three-day timeouts and run in the data's region. Infrastructure failures are re-driven and never count as task failures.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="flow-title">
+    <h2 id="flow-title">The paths</h2>
+    <p class="hint">Solid edges are the path a candidate takes; dashed edges leave it for an outcome or an alternate route. Agentic tasks need a machine (a shell, files or tools). Non-agentic tasks skip machine provisioning and every other agent-only check; every source still needs a grading-boundary assessment. Select an outcome to list its sources.</p>
+    <div class="flow-scroller" tabindex="0" aria-label="Flow diagram, scrolls sideways on narrow screens">
+    <svg class="flow" viewBox="0 0 1000 1240" role="img" aria-labelledby="flow-svg-title flow-svg-desc">
+      <title id="flow-svg-title">Ingestion paths for an RL Data Atlas source</title>
+      <desc id="flow-svg-desc">Seven steps from a candidate dataset to an admitted source. Non-agentic sources bypass the agentic format gate and still assess grading boundaries. Environment failures drop one task while the surviving tasks continue. Deprecation is drawn on the older source a qualified release replaces. Execution oversight and content-review Quality are distinct; neither alone establishes training eligibility.</desc>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker>
+      </defs>
+
+      <!-- spine connectors -->
+      <g class="edge">
+        <path d="M245,78 V116" marker-end="url(#arrow)"/>
+        <path d="M245,188 V228" marker-end="url(#arrow)"/>
+        <path d="M245,314 V368" marker-end="url(#arrow)"/>
+        <path d="M245,492 V530" marker-end="url(#arrow)"/>
+        <path d="M245,602 V640" marker-end="url(#arrow)"/>
+        <path d="M245,808 V846" marker-end="url(#arrow)"/>
+        <path d="M245,932 V970" marker-end="url(#arrow)"/>
+        <path d="M245,1056 V1098" marker-end="url(#arrow)"/>
+        <path d="M245,1056 V1078 H742 V1098" marker-end="url(#arrow)"/>
+        <!-- non-agentic bypass around the agentic format and environment gates -->
+        <path d="M30,160 H16 V420 H28" marker-end="url(#arrow)"/>
+      </g>
+      <!-- per-task drop-and-continue loop -->
+      <g class="edge exit">
+        <path d="M680,454 V520 H253" marker-end="url(#arrow)"/>
+      </g>
+      <!-- exits -->
+      <g class="edge exit">
+        <path d="M460,250 H524 V260 H588" marker-end="url(#arrow)"/>
+        <path d="M460,296 H524 V340 H588" marker-end="url(#arrow)"/>
+        <path d="M460,422 H588" marker-end="url(#arrow)"/>
+        <path d="M460,562 H588" marker-end="url(#arrow)"/>
+        <path d="M460,744 H524 V776 H588" marker-end="url(#arrow)"/>
+        <path d="M460,1013 H524 V1002 H588" marker-end="url(#arrow)"/>
+      </g>
+      <g class="elabel">
+        <text x="253" y="212">pipeline present</text>
+        <text x="255" y="345">accepted format</text>
+        <text x="270" y="514">drop this task; survivors continue</text>
+        <text x="255" y="624">SAMPLE or FULL assessment</text>
+        <text x="255" y="830">qualification passed</text>
+        <text x="255" y="1092">execution evidence covers a documented sample</text>
+        <text x="480" y="1070">execution evidence covers every retained task</text>
+        <text transform="rotate(-90 12 400)" x="12" y="400">non-agentic: go to 3</text>
+      </g>
+
+      <!-- spine nodes -->
+      <g class="node start"><rect x="30" y="20" width="430" height="58" rx="10"/>
+        <text x="50" y="45" class="nt">Candidate dataset</text>
+        <text x="50" y="66" class="ns">Pinned HF commit, URL + SHA-256, or Harbor Hub digest</text></g>
+
+      <g class="node"><rect x="30" y="116" width="430" height="72" rx="10"/>
+        <text x="50" y="141" class="nt"><tspan class="step">1</tspan> Declare an RlDataSource</text>
+        <text x="50" y="162" class="ns">Registered: stable ID, pinned input, origin, family</text>
+        <text x="50" y="179" class="ns">Every entry has a registered converter</text></g>
+
+      <g class="node"><rect x="30" y="228" width="430" height="86" rx="10"/>
+        <text x="50" y="253" class="nt"><tspan class="step">2</tspan> Task format gate (agentic only)</text>
+        <text x="50" y="274" class="ns">Accepted: TaskCompendium or Harbor task directories</text>
+        <text x="50" y="291" class="ns">MarinSkyRL blends only from the frozen list</text>
+        <text x="50" y="307" class="ns muted-text">Checked by runnable_sources() before any run starts</text></g>
+
+      <g class="node"><rect x="30" y="368" width="430" height="124" rx="10"/>
+        <text x="50" y="393" class="nt"><tspan class="step">3</tspan> Fidelity and grading boundary</text>
+        <text x="50" y="414" class="ns">Each task runs in exactly its specified environment:</text>
+        <text x="62" y="433" class="ns">· grading: SHARED or SEPARATE from the task contract</text>
+        <text x="62" y="451" class="ns">· workspace state requires SHARED execution</text>
+        <text x="62" y="469" class="ns">· repairs need complete specs, new pins and QA</text>
+        <text x="50" y="486" class="ns muted-text">a grading mismatch or missing environment rejects the task</text></g>
+
+      <g class="node"><rect x="30" y="530" width="430" height="72" rx="10"/>
+        <text x="50" y="555" class="nt"><tspan class="step">4</tspan> Convert, deduplicate and decontaminate</text>
+        <text x="50" y="576" class="ns">QUICK: converted without review; QA follows remediation</text>
+        <text x="50" y="593" class="ns muted-text" data-fill="modes">Modes in this snapshot: loading…</text></g>
+
+      <g class="node"><rect x="30" y="640" width="430" height="168" rx="10"/>
+        <text x="50" y="665" class="nt"><tspan class="step">5</tspan> Calibrate, oracle-filter and assess QA</text>
+        <text x="62" y="687" class="ns">· exact pins, conversion fidelity and drop accounting</text>
+        <text x="62" y="706" class="ns">· full-population oracle filter in both QA modes</text>
+        <text x="62" y="725" class="ns">· no oracle: retained minus typed static blockers</text>
+        <text x="62" y="744" class="ns">· pinned judge tier and end-to-end qualification</text>
+        <text x="62" y="763" class="ns">· content QC reports issues; it never rejects tasks</text>
+        <text x="50" y="789" class="ns muted-text" data-fill="oracle">Oracle: loading…</text></g>
+
+      <g class="node"><rect x="30" y="846" width="430" height="86" rx="10"/>
+        <text x="50" y="871" class="nt"><tspan class="step">6</tspan> Daytona capacity and compatibility</text>
+        <text x="50" y="892" class="ns">Actor-only: identities from the declared task specs</text>
+        <text x="50" y="909" class="ns">via the naming path; no API calls, no quota tested</text>
+        <text x="50" y="926" class="ns" data-fill="daytona-rule">beyond the snapshot cap or refused: still ingested</text></g>
+
+      <g class="node"><rect x="30" y="970" width="430" height="86" rx="10"/>
+        <text x="50" y="995" class="nt"><tspan class="step">7</tspan> Publish, then load</text>
+        <text x="50" y="1016" class="ns">Private open-athena HF release, TaskCompendium format</text>
+        <text x="50" y="1033" class="ns">Publish a complete catalog; load the chosen app</text>
+        <text x="50" y="1050" class="ns muted-text">qualified ≠ published ≠ loaded, three separate operations</text></g>
+
+      <!-- outcome pills -->
+      <g class="pill rejected"><rect x="590" y="228" width="380" height="64" rx="10"/>
+        <text x="608" y="248" class="pc">No declared format, or MarinSkyRL off the list</text><text x="608" y="268" class="pt">Rejected at selection</text>
+        <text x="608" y="285" class="pn">Fails before any run; not cataloged as runnable</text></g>
+
+      <g class="pill grandfathered" data-leaf="grandfathered" tabindex="0" role="button" aria-label="Grandfathered blends: list sources"><rect x="590" y="308" width="380" height="64" rx="10"/>
+        <text x="608" y="328" class="pc">MarinSkyRL blend on the frozen grandfather list</text><text x="608" y="348" class="pt">Grandfathered blend</text>
+        <text x="608" y="365" class="pn" data-count="grandfathered">…</text></g>
+
+      <g class="pill rejected"><rect x="590" y="390" width="380" height="64" rx="10"/>
+        <text x="608" y="410" class="pc">Runtime differs from spec: class (c)</text><text x="608" y="430" class="pt">Task rejected, source continues</text>
+        <text x="608" y="447" class="pn">Drop the task, keep the reason, survivors continue</text></g>
+
+      <g class="pill needs-qa" data-leaf="unreviewed" tabindex="0" role="button" aria-label="Execution oversight pending: list sources"><rect x="590" y="530" width="380" height="64" rx="10"/>
+        <text x="608" y="550" class="pc">Execution oversight not recorded</text><text x="608" y="570" class="pt">Qualification pending</text>
+        <text x="608" y="587" class="pn" data-count="unreviewed">…</text></g>
+
+      <g class="pill excluded" data-leaf="excluded" tabindex="0" role="button" aria-label="Excluded: list sources"><rect x="590" y="744" width="380" height="64" rx="10"/>
+        <text x="608" y="764" class="pc">Explicit source exclusion with a recorded reason</text><text x="608" y="784" class="pt">Excluded, with the reason</text>
+        <text x="608" y="801" class="pn" data-count="excluded">…</text></g>
+
+      <g class="pill deprecated" data-leaf="deprecated" tabindex="0" role="button" aria-label="Deprecated: list sources"><rect x="590" y="970" width="380" height="64" rx="10"/>
+        <text x="608" y="990" class="pc">The qualified release replaces it, or it is withdrawn</text><text x="608" y="1010" class="pt">Older source: Deprecated</text>
+        <text x="608" y="1027" class="pn" data-count="deprecated">…</text></g>
+
+      <!-- admitted outcomes -->
+      <g class="pill admitted" data-leaf="sample" tabindex="0" role="button" aria-label="Admitted at SAMPLE oversight: list sources"><rect x="30" y="1100" width="455" height="118" rx="12"/>
+        <text x="50" y="1126" class="pt">Execution oversight SAMPLE</text>
+        <text x="50" y="1148" class="ns">Execution evidence covers a recorded sample</text>
+        <text x="50" y="1172" class="pn" data-count="sample">…</text>
+        <text x="50" y="1194" class="pn" data-coverage="sample">…</text>
+        <text x="50" y="1216" class="pn" data-daytona="sample">…</text></g>
+
+      <g class="pill admitted full" data-leaf="full" tabindex="0" role="button" aria-label="Admitted at FULL oversight: list sources"><rect x="515" y="1100" width="455" height="118" rx="12"/>
+        <text x="535" y="1126" class="pt">Execution oversight FULL</text>
+        <text x="535" y="1148" class="ns">Recorded execution covers the retained population</text>
+        <text x="535" y="1172" class="pn" data-count="full">…</text>
+        <text x="535" y="1194" class="pn" data-coverage="full">…</text>
+        <text x="535" y="1216" class="pn" data-daytona="full">…</text></g>
+    </svg>
+    </div>
+    <div class="flow-legend" aria-hidden="true">
+      <span><i class="edge-sample"></i>the candidate's required path</span>
+      <span><i class="edge-sample dashed"></i>exit into an outcome, or an alternate route such as the non-agentic bypass</span>
+    </div>
+  </section>
+
+  <section aria-labelledby="leaves-title">
+    <h2 id="leaves-title">Read the evidence before selecting data</h2>
+    <p>In the preview, sources awaiting an exact-input SAMPLE Result display QUICK. Their Quality tooltip and Evidence say “SAMPLE review in progress”; Result and issue rate stay unmeasured. The source declaration and execution evidence remain unchanged.</p>
+    <p>Quality levels define the required content-review scope: <strong>QUICK</strong> converts without content review, <strong>SAMPLE</strong> requires a complete review of the selected sample, and <strong>FULL</strong> requires review of the whole retained population, or an explicitly accepted whole-source waiver accounting for every unreviewed task and exact reason. An accepted waiver gives a final Result while Evidence still shows false strict coverage and the missing-review count. A provisional Result marks an unfinished required review, including unreviewed or uncertain tasks. Execution qualification is separate: content review does not prove that tasks execute successfully.</p>
+    <p>Use comes from the registered converter’s explicit TRAIN or EVAL policy. A benchmark tag never overrides TRAIN. Historical declarations without recorded Use display Unknown.</p>
+    <p>Result is computed from conclusive content reviews: <strong>GOOD</strong> means at most 10% with issues, <strong>BAD</strong> means at least 50%, and <strong>SOME_ISSUES</strong> lies between. Uncertain and unavailable observations stay explicit. QC never rejects tasks or sources. Mechanical conversion, environment, oracle and contamination exclusions have their own ledgers. A missing Result is unassessed, not a clean result.</p>
+    <p><span class="chip quality-some_issues result-provisional">Some issues · provisional</span> A Result is provisional when its required review is incomplete, including unreviewed or uncertain observations, unless a pinned whole-source waiver explicitly finalizes it. A completed SAMPLE review is final for its sample. The Issue rate column shows the conclusive issue fraction; review progress and lower bounds are on the source Evidence page. Enum chips carry their whole label with no text beneath them. The Overlap column counts flagged tasks in the measured input.</p>
+    <div id="contamination">
+      <h3>Contamination</h3>
+      <p>Contamination records lexical overlap with the evaluation corpus. Counts refer to the measured input population, before duplicate and lexical exclusions. This measurement does not establish semantic decontamination.</p>
+      <dl>
+        <dt><span class="chip contamination-chip quality-good">NO ISSUES</span></dt><dd>A zero-overlap measurement binds to the current input pin or a validated current retained-release receipt.</dd>
+        <dt><span class="chip contamination-chip contamination-remediated">REMEDIATED</span></dt><dd>TRAIN overlap was found and excluded in a new pinned private TaskCompendium release. Its validated remediation receipt must match the current dataset pin.</dd>
+        <dt><span class="chip contamination-chip quality-some_issues">MEASURED, EVAL</span></dt><dd>Overlap was measured for a source declared EVAL and retained by policy. Inspect the overlapping-task count and matched evaluations in Evidence.</dd>
+        <dt><span class="chip contamination-chip quality-bad contamination-required">REMEDIATION REQUIRED</span></dt><dd>TRAIN overlap is measured but the current private pin lacks verified remediation. This state violates ingestion requirements and requires attention before training selection.</dd>
+        <dt><span class="chip contamination-chip quality-unassessed">NOT MEASURED</span></dt><dd>No applicable current-pin lexical record exists. Historical evidence can remain available; the current source has no cleanliness claim.</dd>
+      </dl>
+    </div>
+    <p>The outcome lists below group sources by recorded execution oversight and source status, independently of Quality. A source with FULL content review can still have execution qualification pending. Open a source for its exact pin, counts and evidence.</p>
+    <div class="table-wrap"><table class="leaf-table" id="eligibility">
+      <caption>Recorded execution and source status</caption>
+      <thead><tr><th scope="col">Category</th><th scope="col">What it records</th><th scope="col" class="num">Sources</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Grandfathered blend</th><td>A frozen historical exception; missing environment measurements remain unavailable. It does not establish new QA.</td><td class="num"><button class="count" data-leaf="grandfathered" data-count="grandfathered-n">…</button></td></tr>
+        <tr><th scope="row">Execution oversight pending</th><td>No qualifying execution oversight is recorded. Inspect content QA separately.</td><td class="num"><button class="count" data-leaf="unreviewed" data-count="unreviewed-n">…</button></td></tr>
+        <tr><th scope="row">Excluded</th><td>An explicit exclusion with its recorded reason; evidence remains available.</td><td class="num"><button class="count" data-leaf="excluded" data-count="excluded-n">…</button></td></tr>
+        <tr><th scope="row">Deprecated</th><td>A replacement or withdrawal reason; historical evidence remains available.</td><td class="num"><button class="count" data-leaf="deprecated" data-count="deprecated-n">…</button></td></tr>
+        <tr><th scope="row">Execution oversight SAMPLE</th><td>Some execution checks are sampled. Oracle filtering still covers every eligible task; inspect the receipts for each check.</td><td class="num"><button class="count" data-leaf="sample" data-count="sample-n">…</button></td></tr>
+        <tr><th scope="row">Execution oversight FULL</th><td>Recorded execution evidence covers the retained population. This does not certify every grader verdict or establish complete content QA.</td><td class="num"><button class="count" data-leaf="full" data-count="full-n">…</button></td></tr>
+      </tbody>
+    </table></div>
+    <dl class="daytona-labels">
+      <div><dt>SAFE</dt><dd>Measured actor requirements fit the recorded Daytona capability and snapshot rules. Provisioning, quota headroom and completed rollouts are not established.</dd></div>
+      <div><dt>UNSAFE: reason</dt><dd>Recorded actor requirements exceed a limit or use an unsupported capability. The source remains listed.</dd></div>
+      <div><dt>N/A or pending</dt><dd>N/A requires a complete census with zero actor machines. Missing measurements remain pending. Grading machines do not enter the actor's Daytona label.</dd></div>
+    </dl>
+    <section id="leaf-list" class="leaf-list" hidden aria-live="polite">
+      <div class="leaf-list-head"><h3 id="leaf-list-title"></h3><button id="leaf-list-close" class="text-button" type="button">Close list</button></div>
+      <div class="table-wrap"><table class="leaf-sources"><thead><tr><th scope="col">Source</th><th scope="col">Origin</th><th scope="col">Execution oversight</th><th scope="col">Daytona</th></tr></thead><tbody id="leaf-rows"></tbody></table></div>
+    </section>
+  </section>
+
+  <section aria-labelledby="steps-title" class="steps">
+    <h2 id="steps-title">The required ingest order</h2>
+    <article id="declare"><h3><span class="step-badge">1</span> Declare an immutable input</h3>
+      <p>Every source has a registered converter, a canonical ID, an immutable dataset pin and upstream provenance. Historical IDs resolve through the alias table. Register the source through <code>all_sources()</code>; inventory-only declarations are not current runnable sources. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#declarations">Declarations</a>.</p>
+    </article>
+    <article id="format"><h3><span class="step-badge">2</span> Preserve the task contract</h3>
+      <p>New agentic sources ingest TaskCompendium or Harbor task directories. Internal MarinSkyRL format is accepted only for the frozen grandfather list. Prompts, answer contracts, environments and graders belong to the task specification.</p>
+    </article>
+    <article id="environment"><h3><span class="step-badge">3</span> Assess environment fidelity and grading boundaries</h3>
+      <p>Tasks run in exactly their specified environment. A shared image cannot replace it. A repaired release completely describes its runtime behavior; ingestion-time transformations require SAMPLE or FULL QA and a new pinned version.</p>
+      <p>Every conversion assesses SHARED versus SEPARATE grading on every task. Workspace state and repository capabilities require SHARED execution; independent submitted-program or typed file-only contracts may use SEPARATE grading. A mismatched boundary is a mechanical rejection. Source-level declarations do not override task requirements. Inspect the per-source census and evidence. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#environments">Environments</a>.</p>
+    </article>
+    <article id="modes"><h3><span class="step-badge">4</span> Convert, deduplicate and decontaminate</h3>
+      <p>The mandatory order is conversion, exact within-source deduplication, lexical decontamination, resource calibration (agentic tasks only) and full-population oracle filtering, then SAMPLE/FULL QA. Raw, unique and dropped counts must reconcile, with a manifest explaining each exclusion.</p>
+      <p>Lexical measurements bind to the exact dataset revision. TRAIN remediation removes the union of duplicate and lexical exclusions; EVAL sources remove duplicates and retain lexical flags without lexical exclusions. Remediation produces a new private <code>open-athena</code> TaskCompendium release. QA and execution evidence bind to that retained population. Advisory cross-source duplicate groups are distinct from within-source drops and do not authorize deleting data. They pair each task with its nearest neighbor in the other source, never by task ID; a model cannot downgrade a measured overlap.</p>
+      <p>QUICK converts without review. SAMPLE uses a bounded QA panel; FULL processes the complete population; complete content review requires its own coverage evidence. Processing mode, execution oversight, content Quality and Result are separate fields. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#mandatory-within-source-duplicate-removal">Within-source deduplication</a> and <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#lexical-decontamination-before-publication">Lexical decontamination</a>.</p>
+    </article>
+    <article id="qualify"><h3><span class="step-badge">5</span> Filter oracles and qualify execution</h3>
+      <p>Oracle filtering covers every oracle-bearing task in both SAMPLE and FULL. A sampled control pass rate never exempts unsampled oracle-bearing tasks. The retained cohort is the passing subset; infrastructure errors are re-driven and never count as oracle failures. Workspace-graded tasks also need a full-population <code>nop</code> negative control that does not pass. Content QC remains informational and never rejects tasks.</p>
+      <p>The Filtration column shows EXCLUDED and Examples 0 for a complete, current-pin private filtration output with no retained tasks. This is a mechanical exclusion, not an admission or execution claim. Oracle-bearing sources show Pending oracle filtration until final evidence is bound. No-oracle Examples equal the current retained count minus unique typed static blockers under the pinned policy ruling; EVAL tasks enter total Atlas admission as evaluation data and remain excluded from TRAIN selection. Actorless answer-only tasks are exempt from agentic-only environment, lock, tool, network and workspace checks under their pinned ruling. Grading, content QA, deduplication, lexical checks and original-oracle filtering still apply. Missing static measurements remain unmeasured. The ledger links canonical filter, private output and validation receipts with their SHA-256 hashes. Content QA and backend fit never supply an admitted count.</p>
+      <h4 id="no-oracle">Sources without oracle solutions</h4>
+      <p>No per-task execution proof is required for now; the requirement can be restored later. Examples counts the tasks retained after deduplication and lexical decontamination, minus tasks with typed static blockers such as <code>tool_provider_required</code> or <code>shared_executor_required</code>. Content QA, environment fidelity, deduplication and decontamination still apply. Payload preservation, setup execution and verifier liveness checks remain available as diagnostics; a rebuilt environment uses them to show its spec is faithful. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#sources-without-oracle-solutions">Sources without oracle solutions</a>.</p>
+      <h4 id="judged">LLM-judged sources</h4>
+      <p>The implemented <code>JUDGE_TIERS</code> table defines LIGHT, MEDIUM and HEAVY judge specifications. Choose a tier after reviewing ten frozen tasks by hand and record the rationale. Pin the model identity and available revision, rubric, inputs, context and completion budgets, reasoning, temperature (0.7), parsing and retry settings. Endpoint configuration stays separate from the task's judge contract.</p>
+      <p>A pinned preset establishes a contract; source qualification remains pending until end-to-end controls and review demonstrate its behavior through the production grader. Record unavailable immutable weight identities as limitations. The curation reviewer uses its own pinned <code>ReviewerSpec</code>, separate from the task's reward judge. See <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#llm-judged-sources">LLM-judged sources</a> and <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#full-population-oracle-filter">Oracle filtering</a>.</p>
+    </article>
+    <article id="daytona"><h3><span class="step-badge">6</span> Read actor capacity separately</h3>
+      <p>Daytona labels measure actor machines only. Grading runs according to each task's SHARED/SEPARATE contract and does not change the actor label. A static census does not prove live quota, image availability or successful execution. Per-source backend fit remains unassessed when no current complete task-spec census was loaded.</p>
+    </article>
+    <article id="publish"><h3><span class="step-badge">7</span> Publish evidence, then load the intended app</h3>
+      <p>Dataset publication, catalog publication, application code release and catalog loading are separate operations. Repaired and converted datasets are private <code>open-athena</code> TaskCompendium releases with immutable pins and provenance, one new version per source. Prepared task images use a new internal GHCR package per source. Inspect campaign outcomes before selecting a catalog snapshot. Loading a complete snapshot selects it atomically; failed staging preserves the serving selection.</p>
+      <p>This preview does not authorize production publication. Follow the <a href="https://github.com/marin-community/marin/blob/main/docs/references/rl-data-atlas.md#preview-packaging-before-the-shared-runtime-is-updated">Atlas preview procedure</a> with the explicit preview app ID. Production remains on hold.</p>
+    </article>
+    <article id="selection"><h3>After admission: training selection</h3>
+      <p>Only TRAIN sources with eligible FULL-mode artifacts may supply a training population. EVAL sources stay evaluation-only. A selection recipe names sources and quotas and pins the heldout set. Its exact heldout matching and cross-source deduplication supplement mandatory version-bound lexical decontamination; they do not replace it or establish semantic decontamination.</p>
+      <h4 id="before-a-run">Before a training run</h4>
+      <ol><li>Verify the retained dataset pin, intended Use, license and private access.</li><li>Read raw/unique/drop counts, lexical remediation and their manifests.</li><li>Inspect content Quality, Result and provisional coverage separately from execution qualification.</li><li>Check full-population oracle evidence, the SHARED/SEPARATE grading census and backend requirements.</li><li>Use the current <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md#final-task-selection">selection procedure</a> and <a href="https://github.com/marin-community/marin/blob/main/docs/recipes/quick-rl-loop.md">quick RL loop</a>; Atlas visibility alone does not establish eligibility.</li></ol>
+    </article>
+  </section>
+
+  <section aria-labelledby="practice-title" class="practice">
+    <h2 id="practice-title">Use or add a source</h2>
+    <article id="use-a-source"><h3>Read the current catalog</h3>
+      <p>The source table hides QUICK and BAD rows and collapses advisory duplicate groups by default. Show all sources or expand a group to inspect its members. Source evidence links always open the selected source, including entries hidden by table defaults. Missing measurements show as unavailable, never as zero.</p>
+      <p>Curriculum coverage selects the current live-source release and keeps the previous retained 59-source release selectable. Older pre-remediation and archived all-source artifacts remain historical evidence through their SHA-bound provenance receipts. Coverage applies only to the sources in the selected release. Approved role corrections show effective Use and preserve sampled evidence's historical role, with a receipt link. Coverage does not establish training eligibility.</p>
+    </article>
+    <article id="first-source"><h3>Add a source using the maintained procedure</h3>
+      <p>Use <a href="https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/README.md#adding-a-dataset">Adding a dataset</a> and the <a href="https://github.com/marin-community/marin/blob/main/docs/references/task-curation.md">task curation reference</a> for current commands, immutable inputs, reviewer configuration and qualification gates. Preserve each attempt's evidence and publish a new version when a task contract changes. A local conversion check does not establish admission or complete QA.</p>
+    </article>
+    <article id="evidence"><h3>Follow the recorded evidence</h3>
+      <p>Each source page links its pinned current release, upstream input, duplicate/drop manifests, lexical measurements, grading assessment and available QC or execution receipts. Storage pointers include Filer links. Private files require the corresponding Marina or dataset access. A missing field or inaccessible artifact remains an explicit limitation.</p>
+    </article>
+  </section>
+  <p id="snapshot-info" class="snapshot-info"></p>
+  </div>
+</main>
+</body>
+</html>

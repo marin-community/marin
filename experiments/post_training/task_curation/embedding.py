@@ -57,13 +57,20 @@ from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_REQUEST_TIMEOUT, resolve_glm_base_url
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.catalog_identity import canonical_declaration
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
+from infra.marina.apps.rl_data_catalog.server.source_identity import (
+    SOURCE_ID_ALIASES,
+    canonical_source_id,
+    canonical_source_map,
+    original_source_id,
+)
 
 INPUTS_VERSION = "2026.10.14.1"
 DESCRIPTIONS_VERSION = "2026.10.15.1"
 INSTRUCTION_TEXTS_VERSION = "2026.10.15.1"
-EMBEDDINGS_VERSION = "2026.10.15.2"
-CURRICULUM_EMBEDDINGS_VERSION = "2026.10.15.2"
+EMBEDDINGS_VERSION = "2026.11.13.1"
+CURRICULUM_EMBEDDINGS_VERSION = "2026.11.13.1"
 ALIGNMENT_VERSION = "2026.10.15.2"
 PUBLICATION_VERSION = "2026.10.15.2"
 COVERAGE_VERSION = "2026.10.15.1"
@@ -112,6 +119,7 @@ def _prepare(
     seed: int,
     output_root: str,
 ) -> SemanticArtifact:
+    curated_roots = canonical_source_map(curated_roots)
     sources = []
     for source_id, root in curated_roots.items():
         manifest = json.loads((StoragePath(root) / "manifest.json").read_text())
@@ -267,6 +275,7 @@ def _align(
         curriculum_key=curriculum_key,
         spec=spec,
         output_root=output_root,
+        source_id_replacements=SOURCE_ID_ALIASES,
     )
     manifest = AlignmentManifest(
         inputs_root=inputs_root,
@@ -295,9 +304,14 @@ def _publish(
     sample_size: int | None,
     output_root: str,
 ) -> SemanticArtifact:
+    curated_roots = canonical_source_map(curated_roots)
+    inventory = [canonical_declaration(row) for row in inventory]
     alignment = AlignmentManifest.model_validate_json((StoragePath(alignment_root) / "alignment.json").read_text())
     paths = SemanticArtifact.raw_load(alignment_root).paths
-    counts = {row.source_id: row for row in count_alignment_sources(runtime.context, paths=paths)}
+    counts = {
+        canonical_source_id(row.source_id): replace(row, source_id=canonical_source_id(row.source_id))
+        for row in count_alignment_sources(runtime.context, paths=paths)
+    }
     if set(counts) - curated_roots.keys():
         raise ValueError("Alignment contains sources outside the selected corpus")
     if curated_roots.keys() - {row.id for row in inventory}:
@@ -340,7 +354,7 @@ def _publish(
     sources.extend(
         AlignmentSource(
             source_id=row.id,
-            source_key=canonical_sha256(row.model_dump(mode="json")),
+            source_key=canonical_sha256({**row.model_dump(mode="json"), "id": original_source_id(row.id)}),
             population=population,
             intended_use=None,
             task_count=row.task_count,
@@ -405,6 +419,11 @@ def _coverage(
         capability_distance=capability_distance,
         source_sample_size=source_sample_size,
         area_sample_size=area_sample_size,
+        sampling_source_ids={
+            identifier: original_source_id(row.source_id)
+            for row in release.sources
+            for identifier in (row.source_id, canonical_source_id(row.source_id), original_source_id(row.source_id))
+        },
     )
     coverage = CurriculumCoverage(
         coverage_id=canonical_sha256(
@@ -446,9 +465,15 @@ def curation_embedding_pipeline(
     sample_size: int | None,
     seed: int,
     inventory: list[SourceDeclaration],
+    prepared_inputs: ArtifactStep[SemanticArtifact] | None = None,
+    prepared_descriptions: ArtifactStep[SemanticArtifact] | None = None,
+    prepared_curriculum_embeddings: ArtifactStep[SemanticArtifact] | None = None,
 ) -> CurationEmbeddingStages:
     """Bind independent task and curriculum embeddings before the assignment pass."""
-    inputs = _named(
+    # Preserve artifact addresses; resolve public IDs at execution boundaries.
+    curated = {original_source_id(key): value for key, value in canonical_source_map(curated).items()}
+    inventory = [row.model_copy(update={"id": original_source_id(row.id)}) for row in inventory]
+    inputs = prepared_inputs or _named(
         apply(
             "rl-semantics/inputs",
             partial(_prepare, runtime),
@@ -461,7 +486,7 @@ def curation_embedding_pipeline(
             output_root=OUT,
         )
     )
-    descriptions = _named(
+    descriptions = prepared_descriptions or _named(
         apply(
             "rl-semantics/descriptions",
             partial(_describe, runtime, endpoint),
@@ -495,7 +520,7 @@ def curation_embedding_pipeline(
             output_root=OUT,
         )
     )
-    anchors = _named(
+    anchors = prepared_curriculum_embeddings or _named(
         apply(
             "rl-semantics/curriculum-embeddings",
             partial(_embed_curriculum, runtime, embedder_factory),

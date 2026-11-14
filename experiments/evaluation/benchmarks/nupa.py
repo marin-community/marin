@@ -23,7 +23,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 NUPA_REVISION = "01e3831ec00dfd618a77d9f6fe7fc0d327ad16d7"
 PANEL_SHA256 = "27f122972d76dc2a1170a3d105a9856b55beedabe037f697c1a1aa2baeb67036"
@@ -53,8 +53,11 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             RlDataSource(
                 info=SourceInfo(
                     id="Evalchemy:" + name,
-                    title=name,
-                    origin="Evalchemy",
+                    upstream_dataset=name,
+                    upstream_name=name,
+                    subset=None,
+                    build_path="Evalchemy",
+                    origin=SourceOrigin.EVALCHEMY,
                     family="numeric-representation",
                     tags=("eval", "source:evalchemy", "single-turn", "benchmark", "family:numeric-representation"),
                     count=rows,

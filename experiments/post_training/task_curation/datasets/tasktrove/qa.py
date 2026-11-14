@@ -20,13 +20,21 @@ from taskcompendium.models import TaskSpec, TextMessage
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
-from verifyit.spec import JudgeSpec
+from verifyit.spec import RUBRIC_REFERENCE
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_resources
+from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import (
+    OversightEvidence,
+    OversightLevel,
+    RlDataSource,
+    SourceInfo,
+    SourceOrigin,
+    TaskFormat,
+)
 
 MCQA_CONFIG = "laion__nemotron-gym-knowledge-mcqa-v2"
 
@@ -119,9 +127,20 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
         return source_defect("missing_question", "The semantic judge requires its source question")
     if not references:
         return source_defect("invalid_references", "At least one reference is required")
+    subject = "knowledge" if isinstance(data.get("expected_answers"), list) else "science"
+    # QA-admitted tiers: knowledge-openqa validates on MEDIUM, science-openqa on HEAVY.
+    tier = JudgeTier.MEDIUM if subject == "knowledge" else JudgeTier.HEAVY
     # JudgeSpec carries the grading inputs; archived scripts remain private provenance only.
+    # The source harness gates verbatim reference matches before consulting the judge, so the
+    # tier contract's labels-harness default is overridden with the source's exact gate.
     package = verifyit_package(
-        JudgeSpec(references=references, question=question),
+        replace(
+            JUDGE_TIERS[tier].spec,
+            references=references,
+            question=question,
+            rubric=RUBRIC_REFERENCE,
+            exact_gate=True,
+        ),
         tuple(
             resource.model_copy(update={"path": "source/" + resource.path})
             for resource in archive_resources(row.data).verifier
@@ -130,7 +149,6 @@ def convert_openqa(row: RawRow, context: ConversionContext) -> TaskSpec | Normal
     )
     prompt = TextMessage(role="user", content=replace_phrases(instruction, OPENQA_DELIVERY))
     task = conversation_task(row, events=(prompt,), package=package)
-    subject = "knowledge" if isinstance(data.get("expected_answers"), list) else "science"
     task = task.model_copy(update={"tags": ("qa", "openqa", "judge", "reference", "nemotron", subject)})
     return rewritten_task(task, original=instruction, reason=OPENQA_REWRITE_REASON)
 
@@ -235,15 +253,37 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "knowledge-openqa",
             "laion__nemotron-gym-knowledge-openqa-v4",
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-knowledge-openqa-v4",
-                title="laion/nemotron-gym-knowledge-openqa-v4",
-                origin="Task Trove",
+                id="TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
+                upstream_dataset="laion__nemotron-gym-knowledge-openqa-v4",
+                upstream_name="laion__nemotron-gym-knowledge-openqa-v4",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn"),
                 count=122357,
                 notes=(
                     "Exact gate then reference-based judge. Reference answers are real; needs the judge "
-                    "in the new grader."
+                    "in the new grader. QA (RL Data Atlas): every row re-converted with zero fidelity "
+                    "discrepancies; 43 exact duplicates collapse under the pipeline dedup key (122,314 "
+                    "published); MEDIUM judge e2e 30/30 on the seeded sample through the production "
+                    "grading path."
+                ),
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/qa.py version 5 "
+                    "(MEDIUM JUDGE_TIERS pin); archive open-thoughts/TaskTrove @ 02923004846e",
+                    verification=(
+                        "All 122,357 rows re-converted through the production recipe and compared against "
+                        "the archive row-by-row with zero discrepancies; 43 exact duplicates collapse under "
+                        "the pipeline dedup key, 122,314 retained. MEDIUM-tier judge e2e on the 10-task "
+                        "seeded sample through the production grading boundary at temperature 0.7: all 30 "
+                        "submissions (10 positive, 10 wrong, 10 empty) graded as expected. Evidence: "
+                        "atlas-env-audit qa-knowledge/ (fidelity, judge-packets, medium-batch)"
+                    ),
+                    level=OversightLevel.SAMPLE,
+                    reviewed=10,
+                    admitted=122314,
                 ),
             ),
         ),
@@ -251,15 +291,36 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "science-openqa",
             "laion__nemotron-gym-science-so-openq-v3",
             SourceInfo(
-                id="Task Trove:laion__nemotron-gym-science-so-openq-v3",
-                title="laion/nemotron-gym-science-so-openq-v3",
-                origin="Task Trove",
+                id="TaskTrove:laion__nemotron-gym-science-so-openq-v3",
+                upstream_dataset="laion__nemotron-gym-science-so-openq-v3",
+                upstream_name="laion__nemotron-gym-science-so-openq-v3",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
                 tags=("agentic", "multi-turn"),
                 count=150644,
                 notes=(
                     "Reference answer plus judge. Move the reference out of the criterion text into a "
-                    "data field at conversion."
+                    "data field at conversion. QA (RL Data Atlas): every row re-converted with zero "
+                    "fidelity discrepancies (no dedup collisions); HEAVY judge e2e 30/30 on the seeded "
+                    "sample through the GLM relay."
+                ),
+                oversight=OversightEvidence(
+                    campaign="RL Data Atlas",
+                    recipe_revision="datasets/tasktrove/qa.py version 5 "
+                    "(HEAVY JUDGE_TIERS pin); archive open-thoughts/TaskTrove @ 02923004846e",
+                    verification=(
+                        "All 150,644 rows re-converted through the production recipe and compared against "
+                        "the archive row-by-row with zero discrepancies; no dedup collisions. HEAVY-tier "
+                        "judge e2e on the 10-task seeded sample through the production grading boundary "
+                        "against the pinned GLM relay at temperature 0.7: all 30 submissions (10 positive, "
+                        "10 wrong including the flagged small-angle leniency trap, 10 empty) graded as "
+                        "expected. Evidence: atlas-env-audit qa-knowledge/ (fidelity, judge-packets, heavy-batch)"
+                    ),
+                    level=OversightLevel.SAMPLE,
+                    reviewed=10,
+                    admitted=150644,
                 ),
             ),
         ),
@@ -273,7 +334,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     name=name,
                     source=tasktrove_source(config),
                     convert=TaskTroveConverter(config, convert_openqa),
-                    version="4",
+                    version="5",
                     intended_use=IntendedUse.TRAIN,
                     rubric=OPENQA_RUBRIC,
                     grader=GRADER_PACKAGES,
@@ -284,9 +345,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id=f"Task Trove:{MCQA_CONFIG}",
-                title="laion/nemotron-gym-knowledge-mcqa-v2",
-                origin="Task Trove",
+                id=f"TaskTrove:{MCQA_CONFIG}",
+                upstream_dataset=MCQA_CONFIG,
+                upstream_name=MCQA_CONFIG,
+                subset=None,
+                build_path="TaskTrove",
+                origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
                 tags=("agentic", "multi-turn"),
                 count=616888,

@@ -3,7 +3,7 @@
 
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
@@ -24,12 +24,48 @@ from taskcompendium.pipeline.semantics import DescriptionModel
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
+from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.embedding import DescriptionEndpoint, curation_embedding_pipeline
 from experiments.post_training.task_curation.local import artifact_prefix
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.registry import read_registry_json
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.numbers_pipeline import (
+    NUMBERS_DATASET,
+    NumbersConfig,
+    numbers_pipeline,
+)
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
+
+
+@pytest.fixture(autouse=True)
+def numeric_actor_census(request, monkeypatch):
+    if request.node.get_closest_marker("data_integration") is not None:
+        sources = driver.all_sources()
+    else:
+        sources = {}
+        for source in skyrl_math.sources():
+            if source.info.id not in {"HuggingFaceH4:aime24", "OpenAI:gsm8k"}:
+                continue
+            sources[source.info.id] = replace(
+                source,
+                info=replace(
+                    source.info,
+                    count=1,
+                    within_source_dedup=deduplication_evidence(
+                        source.dataset.name, source.dataset.revision, source.version
+                    ),
+                    daytona_machine_slots=0,
+                    daytona_snapshot_count=0,
+                    daytona_execution_failures=0,
+                    daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+                ),
+            )
+    monkeypatch.setattr(driver, "all_sources", lambda: sources)
+    monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: sources)
 
 
 @pytest.fixture(autouse=True)
@@ -192,7 +228,7 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
             (directory / "curriculum.json").write_text(json.dumps(payload))
             stages.append(
                 curation_embedding_pipeline(
-                    curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+                    curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
                     curriculum=ArtifactStep.adopt("curriculum-fixture", f"2026.10.14.{revision}", source=str(directory)),
                     runtime=runtime,
                     description_model=DescriptionModel("fixture", "1"),
@@ -204,7 +240,24 @@ def test_curriculum_edit_reuses_task_artifacts_and_embeds_only_changed_anchor(tm
                     sample_size=None,
                     seed=0,
                     inventory=[
-                        RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration
+                        RlDataSource(
+                            config=NumbersConfig("source", tmp_path / "unused"),
+                            pipeline=numbers_pipeline,
+                            info=SourceInfo(
+                                within_source_dedup=deduplication_evidence(
+                                    NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"
+                                ),
+                                id="Marin:source",
+                                upstream_dataset="source",
+                                upstream_name="source",
+                                build_path="test",
+                                origin=SourceOrigin.MARIN,
+                                daytona_snapshot_count=0,
+                                daytona_machine_slots=0,
+                                daytona_execution_failures=0,
+                                daytona_count_basis="Fixture numerical task requires no actor.",
+                            ),
+                        ).declaration
                     ],
                 )
             )
@@ -260,9 +313,9 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
         "1",
         "--catalog-root",
         str(curriculum),
-        "--model-revision",
+        "--description-model-revision",
         "fixture",
-        "--base-url",
+        "--description-base-url",
         f"http://127.0.0.1:{description_server.server_port}/v1",
     ]
     runner = CliRunner()
@@ -298,7 +351,7 @@ def test_driver_converts_embeds_and_resumes_without_rereading_raw_inputs(
     assert tasks[0]["matches"]["subjects"][0]["subject_id"] == "D01"
 
 
-def test_publication_adds_declared_inventory_sources_without_placement(tmp_path, description_server):
+def test_publication_retains_registered_sources_without_placement(tmp_path, description_server):
     curated = tmp_path / "curated"
     (curated / "final").mkdir(parents=True)
     (curated / "manifest.json").write_text(json.dumps({"intended_use": "train", "revision": "fixture-1"}))
@@ -330,7 +383,7 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
         runtime.activate(context),
     ):
         stages = curation_embedding_pipeline(
-            curated={"source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
+            curated={"Marin:source": ArtifactStep.adopt("curated-fixture", "2026.10.14.1", source=str(curated))},
             curriculum=ArtifactStep.adopt("curriculum-fixture", "2026.10.14.1", source=str(directory)),
             runtime=runtime,
             description_model=DescriptionModel("fixture", "1"),
@@ -342,25 +395,73 @@ def test_publication_adds_declared_inventory_sources_without_placement(tmp_path,
             sample_size=None,
             seed=0,
             inventory=[
-                RlDataSource(info=SourceInfo(id="source", title="Fixture", origin="fixture")).declaration,
                 RlDataSource(
-                    info=SourceInfo(id="Pointer:release", title="Pointer", origin="fixture", count=7)
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
+                    info=SourceInfo(
+                        within_source_dedup=deduplication_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"),
+                        id="Marin:source",
+                        upstream_dataset="source",
+                        upstream_name="source",
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        daytona_snapshot_count=0,
+                        daytona_machine_slots=0,
+                        daytona_execution_failures=0,
+                        daytona_count_basis="Fixture numerical task requires no actor.",
+                    ),
                 ).declaration,
-                RlDataSource(info=SourceInfo(id="Pointer:no-count", title="NoCount", origin="fixture")).declaration,
+                RlDataSource(
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
+                    info=SourceInfo(
+                        within_source_dedup=deduplication_evidence(
+                            NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1", 7
+                        ),
+                        id="Marin:release",
+                        upstream_dataset=("Marin:release").partition(":")[2],
+                        upstream_name=("Marin:release").partition(":")[2],
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        daytona_snapshot_count=0,
+                        daytona_machine_slots=0,
+                        daytona_execution_failures=0,
+                        daytona_count_basis="Fixture numerical task requires no actor.",
+                        count=7,
+                    ),
+                ).declaration,
+                RlDataSource(
+                    config=NumbersConfig("source", tmp_path / "unused"),
+                    pipeline=numbers_pipeline,
+                    info=SourceInfo(
+                        within_source_dedup=deduplication_evidence(NUMBERS_DATASET.name, NUMBERS_DATASET.revision, "1"),
+                        id="Marin:no-count",
+                        upstream_dataset=("Marin:no-count").partition(":")[2],
+                        upstream_name=("Marin:no-count").partition(":")[2],
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        daytona_snapshot_count=0,
+                        daytona_machine_slots=0,
+                        daytona_execution_failures=0,
+                        daytona_count_basis="Fixture numerical task requires no actor.",
+                    ),
+                ).declaration,
             ],
         )
         built = run(stages.publication, max_concurrent=1)[0]
     release = json.loads((Path(built.path) / "release.json").read_text())
     rows = {row["source_id"]: row for row in release["sources"]}
-    assert rows["source"]["basis"] == "matched"
-    assert rows["Pointer:release"]["basis"] == "declared"
-    assert rows["Pointer:release"]["task_count"] == 7
-    assert rows["Pointer:release"]["intended_use"] is None
-    assert "Pointer:no-count" not in rows
+    assert rows["Marin:source"]["basis"] == "matched"
+    assert rows["Marin:release"]["basis"] == "declared"
+    assert rows["Marin:release"]["task_count"] == 7
+    assert rows["Marin:release"]["intended_use"] is None
+    assert rows["Marin:no-count"]["basis"] == "declared"
+    assert rows["Marin:no-count"]["task_count"] == 1
     assert release["task_count"] == 1
 
 
-def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path, monkeypatch, description_server):
+@pytest.mark.data_integration
+def test_corpus_resume_refreshes_registered_source_metadata(tmp_path, monkeypatch, description_server):
     monkeypatch.setattr(
         "experiments.post_training.task_curation.driver.load_harrier",
         lambda config: EmbeddingEndpoint(str(tmp_path / "embeddings.jsonl"), config.dimensions),
@@ -384,9 +485,9 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
         "1",
         "--catalog-root",
         str(curriculum),
-        "--model-revision",
+        "--description-model-revision",
         "fixture",
-        "--base-url",
+        "--description-base-url",
         f"http://127.0.0.1:{description_server.server_port}/v1",
     ]
     runner = CliRunner()
@@ -414,7 +515,8 @@ def test_corpus_resume_refreshes_inventory_and_declares_pointer_sources(tmp_path
     assert resumed.exit_code == 0, resumed.output
     releases = [json.loads(path.read_text()) for path in (cache / "rl-semantics").glob("publication-*/*/release.json")]
     sources = {row["source_id"]: row for row in max(releases, key=lambda r: len(r["sources"]))["sources"]}
-    assert sources["MarinSkyRL:aime24"]["basis"] == "matched"
+    assert sources["HuggingFaceH4:aime24"]["basis"] == "matched"
     declared = [row for row in sources.values() if row["basis"] == "declared"]
     assert declared and all(row["task_count"] > 0 and row["intended_use"] is None for row in declared)
-    assert any(row["source_id"] == "Campaign Release:smartie-calibforge-admitted" for row in declared)
+    retired = read_registry_json(Path(__file__).parents[1] / "retired-inventory-only.json")
+    assert {row["id"] for row in retired["entries"] if row["disposition"] != "quick_converted"}.isdisjoint(sources)

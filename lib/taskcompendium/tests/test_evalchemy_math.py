@@ -9,8 +9,8 @@ import pytest
 from verifyit.grade import GradingInfraError
 
 from taskcompendium.importers.evalchemy.scorers import minerva
+from taskcompendium.importers.evalchemy.scorers.fewshot import score
 from taskcompendium.importers.evalchemy.scorers.harness_generation import grade_harness_generation_candidate
-from taskcompendium.importers.evalchemy.scorers.main import score
 from taskcompendium.importers.evalchemy.scorers.minerva import is_equiv
 
 

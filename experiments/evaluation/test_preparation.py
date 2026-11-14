@@ -40,7 +40,7 @@ from experiments.post_training.task_curation.config import InputOverrides, Pipel
 from experiments.post_training.task_curation.driver import _conversion_steps
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 
 def decode_prefix(data: dict, _context: ConversionContext, *, prefix: str) -> dict:
@@ -69,7 +69,14 @@ def grouped_item(task):
 def fixture_source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="eval-identity", title="Identity fixture", origin="test", family="test", tags=("eval",), count=1
+            id="Marin:eval-identity",
+            upstream_dataset="eval-identity",
+            upstream_name="eval-identity",
+            build_path="test",
+            origin=SourceOrigin.MARIN,
+            family="test",
+            tags=("eval",),
+            count=1,
         ),
         config=EvaluationCorpusRecipe(
             CurationRecipe(
@@ -193,8 +200,13 @@ def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(
         run(step, max_concurrent=1)
     assert not (Path(step.path()) / MANIFEST_FILENAME).exists()
     path.write_bytes(original)
-    artifact = run(step, max_concurrent=1)[0]
-    assert artifact.path == step.path()
+    with pytest.raises(RuntimeError):
+        run(step, max_concurrent=1)
+    retry = prepare_evaluation(
+        replace(source, config=replace(dataset, recipe=replace(source.config.recipe, version="2"))), options
+    )
+    artifact = run(retry, max_concurrent=1)[0]
+    assert artifact.path != step.path()
     assert len(list(evaluation_cases(artifact.path))) == 1
 
 

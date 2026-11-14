@@ -2,11 +2,12 @@
 const number = new Intl.NumberFormat('en-US');
 const compact = new Intl.NumberFormat('en-US', {notation: 'compact', maximumFractionDigits: 1});
 const percent = value => `${(100 * value).toFixed(1)}%`;
+const useLabels = {train: 'Training', eval: 'Evaluation'};
 const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', out_of_scope: 'Outside cutoff', insufficient_context: 'Insufficient context', skipped: 'Embedding skipped'};
 const state = { data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null};
 
 function parameters() {
-  return new URLSearchParams({intended_use: $('use').value, source_id: $('source').value});
+  return new URLSearchParams({intended_use: $('use').value, source_id: $('source').value, release: $('release').value});
 }
 function labelFor(id, subject) { return state.nodes.get(`${subject}/${id}`)?.name || id; }
 function button(text, className, action) { const item = node('button', text, className); item.type = 'button'; item.addEventListener('click', action); return item; }
@@ -29,6 +30,10 @@ async function loadCoverage() {
     $('source').replaceChildren(node('option', 'All sources'));
     $('source').firstChild.value = '';
     for (const source of data.sources) { const option = node('option', source.name); option.value = source.source_id; $('source').append(option); }
+    if (selected && !data.sources.some(source => source.source_id === selected)) {
+      const option = node('option', `Source not covered: ${selected}`);
+      option.value = selected; $('source').append(option);
+    }
     $('source').value = selected;
     $('domain').replaceChildren(node('option', 'All domains'));
     $('domain').firstChild.value = '';
@@ -39,7 +44,13 @@ async function loadCoverage() {
     renderCoverage();
     const processed = data.sources.filter(source => source.alignment?.basis === 'matched').length;
     $('message').textContent = `${number.format(processed)} of ${number.format(data.sources.length)} sources included · ${new Date(data.created_at).toLocaleDateString()}`;
-    $('provenance').textContent = JSON.stringify({release_id: data.release_id, curriculum_key: data.curriculum_key, population: data.population, sample_size: data.sample_size, lineage: data.lineage}, null, 2);
+    $('provenance').textContent = JSON.stringify({release_id: data.release_id, curriculum_key: data.curriculum_key, population: data.population, sample_size: data.sample_size, lineage: data.lineage, role_projection: data.role_projection}, null, 2);
+    $('role-note').hidden = !data.role_projection;
+    if (data.role_projection) {
+      const link = node('a', 'Role-correction receipt ↗');
+      link.href = `https://filer.marina.oa.dev/#${encodeURIComponent(data.role_projection.uri)}`;
+      $('role-note').replaceChildren('Source Use includes an approved metadata correction. Sampled evidence preserves its historical role. ', link);
+    }
     const area = state.nodes.get(`${state.subject}/${state.parent}`);
     if (area) await showTasks(area);
   } catch (error) { if (request === state.request) $('message').textContent = `Coverage could not be loaded. ${error.message}`; }
@@ -68,6 +79,21 @@ function renderBreadcrumbs() {
 function renderCoverage() {
   const data = state.data;
   if (!data) return;
+  const measured = data.sources.filter(source => source.alignment?.basis === 'matched' &&
+    (!$('source').value || source.source_id === $('source').value) &&
+    ($('use').value === 'all' || source.alignment.intended_use === $('use').value));
+  if (!measured.length) {
+    for (const id of ['task-count', 'mapped-count', 'capability-count']) $(id).textContent = '—';
+    $('source-count').textContent = 'No measured sources in this selection';
+    $('broad-count').textContent = 'Coverage unavailable';
+    $('sample-note').textContent = 'No matching population was measured in this release.';
+    $('source-ledger').hidden = true; $('coverage-scope').hidden = true;
+    renderBreadcrumbs();
+    $('curriculum-map').replaceChildren(node('p', 'Coverage has not been measured for this selection.', 'scope-note'));
+    $('outcomes').replaceChildren(); $('matrix-summary').textContent = 'Coverage unavailable';
+    history.replaceState(null, '', viewUrl());
+    return;
+  }
   const total = data.totals.denominator;
   const mapped = data.totals.assigned + data.totals.subject_only;
   $('task-count').textContent = number.format(total);
@@ -137,15 +163,40 @@ function renderMap() {
   function branch(area, includeAll = false) {
     if (query && !includeAll && !matching(area)) return null;
     const section = node('section', '', `map-branch ${area.kind}`);
+    section.dataset.nodeId = area.node_id;
     section.append(areaRow(area));
     const descendants = children.get(key(area)) || [];
     if ((showSkills || query) && descendants.length) {
       const nested = node('div', '', 'map-children');
       const includeChildren = includeAll || (query && `${area.name} ${area.description}`.toLowerCase().includes(query));
-      for (const child of descendants) { const item = branch(child, includeChildren); if (item) nested.append(item); }
+      appendChildren(area, nested, includeChildren);
       section.append(nested);
     }
     return section;
+  }
+  function appendChildren(area, container, includeAll) {
+    const descendants = children.get(key(area)) || [];
+    let displayedCount = 0, childCount = 0, displayed = 0;
+    for (const child of descendants) {
+      const count = counts.get(key(child)) || 0;
+      childCount += count;
+      const item = branch(child, includeAll);
+      if (item) { container.append(item); displayedCount += count; displayed++; }
+    }
+    // Domain membership uses a broader cutoff than capability placement.
+    // Search can also hide children; keep both differences visible in the sum.
+    const count = counts.get(key(area)) || 0;
+    const subjectOnly = count - childCount;
+    const hidden = childCount - displayedCount;
+    const remainder = count - displayedCount;
+    if (remainder > 0) {
+      const row = node('div', '', 'map-area map-remainder');
+      const reason = hidden ? 'subject only or hidden by search' : 'subject only';
+      row.append(node('span', `Other/unlisted (${reason})`, 'map-area-name'), node('span', number.format(remainder), 'map-area-count'));
+      row.title = `${number.format(subjectOnly)} subject matches without a capability match; ${number.format(hidden)} in subcategories hidden by search. Counts use the same selected coverage population.`;
+      container.append(row);
+    }
+    return displayed;
   }
   const cards = [];
   let topics = 0;
@@ -161,7 +212,7 @@ function renderMap() {
     const descendants = children.get(key(area)) || [];
     const body = node('div', '', 'map-topics');
     const includeAll = !!query && `${area.name} ${area.description}`.toLowerCase().includes(query);
-    for (const child of descendants) { const item = branch(child, includeAll); if (item) { body.append(item); topics++; } }
+    topics += appendChildren(area, body, includeAll);
     card.append(header, node('p', `${descendants.length} ${area.kind === 'subject' ? 'topics' : 'skills'}`, 'domain-subtitle'));
     if (focused) card.append(button('Read sampled examples', 'domain-examples text-button', () => openTasks(area)));
     card.append(body);
@@ -231,7 +282,8 @@ async function openDetail(task) {
         status: candidate.similarity >= 1 - state.data.thresholds.capability_distance ? 'Alternative within capability cutoff' : 'Outside capability cutoff'})), alternatives);
       $('detail-matches').append(alternatives);
     }
-    $('detail-provenance').textContent = JSON.stringify({source_id: detail.source_id, task_id: detail.task_id, source_key: detail.source_key, task_hash: detail.task_hash, content_hash: detail.content_hash, intended_use: detail.intended_use, population: detail.population, release_id: state.data.release_id}, null, 2);
+    $('detail-use').textContent = `Use: ${useLabels[detail.intended_use] || 'Unknown'}` + (detail.recorded_intended_use !== detail.intended_use ? ` · Historical recorded Use: ${useLabels[detail.recorded_intended_use] || 'Unknown'}` : '');
+    $('detail-provenance').textContent = JSON.stringify({source_id: detail.source_id, task_id: detail.task_id, source_key: detail.source_key, task_hash: detail.task_hash, content_hash: detail.content_hash, intended_use: detail.intended_use, recorded_intended_use: detail.recorded_intended_use, population: detail.population, release_id: state.data.release_id}, null, 2);
   } catch (error) { $('detail-description').textContent = `Task could not be loaded. ${error.message}`; }
 }
 function scoreTable(scores, target = $('detail-matches')) {
@@ -243,6 +295,7 @@ function viewUrl() {
   const hash = new URLSearchParams();
   if ($('use').value !== 'all') hash.set('intended_use', $('use').value);
   if ($('source').value) hash.set('source_id', $('source').value);
+  if ($('release').value) hash.set('release', $('release').value);
   if (state.parent) { hash.set('parent_id', state.parent); hash.set('subject_id', state.subject); }
   if ($('search').value) hash.set('search', $('search').value);
   return location.pathname + (hash.size ? `#${hash}` : '');
@@ -250,6 +303,7 @@ function viewUrl() {
 function readLocation() {
   const initial = new URLSearchParams(location.hash.slice(1));
   $('use').value = initial.get('intended_use') || 'all';
+  $('release').value = initial.get('release') || '';
   $('search').value = initial.get('search') || '';
   const source = initial.get('source_id') || '';
   $('source').value = source;
@@ -259,7 +313,7 @@ function readLocation() {
   state.parent = initial.get('parent_id') || ''; state.subject = initial.get('subject_id') || '';
 }
 $('controls').addEventListener('submit', event => event.preventDefault());
-for (const id of ['source', 'use']) $(id).addEventListener('change', () => {
+for (const id of ['source', 'use', 'release']) $(id).addEventListener('change', () => {
   history.pushState(null, '', viewUrl()); loadCoverage();
 });
 $('domain').addEventListener('change', () => navigate($('domain').value ? state.nodes.get(`${$('domain').value}/subject:${$('domain').value}`) : null));
@@ -274,5 +328,13 @@ $('reset-view').addEventListener('click', () => {
   history.pushState(null, '', viewUrl()); loadCoverage();
 });
 window.addEventListener('popstate', () => { readLocation(); loadCoverage(); });
-readLocation();
-loadCoverage();
+async function start() {
+  const data = await json('api/curriculum/releases');
+  for (const release of data.releases.filter(item => !item.selected)) {
+    const option = node('option', 'Previous population (evidence)');
+    option.value = release.release_id; $('release').append(option);
+  }
+  readLocation();
+  await loadCoverage();
+}
+start().catch(error => { $('message').textContent = `Coverage could not be loaded. ${error.message}`; });

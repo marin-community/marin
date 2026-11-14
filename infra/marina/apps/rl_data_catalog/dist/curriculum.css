@@ -23,6 +23,8 @@
 .map-topics { display: grid; gap: 5px; padding: 0 8px 8px; }
 .map-branch { min-width: 0; }
 .map-area { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 43px; border-radius: 4px; padding: 5px 9px; }
+.map-remainder { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
+.map-remainder .map-area-name { font-style: italic; }
 .map-area-name, .map-area-count { border: 0; background: none; color: inherit; padding: 4px 0; line-height: 1.45; }
 .map-area-name { text-align: left; font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
 .map-area-name:hover { text-decoration: underline; }
@@ -60,11 +62,9 @@
 #task-detail pre { font: 12px/1.7 ui-monospace, monospace; background: #f1f4ef; padding: 16px; border-radius: 5px; }
 #task-detail .description { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
 #task-detail details { margin-top: 22px; font-size: 12px; }
-#detail-matches table { table-layout: fixed; }
+#detail-matches table { table-layout: auto; }
 #detail-matches td { height: auto; padding: 9px 7px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 #detail-matches th { position: static; padding: 9px 7px; font-size: 11px; }
-#detail-matches th:first-child { width: 42%; }
-#detail-matches th:last-child { width: 27%; }
 #detail-matches .score { text-align: right; font-variant-numeric: tabular-nums; }
 .score-status { color: #657c6b; font-size: 11px; }
 .score-status.outside { color: #95652b; }
@@ -87,4 +87,13 @@
   .task-row { grid-template-columns: 100px 1fr; gap: 12px; padding: 14px 12px; }
   .task-outcome { display: none; }
   .map-area-count { min-width: 35px; min-height: 35px; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .coverage-totals strong, .breadcrumb[aria-current], .domain-title,
+  .outcome-button b { color: #c5ead3; }
+  .domain-count, .outcome-button { background: #243c2d; color: #c5ead3; }
+  .map-area.zero { background: #24352a; color: #a1b3a7; border-color: var(--line); }
+  .domain-count:hover { background: #34593f; }
+  .outcome-button { border-color: var(--line); }
 }

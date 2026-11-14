@@ -3,6 +3,8 @@ import json
 import logging
 import math
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from upath import UPath
@@ -58,6 +60,70 @@ class VerifierRuntimeError(Exception):
     pass
 
 
+def structured_rewards(data: bytes) -> dict[str, float | int]:
+    """Parse the production structured-verdict contract for native and TaskSpec trials."""
+    try:
+        verdict = json.loads(data)
+    except (ValueError, TypeError) as error:
+        raise VerifierOutputParseError("Invalid structured verifier verdict") from error
+    if not isinstance(verdict, dict) or not isinstance(verdict.get("detail"), dict):
+        raise VerifierOutputParseError("Invalid structured verifier verdict fields")
+    # The task's verifier owns setup responsibility. A scored setup
+    # failure can be an agent failure (for example, not cloning a repo).
+    # Infrastructure failures are explicitly non-scored verdicts.
+    if verdict.get("status") != "scored":
+        raise VerifierRuntimeError(
+            f"Structured verifier did not score the candidate: {verdict}"
+        )
+    reward = verdict.get("reward")
+    if (
+        not isinstance(reward, (float, int))
+        or isinstance(reward, bool)
+        or not math.isfinite(reward)
+    ):
+        raise VerifierOutputParseError("Invalid structured verifier reward")
+    return {"reward": reward}
+
+
+@dataclass(frozen=True)
+class ResolvedVerifierRewards:
+    rewards: dict[str, float | int]
+    artifact: UPath
+
+
+def resolve_verifier_rewards(trial_paths: TrialPaths, test_dirs: Sequence[Path]) -> ResolvedVerifierRewards:
+    """Read the production reward format and retain its exact source artifact."""
+    requires_verdict = any(
+        (directory / filename).exists()
+        for directory in test_dirs
+        for filename in ("verifier.toml", "taskcompendium-verifier.toml")
+    )
+    if requires_verdict:
+        artifact = trial_paths.verifier_dir / "verdict.json"
+        if not artifact.exists():
+            raise VerifierRuntimeError("Structured verifier produced no verdict")
+        return ResolvedVerifierRewards(structured_rewards(artifact.read_bytes()), artifact)
+    if trial_paths.reward_json_path.exists():
+        artifact = trial_paths.reward_json_path
+    elif trial_paths.reward_text_path.exists():
+        artifact = trial_paths.reward_text_path
+    else:
+        raise RewardFileNotFoundError(
+            f"No reward file found at {trial_paths.reward_text_path} or {trial_paths.reward_json_path}"
+        )
+    if artifact.stat().st_size == 0:
+        raise RewardFileEmptyError(f"Reward file is empty at {artifact}")
+    try:
+        rewards = (
+            json.loads(artifact.read_text())
+            if artifact.name == "reward.json"
+            else {"reward": float(artifact.read_text())}
+        )
+    except (ValueError, TypeError) as error:
+        raise VerifierOutputParseError(f"Failed to parse rewards from {artifact}") from error
+    return ResolvedVerifierRewards(rewards, artifact)
+
+
 class Verifier(BaseVerifier):
     def __init__(
         self,
@@ -84,51 +150,8 @@ class Verifier(BaseVerifier):
         self._timeout_sec = timeout_sec
 
     def _resolve_rewards(self) -> dict[str, float | int]:
-        """Resolve the reward dict from the reward file on the trial dir.
-
-        Runs the ``exists`` / ``stat`` / ``read_text`` object-store calls, which
-        are SYNCHRONOUS fsspec I/O on a remote (``s3://``) trial dir. Invoked via
-        ``asyncio.to_thread`` from :meth:`verify` so the event loop stays free.
-        """
-        if self.trial_paths.reward_json_path.exists():
-            return self._parse_reward_json()
-        elif self.trial_paths.reward_text_path.exists():
-            return self._parse_reward_text()
-        raise RewardFileNotFoundError(
-            f"No reward file found at {self.trial_paths.reward_text_path} or {
-                self.trial_paths.reward_json_path
-            }"
-        )
-
-    def _parse_reward_text(self) -> dict[str, float | int]:
-        if self.trial_paths.reward_text_path.stat().st_size == 0:
-            raise RewardFileEmptyError(
-                f"Reward file is empty at {self.trial_paths.reward_text_path}"
-            )
-
-        try:
-            return {"reward": float(self.trial_paths.reward_text_path.read_text())}
-        except (ValueError, TypeError) as e:
-            raise VerifierOutputParseError(
-                f"Failed to parse rewards from text file {
-                    self.trial_paths.reward_text_path
-                }"
-            ) from e
-
-    def _parse_reward_json(self) -> dict[str, float | int]:
-        if self.trial_paths.reward_json_path.stat().st_size == 0:
-            raise RewardFileEmptyError(
-                f"Reward file is empty at {self.trial_paths.reward_json_path}"
-            )
-
-        try:
-            return json.loads(self.trial_paths.reward_json_path.read_text())
-        except (ValueError, TypeError) as e:
-            raise VerifierOutputParseError(
-                f"Failed to parse rewards from JSON file {
-                    self.trial_paths.reward_json_path
-                }"
-            ) from e
+        test_dirs, _, _ = self._resolve_tests()
+        return resolve_verifier_rewards(self.trial_paths, test_dirs).rewards
 
     def _resolve_tests(self) -> tuple[list[Path], Path, Path]:
         if self._skip_tests_upload:
@@ -289,7 +312,12 @@ class Verifier(BaseVerifier):
         stdout, stderr = await asyncio.to_thread(
             self._captured_output, test_exec_result
         )
-        return VerifierResult(rewards=rewards, stdout=stdout, stderr=stderr)
+        return VerifierResult(
+            rewards=rewards,
+            exit_code=test_exec_result.return_code,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     def _captured_output(
         self, exec_result: ExecResult

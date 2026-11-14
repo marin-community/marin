@@ -281,10 +281,8 @@ class MultiStepTrial(Trial):
         await self._run_collect_hooks(
             [*self.task.config.verifier.collect, *step.verifier.collect]
         )
-        await self._artifact_handler.download_artifacts(
-            self.agent_environment,
+        await self._download_artifacts(
             artifacts_dir,
-            source_artifacts_dir=self.agent_env_paths.artifacts_dir,
             artifacts=step.artifacts,
         )
         return artifacts_dir

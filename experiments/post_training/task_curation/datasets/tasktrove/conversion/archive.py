@@ -49,6 +49,9 @@ TESTS_MOUNT = "/tests"
 """Where Harbor mounts a task's ``tests/`` directory, and only at grading time."""
 UV_IMAGE = "ghcr.io/astral-sh/uv:0.13.5"
 TEST_SH_REWARD = FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))
+VERIFYIT_VERDICT_REWARD = FileReward(
+    files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+)
 """The numeric reward file a Harbor ``tests/test.sh`` writes."""
 
 
@@ -112,7 +115,7 @@ def archive_file(data: Mapping[str, Any], path: str) -> bytes | None:
 
 def archive_requirements(data: Mapping[str, Any]) -> EnvironmentRequirements:
     """The unpacked archive row's own environment, lowered onto its pinned base."""
-    return archive_environment(archive_file(data, DOCKERFILE))
+    return archive_environment(data["files"])
 
 
 def archive_resource(data: Mapping[str, Any], path: str) -> TaskResource:

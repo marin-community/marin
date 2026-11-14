@@ -147,18 +147,23 @@ controllers need a separately authorized rollout before submitting prepared-imag
 ### Sandbox disk limits
 
 Kubernetes sandbox pod manifests set CPU and memory container limits. A nonzero
-`ResourceSpec.disk` also sets the pod storage request and limit in exact bytes;
-omitting disk sets neither. Ordinary jobs retain their existing rounded storage
-requests and limits. Sandbox tasks mount no writable hostPath. Kubelet accounts
-for runtime-reported writable layers, logs and disk-backed emptyDir volumes;
-read-only image layers are excluded. Eviction is asynchronous.
-`RESOURCE_LIMIT_DISK` in the task error and attempt terminal reason identifies a
-newly launched sandbox pod evicted for exceeding its own storage limit. This
-charges the failure retry budget. Ordinary pods retain their existing eviction retry behavior.
+`ResourceSpec.disk` sets the storage request and limit in exact bytes; omitting
+disk sets neither. Ordinary jobs retain rounded storage quantities and their
+existing eviction retry behavior. Newly launched sandbox pods with declared disk
+carry an annotation; their own-limit evictions report `RESOURCE_LIMIT_DISK` and
+charge the failure retry budget. Existing pods and node-pressure evictions retain
+their previous classification.
 
-Disk accounting depends on the container runtime. gVisor writable-layer accounting
-has not been qualified with a sandbox overflow run, so Kubernetes backends do not
-advertise a `sandbox-storage-limit` capability.
+Kubelet accounts for runtime-reported writable layers, logs and disk-backed
+emptyDir volumes. gVisor writable-layer accounting has not been qualified, so
+Kubernetes backends do not advertise `sandbox-storage-limit`. A restricted-profile
+overflow does not qualify SANDBOX. Qualification requires a successful
+`CONTAINER_PROFILE_SANDBOX` overflow on the pinned pool, with the node's
+CoreWeave-provided `runsc.toml` `overlay2` setting and raw kubelet eviction status
+recorded together. A memory-backed overlay can charge writes to memory instead
+of disk. Sandbox startup is currently blocked on both H100
+([#10090](https://github.com/marin-community/marin/issues/10090)) and CPU Genoa
+([#11343](https://github.com/marin-community/marin/issues/11343)).
 
 Inspect the pod's status reason/message as well as the container termination:
 exit 137 and the word `ephemeral-storage` alone do not establish a task limit.

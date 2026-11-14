@@ -9,6 +9,7 @@ import json
 from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import cast
 
 import pyarrow as pa
@@ -18,23 +19,32 @@ from verifyit.modes.grade_judge import JudgeConnection
 from verifyit.spec import JudgeSpec
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.plan import compute_plan
 from zephyr.readers import load_jsonl
 
 from taskcompendium.grader import verifyit_package
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ResourceGroups, Source, TaskSpec
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    EnvironmentRequirements,
+    NoGrader,
+    ResourceGroups,
+    Source,
+    TaskSpec,
+)
 from taskcompendium.pipeline.controls import GradingMachines, answer_reply, reference_reply
+from taskcompendium.pipeline.conversion import convert_source_row
+from taskcompendium.pipeline.deduplication import unique_task_indices
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFileOverride, SourceFormat
 from taskcompendium.pipeline.models import (
     Controls,
-    FilterPolicy,
     ImportFailureKind,
     ImportRejection,
     OracleCommand,
     RawRow,
     SourceRecipe,
 )
+from taskcompendium.pipeline.oracle_filter import oracle_recipe_identity
 from taskcompendium.pipeline.review import BatchReviewer, completion_body
 from taskcompendium.pipeline.source_processing import (
     ConversionResult,
@@ -47,9 +57,12 @@ from taskcompendium.pipeline.source_processing import (
 )
 from taskcompendium.pipeline.source_quality import SourceQualityPolicy
 from taskcompendium.pipeline.source_verification import SourceVerificationPolicy
+from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
 from taskcompendium.pipeline.stages import AuditExecution, prepare_source
 from taskcompendium.runtime.resources import inline_resource
 
+from .decontamination_fixtures import decontamination_evidence
+from .oracle_filter_fixtures import oracle_receipt
 from .pipeline_stages import (
     GRADER_ENVIRONMENT,
     SOURCE_FILES,
@@ -61,6 +74,7 @@ from .pipeline_stages import (
     script_graded,
     svamp_row_task,
 )
+from .reviewer_specs import reviewer_spec
 from .test_pipeline import BatchService, Output
 
 REFERENCE_CONTROLS = Controls(golden=reference_reply)
@@ -159,6 +173,47 @@ def parquet_rows(path):
     return [row for file in sorted(Path(path).glob("*.parquet")) for row in pq.read_table(file).to_pylist()]
 
 
+def unprotected_shared_task(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
+    task = convert_svamp(row, context)
+    assert isinstance(task, TaskSpec)
+    return task.model_copy(
+        update={
+            "answer_type": AnswerType.WORKSPACE_STATE,
+            "environment_requirements": EnvironmentRequirements(
+                docker_image="python@sha256:" + "a" * 64, command_semantics=CommandSemantics.LINUX_PROCESS
+            ),
+            "grader": NoGrader(reason="Native SHARED trial"),
+            "resources": ResourceGroups(
+                verifier=(inline_resource("task.toml", b'[verifier]\nenvironment_mode = "shared"\n'),)
+            ),
+        }
+    )
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_shared_admission_requires_integrity_but_quick_keeps_measurement(tmp_path, mode):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(1))
+    recipe = fixture_recipe(unprotected_shared_task, rubric=None, controls=None)
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
+    with ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "quick-chunks")) as context:
+        quick = run_source_pipeline(
+            recipe,
+            context,
+            str(source),
+            str(tmp_path / "quick"),
+            mode=SourceProcessingMode.QUICK,
+            canonical_source=recipe.name,
+        )
+    quick_rows = parquet_rows(Path(quick.manifest_path).parent / "normalize")
+    assert len(quick_rows) == 1 and quick_rows[0]["task_json"] is not None
+    assert quick_rows[0]["grading_environment"]["status"] == "matched"
+    reviewed = run_pipeline(recipe, source, tmp_path / "reviewed", pipeline_config(mode, reviewer))
+    assert parquet_rows(reviewed.final_path) == []
+    rows = parquet_rows(reviewed.normalize_path)
+    assert rows[0]["normalization_reason"] == "shared_integrity_contract_missing"
+
+
 def pipeline_config(
     mode: SourceProcessingMode,
     reviewer: BatchReviewer,
@@ -175,21 +230,53 @@ def pipeline_config(
         verification,
         review_config(reviewer),
         execution if execution is not None else AuditExecution(reviewer=reviewer),
-        FilterPolicy(),
         normalized_shards=normalized_shards,
         machines=machines,
         judge_connection=judge_connection,
+        lexical_contamination=decontamination_evidence(SOURCE_FILES.dataset, SOURCE_FILES.revision, 1),
     )
 
 
 def run_pipeline(
     recipe: SourceRecipe, source: Path, output: Path, config: SourcePipelineConfig, **options
 ) -> SourcePipelineResult:
+    if config.oracle_filter is None and not recipe.oracle_solutions and recipe.convert is not convert_script_graded:
+        config = calibrated_config(recipe, source, config)
     with ZephyrContext(max_workers=2, chunk_storage_prefix=str(output.parent / "chunks")) as context:
         result = run_source_pipeline(
             recipe, context, str(source), str(output), config, mode=config.mode, canonical_source=recipe.name, **options
         )
     return cast(SourcePipelineResult, result)
+
+
+def calibrated_config(recipe: SourceRecipe, source: Path, config: SourcePipelineConfig, overrides=None):
+    """Prepare independent execution receipts before the pipeline invocation being tested."""
+    with TemporaryDirectory() as directory:
+        converter = recipe.convert
+        if isinstance(converter, (RecordingConverter, MixedPanelConverter)):
+            converter = replace(converter, directory=directory)
+        decoder = recipe.source.decode
+        if isinstance(decoder, RecordingDecoder):
+            decoder = replace(decoder, directory=directory)
+        parts = recipe.source.parts
+        if isinstance(parts, AlternatingParts):
+            parts = replace(parts, produced=directory)
+        fixture_recipe = replace(recipe, convert=converter, source=replace(recipe.source, decode=decoder, parts=parts))
+        tasks = []
+        input_rows = 0
+        for shard in source_shards(str(source), fixture_recipe.source, overrides):
+            for raw in staged_raw_file_rows(
+                str(source), shard, fixture_recipe.source, conversion_context(fixture_recipe)
+            ):
+                input_rows += 1
+                result = convert_source_row(raw, fixture_recipe).result
+                if not isinstance(result, ImportRejection):
+                    tasks.append(result.task)
+        kept, dropped = unique_task_indices(tasks)
+        receipt = oracle_receipt([tasks[index] for index in kept], oracle_recipe_identity(recipe)).model_copy(
+            update={"input_rows": input_rows - len(dropped), "conversion_rejections": input_rows - len(tasks)}
+        )
+        return replace(config, oracle_filter=receipt)
 
 
 def read_json(path) -> dict:
@@ -201,7 +288,7 @@ def test_small_source_export_preserves_rows_with_fewer_files(tmp_path, rows, lim
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(rows))
     recipe = fixture_recipe(convert_svamp, rubric=None, controls=REFERENCE_CONTROLS)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, normalized_shards=limit)
     result = run_pipeline(recipe, source, tmp_path / "output", config)
 
@@ -228,7 +315,7 @@ def test_full_preparation_preserves_joined_rows_across_partition_layouts(tmp_pat
     rows[6] = {**rows[6], "grader": "none"}
     write_jsonl(source, rows)
     recipe = fixture_recipe(convert_mixed_graders, rubric=None)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, execution=AuditExecution(review_batch_size=2000))
     snapshots = []
     for maximum in (1, 64):
@@ -236,35 +323,23 @@ def test_full_preparation_preserves_joined_rows_across_partition_layouts(tmp_pat
         output = tmp_path / f"output-{maximum}"
         result = run_pipeline(recipe, source, output, config)
         manifest = read_json(result.manifest_path)
-        assert manifest["admission_counts"] == {"admitted": 994, "rejected": 5, "no_grader": 2}
+        assert manifest["admission_counts"] == {"admitted": 996, "rejected": 1, "no_grader": 2}
+        assert manifest["within_source_dedup"]["within_source_duplicates"] == 2
         snapshot = {
             view: sorted(parquet_rows(output / view), key=lambda row: row["task_id"])
             for view in ("normalize", "review", "verify", "final", "download/locators")
         }
-        assert len(snapshot["download/locators"]) == len(snapshot["normalize"]) == 1001
-        assert len(snapshot["final"]) == 994
+        assert len(snapshot["download/locators"]) == 1001
+        assert len(snapshot["normalize"]) == 999
+        assert len(snapshot["final"]) == 996
         # Report references live beneath each result's own root.
         snapshots.append(json.loads(json.dumps(snapshot).replace(str(output), "$OUTPUT")))
-        telemetry = read_json(output / "telemetry.json")
-        prepared = next(phase for phase in telemetry["phases"] if phase["phase"] == "full_prepare")
-        assert prepared["executions"][0]["counters"]["zephyr/records_out"] == min(maximum, 2)
     assert snapshots[0] == snapshots[1]
     reviews = {row["source_locator"]: row for row in snapshots[0]["review"]}
-    assert reviews["source.jsonl:1"]["duplicate_of"] == reviews["source.jsonl:0"]["task_id"]
-    assert reviews["source.jsonl:999"]["duplicate_of"] == reviews["source.jsonl:998"]["task_id"]
-    assert reviews["source.jsonl:499"]["filter_reasons"] == ["conflicting_references"]
-    assert reviews["source.jsonl:500"]["filter_reasons"] == ["conflicting_references"]
-
-
-class PanelPlanContext(ZephyrContext):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.panel_source_shards = []
-
-    def execute(self, dataset, **kwargs):
-        if isinstance(dataset.source, list) and dataset.source and isinstance(dataset.source[0], tuple):
-            self.panel_source_shards.append(len(compute_plan(dataset).source_items))
-        return super().execute(dataset, **kwargs)
+    assert reviews["source.jsonl:499"]["filter_status"] == "keep"
+    assert reviews["source.jsonl:500"]["filter_status"] == "keep"
+    dropped = parquet_rows(tmp_path / "output-1/within-source-dedup/drops")
+    assert len(dropped) == 2 and all(row["kept_id"] < row["task_id"] for row in dropped)
 
 
 def test_raw_sample_is_partition_and_order_independent():
@@ -278,6 +353,23 @@ def test_raw_sample_is_partition_and_order_independent():
     assert whole == merged == sample_raw_rows(iter(reversed(rows)), size=100, seed=11)
     assert whole.population_count == 400
     assert len(whole.rows) == 100
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_complete_deduplication_precedes_quality_panel_and_admission(tmp_path, mode):
+    source = tmp_path / "source"
+    first, second = apple_rows(2)
+    write_jsonl(source, [first, first, second])
+    recipe = fixture_recipe(convert_svamp, rubric=None, controls=None)
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
+    result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(mode, reviewer))
+    manifest = read_json(result.manifest_path)
+    assert manifest["raw_population_count"] == 3
+    assert manifest["raw_sample_count"] == 2
+    assert manifest["within_source_dedup"]["within_source_duplicates"] == 1
+    assert len(parquet_rows(result.final_path)) == 2
+    dropped = parquet_rows(tmp_path / "output/within-source-dedup/drops")
+    assert len(dropped) == 1 and dropped[0]["kept_id"] < dropped[0]["task_id"]
 
 
 @pytest.mark.parametrize("num_output_shards", [1, 3, 64])
@@ -319,14 +411,10 @@ def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp
         records.extend(batch)
     records.sort(key=lambda record: int(record["source"]["row"].rsplit(":", 1)[1]))
     assert manifest["input_rows"] == len(records) == len(rows)
-    assert records[0]["decision"] is None
-    for index, (record, original) in enumerate(zip(records, rows, strict=True)):
+    for record, original in zip(records, rows, strict=True):
         assert record["raw"]["data"] == original
         task = TaskSpec.model_validate(record["normalized"])
         assert task == svamp_row_task(RawRow(task.id, task.source, original))
-        if index:
-            assert record["decision"]["reasons"] == ["exact_semantic_duplicate"]
-            assert record["decision"]["duplicate_of"] == records[0]["task_id"]
 
 
 @pytest.mark.parametrize(
@@ -334,11 +422,13 @@ def test_preparation_bounds_lossless_review_files_with_skewed_duplicate_rows(tmp
     [
         (SourceProcessingMode.SAMPLE, "good", 100),
         (SourceProcessingMode.FULL, "good", 125),
-        (SourceProcessingMode.FULL, "bad", 100),
+        (SourceProcessingMode.FULL, "bad", 125),
         (SourceProcessingMode.FULL, "some_issues", 125),
     ],
 )
-def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mode, quality, expected_conversions):
+def test_complete_conversion_precedes_bounded_quality_and_preserves_ledgers(
+    tmp_path, mode, quality, expected_conversions
+):
     source = tmp_path / "source"
     conversions = tmp_path / "conversions"
     decodings = tmp_path / "decodings"
@@ -370,9 +460,10 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
         ),
     )
     service = BatchService(quality=quality)
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     config = pipeline_config(mode, reviewer)
-    with PanelPlanContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+    config = calibrated_config(recipe, source, config)
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         result = run_source_pipeline(
             recipe,
             context,
@@ -394,8 +485,9 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     operations.pop("verification", None)
     # The panel is prepared on the driver, and each later phase is one execution.
     expected_operations = {
+        "within_source_dedup": ["deduplicate"],
         "raw_sample": ["execute"],
-        "panel_normalize": ["execute"],
+        "panel_normalize": [],
         "sample_prepare": [],
         "quality_review": ["review"],
         "audit_review": ["review"],
@@ -409,12 +501,11 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     ids = [execution["execution_id"] for execution in executions if execution["execution_id"]]
     assert len(ids) == len(set(ids)) and all(execution["status"] == "completed" for execution in executions)
     assert any("source/decode/seconds" in execution["counters"] for execution in executions)
-    assert context.panel_source_shards == [7]
     files = list(conversions.iterdir())
-    assert len(files) == expected_conversions
+    assert len(files) == 125
     assert all(file.read_text() == "converted\n" for file in files)
     decoded_files = list(decodings.iterdir())
-    assert len(decoded_files) == expected_conversions
+    assert len(decoded_files) == 125
     assert all(file.read_text() == "decoded\n" for file in decoded_files)
     raw = parquet_rows(Path(result.download_path) / "locators")
     review = parquet_rows(result.review_path)
@@ -440,37 +531,29 @@ def test_source_gate_bounds_conversion_and_preserves_joined_ledgers(tmp_path, mo
     assert recipe.rubric is not None
     for requests in service.batches.values():
         for request in requests:
-            assert request["body"] == completion_body(
-                expected_tasks[request["custom_id"]], recipe.rubric, reviewer.model, reviewer.max_tokens
-            )
+            assert request["body"] == completion_body(expected_tasks[request["custom_id"]], recipe.rubric, reviewer.spec)
     assert all(row["raw_input_sha256"] == raw_by_id[row["task_id"]]["raw_input_sha256"] for row in normalized)
     assert all(row["raw_sha256"] != row["raw_input_sha256"] for row in normalized)
     assert all(row["raw_sha256"] is None for row in raw)
     assert len(list(Path(result.normalize_path).glob("*.parquet"))) == 1
     assert all("raw_json" not in row for row in raw)
     assert read_json(Path(result.download_path) / "manifest.json")["source_input"] == str(source)
-    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
-    assert not list((tmp_path / "output/work").rglob("batch-*.jsonl.gz"))
+    assert list((tmp_path / "output/work/filtered/audit").glob("*.parquet"))
+    assert list((tmp_path / "output/work/sample/review-inputs").glob("batch-*.jsonl.gz"))
+
     assert {row["task_id"] for row in raw} == {row["task_id"] for row in review}
     assert all("task_json" not in row and "raw_json" not in row for row in review)
     assert not report["raw_population_census"]
-    assert report["quality"]["status"] == {"bad": "reject", "good": "trust", "some_issues": "trust"}[quality]
+    assert report["quality"]["status"] == "trust"
     reviewed = sum(len(requests) for requests in service.files.values())
     assert reviewed == 100
-    if quality == "bad":
-        assert all(row["filter_status"] == "reject" for row in review)
-        assert not parquet_rows(result.final_path)
-    elif quality == "good":
-        verified = parquet_rows(result.verify_path)
-        assert {row["admission"] for row in verified} == {"admitted"}
-        assert len(parquet_rows(result.final_path)) == len(verified) == expected_conversions
-    else:
-        # Uncertain panel judgments are not source defects: the reviewed rows are
-        # rejected individually and the unreviewed rows inherit the source decision.
-        assert Counter((row["quality_basis"], row["filter_status"]) for row in review) == {
-            ("direct_review", "reject"): 100,
-            ("inferred_from_source", "keep"): 25,
-        }
+    verified = parquet_rows(result.verify_path)
+    assert {row["admission"] for row in verified} == {"admitted"}
+    assert len(parquet_rows(result.final_path)) == len(verified) == expected_conversions
+    assert Counter(row["filter_status"] for row in review) == Counter(
+        {"keep": expected_conversions, "defer": 125 - expected_conversions}
+    )
+    assert report["quality"]["result"]["verdict"] == {"bad": "bad", "good": "good", "some_issues": "unknown"}[quality]
 
 
 @pytest.mark.parametrize("population_count", [10, 125])
@@ -479,14 +562,14 @@ def test_unsupported_raw_panel_never_becomes_a_small_population_census(tmp_path,
     conversions.mkdir()
     write_jsonl(source, apple_rows(population_count + 1)[1:])
     recipe = fixture_recipe(RecordingConverter(str(conversions), unsupported=True))
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(SourceProcessingMode.FULL, reviewer))
     report = read_json(result.manifest_path)
-    assert report["quality"]["status"] == "incomplete"
+    assert report["quality"]["status"] == ("census" if population_count <= 100 else "trust")
     assert report["raw_population_census"] == (population_count <= 100)
-    assert not report["full_expansion"]
-    assert result.status == "incomplete"
-    assert len(list(conversions.iterdir())) == min(100, population_count)
+    assert report["full_expansion"]
+    assert result.status == "completed"
+    assert len(list(conversions.iterdir())) == population_count
     review = parquet_rows(result.review_path)
     assert len(review) == population_count
     assert {row["filter_status"] for row in review} == {"defer"}
@@ -514,7 +597,7 @@ def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path, mode
     source, produced = tmp_path / "source", tmp_path / "produced"
     produced.mkdir()
     write_jsonl(source, apple_rows(125))
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     config = pipeline_config(mode, reviewer)
     whole = run_pipeline(fixture_recipe(convert_svamp), source, tmp_path / "whole", config)
     parts = AlternatingParts(3, str(produced))
@@ -530,33 +613,35 @@ def test_source_read_in_parts_publishes_the_views_of_a_whole_read(tmp_path, mode
     # A sample produces only the rows it processes; the ledger lists every row, hashing those produced.
     normalized = parquet_rows(parted.normalize_path)
     assert len(normalized) == (100 if mode == SourceProcessingMode.SAMPLE else 125)
-    assert {f"source.jsonl:{path.name}" for path in produced.iterdir()} == {row["source_row"] for row in normalized}
-    processed = {row["task_id"] for row in normalized}
-    expected_ledger = [
-        {**row, "raw_input_sha256": row["raw_input_sha256"] if row["task_id"] in processed else None}
-        for row in parquet_rows(Path(whole.download_path) / "locators")
-    ]
+    assert {f"source.jsonl:{path.name}" for path in produced.iterdir()} == {
+        f"source.jsonl:{index}" for index in range(125)
+    }
+    expected_ledger = [row for row in parquet_rows(Path(whole.download_path) / "locators")]
     assert sorted(parquet_rows(Path(parted.download_path) / "locators"), key=lambda row: row["task_id"]) == sorted(
         expected_ledger, key=lambda row: row["task_id"]
     )
     assert read_json(parted.manifest_path)["raw_population_count"] == 125
 
 
-def test_completed_source_rerun_reuses_inference_cache_without_scratch(tmp_path):
+def test_completed_source_preserves_phase_payloads_and_reuses_inference_cache(tmp_path):
+
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(2)[1:])
     recipe = fixture_recipe(convert_svamp)
     initial = BatchService()
-    reviewer = BatchReviewer(initial, "fixture", "revision", query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(initial, reviewer_spec("fixture", "revision"), query_cache_root=str(tmp_path / "cache"))
     config = pipeline_config(SourceProcessingMode.SAMPLE, reviewer)
     first = run_pipeline(recipe, source, tmp_path / "output", config)
     first_review = parquet_rows(first.review_path)
-    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
+    assert list((tmp_path / "output/work/filtered/audit").glob("*.parquet"))
+
     resumed = BatchService(interrupted=True)
     second_reviewer = replace(reviewer, client=resumed)
     config = replace(config, execution=replace(config.execution, reviewer=second_reviewer))
     second = run_pipeline(recipe, source, tmp_path / "output", config)
-    assert parquet_rows(second.review_path) == first_review
+    assert parquet_rows(second.review_path) == [
+        {**row, "source_quality_report": str(Path(second.manifest_path).parent / "work/quality")} for row in first_review
+    ]
     assert not resumed.files and not resumed.batches
     assert list((tmp_path / "output/work/quality/evidence").glob("*.parquet"))
 
@@ -573,22 +658,36 @@ def test_source_retry_reuses_successful_reviews_after_unavailable_evidence(tmp_p
         recipe = fixture_recipe(convert_svamp)
         unavailable = available = None
     service = BatchService(interrupted=failure == "quality_panel")
-    reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1, query_cache_root=str(tmp_path / "cache"))
+    reviewer = BatchReviewer(
+        service, reviewer_spec("fixture", "revision", max_attempts=1), query_cache_root=str(tmp_path / "cache")
+    )
     config = pipeline_config(SourceProcessingMode.FULL, reviewer, machines=unavailable)
+    if failure == "verification":
+        tasks = [
+            convert_source_row({"locator": f"source.jsonl:{i}", "data": data}, recipe).result.task
+            for i, data in enumerate(apple_rows(population))
+        ]
+        config = replace(config, oracle_filter=oracle_receipt(tasks, oracle_recipe_identity(recipe)))
     first = run_pipeline(recipe, source, tmp_path / "output", config)
-    assert first.status == "incomplete"
+    assert first.status == ("completed" if failure == "quality_panel" else "incomplete")
     assert Path(first.manifest_path).exists()
     submitted = sum(len(rows) for rows in service.files.values())
     first_files = set(service.files)
+    partial = tmp_path / "output/work/audited/audit/preempted.parquet"
+    partial.write_bytes(b"retained partial audit")
+    prior_files = {path: path.read_bytes() for path in (tmp_path / "output").rglob("*") if path.is_file()}
     second = run_pipeline(recipe, source, tmp_path / "output", replace(config, machines=available))
     assert second.status == "completed"
+    assert Path(second.manifest_path).parent.parent == tmp_path / "output/attempts"
+    assert {path: path.read_bytes() for path in prior_files} == prior_files
     retried_ids = [
         row["custom_id"] for file_id, rows in service.files.items() if file_id not in first_files for row in rows
     ]
     failed_ids = [row["custom_id"] for row in service.batches["batch-0"]] if failure == "quality_panel" else []
     assert sorted(retried_ids) == sorted(failed_ids)
     assert submitted == (100 if failure == "quality_panel" else population)
-    assert not [path for path in (tmp_path / "output/work").rglob("*.parquet") if path.parent.name != "evidence"]
+    assert list((Path(second.manifest_path).parent / "work/sample/review-inputs").glob("*.jsonl.gz"))
+
     review = parquet_rows(second.review_path)
     assert len(review) == len({row["task_id"] for row in review}) == population
     assert all(row["review_status"] not in {"invalid", "unavailable"} for row in review)
@@ -630,7 +729,7 @@ class PartiallyUnavailableReview(BatchService):
         (SourceProcessingMode.SAMPLE, 125, 0, "trust", 100, "validated"),
     ],
 )
-def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
+def test_qc_unavailability_does_not_reject_tasks_but_controls_still_can(
     tmp_path, mode, population, bad_count, quality, processed, verification
 ):
     source = tmp_path / "source"
@@ -641,7 +740,7 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
     )
     recipe = fixture_recipe(convert_svamp, controls=controls)
     service = PartiallyUnavailableReview(bad_count)
-    reviewer = BatchReviewer(service, "fixture", "revision", max_attempts=1)
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision", max_attempts=1))
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(mode, reviewer))
     assert result.status == ("sampled" if processed < population else "completed")
     report = read_json(result.manifest_path)
@@ -652,24 +751,26 @@ def test_resolved_source_gate_finishes_with_unavailable_task_deferred(
     review = parquet_rows(result.review_path)
     deferred = [row for row in review if row["review_status"] == "unavailable"]
     assert len(deferred) == 1
-    assert deferred[0]["filter_status"] == "defer"
+    assert deferred[0]["filter_status"] == ("reject" if verification == "validated" else "keep")
     final = parquet_rows(result.final_path)
-    assert len(final) == (0 if verification == "validated" else processed - bad_count - 1)
-    assert deferred[0]["task_id"] not in {row["task_id"] for row in final}
+    assert len(final) == (0 if verification == "validated" else processed)
+    assert (deferred[0]["task_id"] in {row["task_id"] for row in final}) == (verification != "validated")
     assert list((tmp_path / "output/work/quality/evidence").glob("*.parquet"))
 
 
 @pytest.mark.parametrize(
     "unavailable,bad_count,quality,status,admitted",
-    [(3, 20, "trust", "completed", 102), (10, 45, "incomplete", "incomplete", 0)],
+    [(3, 20, "trust", "completed", 125), (10, 45, "trust", "completed", 125)],
     ids=["decision_reached", "decision_open"],
 )
-def test_unavailable_reviews_leave_a_source_incomplete_only_when_the_gate_cannot_decide(
+def test_unavailable_reviews_remain_in_the_ledger_while_full_conversion_completes(
     tmp_path, unavailable, bad_count, quality, status, admitted
 ):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(125))
-    reviewer = BatchReviewer(PartiallyUnavailableReview(bad_count, unavailable), "fixture", "revision", max_attempts=1)
+    reviewer = BatchReviewer(
+        PartiallyUnavailableReview(bad_count, unavailable), reviewer_spec("fixture", "revision", max_attempts=1)
+    )
     result = run_pipeline(
         fixture_recipe(convert_svamp),
         source,
@@ -683,7 +784,7 @@ def test_unavailable_reviews_leave_a_source_incomplete_only_when_the_gate_cannot
     review = parquet_rows(result.review_path)
     deferred = [row for row in review if row["review_status"] == "unavailable"]
     assert len(deferred) == unavailable
-    assert {row["filter_status"] for row in deferred} == {"defer"}
+    assert {row["filter_status"] for row in deferred} == {"keep"}
     assert len(parquet_rows(result.final_path)) == admitted
 
 
@@ -702,7 +803,7 @@ class MixedPanelConverter:
 
 
 @pytest.mark.parametrize(
-    "defect_limit,expected_quality,expected_status", [(2, "trust", "sampled"), (101, "reject", "gated")]
+    "defect_limit,expected_quality,expected_status", [(2, "trust", "sampled"), (101, "trust", "sampled")]
 )
 def test_raw_panel_with_source_defects_keeps_fixed_draw_and_decisive_quality(
     tmp_path, defect_limit, expected_quality, expected_status
@@ -712,27 +813,30 @@ def test_raw_panel_with_source_defects_keeps_fixed_draw_and_decisive_quality(
     write_jsonl(source, apple_rows(101))
     recipe = fixture_recipe(MixedPanelConverter(str(conversions), defect_limit))
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     result = run_pipeline(recipe, source, tmp_path / "output", pipeline_config(SourceProcessingMode.SAMPLE, reviewer))
     report = read_json(result.manifest_path)
     assert report["raw_sample_count"] == report["quality"]["population"]["input_count"] == 100
     assert report["quality"]["status"] == expected_quality
+    exclusions = report["quality"]["population"]["exclusions"]
     if defect_limit == 2:
-        assert report["quality"]["assessments"]["defect"] in (1, 2)
-        assert report["quality"]["defect_fraction"] in (0.01, 0.02)
+        assert exclusions["normalization:source_defect"] in (1, 2)
+        assert report["quality"]["result"]["issue_count"] == 0
+        assert report["quality"]["result"]["verdict"] == "good"
     else:
-        assert report["quality"]["assessments"]["defect"] == 100
-        assert report["quality"]["defect_fraction"] == 1.0
+        assert exclusions["normalization:source_defect"] == 100
+        assert report["quality"]["result"]["reviewed"] == 0
+        assert report["quality"]["result"]["verdict"] == "unknown"
         assert service.files == {}
     assert result.status == expected_status
-    assert len(list(conversions.iterdir())) == 100
+    assert len(list(conversions.iterdir())) == 101
 
 
 def test_source_failure_retains_nested_preparation_evidence_without_review_requests(tmp_path):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(3)[2:])
     recipe = fixture_recipe(convert_svamp)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     config = pipeline_config(
         SourceProcessingMode.SAMPLE,
         reviewer,
@@ -740,6 +844,7 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
         verification=SourceVerificationPolicy(1, 0, 1, 1),
         normalized_shards=1,
     )
+    config = calibrated_config(recipe, source, config)
     with ZephyrContext(max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         with pytest.raises(ValueError, match="requires a reviewer"):
             run_source_pipeline(
@@ -755,12 +860,13 @@ def test_source_failure_retains_nested_preparation_evidence_without_review_reque
     assert report["source"] == "catalog-selection"
     assert report["status"] == "failed" and report["error_type"] == "ValueError"
     assert [phase["phase"] for phase in report["phases"]] == [
+        "within_source_dedup",
         "raw_sample",
         "panel_normalize",
         "sample_prepare",
         "quality_review",
     ]
-    assert report["phases"][2]["status"] == "completed"
+    assert report["phases"][3]["status"] == "completed"
     assert read_json(tmp_path / "output/work/sample/manifest.json")["input_rows"] == 1
     assert list((tmp_path / "output/work/sample/review-inputs").glob("batch-*.jsonl.gz"))
     assert report["phases"][-1]["executions"] == []
@@ -776,7 +882,7 @@ def test_source_without_rubric_keeps_converted_rows_without_review_requests(tmp_
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(120))
     service = BatchService()
-    reviewer = BatchReviewer(service, "fixture", "revision")
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
     result = run_pipeline(
         fixture_recipe(convert_svamp, rubric=None), source, tmp_path / "output", pipeline_config(mode, reviewer)
     )
@@ -803,12 +909,20 @@ def test_admission_admits_only_rows_with_a_ready_grader_and_names_each_output_vi
         {"Body": "Aya has apples.", "Question": "How many?", "Answer": "unknown", "grader": "in_process"}
     ]
     write_jsonl(source, rows)
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
+    recipe = fixture_recipe(convert_mixed_graders, rubric=None)
+    converted = [
+        convert_source_row({"locator": f"source.jsonl:{i}", "data": row}, recipe).result for i, row in enumerate(rows)
+    ]
+    tasks = [row.task for row in converted if not isinstance(row, ImportRejection)]
+    receipt = oracle_receipt(tasks, oracle_recipe_identity(recipe)).model_copy(
+        update={"input_rows": len(rows), "conversion_rejections": len(rows) - len(tasks)}
+    )
     result = run_pipeline(
-        fixture_recipe(convert_mixed_graders, rubric=None),
+        recipe,
         source,
         tmp_path / "output",
-        pipeline_config(SourceProcessingMode.FULL, reviewer),
+        replace(pipeline_config(SourceProcessingMode.FULL, reviewer), oracle_filter=receipt),
     )
     output = tmp_path / "output"
     manifest = read_json(result.manifest_path)
@@ -851,7 +965,7 @@ def test_admission_admits_only_rows_with_a_ready_grader_and_names_each_output_vi
 def test_judge_graded_source_without_controls_is_admitted_unverified(tmp_path):
     source = tmp_path / "source"
     write_jsonl(source, [{**row, "grader": "judge"} for row in apple_rows(3)])
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     result = run_pipeline(
         fixture_recipe(convert_mixed_graders, rubric=None, controls=None),
         source,
@@ -873,7 +987,7 @@ def test_judge_graded_source_runs_controls_through_explicit_remote_connection(tm
     judge_server.reply = "FAIL"
     source = tmp_path / "source"
     write_jsonl(source, [{**row, "grader": "judge"} for row in apple_rows(3)])
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
     result = run_pipeline(
         fixture_recipe(convert_mixed_graders, rubric=None, controls=JUDGE_CONTROLS),
         source,
@@ -907,12 +1021,21 @@ def test_judge_graded_source_runs_controls_through_explicit_remote_connection(tm
 def test_sandbox_rows_reach_final_only_after_controls_pass(tmp_path, machines, admission, status):
     source = tmp_path / "source"
     write_jsonl(source, apple_rows(3))
-    reviewer = BatchReviewer(BatchService(), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(), reviewer_spec("fixture", "revision"))
+    recipe = fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS)
+    tasks = [
+        convert_source_row({"locator": f"source.jsonl:{i}", "data": data}, recipe).result.task
+        for i, data in enumerate(apple_rows(3))
+    ]
+    config = replace(
+        pipeline_config(SourceProcessingMode.FULL, reviewer, machines=machines),
+        oracle_filter=oracle_receipt(tasks, oracle_recipe_identity(recipe)),
+    )
     result = run_pipeline(
-        fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS),
+        recipe,
         source,
         tmp_path / "output",
-        pipeline_config(SourceProcessingMode.FULL, reviewer, machines=machines),
+        config,
     )
     manifest = read_json(result.manifest_path)
     assert result.status == status
@@ -955,7 +1078,7 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
         RecordingConverter(str(conversions), unsupported=True),
         source=replace(SOURCE_FILES, patterns=(filename,), format=source_format, decode=drop_archive_path),
     )
-    reviewer = BatchReviewer(BatchService(quality="good"), "fixture", "revision")
+    reviewer = BatchReviewer(BatchService(quality="good"), reviewer_spec("fixture", "revision"))
     with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         quick = run_source_pipeline(
             recipe,
@@ -972,7 +1095,7 @@ def test_reviewed_modes_share_quick_conversion_records_before_admission(tmp_path
             context,
             str(source),
             str(tmp_path / "reviewed"),
-            pipeline_config(mode, reviewer),
+            calibrated_config(recipe, source, pipeline_config(mode, reviewer), overrides),
             mode=mode,
             canonical_source=recipe.name,
             parquet_shard_bytes=1,
@@ -1000,3 +1123,88 @@ def mechanical_records(records):
         row["source_row"]: {key: value for key, value in row.items() if key not in {"raw_sha256", "raw_input_sha256"}}
         for row in records
     }
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+def test_reviewed_oracle_source_requires_population_filter_and_rejects_failed_oracles(tmp_path, mode):
+    source = tmp_path / "source"
+    rows = apple_rows(2)
+    write_jsonl(source, rows)
+    recipe = replace(fixture_recipe(convert_script_graded, rubric=None, controls=ORACLE_CONTROLS), oracle_solutions=True)
+    service = BatchService()
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
+    config = pipeline_config(mode, reviewer, machines=FixtureGradingMachines())
+    with pytest.raises(ValueError, match="full-population Harbor oracle filter"):
+        run_pipeline(recipe, source, tmp_path / "missing", config)
+    tasks = [
+        convert_source_row({"locator": f"source.jsonl:{i}", "data": row}, recipe).result.task
+        for i, row in enumerate(rows)
+    ]
+    receipt = oracle_receipt(tasks, oracle_recipe_identity(recipe), failed=frozenset({tasks[0].id}))
+    result = run_pipeline(recipe, source, tmp_path / "filtered", replace(config, oracle_filter=receipt))
+    assert [row["task_id"] for row in parquet_rows(result.final_path)] == [tasks[1].id]
+    assert read_json(result.manifest_path)["admission_counts"] == {"rejected": 1, "admitted": 1}
+
+    assert all(request["custom_id"] != tasks[0].id for batch in service.batches.values() for request in batch)
+
+
+@pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
+@pytest.mark.parametrize("state", ["missing", "measurement_only", "wrong_pin", "clean", "remediated"])
+def test_decontamination_receipt_precedes_conversion_and_quality_review(tmp_path, mode, state):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(1))
+    conversions = tmp_path / "conversions"
+    conversions.mkdir()
+    recipe = fixture_recipe(RecordingConverter(str(conversions)), controls=REFERENCE_CONTROLS)
+    service = BatchService()
+    reviewer = BatchReviewer(service, reviewer_spec("fixture", "revision"))
+    evidence = decontamination_evidence(recipe.source.dataset, recipe.source.revision, 1)
+    document = evidence.model_dump(mode="json")
+    if state == "measurement_only":
+        document["receipt"] = None
+    elif state == "wrong_pin":
+        document["receipt"]["release"]["dataset_revision"] = "c" * 40
+    elif state == "remediated":
+        document.update(measured_tasks=2, contaminated_tasks=1, contaminated_fraction=0.5)
+        document["receipt"].update(status="remediated", dropped_tasks=1)
+        document["receipt"]["release"].update(
+            drop_manifest_uri="s3://test/dropped-task.jsonl",
+            original_private_dataset_id="open-athena/unfiltered",
+            original_private_dataset_revision="b" * 40,
+        )
+    evidence = None if state == "missing" else type(evidence).model_validate(document)
+    config = replace(pipeline_config(mode, reviewer), lexical_contamination=evidence)
+    if state in {"missing", "measurement_only", "wrong_pin"}:
+        with pytest.raises(ValueError, match=r"[Dd]econtamination"):
+            run_pipeline(recipe, source, tmp_path / "output", config)
+        assert list(conversions.iterdir()) == []
+        assert service.files == {}
+        assert not (tmp_path / "output" / "final").exists()
+        return
+    result = run_pipeline(recipe, source, tmp_path / "output", config)
+    assert len(parquet_rows(result.final_path)) == 1
+    assert service.files
+    assert read_json(result.manifest_path)["lexical_contamination"] == document
+
+
+def test_transport_outage_cannot_qualify_tasks_with_passing_controls(tmp_path):
+    source = tmp_path / "source"
+    write_jsonl(source, apple_rows(2))
+    recipe = fixture_recipe(convert_svamp, controls=REFERENCE_CONTROLS)
+    available = BatchReviewer(BatchService(), reviewer_spec("fixture", "available", max_attempts=1))
+    qualified = run_pipeline(
+        recipe, source, tmp_path / "available", pipeline_config(SourceProcessingMode.FULL, available)
+    )
+    assert qualified.status == "completed"
+    assert len(parquet_rows(qualified.final_path)) == 2
+    unavailable = BatchReviewer(BatchService(interrupted=True), reviewer_spec("fixture", "unavailable", max_attempts=1))
+    pending = run_pipeline(
+        recipe, source, tmp_path / "unavailable", pipeline_config(SourceProcessingMode.FULL, unavailable)
+    )
+    assert pending.status == "incomplete"
+    assert parquet_rows(pending.final_path) == []
+    report = read_json(pending.manifest_path)
+    assert report["quality"]["result"]["verdict"] == "unknown"
+    assert report["quality"]["result"]["issue_count"] == 0
+    assert report["quality"]["result"]["unavailable_count"] == 2
+    assert {row["admission"] for row in parquet_rows(pending.verify_path)} == {"deferred"}

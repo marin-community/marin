@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import shutil
+import sys
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -13,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.curation import CurationCatalog
+from finestore.rl.curation import CurationCatalog, OversightEvidence, OversightLevel
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -21,12 +22,15 @@ from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Command, HostImage, Mount, NetworkPolicy
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import SourceFormat
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.local import LocalRuntime, local_runtime
 from zephyr.readers import load_parquet
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
+from experiments.post_training.task_curation import driver
 from experiments.post_training.task_curation import pipeline as processor
+from experiments.post_training.task_curation import sources as source_catalog
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.environment import Environment
@@ -38,7 +42,8 @@ from experiments.post_training.task_curation.pipeline import (
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -47,10 +52,29 @@ from experiments.post_training.task_curation.tests.image_builds import (
     install_fake_build_tools,
 )
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
+from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def math500() -> CurationRecipe:
-    return cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    recipe = cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
+    return resource_recipe(replace(recipe, source=replace(recipe.source, repo="open-athena/math500-fixture")))
+
+
+def source_with_input_evidence[ConfigT: CatalogConfig](source: RlDataSource[ConfigT]) -> RlDataSource[ConfigT]:
+    dataset = source.dataset
+    assert dataset is not None and dataset.revision is not None
+    return with_admission_census(
+        replace(
+            source,
+            info=replace(
+                source.info,
+                lexical_contamination=decontamination_evidence(dataset.name, dataset.revision, 1),
+                within_source_dedup=deduplication_evidence(dataset.name, dataset.revision, source.version),
+            ),
+        )
+    )
 
 
 @pytest.fixture
@@ -62,7 +86,19 @@ def catalog(monkeypatch, tmp_path):
             **{
                 name: RlDataSource(
                     pipeline=process_rows,
-                    info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"),
+                    info=SourceInfo(
+                        within_source_dedup=deduplication_evidence(
+                            pipeline.dataset.name, pipeline.dataset.revision, pipeline.version
+                        ),
+                        id=f"Marin:{name}",
+                        upstream_dataset=name,
+                        upstream_name=name,
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                        lexical_contamination=decontamination_evidence(
+                            pipeline.dataset.name, pipeline.dataset.revision, 1
+                        ),
+                    ),
                     config=pipeline,
                 )
                 for name, pipeline in pipelines.items()
@@ -76,8 +112,6 @@ def catalog(monkeypatch, tmp_path):
 def arguments(tmp_path) -> list[str]:
     options = {
         "--mode": "sample",
-        "--review-mode": "chat",
-        "--model-revision": "fixture-revision",
         "--review-cache": str(tmp_path / "cache"),
         "--max-workers": "1",
         "--coordinator-memory": "16g",
@@ -86,6 +120,46 @@ def arguments(tmp_path) -> list[str]:
         "--report-path": str(tmp_path / "report.json"),
     }
     return [item for pair in options.items() for item in pair]
+
+
+def test_historical_corpus_inventory_keeps_the_current_embedding_plan(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "numbers")
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            id="HuggingFaceH4:math500",
+            origin=SourceOrigin.HUGGINGFACEH4,
+            upstream_dataset="math500",
+            upstream_name="math500",
+            title=None,
+        ),
+    )
+
+    def current_sources():
+        sys.stderr.write("Planning diagnostic\n")
+        return {source.info.id: source}
+
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", current_sources)
+    options = ["--embed", "coverage", "--cache-dir", str(tmp_path / "cache")]
+    plans = []
+    for identifier in (source.info.id, "MarinSkyRL:math500"):
+        corpus = tmp_path / (identifier.replace(":", "-") + ".json")
+        corpus.write_text(
+            json.dumps(
+                {
+                    "population": "converted",
+                    "sources": [],
+                    "inventory": [{**source.declaration.model_dump(mode="json"), "id": identifier}],
+                }
+            )
+        )
+        frozen = corpus.read_bytes()
+        result = CliRunner().invoke(main, [*options, "--corpus", str(corpus)])
+        assert result.exit_code == 0, result.output
+        plans.append(json.loads(result.stdout))
+        assert corpus.read_bytes() == frozen
+    assert plans[0] == plans[1]
 
 
 def test_source_option_selects_catalog_order_without_changing_identity(tmp_path, catalog):
@@ -122,6 +196,7 @@ def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, cata
     assert not production.exists()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="The local bubblewrap backend requires Linux")
 def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_their_lock(tmp_path, monkeypatch, request):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
     install_fake_build_tools(tmp_path, monkeypatch)
@@ -165,6 +240,47 @@ def test_remote_planning_uses_cw_instead_of_ambient_gcs(tmp_path, catalog, monke
     assert not (tmp_path / "report.json").exists()
 
 
+def test_remote_campaign_plans_with_canonical_execution_defaults(tmp_path, catalog):
+    # An Iris campaign uses its pinned reviewer and resolves execution defaults once.
+    root = "s3://marin-us-east-02a/marin/curation-trial"
+    minimal = [
+        "--mode",
+        "sample",
+        "--report-path",
+        str(tmp_path / "report.json"),
+        "--artifact-root",
+        root,
+    ]
+    result = CliRunner().invoke(main, minimal)
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["max_workers"] == 64
+    assert plan["coordinator_resources"]["ram"] == "16g"
+    # No image override: Iris starts the workers from the cluster's configured task image.
+    assert plan["worker_resources"]["image"] is None
+    assert plan["review_cache"] == f"{root}/rl-data/review-cache"
+
+    overrides = ["--max-workers", "8", "--coordinator-memory", "8g", "--worker-image", "fixture-image"]
+    overrides += ["--review-cache", str(tmp_path / "cache")]
+    result = CliRunner().invoke(main, [*minimal, *overrides])
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["max_workers"] == 8
+    assert plan["coordinator_resources"]["ram"] == "8g"
+    assert plan["worker_resources"]["image"] == "fixture-image"
+    assert plan["review_cache"] == str(tmp_path / "cache")
+
+
+def test_local_campaign_keeps_its_review_cache_in_the_cache_directory(tmp_path, catalog):
+    cache = tmp_path / "canary"
+    options = ["--mode", "sample"]
+    result = CliRunner().invoke(main, [*options, "--cache-dir", str(cache)])
+    assert result.exit_code == 0, result.output
+    plan = json.loads(result.output)
+    assert plan["review_cache"] == str(cache.resolve() / "review-cache")
+    assert plan["max_workers"] == 4
+
+
 def test_gvisor_image_backend_requires_an_in_cluster_driver(tmp_path, catalog, monkeypatch):
     monkeypatch.setattr("experiments.post_training.task_curation.driver.get_job_info", lambda: None)
     options = [*arguments(tmp_path), "--image-backend", "gvisor"]
@@ -174,6 +290,9 @@ def test_gvisor_image_backend_requires_an_in_cluster_driver(tmp_path, catalog, m
 
 
 def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):
+    declared = {source.name: source for source in skyrl_math.sources()}
+    sources = {name: source_with_input_evidence(declared[name]) for name in ("math500", "aime24")}
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: sources)
     monkeypatch.delenv("GLM_BULK_TOKEN", raising=False)
     output, cache = tmp_path / "output", tmp_path / "downloads"
     options = {
@@ -236,6 +355,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     input_file = tmp_path / "numbers.txt"
     input_file.write_text("1\n2\n3\n")
     source = number_source(input_file)
+    source = source_with_input_evidence(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     options = [
         "--mode",
@@ -290,16 +410,26 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
 
 @pytest.mark.parametrize("mode", ["sample", "full"])
 @pytest.mark.parametrize("rubric", [None, "Check the reference answer."])
-def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path, monkeypatch, mode, rubric):
+def test_recipe_cli_plans_pinned_review_and_requires_credentials_only_for_execution(tmp_path, monkeypatch, mode, rubric):
     monkeypatch.delenv(GLM_BULK_TOKEN_ENV, raising=False)
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    declared = replace(
+        declared,
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
     source = replace(
         declared,
         config=replace(
             math500(),
-            source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+            source=HfSource("open-athena/fixture-questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
             rubric=rubric,
             controls=None,
             grader=None,
@@ -312,11 +442,24 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
     monkeypatch.setattr(
         processor, "plan_download", lambda request: original(replace(request, source_url_override=str(remote)))
     )
+    evidence = decontamination_evidence(source.dataset.name, source.dataset.revision, 1)
+    decontamination_path = tmp_path / "decontamination.json"
+    decontamination_path.write_text(evidence.model_dump_json())
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version),
+        ),
+    )
+    source = with_admission_census(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     report = tmp_path / "report.json"
     options = [
         "--mode",
         mode,
+        "--decontamination-receipt",
+        str(decontamination_path),
         "--skip-assessment",
         "--max-workers",
         "1",
@@ -332,8 +475,9 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         str(tmp_path / "artifacts"),
     ]
     runner = CliRunner()
+    options += write_fixture_receipt(source.config, remote, tmp_path / "resource-receipt.json")
     planned = runner.invoke(main, options)
-    assert planned.exit_code == (2 if rubric is not None else 0), planned.output
+    assert planned.exit_code == 0, planned.output
     assert not (tmp_path / "artifacts").exists()
     assert not report.exists()
     client = LocalClient()
@@ -347,6 +491,8 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
             return
         assert executed.exit_code == 0, executed.output
         result = json.loads(report.read_text())["sources"][0]["result"]
+        manifest = json.loads(StoragePath(result["evidence"]["manifest"]).read_text())
+        assert manifest["lexical_contamination"] == evidence.model_dump(mode="json")
         rows = [
             row
             for shard in (StoragePath(result["outputs"]["final"]) / "*.parquet").glob()
@@ -372,16 +518,27 @@ def test_shell_only_campaign_does_not_load_ports_catalog(tmp_path):
     asyncio.run(check())
 
 
-def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, monkeypatch, review_server):
+def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, monkeypatch, review_server, qa_reviewer):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    declared = replace(
+        declared,
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
     source = replace(
         declared,
         config=replace(
             math500(),
-            source=HfSource("fixture/questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
+            source=HfSource("open-athena/fixture-questions", "a" * 40, ("rows.jsonl",), SourceFormat.JSONL),
             controls=None,
         ),
     )
+    source = source_with_input_evidence(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
@@ -403,17 +560,12 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
         "2",
         "--max-workers",
         "1",
-        "--review-mode",
-        "chat",
         "--review-concurrency",
         "1",
-        "--model-revision",
-        "fixture",
-        "--base-url",
-        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
     runner = CliRunner()
+    args += write_fixture_receipt(source.config, staged, tmp_path / "resource-receipt.json")
     first = runner.invoke(main, [*args, "--normalized-shards", "1"])
     assert first.exit_code == 0, first.output
     outcome = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
@@ -428,9 +580,20 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
     assert len(review_server.requests) == 2
 
 
-def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, review_server):
+def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, review_server, qa_reviewer):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    declared = replace(
+        declared,
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
     source = replace(declared, config=replace(math500(), rubric=None, controls=None))
+    source = source_with_input_evidence(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     staged = tmp_path / "input"
@@ -454,14 +617,9 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
         "2",
         "--assessment-sample-size",
         "1",
-        "--review-mode",
-        "chat",
-        "--model-revision",
-        "fixture",
-        "--base-url",
-        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
+    args += write_fixture_receipt(source.config, staged, tmp_path / "resource-receipt.json")
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     catalog = CurationCatalog(str(cache / "campaigns/catalog"))
@@ -484,9 +642,20 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
     assert len(review_server.requests) == 1
 
 
-def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_path, monkeypatch, review_server):
+def test_full_campaign_requires_qa_transport_availability(tmp_path, monkeypatch, review_server, qa_reviewer):
     declared = next(source for source in skyrl_math.sources() if source.name == "math500")
+    declared = replace(
+        declared,
+        info=replace(
+            declared.info,
+            daytona_machine_slots=0,
+            daytona_snapshot_count=0,
+            daytona_execution_failures=0,
+            daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
+        ),
+    )
     source = replace(declared, config=replace(math500(), controls=None))
+    source = source_with_input_evidence(source)
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {source.name: source})
     monkeypatch.setenv(GLM_BULK_TOKEN_ENV, "fixture-token")
     review_server.review_available = False
@@ -507,16 +676,11 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
         "1",
         "--quality-sample-size",
         "1",
-        "--review-mode",
-        "chat",
-        "--model-revision",
-        "fixture",
         "--review-concurrency",
         "1",
-        "--base-url",
-        f"http://127.0.0.1:{review_server.server_address[1]}/v1",
         "--run",
     ]
+    args += write_fixture_receipt(source.config, staged, tmp_path / "resource-receipt.json")
     result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
     campaign = json.loads((cache / "campaigns/campaign.json").read_text())
@@ -528,7 +692,7 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     )
     assert catalog_source.curation.status == "incomplete"
     assert [(item.cohort, item.status) for item in catalog.items(catalog_source.assessment_key)] == [
-        ("excluded", "reviewed")
+        ("excluded", "reviewed"),
     ]
     requests = list(review_server.requests)
     assert sum(request["tool_choice"]["function"]["name"] == "assess_task" for request in requests) == 1
@@ -541,3 +705,62 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     recovered = json.loads((cache / "campaigns/campaign.json").read_text())
     assert recovered["sources"][0]["status"] == "completed"
     assert recovered["sources"][0]["path"] != outcome["path"]
+
+
+def test_mutable_decontamination_receipt_cannot_plan_a_reviewed_campaign(tmp_path, catalog):
+    dataset = math500().dataset
+    receipt = decontamination_evidence(dataset.name, dataset.revision, 1).model_dump(mode="json")
+    receipt["receipt"]["release"]["dataset_revision"] = "main"
+    path = tmp_path / "mutable-receipt.json"
+    path.write_text(json.dumps(receipt))
+    result = CliRunner().invoke(main, [*arguments(tmp_path), "--decontamination-receipt", str(path)])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, ValueError)
+    assert "dataset_revision" in str(result.exception)
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_quick_conversion_can_collect_actor_evidence_before_catalog_publication(tmp_path, monkeypatch):
+    input_path = tmp_path / "numbers.txt"
+    input_path.write_text("1\n2\n")
+    source = number_source(input_path)
+    source = replace(source, info=replace(source.info, daytona_machine_slots=None, daytona_count_basis=None))
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {})
+    result = CliRunner().invoke(
+        main,
+        [
+            "--mode",
+            "quick",
+            "--source",
+            source.name,
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--max-workers",
+            "1",
+            "--run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    output = tmp_path / "output" / source.name / "numbers.json"
+    assert json.loads(output.read_text()) == [2, 4]
+    assert source.catalog_declaration is None
+
+
+def test_quick_selection_does_not_require_admission_for_unrelated_sources(tmp_path, monkeypatch):
+    source = number_source(tmp_path / "input")
+    unrelated = number_source(tmp_path / "other", "unqualified")
+    unrelated = replace(
+        unrelated,
+        info=replace(
+            unrelated.info,
+            oversight=OversightEvidence(level=OversightLevel.SAMPLE, verification="Executed fixture controls"),
+        ),
+    )
+    monkeypatch.setattr(driver, "all_sources", lambda: {source.info.id: source, unrelated.info.id: unrelated})
+
+    monkeypatch.setattr(source_catalog, "all_sources", driver.all_sources)
+    monkeypatch.setattr(driver, "runnable_sources", source_catalog.runnable_sources)
+    assert driver._selected_sources((source.name,), SourceProcessingMode.QUICK) == {source.name: source}

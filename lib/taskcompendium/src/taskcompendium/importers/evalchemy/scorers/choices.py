@@ -38,10 +38,3 @@ def grade_gpqa_answer(expected: str, response: str) -> Reward:
 def grade_mmlu_answer(expected: str, response: str) -> Reward:
     answer = extract_mmlu_answer(response)
     return scored(float(answer == expected), extracted=answer, expected=expected)
-
-
-def grade_bbh_cot(document: dict, response: str) -> Reward:
-    matches = re.findall(r"(?<=the answer is )(.*)(?=.)", response)
-    answer = matches[0] if matches else "[invalid]"
-    value = float(answer == document["target"])
-    return scored(value, metrics={"exact_match,get-answer": value}, extracted=answer)

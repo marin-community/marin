@@ -27,8 +27,8 @@ from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
+from verifyit.judge_contract import validate_judge_spec
 from verifyit.modes.extract import extract_boxed
-from verifyit.modes.grade_judge import validate_judge_spec
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
@@ -42,6 +42,8 @@ from verifyit.spec import (
     StdioSpec,
     spec_from_table,
 )
+
+from taskcompendium.integrity import SharedIntegrityContract
 
 SCHEMA_VERSION = "0.30"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
@@ -394,6 +396,31 @@ class EnvironmentRequirements(BaseModel):
         if self.working_directory is not None:
             validate_workspace_path(self.working_directory)
         return self
+
+
+def missing_environment(spec: Mapping) -> str | None:
+    """Explain a missing task environment before conversion or cohort admission.
+
+    Conversation-only tasks need no machine.
+    """
+    requirements = spec.get("environment_requirements") or {}
+    if any(
+        requirements.get(name) is not None for name in ("docker_image", "docker_build", "packages_lock", "package_spec")
+    ):
+        return None
+    needs_machine = (
+        spec.get("answer_type") in {"file", "state", "workspace_state"}
+        or bool(requirements.get("capabilities"))
+        or requirements.get("command_semantics") is not None
+        or bool(requirements.get("tool_providers"))
+        or bool(requirements.get("setup_commands"))
+        or bool(requirements.get("working_directory"))
+        or bool(requirements.get("environment_variables"))
+        or bool(spec.get("tool_bindings"))
+        or bool(spec.get("output_paths"))
+        or bool((spec.get("resources") or {}).get("worker"))
+    )
+    return "agentic task declares no environment" if needs_machine else None
 
 
 def require_resolved_environment(requirements: EnvironmentRequirements) -> None:
@@ -905,6 +932,18 @@ AnswerFormat = Annotated[
 ]
 
 
+class ExecutionRequirements(BaseModel):
+    """Task-declared machine capacity and phase deadlines, in MiB and seconds."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    cpus: int = Field(gt=0)
+    memory_mb: int = Field(gt=0)
+    storage_mb: int = Field(gt=0)
+    agent_timeout_sec: float = Field(gt=0)
+    verifier_timeout_sec: float = Field(gt=0)
+
+
 class TaskSpec(BaseModel):
     """The complete semantic definition of one task, its grader, and its final result."""
 
@@ -913,6 +952,10 @@ class TaskSpec(BaseModel):
     id: str
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
+    execution_requirements: ExecutionRequirements | None = None
+    verifier_execution_requirements: ExecutionRequirements | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
@@ -926,9 +969,16 @@ class TaskSpec(BaseModel):
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
     labels: dict[str, str] = Field(default_factory=dict)
+    integrity_contract: SharedIntegrityContract | None = None
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
+        if self.verifier_execution_requirements is not None:
+            if self.execution_requirements is None or any(
+                getattr(self.verifier_execution_requirements, name) != getattr(self.execution_requirements, name)
+                for name in ("agent_timeout_sec", "verifier_timeout_sec")
+            ):
+                raise ValueError("Actor and verifier allocations must share the same phase deadlines")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:

@@ -39,6 +39,10 @@ _DURATION = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)")
 _LOG_VOLUME = "${HOST_AGENT_LOGS_PATH}:${ENV_AGENT_LOGS_PATH}"
 
 
+class MissingPreparedImageError(ValueError):
+    """A declared service has no immutable prepared image for execution."""
+
+
 class PreparedImageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     image: str
@@ -155,7 +159,7 @@ def _machine(
         image_reference = image_reference or task.docker_image
         workdir = task.workdir or workdir
     if image_reference is None or PINNED_IMAGE.fullmatch(image_reference) is None:
-        raise ValueError(
+        raise MissingPreparedImageError(
             f"Service {name!r} requires a prepared image pinned with @sha256 in shellbox-images.json"
         )
     if not workdir or not PurePosixPath(workdir).is_absolute():
@@ -179,7 +183,7 @@ def _machine(
     return MachineSpec(
         source=RegistryImage(image_reference),
         workdir=workdir,
-        network=NetworkPolicy.DENY,
+        network=NetworkPolicy.ALLOW if task.allow_internet else NetworkPolicy.DENY,
         env=(
             {
                 **resolve_env_vars(
@@ -242,8 +246,6 @@ def import_prepared_task(
     protected_values: frozenset[str] = frozenset(),
 ) -> ImportedTask:
     """Translate the supported Compose subset without building images or reading host variables."""
-    if task.allow_internet:
-        raise ValueError("Prepared service groups require allow_internet=false")
     if task.os is not TaskOS.LINUX:
         raise ValueError("Prepared service groups require Linux images")
     if task.gpus or task.gpu_types or task.tpu is not None:

@@ -124,6 +124,7 @@ def classification_spec(
         references=(reference,),
         model=model,
         rubric="labels",
+        parse_attempts=1,
         prompt_template=template,
         exact_gate=False,
         empty_output=EmptyOutputPolicy.GRADE,

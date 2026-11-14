@@ -32,7 +32,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.environments import PYTHON_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 HUMANEVAL_FEWSHOT_VERSION = "2026.11.05.3"
 
@@ -49,8 +49,11 @@ def python_source(
     return RlDataSource(
         info=SourceInfo(
             id="Evalchemy:" + suite,
-            title=name,
-            origin="Evalchemy",
+            upstream_dataset=suite,
+            upstream_name=suite,
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="python-code",
             tags=("eval", "source:evalchemy", "benchmark", "code", "single-turn"),
             count=population,
@@ -151,7 +154,7 @@ def fewshot_sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         replace(
             human,
-            info=replace(human.info, id="Checkpoint:humaneval-10shot", title="humaneval-10shot"),
+            info=replace(human.info, id="", title=None, variant="10shot", build_path="Checkpoint"),
             config=replace(
                 dataset,
                 recipe=replace(

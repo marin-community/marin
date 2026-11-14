@@ -7,6 +7,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "marin-rigging",
     "pydantic>=2.11.7",
     "shortuuid>=1.0.13",
     "typer>=0.16.0",
@@ -37,7 +38,9 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona,sotopia]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona,sotopia,iris,taskcompendium]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings", "transformers>=5.0"]
+taskcompendium = ["marin-taskcompendium", "marin-rolloutengine"]
+iris = ["marin-shellbox[iris]"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
 sotopia = ["harbor[archive,telemetry]", "numpy", "scipy", "scikit-learn"]
@@ -78,12 +81,14 @@ override-dependencies = ["marin-rigging"]
 module-name = ["harbor", "harbor_config"]
 
 [tool.uv.sources]
+marin-iris = { path = "../../lib/iris", editable = true }
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
 marin-shellbox = { path = "../../lib/shellbox", editable = true }
-marin-finelog = { path = "../../lib/finelog", editable = true }
 marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
+marin-rolloutengine = { path = "../../lib/rolloutengine", editable = true }
 marin-verifyit = { path = "../../lib/verifyit", editable = true }
+marin-finelog = { path = "../../lib/finelog", editable = true }
 
 [tool.pytest.ini_options]
 timeout = 60

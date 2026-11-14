@@ -10,7 +10,8 @@ never shares a container with the model-authored Dockerfile.
 
 1. The build job runs a pinned ``bash`` image (Iris requires ``bash`` in the task image, so the
    kaniko image itself cannot be the task image). It fetches a sha256-checked ``crane``, exports
-   the pinned kaniko debug image's ``/kaniko`` with it, and runs kaniko on the context for
+   the pinned kaniko debug image's ``/kaniko`` with it, clears the bootstrap filesystem with
+   kaniko's ``--pre-cleanup``, and runs kaniko on the context for
    linux/amd64 with ``--no-push``, writing ``image.tar`` into ``$IRIS_OUTPUT_DIR``. kaniko needs no
    daemon, mounts or privileges, only the default capabilities and egress, which CoreWeave's
    DEFAULT profile has (buildah failed there on remount; GCP gVisor has no network and GCP DEFAULT
@@ -50,7 +51,7 @@ a parent that carries its CoreWeave keys as explicit environment (``iris job run
 Iris copies those into both jobs' environments, where they override the secrets, and blanking them
 would leave the jobs with empty storage credentials.
 
-The registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
+The default registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
 there is no short-lived scoped token to hand the push job instead. Exposure that remains: secret
 values persist in the controller database, and both image jobs carry the submitter's CoreWeave
 storage credentials, which Iris requires on every CoreWeave job and the output uploader uses. The
@@ -68,6 +69,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.request import parse_http_list, parse_keqv_list
 
 import httpx
 from iris.cli.connect import connect_controller
@@ -116,8 +118,6 @@ PUSH_SOURCE = Path(image_push.__file__)
 """``image_push``, shipped to the push job as a workdir file: its pinned image has no Taskforge."""
 BUILD_SETUP_FAILED_EXIT = 125
 POLL_INTERVAL = 5.0
-JOB_TIMEOUT = 3600
-SCHEDULING_TIMEOUT = 900
 MANIFEST_TYPES = (
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
@@ -134,7 +134,7 @@ BUILD_SCRIPT = r"""
 set -euo pipefail
 trap 'exit "$BUILD_SETUP_FAILED_EXIT"' EXIT
 K=/kaniko
-mkdir -p "$K" /tmp/kroot /app/context "$IRIS_OUTPUT_DIR"
+mkdir -p "$K/context" /tmp/kroot "$IRIS_OUTPUT_DIR"
 wget -q -O /tmp/crane.tgz "$CRANE_URL"
 echo "$CRANE_SHA256  /tmp/crane.tgz" | sha256sum -c - > /dev/null
 tar xzf /tmp/crane.tgz -C /tmp crane
@@ -142,9 +142,11 @@ tar xzf /tmp/crane.tgz -C /tmp crane
 cp -a /tmp/kroot/kaniko/. "$K/"
 mkdir -p "$K/ssl/certs"
 cp /etc/ssl/certs/ca-certificates.crt "$K/ssl/certs/"
-tar xzf "/app/$CONTEXT_FILE" -C /app/context
-SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context dir:///app/context --dockerfile "/app/context/$DOCKERFILE" \
-  --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" --custom-platform linux/amd64
+tar xzf "/app/$CONTEXT_FILE" -C "$K/context"
+# /kaniko is excluded from cleanup; the source context must survive bootstrap removal.
+SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context "dir://$K/context" --dockerfile "$K/context/$DOCKERFILE" \
+  --pre-cleanup --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" \
+  --custom-platform linux/amd64
 """
 
 
@@ -212,6 +214,15 @@ class Published:
     seconds_total: float
 
 
+@dataclass(frozen=True)
+class ImageJobPolicy:
+    """Scheduling priority and deadlines shared by an image build and its push."""
+
+    priority_band: job_pb2.PriorityBand
+    timeout: Duration
+    scheduling_timeout: Duration
+
+
 def manifest_readback(credential: RegistryCredential, repository: str, tag: str) -> str:
     """Return the manifest digest ``tag`` resolves to, after checking it is addressable and linux/amd64."""
     base = f"https://{credential.registry}/v2/{repository}"
@@ -220,6 +231,28 @@ def manifest_readback(credential: RegistryCredential, repository: str, tag: str)
     try:
         with httpx.Client(auth=auth, headers=headers, timeout=60, follow_redirects=False) as client:
             by_tag = client.get(f"{base}/manifests/{tag}")
+            scheme, _, parameters = by_tag.headers.get("www-authenticate", "").partition(" ")
+            if by_tag.status_code == 401 and scheme.lower() == "bearer":
+                challenge = parse_keqv_list(parse_http_list(parameters))
+                realm = httpx.URL(challenge["realm"])
+                registry = httpx.URL(f"https://{credential.registry}")
+                if (
+                    (realm.scheme, realm.host, realm.port) != (registry.scheme, registry.host, registry.port)
+                    or realm.username
+                    or realm.password
+                ):
+                    raise ValueError("Registry token endpoint must share the credential's HTTPS origin")
+                authorization = client.get(realm, params={"service": challenge["service"], "scope": challenge["scope"]})
+                authorization.raise_for_status()
+                payload = authorization.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Registry token response must be a JSON object")
+                token = payload.get("token") or payload["access_token"]
+                if not isinstance(token, str) or not token:
+                    raise ValueError("Registry token response must contain a nonempty token")
+                client.auth = httpx.Auth()
+                client.headers["Authorization"] = f"Bearer {token}"
+                by_tag = client.get(f"{base}/manifests/{tag}")
             by_tag.raise_for_status()
             digest = f"sha256:{hashlib.sha256(by_tag.content).hexdigest()}"
             by_digest = client.get(f"{base}/manifests/{digest}")
@@ -256,6 +289,7 @@ def submit_job(
     env: dict[str, str],
     secrets: dict[str, str],
     target_cluster: str,
+    policy: ImageJobPolicy,
 ) -> Job:
     """Submit an image job with explicit values and the storage credentials it needs.
 
@@ -281,8 +315,9 @@ def submit_job(
         task_image=image,
         container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
         constraints=[Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value=target_cluster)],
-        scheduling_timeout=Duration.from_seconds(SCHEDULING_TIMEOUT),
-        timeout=Duration.from_seconds(JOB_TIMEOUT),
+        scheduling_timeout=policy.scheduling_timeout,
+        timeout=policy.timeout,
+        priority_band=policy.priority_band,
         max_retries_failure=0,
         max_retries_preemption=0,
     )
@@ -303,6 +338,7 @@ class IrisImageBuilder:
         controller_url: str | None = None,
         target_cluster: str,
         credential: RegistryCredential,
+        policy: ImageJobPolicy,
     ):
         if (cluster is None) == (controller_url is None):
             raise ValueError("Specify exactly one Iris cluster or controller URL")
@@ -310,6 +346,7 @@ class IrisImageBuilder:
         self.controller_url = controller_url
         self.target_cluster = target_cluster
         self.credential = credential
+        self.policy = policy
 
     async def publish(self, build: DockerBuild, repository: str) -> str:
         """Publish ``build`` under ``repository`` and return its digest-pinned reference.
@@ -317,7 +354,7 @@ class IrisImageBuilder:
         The reference is ``registry/repository@sha256:...``. A failed build raises ``BuildFailed``,
         and a failure of the host or the registry raises ``ImageJobFailed``.
         """
-        # A publish waits on Iris for up to SCHEDULING_TIMEOUT + JOB_TIMEOUT seconds; keep the loop free.
+        # A publish waits through both declared deadlines; keep the event loop free.
         return (await asyncio.to_thread(self.publish_with_timings, build, repository)).image
 
     def publish_with_timings(self, build: DockerBuild, repository: str) -> Published:
@@ -355,10 +392,11 @@ class IrisImageBuilder:
                     },
                     secrets={},
                     target_cluster=self.target_cluster,
+                    policy=self.policy,
                 )
                 jobs.append(build_job)
                 logger.info("submitted build job %s for %s", build_job.job_id, destination)
-                wait_succeeded(build_job, BuildFailed)
+                wait_succeeded(build_job, BuildFailed, self.policy)
                 built = time.monotonic() - start
                 archive = output_archive(build_job)
                 logger.info("build archive %s (%d bytes)", archive.uri, archive.size_bytes)
@@ -379,10 +417,11 @@ class IrisImageBuilder:
                     },
                     secrets={image_push.REGISTRY_AUTH_SECRET: credential.docker_config()},
                     target_cluster=self.target_cluster,
+                    policy=self.policy,
                 )
                 jobs.append(push_job)
                 logger.info("submitted push job %s", push_job.job_id)
-                wait_succeeded(push_job, ImageJobFailed)
+                wait_succeeded(push_job, ImageJobFailed, self.policy)
             finally:
                 for job in jobs:
                     if not is_job_finished(job.state):
@@ -400,7 +439,7 @@ A job that ran and exited nonzero, or outran its execution timeout, ends ``FAILE
 """
 
 
-def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None:
+def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed], policy: ImageJobPolicy) -> None:
     """Wait for ``job`` to succeed, raising with Iris's error, which carries the log tail, when it does not.
 
     Raises:
@@ -408,7 +447,11 @@ def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None
         BuildFailed | ImageJobFailed: ``failed``, when the job ran and ended ``FAILED``.
     """
     try:
-        status = job.wait(timeout=SCHEDULING_TIMEOUT + JOB_TIMEOUT, poll_interval=POLL_INTERVAL, raise_on_failure=False)
+        status = job.wait(
+            timeout=policy.scheduling_timeout.to_seconds() + policy.timeout.to_seconds(),
+            poll_interval=POLL_INTERVAL,
+            raise_on_failure=False,
+        )
     except TimeoutError as error:
         raise ImageJobFailed(f"job {job.job_id} did not end within its scheduling and execution timeouts") from error
     if status.state == JobState.SUCCEEDED:

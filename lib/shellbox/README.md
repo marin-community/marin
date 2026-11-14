@@ -41,12 +41,24 @@ credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
-`/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
+`/bin/sh`, `setsid`, `base64`, `tar`, `head`, `tail`, `wc` and readable `/proc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
 for commands and directory transfer.
+Daytona uploads each control wrapper into a private command directory before execution,
+so nested shell quoting does not enlarge the argument sent to its execution API.
+The original argv, stdin, environment and working directory are preserved;
+Linux limits still apply to each original argument. The wrapper is removed with
+the command's other temporary files.
+If command execution fails or is cancelled, later sandbox-deletion failures are
+attached as exception notes. Cleanup failure after a successful command still
+raises an error.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
+Daytona disables the provider's inactivity auto-stop while retaining the wall-clock
+TTL and caller-owned teardown. If a container-IP control failure reveals a stopped,
+paused, archived, failed or destroyed sandbox, the command raises `MachineTerminated`.
+Pending startup keeps the existing control retries.
 
 ```python
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
@@ -120,8 +132,33 @@ UTS namespaces. Container names resolve to `127.0.0.1` inside the group.
 address. Concurrent groups may use the same ports. Every member must request
 `NetworkPolicy.DENY`; the group never falls back to host networking.
 
-The Iris adapter supports single-container machine commands and file transfer;
-it provides neither `create_task` nor process sessions.
+The Iris adapter supports singleton `create_task`, machine commands and file
+transfer. It rejects multi-container tasks and provides no process sessions.
+Each command runs in a new process group. Timeout or caller cancellation stops
+that group, waits for its live members and remote exec to finish, and preserves
+the machine's files for verification. Failure to confirm the stop closes the
+machine. A stop marker fences commands admitted after cancellation.
+
+Declared storage requires a direct Kubernetes controller advertising
+`sandbox-storage-limit`. The candidate manifest sets exact-byte ephemeral-storage
+limits with zero harness allowance, including command files. Only newly marked
+sandbox pods' explicit own-limit evictions raise `DiskLimitExceeded`; ordinary
+jobs and node disk pressure retain their prior classification. SANDBOX writable
+layer accounting is unqualified, so no controller currently advertises this
+capability. Restricted-profile overflow evidence is insufficient.
+
+Prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
+Harbor selects this backend through `--environment iris-sandbox` with `cluster`,
+`pool`, `priority` and `ttl` kwargs. It reports no storage capability and rejects
+declared disk until a real SANDBOX overflow qualifies the pinned pool and its
+`runsc.toml` `overlay2` setting. Sandbox startup is currently blocked on
+[cpu-genoa](https://github.com/marin-community/marin/issues/11343) and
+[H100](https://github.com/marin-community/marin/issues/10090). The environment
+supports only single-container tasks without process-session model relays.
 
 Creation starts the containers and returns handles without waiting for health.
 Start host capabilities before readiness when a container needs them:
@@ -304,6 +341,18 @@ runtime. Daytona applies CPU, memory, storage, and GPU settings through its SDK.
 It rounds memory and storage up to whole GiB. Iris applies CPU, memory, and storage settings. QEMU applies CPU and
 memory settings. Backends reject resource overrides that they cannot apply.
 
+LOCAL can enforce declared storage inside the existing privileged worker with
+`LocalMachineFactory(disk_pool=LocalDiskPool(Path("/cache/shellbox-disks")))`.
+Import `LocalDiskPool` from `shellbox.backends.local.disk`. Construction probes
+ext4 loop mounts, OverlayFS, ENOSPC and cleanup on that host; ordinary factories
+continue rejecting `storage_mb`. The exact-size filesystem charges writable
+image layers, scratch, workdirs, `/dev/shm` and command spools, while shared
+read-only image layers remain outside it. See the [LOCAL route](../../docs/references/task-curation.md#full-population-oracle-filter)
+for prerequisites, accounting, crash recovery and explicit correctness tests.
+Async callers can await `verified_local_disk_pool(root)` from the same module;
+it runs the probe off the event loop and reuses the pool within a worker process
+and mount namespace. Harbor uses this path before acquiring LOCAL sandboxes.
+
 `Command.user` selects the execution user for one command. Docker accepts a
 username or UID string. An omitted user retains the image's user. ShellSim and
 QEMU accept only root overrides. Iris rejects user overrides. Daytona starts its
@@ -346,7 +395,7 @@ machine = await QemuMachineFactory(
 ).create(spec)
 ```
 
-The QEMU factory uses `ImageCache` to prepare each source once per process. Preparation selects `linux/amd64`, copies it to a local OCI layout and caches the layout by its selected manifest digest. Registry references remain snapshots within one process. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; pass a Skopeo policy file path as `policy` for signature verification.
+The QEMU factory uses `ImageCache` to prepare each source once per process. Preparation selects `linux/amd64`, copies it to a local OCI layout and caches the layout by its selected manifest digest. Digest-pinned registry references also reuse verified layouts across processes when conversion from Docker manifest format to OCI format changes the manifest digest. The cache retains the source manifest chain and checks the source pin, index links, both configuration blob hashes, complete decoded configuration values, ordered layer digests, and prepared blobs before reuse. Original configuration bytes are retained even when the conversion changes their JSON serialization. When OCI conversion drops only Docker build metadata (`container`, `docker_version`, or `config.Image`), the prepared image retains the original configuration blob and its manifest references that blob. Other configuration differences and changed layer digests fail verification. Mutable registry references remain snapshots within one process. For a private registry, pass a Skopeo `authfile` path to the factory. The default Skopeo policy accepts unsigned images over verified TLS; a configured `policy` requires a fresh signature-verified copy from the registry.
 
 For QEMU, `DockerfileSource(context=..., dockerfile=...)` builds with a local Docker daemon and exports the result through Skopeo into the OCI cache. The cache fingerprints the Dockerfile and every path in its build context on each call. An unchanged context builds once per Python process; a changed context triggers a new build. Pin `FROM` by digest for repeatable builds. `QemuMachineFactory` accepts `PreparedImage` and needs `QemuAssets` and a `bundle_cache` to construct a guest bundle. `tests/manual/check_prepared_image.py` compares command output in Docker and QEMU for one registry image. The QEMU bundle cache key includes the prepared image digest, disk size, and caller-supplied `runtime_id`; change `runtime_id` when QEMU, kernel, BusyBox, firmware, or libraries change.
 
@@ -489,7 +538,7 @@ The Harbor QEMU adapter accepts a prebuilt `guest_bundle` or prepares a task ima
 from `docker_image` or `environment/Dockerfile`. Harbor jobs must select a
 [supported agent](../../vendor/harbor/README.md).
 
-The task must specify exactly one source: `docker_image` or `environment/Dockerfile`. The first trial in a Harbor process prepares the image. Later trials with the same source reuse it; concurrent trials wait for the same preparation. Each new process resolves registry references and rebuilds Dockerfile contexts; the OCI and QEMU bundle caches on disk reuse matching digests. For fully offline trials, prepare the image ahead of time and use a prebuilt guest bundle. Image preparation requires `skopeo` on `PATH`, `umoci`, `mkfs.ext4`, and `cpio` on the host. Dockerfile preparation also requires a working Docker builder. `registry_authfile` and `signature_policy` are optional environment kwargs for private registries and signed images; private registry authentication has not been tested end to end.
+The task must specify exactly one source: `docker_image` or `environment/Dockerfile`. The first trial in a Harbor process prepares the image. Later trials with the same source reuse it; concurrent trials wait for the same preparation. Each new process resolves mutable registry references and rebuilds Dockerfile contexts; verified digest-pinned images can be reused offline, and the QEMU bundle cache reuses matching digests. For fully offline trials, prepare the image ahead of time and use a prebuilt guest bundle. Image preparation requires `skopeo` on `PATH`, `umoci`, `mkfs.ext4`, and `cpio` on the host. Dockerfile preparation also requires a working Docker builder. `registry_authfile` and `signature_policy` are optional environment kwargs for private registries and signed images; private registry authentication has not been tested end to end.
 
 The 0.1 QEMU extra supplies the emulator but does not supply the guest kernel, BusyBox, firmware, or OCI staging tools, so task-image preparation needs the explicit paths above. A prebuilt `guest_bundle` needs no staging tools on the trial host. Skopeo is available through Linux distribution packages; its upstream project does not publish a portable standalone release binary and recommends distribution packages or its container image. We therefore leave Skopeo outside the wheel for now.
 

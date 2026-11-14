@@ -33,7 +33,11 @@ def execute_in_namespaces(configuration_fd: int) -> None:
     status = config.get("status")
     if status is not None:
         os.set_inheritable(status, False)
+    disk_status = config.get("disk_status")
+    disk = None
     try:
+        if disk_status is not None:
+            disk = os.open(config["disk_root"], os.O_RDONLY | os.O_DIRECTORY)
         if config.get("cgroup") is not None:
             # Joining a cgroup namespace changes visibility, not membership.
             # Move the trusted launcher before it can fork any guest process.
@@ -72,6 +76,9 @@ def execute_in_namespaces(configuration_fd: int) -> None:
         # PID namespace, so neither its pre-exec state nor control FDs are visible.
         child = os.fork()
         if child == 0:
+            if disk is not None:
+                os.close(disk)
+                os.close(disk_status)
             drop_privileges(config["account"])
             signal.signal(signal.SIGPIPE, signal.SIG_DFL)
             signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
@@ -88,6 +95,12 @@ def execute_in_namespaces(configuration_fd: int) -> None:
         os.close(status)
     _, status = os.waitpid(child, 0)
     code = os.waitstatus_to_exitcode(status)
+    if disk is not None:
+        if code:
+            filesystem = os.fstatvfs(disk)
+            full = filesystem.f_favail == 0 or filesystem.f_bavail * filesystem.f_bsize < config["disk_failure_headroom"]
+            os.write(disk_status, bytes((full,)))
+        os.close(disk)
     sys.exit(code if code >= 0 else 128 - code)
 
 

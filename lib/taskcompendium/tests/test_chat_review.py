@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 
 import pytest
 from finestore.cache import PersistentKvCache
 
-from taskcompendium.models import Source, TaskSpec
+from taskcompendium.models import ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.models import RawRow, ReviewRubric, ReviewStatus
 from taskcompendium.pipeline.query_cache import cached_request_output
 from taskcompendium.pipeline.review import BatchReviewer, ChatReviewer, valid_review_completion
 from taskcompendium.pipeline.review_requests import RequestObservation, RequestOutput
 
-from .pipeline_stages import response, svamp_row_task
+from .pipeline_stages import GRADER_ENVIRONMENT, response, svamp_row_task
+from .reviewer_specs import reviewer_spec
 
 
 class UnusedBatchClient:
@@ -81,10 +83,10 @@ def test_direct_review_reuses_exact_cache_across_modes_and_source_ids(tmp_path):
     abandoned.parent.mkdir(parents=True)
     abandoned.write_text('{"state": "reserved", "attempts": ["missing.json"]}')
     original = abandoned.read_bytes()
-    direct = ChatReviewer(chat, "fixture", "deployment", query_cache_root=cache)
+    direct = ChatReviewer(chat, reviewer_spec("fixture", "deployment"), query_cache_root=cache)
     first = direct.review([task], rubric).reviews
     second = direct.review([task.model_copy(update={"id": "source-b"})], rubric).reviews
-    batch = BatchReviewer(batches, "fixture", "deployment", query_cache_root=cache)
+    batch = BatchReviewer(batches, reviewer_spec("fixture", "deployment"), query_cache_root=cache)
     third = batch.review([task.model_copy(update={"id": "source-c"})], rubric).reviews
     assert [row.status for row in first + second + third] == [ReviewStatus.REVIEWED] * 3
     assert [row.task_id for row in first + second + third] == ["source-a", "source-b", "source-c"]
@@ -185,7 +187,7 @@ def test_direct_provider_failures_have_finite_neutral_retries(tmp_path, recover)
             return super().complete(body)
 
     chat = TransientChat()
-    reviewer = ChatReviewer(chat, "fixture", "deployment", query_cache_root=str(tmp_path / "cache"))
+    reviewer = ChatReviewer(chat, reviewer_spec("fixture", "deployment"), query_cache_root=str(tmp_path / "cache"))
     result = reviewer.review([task], rubric)
     record = result.reviews[0]
     assert chat.attempts == 3
@@ -224,3 +226,78 @@ def test_cache_storage_failure_does_not_discard_provider_response(tmp_path, monk
     assert result.output == raw
     assert submitted == requests
     assert result.observations[0].output == raw
+
+
+def test_review_cache_tracks_spec_but_reuses_capacity_changes(tmp_path):
+    task = svamp_row_task(
+        RawRow(
+            "task",
+            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            {"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"},
+        )
+    )
+    assert isinstance(task, TaskSpec)
+    rubric = ReviewRubric("fixture", "1", ("Check the count.",))
+    chat = ReviewChat()
+    reviewer = ChatReviewer(chat, reviewer_spec(), query_cache_root=str(tmp_path / "cache"), max_concurrent=1)
+    reviewer.review([task], rubric)
+    more_capacity = replace(reviewer, max_concurrent=64)
+    more_capacity.review([task], rubric)
+    assert len(chat.requests) == 1
+    for settings in (
+        {"base_rubric_version": reviewer.spec.base_rubric_version + "-changed"},
+        {"temperature": 0.8},
+        {"reasoning_effort": "medium"},
+    ):
+        changed = replace(reviewer, spec=replace(reviewer.spec, **settings))
+        changed.review([task], rubric)
+    reviewer.review([task], replace(rubric, version="2"))
+    assert len(chat.requests) == 5
+    assert chat.requests[0]["temperature"] == 0.7
+    assert chat.requests[-2]["chat_template_kwargs"] == {"reasoning_effort": "medium"}
+
+
+def test_content_cache_reuses_calibration_but_tracks_grader_and_image_changes(tmp_path):
+    task = svamp_row_task(
+        RawRow(
+            "task",
+            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            {"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"},
+        )
+    )
+    assert isinstance(task, TaskSpec) and task.execution_requirements is not None
+    environment = GRADER_ENVIRONMENT.model_copy(
+        update={"docker_image": None, "packages_lock": "/original/requirements.lock"}
+    )
+    task = task.model_copy(
+        update={
+            "environment_requirements": environment,
+            "grader": ScriptGrader(argv=("true",), environment=environment),
+        }
+    )
+    rubric = ReviewRubric("content", "1", ("Check the public task and grader.",))
+    chat = ReviewChat()
+    reviewer = ChatReviewer(chat, reviewer_spec(), query_cache_root=str(tmp_path / "cache"))
+    first = reviewer.review([task], rubric)
+    repaired_environment = environment.model_copy(update={"packages_lock": "/repaired/requirements.lock"})
+    calibrated = task.model_copy(
+        update={
+            "execution_requirements": task.execution_requirements.model_copy(update={"cpus": 2, "memory_mb": 4096}),
+            "environment_requirements": repaired_environment,
+            "grader": task.grader.model_copy(update={"environment": repaired_environment}),
+        }
+    )
+    reused = reviewer.review([calibrated], rubric)
+    assert reused.reviews == first.reviews
+    assert len(chat.requests) == 1
+    changed_grader = calibrated.model_copy(update={"grader": calibrated.grader.model_copy(update={"argv": ("false",)})})
+    reviewer.review([changed_grader], rubric)
+    changed_image = calibrated.model_copy(
+        update={
+            "environment_requirements": repaired_environment.model_copy(
+                update={"packages_lock": None, "docker_image": "example.test/task@sha256:" + "b" * 64}
+            ),
+        }
+    )
+    reviewer.review([changed_image], rubric)
+    assert len(chat.requests) == 3

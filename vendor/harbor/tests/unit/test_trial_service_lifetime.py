@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -25,8 +26,33 @@ from harbor.models.trial.config import (
 from harbor.models.trial.result import TrialResult
 from harbor.job import Job
 from harbor.trial.trial import Trial
+from shellbox.machine import Command, MachineSpec, PackageSpec
 from shellbox.task import Task
 from tests.unit.environments.transport import ProcessMachine, available_port
+
+
+@pytest.mark.parametrize("background", [False, True])
+async def test_process_teardown_confirms_group_disappearance_after_permission_error(
+    tmp_path, monkeypatch, background
+):
+    machine = ProcessMachine(tmp_path, MachineSpec(PackageSpec(), workdir="/workspace"))
+    command = "sleep 3600 >/dev/null 2>&1 &" if background else "true"
+    await machine.run(Command(("/bin/sh", "-c", command)))
+
+    def denied(group, sig):
+        raise PermissionError("Cannot signal process group")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "killpg", denied)
+            if background:
+                with pytest.raises(PermissionError):
+                    await machine.close()
+            else:
+                await machine.close()
+                assert machine.closed
+    finally:
+        await machine.close()
 
 
 class PartialAnswerAgent(BaseAgent):
@@ -52,6 +78,11 @@ class WaitingAgent(PartialAnswerAgent):
     async def run(self, instruction, environment, context) -> None:
         self.running.set()
         await asyncio.Event().wait()
+
+
+class CompletedAnswerAgent(PartialAnswerAgent):
+    async def run(self, instruction, environment, context) -> None:
+        await environment.exec("printf partial > answer")
 
 
 class JudgeProbeAgent(PartialAnswerAgent):
@@ -109,6 +140,7 @@ def allow_trial_agents(monkeypatch):
         f"test-{agent.__name__}": agent
         for agent in (
             PartialAnswerAgent,
+            CompletedAnswerAgent,
             WaitingAgent,
             JudgeProbeAgent,
             BackgroundServerAgent,
@@ -128,6 +160,78 @@ class ProcessTaskFactory:
 
     def __init__(self, root: Path):
         self.root = root
+
+
+class StalledResourceMachine(ProcessMachine):
+    """Remote counter reads can outlive the provider's command timeout."""
+
+    def __init__(self, root, spec, *, after_grading):
+        super().__init__(root, spec)
+        self.after_grading = after_grading
+        self.release_probe = asyncio.Event()
+
+    async def run(self, command):
+        if (
+            "cpu.stat memory.events" in command.argv[-1]
+            and self.path("/workspace/graded").exists() == self.after_grading
+        ):
+            await self.release_probe.wait()
+        return await super().run(command)
+
+
+class StalledResourceFactory(ProcessTaskFactory):
+    def __init__(self, root, *, after_grading):
+        super().__init__(root)
+        self.after_grading = after_grading
+
+    async def create_task(self, spec):
+        machine = StalledResourceMachine(
+            self.root, spec.primary_container.machine, after_grading=self.after_grading
+        )
+        self.machine = machine
+        return Task({spec.primary: machine}, spec, machine.close)
+
+
+class StalledTransferMachine(ProcessMachine):
+    """Keep one external transfer pending while guest commands run normally."""
+
+    def __init__(self, root, spec, *, phase):
+        super().__init__(root, spec)
+        self.phase = phase
+        self.release_transfer = asyncio.Event()
+
+    async def upload(self, source, target):
+        if self.phase == "upload" and target == "/logs/agent":
+            await self.release_transfer.wait()
+        await super().upload(source, target)
+
+    async def download(self, source, target):
+        if (self.phase == "download" and source == "/logs/agent") or (
+            self.phase.startswith("artifacts") and source == "/logs/artifacts"
+        ):
+            try:
+                await self.release_transfer.wait()
+            except asyncio.CancelledError:
+                if self.phase != "artifacts-resistant":
+                    raise
+                await self.release_transfer.wait()
+        await super().download(source, target)
+
+    async def run(self, command):
+        if self.phase == "hook" and "collect-marker" in command.argv[-1]:
+            await self.release_transfer.wait()
+        return await super().run(command)
+
+
+class StalledTransferFactory(ProcessTaskFactory):
+    def __init__(self, root, *, phase):
+        super().__init__(root)
+        self.phase = phase
+
+    async def create_task(self, spec):
+        machine = StalledTransferMachine(self.root, spec.primary_container.machine, phase=self.phase)
+        self.machine = machine
+        return Task({spec.primary: machine}, spec, machine.close)
 
 
 def trial_config(
@@ -196,6 +300,83 @@ async def test_agent_deadline_preserves_partial_answer_for_actual_grading_script
     native = TrialResult.model_validate_json(trial.paths.result_path.read_text())
     assert native.completion is not None
     assert native.finished_at is not None
+
+
+@pytest.mark.parametrize(
+    ("after_grading", "grader_fails"), [(False, False), (True, False), (True, True)]
+)
+async def test_stalled_resource_probe_does_not_hold_trial_or_replace_verdict(
+    tmp_path, monkeypatch, after_grading, grader_fails
+):
+    factory = StalledResourceFactory(tmp_path / "guest", after_grading=after_grading)
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    config = trial_config(tmp_path, "stalled-counter", guest_root=tmp_path / "guest")
+    config.agent = AgentConfig(
+        name="test-CompletedAnswerAgent", override_timeout_sec=5,
+        kwargs={"resource_usage_filename": "resource-usage.json"},
+    )
+    config.verifier.override_timeout_sec = 0.5
+    config.trial_cleanup_grace_sec = 0.2
+    script = config.task.path / "tests/test.sh"
+    script.write_text(
+        "#!/bin/sh\nset -eu\ntouch graded\n"
+        + ("exit 1\n" if grader_fails else 'printf 1 > "$TEST_REWARD_PATH"\n')
+    )
+    trial = await Trial.create(config)
+    run = asyncio.create_task(trial.run())
+    try:
+        done, _ = await asyncio.wait({run}, timeout=3)
+        assert done, "Resource evidence blocked trial completion"
+        run.result()
+        native = TrialResult.model_validate_json(trial.paths.result_path.read_text())
+        if not after_grading:
+            assert native.verifier_result is None
+            assert error_category(native.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE
+            assert not factory.machine.path("/workspace/graded").exists()
+        elif grader_fails:
+            assert native.verifier_result is None
+            assert native.exception_info.exception_type == "VerifierRuntimeError"
+        else:
+            assert native.verifier_result.rewards == {"reward": 1.0}
+            assert native.exception_info is None
+        assert factory.machine.closed
+    finally:
+        factory.machine.release_probe.set()
+        await run
+
+
+@pytest.mark.parametrize("phase", ["download", "upload", "hook", "artifacts", "artifacts-resistant"])
+async def test_stalled_output_transfer_finishes_without_false_grading(tmp_path, monkeypatch, phase):
+    factory = StalledTransferFactory(tmp_path / "guest", phase=phase)
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    config = trial_config(tmp_path, "stalled-transfer", guest_root=tmp_path / "guest")
+    config.agent = AgentConfig(name="test-CompletedAnswerAgent", override_timeout_sec=5)
+    config.trial_cleanup_grace_sec = 0.1
+    if phase == "hook":
+        with (config.task.path / "task.toml").open("a") as stream:
+            stream.write('\n[[verifier.collect]]\ncommand="printf collect-marker"\ntimeout_sec=0.1\n')
+    script = config.task.path / "tests/test.sh"
+    script.write_text('#!/bin/sh\nset -eu\ntouch graded\nprintf 1 > "$TEST_REWARD_PATH"\n')
+    trial = await Trial.create(config)
+    run = asyncio.create_task(trial.run())
+    try:
+        done, _ = await asyncio.wait({run}, timeout=3)
+        assert done, "Host output transfer blocked trial completion"
+        run.result()
+        native = TrialResult.model_validate_json(trial.paths.result_path.read_text())
+        if phase.startswith("artifacts"):
+            assert native.verifier_result is None
+            assert error_category(native.exception_info.exception_type) is ErrorCategory.INFRASTRUCTURE
+            assert not factory.machine.path("/workspace/graded").exists()
+            if phase == "artifacts-resistant":
+                assert native.completion is None
+        else:
+            assert native.verifier_result.rewards == {"reward": 1.0}
+            assert native.exception_info is None
+        assert factory.machine.closed
+    finally:
+        factory.machine.release_transfer.set()
+        await run
 
 
 @pytest.mark.parametrize("timeout", [False, True])

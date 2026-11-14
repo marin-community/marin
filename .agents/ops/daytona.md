@@ -262,6 +262,12 @@ failure. Very short or empty attempts suggest a broken request path or agent
 loop. Incoherent output following weight synchronization requires correlation
 with reload logs and importance-ratio metrics before concluding learning failed.
 
+When command-output capture fails, Shellbox retains the exception and adds a
+`Daytona exec response:` JSON note with the provider's `exit_code`, the first
+4,096 diagnostic characters, and `diagnostic_truncated`. Inspect that response
+before attributing a missing `/tmp/.shellbox-*/out` file to the task. A capture
+failure supplies no task score.
+
 Fresh inference heartbeats, trace counts, and a running controller job can
 coexist with a stalled trainer. Require advancing trainer phases/steps and
 durable artifacts for training progress. Report dispatched, completed, scored,
@@ -283,6 +289,45 @@ Aggregate large trial sets near the running workload and transfer bounded
 summaries. Compare timezone-aware timestamps in UTC. Resolved configurations,
 logs, and trial metadata can contain capability JWTs inside model ingress URLs;
 redact those as well as named API keys before publication.
+
+## Transient provider errors
+
+Snapshot metadata, snapshot creation/listing and named sandbox creation retry
+HTTP 5xx, HTTP 408/429 and SDK connection/timeouts. Retry delays are capped at
+120 seconds. Retries continue until success or caller cancellation/deadline.
+The provider's HTTP 400 "failed to resolve container IP after 3 attempts"
+startup state also retries. Other 4xx errors and terminal image-build failures
+propagate. Deterministic
+snapshot names and caller-supplied sandbox names identify resources whose
+creation succeeded despite a lost response.
+
+Each retry emits `DAYTONA_PROVIDER_RETRY` with operation, attempt, status and
+delay fields. Count these events separately from task outcomes. Provider errors
+remain infrastructure evidence and receive no oracle score. Command
+execution is not replayed after an ambiguous response.
+
+Harbor selects `ProviderWaitPolicy.JOB` only when the trial has an explicit
+`trial_attempt_timeout_sec`. Queue supervision enforces that overall bound on
+wall-clock time; standalone trials without it retain phase-bound behavior.
+Task-curation calibration and approved retries set a 72-hour overall attempt
+bound without changing the native task or environment kwargs.
+
+Under JOB, safe harness controls, artifact reads/writes and resource probes retry
+within the overall bound. Controls and named sandbox deletion use a 60-second
+per-call timeout; artifact transfers, snapshot operations and sandbox acquisition
+retain SDK operation settings, allowing healthy large transfers to complete.
+Request duration and retry backoff pause phase and command clocks; source-command
+limits remain active during source execution. Normal cleanup also permits these
+provider waits. Cancellation cleanup and grace use wall-clock bounds and disable
+recovery retries. Retain retry events separately from task verdicts.
+
+Retryable controls include read-only metadata/resource probes, private staging-file
+operations, fixed-content artifact transfers and named sandbox deletion.
+Source execution remains single-shot after an ambiguous response. An ambiguous
+process-group termination falls back to sandbox teardown; it cannot safely be
+replayed after PID reuse. Named sandbox deletion and private-file cleanup are
+idempotent. External cancellation disables recovery retries during cancellation
+cleanup and retains its existing cleanup deadline and primary exception.
 
 ## Making a dataset Daytona-safe
 
@@ -309,13 +354,14 @@ re-measurement; none changes a task's own instruction, files or grader.
    declare one shape (for example 2 CPU / 4096 MB / 10240 MB) for task and
    verifier machines. Differing shapes multiply snapshot names without changing
    the environment.
-3. **Keep the archive's environment in the converted task.** A converted task
-   runs in the environment its archive specifies:
-   `environment_fidelity.environment_unused` rejects a spec that replaces the
-   archive's recipe with another image, and a replayed recipe must lower onto the
-   digest-pinned base with the archive's steps, working directory and variables.
-   A conversion that changes the environment is a rewrite, so it ships as a new
-   dataset version whose declaration records the basis.
+3. **Prove a no-op before re-declaring the agent image.** A task may declare
+   `iris-task` only when
+   `experiments/post_training/task_curation/environment_fidelity.py` proves its
+   recipe changes nothing: a single `FROM` equal to the digest-pinned agent
+   image, no `RUN`/`COPY`/`ADD`/`ENV`/`ARG`/`USER`/`ENTRYPOINT`/`CMD` step, and
+   no copied fixtures. That rewrite is a conversion, so it ships as a new dataset
+   version whose declaration records the basis. Anything unproven keeps its own
+   environment and is built.
 4. **Build the archived environment as the task image.** When lowering cannot
    express the recipe and the image is available to the RL org, build it, pin the
    resulting digest, and count each distinct image as one identity.

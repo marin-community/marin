@@ -86,8 +86,9 @@ rewrite the task Parquet.
 factory identifiers, the supported requirements, and the machines that engine grading needs: task resources,
 and a `file` or `workspace_state` answer that the engine grades, need a task machine. It rejects a graded
 `state` task, because the engine does not capture state. Then it calls the harness's own `check(task, limits)`.
-The selected factory applies network and hardware settings. Memory is advisory on Local;
-preparation omits that allocation because bubblewrap cannot enforce it.
+The selected factory applies network and hardware settings. Preparation preserves memory allocations for
+RolloutEngine task and grading machines, including LOCAL. LOCAL enforces them through delegated cgroup v2;
+workers without delegation report unenforced limits. Execution qualification requires resource enforcement.
 
 An environment with `docker_image` uses that prebuilt image. The reference must contain a SHA-256 digest.
 An environment with `packages_lock` and no image requires a `LocalMachineFactory`.

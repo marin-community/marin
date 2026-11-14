@@ -13,6 +13,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from .source_identity import canonical_source_id, original_source_id
+
 TOTAL_METRICS = ("denominator", "assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
 
 
@@ -28,7 +30,7 @@ def coverage_query(
     source_id: str = "",
     release: str = "",
 ) -> CoverageQuery:
-    return CoverageQuery(intended_use, source_id, release)
+    return CoverageQuery(intended_use, canonical_source_id(source_id), release)
 
 
 def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
@@ -53,11 +55,20 @@ def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
 
 
 def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
-    """Read source sizes and leading subjects from the selected compact release."""
+    """Read leading subjects only when the compact release matches the current input."""
+    current = {
+        canonical_source_id(row["id"]): row["declaration"]
+        for row in connection.execute(
+            text(
+                "SELECT s.id,s.declaration FROM atlas_sources s JOIN atlas_current c USING (load_id) "
+                "WHERE c.name='latest'"
+            )
+        ).mappings()
+    }
     rows = connection.execute(
         text(
             """
-        SELECT s.source_id, (s.alignment->>'task_count')::bigint AS example_count,
+        SELECT s.source_id, s.declaration, (s.alignment->>'task_count')::bigint AS example_count,
             s.alignment->>'intended_use' AS intended_use,
             s.alignment->>'basis' AS basis,
             area.subject_id, area.node_id, area.name, area.instances
@@ -75,7 +86,7 @@ def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
         )
     ).mappings()
     return {
-        row["source_id"]: {
+        canonical_source_id(row["source_id"]): {
             "example_count": row["example_count"],
             "intended_use": row["intended_use"],
             "basis": row["basis"],
@@ -86,6 +97,11 @@ def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
             ),
         }
         for row in rows
+        if canonical_source_id(row["source_id"]) in current
+        and all(
+            row["declaration"].get(key) == current[canonical_source_id(row["source_id"])].get(key)
+            for key in ("dataset_id", "dataset_revision", "pipeline")
+        )
     }
 
 
@@ -93,7 +109,7 @@ SOURCES_SQL = """
 WITH selected_sources AS (
     SELECT s.*
     FROM curriculum_sources s WHERE s.load_id=:load_id
-        AND (:source_id='' OR s.source_id=:source_id)
+        AND (:source_id='' OR s.source_id IN (:source_id, :original_source_id))
         AND (:intended_use='all' OR s.alignment IS NULL OR s.alignment->>'intended_use'=:intended_use)
  )
 """
@@ -135,6 +151,22 @@ SAMPLE_SQL = (
 
 
 def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
+    @api.get("/curriculum/releases")
+    def releases() -> dict[str, Any]:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT l.release_id, l.release_uri, l.manifest->>'created_at' AS created_at,
+                        l.load_id=c.load_id AS selected
+                    FROM curriculum_loads l JOIN curriculum_current c
+                        ON l.load_id=c.load_id OR l.load_id=c.previous_load_id
+                    WHERE c.name='latest' ORDER BY selected DESC
+                    """
+                )
+            ).mappings()
+            return {"releases": [dict(row) for row in rows]}
+
     @api.get("/curriculum")
     def coverage(
         filters: Annotated[CoverageQuery, Depends(coverage_query)],
@@ -144,6 +176,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             metadata = loaded_release(connection, filters.release)
             params = {
                 **asdict(filters),
+                "original_source_id": original_source_id(filters.source_id),
                 "load_id": metadata["load_id"],
                 "subject_id": subject_id,
             }
@@ -209,6 +242,18 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
                     params,
                 ).mappings()
             ]
+        sources = [
+            {
+                **row,
+                "source_id": canonical_source_id(row["source_id"]),
+                "alignment": (
+                    {**row["alignment"], "source_id": canonical_source_id(row["alignment"]["source_id"])}
+                    if row["alignment"] is not None
+                    else None
+                ),
+            }
+            for row in sources
+        ]
         manifest = metadata["manifest"]
         return {
             "release_id": metadata["release_id"],
@@ -227,6 +272,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             "hierarchy": manifest["nodes"],
             "lineage": manifest["lineage"],
             "scope_summary": scope_summary,
+            "role_projection": manifest.get("role_projection"),
         }
 
     @api.get("/curriculum/tasks")
@@ -250,6 +296,7 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             metadata = loaded_release(connection, filters.release)
             params = {
                 **asdict(filters),
+                "original_source_id": original_source_id(filters.source_id),
                 "load_id": metadata["load_id"],
                 "subject_id": subject_id,
                 "node_id": node_id,
@@ -292,20 +339,43 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             next_cursor = base64.urlsafe_b64encode(
                 json.dumps([last["sample_rank"], last["source_id"], last["task_id"]]).encode()
             ).decode()
-        return {"release_id": metadata["release_id"], "tasks": rows[:limit], "next_cursor": next_cursor}
+        return {
+            "release_id": metadata["release_id"],
+            "tasks": [{**row, "source_id": canonical_source_id(row["source_id"])} for row in rows[:limit]],
+            "next_cursor": next_cursor,
+        }
 
     @api.get("/curriculum/task")
     def task(source_id: str, task_id: str, release: str = "") -> dict[str, Any]:
         with engine.connect() as connection:
             metadata = loaded_release(connection, release)
-            detail = connection.execute(
-                text(
-                    """
-                SELECT detail FROM curriculum_tasks WHERE load_id=:load_id AND source_id=:source_id AND task_id=:task_id
+            detail = (
+                connection.execute(
+                    text(
+                        """
+                SELECT t.detail, s.alignment->>'intended_use' AS intended_use
+                FROM curriculum_tasks t JOIN curriculum_sources s USING(load_id, source_id)
+                WHERE t.load_id=:load_id AND t.source_id IN (:source_id, :original_source_id) AND t.task_id=:task_id
             """
-                ),
-                {"load_id": metadata["load_id"], "source_id": source_id, "task_id": task_id},
-            ).scalar_one_or_none()
+                    ),
+                    {
+                        "load_id": metadata["load_id"],
+                        "source_id": canonical_source_id(source_id),
+                        "original_source_id": original_source_id(source_id),
+                        "task_id": task_id,
+                    },
+                )
+                .mappings()
+                .one_or_none()
+            )
         if detail is None:
             raise HTTPException(404, "Task is outside the loaded alignment population")
-        return {"release_id": metadata["release_id"], "task": detail}
+        return {
+            "release_id": metadata["release_id"],
+            "task": {
+                **detail["detail"],
+                "source_id": canonical_source_id(detail["detail"]["source_id"]),
+                "recorded_intended_use": detail["detail"]["intended_use"],
+                "intended_use": detail["intended_use"],
+            },
+        }

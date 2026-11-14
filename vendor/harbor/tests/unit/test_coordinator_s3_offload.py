@@ -30,6 +30,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
+from harbor.models.task.config import TaskOS
+from harbor.models.task.task import Task
+from harbor.models.trial.paths import TrialPaths
 from harbor.trial import artifact_handler as artifact_handler_module
 from harbor.trial import trial as trial_module
 from harbor.trial.artifact_handler import ArtifactHandler
@@ -177,25 +180,33 @@ async def test_init_result_mkdirs_on_local_trials_dir(
 # ── verifier layer ───────────────────────────────────────────────────────────
 
 
+@pytest.fixture
+def reward_verifier(tmp_path: Path) -> Verifier:
+    task_dir = tmp_path / "task"
+    tests_dir = task_dir / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test.sh").write_text("#!/bin/sh\nexit 0\n")
+    (task_dir / "task.toml").write_text("[environment]\n")
+    (task_dir / "instruction.md").write_text("Fixture task.")
+    environment_dir = task_dir / "environment"
+    environment_dir.mkdir()
+    (environment_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    paths = TrialPaths(trial_dir=tmp_path / "trial")
+    paths.mkdir()
+    return Verifier(Task(task_dir), paths, mock.MagicMock(os=TaskOS.LINUX))
+
+
 @pytest.mark.unit
-def test_verifier_resolve_rewards_reads_json(tmp_path: Path) -> None:
-    (tmp_path / "reward.json").write_text('{"reward": 1.0}')
-    verifier = object.__new__(Verifier)
-    verifier.trial_paths = SimpleNamespace(
-        reward_json_path=UPath(str(tmp_path / "reward.json")),
-        reward_text_path=UPath(str(tmp_path / "reward.txt")),
-    )
+def test_verifier_resolve_rewards_reads_json(reward_verifier: Verifier) -> None:
+    verifier = reward_verifier
+    verifier.trial_paths.reward_json_path.write_text('{"reward": 1.0}')
     assert verifier._resolve_rewards() == {"reward": 1.0}
 
 
 @pytest.mark.unit
-def test_verifier_resolve_rewards_reads_text_fallback(tmp_path: Path) -> None:
-    (tmp_path / "reward.txt").write_text("0.5")
-    verifier = object.__new__(Verifier)
-    verifier.trial_paths = SimpleNamespace(
-        reward_json_path=UPath(str(tmp_path / "reward.json")),
-        reward_text_path=UPath(str(tmp_path / "reward.txt")),
-    )
+def test_verifier_resolve_rewards_reads_text_fallback(reward_verifier: Verifier) -> None:
+    verifier = reward_verifier
+    verifier.trial_paths.reward_text_path.write_text("0.5")
     assert verifier._resolve_rewards() == {"reward": 0.5}
 
 

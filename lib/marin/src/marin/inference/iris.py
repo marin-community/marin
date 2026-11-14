@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import logging
 import math
+import shutil
 import threading
 import time
 import uuid
@@ -151,6 +152,26 @@ class RemoteInferenceSession:
             return 0
         client = iris_ctx().client
         return sum(client.job_status(JobName.from_string(str(job.job_id))).preemption_count for job in self.jobs)
+
+    def direct_session(self) -> "RemoteInferenceSession":
+        """Return a session using the serving task's current direct address."""
+        address = iris_ctx().client.resolve_endpoint(self.endpoint_name).rstrip("/")
+        endpoint = replace(self.model.endpoint, base_url=f"{address}{OPENAI_API_SUFFIX}")
+        return replace(
+            self,
+            model=replace(self.model, endpoint=endpoint),
+            metrics_url=f"{address}/metrics" if self.metrics_url is not None else None,
+        )
+
+    def ready_direct_session(self) -> "RemoteInferenceSession":
+        """Wait for readiness and retry a registration lost before address resolution."""
+        while True:
+            self.wait_until_ready()
+            try:
+                return self.direct_session()
+            except ConnectError as error:
+                if error.code != Code.NOT_FOUND:
+                    raise
 
     def backend_state(self) -> InferenceBackendState:
         """Return broker readiness or the direct serving jobs' aggregate lifecycle state."""
@@ -326,15 +347,20 @@ def _prepared_local_inference(
 
 
 @contextlib.contextmanager
-def _staged_model(model: ServedModelConfig) -> Iterator[ServedModelConfig]:
+def _staged_model(model: ServedModelConfig, *, directory: Path | None = None) -> Iterator[ServedModelConfig]:
     """Stage remote weights on worker-local disk when the serving config requires it."""
     source = StoragePath(model.weights)
     if model.object_store_load_mode is ObjectStoreLoadMode.STREAM or not source.is_remote:
         yield model
         return
 
-    with TemporaryDirectory(prefix="marin-model-") as temporary_directory:
-        local_weights = Path(temporary_directory) / "model"
+    with contextlib.ExitStack() as stack:
+        if directory is None:
+            directory = Path(stack.enter_context(TemporaryDirectory(prefix="marin-model-")))
+        else:
+            directory.mkdir(parents=True)
+            stack.callback(shutil.rmtree, directory)
+        local_weights = directory / "model"
         started = time.monotonic()
         logger.info("Staging model weights from %s to worker-local disk", source)
         source.download_to(str(local_weights), recursive=True, batch_size=16)
@@ -647,28 +673,33 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
     assert geometry is not None
     assert isinstance(service.engine, VllmEngineConfig)
     model, num_chips = _resolved_model(service.model, service.iris)
-    spec = _vllm_model_spec(model, num_chips, None)
     backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
     with iris_vllm_launch(
         pipeline_parallel_size=geometry.pipeline_parallel_size,
         tensor_parallel_size=geometry.tensor_parallel_size,
         data_parallel_size=geometry.data_parallel_size,
     ) as launch:
-        with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
-            if launch.is_leader:
-                with iris_vllm_followers(launch):
-                    with _ready_vllm_dashboard(
-                        service,
-                        model,
-                        environment,
-                        tensor_parallel_size=geometry.tensor_parallel_size,
-                        backend_name=backend.name,
-                    ):
-                        _block_until_timeout(environment.check_alive, service.timeout_hours)
-            else:
-                wait_for_iris_vllm_shutdown(launch, environment.check_alive)
-        if not launch.is_leader:
-            notify_iris_vllm_stopped(launch)
+        # vLLM sends the leader's model path to followers, so every host must use the same local path.
+        staging_id = uuid.uuid5(uuid.NAMESPACE_URL, launch.coordinator_name).hex
+        with _staged_model(model, directory=Path(f"/tmp/marin-model-{staging_id}")) as model:
+            spec = _vllm_model_spec(model, num_chips, None)
+            with backend.start(
+                spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env
+            ) as environment:
+                if launch.is_leader:
+                    with iris_vllm_followers(launch):
+                        with _ready_vllm_dashboard(
+                            service,
+                            model,
+                            environment,
+                            tensor_parallel_size=geometry.tensor_parallel_size,
+                            backend_name=backend.name,
+                        ):
+                            _block_until_timeout(environment.check_alive, service.timeout_hours)
+                else:
+                    wait_for_iris_vllm_shutdown(launch, environment.check_alive)
+            if not launch.is_leader:
+                notify_iris_vllm_stopped(launch)
 
 
 _PLACED_TASK_STATES = frozenset({TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING})
@@ -780,7 +811,7 @@ def _start_direct_inference(
         engine=config.engine,
         iris=iris,
         endpoint_name=endpoint_name,
-        timeout_hours=24 * 365,
+        timeout_hours=iris.worker_timeout.to_seconds() / 3600 if iris.worker_timeout is not None else 24 * 365,
         port_name=None,
     )
     device = iris.worker_resources.device
@@ -796,6 +827,7 @@ def _start_direct_inference(
             max_retries_preemption=iris.max_retries_preemption,
             max_task_failures=iris.max_retries_failure,
             priority=iris.priority,
+            timeout=iris.worker_timeout,
         )
     )
     try:
@@ -937,6 +969,7 @@ def _submit_broker_workers(
                     max_retries_preemption=broker.max_retries_preemption,
                     max_task_failures=broker.max_retries_failure,
                     priority=iris.priority,
+                    timeout=iris.worker_timeout,
                 )
             )
             cleanup.callback(_terminate_job, job)

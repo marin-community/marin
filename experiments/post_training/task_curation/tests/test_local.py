@@ -27,12 +27,14 @@ from zephyr.readers import load_parquet
 from experiments.post_training.task_curation import pipeline as pipeline_module
 from experiments.post_training.task_curation.campaign import CampaignFailed, CampaignRuntime
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions
+from experiments.post_training.task_curation.datasets.evalchemy import math as eval_math
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import prepare_blend
 from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.driver import main as curation_main
+from experiments.post_training.task_curation.images.build import MissingEnvironmentArtifact
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
 
@@ -45,7 +47,15 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
     )
     sources = {
         name: RlDataSource(
-            pipeline=process_rows, info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), config=pipeline
+            pipeline=process_rows,
+            info=SourceInfo(
+                id=f"Marin:{name}",
+                upstream_dataset=name,
+                upstream_name=name,
+                build_path="test",
+                origin=SourceOrigin.MARIN,
+            ),
+            config=pipeline,
         )
         for name, pipeline in pipelines.items()
     }
@@ -112,13 +122,16 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
         assert environment.packages_lock == planned_lock_url(source.grader)
     catalog = ReadView(str(output / "catalog"))
     recorded = list(catalog.iter_rows("sources"))
-    successful = next(row for row in recorded if row["atlas_id"] == f"fixture:{source.name}")
+    successful = next(row for row in recorded if row["atlas_id"] == f"Marin:{source.name}")
     assert successful["processed_rows"] == 1
     assert successful["admitted"] is None
     assert successful["verification_status"] is None
 
 
-def test_local_eval_plan_schedules_missing_grader_under_cache(tmp_path):
+def test_local_eval_planning_uses_cache_for_grader_artifact_lookup(tmp_path, monkeypatch):
+    source = next(source for source in eval_math.sources() if source.name == "evalchemy-math500")
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {})
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
     cache = tmp_path / "cache"
     result = CliRunner().invoke(
         curation_main,
@@ -135,11 +148,8 @@ def test_local_eval_plan_schedules_missing_grader_under_cache(tmp_path):
             str(tmp_path / "output"),
         ],
     )
-    assert result.exit_code == 0, result.output
-    plan = json.loads(result.output)
-    assert plan["cache_dir"] == str(cache)
-    assert any(dependency.startswith("images/env-") for dependency in plan["sources"][0]["dependencies"])
-    assert not (tmp_path / "remote").exists()
+    assert isinstance(result.exception, MissingEnvironmentArtifact)
+    assert str(cache / "images") in str(result.exception)
 
 
 def answer_from_auxiliary(row, context):

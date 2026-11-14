@@ -7,9 +7,7 @@ import asyncio
 import io
 import json
 import os
-import sys
 import tarfile
-import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -34,8 +32,6 @@ from verifyit.spec import (
     ExactSpec,
     JudgeSpec,
     ScriptSpec,
-    render_spec,
-    spec_from_table,
 )
 
 from taskcompendium.ejection import mark_unsolvable
@@ -71,10 +67,11 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from taskcompendium.pipeline.models import CheckStatus
+from taskcompendium.pipeline.controls import _oracle_attempt
+from taskcompendium.pipeline.models import CheckStatus, OracleCommand
 from taskcompendium.pipeline.verification import verify_task
 from taskcompendium.runtime.episode import ScriptedActor, run_episode
-from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
+from taskcompendium.runtime.grading import STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
 from taskcompendium.runtime.models import RuntimeEvidence, Termination, grading_attempt
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import (
@@ -86,10 +83,11 @@ from taskcompendium.runtime.shell import (
 )
 from taskcompendium.runtime.task_grading import grade_task
 
+from .grading_machines import EXITED, LocalGradingMachines
+
 GRADER_IMAGE = "fixture@sha256:" + "a" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE)
 GRADER_MACHINE = MachineSpec(DockerImage(GRADER_IMAGE))
-EXITED = Result(0, b"", b"", False, False, ExitReason.EXITED)
 
 
 @pytest.fixture
@@ -239,89 +237,6 @@ def test_unresolved_grader_build_never_creates_a_machine(shell_task, entrypoint)
         else:
             grade_task(task, GradingAttempt(finished(task)))
     assert machines.machines == []
-
-
-@dataclass(kw_only=True)
-class LocalGradingMachine:
-    """Run grading commands as host subprocesses under ``root``, translating absolute container paths."""
-
-    root: Path
-    workdir: str
-    env: dict[str, str] = field(default_factory=dict)
-    remove_exit_code: int = 0
-    closed: bool = False
-
-    def local(self, path: str) -> Path:
-        return self.root / path.lstrip("/")
-
-    def local_arguments(self, arguments) -> list[str]:
-        return [str(self.local(value)) if value.startswith("/") else value for value in arguments]
-
-    async def upload(self, source: Path, target: str):
-        path = self.local(target)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(source.read_bytes())
-
-    async def download(self, source: str, target: Path):
-        target.write_bytes(self.local(source).read_bytes())
-
-    async def close(self):
-        self.closed = True
-
-    async def run(self, command: Command):
-        program = command.argv[0]
-        if command.argv[:2] == ("rm", "-f"):
-            if self.remove_exit_code and STAGING_ARCHIVE in command.argv:
-                return Result(self.remove_exit_code, b"", b"cleanup failed", False, False, ExitReason.EXITED)
-            for path in command.argv[2:]:
-                self.local(path).unlink(missing_ok=True)
-            return EXITED
-        if command.argv[:2] == ("mkdir", "-p"):
-            for path in command.argv[2:]:
-                self.local(path).mkdir(parents=True, exist_ok=True)
-            return EXITED
-        if command.argv[:2] == ("tar", "-xf"):
-            with tarfile.open(self.local(command.argv[2])) as archive:
-                archive.extractall(self.root, filter="data")
-            return EXITED
-        argv = self.local_arguments(command.argv)
-        env = {**os.environ, **self.env, **command.env}
-        if program == "python3":
-            argv[0] = sys.executable
-            env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
-            if SPEC_PATH in command.argv:
-                spec_path = self.local(SPEC_PATH)
-                spec = spec_from_table(tomllib.loads(spec_path.read_text()))
-                if isinstance(spec, ScriptSpec):
-                    spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
-                argv.extend(("--logs-dir", str(self.local("/logs/verifier"))))
-        else:
-            assert program in {"bash", "sh"}, command.argv
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=self.local(command.cwd or self.workdir),
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate()
-        return Result(process.returncode, stdout, stderr, False, False, ExitReason.EXITED)
-
-
-@dataclass
-class LocalGradingMachines(DockerMachineFactory):
-    root: Path
-    remove_exit_code: int = 0
-    machines: list[LocalGradingMachine] = field(default_factory=list)
-    backend = Backend.DOCKER
-
-    async def create(self, spec):
-        (self.root / spec.workdir.lstrip("/")).mkdir(parents=True, exist_ok=True)
-        machine = LocalGradingMachine(
-            root=self.root, workdir=spec.workdir, env=dict(spec.env), remove_exit_code=self.remove_exit_code
-        )
-        self.machines.append(machine)
-        return machine
 
 
 @pytest.fixture
@@ -925,3 +840,18 @@ async def test_grader_setup_cannot_overwrite_captured_candidate_files(shell_task
         GRADER_MACHINE,
     )
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
+
+
+@pytest.mark.asyncio
+async def test_oracle_preserves_an_images_default_working_directory(shell_task, tmp_path):
+    task = shell_task.model_copy(update={"resources": ResourceGroups()})
+    machines = LocalGradingMachines(tmp_path)
+    attempt = await _oracle_attempt(
+        task,
+        OracleCommand("printf 7 > answer.txt", answer_file="answer.txt"),
+        machines,
+        replace(GRADER_MACHINE, workdir=""),
+        GRADER_ENVIRONMENT,
+    )
+    assert attempt.conversation.events[-1].content == "7"
+    assert all(machine.closed for machine in machines.machines)

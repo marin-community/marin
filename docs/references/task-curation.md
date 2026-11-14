@@ -23,7 +23,120 @@ protocol, and item builder. Evaluation owns shot selection and prompt preparatio
 shared curation code supplies acquisition and catalog publication. TaskCompendium
 owns reusable source importers and the corpus publisher.
 
+## Current admission policy
+
+These rules include the admission display policy for Atlas preview revision 15 (2026-11-14). When a
+later section of this reference conflicts with them, this section is current.
+
+**Examples.** Atlas Examples is the admitted count after filtration. The Atlas
+has no separate oracle column. Every header count is in tasks. Admission totals
+split TRAIN and EVAL, alongside tasks pending oracle filtration and tasks excluded.
+Quality totals count tasks by their source's QUICK/SAMPLE/FULL label. A no-oracle source
+shows its static-retained count (below). An oracle source shows Examples Pending
+until its current-pin admission receipt exists.
+
+- *Sources with oracles.* Run the original oracle over the complete population
+  through the production Harbor trial path, in SAMPLE and FULL. Tasks that fail
+  are dropped before ingestion. Workspace-graded tasks also need a `nop` negative
+  control: admit a task only when its oracle passes and its nop does not pass. A
+  nop pass excludes the task as `NEGATIVE_CONTROL_PASSED`. A nop run that ends
+  with signal -9, -6 or -11, or with a producer interruption, gets exactly one
+  re-drive at the same budget. A 600-second verifier deadline or a source error
+  on the unsolved state is a non-passing annotation. Answer-graded tasks need no
+  negative control (N/A). See [workspace oracle negative controls](#workspace-oracle-negative-controls).
+- *Sources without oracles.* Examples is the retained count after strict
+  within-source deduplication and lexical decontamination, minus tasks with typed
+  static blockers such as `tool_provider_required` or `shared_executor_required`.
+  No per-task executability proof is required. This requirement is suspended and
+  can be restored later. Every other gate still applies.
+- *Use=EVAL sources* are admitted to Atlas as evaluation data after applicable
+  filtration. Total admission is TRAIN plus EVAL. EVAL tasks remain excluded from
+  TRAIN selection; deduplication and lexical measurement still apply, with no
+  lexical remediation of EVAL overlap.
+
+**Non-agentic tasks.** A TaskSpec with no actor role, agent harness or agent
+workspace is non-agentic: the model answers and the task's grader checks the
+answer. Decide this per TaskSpec from its contract, never from the source name.
+Non-agentic tasks are exempt from every check that exists only because an agent
+runs in an environment:
+
+- resource and timeout specs, calibration and machine-role allocation evidence
+  (`verifier_execution_requirements`);
+- package locks (`missing_packages_lock`);
+- Docker base mutability (`mutable_docker_base`), environment builds and prepared images;
+- tool providers (`tool_provider_required`) and shared executors (`shared_executor_required`);
+- Daytona and backend fit, and network policy;
+- workspace nop negative controls.
+
+None of these can exclude a non-agentic task or block its admission. These checks
+still apply: the grader must produce a verdict, oracle filtering runs wherever an
+original oracle exists, and content QA, within-source deduplication, lexical
+decontamination, cross-source overlap, the Use=EVAL rules and the SHARED/SEPARATE
+grading assessment are unchanged.
+
+**Agentic tasks.** Every rule in this reference applies:
+
+- The environment spec is data. Each task runs in exactly its own environment;
+  a shared or substitute image is never acceptable. A task may move to another
+  image only with a mechanical proof that its environment is a no-op against that
+  image, followed by a new dataset version. A source is repaired when its
+  published spec completely describes what it does.
+- Declared limits are preserved. Calibrate only missing dimensions, starting at
+  1 CPU, 2 GiB memory, 2 GiB disk, a 300-second agent timeout and a 60-second
+  verifier timeout, and double only the dimension that failed. See
+  [Full-population oracle filter](#full-population-oracle-filter).
+- The whole contract (actor, tool providers, shared executor, environment and
+  grader) must run on a production backend through the path Atlas consumers use.
+  A task that cannot is filtered with a typed reason and its evidence.
+- Each task's declared network policy (ALLOW or DENY) is honored. A backend that
+  cannot provide it records `network_policy_unsupported`; the task is filtered
+  unless another backend can run it.
+
+**Releases, images and overlap.**
+
+- Remediation publishes one new **private** `open-athena` pinned version per
+  source. Never delete or overwrite an artifact; publish a new version.
+- Prepared task images go in a new GHCR package per source, never shared across
+  sources. Packages have INTERNAL (organization-only) visibility, recorded in the
+  receipt. Never make one public.
+- Strict exact-contract deduplication applies to every source, including EVAL
+  sources and grandfathered blends.
+- Lexical 13-gram decontamination removes flagged TRAIN tasks. EVAL sources are
+  measured only.
+- Cross-source overlap matches each task to its nearest neighbor in the other
+  source (exact hash, then near-duplicate or embedding search). Task IDs never pair
+  tasks. A model may not downgrade a pair whose measured overlap clears the threshold.
+
+**Quality.** Result is GOOD when at least 90% of reviewed tasks are clean, BAD
+when at least 50% have issues, and SOME_ISSUES otherwise. QC never rejects a task
+or a source. A FULL review may be finalized under a pinned waiver when at most 1%
+of retained tasks are unreviewed. LLM judges run at temperature 0.7 through the
+production judge service.
+
+**Jobs.** Use three-day job timeouts and an explicit `--target-cluster` in the
+data's region. Infrastructure failures are re-driven and never count as task failures.
+
+**Landing changes (temporary).** While CI is suspended, Atlas workers land their
+own committed changes on `atlas-env-audit` instead of opening child PRs. Run from
+your dedicated worktree on a named branch other than `main`:
+
+```bash
+atlas-push --test "<affected test command>" --who "<session id>" --what "<change summary>"
+```
+
+The script takes a machine-wide lock, fetches and rebases onto
+`origin/atlas-env-audit`, runs lint and your affected tests on the rebased head,
+pushes without force and verifies the remote. A failure stops the push; resolve
+rebase conflicts and rerun. Advisory review remains required for non-trivial
+changes. Report the landed SHA to the coordinator. Never force-push or push to
+`main`. This rule ends when CI resumes.
+
 ## Pipeline overview
+
+The mandatory ingest order is conversion → exact within-source deduplication → lexical
+decontamination → resource calibration (agentic tasks only) and full-population oracle
+filtering → SAMPLE/FULL QA.
+QUICK also deduplicates its complete converted population.
 
 The driver runs each dataset's conversion graph, then binds the embedding graph
 to the completed source artifacts. QUICK converts without review; SAMPLE reviews
@@ -36,8 +149,11 @@ populations remain distinct throughout the export.
 ```mermaid
 flowchart TD
     sources["Pinned dataset declarations"] --> conversion["Dataset-owned conversion graph"]
-    conversion --> quick["QUICK: converted TaskSpecs"]
-    conversion --> reviewed["SAMPLE/FULL: review, verify, admit"]
+    conversion --> dedup["Within-source exact deduplication"]
+    dedup --> quick["QUICK: unique converted TaskSpecs"]
+    dedup --> decon["Lexical decontamination or benchmark measurement"]
+    decon --> calibration["Resource calibration and full-population oracle filtering"]
+    calibration --> reviewed["SAMPLE/FULL: review, verify, admit"]
     reviewed --> catalog["FineStore campaign catalog: results and evidence"]
     quick --> text["Public task inputs → direct instruction text"]
     reviewed --> text
@@ -63,6 +179,91 @@ curriculum matrix in worker memory and scores batches exactly. A curriculum edit
 reuses task vectors. Atlas imports precomputed counts and samples; the full task
 release and vectors stay in object storage.
 
+For a retained-population coverage backfill, `curriculum_backfill prepare`
+accepts a JSON list of `FrozenCoverageSource` records. Freeze each current
+declaration, exact population receipt and hash, TaskSpec column and directory,
+Use, and any complete exclusion manifest and hash. Also freeze
+`task_spec_scan_sha256`: SHA-256 of exact stored JSON cell bytes concatenated in
+lexicographically sorted Parquet-path and physical row order. Preparation checks
+that digest before publishing and rechecks raw inputs and exclusions before
+per-source or whole-corpus reuse. The expected scan digest is part of the frozen
+input and source key. Historical `task_specs_sha256` remains separate: some
+producers hash their original iteration order before sorting rows for storage.
+Do not equate those conventions or replace a frozen expectation with a new scan.
+Preparation preserves task identities, accounts for every exclusion, and writes
+only public semantic inputs.
+The adopted input name includes the frozen selection key so changed source
+lineage forks assignments even when instruction text and vectors are reused.
+Run preparation beside the private inputs; its output root may stage public
+inputs in the embedding worker's region. The existing embedding graph accepts
+that prepared input artifact and retains its normal vector cache and release format.
+
+```bash
+uv run python -m experiments.post_training.task_curation.curriculum_backfill prepare \
+  --selection FROZEN_SELECTION.json --output-root PUBLIC_INPUT_ROOT --workers 8
+uv run python -m experiments.post_training.task_curation.curriculum_backfill embed \
+  --corpus PUBLIC_INPUT_ROOT/corpus.json --artifact-root ARTIFACT_ROOT \
+  --cache-root VECTOR_CACHE_ROOT --stage descriptions --device cpu \
+  --workers 2 --worker-memory 64g --run
+```
+
+Then run `task_embeddings` and `curriculum_embeddings` with one CUDA worker
+inside a batch GPU job, followed by `coverage` on CPU workers. Use the same
+corpus, artifact root and cache for every stage. The final receipt binds the
+release and coverage hashes, source/task counts and embedding specification.
+Changed selections require a new output root; interrupted source attempts are
+preserved and completed source projections can be reused. Coverage measures
+converted populations and supplies no training admission or quality review.
+Size the enclosing job for its worker memory and coordinator. With an in-process
+worker pool, the shuffle samples the shared process RSS; an 8 GB worker budget
+below that baseline forces two-way spill merges even when the enclosing job has
+free memory. Choose the budget from measured reducer payloads and preserve the
+shuffle's existing memory-safety model.
+
+Harrier uses PyTorch SDPA with Flash, memory-efficient and math attention enabled.
+cuDNN attention is excluded because its execution-plan selection can fail on
+padded GB200 batches. Model/tokenizer pins, BF16 precision, pooling and cache
+keys stay the same. Record cross-device vector agreement against the reference
+cache before extending a CPU-produced population on GPU.
+The `harrier_parity` entry point checks a frozen 2,048-key reference bundle and
+writes a receipt before accepting the backend. Every vector must have cosine
+similarity at least 0.999 to its CPU BF16 reference, and both primary area
+assignments must agree for at least 99.5% of sampled tasks. A failed gate stops
+the run; preserve its receipt rather than changing the thresholds. CUDA execution
+requires `embed --parity-receipt IMMUTABLE_RECEIPT_URI`. The entry point checks
+acceptance, the exact embedding specification, and the running GPU, Torch and
+CUDA versions before executing the graph. The final coverage receipt records
+the parity receipt URI and byte hash. A CPU coverage pass can supply the same
+receipt to retain the accepted backend provenance without claiming to run on GPU.
+
+For a regional move, copy public Parquet and cache objects without clobbering,
+then verify sizes and checksums. Preserve source manifests and source keys;
+write new regional pointer records instead of rewriting historical records.
+A regional corpus can supply `prepared_descriptions` and
+`prepared_curriculum_embeddings` so the graph adopts those completed stages.
+Their adoption names include the immutable producer-record hash, so changed
+instruction or anchor content forks dependent outputs. Anchor adoption also
+requires the catalog, anchor records, hierarchy and embedding specification to
+match the requested `TASK_CURRICULUM`. All referenced runtime paths must point
+into the destination region.
+FineStore HEADs, manifests and table metadata also contain absolute paths;
+copying the cache bytes alone leaves reads pointed at the original region and
+prevents registering the relocated table for writes. After verifying the copy,
+FineStore's `fork_relocated_archive` admin operation creates a fresh regional archive manifest over the
+copied immutable shards. It preserves row-commit bounds and sequences, writes
+canonical table metadata under the new root, and accepts explicit prior roots
+for caches that have moved more than once. Keep the historical cache and failed
+attempts intact and use the fresh root for subsequent vector writes.
+
+```bash
+uv run python -m finestore.admin fork-relocated \
+  --original-root ORIGINAL_CACHE --copied-root VERIFIED_REGIONAL_COPY \
+  --output-root NEW_WRITABLE_CACHE --reference-root PRIOR_REGIONAL_ROOT
+```
+
+Repeat `--reference-root` for additional historical roots; omit it for a cache
+that has not previously moved. Existing output archives are rejected.
+
 | Part | Implementation and data models |
 |---|---|
 | Source selection and graph execution | [driver.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/driver.py), [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [TaskSpec](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py) |
@@ -75,10 +276,34 @@ release and vectors stay in object storage.
 
 ## Storage and publication
 
+### Decontamination before QA
+
+QUICK produces unreviewed TaskSpecs for measurement. Before SAMPLE/FULL review,
+each source must carry `lexical_contamination`, including a verified private
+`open-athena` TaskCompendium release receipt at the exact input repository and
+revision. `--decontamination-receipt PATH` loads the complete measurement and
+receipt JSON; declarations expose the same evidence in the catalog.
+
+A measurement with no receipt cannot admit tasks, including a measurement with
+zero contaminated tasks. A clean receipt retains the complete measured
+population. A remediated receipt drops every flagged task, records the drop
+manifest and original private snapshot pin, and identifies a new output pin.
+Retained plus dropped tasks must equal the measured population. The output pin
+must match the source used for QA and admission. Preserve the raw measurement
+input pin separately from the archived private snapshot and final release.
+
+The recipe runner rejects missing or mismatched receipts before conversion,
+reviewer requests or grader controls. Prebuilt imports also check the receipt
+population against the published cohort and preserve the receipt in their
+manifest. Receipt changes enter artifact identity. Existing grandfathered
+MarinSkyRL blend selection remains unchanged; their measurements and remediation
+candidates are recorded without changing the blend wiring.
+
 The curation driver defaults to `s3://marin-us-east-02a/marin` on CoreWeave.
 `--artifact-root URL` selects another root explicitly and overrides the ambient
 `MARIN_PREFIX`. Local `--cache-dir PATH` takes precedence for local execution.
-`--output-root`, `--report-path` and `--review-cache` remain explicit locations;
+`--output-root` and `--report-path` remain explicit locations, and `--review-cache`
+defaults to `<artifact-root>/rl-data/review-cache`;
 use the same CW bucket for retained remote runs and a new versioned output
 directory for each campaign.
 
@@ -100,8 +325,8 @@ campaigns use `--publish-catalog s3://marin-us-east-02a/marin/rl-data/catalog/pr
 to accumulate results across versioned report directories, with assessment enabled.
 `--cache-dir` selects local execution and a local artifact root, so shared
 publication rejects it; local and SAMPLE runs keep separate catalogs. Remote runs
-reuse completed artifacts under `--artifact-root` and model requests under the
-explicit `--review-cache`. Reuse those locations, pinned inputs, recipe versions,
+reuse completed artifacts under `--artifact-root` and model requests under
+`--review-cache`. Reuse those locations, pinned inputs, recipe versions,
 rubric and model revisions across campaigns. A new report directory or enabling
 assessment does not force recomputation of completed work. Switching artifact
 roots does not copy completed work or model-request caches; verify their reuse
@@ -131,6 +356,43 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin \
   uv run python -m experiments.post_training.task_curation.images --all
 ```
 
+## Mandatory within-source duplicate removal
+
+Every source, including QUICK and prebuilt cohorts, drops exact duplicate contracts after
+conversion. `taskcompendium.identity.task_identity` hashes the canonical TaskSpec with only
+`id`, `source`, `tags` and `labels` excluded. Public conversation, tools, environment and execution
+requirements, grader contract, private reference and tests all participate. Equal prompts with
+different graders remain distinct. Near-duplicates remain advisory.
+
+The lowest task ID is retained, using lexicographic string order. The drop manifest records each
+`task_id` → `kept_id` with ledger reason `DUPLICATE_WITHIN_SOURCE`. This is a mechanical exclusion;
+it does not contribute a QC defect. The raw locator ledger lists every selected input; retained
+conversions, duplicate mappings and conversion rejections account for its outcomes. SAMPLE draws
+its QA panel from the unique converted population; FULL reads the cached unique conversions.
+
+Catalog declarations require `within_source_dedup` evidence bound to the input dataset pin and
+converter version. Evidence and curriculum coverage show `unique_count`; Atlas Examples is the
+post-filtration admitted count described in [Current admission policy](#current-admission-policy).
+`raw_count` counts successfully converted TaskSpecs before deduplication, and
+`within_source_duplicates` counts the dropped copies.
+Conversion rejections remain a separate ledger. The source fingerprint uses the same exact
+within-source contract identity to count duplicates in the successful pre-deduplication conversions.
+
+For TRAIN remediation, union duplicate and lexical exclusion manifests by task ID, preserving both
+reasons for an overlap. For eval/benchmark sources, drop duplicates and record lexical flags without
+lexical exclusions. Both policies prepare one new
+private `open-athena` TaskCompendium release per source. Bind calibration, full-population oracle
+filtering, and SAMPLE/FULL QA to the retained population. Measurement and manifest preparation
+alone never publish a Hugging Face release. Existing source artifacts remain immutable.
+
+Evaluation protocols pin the upstream input and its raw task count. Evaluation manifests and
+sidecars contain the unique contracts actually evaluated, in their original source order; the
+conversion ledger reconciles raw rows with unique tasks and dropped copies. An interrupted or
+unsuccessful publication attempt requires a new output artifact version.
+
+Selection-time deduplication retains the rules in [Final task selection](#final-task-selection); changing its grader and
+reference semantics requires a separate decision.
+
 ## Final task selection
 
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
@@ -151,8 +413,8 @@ this small recipe selects 100 calendar tasks from two admitted sources:
   "name": "calendar-trial",
   "version": "2026.10.23.1",
   "sources": {
-    "Task Trove:laion__nemotron-gym-agent-calendar-v2": "calendar",
-    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
+    "TaskTrove:laion__nemotron-gym-agent-calendar-v2": "calendar",
+    "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
   },
   "family_limits": {"calendar": 100},
   "heldout": [{
@@ -366,13 +628,73 @@ ArtifactSteps.
 
 ## Declarations
 
-An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
-`SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. The `deprecated` tag marks a
-source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
-the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
-visible in the Atlas with its evidence, but it is never admitted to selection and
-its measured Daytona and oracle evidence remains visible even without a pipeline.
+An `RlDataSource` binds source information, a typed configuration and a registered
+conversion pipeline. A declaration without that pipeline is rejected. Every Atlas
+entry enters through QUICK, SAMPLE or FULL; QUICK means converted without review,
+and does not make a source selectable for training. The deprecated tag and its
+reason remain available for registered historical sources. Removed pipeline-less
+entries are tracked in retired-inventory-only.json; their artifacts stay archived.
+
+`SourceInfo.origin` is a `SourceOrigin` naming the upstream provider. Internal
+campaigns and pipelines belong in `build_path`. `Task Trove` and `TaskTrove` share
+`SourceOrigin.TASKTROVE`; Nemotron blend providers remain Nemotron even when
+MarinSkyRL builds them.
+
+| Field | Ingestion contract |
+|---|---|
+| `upstream_dataset`, `subset`, `variant` | Stable upstream population keys; subset and variant are optional. |
+| `id` | Generated as `<origin>:<upstream_dataset>[/<subset>][@<variant>]`; mismatches fail validation. Approved historical IDs resolve through the permanent alias table. |
+| `upstream_name`, `title` | Title is generated as `<upstream_name> · <subset> · <variant>`, omitting absent parts. Do not add prose or format labels. |
+| `build_path` | Internal campaign or pipeline, independently of upstream origin. |
+| `url` | Upstream provenance URL, including for repaired releases. |
+| `current_release` | Required exact `{repo, revision, url}` consumed for training. QUICK uses its pinned input; QA/repair uses its private open-athena release; decontamination uses the configured remediated pin after the pipeline is rebound. Release URLs must match their repository and revision. |
+| `quality_result` | Computed `reviewed`, `issue_count`, `issue_rate`, `verdict`, `issues`, and `repair_recommendation`. `sample_count`, `uncertain_count` and `unavailable_count` retain coverage. Mechanical exclusions remain in their own ledger. |
+
+Catalog publication, metadata refresh, Atlas loading and registered training selection require
+the grading census carried by the source declaration. Its `ActorCensusInput` must match the
+current dataset pin, converter and retained population; that population must be nonempty, and
+the grading census must cover every task without missing-grader findings. Missing or stale
+evidence fails validation. Native
+Harbor packages are checked for their executable verifier and environment rather than treating
+their `NoGrader` transport wrapper as an absent grader. A population with no executable grader
+is retired into the historical ledger; aliases, previous snapshots and artifacts remain available.
+Atlas also refuses a new load that would display SAMPLE or FULL without a computed Result.
+Executed grader controls alone do not supply a content-quality Result.
+
+`admission_inventory` scans current populations through their actor-census bindings and freezes
+seed-zero panels of at most 100 tasks. It records the stored-byte scan digest independently from
+the original conversion-order digest. `--resume-root` reuses completed matching censuses and
+hash-checked panels. These panels provide neither execution qualification nor an oracle receipt.
+Run the census on CPU workers in the data's region with an explicit target, production priority
+and a three-day timeout:
+
+```bash
+python -m experiments.post_training.task_curation.admission_inventory \
+  --declarations FROZEN_DECLARATIONS.json --output-root NEW_VERSIONED_PREFIX --workers 12
+```
+
+Catalog projection rejects every non-grandfathered source without actor census
+counts and their basis, including conversation-only sources claiming N/A. Keep
+unmeasured cohorts in the pending ingestion ledger. Publish a new metadata
+snapshot only after the producer's exact-pin census supplies these proofs;
+existing production SQL remains selected until that evidence-backed load is ready.
+
+The Atlas application owns the permanent `SOURCE_ID_ALIASES` table in
+`infra.marina.apps.rl_data_catalog.server.source_identity` resolves the 232 approved
+historical IDs to generated identities. Atlas and task-curation readers apply
+that policy at their boundaries; shared FineStore and TaskCompendium models keep
+source IDs opaque. Application packages carry the policy through relative imports.
+These readers resolve both spellings to the canonical ID, including retained assessments,
+actor receipts, duplicate surveys and Atlas URLs. Historical snapshots, packet
+URIs, pipeline keys and TaskSpec bytes remain unchanged. Artifact construction
+and deterministic selection use `original_source_id` for existing cache keys,
+source ordering and source-derived seeds. A naming migration therefore preserves
+conversion, assessment, census and decontamination artifacts and selected task
+bytes. Curriculum coverage receives explicit stable sampling IDs from its caller,
+and Atlas projects survey IDs without changing their original hash payloads.
+The relocation does not authorize a production publication or a new conversion.
+New declarations must match their generated identities. Do not add aliases to
+bypass that contract without an explicitly approved identity migration.
 
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
@@ -380,20 +702,113 @@ an agentic source that declares no format, and rejects MarinSkyRL's internal
 blend format unless the source appears in `GRANDFATHERED_MARINSKYRL_SOURCES`, the
 frozen list of Nemotron Ultra components admitted before the requirement. A new
 internal-format source therefore fails at selection instead of shipping.
-`independent_qc` records
-quality control a pinned release performed outside curation, so inventory-only
-pointers surface that evidence in the Atlas. The Daytona verdict is derived, never
-declared: `finestore.rl.curation.daytona_verdict` marks a non-agentic source safe,
-an agentic source with no measured count `unassessed`, and a measured source
-unsafe when its unique environment count exceeds `DAYTONA_SAFE_SNAPSHOT_LIMIT`
-(ten) or when the Daytona backend refuses any task's declared execution
-requirements. The inputs are measurements: `daytona_snapshot_count` holds the
-number of distinct environments the source's own task specs require through the
-production path, `daytona_count_basis` names the rule and payload source, and
-`daytona_execution_failures` counts refused tasks. An unsafe label does not
-remove a source from the catalog; it records that a run would exceed the org's
-limits. [Making a dataset Daytona-safe](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#making-a-dataset-daytona-safe)
-covers the faithful ways to bring one inside the budget.
+`independent_qc` records quality checks performed outside curation. Quality Result
+is computed from recorded SAMPLE/FULL issue counts and remains separate from
+mechanical exclusions and spec fidelity. Daytona is a required measured enum:
+SAFE or UNSAFE for an actor, N/A when a measured census proves zero actor slots, snapshots and refusals. A count basis is required for every verdict. Grandfathered blend
+entries show a dash. Missing measurements never imply safety.
+
+Production uses a split deployment: the Daytona label counts only actor snapshot
+identities and actor execution refusals. Ten or fewer identities with no refused
+actor requirements is SAFE; otherwise it is UNSAFE. Package-lock graders run on
+LOCAL and record separate per-role compatibility evidence. A LOCAL grader failure
+does not change the actor's Daytona label. Unsafe sources can still be ingested.
+The measured count, refused-task count, actor machine count and provenance remain
+visible beside the label. UNSAFE includes one or more typed reasons:
+`TOO_MANY_SNAPSHOTS`, `UNBUILT_IMAGE`, `HOST_IMAGE_REQUIRED`, or
+`EXECUTION_REQUIREMENT`. `daytona_unsafe_details` explains each census cause;
+`daytona_unsafe_counts` counts affected actor task slots per reason. Counts can
+overlap when an actor has several refusal causes. The snapshot total remains
+separate from affected-task counts. Grader refusals never supply actor reasons.
+
+### Lexical decontamination before publication
+
+Count every TaskSpec emitted by the registered converter before common QA or
+admission gates. Deduplication, decontamination and filtration start from this
+converted count. Atlas **Examples** is the later post-filtration admitted count; the
+upstream row count is separate. Record mechanical conversion rejections, admission rejections, the input
+pin and converter version with that count. A converter emitting zero TaskSpecs
+is an ingestion failure with its exact reason, not an empty successful source.
+
+The retained source set is the explicit inventory of the intended Atlas catalog
+snapshot, including grandfathered sources. It is fixed before per-task QA or
+lexical exclusions. Use that complete source set for DF filtering.
+
+Before admitting a new or changed source:
+
+1. Normalize and exactly deduplicate the complete converted population with `lexical_contamination`.
+   It uses TaskCompendium's `format_conversation` for the public instruction and
+   conversation context, preserving case and blank-line paragraphs. It excludes
+   private grader, test and oracle resources from the scanned text, and retains
+   full TaskSpecs separately for publication and fingerprinting.
+2. Run `lexical_scan` over every retained source using the shared eval bloom and
+   its hash index. DF means document frequency; these filters remove common
+   boilerplate features from matching. The implementation calls Datakit's existing
+   filters and `decon_to_parquet`: contiguous word 13-grams and a 0.5 overlap
+   threshold, measured as matching features divided by remaining features in
+   each task paragraph after DF filtering. Normally two distinct matched features
+   are required. Datakit also retains a complete single-feature match, including
+   an exact whole-record feature for a complete 3–12-token record and a sole
+   usable n-gram remaining after filtering.
+   Source-local DF samples 5,000 documents and drops features meeting both 0.005
+   frequency and five occurrences. Global DF samples up to 1,000,000 documents
+   per source and drops a feature found in at least 50 documents across at
+   least three sources in that retained inventory.
+3. Inspect the per-source measurement table before mass publication. Evidence
+   includes the contaminated count/fraction, maximum, mean and p95 of per-task
+   maximum overlap over all tasks, and matched eval families. Every task's flags
+   and exact eval IDs are retained: join every matched feature hash that caused
+   a flag to the shared index's `(hash, eval_id)` rows. The report scans the full
+   index and all marked tasks, without gallery sampling.
+4. Publish a new pinned **private open-athena TaskCompendium** version. A clean
+   population retains every converted task. A flagged population drops exactly
+   the task IDs in its drop manifest, which records eval IDs and overlap values.
+   If a flagged source did not originate in open-athena, first archive its exact
+   pinned raw snapshot in a private open-athena repository. Preserve the input
+   revision, converter identity, counts and all exclusion reasons.
+5. Read the publication back, compare every published TaskSpec hash with the
+   retained conversion/drop-manifest population, and verify repository privacy.
+   Store the receipt in the source declaration's `lexical_contamination.receipt`,
+   with complete measurement artifacts linked through `evidence_url`. A clean
+   receipt has zero exclusions; a remediated receipt accounts for every flagged
+   task in its drop manifest and records the original private snapshot pin.
+   Both bind the published dataset ID and revision. The receipt records
+   `private: true` and `format: taskcompendium`. A raw measurement, including a
+   zero-flag measurement, is not a publication receipt. Fingerprint and review
+   the published remainder, then attach the production backend survey and
+   curation assessment to that source declaration and catalog snapshot.
+
+Grandfathered MarinSkyRL blends are included in measurements and candidate
+remediated versions. Their existing admission and training selection remain
+unchanged until explicitly approved. Lexical filtering detects verbatim and
+near-verbatim overlap; it does not establish absence of paraphrases or semantic
+contamination. Semantic decontamination remains separate future work.
+
+For an explicitly enumerated source set, create `source-ids.json` as a JSON list
+of registered Atlas IDs. Run in the data's region; use a new immutable artifact
+version after changing converters or policy. Obtain the bloom from the matching
+`decontamination_steps({}).bloom.output_path` in the Datakit reference pipeline
+under the chosen artifact root; record that artifact's eval corpus and feature
+versions together. Its `_bloom/eval_hash_index.parquet` is selected automatically,
+so a separately chosen index cannot be substituted:
+
+```bash
+uv run --extra cpu --extra dedup python -m experiments.post_training.task_curation.lexical_contamination \
+  --source-ids source-ids.json --converter-revision CONVERTER_COMMIT \
+  --artifact-version YYYY.MM.DD.N --artifact-root ARTIFACT_ROOT \
+  --max-workers 4 --output populations.json --run
+uv run --extra cpu --extra dedup python -m experiments.post_training.task_curation.lexical_scan \
+  --populations populations.json --source-ids source-ids.json \
+  --bloom-path PINNED_SHARED_BLOOM --eval-corpus-version EVAL_CORPUS_VERSION \
+  --population-set retained --artifact-version YYYY.MM.DD.N \
+  --artifact-root ARTIFACT_ROOT --max-workers 4 --output lexical-report.json --run
+```
+
+These commands perform acquisition, conversion and measurement only. They do not
+publish Hugging Face versions or create admission receipts. `--population-set
+pilot` labels a bounded calibration run; its DF corpus must not stand in for the
+complete retained corpus. Keep population manifests and report artifacts together
+so a resumed scan reuses completed conversion work.
 
 **Publishing a conversion.** A curation step that converts data publishes the converted
 artifact to the `open-athena` Hugging Face org as a **private** repository: campaign
@@ -411,17 +826,38 @@ Measurement runs that production path rather than reimplementing it
 task's environment is materialized to a build context, the `MachineSpec` is
 built through Harbor's own task-config mapping
 (`harbor.environments.daytona.machine_spec`), and the name comes from
-`shellbox.backends.daytona.snapshot.snapshot_request_for_spec` — the same
-derivation the Daytona factory uses to name and create snapshots. A task the
-production validation rejects (for example a Dockerfile with `ADD`, which
-Daytona cannot build) counts as a failure and is reported, not treated as safe.
-No Daytona API calls are made. `oracle_validation` separately records how
-execution was qualified; see
-[Sources without oracle solutions](#sources-without-oracle-solutions). A
+`shellbox.backends.daytona.machine.snapshot_identity` — the same function the
+Daytona factory uses to name and create snapshots. A task the production
+validation rejects (for example a Dockerfile with `ADD`, which Daytona cannot
+build) counts as a failure and is reported, not treated as safe. No Daytona API
+calls are made. `oracle_validation` separately records how execution was
+qualified; see [Sources without oracle solutions](#sources-without-oracle-solutions).
+A
 `SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed
 assessment records in `finestore.rl.curation.CurationCatalog`.
+
+Published native Harbor cohorts use `prebuilt.import_harbor_prebuilt` with
+`TaskFormat.HARBOR`. Their pinned `tasks.parquet` stores the original `task_spec`
+strings, including `task.toml`, environment files and verifier resources. Import
+matches every string's SHA-256 to `controls.jsonl` at the same revision and requires
+scored bug-zero/reference-one controls for the complete population. It retains
+package bytes and executes no controls during import. Infrastructure-error zeros
+cannot admit a task. Lowered TaskCompendium envelopes use `prebuilt.import_prebuilt`.
+
+Canonical TaskCompendium cohorts use `prebuilt.import_taskcompendium_prebuilt`.
+Their Parquet rows contain `task_spec` and `task_sha256`; import validates every
+hash, task identity and required environment, rejects duplicate IDs and population
+count changes, and writes the original task strings into the corpus views.
+Conversation-only tasks need no runtime envelope or machine. The pinned source
+declaration must record its qualification and SAMPLE/FULL oversight; importing a
+published cohort does not supply missing reviews or execute its controls.
+
+Native Harbor execution runs `environment.setup.command` with its declared
+`timeout_sec` before agent access. Task `agent.env` values apply only to the
+agent; conflicting trial-level values fail. A structured verifier's non-scored
+verdict remains an infrastructure error even when a zero reward file exists.
 
 ```python
 from finestore.rl.curation import CurationCatalog
@@ -488,6 +924,153 @@ uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --
 
 ## Environments
 
+Every conversion assesses its grading boundary from the task specification.
+WORKSPACE_STATE, repository capabilities and directory captures require SHARED
+execution because the agent can change the state the grader reads. Submitted
+program/stdout and typed file-only contracts may use an independent SEPARATE
+grader. A declared SEPARATE boundary when SHARED is required is rejected as
+`grading_environment_mismatch`, before either SAMPLE or FULL admission.
+
+Normalized rows retain `grading_environment` with required mode, declared mode,
+status and reason. Conversion and admission manifests aggregate these fields;
+`SourceDeclaration.grading_environment` exposes that census and its evidence
+URL to catalog consumers. Native Harbor assessment reads the published task.toml;
+it never substitutes a source-level declaration for task configuration.
+
+Harbor's LOCAL environment runs prepared, digest-pinned task images through
+bubblewrap and umoci, using shellbox-images.json. It honors the task's
+allow_internet: allowed tasks share the backend's network; denied tasks keep
+the isolated network. LOCAL accepts only root commands (None, root, 0
+or 0:0). A task requiring another user needs a supporting environment rather
+than a user override.
+
+### Grading-environment trust model
+
+New SHARED SWE pytest packages use the versioned `SharedIntegrityContract` in
+TaskCompendium. The dependency-state field is explicitly `AGENT_MUTABLE`; it
+has no default. The agent runs as UID 10001 and may change dependencies and
+filesystem state outside the protected harness. Grading uses that same container,
+with its pytest child running as a separate UID, 10002.
+
+Native source adapters construct this package through
+`taskcompendium.harbor.shared_package.harden_shared_swe`, passing its file map,
+typed Verifyit specification and explicit dependency policy. The helper validates
+the private bootstrap payload and constructs pre-agent protection. Each changed
+package requires a new version and fresh qualification evidence.
+
+Before agent access, the harness captures the task-reference tests and conftests,
+third-party pytest and plugin implementations, the test interpreter and the
+control program. It discovers the task repository's pytest configuration and root
+directory using the task interpreter and preserves its configuration and addopts.
+On every grading launch it kills agent-UID processes, restores the captured reference
+files, and removes added tests and protected fixture-plugin initializers. Installed entrypoint plugins
+use frozen pre-agent entrypoint names and modules. Third-party implementations
+load from the protected runner; repository-owned distributions remain live
+product code, even when they register pytest plugins. Ownership is captured
+before agent access: distribution source files resolve into the repository workspace, or its
+top-level import names match repository package roots in that census. The census
+excludes the source interpreter's actual dependency sites and installation/virtualenv
+prefixes from both ownership checks. It also excludes virtualenvs identified by
+`pyvenv.cfg`, `.tox` environments and build/cache trees. Third-party packages installed
+in a workspace virtualenv stay pinned; editable source outside the excluded roots
+can remain repository-owned. The census identifies Python packages, including
+namespace packages and `src` layouts, and single-module files outside
+test, docs, build, cache and repository-metadata trees. A third-party
+plugin's dependency on a repository-owned distribution does not pin that product.
+The runner registers entrypoint packages for assertion rewriting before imports,
+preserves plugin registration names and honors source `-p no:...` blocks.
+Configuration discovery reads the source settings without starting plugins;
+the grading session validates required plugins after loading the frozen baseline.
+Conftest plugin imports keep pytest's normal test-path handling.
+The `-I -S` launcher restores standard `site` builtins such as `help` after
+adding dependency sites and before importing `sitecustomize`.
+Product subprocesses launched through `sys.executable` also load the source
+interpreter's live dependency sites from a protected startup-path file.
+The runner disables live plugin autoload
+and clears the test environment,
+including PYTHONPATH, PYTEST_ADDOPTS, LD_PRELOAD and user-site loading. Verifyit
+scores missing editable candidate modules as zero. Missing dependencies, failures
+in protected code and failures with unresolved provenance remain unscored.
+
+Protected control files and the verdict directory are root-owned; the agent UID
+has no write access. Test stdout is
+retained as diagnostic output and cannot serve as the verdict. Per-trial
+`site-packages-diff.json` and `startup-hooks-diff.json` compare dependency files
+and startup hooks to the pre-agent baseline. `source-environment.json` records the
+pytest and pytest-metadata versions captured with the protected runner before
+agent access. `workspace-owned-distributions.json` records dependency-root exclusions, the package-root census,
+ownership evidence and which distributions were encountered in the grader's
+dependency graph; `workspace-owned-diff.json` compares their repository files
+against the pre-agent baseline. Installed copies remain covered by the site-packages
+diff. The contract records the dependency/hook audit
+probes and the known open `.pth` and `sitecustomize` hook gaps.
+
+This policy temporarily gives greater weight to avoiding bad RL signal from
+ignoring dependency changes than to preventing sophisticated tampering. It is
+subject to change. Planned LLM tamper audits will examine the dependency/hook
+diffs and the submitted changes; the present harness does not certify those
+open hooks against deliberate manipulation.
+The test process still executes live dependency `.pth` and `sitecustomize` hooks,
+which can change test-process behavior.
+
+Ingestion renders the agent-facing preamble from the same contract and prepends
+it to the task instruction. It explains the restored tests and pinned grading
+infrastructure, permits dependency and other filesystem changes, and takes
+precedence over contradictory later instructions. Auditor-only gaps do not
+appear in the preamble. The published TaskSpec records the contract ID, version
+and full configuration; native task.toml metadata carries the identical record.
+Changing the contract or preamble requires a new dataset version and renewed QA.
+
+The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
+`shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE)`.
+It moves the exact initial repository/dependency setup into Harbor's pre-agent
+setup and uses common actor images. Source `setup_files/` resources retain their
+bytes and file modes in the native package, including tasks with declared build
+contexts; Harbor uploads them before running that setup. Publish the resulting native package, copy
+its metadata integrity contract into the TaskSpec, then run full-population
+Harbor ORACLE filtering and SAMPLE/FULL QA.
+
+Protected bootstrap metadata travels as a compressed native `setup_files` resource.
+Harbor uploads it before initialization; the root bootstrap reads it from a file
+and removes both compressed and unpacked inputs before agent access. Keeping this
+payload out of command arguments avoids Linux's per-argument size limit without
+adding per-task data to the common image. Changing this resource or setup command
+requires new native hashes and dataset qualification.
+
+Non-Python SWE-rebench packages use `harbor_payload` or `harbor_record` with a `shared-native` contract
+and an explicit `native.family`: Go, Rust, JVM (Gradle/Maven), Julia, Swift,
+C/C++, Dart, PHP, Elixir, .NET, Lua or OCaml. The declaration preserves the exact
+source `install_config.test_cmd` and self-contained test-ID parser. Before agent
+access, bootstrap applies the trusted source test patch, captures tests and build
+configuration, and snapshots installed toolchains and runner packages. Each grading launch restores
+those snapshots and the declared test/configuration paths, including source wrapper scripts.
+Added paths matching the contract's test and configuration patterns are removed. The command runs as the grader
+UID with a cleared environment. The root controller captures its output through
+an inherited file descriptor, kills grader-UID descendants, invokes the pinned
+parser in isolated Python, and writes the structured verdict. Dependency edits
+to installed libraries outside the pinned runner packages remain live and produce `dependencies-diff.json`;
+dependency declarations in restored build files remain pinned. Startup changes produce
+`startup-hooks-diff.json`. Candidate programs can still influence test-output parsing,
+and mutable dependencies can execute startup hooks; the contract records these gaps for subsequent tamper audits.
+
+The manual Linux-root suite exercises real runners, failed tampering attempts
+and a passing external-dependency mutation. Run it inside a disposable Linux
+container with the declared toolchains installed, since the suite overwrites
+and restores their executable files:
+
+```bash
+uv run pytest lib/taskcompendium/tests/test_shared_native.py -m manual -n 0
+```
+
+Use `-k go` to start with Go, `-k gradle` for Gradle or `-k julia` for Julia. These
+controller regressions do not replace source oracle filtering or SAMPLE/FULL QA.
+
+Recipe and prebuilt admission also require the typed integrity contract whenever
+the task requires SHARED grading. A matching container boundary or passing control
+receipt does not supply that contract. QUICK retains unprotected conversions for
+measurement; SAMPLE/FULL record `shared_integrity_contract_missing` and refuse
+admission. Changed admission revisions write new artifacts and retain prior versions.
+
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
 
@@ -535,6 +1118,36 @@ Conversation-only tasks need no machine. Memory settings are advisory sizing hin
 Built environments export gzip layers, including inherited base-image layers,
 for Docker and OCI consumers. Compression enters built-image cache
 identity; lock-backed worker environments retain their existing identities.
+
+## Environment fidelity and repair
+
+An agentic task's environment is part of its data. Execution uses the environment
+and resource requirements carried by that task's specification. A declaration or
+worker image cannot replace missing task requirements. A task may move to another
+image only with a mechanical proof that its environment is a no-op against that
+image, followed by a new dataset version whose spec names the image.
+
+A native Harbor package retains its own `task.toml`, build context, files and
+permissions. A TaskCompendium task carries its declared image, build context or
+package environment. `lower_environment` in
+[`environment_fidelity.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/environment_fidelity.py)
+can express supported archive recipes as setup commands on a matching
+digest-pinned base, preserving the working directory and environment variables.
+Unsupported steps remain explicit conversion failures. `missing_environment`
+rejects an agentic task without an environment; `environment_unused` detects a
+conversion that drops the archive's environment.
+
+A source is repaired when the published specification completely describes its
+runtime behavior. Changing a task's bytes requires a new private, pinned
+TaskCompendium release with [SAMPLE or FULL oversight](#curation-modes-and-oversight-levels).
+Conversion fidelity, executed grading controls, drop accounting and the frozen
+review evidence remain distinct. A zero reward does not establish verifier
+liveness. Sources without oracles need no per-task executability proof; see
+[Sources without oracle solutions](#sources-without-oracle-solutions).
+Every oracle-bearing task is filtered in both SAMPLE and FULL, subject only to
+an explicitly recorded [targeted requalification decision](#targeted-requalification-after-an-approved-harness-change).
+QC reports issues and never rejects tasks. Mandatory within-source deduplication
+and lexical evidence apply separately, including measurement-only EVAL receipts.
 
 ## Graders and controls
 
@@ -679,13 +1292,128 @@ each host. On Iris, they use the executable `/cache/task-curation` mount because
 Build locks and completion markers let concurrent workers reuse finished
 environments; uv retains its configured package cache.
 
+## LLM-judged sources
+
+An LLM judge is part of a task's grading semantics. A judged TaskSpec whose
+`JudgeSpec.model` is empty, or whose rubric and judge settings are unstated, does
+not describe what grades the task. Such a source is unrepaired, whatever its
+sample review found, and stays at oversight `none`.
+
+### Choose a judge tier
+
+When a repair meets a judged source without a specified judge, the repairer
+works out the judge it needs:
+
+1. Judge ten tasks from the frozen sample yourself, under the source's rubric if
+   it has one. For each task, record the verdict, the evidence the judgment
+   needed and how hard the judgment was.
+2. Estimate the tier the source needs:
+
+   | Tier | Judgment it supports | Example | Historical model |
+   |---|---|---|---|
+   | `LIGHT` | Surface checks with a clear contract | format compliance, schema adherence | GPT OSS 120B |
+   | `MEDIUM` | Comparing content with a reference or checklist | open QA against references | MiniMax M3 |
+   | `HEAVY` | Multi-step verification that needs deep domain reasoning | Lean proof validation | GLM 5.3 |
+
+3. Pin the source's `JudgeSpec` to that tier's instantiable judge definition in
+   `JUDGE_TIERS` (`experiments/post_training/task_curation/judges.py`). Record the
+   ten verdicts and the tier rationale in the source's QA evidence.
+
+### What a judge specification must state
+
+A judge specification names the model and every setting that changes a verdict:
+
+- the rubric, written well enough for a reviewer to apply it by hand;
+- what the judge sees: the question, the candidate answer and any references,
+  checklist criteria or conversation context, and whether reasoning blocks are
+  removed;
+- the context length, maximum completion tokens and reasoning effort;
+- the harness: the API (`chat_completions` or another), the system prompt and
+  prompt template, and the label parsing and scores;
+- the turns allowed, the request timeout and the transport retry budget.
+
+The specification says nothing about how its OpenAI-compatible endpoint is
+reached. A hosted provider, a relay or a co-hosted local server serving the named
+model are interchangeable for curation. `JudgeConnection` supplies the base URL
+and key at run time. A specification may not depend on a particular endpoint's
+defaults; if a verdict changes with an unstated setting, state the setting.
+
+Every tier sets temperature to **0.7**. If an API cannot accept temperature,
+omit that request parameter and explicitly record **API default** in the preset.
+`context_char_limit` bounds auxiliary context in characters; it is separate
+from the preset's declared model context window in tokens. `max_turns` is one:
+parse retries issue independent requests without conversation continuation.
+
+`JUDGE_TIERS` maps each `JudgeTier` to a `JudgeTierDefinition`. Bind a task's
+question and rubric by replacing fields on its `.spec`; keep the accompanying
+`context_window_tokens`, model identity and revision in the qualification evidence.
+The presets do not certify endpoint availability or source admission.
+
+Choose a `JudgeEndpoint` at run time and use its `connect()` context to obtain
+the grader's `JudgeConnection`. `HostedJudgeEndpoint` accepts a provider URL
+and credentials; `RelayJudgeEndpoint` discovers an existing Iris GLM relay;
+`LocalJudgeEndpoint` owns `marin.inference.iris.remote_inference` inside an
+Iris job. Every implementation checks that `/models` advertises the tier's
+exact served model name. This check does not establish a hosted alias's
+underlying weight revision.
+
+Local hosting additionally requires a model YAML matching the tier's immutable
+revision and context window, and confirms the running server's context window.
+For MEDIUM, use
+`experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml`:
+it pins 262,144 tokens and eight H100s. The 32k judge YAML does not satisfy this
+tier. Exit the endpoint context as soon as validation finishes to release its
+workers. Keep endpoint URLs and credentials out of task specifications.
+
+| Tier | Model requested | Completion budget | Request timeout | Transport attempts | Parse attempts |
+|---|---|---:|---:|---:|---:|
+| LIGHT | `openai/gpt-oss-120b` | 8,192 | 120 seconds | 3 | 2 |
+| MEDIUM | `MiniMaxAI/MiniMax-M3-MXFP8` | 2,048 | 300 seconds | 6 | 1 |
+| HEAVY | `glm-5.3` | 4,096, then 8,192 if truncated | 300 seconds | 3 | 3 |
+
+MEDIUM requires checkpoint `c5454eb03678d8710e54a4e0fc681b9f3b4a3dba`.
+The historical HEAVY deployment reports GLM-5.3 FP8 but exposes no immutable
+weight revision; its tokenizer revision does not establish the weight identity.
+Qualification records that limitation. LIGHT uses explicit low reasoning;
+MEDIUM uses explicit adaptive thinking; HEAVY uses explicit low reasoning
+through its chat template. These presets pin temperature and reasoning settings
+that historical callers sometimes left to provider defaults.
+
+### Validate the judge end to end
+
+A judged source is repaired and quality-checked only after its pinned judge has
+graded real tasks end to end through the production grader:
+
+- a reference or known-good answer scores 1 wherever one exists;
+- an empty, unrelated or known-wrong answer scores 0;
+- on the frozen sample, the judge's verdicts agree with the repairer's own ten
+  verdicts and with a blinded review. Report the disagreements and an estimated
+  error rate, using the `audit-grader` method;
+- verdict coverage is complete: every request returns a parsed verdict within
+  the stated budgets.
+
+Record the judge definition, its endpoint at validation time, the verdicts and
+the agreement in the source's oversight evidence. A judge that cannot be reached
+or validated leaves the source at oversight `none`.
+The production reference and checklist graders retain each parsed provider
+response, including token usage, under `judge_responses`. Confirm that every
+remote prompt plus its completion budget fits the tier's declared context.
+
 ## Sources without oracle solutions
 
 Some sources ship no oracle solution: every row has `has_solution` false, or its
-`solution_binary` is an empty archive. The controls above cannot run there, so
-execution is qualified by three checks that need no oracle. Apply them whenever a
-source is admitted without one, including every rebuilt cohort that inherits a
-native source's missing oracles.
+`solution_binary` is an empty archive. Admission requires no per-task
+executability proof for these tasks. This requirement is suspended and can be
+restored later. Examples is the retained count after within-source deduplication
+and lexical decontamination, minus tasks with typed static blockers such as
+`tool_provider_required` or `shared_executor_required`. Content QA, environment
+fidelity, deduplication and lexical decontamination still apply, and a missing
+receipt or an old wire version never exempts a source.
+
+The three checks below need no oracle. They remain available as diagnostics. A
+rebuilt cohort that changes a native environment uses payload preservation and
+setup execution to show that its published spec is faithful. None of these
+checks is an admission gate.
 
 **Payload preservation (offline).** For each rebuilt task, every file the native
 recipe `COPY`s into the workspace must appear in the rebuilt setup payload with
@@ -700,16 +1428,22 @@ resources installed under `/setup_files`, then compare the files it writes at th
 native recipe's `COPY` destinations against the same expectation set. A spec that
 declares no setup commands reports `no_setup_commands` rather than passing: a hook
 the runtime never executes must not count as evidence. Container DNS may need an
-explicit resolver (`--docker-dns 1.1.1.1`); package installation runs for real,
-because the rebuilt setup installs the task's declared dependencies verbatim.
+explicit resolver (`--docker-dns 1.1.1.1`); package installation is real, because
+the rebuilt setup no longer installs task dependencies and the base image owns
+provisioning.
 
 **Empty-submission grading (sandbox).** `no_oracle_liveness` samples tasks by
-base and calls `grade_empty_in_sandbox` on a fresh grading machine. The task
+base image and calls `grade_empty_in_sandbox` on a fresh grading machine. The task
 machine's setup commands do not run in this path; the grader's declared setup
 commands do. A `negative_verdict` requires exit code zero, a reward below one,
 and a positive structured executed-test count (`detail.total`). Numeric reward
 files without execution evidence report `unverified_execution`. Crashes and
 missing exit diagnostics report `verifier_error`, even when a reward is zero.
+A sampled task passes verifier liveness only with `negative_verdict`.
+`verifier_machine.startup_timeout` bounds machine preparation, and
+`verifier_machine.cleanup_timeout` bounds teardown. Without a per-machine cleanup
+deadline, qualification uses 120 seconds. Failed or expired machine cleanup
+reports `infra_error`. Verifier liveness is diagnostic evidence only.
 
 The offline report records payload preservation and setup execution rates. Its
 verifier results are populated only from an explicit `--liveness` JSONL file. `skipped` is the default
@@ -752,31 +1486,41 @@ prints a plan unless `--run` is supplied. QUICK runs locally without review or
 controller settings. See the campaign quickstart below for input overrides.
 The recipe implementation shares conversion and the normalized schema across
 its modes. QUICK retains TaskSpecs
-and typed rejections, skipping admission, fingerprints, review, deduplication
-and grading. It records declared images or locks without building environments.
+and typed rejections after exact within-source duplicate removal, skipping admission,
+advisory cross-source fingerprints, review and grading. It records declared images or locks without building environments.
 
 Recipe SAMPLE and FULL bind `SourcePipelineConfig` and a resolved grader
 environment. Other callables choose their own configuration. The recipe's FULL
-mode reviews a bounded panel, then
-reuses those conversions when its quality gate allows expansion. The procedure
+mode converts and deduplicates the complete population before reviewing a bounded panel,
+then reuses retained conversions for full QA. Sample QC is informational and never rejects a source or task. The procedure
 below describes those reviewed stages. See the
 [campaign quickstart](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
 for local overrides, Harbor export and pinned content comparison commands.
 
 ## Source procedure
 
-Sample and full modes run the reviewed procedure below.
+Sample and full modes run the reviewed procedure below. A source shipping oracle
+solutions must first run the full-population oracle filter described below.
+Oracle filtering is never sampled, even when the other checks use SAMPLE.
 
-1. Download the pinned files once per distinct pin
+1. Assess the required and declared grading environment on every converted task;
+   retain mismatches and their reasons in the census and reject them. A repair
+   requires a new published version and renewed QA.
+2. Download the pinned files once per distinct pin
    (`task-curation/download/<hash>`).
 2. Draw at most 100 raw rows with a seeded sample, convert them and run cheap
    checks.
-3. With a rubric, send the panel in bounded batches to the GLM reviewer. More
-   than 50% known defects, over the whole panel, rejects the source; otherwise
-   it is accepted. Uncertain judgments, unsupported conversions and duplicate
-   rows are not defects. Rows outside the panel are never reviewed individually.
-   Without a rubric, rows are kept as `unreviewed`.
-4. In full mode, convert and audit every row of an accepted source.
+3. With a rubric, send the panel in bounded batches to the GLM reviewer. Compute
+   Result from conclusive reviewed tasks: GOOD at no more than 10% issues,
+   BAD at 50% or more, SOME_ISSUES between them. Exactly 10% is GOOD; exactly
+   50% is BAD. Record counts, rate, issue evidence and a repair recommendation.
+   Unavailable and uncertain observations remain explicit; mechanical exclusions
+   never enter this denominator. QC scores do not reject tasks or block expansion.
+   If every attempted review request is unavailable, QA remains incomplete and
+   tasks are deferred; transport availability is separate from the quality score.
+   Rows outside the panel are never reviewed individually. Without a rubric,
+   record an unreviewed Result.
+4. In full mode, convert and audit every row.
 5. Filter rows into kept, rejected and deferred.
 6. With controls, verify a seeded sample of at most 20 kept rows
    (`--verification-sample-size`): each task's one control runs once in a fresh
@@ -787,7 +1531,871 @@ Sample and full modes run the reviewed procedure below.
    the network-denied grader sandbox; credentials stay out of task specifications
    and persisted campaign evidence. This threshold is independent of sampled
    GLM quality grades.
-7. Admit rows and write the outputs.
+7. Join the full-population oracle-filter receipt by task ID and exact TaskSpec hash.
+   Exclude failed oracle tasks and hold unresolved infrastructure failures as
+   pending; a missing, stale or incomplete receipt blocks admission. Admit the remaining rows and write
+   the outputs.
+
+### Prepare retained contracts for a complete quality review
+
+Before reviewing a proposed remediated population, freeze its combined
+within-source duplicate and lexical drop plan. The preparation command indexes
+every retained TaskSpec and deployment runtime by separate SHA-256 values,
+checks the complete population against its pinned conversion and drop manifest,
+and records oracle, resource-declaration and grading-boundary diagnostics:
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_inputs \
+  --retention-plans IMMUTABLE_COMBINED_PLANS.json --source-ids SOURCE_IDS.json \
+  --artifact-root s3://marin-us-east-02a/marin \
+  --artifact-version YYYY.MM.DD.N --output inputs.json --run
+```
+
+Both input arguments accept local paths or object-storage URLs. Omit `--run`
+to inspect the planned artifact paths. Run preparation on CPU workers in the data's
+cluster, with an explicit target cluster, authorized priority and a three-day
+timeout. Completed source indexes are reused; interrupted attempts retain their
+partial files under distinct attempt directories.
+
+An index establishes the proposed review population. It supplies no model
+judgments, execution qualification, admission or publication receipt. Reuse QA
+evidence only for identical task and runtime hashes after calibration or repair.
+Hugging Face publication and Atlas loading remain separate operations.
+
+Content-only campaigns may use `full_qc` to review every retained task while
+execution qualification remains pending. The resulting evidence explicitly
+records `qualification_status=pending`; complete content review does not imply
+SAMPLE/FULL execution admission. Payload revision 4 excludes top-level execution
+requirements and actor/grader package-lock artifact locations. Deployment runtime
+remains in audit hashes rather than the content rubric. Exact requests can be
+reused after changes confined to those fields. Images, grader settings,
+instructions and resource bytes remain model-visible; modifying them invalidates
+the request, including edits to resource settings embedded in native task.toml.
+The versioned base rubric describes TaskCompendium's answer transport: it extracts
+conversation answers using `answer_format` and stages them at a sandbox grader's
+configured answer path. That private path alone is not an actor file-writing
+obligation. File and workspace submissions still require their declared outputs.
+Changing these reviewer instructions changes `ReviewerSpec` and invalidates prior
+request-cache entries; preserve the old review artifacts when correcting a rubric.
+See the [campaign command](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#complete-retained-population-review).
+
+### Inventory calibration prerequisites
+
+Before dispatching a backfill, inspect every retained contract against its frozen
+combined duplicate/lexical drop plan. This CPU census records missing execution
+requirements, original oracle resources, grading boundaries and task-level
+static blockers. On agentic tasks, mutable image inputs, missing package locks
+and fragment-only oracles require a separately versioned repair. Non-agentic tasks
+are exempt from the resource, package-lock, image and tool blockers. An agentic
+source with zero static blockers still requires production calibration, provider
+quota checks and complete receipts.
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.calibration_inventory \
+  --retention-plans FROZEN_PLANS.json --source-ids SOURCE_IDS.json \
+  --prepared-inputs FROZEN_INPUT_ARTIFACTS.json \
+  --output-root REGIONAL_VERSIONED_URL --workers 4
+```
+
+`--prepared-inputs` maps source IDs to previously frozen FULL-QC input artifacts.
+Their per-task and runtime hashes bind the inventory to the reviewed contracts.
+Without a prior index, hashes are observations and every task records a missing
+frozen-index blocker. Legacy aggregate digests identify population metadata;
+they cannot verify a reordered stream of stored TaskSpecs.
+
+Use an explicit data-local Iris target, the campaign's authorized priority and a
+three-day timeout. The command preserves all input TaskSpecs and writes per-task
+hashes and blockers plus source summaries. Reusing an output prefix is rejected;
+interrupted attempts require a fresh version. These inventories supply no
+execution admission, calibration result or publication evidence.
+
+### Full-population oracle filter
+
+Catalog bindings for oracle filtration use `OracleFilteredReleaseReceipt` and
+`OracleFiltrationEvidence`. They bind the original release and full cohort, the
+canonical oracle-filter receipt, the read-back PRIVATE output pin, and typed
+exclusion counts. Prior deduplication and lexical measurements remain in the
+archived input lineage. The active uniqueness census describes only the new
+output rows; oracle exclusions are recorded separately.
+
+This binding supports empty outputs. Changing the population clears earlier
+actor, grading, oversight and content qualification. The output remains visible
+as excluded, with zero Atlas Examples and a filtration blocker. It carries no
+actor census or inferred Daytona safety and cannot enter admitted selection.
+
+Reproduce complete input-ID coverage, typed exclusions, output hashes and
+PRIVATE pinned readback before generating registry shards:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_release \
+  --manifest oracle-release-inputs.json --output-dir oracle-release-receipts
+```
+
+The manifest is a list of `OracleReleaseInput` records: source ID, filtration
+evidence, output dedup census and local paths for the original cohort, canonical
+oracle-filter receipt and output Parquet. The command uses the configured source
+before filtration and checks its original pin, then writes `part-*.json` shards.
+Empty outputs also receive empty source fingerprints bound to their new pins;
+they have no cross-source overlap candidates.
+
+Nonempty filtered outputs use `OracleAdmittedReleaseReceipt`. The receipt joins
+complete oracle/control decisions to actor, grading, lexical and sampled content
+evidence measured for the exact published dataset revision. SHARED grading, where
+the agent and grader use the same container, also requires a complete
+integrity-contract census. `TaskFormat.HARBOR` selects
+`import_oracle_harbor_prebuilt`; `TaskFormat.TASKCOMPENDIUM` selects
+`import_taskcompendium_prebuilt`. The selected `PrebuiltCohort.version` must match
+the actor census's recorded `converter_version` so its measurements cover that
+pipeline. Qualification of the original, unfiltered population remains archived.
+
+`filtration.original_release` identifies the configured source before repair.
+`filtration.original_cohort` identifies the exact executed cohort, which may be
+a separately versioned repair. Set `execution_release` to its exact Hugging Face
+cohort pin, or explicitly `null` for an input published only as a versioned
+S3 cohort. The command rechecks a supplied execution pin against the cohort hash;
+`repair_evidence` preserves the baseline-to-execution lineage. These fields do not
+assert that repaired bytes are identical to the baseline.
+
+Generate registry receipt shards from the complete input cohort, canonical
+filter, output Parquet and hashed qualification metadata for the new revision:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_admitted_release \
+  --manifest admitted-oracle-input.json --output-dir admitted-oracle-receipts
+```
+
+The command rechecks input-ID coverage, typed exclusions, sampled observations
+and the published cohort before writing registry shards. After selecting the
+filtered pin, it attaches the seed-zero SAMPLE content review and any optional
+quality result covering the whole filtered population. Content evidence for the
+original pin remains archival. Unresolved infrastructure failures in original
+oracle trials or negative controls prevent release qualification.
+
+Every oracle-bearing agentic TaskSpec admitted through an execution receipt must declare `execution_requirements`: `cpus`,
+`memory_mb`, `storage_mb`, `agent_timeout_sec` and `verifier_timeout_sec`.
+Sizes use MiB and deadlines use seconds. Conversion may leave this field absent;
+SAMPLE and FULL admission of an agentic task require it and a population-complete
+resource receipt. Non-agentic TaskSpecs need no resource or timeout spec,
+calibration or role-allocation evidence.
+Harbor export writes these values into the task package. Trials must use them
+without resource overrides or timeout multipliers.
+
+Collection evaluates `is_nonagentic_task` from each TaskSpec. For non-agentic
+contracts, it preserves existing TaskSpec fields verbatim and adds no resource
+projection. Actual Trial/config/history records remain in the receipt with their
+original result hashes. The [current admission policy](#current-admission-policy)
+defines which checks still apply.
+
+Native Harbor ingestion and the TaskTrove archive wrapper lift all five explicit
+`task.toml` limits into `execution_requirements`. Partial declarations remain in
+the original package; ingestion supplies no defaults. An existing top-level
+declaration that conflicts with an explicit source limit is an error. Frozen
+releases need a separately versioned projection preserving task IDs, provenance
+and resource bytes. Only an identical content-review payload can reuse a review;
+reconversion can change importer provenance even when task files stay identical.
+
+Conversation oracle packets can include `oracle-command.json`, binding the
+source's declared `OracleCommand` to the exact TaskSpec, runtime and resource
+bytes, with the pinned revision and canonical callable identity of its declared
+`Controls.golden`. The command runs inside production
+Harbor Trial. An actor-less task uses a separate machine of its original grader
+environment in the grader workspace; it keeps the original agent budgets and
+deadline and closes before verification. The delivery adapter creates the declared
+answer file's parent directory before running the original command in its source
+working directory. The captured answer becomes the final
+assistant text with the original conversation preserved, using the canonical
+UTF-8 replacement policy. Trial artifacts retain the untouched `answer.bin`
+bytes, actual source exit and resource usage. This control
+adds no candidate actor. Changed task, resource or runtime bindings fail closed.
+Oracle resource uploads use the shared PAX archive path to preserve original
+file bytes, modes and nanosecond timestamps before the command executes.
+
+An explicitly repaired managed environment can also supply `expected-runtime.json`,
+bound to its TaskSpec and runtime. Selected source-grader and oracle-control
+machines record protected interpreter, import-path, module-origin, dependency-lock
+and file-hash observations before source commands run. A mismatch or observation
+timeout is unscored infrastructure failure. The probe has its own five-second
+host and guest cap, bounded by the source phase deadline; the original command
+keeps its full declared deadline. Packets without this binding trigger
+no probe. The source projection does not replace the trusted host judge framework.
+
+Calibration runs inside the full-population oracle filter. Tasks with declared
+limits are validated at exactly those limits. For a task without declared limits,
+stage a new package at 1 CPU, 2 GiB memory, 2 GiB disk, a five-minute agent
+timeout and a one-minute verifier timeout. Preserve any limits already explicit
+in the native package; calibrate only missing dimensions. Existing native TOML
+literals remain unchanged; only missing keys are inserted. Added native settings
+still require an exact content-review payload comparison before cache reuse. After a failed trial, double only the
+dimension identified by its failure: memory for an explicit OOM kill, disk for
+ENOSPC or a typed Iris `RESOURCE_LIMIT_DISK` eviction, agent timeout for an agent
+timeout, or verifier timeout for a verifier timeout. Also double CPU on an agent timeout when measured CPU use reaches 90%
+of its allocated capacity. A bare exit 137 does not establish OOM, and unavailable
+CPU counters do not establish CPU saturation.
+
+Verifier counter collection has a host-side deadline of five seconds, capped by
+the declared verifier timeout, plus the trial's cleanup grace. A pre-verifier
+measurement timeout is an unscored infrastructure failure. Final measurements
+are best effort and preserve the grader's result or primary failure; incomplete
+command cleanup still prevents a completed trial receipt.
+
+Host agent-log transfers and trial artifact downloads use the trial's cleanup
+grace as their wall-clock limit. A cancelled log transfer remains best effort;
+an artifact-transfer timeout is an unscored infrastructure failure. Collect
+hooks retain their declared timeouts, enforced by the host as well as the guest.
+Cancellation that does not finish within the cleanup grace prevents a completed
+trial receipt.
+
+Stop increasing at 16 CPU, 64 GiB memory, 128 GiB disk, a four-hour agent timeout
+and a 30-minute verifier timeout. A resource failure at its applicable cap becomes an
+exclusion with its resource signal and trial evidence. Without retry history or a
+measured source-environment incompatibility, a scored non-resource failure is
+`oracle_failed`; an unscored non-resource failure is
+`resource_calibration:infrastructure`.
+Source-environment incompatibilities and [approved infrastructure replays](#replaying-our-infrastructure-failures)
+use the specific rules below.
+The receipt retains every attempt and the final per-task shape. It reports a
+uniform source shape only when every task passed at that shape. A failure in an
+explicitly fixed dimension is excluded at its declared limit.
+Receipts retain actor and verifier measurements separately. A separate grader's
+failure at its declared memory or disk limit stops calibration without increasing
+the actor's allocation; a shared grader uses the task's container budget.
+
+`SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` identifies a measured source-environment defect.
+The measured conflict requires an oracle `solve.sh` exit of zero and a verifier
+startup failure in `pytest_metadata/plugin.py` because `pytest.StashKey` is absent.
+New controller receipts also require protected pre-agent versions showing pytest
+before 7 and an installed pytest-metadata plugin. Historical receipts without that
+observation require the measured explicit `pytest==6.2.5` setup line.
+The exclusion records hashes of the unchanged setup, raw verdict and, when
+available, the protected version observation. Preserve the declared environment and the raw infrastructure verdict;
+this exclusion does not establish an oracle score of zero. Unrecognized
+infrastructure failures remain unscored after the retry budget, while other
+population tasks continue. The summary counts exclusions by typed reason.
+
+#### Targeted requalification after an approved harness change
+
+An explicit source-specific decision may replace a fresh full-population pass with
+a targeted pass. Record that decision and the exact old/new payload and backend
+commits. Re-run every task without a clean prior oracle pass, including source
+environment exclusions, resource failures and unscored or hung tasks. Count a hung
+task once within the unscored set.
+
+Also re-run every prior pass whose verdict the actual trial-payload change could
+affect. Derive that set mechanically from frozen task evidence and the code delta;
+report the selection rule, coverage limitations, count and ETA before dispatch.
+The conservative static criterion includes explicit subprocess/interpreter APIs,
+pytester, xdist or virtualenv use, access to builtins changed by the payload delta, and unresolved local
+helper or dynamic code paths. A complete trace of every third-party dependency is
+not required; record that limitation in the release notes.
+A host-only collection change does not invalidate a trial. For example, restoring
+the source environment's dependency search paths in an ordinary child interpreter concerns tasks whose tests
+invoke such an interpreter, directly or through product/helper code. Missing
+evidence of a subprocess is not proof that none ran. Include unresolved impact in
+the targeted set rather than classifying it as unaffected.
+
+Carry an unaffected pass only with its original TaskSpec, native payload, execution
+requirements and production oracle receipt. Do not attach an old verdict to a
+changed native checksum. Preserve the prior production oracle receipts, all rerun receipts and a per-task
+selection/lineage manifest; assemble the release from carried original tasks and
+newly passing targeted tasks. Keep unscored tasks pending, separately from source
+faults. Apply the final deduplication, lexical checks and [SAMPLE/FULL oversight](#curation-modes-and-oversight-levels) to
+that exact release union before publishing or rebinding its source pin.
+
+SWE-rebench v14 uses this targeted procedure. Its baseline set is all 1,567 v13
+nonpasses, plus mechanically affected clean passes. The original 5,474-task scope
+and the v13 history remain preserved. Report the breakdown before dispatch if
+more than half of the 3,907 clean passes meet the impact rule. The final targeted count belongs in its
+immutable selection manifest, not a generic policy constant.
+
+#### Replaying our infrastructure failures
+
+A backend failure is pending evidence, not a source negative. Before replay,
+obtain an explicit per-task decision classifying the failure as our infrastructure.
+Each approval records `classification="our_infrastructure"`, the exact parent
+`parent_result_sha256`, a `failure_signature`, and a `decision_ref`. Source setup
+failures and scored source negatives do not authorize infrastructure replay.
+
+Freeze the fixed backend from a committed checkout:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter backend-fix \
+  --revision <40-hex-fixed-commit> --output backend-fix.json
+```
+
+The manifest hashes the locked Harbor runtime and its maintained dependencies.
+Include it with the approved task list on the CPU worker. Restore the original
+native packages, parent maps and trial artifacts at their exact absolute paths.
+Create a fresh partition and run one approved fixed-backend phase:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter retry-plan \
+  --cohort ORIGINAL_COHORT --task-map ORIGINAL_FULL_CALIBRATED_MAP \
+  --approvals APPROVED_TASKS.json --backend-fix backend-fix.json --output-dir NEW_PLAN
+uv run python -m experiments.post_training.task_curation.oracle_filter retry \
+  --plan NEW_PLAN/plan.json --output-dir NEW_PHASE --concurrency APPROVED_CONCURRENCY
+uv run python -m experiments.post_training.task_curation.oracle_filter merge-retries \
+  --task-map ORIGINAL_FULL_CALIBRATED_MAP --retry-map NEW_PHASE/task-map.json --output NEW_FULL_MAP
+```
+
+Each task receipt records `source_task_sha256` and `source_task_checksum` before
+calibrated requirements are projected into the admitted TaskSpec. Every retry
+transition must match these original-source anchors. Legacy receipts without
+anchors are checked against their entry task/package identity; an unanchored
+partial-source projection is rejected. Absent anchors remain omitted so archived
+history hashes are unchanged.
+
+Use a fresh phase directory under the existing calibration root so `collect` can
+inspect both phases through one `--jobs-dir`. No prior file is overwritten.
+The runner verifies the task, native files, declared limits, original backend
+configuration and pinned backend source before dispatch. The existing budget of
+three infrastructure attempts applies independently to this approved phase. A new scored
+original negative keeps `oracle_failed`; a measured source-declared deadline keeps
+its phase timeout exclusion. Earlier infrastructure history does not mask these
+new source outcomes.
+For partially declared tasks, the phase records `initial_requirements` and starts
+at the parent's final calibrated allocation. Declared and preserved source limits
+remain fixed; an earlier OOM increase is retained instead of starting over.
+
+Original runtime `task_machine` and `verifier_machine` resources are source
+declarations. Calibration merges actor CPU, memory and disk into preserved limits,
+and verifier resources into the independently fixed verifier profile. Only missing
+dimensions may grow. Recorded and admitted actor requirements match the actual
+actor allocation; a fixed verifier OOM cannot increase the actor's memory.
+Collection rejects maps that omitted those original declarations.
+
+Separate verifiers start missing capacity dimensions at the canonical calibration
+base, independently of actor declarations. A failing missing dimension grows only
+on the machine role that executed it; actorless original oracle commands use the
+verifier allocation. The phase deadlines remain one shared pair. New separate-role
+Trials record `verifier_execution_requirements` in the production config and
+receipt, and private TaskSpecs retain the same resolved allocation for subsequent
+execution. Missing historical role measurements remain unqualified; they are never
+inferred from an actor wrapper. Original raw runtime and source anchors stay fixed.
+The resource-only content-review projection excludes both allocation fields;
+complete task identities include both.
+
+An approved unscored old attempt that missed these fields may use
+`retry-plan --source-runtime-resource-recovery ORIGINAL_BINDING.json`. The
+`TaskSpecRuntimeBinding` binds the exact original task and runtime hashes, so each
+recovery plan covers one task. Its transition retains the old calibration as
+unqualified history and overlays only the missed explicit role resources. All
+other limits, original files, grading mode and prior phase hashes remain fixed.
+Ordinary retries without this field keep their existing strict invariants.
+
+A replacement LOCAL worker may supply `retry-plan --local-host HOST.json`.
+`LocalExecutionHostTransition` records exact `parent_kwargs`, replacement
+`current_kwargs`, and nonempty immutable URI/SHA-256 `scope_evidence`. Only
+`cgroup_parent`, `disk_root`, `image_cache`, and `registry_authfile` may change;
+backend type and every logical option remain fixed. Before dispatch, the runner
+verifies the evidence hashes and the replacement cgroup's containment inside the
+current worker's delegated scope, including CPU and memory controllers. Old worker
+paths and every prior attempt remain in the parent history.
+
+Historical TaskSpec packages without `source-runtime.json` may pass the original
+frozen runtime binding as `TaskConfig.source_runtime`. TaskSpec trials validate its
+task/runtime hashes and equality with any existing sidecar; native Harbor trials
+reject this field. The producer reads this binding from the frozen input cohort,
+so the historical package and its checksum remain unchanged.
+
+LOCAL continuation workers can share an explicit physical-host admission contract:
+
+```json
+{"control_root":"s3://marin-us-east-02a/marin/rl-data/atlas/local-host-admission/v1","max_trials_per_host":1}
+```
+
+Pass its file as `--host-admission`, with `--host-node-id "$IRIS_NODE_NAME"`
+and `--host-worker-id "$IRIS_TASK_ID"`, to `calibrate` or `retry`. All participating
+workers must use the same pinned control root and limit. Atomic conditional-object
+slots coordinate private pod namespaces by the Iris physical node name; the kernel
+boot ID must match the host contract. Admission waits before starting Harbor and
+holds a slot through its subprocess, including teardown. Release requires a
+successful process exit and exactly one persisted production Trial with a
+completion manifest, emitted only after resource cleanup. Missing completion or
+abnormal termination retains the claim. Source negatives and deadlines retain
+their outcomes and can release a clean host. Each attempt records
+`host-admission.json`. Source machine arguments and execution limits do not change.
+
+Held claims never expire or get stolen. A crashed worker can leave a claim held;
+release requires evidence that its exact owner and owned resources are gone.
+Changing the contract or reusing a host name after a reboot fails closed until
+that evidence is reconciled. A per-process semaphore or a lock in a pod-private
+disk root does not enforce this campaign-wide host cap.
+
+Known pre-command host failures remain unscored infrastructure: the original
+Daytona oracle's resource-counter call finding a closed machine, and LOCAL's
+disk-probe loop-allocation failure. Historical one-attempt phases remain readable;
+new calibration still uses three infrastructure attempts, with bounded backoff
+for these signatures. A matching message from source execution is insufficient.
+LOCAL reclamation opens only an existing released lease, preserving a live
+guardian's lock even after its lease pathname is unlinked during cleanup.
+Calibration validates and deduplicates Harbor's selected-result copy and physical
+attempt result before consuming the physical verdict, oracle exit and resource receipts.
+A cleanup cancellation can replace a previously observed source deadline in the final
+Trial result. Preserve that deadline with `OracleTrialReceipt.prior_phase_failure`:
+`phase`, `timeout_sec`, canonical `result_sha256`, immutable archive/exception
+references, and the exact `archive_member` and `archive_root`. The exception URI is
+`archive.uri#archive_member`; its digest hashes the member bytes. The collector
+checks archive and member hashes, the physical Trial URI, exact archived config,
+the Harbor timeout traceback and the original source-declared phase budget.
+Write the evidence as a JSON list of `PriorPhaseFailureReceipt` objects, then bind
+it to a new map:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter bind-phase-failures \
+  --task-map original-map.json --evidence phase-failures.json --output bound-map.json
+```
+
+Production result JSON and old map bytes remain unchanged. Such a trial
+remains a source-deadline exclusion and cannot receive an infrastructure replay.
+Absent evidence is omitted from serialization so historical retry hashes remain
+unchanged. A persisted `lifecycle-result.json` is collected only when that Trial
+has no selected `result.json`.
+
+Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
+This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
+standalone Harbor trials without it keep PHASE behavior. Safe provider retries
+spend neither the three infrastructure attempts nor source execution time.
+Request duration and backoff pause phase clocks while the overall attempt clock
+advances. Controls and deletion use a 60-second per-call timeout and backoff capped
+at 120 seconds. Artifact transfers retain SDK timeouts appropriate for large files;
+snapshot and acquisition operations retain their SDK settings. Normal cleanup
+allows job-bounded provider recovery; cancellation cleanup and grace remain bounded
+by wall-clock time. Source commands execute once per attempt; an ambiguous source
+response remains infrastructure evidence.
+Preserve the original phase and replay approved provider-unscored tasks after a
+pinned backend repair, with the same native files and source limits.
+New attempts record that approved context; historical failure classifications
+remain unchanged, including old phases that stopped after one unknown error.
+Further phases require another explicit decision; the runner never schedules them
+automatically. A failed replay remains unscored for review even if its final raw
+verdict contains zero.
+
+Collect the original full cohort with `NEW_FULL_MAP`. Receipts retain every
+parent phase, its map and result hashes, the approved partition and backend-fix
+identity. Collection checks all original and replayed native packages and results,
+and rejects substituted parent files, input changes or reused attempts. Keep the
+plan, its cohort and parent map, all attempts and the backend manifest in the
+release's private evidence archive. `infrastructure_pending` counts unscored
+cases separately from source oracle failures.
+
+Admission does not require an executability run for tasks without original
+solutions; see [Sources without oracle solutions](#sources-without-oracle-solutions).
+The suspended procedure is kept here so it can be restored. It ran a production
+actor (GLM-5.3, temperature 0.7, at most three turns) followed by the task's
+original grader, and treated a completed run with a valid structured verdict as a
+pass, with the reward recorded separately.
+
+To record such runs, pass `collect --executability-runs RUNS.jsonl` with one
+`{"task_id": "...", "receipt": {...}}` record per no-oracle task. Each
+`ExecutabilityRunReceipt` binds the final production trial, observed actor-turn
+count, model configuration, and immutable model request/response evidence
+references. The trial must match the final calibration attempt and native task
+checksum. Prebuilt imports enforce the same requirement. This collector consumes
+completed evidence; it does not launch model requests. The actor run itself is the
+final calibration attempt. If its shape changes, collect a new run and its model
+evidence at that shape. Construct the record using the shared
+`taskcompendium.pipeline.oracle_filter.ExecutabilityRunReceipt` schema; its
+`model_evidence` entries identify archived request/response objects by URI and
+SHA-256, not credential files.
+
+Oracle filter wire version 3 also accepts `MechanicalOracleTaskReceipt` entries
+for tasks whose complete contract cannot execute or has no execution proof. Supply
+these as `collect --mechanical-outcomes OUTCOMES.jsonl`, using the same task-ID and
+receipt envelope. Each entry retains the exact TaskSpec/runtime hashes, original
+oracle presence, a typed exclusion reason, and at least one evidence URI with its
+SHA-256. It contains no invented trial, shape, or calibration. With
+`--input-evidence-uri URI`, missing task-map entries receive
+`executability_proof_missing` evidence bound to the frozen cohort hash. The output
+includes every filtered original row in `excluded-tasks.parquet` and counts reasons
+in `oracle-filter-summary.json`. Version 2 receipts remain readable as archives and
+cannot establish new admission.
+Use an explicit mechanical outcome for a measured contract blocker and retain its
+diagnostic evidence. Use automatic `executability_proof_missing` only when no
+production mapping or measured outcome exists. Both paths exclude the task. While
+the no-oracle requirement is suspended, a task without an oracle is excluded only
+by a typed static blocker, never by `executability_proof_missing`.
+
+#### Static retention for sources without oracles
+
+Wire version 5 records static retention under an explicit
+`NoOracleExecutabilityPolicy` with
+`executability_proof_required_for_no_oracle=false`. Its `decision` is the
+URI/SHA-256 supplied by the source's approved suspension ruling.
+`NoOracleSourceContext` binds the current source ID, dataset pin, converter identity,
+TaskSpec-population digest, complete cohort SHA-256 and Use. The complete population
+must contain no original oracle; mixed or unknown oracle presence cannot use this
+route. Old receipts and an absent policy retain their existing admission rules.
+
+`StaticRetainedTaskReceipt` records `outcome=static_retained` and
+`executability=unmeasured`. It carries the unchanged TaskSpec/runtime identities,
+cohort and policy hashes, and the actual original Harbor checksum for a native
+package. It contains no Trial, calibrated shape, model run or nop verdict. Typed
+mechanical entries preserve static exclusions, with one primary reason per task.
+The diagnostic ledger retains all overlapping reasons without summing them as
+unique exclusions. Use=EVAL records population and static-retention counts while
+executability remains unmeasured; these tasks cannot enter TRAIN admission.
+
+Create evidence from the frozen source, without running source commands:
+
+```bash
+uv run python -m experiments.post_training.task_curation.static_retention \
+  --cohort ORIGINAL_TASKS.parquet --cohort-evidence COHORT_URI_AND_SHA.json \
+  --source-context CURRENT_SOURCE_CONTEXT.json --output-dir NEW_STATIC_EVIDENCE
+```
+
+The output contains `oracle-filter.json`, unchanged retained rows in
+`tasks.parquet`, `static-exclusions.json`, a diagnostic `static-retention.json`,
+and typed `NoOracleStaticRetentionEvidence` in `static-retention-evidence.json`. Supply
+`--recipe-identity` when the source recipe processor consumes the receipt.
+`load_oracle_filter` and `require_oracle_filter` require an independently configured
+`source_context` for static retention. Consumers reconstruct their expected context
+from current source configuration, independently of the receipt, and compare the
+two. Loading also requires `expected_sha256` from the configured receipt reference.
+Native consumers supply the checksum read by Harbor from the original
+package, independently of its recorded checksum. The prebuilt consumer derives these
+bindings from its configured pin, current input census and downloaded cohort.
+Source metadata carries optional `no_oracle_executability_policy` and
+`no_oracle_static_retention` fields; absent fields remain omitted from serialized
+catalog records. Static evidence leaves grading-boundary, integrity, content,
+deduplication, lexical and overlap checks in force.
+
+For both SAMPLE and FULL, run the production Harbor Trial with the restored
+ORACLE agent over the complete oracle-bearing population. The filter retains exactly
+the tasks with a completed trial, solution exit zero, and structured scored
+reward one. Numeric reward files alone are insufficient. Retain failed oracles
+as exclusions with reasons and counts. Unresolved infrastructure errors are not
+admitted, but they stay pending for a re-drive and never count as oracle failures.
+Native Harbor `reward.txt` and `reward.json` outputs qualify through the production
+reward parser when their exact reward dictionary matches the validated Trial's
+`VerifierResult`. The collector records `native_grade` with the raw artifact SHA-256,
+result hash and native task checksum. This path is unavailable to TaskSpec payloads
+and cannot replace a missing or infrastructure-failed structured verdict.
+Retry infrastructure failures up to two times; tasks still unscored remain
+`infrastructure_pending`.
+
+Keep the task's environment, network permission, setup and solution scripts.
+For converted TaskSpec packets, call `write_source_runtime(task, runtime, directory)`
+after export and before `write_task_map` measures the complete Harbor directory.
+The checksum includes `source-runtime.json`. Production trials record declared and effective
+actor/verifier permissions separately in `network-policy.json`; source-declared
+permissions must equal the effective permissions for each required machine role.
+The receipt records `actor_required` from the actual execution plan; an actorless
+original command uses the grader machine. A missing or mismatched observation
+cannot establish admission. Unsupported backend
+policies remain filtered as `network_policy_unsupported`. An absent role or network
+field remains undeclared.
+Export or acquire the cohort's faithful Harbor packages first; do not prebake
+network-dependent solution scripts or replace task images. Freeze the task map
+before launching. The map binds TaskSpec content hashes to native Harbor task
+names and complete directory checksums. If package directories use other names,
+write the same three map fields explicitly for each oracle TaskSpec:
+task_name, task_checksum and task_sha256. Lowered envelopes also include
+runtime_sha256, binding the deployment shape and settings.
+
+Programmatic callers of `calibrate_cohort` and `retry_cohort` may supply
+`prepare_attempt(package: Path, shape: ExecutionRequirements) -> None` to check
+backend capacity for each staged attempt before Trial allocation. The hook sees
+the final native resource limits, including increases after resource failures.
+The hook must preserve task and package inputs. Callers must check shared
+snapshot counts atomically when using concurrent trials.
+A preparation exception propagates without creating an oracle verdict; retain
+the affected task as pending infrastructure work and retry in a fresh run.
+
+Converted TaskSpecs without native Harbor packages use the TaskSpec trial workload.
+Prepare a frozen, retained cohort with:
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.task_spec_harbor \
+  --cohort /path/to/converted/tasks.parquet --output /path/to/task-spec-packages-v1 \
+  --source-revision PINNED_CODE_REVISION \
+  --controls experiments.post_training.task_curation.datasets.tasktrove.math:MATH_CONTROLS
+~~~
+
+This writes an unchanged private `task-spec.json` payload and the task map.
+Rows with a `runtime` field also write `source-runtime.json`, preserving its
+original JSON values and recording their canonical hash in that file before
+packet checksums are measured. CPU, RAM and disk declared under `task_machine` and
+`verifier_machine` are allocated independently. Absent or null dimensions keep
+that role's current trial budgets; actor allocations do not fill missing
+verifier dimensions. Non-integer or contradictory source budgets are rejected
+before allocation. Trial honors the declared actor and verifier network policies
+independently; an actor-less oracle uses the verifier policy of its original
+grader environment. `network-policy.json` records the declared and effective
+policies with the source runtime hash. Missing roles remain undeclared. The
+optional `--controls module:attribute` selects the source's declared `Controls`
+object; a conversation `OracleCommand` writes its bound packet before checksums
+are measured. `--source-revision` pins that control's code. For an explicitly
+repaired runtime, `--runtime-expectations` accepts a JSON mapping from source
+machine roles to expected interpreter and file facts and writes the protected
+binding before the same checksums. Source commands are not executed by export. The
+wrapper's `task.toml` supplies missing CPU, RAM, disk, agent-timeout and
+verifier-timeout budgets, starting at 1 CPU, 2048 MiB RAM, 2048 MiB disk, 300
+seconds and 60 seconds. Source limits remain fixed. Preparation does not apply deduplication or lexical drops.
+Limits are checked against explicit execution requirements and preserved `task.toml`
+resources in the shared, worker, verifier, and oracle roles. CrossCode repairs also
+retain `source_archive/task.toml` among oracle resources. The archived limits are
+read only with the accompanying `taskcompendium/crosscode-remediation.json` record,
+whose version must match the TaskSpec's remediation label and which records the
+original task hash. Conflicting declarations reject preparation.
+The actor census uses the same provenance-bound archive reader. Repaired native
+tasks retain their archived allocation settings while snapshot identities use
+their current declared actor and grader images.
+Run `calibrate` against the emitted `task-map.json` with `--environment local`
+and the worker's delegated cgroup-v2 directory (`cgroup_parent`) and writable
+loop-device backing directory (`disk_root`) in `--environment-kwargs`. The
+LOCAL disk backend must first pass its loop/OverlayFS/ENOSPC qualification
+([#11349](https://github.com/marin-community/marin/pull/11349)). LOCAL rejects
+unenforceable limits. An unresolved `docker_build` in either the actor or
+verifier environment remains blocked and needs a separately versioned source
+repair with QA; this adapter does not replace it with an image.
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet \
+  --task-map /path/to/task-spec-packages-v1/task-map.json \
+  --output-dir /path/to/calibrated-v1 --environment local --concurrency 4 \
+  --environment-kwargs '{"cgroup_parent":"/sys/fs/cgroup/atlas","disk_root":"/var/tmp/atlas-disks","model_endpoint":"https://judge.example/v1","model_name":"declared-judge-model"}' \
+  --calibration-solutions /path/to/calibration-solutions
+~~~
+
+For candidate trials, select `task-spec-chat` with explicit `api_base`,
+`max_turns`, `max_tokens` and `request_parameters` agent kwargs. Atlas routes
+its candidate endpoint through the protocol relay, which owns tokenization,
+request budgets and traffic receipts. The agent consumes the original conversation
+and final-submission tools; shell tools require the declared actor machine.
+The `shell:v1` repository provider runs on that same actor machine. Its literal
+`repository`, `source_ref` and absolute `workspace` remain in the TaskSpec;
+commands run in that workspace and retain state between calls. The source's
+public setup instructions and oracle scripts own cloning and installation.
+The provider does not add another clone, install packages or change the checkout.
+It advertises one `shell` function with a required string `command` argument,
+without also advertising the harness's default shell. Trials retain the exact
+provider declaration and TaskSpec hash in `tool-providers.json`.
+
+Other tool-provider interfaces remain unsupported. In particular,
+`nemotron-agent:ns_tools_simple_agent` with `stateful_python_code_exec` needs its
+own stateful Python adapter; a repository shell is not equivalent. Supporting
+`shell:v1` also does not resolve a task's unbuilt environment or SHARED grading
+boundary. Those blockers remain explicit until the corresponding execution
+contract is supported and qualified.
+
+Actor files and setup commands run only in the declared actor
+environment. Script graders and non-judge Verifyit graders retain their declared
+verifier environment.
+A conversation-only task receives no actor image. Verifyit judge mode uses production
+host-side grading through the declared JudgeSpec and connection. Its trusted
+framework worker enforces the verifier CPU, RAM, disk and time budget; it leaves
+the TaskSpec and task package lock unchanged and installs no SDK into the task
+environment. Both paths use the production structured-verdict parser. Judge
+transport requires `model_endpoint` and its declared `model_name` in environment
+kwargs. A verifier-only loopback relay carries requests to that fixed endpoint;
+provider credentials stay on the host. Agent/verifier credential declarations
+configure host transport and do not modify TaskSpec environment variables.
+
+The `oracle` control executes a preserved file-task `solution/solve.sh` in its
+declared actor environment. A task without an original oracle instead reads
+`solution/response.json`, containing a JSON array of exactly one OpenAI-format assistant message,
+from `--calibration-solutions/<task-id>/`. That response is calibration-only.
+Select `nop` for independent empty-submission liveness. These controls receive
+no candidate-model settings. Shared-state grading, state capture, other tool providers,
+unresolved image builds and oracle delivery without an explicit supported
+contract remain execution blockers; the adapter does not rewrite them.
+
+Changes to TaskSpec provisioning require the dedicated LOCAL regression below
+on a privileged Linux CPU worker with delegated cgroup v2, loop devices and
+ext4 mount tools. It executes the frozen tau and language-mixing JudgeSpecs through the production
+host service and a local HTTP judge fixture, preserving their original task locks. The test observes
+the actual CPU/memory controller values, exact disk-image allocation and cleanup.
+It does not provide oracle, admission or external-model quality evidence.
+Ordinary offline test selection excludes this runtime suite.
+
+~~~bash
+uv run --project vendor/harbor --frozen --extra runtime --group test python -m pytest \
+  --noconftest -p lib.shellbox.tests.conftest -c vendor/harbor/pyproject.toml \
+  --local-cgroup-parent /sys/fs/cgroup/path/to/delegated/worker \
+  vendor/harbor/tests/runtime/test_taskcompendium_local.py \
+  -m 'runtime and not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not windows_containers'
+~~~
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.oracle_filter map \
+  --cohort /path/to/converted/tasks.parquet \
+  --tasks-dir /path/to/faithful-harbor-tasks --output /path/to/task-map.json
+
+# DAYTONA: use the RL organization credential and verify the snapshot cap first.
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-run-v2 --environment daytona --concurrency 128
+
+# LOCAL: prepared digest-pinned images via umoci and shellbox-images.json,
+# in PRIVILEGED Iris CPU workers with loop devices. This route supports only root commands.
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-local-v2 --environment local --concurrency 4 \
+  --environment-kwargs '{"image_cache":"/cache/shellbox-images","cgroup_parent":"/sys/fs/cgroup/marin-liveness","disk_root":"/cache/shellbox-disks"}'
+
+# IRIS-SANDBOX: intended invocation after SANDBOX disk qualification.
+# Currently rejects declared storage; do not use for calibrated cohorts.
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
+  --output-dir /path/to/oracle-iris-v2 --environment iris-sandbox --concurrency 4 \
+  --environment-kwargs '{"cluster":"cw-us-east-02a","pool":"cpu-genoa","priority":"batch","ttl":259200}'
+
+uv run python -m experiments.post_training.task_curation.oracle_filter collect \
+  --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
+  --jobs-dir /path/to/oracle-run-v2 --output /path/to/filtered-v2/tasks.parquet \
+  --conversion-manifest /path/to/quick/manifest.json
+~~~
+
+DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
+when the cohort's snapshot identities fit the cap. The `iris-sandbox` environment
+uses prepared image references from `shellbox-images.json` and submits exactly
+one sandbox container and replica per Iris job. It takes `cluster`, `pool`,
+`priority` (`batch` by default, or `production`) and `ttl` in seconds. A TTL of
+259200 gives each job a three-day timeout. Images retain their prepared `/app`
+contents; commands run in separate process groups so a timeout or cancellation
+can stop a command while preserving the task filesystem for the verifier.
+Images must provide `setsid` and a readable `/proc`.
+
+LOCAL accepts declared `storage_mb` only with an explicit `disk_root` whose
+`LocalDiskPool` host probe passes. The worker needs Linux root in the existing
+PRIVILEGED pod, `/dev/loop-control`, available loop devices, ext4 and OverlayFS,
+and `mkfs.ext4`, `mount`, `umount`, `losetup`, `findmnt` and `umoci`. The disk root
+must be root-owned mode 0700 in a private or slave mount namespace. Missing
+capabilities fail before task acquisition; an unconfigured LOCAL worker continues
+to reject storage declarations. This route requires no controller change or gVisor.
+Harbor runs verification in a worker thread before sandbox acquisition and reuses
+the verified pool for concurrent trials in the same worker process, mount
+namespace and disk root. Each allocation also reclaims abandoned leases, without
+repeating the full host probe.
+
+Each container gets a sparse image of exactly `storage_mb * 1024 * 1024` bytes,
+formatted as ext4 with no reserved root blocks. Filesystem metadata and journal
+consume part of that capacity. Prepared image contents are shared read-only
+OverlayFS lower layers outside the budget. Copy-up, whiteouts, new root files,
+`/tmp`, workdirs, `/dev/shm`, uploads and command stdout/stderr/input spool files
+consume the container's ext4 budget. `/dev` permits device I/O but disallows
+creating regular files; `/dev/shm` binds back to ext4. Read-only package/program
+mounts remain outside the budget. Provision the worker disk for the sum of active
+limits plus image caches and host artifacts; sparse images do not reserve that
+physical capacity.
+
+This accounting differs by backend: Daytona requests whole GiB rounded up through
+its service API, whose image/filesystem accounting is provider-controlled. Docker
+passes `--storage-opt size` to a supporting storage driver for the writable layer;
+its separate tmpfs and bind/volume mounts are outside that layer. LOCAL's ext4
+filesystem includes its scratch and shared-memory directories. For a foreground
+command, a disk-limit outcome requires a failed exit (nonzero or signal) and
+either zero available inodes or fewer available bytes than the larger of 1 MiB
+and 0.5% of the declared filesystem size. The trusted host launcher samples the task's ext4
+filesystem immediately after reaping the command, before command spools close.
+Successful commands remain successful while full. With inodes available,
+failed commands at or above that byte headroom threshold remain ordinary failures,
+including commands that reclaim sufficient space before exiting. Guest stderr text never establishes exhaustion, and output
+truncation or a zero output limit cannot hide the capacity sample. A private
+one-byte host report records the sample; guest code does not inherit its FD.
+Block capacity uses `f_bavail`; `f_bfree` also includes ext4's
+[reserved metadata pool](https://raw.githubusercontent.com/torvalds/linux/master/fs/ext4/super.c),
+which remains reserved even with `mkfs.ext4 -m 0`.
+`DISK_FAILURE_MIN_HEADROOM_BYTES` and `DISK_FAILURE_HEADROOM_FRACTION` define the
+classification threshold: a bulk allocation can fail while a smaller write
+still fits. Treating that near-capacity failure as disk pressure lets calibration
+double its current trial disk allocation when the task has no declared disk limit.
+A failed or signalled command near capacity (zero available inodes, or available bytes < max(1 MiB, 0.5% of `storage_mb` MiB)) is classified DISK even if its failure is unrelated, because doubling disk on an ambiguous near-full failure is cheap during calibration, while missing a real limit causes oracle qualification to wrongly exclude the task instead of retrying with more disk.
+The threshold classifies failures; it adds no bytes to the filesystem and gives
+command spools no extra storage allowance.
+
+Shellbox reports `DiskLimitExceeded` with `ResourceLimit.DISK`, translated by
+Harbor to `SandboxDiskFullError` (or `AgentDiskFullError` during the agent phase).
+Calibration classifies the explicit disk signal before infrastructure verdicts
+and doubles only missing disk limits. A declared fixed disk limit remains fixed
+and records a resource exclusion when exceeded.
+
+Command spools remain inside the quota, with no extra storage allowance. A
+`run()` command can successfully consume the final inode while its three
+anonymous spools are open. Closing those spools releases their inodes for the
+next command. If an `open_process()` command consumes every inode using pipe
+output, the next `run()` may fail to create its spool before guest execution.
+The host samples that failure before closing other spools already created for
+the same `run()`; a failure within the capacity threshold is a typed disk failure. The host report
+is trusted launcher control metadata, like namespace configuration, outside the
+task filesystem; stdout, stderr and stdin payloads remain charged.
+
+A guardian owns each filesystem until task teardown unmounts OverlayFS and ext4
+and releases the autoclear loop device. Closing the owner pipe on driver death
+also invokes cleanup. Startup reclaims allocations with released leases and
+leaves live neighbours intact. Cleanup errors retain the allocation for recovery
+and fail visibly; cleanup never lazily unmounts or detaches unrelated loop devices.
+Run the bounded disk correctness tests explicitly in an authorized privileged
+CPU worker:
+
+```bash
+uv run --package marin-shellbox --group test pytest \
+  lib/shellbox/tests/test_local_disk.py -o addopts='' -m manual -q -s
+```
+
+LOCAL honors `allow_internet` and supports only root commands.
+
+Iris prepared-image submission requires the separate `sandbox-image-workdir` backend
+capability, even without declared disk. Older controllers are rejected before
+submission because they hide the image's `/app` under an empty volume. This
+capability describes image preservation and does not qualify storage enforcement.
+
+Iris SANDBOX storage enforcement has not been validated. Harbor reports no
+storage-limit capability and rejects declared `storage_mb` for `iris-sandbox`. The Shellbox
+adapter also requires a direct Kubernetes controller advertising
+`sandbox-storage-limit` before submitting any declared disk; current controllers
+do not advertise it. Sandbox-profile pods cannot start on the pinned CPU pool
+([#11343](https://github.com/marin-community/marin/issues/11343)); H100 startup
+is blocked separately ([#10090](https://github.com/marin-community/marin/issues/10090)).
+See the [runtime incident](https://marina.oa.dev/echo/wiki/976).
+
+The candidate pod manifest sets ephemeral-storage to exactly
+`storage_mb * 1024**2` bytes, with zero harness allowance. The driver stays outside
+the pod. Kubelet's runtime accounting must include task writes and command files
+for this to enforce disk. Its accounting and eviction are asynchronous. A real
+`CONTAINER_PROFILE_SANDBOX` overflow on the pinned pool must establish the disk
+boundary, with the node's `runsc.toml` `overlay2` setting recorded beside raw
+kubelet eviction evidence. A restricted-profile overflow does not qualify this
+path; a memory-backed overlay can turn disk pressure into an OOM. Follow the
+[deployment checklist](rl-data-atlas.md#deployment-checklist) before enabling
+storage admission or advertising the capability. Deployment/restart requires
+separate user authorization.
+
+Only newly annotated sandbox pods receive typed own-limit storage failures:
+`RESOURCE_LIMIT_DISK`, Shellbox `DiskLimitExceeded`, then Harbor disk-full.
+Calibration doubles disk as for ENOSPC, including alongside an infrastructure
+verifier verdict. Ordinary jobs and node disk-pressure evictions retain their
+previous retry classification. The shared-worker bubblewrap `local` environment
+remains separate. `iris-sandbox` honors `allow_internet`, supports root commands
+and one container, and rejects service groups and process-session model relays.
+
+Use CPU Iris jobs with a three-day job timeout. Select the campaign's approved
+priority explicitly through `priority`; use production for the bounded
+disk-overflow correctness check. Run `collect` against the same calibrated run; there is no second oracle pass.
+Each attempt uses a fresh container and a fresh native package directory.
+Preserve the original packages, trials and published prefixes; select a new
+output version when rerunning.
+
+Single-step native Trial results record the verifier script's return code in
+`verifier_result.exit_code`, separately from its reward. This field records the
+process outcome; it does not enforce negative-control admission. Multi-step mean
+reward aggregates have no single verifier process exit code.
+
+The collector requires every task's trial, preserves its independent
+solution exit code and structured verifier verdict, and emits oracle-filter.json
+plus oracle-filter-summary.json. It writes the final calibrated requirements
+into each retained TaskSpec. Publish the filtered tasks and receipt together at one private
+immutable revision. Prebuilt admission checks every retained oracle TaskSpec
+against the receipt.
+
+For a recipe pass, supply --oracle-filter-receipt /path/to/oracle-filter.json
+to the driver. The QUICK manifest supplies the recipe identity and full input
+accounting; pass it to the collector. Recipes that can ship solutions declare
+oracle_solutions=True so an oracle-free sample cannot bypass the population
+requirement. The row gate also detects solution resources independently.
 
 For a standalone task batch, call
 `review_tasks(tasks, rubric, reviewer, cached=None)` from
@@ -818,6 +2426,64 @@ configured cap in `normalized_shard_limit`. Full preparation uses the same
 population rule with a cap of 64 deduplication partitions; persisted review files
 retain their independent record and byte limits.
 
+### QA reviewer
+
+SAMPLE and FULL curation require an immutable `ReviewerSpec`. `--reviewer-tier HEAVY`
+selects `JUDGE_TIERS[HEAVY].qa_reviewer`: `glm-5.3` through the
+`/muchanem/glm53-relay` OpenAI-compatible relay, temperature 0.7, reasoning
+effort low, 4096 completion tokens and three total attempts. Invalid responses
+retry with an 8192-token budget.
+The deployment revision is recorded as `unverified:ortet-glm-5.3-fp8`;
+the relay does not attest an immutable checkpoint. Connection fails if its model
+list does not advertise `glm-5.3`. A provider that cannot accept temperature may use
+`temperature=None` to retain its API default; zero is disallowed.
+
+The spec pins base rubric `task-quality-v2`, its SHA-256 content hash, and review
+payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
+`BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
+hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
+task evidence projected into the request. Quality review appends per-source
+`ReviewRubric` criteria to the base rubric and includes its ID and version in the
+request and quality manifest. Assessments use and retain their separate full
+assessment rubric text.
+
+Revision 4 separates content quality from execution qualification: it excludes
+top-level `execution_requirements`, actor/grader `packages_lock` artifact paths,
+and deployment-runtime rubric text. Its semantic task ID hashes the same
+projection, so calibration-only changes reuse exact requests. Full task and
+runtime hashes remain in the audit. Images, grader settings and resource bytes
+remain visible; edits to native task.toml or verifier code invalidate requests.
+The spec records serving precision as part of reviewer identity.
+
+The self-hosted retained-population FULL-QC workflow has explicit reviewer
+versions, separate from the shared relay preset. Its v3 policy doubles v2's
+serving context from 262,144 to 524,288 tokens and generation limits from
+4,096/8,192 to 8,192/16,384 initial/retry tokens. Future source starts use v3;
+in-flight v2 work and its valid observations keep their original identities.
+The [FULL-QC reviewer changelog](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#complete-retained-population-review)
+records cache separation, resume commands and the preserved v2 repair policy.
+
+Whole-source content Result finality is recorded explicitly as `complete` or
+`accepted_incomplete`, independently of coverage. The latter requires a pinned
+waiver enumerating every unreviewed task and exact reason, and preserves
+missing-review and uncertainty counts. This accepted whole-source review displays
+Quality FULL and a final Result; strict coverage remains false on Evidence.
+Exact-input whole-source bindings
+take precedence over later SAMPLE panels; input changes invalidate that finality.
+See [final whole-source Results](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#final-whole-source-content-results)
+for offline evidence verification and transport. Completed SAMPLE panels retain
+their existing finality semantics. Content finality supplies neither execution
+qualification nor permission to publish a remediated dataset.
+
+Quality manifests and assessment model metadata record the complete spec identity.
+The request-cache namespace includes every spec field, including deployment and
+payload revisions. Changing a base or per-source rubric version,
+endpoint, model or sampling setting misses the cache. Existing caches and artifacts
+remain archived. `--review-concurrency` (at most 64 per worker) and `--max-workers`
+are runtime capacity settings and leave reviewer identity and request caches
+unchanged. Programmatic callers bind an existing `JudgeEndpoint` in the spec;
+credentials are supplied at connection time and excluded from identity.
+
 ## Run a campaign
 
 Run the driver inside an Iris job whose `EnvironmentSpec` includes
@@ -826,7 +2492,7 @@ Run the driver inside an Iris job whose `EnvironmentSpec` includes
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.driver \
-  --review-mode chat --model-revision YOUR_GLM_REVISION \
+  --reviewer-tier HEAVY \
   --review-cache CACHE_PREFIX --mode sample \
   --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
   --normalized-shards 32 \
@@ -834,6 +2500,14 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   --worker-image ghcr.io/marin-community/iris-task@sha256:DIGEST \
   --report-path CAMPAIGN_PREFIX/sample.json
 ```
+
+Iris execution defaults to `--max-workers 64`, `--coordinator-memory 16g`,
+`--normalized-shards 32` and `--review-cache <artifact-root>/rl-data/review-cache`.
+Review cache keys hash the model, its revision and the complete request, so one
+shared cache cannot return a judgment for a different prompt or model. Without
+`--worker-image`, Zephyr workers run the cluster's configured task image
+(`default_task_image`, `ghcr.io/marin-community/iris-task:latest`). Pass a
+digest-pinned `--worker-image` to record an exact image in the artifact identity.
 
 Build the [registered environments](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/images/README.md#building)
 first, with `MARIN_PREFIX` set to the driver's artifact root:
@@ -877,13 +2551,12 @@ Neither path requires a Docker daemon in the Zephyr worker. Without an image bac
 controls can still use package locks through Local or explicit simulator requirements
 through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.
 Grading machines never have network access. Add `--run` to execute, with `GLM_BULK_TOKEN` in the driver environment;
-the review endpoint is resolved from the Iris GLM relay job (`--relay-job`) unless
-`--base-url` overrides it. `--mode sample` is a test run that
+the reviewer endpoint is pinned by `--reviewer-tier HEAVY`. `--mode sample` is a test run that
 converts and gates only each source's panel. `--mode full` runs each source on
-its own: it makes its own panel quality decision, converts every row of an
-accepted source, draws its control sample from all kept rows, and validates every
-kept task when the control sample does not permit skipping validation. A quality
-rejection ends the source `gated`; control failures reject individual tasks. Repeat
+its own: it records its panel quality Result, converts every row, draws its
+control sample from all kept rows, and validates every kept task when the control
+sample does not permit skipping validation. QC is informational; mechanical
+and control failures retain their separate task exclusions. Repeat
 `--source NAME` to run a subset.
 
 FULL runs append a post-curation assessment; SAMPLE can opt in with `--assess`.
@@ -900,8 +2573,12 @@ Incomplete curation produces retained artifacts and downstream assessment, then
 the campaign reports failure. `--curation-attempt N` selects a new curation key
 when controls need a retry; successful exact review requests and pinned downloads
 remain cached. Rerun the same campaign to reuse completed dependencies.
-`--assessment-model-revision` changes the grading model revision separately from
-the curation review revision.
+When `run_source_pipeline` runs SAMPLE or FULL again at an existing output root, it writes a
+new `attempts/<uuid>/` directory. The returned manifest and view paths identify
+that attempt; previous telemetry, partial shards and completed phase evidence
+remain in place. The configured request cache is shared across attempts and reuses only requests
+with the same serialized body and model revision.
+Assessment uses the same pinned reviewer spec as curation.
 
 Use `--cache-dir PATH` to run SAMPLE/FULL locally against small pinned sources
 and retain downloads, source artifacts, assessment artifacts and GLM query
@@ -977,19 +2654,277 @@ alive under object-age lifecycle deletion.
 
 ## Curation modes and oversight levels
 
-`CurationSummary.mode` is a `CurationMode`, and it says how much of a source a pass
-examined: `QUICK` (inventory or a spot check), `SAMPLE` (a documented sample executed
-end to end, verifiers included) or `FULL` (every task executed end to end). Only
-`SAMPLE` and `FULL` admit tasks; a `QUICK` summary cannot record admitted counts
-(`CurationSummary` rejects it) and its corpus is not selectable for training.
+`CurationSummary.mode` records the requested processing scope. `QUICK` converts
+without qualifying execution oversight; `SAMPLE` records a documented end-to-end
+sample, including verifiers; `FULL` processes the complete population. The mode
+alone does not prove execution coverage or complete content QA: those require
+their own oversight and review evidence. Only `SAMPLE` and `FULL` admit tasks;
+a `QUICK` summary cannot record admitted counts (`CurationSummary` rejects it),
+and its corpus is not selectable for training.
+
+Oracle filtering covers the full population in both SAMPLE and FULL whenever
+solutions are supplied, and so do nop negative controls for workspace-graded
+tasks. Oversight still differs in its other quality checks and blinded review. A
+sampled oracle run cannot qualify either mode.
 
 Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
 `OversightEvidence` that points at the campaign, the recipe revision and the
-verification summary behind it. `none` means inventory only: the source is listed but
+verification summary behind it. `none` means converted without review: the source is listed but
 not admitted. The level is the weakest review the admission rests on, so a cohort whose
-setup fidelity ran on every task but whose verifier liveness ran on a sample is
+setup fidelity ran on every task but whose grader controls ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
 release and does not raise the level.
+
+Runnable agentic sources require an accepted task format, a production snapshot-identity
+measurement and its basis, an execution-requirement failure count, and SAMPLE or FULL
+oversight with verification evidence. A missing required record blocks admission.
+The grandfathered MarinSkyRL sources retain their existing admission policy.
+Conversion and diagnostic review can collect evidence before admission; there is
+no inventory-only substitute for a registered converter.
+Deprecated sources retain their history and name their qualified replacement.
+
+Conversion rejects machine tasks without a declared image, build context, package lock
+or package spec, including workspace tasks with an empty capability list. Conversation-only
+rewrites need no agent machine; their published spec must describe the complete runtime
+and their admission requires the same SAMPLE or FULL quality evidence.
+
+The production identity census measures agent and grader machines independently, using
+their declared environments and resource shapes. Failed execution requirements make a
+cohort Daytona-unsafe even when its snapshot count fits the budget. Unsafe cohorts with
+valid task environments and admission evidence remain ingested with that label.
+
+`TaskSpec.execution_requirements` declares an integer CPU count, memory and
+storage in MiB, and agent/verifier deadlines in seconds. The backend survey
+classifies all five fields and includes their schema in its version digest.
+Actor capacity must match the converted envelope's `runtime.task_machine`
+allocations where present. Separate graders retain their own
+`runtime.verifier_machine` allocations. Native Harbor actor capacity
+and deadlines must also match the embedded `task.toml`. A conflict fails that
+source's census; it publishes no replacement verdict. Budgets apply to roles
+with a declared machine environment (`environment_requirements` or
+`grader.environment`), and to the native Harbor actor defined by `task.toml`.
+Budgets alone do not create a machine requirement for text-only tasks.
+
+The complete actor census groups shared-grader protection contracts by their
+ID, version, dependency state, native family and harness policy. It publishes
+counts of each group, all tasks without a contract, and SHARED tasks missing
+required contracts, plus one complete contract
+example of at most 16 KiB. Its evidence URI binds the summary to the input
+dataset revision and TaskSpec digest. `BackendSourceMap.integrity_contracts`
+carries this optional summary beside the published grading-environment census.
+Missing contracts remain missing evidence for qualification.
+
+Actor census receipts bind the configured dataset ID, immutable revision and
+converter version. `all_sources()` clears stale or missing actor evidence and
+keeps the source pending measurement. Receipt IDs absent from the source
+registry remain staged; they do not register a new source. The declaration
+persists the input binding in `actor_census_input` and rejects a later input or
+converter change that carries the old census.
+
+### Updating pinned registry receipts
+
+When recording new measurements, stage raw JSON in a fresh directory using each
+file's repository-relative path. For example, census shards belong under
+`STAGED_ROOT/experiments/post_training/task_curation/datasets/daytona_census_receipts/`.
+Review the complete staged collection, then append it to the existing private
+registry and update its references:
+
+```bash
+uv run python -m experiments.post_training.task_curation.registry \
+  --staged-root /tmp/atlas-registry-YYYYMMDD-v1 --references-root . \
+  --repo open-athena/marin-rl-data-atlas-registry \
+  --parent-revision CURRENT_REGISTRY_COMMIT --message 'Record approved census receipts'
+```
+
+Use the registry's current 40-character commit as `--parent-revision`; a concurrent
+update fails rather than overwriting it. The command uses add operations only,
+reads every staged file back at the new immutable commit and verifies its hash
+before updating any Git reference. Earlier commits and artifacts remain intact.
+Stage the complete replacement shard collection. For each staged `part-*.json`
+directory, inactive existing tail shards are archived as empty objects in the
+new revision and their references are updated too. This prevents stale receipts
+without deleting any earlier artifact or revision.
+Do not write generated bodies over pinned references. The overlap workflow reads
+through the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in
+that job. Local readers use the Hugging Face client's normal credentials; the
+archive command needs write access to this private registry only.
+
+
+### Actor census registration
+
+Stage a complete set of measured actor artifacts in a fresh registry tree:
+
+```bash
+uv run python -m experiments.post_training.task_curation.census_binding \
+  --censuses actor-censuses.json \
+  --integrity-censuses integrity-censuses.json \
+  --output-dir /tmp/atlas-registry-YYYYMMDD-v1/experiments/post_training/task_curation/datasets/daytona_census_receipts
+```
+
+Archive the staged tree with the
+[registry update command](#updating-pinned-registry-receipts).
+It appends an immutable private revision, verifies readback, then updates the Git
+references. Never use the checked-in reference directory as producer output.
+
+Integrity-contract summaries are optional and independent of actor safety.
+The optional `--integrity-censuses` input requires the same source, normalized
+artifact, converter identity and task count as its actor receipt. Only refreshed
+summaries distinguish required SHARED tasks missing a contract
+from all tasks without a contract. Full contract groups stay in the referenced
+artifact; catalog summaries retain at most 64 groups and one 16 KiB example.
+
+Evaluation and benchmark Use values receive a lexical receipt with status
+`measured (benchmark, not remediated)`. Expected self-matches stay in the
+measurement and matched-evaluation evidence. These receipts retain every task,
+name no new release, and never certify a training release. Use comes from the
+registered converter's `intended_use`; the benchmark marker distinguishes
+evaluation benchmarks without overriding a declared training Use.
+
+After a full scan, apply the frozen Use declarations and produce the training
+review table before publishing any remediation versions:
+
+```bash
+uv run python -m experiments.post_training.task_curation.lexical_policy \
+  --measurements lexical-measurements.json --source-uses measured-source-uses.json \
+  --output lexical-outcomes.json
+```
+
+Only training rows appear in `training_review`. Their measurement receipts
+remain absent until private clean/remediated TaskCompendium publication and
+readback. A training release receipt stores its output pin and archive lineage
+under `receipt.release`; benchmark measurement receipts set that field to null.
+
+Completed measurements are registered separately from dataset releases. The
+registry resolves frozen source IDs through the permanent alias table and joins
+each measurement to the exact normalization and actor-census input, including the
+converter version/revision, TaskSpec digest, task count and declared Use.
+`SourceInfo.lexical_contamination` receives matching metrics. Stale input or Use
+changes clear raw metrics; an existing valid current release proof is preserved.
+Training measurements alone do not supply private-release admission proof.
+For retained evaluation releases, measure the current private pin and bind its
+receipt after retained-release selection updates the actor input. An older
+upstream-pin benchmark measurement stays in lineage and cannot substitute for
+the current-pin receipt. Evaluation and benchmark receipts retain every task
+without remediation.
+
+```bash
+uv run python -m experiments.post_training.task_curation.lexical_registration \
+  --outcomes lexical-outcomes.json --populations normalized-populations.json \
+  --source-uses measured-source-uses.json \
+  --actor-receipts-dir experiments/post_training/task_curation/datasets/daytona_census_receipts \
+  --output-dir /tmp/atlas-registry-YYYYMMDD-v2/experiments/post_training/task_curation/datasets/lexical_measurement_receipts
+```
+
+This command updates metadata only. It does not publish dataset versions or
+change admitted selection. Training release publication combines within-source
+exact deduplication and lexical decontamination after approval of the retained
+population.
+The output directory must be new; an existing directory is never replaced.
+Review the staged shards, then use the
+[registry update command](#updating-pinned-registry-receipts)
+with that fresh staging root. The checked-in `datasets/lexical_measurement_receipts`
+directory contains references, not writable receipt bodies.
+
+Approved frozen combined plans are published with `remediation_publish`. Run
+publication on CPU Iris workers in the artifacts' region, at production priority
+with a three-day timeout. The publisher reads the stored TaskSpecs, removes
+exactly the combined manifest IDs, and creates new private open-athena repositories
+through the existing TaskCompendium publisher. Existing repositories are refused.
+Task JSON and runtime bytes remain unchanged; readback verifies every retained
+hash and the plan's count. Dataset cards and manifests carry the original pin,
+duplicate and lexical evidence, combined exclusions and counts. Public training
+inputs with lexical exclusions also receive a private original archive.
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run \
+  --target-cluster cw-us-east-02a --cpu 8 --memory 64G --disk 200G \
+  --enable-extra-resources --sync-package marin-core --extra cpu \
+  --priority production --timeout 259200 --no-wait -- \
+  python -m experiments.post_training.task_curation.remediation_publish \
+  --plans s3://BUCKET/frozen-plans.json --version YYYYMMDD-v1 \
+  --evidence-root s3://BUCKET/new-publication-prefix --workers 4
+```
+
+#### Retained release census
+
+After readback, `retained_census` measures the retained actor and integrity
+population using the existing complete census. It also writes a normalized
+`task_json` view with the original serialized bytes. `remediation_binding` joins
+these measurements to the publication receipts. Set its `--output-dir` to a fresh
+`STAGED_ROOT/experiments/post_training/task_curation/datasets/retained_release_receipts`
+directory, then use the
+[registry update command](#updating-pinned-registry-receipts)
+to archive/read back the shards and update their references. Registry loading validates the original
+conversion binding before selecting the retained importer and pin. Original
+pipeline, conversion, deduplication and qualification records stay in lineage.
+Active deduplication counts describe the retained pin: raw and unique both equal
+the retained count, with zero further duplicates. The verified subset preserves
+its original oversight and quality evidence. An admitted legacy blend can carry
+admission through this lineage, but its TaskCompendium release requires a fresh
+actor census and has no legacy Daytona exemption. SAMPLE/FULL imports require
+all current admission gates and write the exact retained bytes into the final
+corpus. Their manifests record the requested mode, original oversight, old and
+new pins, and readback receipt; they record no newly executed qualification.
+QUICK writes an inspection view with zero admitted rows.
+
+`retained_grading` aggregates the normalized rows' stored grading-boundary
+assessments into exact-input SHARED/SEPARATE evidence before declaration binding.
+It reads only the assessment column and preserves unavailable and mismatched
+assessments; it does not filter tasks.
+
+For frozen populations without a stored census, `grading_census` applies the same
+`assess_grading_environment`, `count_grading_environment` and
+`grading_environment_census` functions to every serialized TaskSpec:
+
+```bash
+uv run iris --cluster marin job run --target-cluster cw-us-east-02a \
+  --cpu 8 --memory 32G --disk 64G --enable-extra-resources \
+  --sync-package marin-core --extra cpu --extra dedup \
+  --priority production --timeout 259200 --no-wait -- \
+  python -m experiments.post_training.task_curation.grading_census \
+  --inputs s3://BUCKET/frozen-grading-inputs.json \
+  --output-root s3://BUCKET/new-grading-version --workers 8
+```
+
+Each input contains a `SourceTextPopulation` and its matching `ActorCensusInput`.
+Run in the input bucket's region: `marin-us-east-02a` uses `cw-us-east-02a`,
+and `marin-rno2a` uses `cw-rno2a`, with outputs in the same bucket.
+The command checks the frozen population manifest and complete
+task count, then writes per-task IDs, content hashes, required/declared boundaries,
+statuses and reasons to `tasks.parquet`. Validation failures remain unassessable
+with their reasons. Unavailable graders and boundary mismatches retain their
+existing assessment statuses. The receipt keeps the original actor binding and
+adds an aggregate SHA-256 of serialized TaskSpec bytes, traversing sorted Parquet
+paths and each file's row order; older population
+digests used conversion order and cannot be compared to this scan digest.
+Existing output directories are refused; select a new version for reruns.
+
+Stage the downloaded regional `receipts.json` indexes into a new directory:
+
+```bash
+uv run python -m experiments.post_training.task_curation.grading_binding \
+  --censuses east-receipts.json rno2a-receipts.json \
+  --output-dir STAGE/experiments/post_training/task_curation/datasets/grading_census_receipts
+```
+
+Archive that stage with the [registry publication command](#updating-pinned-registry-receipts),
+then commit its returned references. `grading_census_receipts()` lazily verifies
+and loads them when building the source catalog.
+
+`bind_grading_census` attaches evidence only when the configured source pin,
+converter version and full actor input still match. This census measures grading
+boundaries without executing graders or qualifying integrity contracts.
+`SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` continues to require a failed grader trial's
+verdict and source-environment evidence in an `OracleTaskReceipt`; a static census cannot
+establish that failure.
+
+Combined training receipts use disjoint duplicate-first accounting:
+`measured_tasks = retained_tasks + duplicate_dropped_tasks + dropped_tasks`.
+`duplicate_dropped_tasks` counts all original exact duplicates; `dropped_tasks`
+counts unique contracts flagged by any copy's lexical measurement. The original
+raw `contaminated_tasks` numerator is preserved. Duplicate and combined-drop
+manifests plus the original dedup census are required provenance. Evaluation
+receipts remain measurement-only and cannot certify training admission.
 
 ### Package-lock graders use the worker's local runtime
 
@@ -999,3 +2934,145 @@ grader as unsupported on Daytona, independently of the task machine's image.
 A mixed deployment may run the agent on Daytona and the grader locally, but
 that does not qualify both machine slots for Daytona. CalibForge declares an
 image for its grader.
+
+### Archived CodeContests and TACO image pins
+
+`datasets/tasktrove/built_images.py` maps each archived context to its built GHCR
+image. The key covers the source files, permission bits and verifier-install
+recipe. The image freezes its bundled VerifyIT revision; changing the checkout's
+VerifyIT does not change the installed grader in that pin. Unrecognized contexts
+retain explicit build declarations. Both sources declare a script grader that
+invokes the image-installed `verifyit` tool with the preserved stdio configuration.
+System Python remains the candidate program interpreter. The script grader reads
+`verdict.json`, preserving invalid-task and infrastructure-error outcomes even
+when the CLI also writes numeric reward zero. The archive admission guard
+reconstructs the context before accepting a known image pin.
+
+The original pinned CodeContests and TACO releases read numeric rewards only.
+They remain excluded until a new immutable release carries the structured
+protocol and robust SAMPLE/FULL qualification.
+
+The images live in the non-public `marin-community/task-curation-tasktrove` GHCR
+package, which predates the one-package-per-source rule. New prepared task images
+use a new INTERNAL package per source. Daytona needs an organization registry credential for `ghcr.io` before
+it can import them. Keep that credential in Daytona's registry settings, outside
+the TaskSpecs and qualification evidence. Image identity measurement alone does
+not establish pull access or grading liveness.
+
+### Completed legacy role qualification
+
+Completed converted trials from producer `2c5eea40f264158596f62e593dd21ecaeaa4dc52`
+may retain an unknown verifier allocation in their original receipts. A scoped
+adoption decision can qualify a frozen set of completed original-oracle passes
+using an offline capture of that producer's actual MachineSpec constructors.
+The audit must verify original task, runtime, package and final result hashes,
+each declared limit, and actual actor presence. It creates no provider and runs
+no source command. Other legacy outcomes require a separate decision.
+
+Pass `collect --legacy-role-qualification-evidence evidence.json` with this JSON
+object, using the actual evidence URIs and SHA-256 digests:
+
+```json
+{
+  "input_partition": {"uri": "...", "sha256": "..."},
+  "audit": {"uri": "...", "sha256": "..."},
+  "decision": {"uri": "...", "sha256": "..."}
+}
+```
+
+The partition enumerates the frozen task identities and original receipt/archive
+hashes, plus the producer's file manifest and artifact closure. The audit binds
+each original final result to its constructor capture under that producer. The
+decision is a `LegacyRoleAdoptionDecision` JSON object: version 1, disposition
+`adopted`, exact `producer_revision`, `input_partition_sha256`, `audit_sha256`,
+and a `ruling` evidence reference. Both approved digests must match the supplied
+partition and audit before any task qualifies. The collector verifies
+these bytes and each requested member independently; tasks outside the partition
+receive no legacy qualification.
+
+The new `oracle-filter.json` records `OracleTaskReceipt.legacy_role_qualification`.
+It binds the evidence to the filtered output's TaskSpec projection and supplies
+that TaskSpec's qualified verifier allocation. Its embedded `adoption_decision`
+retains the ruling and exact scope for validation when the receipt is reloaded.
+Original trial JSON, calibration history and unknown allocation fields remain
+unchanged. Actorless trials retain an absent actor and their observed oracle
+helper allocation.
+
+Qualification does not supply a workspace negative control or content review.
+Qualified tasks still use the full-population collector and its grading/network
+checks. Workspace tasks also require the [negative controls below](#workspace-oracle-negative-controls).
+
+### Workspace oracle negative controls
+
+New oracle admissions use oracle-filter wire version 4. Workspace-graded tasks
+require an unchanged-package production `nop` Trial after the original public
+setup. Answer-graded tasks record `answer_graded_not_applicable`; admission
+recomputes this classification from the TaskSpec. Versions 2 and 3 remain
+readable as historical evidence.
+
+Collect physical nop archives with
+`negative_control_from_archive(archive, control_member, source_task_sha256=...,
+source_task_checksum=..., execution_requirements=...)`. Pass JSONL records of
+`{"task_id": ..., "receipt": ...}` to `collect --negative-controls controls.jsonl`.
+The collector verifies the archive, setup script, physical result and verdict
+bytes before binding the control to the exact original and consumed contracts.
+Original oracle trials and reward maps remain unchanged.
+
+Run one control with `python -m harbor.cli.curation_control`, passing a JSON
+request on stdin with `trial` (the production `TrialConfig`), `source`
+(`NegativeControlSource`), a fresh `output_root`, and `native_setup`. The Trial's
+`trials_dir` must be `output_root/trials`, and `output_root` must not exist.
+The request models are defined in
+[`TrialConfig`](https://github.com/marin-community/marin/blob/main/vendor/harbor/src/harbor/models/trial/config.py) and
+[`NegativeControlSource` / `NativeInstructionSetup`](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/harbor/negative_control.py).
+The caller acquires the LOCAL physical-host slot described above and
+archives/uploads the complete output directory; the writer performs no source
+commands outside the Trial and accepts no actor or budget overrides.
+
+For native Harbor packages, `native_setup: {"block_index": 0}` selects the first
+fenced `bash` block in the original `instruction.md`; later blocks increment
+the zero-based index. The writer executes that verbatim
+public setup inside the Trial and preserves its actual exit code. For converted
+TaskSpecs, pass `native_setup: null`. Production TaskSpec preparation installs
+the original environment and public resources before `agent_start`; the writer
+records `setup_kind: task_spec_preparation`, the exact source TaskSpec, a
+`task-spec-preparation.json` manifest, and the observed preparation timing.
+There is no aggregate shell exit code for this path: `setup_exit_code` remains
+null. Its receipt binds `preparation_artifact` as well as the actual
+`setup_artifact`. Failed preparation produces `negative_control_pending` during
+collection; retain the failed archive before resolving its source or provider
+failure. Admission derives the
+preparation kind from the source contract; verifier allocation presence does
+not select it.
+
+A passing nop excludes the task as `negative_control_passed`. Missing controls,
+setup failures, zero-test reports and unresolved infrastructure outcomes remain
+`negative_control_pending`. A completed source verifier deadline keeps its absent
+score and records `negative_control_verifier_timeout`; recognized source-local
+verifier failures record `negative_control_verifier_error`. These annotations
+are non-passing controls and preserve the original oracle pass.
+
+A native producer signal (-9, -6 or -11), or the exact source error
+`pytest producer was interrupted`, permits one approved identical-budget nop
+re-drive. Bind its physical `redrive_parent` and immutable `redrive_decision`;
+the parent cannot itself have a parent. Both archives are verified, physical
+Trial identities must differ, and source/runtime/package, public setup, agent
+configuration and role allocations must match. A reproduced signal becomes a
+source-error annotation. An unresolved re-drive stays pending. No original
+oracle command is repeated.
+
+Native named rewards require an explicit `NativeOracleSuccessPolicy` bound to
+the source TaskSpec, native checksum, runtime and input cohort, with immutable
+consumer, source-census and decision evidence. Both oracle and nop grades use
+that policy: every required reward key must exist, and every observed finite
+reward must equal the declared maximum. The raw production reward map is kept.
+
+Wire version 4 also requires an explicit `negative_control_policy`:
+`NegativeControlPolicy(version=1, scope="global_workspace",
+max_identical_budget_repeats=1, answer_graded="not_applicable",
+source_deadline="non_passing_annotation", source_error="non_passing_annotation",
+decision=ContentEvidenceReference(...))`. Its decision reference identifies the
+immutable standing ruling for all eligible workspace-graded sources. Pass its
+JSON file as `collect --negative-control-policy global-policy.json`. Source IDs
+are not policy selectors. Unsealed version-4 metadata must be recollected to a
+new output version; raw Trial artifacts remain unchanged.

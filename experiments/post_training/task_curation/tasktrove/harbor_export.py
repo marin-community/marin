@@ -23,6 +23,8 @@ import tomlkit
 from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.script_grader import GRADE_ARGV
+from taskcompendium.grading_environment import SharedGradingPolicy
+from taskcompendium.harbor.shared_package import harden_shared_swe
 from taskcompendium.models import (
     DOCKER_IMAGE_PATTERN,
     AnswerType,
@@ -59,10 +61,12 @@ from verifyit.spec import (
     render_spec,
 )
 
+from experiments.post_training.task_curation.datasets.tasktrove.built_images import BUILT_IMAGES
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
     DOCKERFILE,
     TASKTROVE_REPO,
     TEST_SH,
+    VERIFYIT_VERDICT_REWARD,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
 from experiments.post_training.task_curation.tasktrove.source_images import ARC_SOURCES, PYTEST_ENV, source_actor_build
@@ -156,7 +160,7 @@ def archive_file_mode(name: str, modes: dict[str, str]) -> int:
     return int(modes.get(name, "755" if name.endswith(".sh") else "644"), 8)
 
 
-def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
+def archive_bytes(files: dict[str, bytes], modes: dict[str, str], *, compression_level: int = 1) -> bytes:
     """Write deterministic regular-file archives without inheriting host ownership."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
@@ -165,7 +169,7 @@ def archive_bytes(files: dict[str, bytes], modes: dict[str, str]) -> bytes:
             entry.size = len(data)
             entry.mode = archive_file_mode(name, modes)
             archive.addfile(entry, io.BytesIO(data))
-    return gzip.compress(buffer.getvalue(), compresslevel=1, mtime=0)
+    return gzip.compress(buffer.getvalue(), compresslevel=compression_level, mtime=0)
 
 
 @cache
@@ -322,8 +326,11 @@ def _verifier_program(
             if len(grader.reward.files) != 1:
                 raise UnsupportedHarborTask("Script graders must emit one Harbor reward file")
             reward = grader.reward.files[0]
-            if reward.path != HARBOR_REWARD_PATH or reward.format != "number":
-                raise UnsupportedHarborTask("Script graders must emit Harbor's numeric reward.txt")
+            if grader.reward == VERIFYIT_VERDICT_REWARD:
+                if not any("tests/" + resource.path == VERIFIER_SPEC_PATH for resource in task.resources.verifier):
+                    raise UnsupportedHarborTask("Structured Verifyit rewards require their verifier configuration")
+            elif reward.path != HARBOR_REWARD_PATH or reward.format != "number":
+                raise UnsupportedHarborTask("Unsupported Harbor script reward contract")
         else:
             raise UnsupportedHarborTask("Unsupported script command or reward contract")
         answer_path = grader.answer_path
@@ -392,8 +399,8 @@ def harbor_payload(
     *,
     grader_image: str | None,
     family: str,
-    fallback_actor_image: str,
     verifyit_package_root: Path | None = None,
+    shared_policy: SharedGradingPolicy | None = None,
 ) -> HarborPayload:
     """Lower tasks to Harbor, retaining TaskTrove's shared actor and grader environment."""
     if grader_image is not None and re.fullmatch(DOCKER_IMAGE_PATTERN, grader_image) is None:
@@ -404,6 +411,8 @@ def harbor_payload(
     environment = task.environment_requirements
     grader = task.grader
     repository_state = task.answer_type == AnswerType.WORKSPACE_STATE
+    if repository_state and shared_policy is None:
+        raise UnsupportedHarborTask("Shared SWE lowering requires an explicit dependency-state policy")
     verifier = _verifier_program(task, grader_image, environment_mode)
     assert isinstance(grader, (ScriptGrader, VerifyitGrader))
     files = verifier.files
@@ -423,8 +432,18 @@ def harbor_payload(
     public = () if environment.docker_build is not None else (*task.resources.all, *task.resources.worker)
     source = row["source_row"].split("/", 1)[0]
     actor_build = environment.docker_build
-    if actor_build is None:
+    if actor_build is None and environment.docker_image not in BUILT_IMAGES.values():
         actor_build = source_actor_build(task, source=source, mode=verifier.mode, package=verifyit_package_root)
+    if actor_build is not None:
+        # Harbor uploads setup_files before the pre-agent setup; build contexts do not deliver them.
+        for resource in (*task.resources.all, *task.resources.worker):
+            if not resource.path.startswith("setup_files/"):
+                continue
+            if resource.path in files:
+                raise UnsupportedHarborTask(f"Setup resource collides with generated file: {resource.path}")
+            files[resource.path] = resource_bytes(resource)
+            if resource.mode:
+                modes[resource.path] = resource.mode
     # ARC's Harbor compatibility recipe supplies scorer imports independently of its native package lock.
     if environment.packages_lock is not None and (actor_build is None or source not in ARC_SOURCES):
         raise UnsupportedHarborTask("Agent package locks require an environment build")
@@ -444,7 +463,9 @@ def harbor_payload(
         if not dockerfile.endswith("\n"):
             dockerfile += "\n"
     else:
-        dockerfile = f"FROM {environment.docker_image or fallback_actor_image}\n"
+        if environment.docker_image is None:
+            raise UnsupportedHarborTask("Agentic task declares no environment")
+        dockerfile = f"FROM {environment.docker_image}\n"
     if public:
         dockerfile += "COPY files/ /\n"
     for resource in public:
@@ -533,6 +554,11 @@ def harbor_payload(
         },
         "artifacts": [{"source": path, "destination": path.removeprefix("/")} for path in dict.fromkeys(outputs)],
     }
+    if task.execution_requirements is not None:
+        shape = task.execution_requirements
+        config["environment"].update(cpus=shape.cpus, memory_mb=shape.memory_mb, storage_mb=shape.storage_mb)
+        config["agent"]["timeout_sec"] = shape.agent_timeout_sec
+        config["verifier"]["timeout_sec"] = shape.verifier_timeout_sec
     if environment_mode == VerifierEnvironmentMode.SHARED:
         config["verifier"]["environment_mode"] = "shared"
         config["verifier"].pop("environment")
@@ -564,6 +590,12 @@ def harbor_payload(
         tags=[tag for tag in task.tags if not tag.startswith("language:")],
         has_solution=bool(solution),
     )
+    if repository_state:
+        assert shared_policy is not None
+        try:
+            harden_shared_swe(files, spec=spec, dependency_state=shared_policy.dependency_state)
+        except KeyError as error:
+            raise UnsupportedHarborTask(f"Shared SWE requires a supported source runner: {error}") from error
     return HarborPayload(record_metadata, files, modes, solution, solution_modes)
 
 
@@ -572,16 +604,16 @@ def harbor_record(
     *,
     grader_image: str | None,
     family: str,
-    fallback_actor_image: str,
     verifyit_package_root: Path | None = None,
+    shared_policy: SharedGradingPolicy | None = None,
 ) -> HarborRecord:
     """Package the shared file assembly into the TaskTrove parquet record."""
     payload = harbor_payload(
         row,
         grader_image=grader_image,
         family=family,
-        fallback_actor_image=fallback_actor_image,
         verifyit_package_root=verifyit_package_root,
+        shared_policy=shared_policy,
     )
     return HarborRecord(
         **asdict(payload.metadata),
@@ -596,7 +628,6 @@ def export_harbor(
     *,
     grader_image: str | None,
     source: HarborSourceMetadata,
-    fallback_actor_image: str,
     verifyit_package_root: Path,
 ) -> dict[str, Any]:
     """Write the legacy parquet view and account for normalization and lowering failures."""
@@ -630,7 +661,6 @@ def export_harbor(
                                     row,
                                     grader_image=grader_image,
                                     family=source.family,
-                                    fallback_actor_image=fallback_actor_image,
                                     verifyit_package_root=verifyit_package_root,
                                 )
                             except UnsupportedHarborTask as error:

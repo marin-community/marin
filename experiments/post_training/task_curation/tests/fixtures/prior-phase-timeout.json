@@ -1,0 +1,203 @@
+{
+  "config": {
+    "task": {
+      "path": "/tmp/atlas-smartie-oracles-v3/calibrated/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e/attempt-00/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e",
+      "git_url": null,
+      "git_commit_id": null,
+      "name": null,
+      "ref": null,
+      "overwrite": false,
+      "download_dir": null,
+      "source": null
+    },
+    "trial_name": "oracle",
+    "trials_dir": "/tmp/atlas-smartie-oracles-v3/calibrated/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e/attempt-00/jobs",
+    "artifact_authority": null,
+    "timeout_multiplier": 1.0,
+    "agent_timeout_multiplier": null,
+    "verifier_timeout_multiplier": null,
+    "agent_setup_timeout_multiplier": null,
+    "environment_build_timeout_multiplier": null,
+    "trial_attempt_timeout_sec": 259200.0,
+    "trial_cleanup_grace_sec": 30.0,
+    "resolved_timeouts": {
+      "agent": 900.0,
+      "verifier": 600.0,
+      "agent_setup": 360.0,
+      "environment_build": 600.0,
+      "trial_attempt": 259200.0,
+      "trial_cleanup_grace": 30.0,
+      "steps": []
+    },
+    "agent": {
+      "name": "oracle",
+      "model_name": null,
+      "model_alias": null,
+      "skills": [],
+      "override_timeout_sec": null,
+      "override_setup_timeout_sec": null,
+      "max_timeout_sec": null,
+      "kwargs": {
+        "resource_usage_filename": "resource-usage.json"
+      },
+      "env": {},
+      "mcp_servers": [],
+      "upload_agent_logs": true
+    },
+    "environment": {
+      "type": "daytona",
+      "force_build": false,
+      "delete": true,
+      "cpu_enforcement_policy": "auto",
+      "memory_enforcement_policy": "auto",
+      "override_cpus": null,
+      "override_memory_mb": null,
+      "override_storage_mb": null,
+      "override_gpus": null,
+      "override_tpu": null,
+      "mounts": null,
+      "env": {},
+      "kwargs": {
+        "create_timeout": 259200
+      }
+    },
+    "verifier": {
+      "override_timeout_sec": null,
+      "max_timeout_sec": null,
+      "env": {},
+      "disable": false
+    },
+    "artifacts": [],
+    "extra_instruction_paths": [],
+    "job_id": null
+  },
+  "exception_text": "Traceback (most recent call last):\n  File \"/app/vendor/harbor/src/harbor/trial/single_step.py\", line 67, in _run_agent\n    await self._run_agent_phase(\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 667, in _run_agent_phase\n    await self._await_phase(\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 788, in _await_phase\n    raise timeout_error from None\nharbor.trial.errors.AgentTimeoutError: Agent execution timed out after 900.0 seconds\n",
+  "archive_member": "5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e/attempt-00/jobs/oracle/attempts/000/exception.txt",
+  "result": {
+    "id": "852cb14f-f8ac-4371-b8f5-912bfab8f1ad",
+    "task_name": "5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e",
+    "trial_name": "oracle",
+    "trial_uri": "file:///tmp/atlas-smartie-oracles-v3/calibrated/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e/attempt-00/jobs/oracle/attempts/000",
+    "trial_relpath": "oracle/attempts/000",
+    "task_id": {
+      "path": "/tmp/atlas-smartie-oracles-v3/calibrated/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e/attempt-00/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e"
+    },
+    "source": null,
+    "task_checksum": "b0631e15a1dbbc437b416fc38f4183c209f4cd596072047fd38785a7c8a6bad8",
+    "config": {
+      "task": {
+        "path": "/tmp/atlas-smartie-oracles-v3/calibrated/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e/attempt-00/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e",
+        "git_url": null,
+        "git_commit_id": null,
+        "name": null,
+        "ref": null,
+        "overwrite": false,
+        "download_dir": null,
+        "source": null
+      },
+      "trial_name": "oracle",
+      "trials_dir": "/tmp/atlas-smartie-oracles-v3/calibrated/5820a0bac4f003f59ae8734cb72e66dd95519de1c8f3047f726b3bbf4207c98e/attempt-00/jobs",
+      "artifact_authority": null,
+      "timeout_multiplier": 1.0,
+      "agent_timeout_multiplier": null,
+      "verifier_timeout_multiplier": null,
+      "agent_setup_timeout_multiplier": null,
+      "environment_build_timeout_multiplier": null,
+      "trial_attempt_timeout_sec": 259200.0,
+      "trial_cleanup_grace_sec": 30.0,
+      "resolved_timeouts": {
+        "agent": 900.0,
+        "verifier": 600.0,
+        "agent_setup": 360.0,
+        "environment_build": 600.0,
+        "trial_attempt": 259200.0,
+        "trial_cleanup_grace": 30.0,
+        "steps": []
+      },
+      "agent": {
+        "name": "oracle",
+        "model_name": null,
+        "model_alias": null,
+        "skills": [],
+        "override_timeout_sec": null,
+        "override_setup_timeout_sec": null,
+        "max_timeout_sec": null,
+        "kwargs": {
+          "resource_usage_filename": "resource-usage.json"
+        },
+        "env": {},
+        "mcp_servers": [],
+        "upload_agent_logs": true
+      },
+      "environment": {
+        "type": "daytona",
+        "force_build": false,
+        "delete": true,
+        "cpu_enforcement_policy": "auto",
+        "memory_enforcement_policy": "auto",
+        "override_cpus": null,
+        "override_memory_mb": null,
+        "override_storage_mb": null,
+        "override_gpus": null,
+        "override_tpu": null,
+        "mounts": null,
+        "env": {},
+        "kwargs": {
+          "create_timeout": 259200
+        }
+      },
+      "verifier": {
+        "override_timeout_sec": null,
+        "max_timeout_sec": null,
+        "env": {},
+        "disable": false
+      },
+      "artifacts": [],
+      "extra_instruction_paths": [],
+      "job_id": null
+    },
+    "agent_info": {
+      "name": "oracle",
+      "version": "1.0.0",
+      "model_info": null
+    },
+    "agent_result": {
+      "n_input_tokens": null,
+      "n_cache_tokens": null,
+      "n_output_tokens": null,
+      "cost_usd": null,
+      "rollout_details": null,
+      "metadata": null
+    },
+    "verifier_result": null,
+    "exception_info": {
+      "exception_type": "CancelledError",
+      "exception_message": "",
+      "exception_traceback": "Traceback (most recent call last):\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 736, in _await_phase\n    done, _ = await asyncio.wait(\n              ^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/tasks.py\", line 464, in wait\n    return await _wait(fs, timeout, return_when, loop)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/tasks.py\", line 550, in _wait\n    await waiter\nasyncio.exceptions.CancelledError\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 336, in run\n    async with asyncio.TaskGroup() as service_tasks:\n               ^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/taskgroups.py\", line 71, in __aexit__\n    return await self._aexit(et, exc)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/taskgroups.py\", line 153, in _aexit\n    raise propagate_cancellation_error\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 341, in run\n    await self._run()\n  File \"/app/vendor/harbor/src/harbor/trial/single_step.py\", line 51, in _run\n    await self._run_verifier()\n  File \"/app/vendor/harbor/src/harbor/trial/single_step.py\", line 109, in _run_verifier\n    self.result.verifier_result = await self._run_shared_verifier(\n                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 956, in _run_shared_verifier\n    return await self._verify(verifier, self.agent_environment, timeout_sec)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 995, in _verify\n    return await self._await_phase(\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 741, in _await_phase\n    raise cancellation\n  File \"/app/vendor/harbor/src/harbor/trial/trial.py\", line 729, in _await_phase\n    done, _ = await asyncio.wait({task})\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/tasks.py\", line 464, in wait\n    return await _wait(fs, timeout, return_when, loop)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/tasks.py\", line 550, in _wait\n    await waiter\nasyncio.exceptions.CancelledError\n",
+      "occurred_at": "2026-11-14T04:55:20.839738"
+    },
+    "secondary_exception_info": [],
+    "started_at": "2026-11-14T03:25:33.229455Z",
+    "finished_at": "2026-11-14T04:55:20.840901Z",
+    "completion": {
+      "trajectory_present": false
+    },
+    "environment_setup": {
+      "started_at": "2026-11-14T03:25:33.292895Z",
+      "finished_at": "2026-11-14T03:25:34.466271Z"
+    },
+    "agent_setup": {
+      "started_at": "2026-11-14T03:25:34.466366Z",
+      "finished_at": "2026-11-14T03:25:34.466455Z"
+    },
+    "agent_execution": {
+      "started_at": "2026-11-14T03:25:34.466511Z",
+      "finished_at": "2026-11-14T03:40:35.517784Z"
+    },
+    "verifier": {
+      "started_at": "2026-11-14T03:40:36.008472Z",
+      "finished_at": "2026-11-14T04:55:20.837913Z"
+    },
+    "step_results": null
+  }
+}

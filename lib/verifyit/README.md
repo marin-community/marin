@@ -47,8 +47,9 @@ Callers with generation stop metadata remove configured terminal markers before 
 The `pytest` mode scores startup and collection errors attributed to editable candidate code as failed attempts.
 `PytestSpec.candidate_modules` names modules the task asks the candidate to implement.
 Missing imports of those modules score zero, including an empty submission.
-Only the modules the spec names in ``candidate_modules`` (and their submodules) count as
-candidate code; imports are never guessed from distribution metadata.
+Modules imported directly by tests or their conftest are also inferred as candidate modules
+when no installed distribution or standard-library provider supplies their top-level package.
+Provider metadata is read from the spec's Python interpreter outside the task workspace.
 Missing modules with an installed provider remain invalid tasks.
 Workspace-qualified candidate packages add the workspace parent to Python's import path.
 Missing dependencies imported by implementation code, errors in restored task files, and genuine interruptions remain unscored.
@@ -92,6 +93,12 @@ checks the interpreter and JSON-report plugin from a temporary directory isolate
 imports. A healthy baseline makes the failed task run a scored startup error; an unavailable
 baseline remains an infrastructure error. The task's original import paths and tests still
 run unchanged, so a candidate named after a standard-library module is graded as submitted.
+
+VerifyIT itself requires Python 3.11 or newer. A `pytest` task may use a Python 3.9 or
+newer subprocess with pytest and pytest-json-report installed in that interpreter.
+Startup errors retain their available traceback and module provenance: editable
+candidate failures score zero, while failures in protected code or with unknown
+provenance remain unscored.
 
 For `judge` reference and checklist rubrics, `max_completion_tokens` sets the initial chat request
 budget (default `8192`). A positive `incomplete_retry_tokens` must exceed it and permits one larger

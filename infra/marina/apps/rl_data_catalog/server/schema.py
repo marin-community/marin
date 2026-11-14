@@ -4,6 +4,12 @@
 """Postgres storage for one staged curation catalog load."""
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS atlas_difficulty (
+    measurement_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
+    protocol_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
+    measurement JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS atlas_difficulty_source ON atlas_difficulty (source_id, protocol_id);
 CREATE TABLE IF NOT EXISTS atlas_loads (
     load_id TEXT PRIMARY KEY, catalog_root TEXT NOT NULL,
     snapshot_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
@@ -12,6 +18,8 @@ CREATE TABLE IF NOT EXISTS atlas_loads (
 CREATE TABLE IF NOT EXISTS atlas_current (
     name TEXT PRIMARY KEY, load_id TEXT
 );
+ALTER TABLE atlas_loads ADD COLUMN IF NOT EXISTS review_completeness_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE atlas_loads ADD COLUMN IF NOT EXISTS display_policy TEXT NOT NULL DEFAULT 'strict';
 INSERT INTO atlas_current (name) VALUES ('latest') ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS curriculum_loads (
     load_id TEXT PRIMARY KEY, release_id TEXT NOT NULL, release_uri TEXT NOT NULL,
@@ -63,6 +71,16 @@ CREATE TABLE IF NOT EXISTS atlas_sources (
     reason TEXT, curation JSONB, diagnostics JSONB NOT NULL,
     PRIMARY KEY (load_id, id)
 );
+ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS source_fingerprint JSONB;
+ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS duplicate_group JSONB;
+ALTER TABLE atlas_sources ADD COLUMN IF NOT EXISTS review_completeness JSONB;
+CREATE TABLE IF NOT EXISTS atlas_identity_surveys (
+    load_id TEXT PRIMARY KEY, survey_id TEXT NOT NULL, metadata JSONB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS atlas_duplicate_reviews (
+    load_id TEXT NOT NULL, left_source TEXT NOT NULL, right_source TEXT NOT NULL, review JSONB NOT NULL,
+    PRIMARY KEY (load_id, left_source, right_source)
+);
 CREATE TABLE IF NOT EXISTS atlas_assessments (
     load_id TEXT NOT NULL, pipeline_key TEXT NOT NULL, source_id TEXT NOT NULL,
     scope TEXT NOT NULL, model JSONB NOT NULL, rubric TEXT NOT NULL,
@@ -86,6 +104,17 @@ CREATE TABLE IF NOT EXISTS atlas_packets (
     packet TEXT NOT NULL,
     PRIMARY KEY (load_id, pipeline_key, task_id)
 );
+CREATE TABLE IF NOT EXISTS atlas_backend_surveys (
+    load_id TEXT PRIMARY KEY, survey_id TEXT NOT NULL, survey JSONB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS atlas_backend_sources (
+    load_id TEXT NOT NULL, source_id TEXT NOT NULL, capabilities JSONB NOT NULL,
+    PRIMARY KEY (load_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS atlas_backend_cells (
+    load_id TEXT NOT NULL, backend TEXT NOT NULL, requirement TEXT NOT NULL, cell JSONB NOT NULL,
+    PRIMARY KEY (load_id, backend, requirement)
+);
 CREATE OR REPLACE VIEW atlas_cohort_summary AS
 WITH counts AS (
 SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
@@ -100,12 +129,9 @@ SELECT p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count,
     ) AS verdict_counts,
     COUNT(i.task_id) AS item_count,
     COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'good') AS good_count,
-    COUNT(i.task_id) FILTER (WHERE i.status = 'reviewed' AND i.has_task AND i.verdict = 'bad') AS bad_count,
     COUNT(i.task_id) FILTER (
         WHERE i.status = 'reviewed' AND i.has_task AND i.verdict <> 'unknown'
-    ) AS conclusive_count,
-    a.curation->>'status' AS curation_status,
-    (a.curation->>'processed_rows')::bigint AS processed_rows
+    ) AS conclusive_count
 FROM atlas_populations p JOIN atlas_assessments a USING (load_id, pipeline_key)
 LEFT JOIN atlas_items i
     ON i.load_id = p.load_id AND i.pipeline_key = p.pipeline_key AND i.cohort = p.cohort
@@ -114,24 +140,24 @@ GROUP BY p.load_id, p.pipeline_key, p.cohort, p.population, p.sample_count, a.cu
 SELECT load_id, pipeline_key, cohort, population, sample_count, reviewed,
     missing_evidence, packets_with_omissions, verdict_counts,
     CASE
-        WHEN cohort = 'admitted' AND population = 0 AND processed_rows > 0
-            AND curation_status IN ('completed', 'gated') THEN 'bad'
-        WHEN sample_count = 0 OR item_count <> sample_count THEN 'unknown'
-        WHEN 5 * good_count >= 4 * sample_count THEN 'good'
-        WHEN 5 * bad_count > sample_count THEN 'bad'
-        WHEN 5 * conclusive_count < 4 * sample_count THEN 'unknown'
+        WHEN sample_count = 0 OR item_count <> sample_count OR conclusive_count = 0 THEN 'unknown'
+        WHEN 2 * (conclusive_count - good_count) >= conclusive_count THEN 'bad'
+        WHEN 10 * (conclusive_count - good_count) <= conclusive_count THEN 'good'
         ELSE 'some_issues'
     END AS grade,
-    good_count::double precision / NULLIF(sample_count, 0) AS good_fraction,
+    good_count::double precision / NULLIF(conclusive_count, 0) AS good_fraction,
     CASE
-        WHEN cohort = 'admitted' AND population = 0 AND processed_rows > 0
-            AND curation_status IN ('completed', 'gated') THEN 'Curation retained zero tasks'
         WHEN sample_count = 0 THEN 'No sample available'
         WHEN item_count <> sample_count THEN 'Sample coverage is incomplete'
-        WHEN 5 * good_count >= 4 * sample_count THEN 'At least 80% of sampled tasks are Good'
-        WHEN 5 * bad_count > sample_count THEN 'More than 20% of sampled tasks are Bad'
-        WHEN 5 * conclusive_count < 4 * sample_count THEN 'Fewer than 80% of sampled tasks have conclusive evidence'
-        ELSE 'Sample has concerns below the Bad threshold'
-    END AS grade_reason
+        WHEN conclusive_count = 0 THEN 'No conclusive reviewed tasks'
+        WHEN 2 * (conclusive_count - good_count) >= conclusive_count THEN 'At least 50% of reviewed tasks have issues'
+        WHEN 10 * (conclusive_count - good_count) <= conclusive_count THEN 'At least 90% of reviewed tasks are clean'
+        ELSE 'More than 10% and fewer than 50% of reviewed tasks have issues'
+    END AS grade_reason,
+    conclusive_count AS result_reviewed,
+    conclusive_count - good_count AS issue_count,
+    (conclusive_count - good_count)::double precision / NULLIF(conclusive_count, 0) AS issue_rate,
+    reviewed - conclusive_count AS uncertain_count,
+    sample_count - reviewed AS unavailable_count
 FROM counts;
 """

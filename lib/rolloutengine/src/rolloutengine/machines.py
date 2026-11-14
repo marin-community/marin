@@ -32,6 +32,7 @@ from taskcompendium.models import (
     TaskSpec,
     require_resolved_environment,
 )
+from taskcompendium.repository_shell import repository_shell_environment
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -73,6 +74,7 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
 
 def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
     require_resolved_environment(requirements)
+    repository = repository_shell_environment(requirements)
     if requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
@@ -83,13 +85,12 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
         source = PackageSpec()
     else:
         raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
+    workdir = requirements.working_directory
+    if workdir is None:
+        workdir = repository.workspace if repository is not None else "" if requirements.docker_image else "/workspace"
     return MachineSpec(
         source=source,
-        workdir=(
-            requirements.working_directory
-            if requirements.working_directory is not None
-            else "" if requirements.docker_image else "/workspace"
-        ),
+        workdir=workdir,
         network=runtime.network,
         memory_mb=runtime.memory_mb,
         cpus=runtime.cpus,
@@ -215,6 +216,33 @@ class _AttemptMachineFactory:
 
 
 @asynccontextmanager
+async def _machine_ownership(cleanup_timeout: float) -> AsyncIterator[tuple[_Cleanup, AsyncExitStack]]:
+    cleanup = _Cleanup(cleanup_timeout)
+    try:
+        async with AsyncExitStack() as owned:
+            yield cleanup, owned
+    except BaseException as error:
+        if cleanup.errors:
+            error.add_note(f"Machine cleanup failed: {[failure.operation for failure in cleanup.errors]}")
+        raise
+    if cleanup.errors:
+        raise RuntimeError(f"Machine cleanup failed: {[error.operation for error in cleanup.errors]}")
+
+
+@asynccontextmanager
+async def grading_machine_factory(
+    factory: MachineFactory, runtime: MachineRuntimeSpec, *, cleanup_timeout: float
+) -> AsyncIterator[MachineFactory]:
+    """Own grading machines until exit and enforce their declared startup and cleanup deadlines.
+
+    Cleanup failures raise after a successful body or attach a note to its exception.
+    A runtime cleanup deadline overrides the caller's fallback deadline.
+    """
+    async with _machine_ownership(cleanup_timeout) as (cleanup, owned):
+        yield _AttemptMachineFactory(runtime, {runtime.backend: factory}, cleanup, owned)
+
+
+@asynccontextmanager
 async def task_machine(
     task: TaskSpec, factory: MachineFactory, runtime: MachineRuntimeSpec, *, cleanup_timeout: float
 ) -> AsyncIterator[Machine]:
@@ -249,17 +277,7 @@ async def prepare_machine(
     Cleanup failures propagate after a successful body, or are attached to its exception as a note.
     ``runtime.cleanup_timeout`` overrides the supplied cleanup deadline when set.
     """
-    cleanup = _Cleanup(cleanup_timeout)
-    try:
-        async with AsyncExitStack() as owned:
-            machine = await _prepare_machine(
-                requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned
-            )
-            assert machine is not None
-            yield machine
-    except BaseException as error:
-        if cleanup.errors:
-            error.add_note(f"Machine cleanup failed: {[failure.operation for failure in cleanup.errors]}")
-        raise
-    if cleanup.errors:
-        raise RuntimeError(f"Machine cleanup failed: {[error.operation for error in cleanup.errors]}")
+    async with _machine_ownership(cleanup_timeout) as (cleanup, owned):
+        machine = await _prepare_machine(requirements, runtime, resources, {runtime.backend: factory}, cleanup, owned)
+        assert machine is not None
+        yield machine

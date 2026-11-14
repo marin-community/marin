@@ -3,6 +3,7 @@
 
 """The registry credential's parsing and the environment of a publish's jobs, submitted through a recording fake."""
 
+import hashlib
 import json
 import subprocess
 from collections.abc import Iterator
@@ -20,6 +21,7 @@ from iris.cluster.secrets import task_secret_values
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import job_pb2
 from rigging.secrets import COREWEAVE_SECRET_NAMES, SECRETS_DIR_ENV
+from rigging.timing import Duration
 
 from taskforge.sandbox.image_builder import (
     BUILD_SCRIPT,
@@ -27,6 +29,7 @@ from taskforge.sandbox.image_builder import (
     REGISTRY_CREDENTIAL_ENV,
     BuildFailed,
     ImageJobFailed,
+    ImageJobPolicy,
     RegistryCredential,
     manifest_readback,
     submit_job,
@@ -39,6 +42,11 @@ CREDENTIAL_JSON = json.dumps({"registry": "registry.example", "user": "publisher
 GLM_TOKEN = "glm-token-value"
 PARENT_ENV = {REGISTRY_CREDENTIAL_ENV: CREDENTIAL_JSON, "GLM_HIGH_TOKEN": GLM_TOKEN}
 STORAGE = {"CW_KEY_ID": "storage-id", "CW_KEY_SECRET": "storage-secret"}
+POLICY = ImageJobPolicy(
+    priority_band=job_pb2.PRIORITY_BAND_BATCH,
+    timeout=Duration.from_seconds(259200),
+    scheduling_timeout=Duration.from_seconds(259200),
+)
 
 
 class RecordingCluster:
@@ -50,6 +58,7 @@ class RecordingCluster:
     def __init__(self):
         self.env_vars: dict[str, dict[str, str]] = {}
         self.secrets: dict[str, dict[str, str]] = {}
+        self.policies: dict[str, dict[str, object]] = {}
 
     def submit_job(
         self,
@@ -63,6 +72,7 @@ class RecordingCluster:
         assert environment is not None
         self.env_vars[job_id.name] = dict(environment.env_vars)
         self.secrets[job_id.name] = task_secret_values(environment)
+        self.policies[job_id.name] = {key: kwargs[key] for key in ("priority_band", "timeout", "scheduling_timeout")}
         return job_id
 
 
@@ -88,6 +98,7 @@ def submit(
         env=env,
         secrets=secrets,
         target_cluster="cw-us-east-02a",
+        policy=POLICY,
     )
     return cluster.env_vars[name], cluster.secrets[name]
 
@@ -140,6 +151,12 @@ def test_image_jobs_only_receive_explicit_secrets_and_storage_credentials(in_a_c
         }
     assert build_secrets == STORAGE
     assert push_secrets == {**STORAGE, REGISTRY_AUTH_SECRET: "push-auth"}
+    for name in ("taskforge-image-build-x", "taskforge-image-push-x"):
+        assert cluster.policies[name] == {
+            "priority_band": job_pb2.PRIORITY_BAND_BATCH,
+            "timeout": Duration.from_seconds(259200),
+            "scheduling_timeout": Duration.from_seconds(259200),
+        }
 
 
 @dataclass(frozen=True)
@@ -178,13 +195,13 @@ class EndedJob:
 @pytest.mark.parametrize("failed", [BuildFailed, ImageJobFailed])
 def test_a_job_the_host_ended_is_an_image_job_failure_whichever_job_it_is(state, failed):
     with pytest.raises(ImageJobFailed):
-        wait_succeeded(cast(Job, EndedJob(state)), failed)
+        wait_succeeded(cast(Job, EndedJob(state)), failed, POLICY)
 
 
 @pytest.mark.parametrize("failed", [BuildFailed, ImageJobFailed])
 def test_a_job_that_ran_and_failed_raises_the_callers_failure(failed):
     with pytest.raises(failed, match="ended failed: the job's log tail"):
-        wait_succeeded(cast(Job, EndedJob(JobState.FAILED)), failed)
+        wait_succeeded(cast(Job, EndedJob(JobState.FAILED)), failed, POLICY)
 
 
 def test_build_bootstrap_failure_is_a_host_failure(tmp_path):
@@ -202,7 +219,7 @@ def test_build_bootstrap_failure_is_a_host_failure(tmp_path):
         check=False,
     )
     with pytest.raises(ImageJobFailed):
-        wait_succeeded(cast(Job, EndedJob(JobState.FAILED, result.returncode)), BuildFailed)
+        wait_succeeded(cast(Job, EndedJob(JobState.FAILED, result.returncode)), BuildFailed, POLICY)
 
 
 @pytest.mark.parametrize("failure", [401, 404, 503, "transport", "malformed"])
@@ -218,6 +235,59 @@ def test_registry_readback_failure_is_a_host_failure(monkeypatch, failure):
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
     with pytest.raises(ImageJobFailed):
         manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag")
+
+
+@pytest.mark.parametrize("authentication", ["basic", "bearer"])
+def test_registry_readback_resolves_authenticated_manifest_and_platform(monkeypatch, authentication):
+    manifest = json.dumps({"config": {"digest": "sha256:config"}, "layers": []}).encode()
+    digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
+    token_requests = []
+
+    def respond(request):
+        if request.url.path == "/token":
+            token_requests.append(request)
+            assert request.headers["authorization"].startswith("Basic ")
+            assert request.url.params == httpx.QueryParams(service="registry.example", scope="repository:task:pull")
+            return httpx.Response(200, json={"token": "scoped-read-token"})
+        if authentication == "bearer" and request.headers["authorization"] != "Bearer scoped-read-token":
+            return httpx.Response(
+                401,
+                headers={
+                    "www-authenticate": (
+                        'Bearer realm="https://registry.example/token",service="registry.example",scope="repository:task:pull"'
+                    )
+                },
+            )
+        if request.url.path == "/v2/task/blobs/sha256:config":
+            return httpx.Response(200, json={"os": "linux", "architecture": "amd64"})
+        assert request.url.path in ("/v2/task/manifests/build-tag", f"/v2/task/manifests/{digest}")
+        return httpx.Response(200, content=manifest)
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    assert manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag") == digest
+    assert bool(token_requests) is (authentication == "bearer")
+
+
+def test_registry_challenge_cannot_forward_credentials_to_another_origin(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            401,
+            headers={
+                "www-authenticate": (
+                    'Bearer realm="https://other.example/token",service="registry.example",scope="repository:task:pull"'
+                )
+            },
+        )
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(ImageJobFailed):
+        manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag")
+    assert [request.url.host for request in requests] == ["registry.example"]
 
 
 def test_archive_request_uses_the_coreweave_credentials_of_the_jobs_secret_files(monkeypatch, tmp_path):

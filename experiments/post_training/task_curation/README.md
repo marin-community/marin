@@ -1,9 +1,41 @@
 # Task data curation
 
+To add a dataset to the RL Data Atlas, start with the Atlas
+[Getting started](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/guide.html)
+page. It shows every ingestion path, what each outcome guarantees and live
+per-outcome source counts. Its source is
+[`guide.html`](../../../infra/marina/apps/rl_data_catalog/dist/guide.html).
+
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
-reviewed SAMPLE/FULL campaigns and artifact outputs.
+reviewed SAMPLE/FULL campaigns and artifact outputs. Its
+[Current admission policy](../../../docs/references/task-curation.md#current-admission-policy)
+section states the current admission rules.
+
+## Pinned registry receipts
+
+Generated census, lexical, retention, deduplication and fingerprint-index JSON is
+archived in the private `open-athena/marin-rl-data-atlas-registry` dataset. The
+repository keeps a reference at each original path with `repo`, exact commit
+`revision`, archive `path` and `sha256`. The archive preserves the original bytes
+and layout; it does not publish or modify a retained TaskCompendium release.
+Human-reviewed policy, including duplicate acknowledgements, stays in Git.
+
+`registry.read_registry_json()` uses the Hugging Face client's authenticated
+cache and verifies the downloaded bytes before decoding. Missing revisions,
+unavailable credentials and checksum mismatches fail the operation; there is no
+fallback to a different revision or inline data. Catalog construction, admission,
+selection and the source-overlap gate use this reader. Importing catalog modules
+does not download the registry; receipt accessors load it when called.
+
+For new measurements, follow the [registry update procedure](../../../docs/references/task-curation.md#updating-pinned-registry-receipts): stage raw JSON in a fresh tree, append to the private registry, verify readback, then update Git references. The overlap workflow uses the read-only `ATLAS_REGISTRY_HF_TOKEN` secret, exposed as `HF_TOKEN` in that job. Local readers use normal Hugging Face credentials; archive updates need write access to this private registry only.
+
+Unit tests inject small documents at the download boundary and reject registry
+downloads. Tests that inspect the complete private registry use the
+`data_integration` marker and are excluded from the default safe suite. The
+source-overlap ranking fixture contains two small contracts rather than an
+archived production population.
 
 ## Final task selection
 
@@ -96,8 +128,8 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
   --source aime24 --source svamp --quality-sample-size 5 \
   --assess --assessment-sample-size 3 --excluded-sample-size 2 \
   --max-workers 2 --concurrent-sources 1 --review-concurrency 1 \
-  --review-mode chat --model-revision YOUR_GLM_REVISION \
-  --base-url YOUR_GLM_ENDPOINT --run
+  --reviewer-tier HEAVY \
+  --run
 ```
 
 Local reviewed runs need no worker image or controller for in-process graders.
@@ -143,16 +175,17 @@ records and packets into Postgres; SQL computes cohort labels and counts.
 
 Malformed or unavailable responses use finite retries. Remaining failures retain
 partial grades and fail the stage. Repeated runs reuse successful exact requests.
-Changing the rubric or `--assessment-model-revision` reuses curation and prepared
-packets. Ordinary source changes invalidate their downstream artifacts; shared
-stage implementation changes require an explicit version bump.
+Changing the assessment rubric reuses curation and prepared packets. Changing the
+reviewer spec selects new review and assessment cache identities. Ordinary source
+changes invalidate their downstream artifacts; shared stage implementation changes require an explicit version bump.
 
 Chat transport allows up to 64 requests per worker process, selected with
 `--review-concurrency`. Eight concurrently grading sources at 64 requests each
 can issue up to 512 requests in flight. Local reviewers share one process limit;
 remote worker processes have separate limits. Byte groups do not impose a
-completion barrier. Each task still has its own request, judgment and trace;
-`--review-mode batch` selects the provider's separate asynchronous batch API.
+completion barrier. Each task still has its own request, judgment and trace.
+Programmatic callers can select the provider's asynchronous batch API with
+`ReviewConfig(spec, mode=ReviewMode.BATCH)`.
 Tune concurrency from measured throughput and errors for the chosen endpoint.
 
 The cohort label is unknown for an empty sample, unavailable judgments or a
@@ -175,7 +208,7 @@ For a production FULL campaign, add
 Enable assessment and omit `--cache-dir`, which selects local execution and a
 local artifact root. Production reuses the remote artifact cache under
 `--artifact-root` (default `s3://marin-us-east-02a/marin`) and model requests under
-the explicit `--review-cache`. Reuse those locations, pinned inputs, recipe
+`--review-cache` (default `<artifact-root>/rl-data/review-cache`). Reuse those locations, pinned inputs, recipe
 versions, rubric and model revisions across campaigns. A new report directory or
 enabling assessment does not force recomputation of completed work. Switching
 artifact roots does not move cached work; verify artifact and model-cache reuse
@@ -311,16 +344,20 @@ private verifier resources. Task and curriculum text use the same Harrier
 checkpoint, retrieval instruction and normalization. `--worker-cpu` and
 `--worker-memory` size each CPU worker; `--max-workers` bounds the shared pool.
 The model loads inside workers when an embedding batch has cache misses.
+Model initialization is serialized within each process because Transformers
+temporarily changes Torch's default dtype. Concurrent workers reuse the cached
+backend after initialization.
 
 `--cache-dir` selects local workers and artifacts. `--review-cache` selects the
-shared inference cache, defaulting locally to `<cache-dir>/review-cache`.
+shared inference cache, defaulting to `<cache-dir>/review-cache` locally and
+`<artifact-root>/rl-data/review-cache` otherwise.
 Keep it across campaigns and worker-count changes. FineStore caches vectors by
 rendered text and embedding specification; Zephyr writes vector Parquet.
 Alignment reads that Parquet and keeps the curriculum matrix in worker memory.
 A curriculum edit reuses task vectors.
 
-Optional `--representation rewrite --model MODEL --model-revision REVISION
---base-url ENDPOINT` uses an inference service to rewrite public inputs before
+Optional `--representation rewrite --description-model MODEL --description-model-revision REVISION
+--description-base-url ENDPOINT` uses an inference service to rewrite public inputs before
 embedding. Supply its credential through `GLM_BULK_TOKEN`. Failed rewrites retain
 `skipped` rows and counters after bounded retries; the pass fails above 5%
 failures across distinct public inputs. `insufficient_context` records an input
@@ -402,3 +439,467 @@ uv run python -m experiments.post_training.task_curation.count_inputs \
 
 The command verifies HF download revision metadata and reads parquet footers.
 Sum only declared files; row selectors require their own complete count.
+
+## Complete retained-population review
+
+`full_qc_inputs` indexes the combined deduplication and lexical remainder against
+the frozen `SourceTextPopulation`. It records task and runtime hashes separately,
+and reports missing execution requirements. Indexing does not qualify execution
+or establish FULL quality.
+
+`full_qc` reviews content independently from execution qualification. Its
+artifacts record `qualification_status=pending`, so complete content coverage
+does not establish execution admission. Qualification and repairs use the
+[full-population oracle procedure](../../../docs/references/task-curation.md#full-population-oracle-filter).
+
+Choose `--reviewer-version v3` for future FULL-QC source starts. The ongoing
+48-worker campaign, Gym repair and Prism finalization remain on their frozen v2
+specifications. Resuming or assembling that campaign requires explicit `v2`;
+never replay its completed observations under v3. New v3 source and campaign
+outputs use separate prefixes and an exact-request cache. The reviewer identity
+and source assembly bind the v3 model-YAML digest and generation budgets, so v2
+and v3 observations cannot be silently combined.
+
+Reviewer-spec changelog (2026-11-13):
+
+| Version | Serving context (tokens) | Initial / retry generation (tokens) | Status |
+| --- | ---: | ---: | --- |
+| v2 | 262,144 | 4,096 / 8,192 | Existing main pass, preserved |
+| v2 repair | 262,144 | 8,192 / 16,384 | Existing incomplete-only repair policy |
+| v3 | 524,288 | 8,192 / 16,384 | Future FULL-QC starts |
+
+V3 constructs a literal ReviewerSpec: GLM-5.3 revision
+`aca966e4e02791568aa6a4ced368624b3d897f42`, API model `glm-5.3`, FP8 precision,
+temperature 0.7, top_p 0.95, top_k 0 (disabled), low reasoning effort, three
+attempts, payload revision 4 and the task-quality-v2 rubric with its content hash.
+Its explicit serving pin checks the checkpoint, API name and context independently
+of shared relay presets. Top_p matches the pinned model's generation configuration;
+top_k disables top-k filtering of candidate next tokens in vLLM 0.28.0. Optional sampling overrides are
+absent from existing v2 requests and identity, preserving its frozen caches. Prompt character budgets remain explicit and unchanged (512,000 by
+default); they are separate from the serving token context. Compilation and CUDA
+graphs remain enabled. The v3 YAML has not yet been exercised by a live GPU job.
+
+Provide a JSON list with `inputs_path` and `output_path` for each source. Run
+inside a CPU Iris job with batch priority, a three-day timeout, and an explicit
+target cluster. Launch this coordinator with --target-cluster cw-us-east-08a.
+Local GLM children inherit its regional controller and use the ANY_REGION marker
+to suppress inherited region selectors, with batch priority and a three-day
+timeout. Iris removes this marker before scheduling; CoreWeave nodes need not
+advertise an iris.region label. A cluster target on these local children would
+request another federation handoff. The immutable public checkpoint, serving image, precision, model
+YAML digest, explicit worker setup scripts, sampling settings, and endpoint identity participate in reviewer
+evidence and request caches. The existing relay retains its separate unverified
+checkpoint identity. The upstream vLLM image needs Git installed before Marin
+worker imports; the explicit setup command is part of local endpoint identity.
+
+Payload revision 4 omits top-level execution requirements and actor/grader lock
+artifact locations. Deployment runtime is retained in audit hashes rather than
+appended to the content rubric. Calibration-only changes to these fields reuse
+identical reviewer requests. Public instructions, grader settings, images and
+resource files remain visible: changes to those inputs select new requests.
+Native resource files are preserved, including any embedded resource settings;
+rewriting a native task.toml therefore invalidates its content request.
+
+Batch preemption can move a serving task to a new address. Full-QC reviewers wait
+for serving readiness and resolve the current endpoint before each uncached
+batch or outer retry. Valid observations stay in immutable batch receipts and
+are reused after recovery. When replacing an interrupted worker, stop the old
+writer before resuming the same shard assignment and output prefix; keep its
+reviewer identity and caches when the task and reviewer contracts are unchanged.
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc --reviewer-version v3 \
+  --work s3://bucket/campaign/work.json \
+  --campaign-output s3://bucket/campaign/review-v3 \
+  --review-cache s3://bucket/campaign/request-cache-v3 --run
+```
+
+Omit `--run` to inspect the source plan and pinned reviewer identity
+without reserving GPUs. Successful batches are reused by exact request identity;
+failed and preempted attempts remain in versioned output paths. Each source
+completion writes task-level observations, computed Result and repair guidance,
+and a campaign record identifying serving jobs and pending qualification. This
+command does not publish datasets or alter Atlas admission.
+
+### Review frozen SAMPLE content panels
+
+Requests using ReviewerSpec V3 have a 1,200-second HTTP deadline to give its
+16,384-token output retry more time. ReviewerSpec V2 retains 300 seconds. The
+client deadline preserves the pinned model, prompt, sampling parameters, token
+budgets and reviewer cache identity.
+
+[`admission_inventory`](../../../docs/references/task-curation.md#declarations)
+counts each pinned source population and selects at most 100 TaskSpecs by
+seed-zero task-ID ordering. The queue is a JSON array of complete, unchanged rows
+selected from its `inventory.json` by the source IDs assigned to SAMPLE.
+Record the queue file's SHA-256 before submission.
+
+`sample_qc` verifies the frozen panel bytes, dataset revision, converter version
+and full-population digest. It uses the GLM-5.3 v3 profile described above and
+writes each selected TaskSpec hash, deployment-runtime hash, review observation
+and batch receipt. Computed Results describe content quality; the artifacts
+record `scope=sample_content` and `qualification_status=pending`.
+[Full-population oracle filtering](../../../docs/references/task-curation.md#full-population-oracle-filter),
+with nop negative controls for workspace-graded tasks, remains a prerequisite for
+admitting oracle-bearing tasks. Tasks without oracles need no executability proof.
+
+Launch the batch coordinator on `cw-us-east-08a`. Its GB200 serving children
+inherit that regional controller, with batch priority and three-day timeouts.
+Compilation and CUDA graphs remain enabled. Panels and evidence stay in their
+original storage region.
+
+```bash
+uv run --no-sync iris --cluster marin job run \
+  --job-name atlas-sample-qc-VERSION --target-cluster cw-us-east-08a \
+  --priority batch --timeout 259200 --cpu 4 --memory 16G --disk 40G \
+  --sync-package marin-core --extra dedup --no-wait -- \
+  uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.sample_qc \
+  --queue s3://bucket/campaign/sample-queue.json --queue-sha256 QUEUE_SHA256 \
+  --output-root s3://bucket/campaign/sample-content-v3 \
+  --review-cache s3://bucket/campaign/request-cache-v3 --run
+```
+
+Run the inner command without `--run` to inspect the queue size and pinned
+reviewer without reserving GPUs. A resume reuses reviewed batch receipts only
+when task/runtime contracts, rubric and reviewer identity match exactly.
+Unavailable observations and unsuccessful attempts remain recorded.
+
+Export a selected Result for each source with:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.sample_qc_receipts \
+  --review-artifacts selected-review-artifacts.json \
+  --output-directory /private/staging/sample_qc_receipts
+```
+
+The input is a JSON array of immutable review artifact paths. Receipt generation
+checks panel membership, task/runtime hashes and the pinned reviewer, then
+recomputes counts from the stored observations. Archive the generated shards in
+the private registry and commit its exact references under
+`datasets/sample_qc_receipts/`. Source binding rejects another dataset pin,
+converter or population digest and preserves execution oversight. Catalog refresh
+uses the pinned content Result while retaining earlier assessments and packets.
+
+### Final whole-source content Results
+
+Whole-source finalization is explicit. Content coverage records whether every
+retained task has a completed review observation, including valid uncertain
+observations. A verified
+`FullContentResultBinding` records the exact dataset pin, converter, retained
+population digest/count, contract index, immutable review receipt and records.
+`COMPLETE` requires every retained task reviewed; `ACCEPTED_INCOMPLETE` requires
+SHA-pinned waiver evidence enumerating every unreviewed task and exact reason,
+with matching Result and uncertainty counts. It displays Quality FULL and a final
+Result while retaining false strict coverage and every missing review.
+Completed uncertain observations remain separate from the conclusive denominator.
+Neither state changes execution qualification or drops tasks.
+
+The campaign owner writes the private waiver sidecar after approval, using the
+frozen review observations. The verifier reads it; it does not grant approval or
+create missing reviews. The sidecar requires these JSON fields (additional audit
+metadata may be retained):
+
+| Field | Required value |
+| --- | --- |
+| `source_id` | Exact reviewed source ID |
+| `retained_count` | Number of retained contract records |
+| `contract_index_sha256` | SHA-256 of the frozen contract index |
+| `review_artifact_sha256` | SHA-256 of the immutable review artifact record |
+| `records_sha256` | SHA-256 of the review-record parquet |
+| `qc_unreviewed` | One `{ "task_id": "...", "reason": "..." }` per unreviewed task, with its exact nonempty failure reason |
+| `result` | Frozen `SourceQualityResult` object, including `reviewed`, `issue_count`, `uncertain_count` and `unavailable_count` |
+
+The task-ID set must match all unreviewed observations exactly, without duplicates.
+Result counts must match recomputation from the records; uncertain observations
+remain explicit. The binding pins the SHA-256 of the entire sidecar. Invalid or
+inconsistent finalization fields in stored declarations never suppress provisional
+Result status: Atlas also requires matching whole-population Result and QC counts.
+
+Verify observations before staging the small transport record:
+
+```bash
+uv run --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_content_receipts \
+  --review-receipt s3://BUCKET/IMMUTABLE_REVIEW/.artifact.json \
+  --review-receipt-sha256 ARTIFACT_SHA256 \
+  --actor-census s3://BUCKET/CURRENT_ACTOR_CENSUS \
+  --reviewer-version v2 --prompt-budget 512000 \
+  --finalization accepted_incomplete \
+  --waiver s3://BUCKET/FINALIZATION.json --waiver-sha256 WAIVER_SHA256 \
+  --output /private/staging/source-final-binding.json
+```
+
+The verifier checks receipt, index, record and waiver digests, the pinned reviewer,
+task/runtime contracts and recomputed Result. If the original population included
+drops, supply `--population EXACT_RETAINED_CENSUS_ARTIFACT`, the `SourceTextPopulation`
+artifact produced by [`retained_census`](../../../docs/references/task-curation.md#retained-release-census)
+for the retained release. A raw population with a different count cannot certify
+the retained input. Review the resulting metadata
+before adding it to `datasets/full_content_results.json`. This transport contains
+pins, counts, digests, generic Result and evidence references; task-level evidence
+stays private. The public Result projection omits private issue excerpts while
+preserving every computed numeric field and verdict. The binding preserves the
+current actor-census provenance URI as part of exact input equality. Source
+loading reads the local transport without new storage
+credentials or remote verification calls. This step does not publish a dataset or
+load production Atlas.
+
+Before SAMPLE attachment, validate any carried whole-source binding against the
+declaration's current full-population census (`ActorCensusInput`); changed pins,
+converters, counts or task digests clear stale Result/finality. Then attach SAMPLE
+and apply the verified matching whole-source binding afterward. A matching final
+Result survives later SAMPLE attachment. The
+declaration persists `quality_result_finalization` and `quality_result_waiver`.
+Atlas requires both accepted-incomplete finality and its typed waiver reference
+plus whole-population accounting to display FULL. Evidence shows false strict
+coverage, the unreviewed count, and the pinned receipt containing exact reasons.
+Completed SAMPLE panels keep their existing finality rules.
+
+### Audit reviewer errors
+
+`audit_harness` freezes a stratified sample of Prism issue-positive reviews and
+two differently ordered blinded review packets. It verifies native task/runtime
+hashes, separates original GLM verdicts from reviewer inputs, and records the
+sample seed, strata and packet hashes. `audit_analysis` reconciles the two review
+files with separately recorded claim causes and estimates the population-weighted
+harness false-discovery fraction. Its interval conditions on the human/model
+review labels; two model reviewers can share blind spots. It measures errors
+among issue verdicts, not overall reviewer accuracy.
+
+`audit_review` repeats the frozen 100 tasks through an existing owned local GLM
+endpoint. Supply its scoped capability URL as the `QA_ENDPOINT_URL` secret file;
+never put the URL in command arguments, artifacts or logs. Run the entrypoint in
+a CPU Iris job at batch priority with a 72-hour timeout and the data's target
+cluster. It starts no model worker. Each prompt version needs a distinct output
+prefix, including a fresh cache for an original-prompt rerun. Preserve baseline
+code before changing the rubric and compare the actual stored reviewer identities.
+The sample digest and native task hashes are checked before requests are sent.
+Exact batch receipts preserve valid observations across retries and preemption.
+
+Before relaunching a corrected campaign, compare original, fresh-baseline and
+revised observations against the frozen independent labels. Require valid paired
+coverage, lower harness error and retained detection of confirmed content defects.
+Keep uncertain or disputed labels separate. A factual transport correction does
+not establish that other types of reviewer error are resolved. Preserve all
+original task artifacts, review judgments, annotations and output prefixes.
+
+### Parallel retained-batch review
+
+Use `full_qc_shards` when a source needs more than one model replica. A worker
+owns original 32-task batches whose `(batch_offset + batch_index) % shard_count`
+equals its `shard_index`. All workers use the same immutable work manifest and
+shard count. Set each source's `batch_offset` to the cumulative number of batches
+in earlier manifest rows. The last batch may contain fewer than 32 tasks.
+
+Each manifest row has these fields:
+
+```json
+{
+  "inputs_path": "s3://bucket/contracts/source/v1",
+  "batch_output_path": "s3://bucket/reviews/source/v1",
+  "shard_output_path": "s3://bucket/shards/source/v1",
+  "assembly_output_path": "s3://bucket/assembled/source/v1",
+  "batch_offset": 0,
+  "prompt_budget": 512000
+}
+```
+
+Wrap the rows in a JSON list. `batch_output_path` may reuse an existing full-QC
+campaign: source sharding preserves the batch and exact-request identities.
+`prompt_budget` sets both the initial and retry character budgets for that source;
+changing it changes the reviewer identity. Keep the pinned model, rubric and
+sampling settings unchanged when resuming.
+
+Run one batch-priority CPU coordinator on cw-us-east-08a for every shard index
+from zero through `shard_count - 1`, with a three-day timeout. Its local GLM
+children also use batch priority and three-day timeouts:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_shards review --reviewer-version v3 \
+  --work s3://bucket/campaign/shard-work.json --shard-index 0 --shard-count 48 \
+  --max-passes 3 --batch-workers 8 --review-cache s3://bucket/campaign/request-cache-v3 \
+  --campaign-output s3://bucket/campaign/worker-000 --run
+```
+
+`--batch-workers` selects one through 32 concurrent original batches. Each batch
+uses at most `32 // batch_workers` concurrent requests, so a shard sends at most
+32 requests at once. Eight batch workers allow four requests per batch. A
+finished batch immediately frees its slot for another assigned batch while
+slower batches continue. Shard receipts remain ordered by original batch index.
+Scheduling does not change reviewer or request identities.
+
+Retries reuse completed source-shard records from the current coordinator root
+before loading a model. To replace a coordinator, stop its writers, then pass
+`--resume-root /owner/retired-coordinator` to reuse its completed source shards.
+Repeat the option for multiple retired roots. Reuse verifies the immutable
+record digest, exact inputs, reviewer, rubric and batch assignment. A completed
+record with a digest or configuration mismatch raises an error before model
+loading. A completed
+primary shard remains frozen even when it contains invalid or uncertain
+observations. Invalid or unavailable observations use the separate repair
+procedure below; completed uncertain observations remain unchanged. Changing
+the pass count does not reopen a completed primary shard.
+If all assigned source shards are complete, the coordinator exits without
+loading a model.
+
+Each pass retries invalid or unavailable observations under the pinned review
+protocol. Valid observations in partially completed batches are retained,
+successful batches are reused, and every attempt remains available. Run exactly
+one current-version writer per batch cache: do not overlap a whole-source
+review driver with shard workers, or two shard campaigns sharing that
+cache. The batch `latest.json` pointer has no compare-and-swap protection.
+Assignments are disjoint within the shard set. Pre-sharding drivers that write
+only immutable attempts and all-valid
+`complete.json` receipts may finish alongside a shard campaign; they never
+replace its partial-progress pointer, but overlapping coverage can duplicate
+requests. A shard
+record reports its attempted and valid counts; it makes no source-wide FULL claim.
+The assembly campaign reports final status counts and the invalid rate per
+source separately from its issue rate.
+The `latest.json` index pins an immutable shard record by SHA-256.
+
+Assemble completed sources on CPU in the data's cluster, also at batch priority
+with a three-day timeout. Assembly makes no model calls and skips sources still
+missing shard records:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_shards assemble --reviewer-version v3 \
+  --work s3://bucket/campaign/shard-work.json --shard-count 48 \
+  --campaign-output s3://bucket/campaign/assembly --run
+```
+
+Assembly requires evidence for every distinct retained task and verifies every
+shard, receipt digest, reviewer identity, task/runtime hash and batch assignment
+before writing the source result. Missing, overlapping or foreign evidence is
+rejected. Invalid observations
+remain unavailable in the computed Result and leave `coverage_complete=false`.
+Execution qualification remains pending.
+
+### Repair incomplete retained reviews
+
+After a source's primary pass finishes, freeze its strict assembled artifact and
+the SHA-256 of its `.artifact.json`. `full_qc_repair` preserves every completed
+primary observation, including uncertain valid verdicts, and retries only INVALID
+(malformed response) or UNAVAILABLE (no valid response) observations. Identity is
+checked against the retained TaskSpec and runtime hashes. The repair uses the same
+pinned model, rubric, payload and temperature with explicit 8,192-token initial
+and 16,384-token retry budgets.
+These budgets have a separate ReviewerSpec and exact-request cache identity.
+
+Run a batch-priority CPU job on the serving workers' cluster with a three-day
+timeout. Repeat `--serving-root` to borrow existing workers from the same pinned
+primary campaign. Each request selects from their current registrations and
+checks the advertised model; an unregistered worker is skipped until it returns.
+The command neither starts nor stops serving jobs. Keep the primary 48 workers
+running and use a separate output prefix and cache.
+
+Set `--batch-workers` explicitly, from one to 16. Inference groups contain only
+original 32-task batches with incomplete primary observations, so intervening
+valid batches do not consume worker slots. Only one group of TaskSpecs is queued
+at a time. Completed repair results remain in memory until a second source pass
+writes every retained batch in its original order. Each batch admits at most four
+requests, so the CLI adds at most 64 concurrent repair requests across the
+borrowed serving pool. Physical routing and concurrency do not change the
+reviewer, request-cache or composite identity. Only incomplete primary contracts
+are submitted, and completed repair receipts are reused on resume:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.full_qc_repair \
+  --primary s3://bucket/assembled/source/v1/attempts/PRIMARY \
+  --primary-sha256 PRIMARY_ARTIFACT_SHA256 \
+  --serving-root /owner/primary-worker-000 \
+  --serving-root /owner/primary-worker-001 --batch-workers 2 \
+  --output s3://bucket/repair-overlay/source/v1 \
+  --review-cache s3://bucket/repair-overlay/request-cache --run
+```
+
+Omit `--run` to validate the frozen observations and print the primary, repair
+and composite identity hashes without model requests. The repair output contains
+every retained exact contract once. Each row records the selected review's
+reviewer identity and the SHA-256 of its primary records or repair receipt.
+Primary review JSON is copied byte for byte. The source identity lists both specs
+and their selection policy. Source issue counts, rates and verdicts use both sets
+of observations, retaining uncertainty separately; failed repairs
+leave coverage incomplete. Rerunning the same frozen primary and repair prefix
+reuses successful repair receipts without resampling them. Existing primary
+records and pointers are never changed. Oracle filtering and resource calibration
+remain separate requirements for execution qualification.
+
+Prism's v2 content review is finalized with 2,220 valid reviews of 2,221 retained
+contracts. The Result is SOME_ISSUES: 286 issues among 2,213 conclusive reviews
+(12.9236%); seven valid uncertain reviews are reported separately. One task stays
+in the population as “QC unreviewed: review exceeded 16,384 tokens.” Its strict
+coverage remains incomplete, and execution qualification is unchanged.
+[Final source evidence](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Ffull-qc%2Ffinal-content%2F2026.11.13.1%2Fprism.json)
+is stored at
+`s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/prism.json`.
+
+### CrossCode Python qualification candidate
+
+CrossCodeEval Python, TypeScript, Java and C# are evaluation sources. Python's
+native `tests/test_state.py` contains the Terminal-Bench canary; the evaluation
+policy applies to all four derived cohorts. Their explicit `intended_use` is
+`eval`, and TRAIN selection rejects even older artifacts that claim training
+eligibility. Within-source deduplication still applies; lexical overlap is
+measured without dropping evaluation tasks.
+
+All four frozen duplicate and combined-drop manifests are empty, so the private
+pins and all 7,763 task contracts are unchanged. [Drop-set equality evidence](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Fatlas%2Ffull-qc%2Fcrosscode-eval%2F2026.11.13.1%2Fretention-proof.json)
+is also available at
+`s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/crosscode-eval/2026.11.13.1/retention-proof.json`.
+Python's original pin retains FULL content QA: 500 valid reviews, eight issues
+(1.60%, GOOD), with zero unavailable or uncertain observations. That exact-pin
+content evidence does not establish execution qualification of Python's four-tier
+grading repair candidate.
+
+`crosscode_python` stages a new candidate for the frozen 500-task CrossCode Python
+population. Build the archived public actor context with the image builder first,
+using explicit batch priority and three-day deadlines for its build and push.
+Keep the returned image digest and context hash. The staging step checks that
+every retained task names that exact archived context.
+
+Prepare the separate grader's hashed dependency lock on a batch CPU worker:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.crosscode_python prepare-grader \
+  --output s3://bucket/crosscode/grader-build/v1 --run
+```
+
+The resulting artifact pins a Python 3.12 base and a hash-locked `tomli-w`
+dependency in `context.tar.gz`. Build that context with the same explicit image
+job policy, then stage the new TaskSpecs and faithful Harbor packages on CPU:
+
+```bash
+uv run --no-sync --package marin-core --extra dedup python -m \
+  experiments.post_training.task_curation.crosscode_python stage \
+  --inputs s3://bucket/crosscode/retained-inputs/v1 \
+  --actor-image registry/actor@sha256:ACTOR_DIGEST \
+  --actor-context-sha256 ARCHIVED_CONTEXT_SHA256 \
+  --grader-image registry/grader@sha256:GRADER_DIGEST \
+  --output s3://bucket/crosscode/candidate/v1 --run
+```
+
+The original `solution/solution.py` is a completion fragment. Its new `solve.sh`
+copies those original bytes to `/app/solution.txt`; it does not execute the
+fragment or generate a reference. The private grader retains the native
+normalization and all four scoring tiers, including leading-identifier full
+credit and non-empty partial credit. It emits an authoritative structured verdict
+directly from those comparisons. A missing submission now produces a completed
+scored zero instead of a failed producer; a missing reference is an unscored
+invalid task. The new candidate records these reporting changes and preserves
+the archived native files.
+
+The candidate uses SEPARATE grading and explicit file capture. It is unqualified:
+run full-population original-oracle calibration and independent negative controls,
+then review all new exact contracts. Preserve native 900-second actor and
+720-second verifier deadlines while calibrating missing machine capacities.
+Use the [oracle filter procedure](../../../docs/references/task-curation.md#full-population-oracle-filter)
+for production Harbor trials and receipts. Staging neither publishes a dataset
+nor changes Atlas admission.

@@ -1,5 +1,6 @@
 """Unit tests for the Verifier."""
 
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -18,6 +19,38 @@ from harbor.verifier.verifier import (
     Verifier,
     VerifierRuntimeError,
 )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("status", [None, "invalid_task", "infra_error", "scored"])
+@pytest.mark.parametrize("config_name", ["verifier.toml", "taskcompendium-verifier.toml"])
+@pytest.mark.parametrize("numeric_reward", [None, "1.0"])
+async def test_structured_verdict_controls_reward_and_failure_status(
+    tmp_path, status, config_name, numeric_reward
+):
+    task_dir = _create_task_dir(tmp_path)
+    (task_dir / "tests" / config_name).write_text('mode = "pytest"\n')
+    task = Task(task_dir)
+    paths = TrialPaths(trial_dir=tmp_path / "trial")
+    paths.mkdir()
+    if numeric_reward is not None:
+        paths.reward_text_path.write_text(numeric_reward)
+    if status is not None:
+        (paths.verifier_dir / "verdict.json").write_text(
+            json.dumps({"status": status, "reward": 0.0, "detail": {}})
+        )
+    environment = MagicMock()
+    environment.capabilities.mounted = True
+    environment.upload_dir = AsyncMock()
+    environment.os = TaskOS.LINUX
+    environment.exec = AsyncMock(return_value=ExecResult(return_code=0))
+    verifier = Verifier(task, paths, environment)
+    if status == "scored":
+        result = await verifier.verify()
+        assert result.rewards == {"reward": 0.0}
+    else:
+        with pytest.raises(VerifierRuntimeError):
+            await verifier.verify()
 
 
 def _create_task_dir(root: Path) -> Path:
@@ -148,7 +181,8 @@ class TestVerifierCapturesOutput:
     shaping for a whole run.
     """
 
-    async def test_output_comes_from_the_teed_files(self):
+    @pytest.mark.parametrize("exit_code", [0, 17])
+    async def test_output_comes_from_the_teed_files(self, exit_code):
         """The tee'd files hold the full text, so they win over the ExecResult."""
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = _create_task_dir(Path(tmp))
@@ -168,7 +202,7 @@ class TestVerifierCapturesOutput:
             env.os = TaskOS.LINUX
             env.exec = AsyncMock(
                 return_value=ExecResult(
-                    return_code=0, stdout="truncated", stderr="truncated"
+                    return_code=exit_code, stdout="truncated", stderr="truncated"
                 )
             )
 
@@ -182,6 +216,7 @@ class TestVerifierCapturesOutput:
 
             assert result.stdout == "7 passed, 3 failed\n"
             assert result.stderr == "a warning\n"
+            assert result.exit_code == exit_code
 
     async def test_output_falls_back_to_the_exec_result(self):
         """No tee'd file: report what the environment returned."""

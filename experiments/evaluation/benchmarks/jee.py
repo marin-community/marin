@@ -21,7 +21,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.environments import BASIC_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 JEE_REVISION = "d070d1113ce365df05903763a2017ec2d0d56118"
 
@@ -31,8 +31,11 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         RlDataSource(
             info=SourceInfo(
                 id="Evalchemy:JEEBench",
-                title="JEEBench",
-                origin="Evalchemy",
+                upstream_dataset="JEEBench",
+                upstream_name="JEEBench",
+                subset=None,
+                build_path="Evalchemy",
+                origin=SourceOrigin.EVALCHEMY,
                 family="engineering-exam",
                 tags=("eval", "source:evalchemy", "single-turn", "benchmark"),
                 count=515,

@@ -3,6 +3,7 @@
 
 """Resolve registry images and Dockerfiles into local, pinned OCI layouts."""
 
+import errno
 import hashlib
 import json
 import os
@@ -13,10 +14,25 @@ import threading
 import uuid
 from dataclasses import dataclass, replace
 from functools import cache
+from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 OCI_TAG = "image"
+DOCKER_BUILD_METADATA = frozenset({"container", "docker_version"})
+SHA256_PATTERN = r"sha256:[0-9a-f]{64}"
+Sha256Digest = Annotated[str, Field(pattern=f"^{SHA256_PATTERN}$")]
+
+
+class _RegistryBinding(BaseModel):
+    """A source-manifest proof for a separately addressed prepared layout."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    prepared_manifest_digest: Sha256Digest
+    source_manifests: tuple[Sha256Digest, ...] = Field(min_length=1)
 
 
 @dataclass(frozen=True)
@@ -43,10 +59,14 @@ class PreparedImage:
     source: RegistryImage | DockerfileSource
 
 
-def _oci_blob(layout: Path, digest: str) -> Path:
-    if re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+def _digest_hex(digest: str) -> str:
+    if re.fullmatch(SHA256_PATTERN, digest) is None:
         raise ValueError("Only sha256 OCI digests are supported")
-    path = layout / "blobs" / "sha256" / digest.removeprefix("sha256:")
+    return digest.removeprefix("sha256:")
+
+
+def _oci_blob(layout: Path, digest: str) -> Path:
+    path = layout / "blobs" / "sha256" / _digest_hex(digest)
     with path.open("rb") as blob:
         actual = hashlib.file_digest(blob, "sha256").hexdigest()
     if f"sha256:{actual}" != digest:
@@ -108,9 +128,9 @@ def image_source_key(source: RegistryImage | DockerfileSource) -> str:
 
 
 class ImageCache:
-    """Reuse prepared sources within one Python process.
+    """Reuse prepared images in memory and verified pinned layouts on disk.
 
-    Without a signature policy, registry references are process-lifetime snapshots.
+    Without a signature policy, mutable registry references are process-lifetime snapshots.
     Dockerfile contexts are fingerprinted on each call so edits cause a new build.
     """
 
@@ -147,10 +167,94 @@ def process_image_cache(directory: Path, authfile: Path | None, policy: Path | N
     return ImageCache(directory.resolve(), authfile=authfile, policy=policy)
 
 
-def _run(*args: str) -> None:
-    result = subprocess.run(args, capture_output=True, text=True)
+def _run(*args: str) -> bytes:
+    result = subprocess.run(args, capture_output=True)
     if result.returncode:
-        raise RuntimeError(f"{' '.join(args[:2])} failed: {result.stderr[-2000:]}")
+        raise RuntimeError(f"{' '.join(args[:2])} failed: {result.stderr.decode(errors='replace')[-2000:]}")
+    return result.stdout
+
+
+def _layer_digests(manifest: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(layer["digest"] for layer in manifest["layers"])
+
+
+def _configuration_json(configuration: dict[str, Any]) -> str:
+    return json.dumps(configuration, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _configuration_without_build_metadata(configuration: dict[str, Any]) -> dict[str, Any]:
+    comparable = {key: value for key, value in configuration.items() if key not in DOCKER_BUILD_METADATA}
+    process = comparable.get("config")
+    if process is not None:
+        comparable["config"] = {key: value for key, value in process.items() if key != "Image"}
+    return comparable
+
+
+def _restore_source_configuration(layout: Path, digest: str, source_configuration: bytes) -> str:
+    """Retain Docker build metadata lost by OCI conversion without changing runtime values."""
+    manifest = _oci_json_blob(layout, digest)
+    original = json.loads(source_configuration)
+    prepared = _oci_json_blob(layout, manifest["config"]["digest"])
+    if _configuration_json(_configuration_without_build_metadata(original)) != _configuration_json(
+        _configuration_without_build_metadata(prepared)
+    ):
+        raise ValueError("Prepared image configuration differs from its pinned registry source")
+    config_digest = hashlib.sha256(source_configuration).hexdigest()
+    (layout / "blobs" / "sha256" / config_digest).write_bytes(source_configuration)
+    manifest["config"].update(digest=f"sha256:{config_digest}", size=len(source_configuration))
+    encoded = _configuration_json(manifest).encode()
+    restored_digest = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    (layout / "blobs" / "sha256" / _digest_hex(restored_digest)).write_bytes(encoded)
+    index_path = layout / "index.json"
+    index = json.loads(index_path.read_bytes())
+    for descriptor in index["manifests"]:
+        if descriptor.get("annotations", {}).get("org.opencontainers.image.ref.name") == OCI_TAG:
+            descriptor.update(digest=restored_digest, size=len(encoded))
+    index_path.write_text(json.dumps(index))
+    return _manifest_digest(layout, expected=restored_digest)
+
+
+def _registry_manifest_chain(
+    repository: str, digest: str, configuration_digest: str, layers: tuple[str, ...], authfile: Path | None
+) -> tuple[bytes, ...] | None:
+    _digest_hex(digest)
+    args = ["skopeo", "inspect", "--raw"]
+    if authfile is not None:
+        args.extend(("--authfile", str(authfile)))
+    raw = _run(*args, f"docker://{repository}@{digest}")
+    if f"sha256:{hashlib.sha256(raw).hexdigest()}" != digest:
+        raise ValueError("Registry manifest differs from the source pin")
+    manifest = json.loads(raw)
+    if "manifests" not in manifest:
+        if manifest["config"]["digest"] == configuration_digest and _layer_digests(manifest) == layers:
+            return (raw,)
+        return None
+    for descriptor in manifest["manifests"]:
+        platform = descriptor.get("platform", {})
+        if platform.get("os") not in (None, "linux") or platform.get("architecture") not in (None, "amd64"):
+            continue
+        chain = _registry_manifest_chain(repository, descriptor["digest"], configuration_digest, layers, authfile)
+        if chain is not None:
+            return (raw, *chain)
+    return None
+
+
+def _require_registry_binding(layout: Path, binding: _RegistryBinding, source_digest: str) -> None:
+    if binding.source_manifests[0] != source_digest:
+        raise ValueError("Cached registry binding belongs to another source pin")
+    for parent, child in pairwise(binding.source_manifests):
+        manifest = _oci_json_blob(layout, parent)
+        if child not in {descriptor["digest"] for descriptor in manifest["manifests"]}:
+            raise ValueError("Cached registry manifest chain differs from its source index")
+    original = _oci_json_blob(layout, binding.source_manifests[-1])
+    prepared = _oci_json_blob(layout, binding.prepared_manifest_digest)
+    original_configuration = _oci_json_blob(layout, original["config"]["digest"])
+    prepared_configuration = _oci_json_blob(layout, prepared["config"]["digest"])
+    if _configuration_json(original_configuration) != _configuration_json(prepared_configuration) or _layer_digests(
+        original
+    ) != _layer_digests(prepared):
+        raise ValueError("Cached registry image payload differs from its source manifest")
+    _manifest_digest(layout, expected=binding.prepared_manifest_digest)
 
 
 def _manifest_digest(layout: Path, *, expected: str | None = None) -> str:
@@ -177,21 +281,34 @@ def prepare_image(
 
     The default Skopeo policy accepts unsigned images. TLS verification remains
     enabled. Digest-pinned platform manifests already present in the cache are
-    verified locally. A signature policy requires a fresh verified copy instead.
+    verified locally. Converted manifests and source indexes retain a digest-verified
+    source chain with identical configuration and ordered layers. A signature policy
+    requires a fresh verified copy instead.
     """
     cache.mkdir(parents=True, exist_ok=True)
     if isinstance(source, RegistryImage) and ("://" in source.reference or not source.reference.strip()):
         raise ValueError("RegistryImage requires a container image reference without a URL scheme")
     pinned_digest = None
+    registry_reference = source.reference if isinstance(source, RegistryImage) else ""
     if isinstance(source, RegistryImage):
-        match = re.fullmatch(r".+@(sha256:[0-9a-f]{64})", source.reference)
+        match = re.fullmatch(r"(.+)@(sha256:[0-9a-f]{64})", source.reference)
         if match is not None:
-            pinned_digest = match[1]
+            pinned_digest = match[2]
+            prefix, separator, name = match[1].rpartition("/")
+            # Skopeo rejects a supplementary tag beside a digest; registry ports stay in the prefix.
+            registry_reference = f"{prefix}{separator}{name.split(':', 1)[0]}@{pinned_digest}"
     if pinned_digest is not None and policy is None:
         destination = cache / pinned_digest.replace(":", "-")
         if destination.exists():
             _manifest_digest(destination, expected=pinned_digest)
             return PreparedImage(destination, pinned_digest, source)
+        binding_path = cache / "registry" / f"{_digest_hex(pinned_digest)}.json"
+        if binding_path.exists():
+            binding = _RegistryBinding.model_validate_json(binding_path.read_bytes())
+            destination = cache / binding.prepared_manifest_digest.replace(":", "-")
+            if destination.exists():
+                _require_registry_binding(destination, binding, pinned_digest)
+                return PreparedImage(destination, binding.prepared_manifest_digest, source)
     with tempfile.TemporaryDirectory(prefix="image-", dir=cache) as temporary:
         layout = Path(temporary) / "oci"
         skopeo_args = ["skopeo"]
@@ -200,7 +317,7 @@ def prepare_image(
         if authfile is not None:
             skopeo_args.extend(("--src-authfile", str(authfile)))
         if isinstance(source, RegistryImage):
-            source_ref = f"docker://{source.reference}"
+            source_ref = f"docker://{registry_reference}"
         else:
             tag = f"harbor-image-build:{uuid.uuid4().hex}"
             try:
@@ -222,11 +339,62 @@ def prepare_image(
         if isinstance(source, RegistryImage):
             _run(*skopeo_args, source_ref, f"oci:{layout}:{OCI_TAG}")
         digest = _manifest_digest(layout)
+        source_blobs: tuple[bytes, ...] = ()
+        binding = None
+        if isinstance(source, RegistryImage) and pinned_digest is not None and pinned_digest != digest:
+            repository = registry_reference.rsplit("@", 1)[0]
+            config_args = [
+                "skopeo",
+                "--override-os",
+                "linux",
+                "--override-arch",
+                "amd64",
+                "inspect",
+                "--raw",
+                "--config",
+            ]
+            if authfile is not None:
+                config_args.extend(("--authfile", str(authfile)))
+            source_configuration = _run(*config_args, source_ref)
+            prepared = _oci_json_blob(layout, digest)
+            if _configuration_json(json.loads(source_configuration)) != _configuration_json(
+                _oci_json_blob(layout, prepared["config"]["digest"])
+            ):
+                digest = _restore_source_configuration(layout, digest, source_configuration)
+                prepared = _oci_json_blob(layout, digest)
+            configuration_digest = f"sha256:{hashlib.sha256(source_configuration).hexdigest()}"
+            chain = _registry_manifest_chain(
+                repository, pinned_digest, configuration_digest, _layer_digests(prepared), authfile
+            )
+            if chain is None:
+                raise ValueError("Prepared image payload differs from its pinned registry source")
+            source_blobs = (*chain, source_configuration)
+            binding = _RegistryBinding(
+                prepared_manifest_digest=digest,
+                source_manifests=tuple(f"sha256:{hashlib.sha256(raw).hexdigest()}" for raw in chain),
+            )
         destination = cache / digest.replace(":", "-")
         if not destination.exists():
             try:
                 layout.rename(destination)
-            except FileExistsError:
-                pass  # Another process published this content-addressed layout.
+            except OSError as error:
+                if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                    raise
         _manifest_digest(destination, expected=digest)
+        if binding is not None:
+            assert pinned_digest is not None
+            for raw in source_blobs:
+                blob_digest = hashlib.sha256(raw).hexdigest()
+                pending = Path(temporary) / blob_digest
+                pending.write_bytes(raw)
+                try:
+                    os.link(pending, destination / "blobs" / "sha256" / blob_digest)
+                except FileExistsError:
+                    pass
+            _require_registry_binding(destination, binding, pinned_digest)
+            binding_path = cache / "registry" / f"{_digest_hex(pinned_digest)}.json"
+            binding_path.parent.mkdir(parents=True, exist_ok=True)
+            pending_binding = Path(temporary) / "binding.json"
+            pending_binding.write_text(binding.model_dump_json() + "\n")
+            pending_binding.replace(binding_path)
         return PreparedImage(destination, digest, source)

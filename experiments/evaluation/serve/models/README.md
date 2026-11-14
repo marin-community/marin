@@ -42,6 +42,7 @@ serve:                          # ServeConfig -> model-server behavior
   max_model_len: 32768
   max_num_batched_tokens: null  # vLLM prefill-token budget
   max_num_seqs: null            # concurrent sequence limit
+  object_store_load_mode: stream # stage_local downloads remote weights to each worker's disk
   hf_overrides: null            # JSON string, e.g. rope-scaling overrides
   limit_mm_per_prompt: null     # JSON string, e.g. '{"image":0,"video":0}' for text-only eval
   tool_call_parser: hermes      # enables --enable-auto-tool-choice + --tool-call-parser
@@ -70,6 +71,14 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
 `auto_serve_overrides` fills unset serve fields from the model's `config.json` and may clamp
 `max_model_len` to the model's native limit. `resource_hint.hbm_gb` is portable across TPU and GPU;
 `resource_hint.gpu` declares that the model requires one of the listed exact GPU shapes.
+
+With `object_store_load_mode: stage_local`, each serving worker downloads the weights before
+starting vLLM. Multi-host workers use the same job-specific local path on every host and retain
+the files through server shutdown. Size each worker's disk for a complete checkpoint copy.
+
+The GLM-5.3 configuration uses `--block-size 64`, which both its sparse MLA and DSA indexer
+backends support. With vLLM 0.28, automatic selection can instead choose 32 on a pipeline follower
+and fail during CUDA graph memory profiling.
 
 For a GPU model whose architecture is supplied by a vLLM plugin, set `vllm_source: upstream`,
 an exact `vllm_version`, and a plugin requirement pinned to a release or commit. These fields are

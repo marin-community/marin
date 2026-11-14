@@ -19,7 +19,7 @@ import pyarrow.parquet as pq
 from finestore.rl.curation import CurationMode
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, ConfigDict, PositiveInt
+from pydantic import BaseModel, ConfigDict, PositiveInt, field_validator
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.structure_closure import structure_closure_task
@@ -48,6 +48,8 @@ from zephyr.writers import write_parquet_file
 
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
 from experiments.post_training.task_curation.datasets.nemotron_ultra.components import BLENDS
+from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_map, original_source_id
 
 SELECTION_PREFIX = "rl-data/task-selection"
 SELECTION_INPUT_PREFIX = "rl-data/selection-inputs"
@@ -143,6 +145,11 @@ class SelectionRecipe(BaseModel):
     exclusions: tuple[HeldoutSource, ...] = ()
     validation_per_family: PositiveInt
     seed: int
+
+    @field_validator("sources", "source_limits", mode="before")
+    @classmethod
+    def _source_keys(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return None if value is None else canonical_source_map(value)
 
 
 @dataclass(frozen=True)
@@ -388,7 +395,7 @@ def _admitted_records(source: SelectionInput) -> Iterator[dict[str, str]]:
 
 
 def _grader_environments(sources: tuple[SelectionInput, ...]) -> dict[str, EnvironmentRequirements]:
-    components = {BLENDS[HELDOUT_BLEND][dataset].id: dataset for dataset in HELDOUT_FAMILIES}
+    components = {original_source_id(BLENDS[HELDOUT_BLEND][dataset].id): dataset for dataset in HELDOUT_FAMILIES}
     environments = {}
     for source in sources:
         if source.source_id not in components:
@@ -566,6 +573,16 @@ def _resolved(
 
 def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecipe) -> ArtifactStep[Artifact]:
     """Bind admitted sources and fixed evaluation exclusions to a versioned training selection."""
+    curated = canonical_source_map(curated)
+    recipe = recipe.model_copy(
+        update={
+            "sources": canonical_source_map(recipe.sources),
+            "source_limits": None if recipe.source_limits is None else canonical_source_map(recipe.source_limits),
+        }
+    )
+    excluded = recipe.sources.keys() & CROSSCODE_EVAL_SOURCE_IDS
+    if excluded:
+        raise ValueError(f"Evaluation-only CrossCodeEval sources cannot enter TRAIN selection: {sorted(excluded)}")
     missing = recipe.sources.keys() - curated.keys()
     if missing:
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
@@ -581,15 +598,27 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
             raise ValueError("Source quotas must sum to each family quota")
     heldout = _pinned_inputs(f"{recipe.name}-heldout", recipe.heldout)
     exclusions = _pinned_inputs(f"{recipe.name}-exclude", recipe.exclusions)
-    inputs = {source_id: curated[source_id] for source_id in sorted(recipe.sources)}
+    inputs = {source_id: curated[source_id] for source_id in sorted(recipe.sources, key=original_source_id)}
+
+    # Persist original keys in the config identity so cached selections and duplicate ownership survive renaming.
+    stored_recipe = recipe.model_copy(
+        update={
+            "sources": {original_source_id(key): value for key, value in recipe.sources.items()},
+            "source_limits": (
+                None
+                if recipe.source_limits is None
+                else {original_source_id(key): value for key, value in recipe.source_limits.items()}
+            ),
+        }
+    )
 
     def build_config(ctx: StepContext) -> SelectionConfig:
         return SelectionConfig(
             tuple(
-                SelectionInput(source_id, recipe.sources[source_id], ctx.artifact_path(step))
+                SelectionInput(original_source_id(source_id), recipe.sources[source_id], ctx.artifact_path(step))
                 for source_id, step in inputs.items()
             ),
-            recipe,
+            stored_recipe,
             _resolved(ctx, recipe.heldout, heldout),
             ctx.output_path,
             _resolved(ctx, recipe.exclusions, exclusions),
