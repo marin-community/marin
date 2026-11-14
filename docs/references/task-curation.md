@@ -821,7 +821,9 @@ Changing the contract or preamble requires a new dataset version and renewed QA.
 The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
 `shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE)`.
 It moves the exact initial repository/dependency setup into Harbor's pre-agent
-setup and uses common actor images. Publish the resulting native package, copy
+setup and uses common actor images. Source `setup_files/` resources retain their
+bytes and file modes in the native package, including tasks with declared build
+contexts; Harbor uploads them before running that setup. Publish the resulting native package, copy
 its metadata integrity contract into the TaskSpec, then run full-population
 Harbor ORACLE filtering and SAMPLE/FULL QA.
 

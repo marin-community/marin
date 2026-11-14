@@ -3,11 +3,13 @@
 
 """Patched repository graders preserve private tests and reject unresolved source results."""
 
+import io
 import json
 import random
 import shutil
 import subprocess
 import sys
+import tarfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
@@ -24,7 +26,7 @@ from verifyit.spec import PytestSpec, parse_spec, render_spec
 
 from experiments.post_training.task_curation.datasets.tasktrove import repositories
 from experiments.post_training.task_curation.pipeline import CurationRecipe
-from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_payload
+from experiments.post_training.task_curation.tasktrove.harbor_export import archive_bytes, harbor_payload
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task, tasktrove_row
 from experiments.post_training.task_curation.tests.local_grader import LOCAL_GRADER_IMAGE
 
@@ -141,6 +143,24 @@ def test_native_shared_lowering_preserves_source_command_parser_and_contract(lan
     assert package.files["instruction.md"].decode().startswith(shared_preamble(contract))
     private = {resource.path: resource_bytes(resource) for resource in task.resources.verifier}
     assert package.files["tests/test_state.py"] == private["test_state.py"]
+
+
+def test_shared_export_keeps_pre_agent_setup_files_in_native_package(tmp_path):
+    task = converted_task(RECIPES["tasktrove-swe_rebench"], tasktrove_row(python_source("abcdef0")))
+    content = b"source-dependency==1.2.3\n"
+    resource = inline_resource("setup_files/requirements.txt", content).model_copy(update={"mode": "640"})
+    task = task.model_copy(update={"resources": task.resources.model_copy(update={"worker": (resource,)})})
+    package = harbor_payload(
+        {"task_json": task.model_dump_json(), "source_row": "swe_rebench/fixture", "original_path": "fixture"},
+        grader_image=None,
+        family="tasktrove",
+        shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE),
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes(package.files, package.modes))) as archive:
+        archive.extractall(tmp_path, filter="data")
+    requirements = tmp_path / "setup_files/requirements.txt"
+    assert requirements.read_bytes() == content
+    assert requirements.stat().st_mode & 0o777 == 0o640
 
 
 @pytest.mark.parametrize("language", ["python", "go"])
