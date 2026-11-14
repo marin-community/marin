@@ -12,6 +12,7 @@ from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.utils.utils import validate_cfg
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING
 from skyrl_train.batch_metrics import reward_metrics
 from skyrl_train.rollouts.buffer import RowFacts
 
@@ -408,7 +409,9 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         ({"trainer.dump_data_batch": True}, "dense batch dumping"),
     ],
 )
-def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_semantics(tmp_path, overrides, message):
+def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_semantics(
+    tmp_path, overrides, message, monkeypatch
+):
     cfg = get_default_config()
     cfg.trainer.batch_builder = "worker"
     cfg.trainer.logger = "console"
@@ -440,6 +443,9 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
             OmegaConf.update(cfg, key, value, merge=False, force_add=True)
     if "rows" in overrides:
         batch = {key: values[: overrides["rows"]] for key, values in batch.items()}
+
+    if metadata["model_type"] == "grug_moe":
+        monkeypatch.delitem(CONFIG_MAPPING._extra_content, "grug_moe", raising=False)
 
     def check():
         validate_cfg(cfg)
