@@ -126,6 +126,9 @@ class Sampler(eqx.Module):
             [jnp.ones_like(keep_sorted[..., :1], dtype=bool), keep_sorted[..., :-1]],
             axis=-1,
         )
+        # top_p=1 is full-distribution sampling. The cutoff tolerance must not
+        # remove small tails or change the behavior logprobs consumed by RL.
+        keep_sorted = keep_sorted | (threshold >= 1.0)
         filtered_sorted_logits = jnp.where(keep_sorted, sorted_logits, -jnp.inf)
         inverse_permutation = jnp.argsort(sorted_indices, axis=-1)
         filtered_logits = jnp.take_along_axis(filtered_sorted_logits, inverse_permutation, axis=-1)

@@ -45,6 +45,23 @@ torch, not much interesting here given jetstream. focused on batch inference I t
 
 ## Technical Design
 
+### Snowball paged serving
+
+Snowball serving uses `levanter.grug.attention.ragged_paged_attention` for
+mixed prefill and decode batches. Queries use the layout
+`[tokens, kv_heads, query_heads_per_group, head_dim]`; KV pages use
+`[pages, page_size, 2 * kv_heads, head_dim]`, with interleaved key/value
+slots. `implementation="reference"` is the portable CPU/GPU path and
+`implementation="tpu"` selects JAX's standard TPU ragged paged-attention
+kernel for eligible FP32 inputs. The TPU path falls back to the reference
+implementation for lower-precision inputs.
+
+The public implementation set is limited to `reference` and `tpu`. The former
+`tpu_fp32_tiles`, `tpu_dma_buffers`, custom TPU decode kernel, compensated
+FP64 arithmetic, and related precision-oracle helpers are removed. Callers
+should use the reference path for CPU validation and the standard TPU path for
+accelerator validation; no compatibility aliases remain.
+
 ### Service Architecture
 The inference server is built around a `GenerationService` that encapsulates:
 - Model loading and initialization via `HFCheckpointConverter`
