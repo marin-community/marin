@@ -137,7 +137,7 @@ def test_gpu_profiles_use_one_cuda132_runtime(extras: tuple[str, ...]) -> None:
             ("megatron", "vllm"),
             "aarch64",
             {"flash-attn-4", "megatron-core", "transformer-engine-torch"},
-            {"causal-conv1d", "fast-hadamard-transform", "flash-attn", "flash-attn-3", "mamba-ssm"},
+            {"flash-attn", "flash-attn-3"},
         ),
     ],
 )
