@@ -24,6 +24,7 @@ from experiments.post_training.task_curation.curriculum_projection import (
     ProjectionInputs,
     SourceReplacement,
     curriculum_projection_step,
+    filter_assignment_file,
     projection_selection,
     task_rebinding,
 )
@@ -387,3 +388,19 @@ def test_registered_use_must_match_the_current_pin_and_archived_role(archived, c
         )
     with pytest.raises(ValueError, match=r"different converter or dataset pin|population or intended use|Declared Use"):
         projection_selection(archive, inventory, frozenset({declarations[2].id}), (), source_uses=bindings)
+
+
+def test_retried_assignment_publication_preserves_prior_attempt(tmp_path, archived):
+    archive, declarations, rows, _ = archived
+    options = dict(
+        output_root=str(tmp_path / "retry-output"),
+        archived_sources=tuple(archive.sources),
+        selected_ids=frozenset(row.id for row in declarations[:2]),
+        rebindings=(),
+    )
+    first = filter_assignment_file((0, archive.paths[0]), **options)
+    saved = Path(first["output"]).read_bytes()
+    retried = filter_assignment_file((0, archive.paths[0]), **options)
+    assert first["output"] != retried["output"]
+    assert Path(first["output"]).read_bytes() == saved
+    assert list(load_parquet(first["output"])) == list(load_parquet(retried["output"])) == rows[:2]

@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
+from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -261,7 +262,7 @@ def filter_assignment_file(
 ) -> dict:
     """Write a selected assignment file and compare every retained value after readback."""
     index, source_path = indexed_path
-    destination = StoragePath(output_root) / f"assignments/part-{index:05d}.parquet"
+    destination = StoragePath(output_root) / f"assignments/part-{index:05d}-{uuid4().hex}.parquet"
     if destination.exists():
         raise ValueError(f"Preserve prior assignment output: {destination}")
     expected = {row.source_id: row for row in archived_sources}
