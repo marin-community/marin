@@ -615,6 +615,13 @@ checks for the OpenQA pairs are checkpointed under `integrity/` as soon as they
 complete. Cross-source agreement cannot exclude an answer defect shared by
 both sources. Use a fresh output root; old evidence is never overwritten.
 
+Exact instruction hashes and disjoint conversation states are checked before loading
+text. Remaining directions share an atomic local normalization cache per source,
+and target populations are sharded across `--workers` CPU processes. To resume a
+run in a fresh output prefix, pass `--reuse-neighbor-root <prior-output-root>`;
+complete direction receipts are reused only under their input-bound direction
+key and after checking the full neighbor digest. Old outputs remain immutable.
+
 The staged loader selects fingerprints, pair reviews and groups atomically with
 the catalog and backend map. Pass the scan's reviewed output to the loader's
 `--source-identities` option. `/sources` returns a compact fingerprint summary

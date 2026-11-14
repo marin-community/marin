@@ -3,11 +3,12 @@
 
 """SHA-bound population locations and verified local content caches."""
 
+import fcntl
 import hashlib
 import json
 import logging
 import tempfile
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Literal
 
@@ -21,10 +22,28 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.registry import read_registry_json
-from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent, content_rows
+from experiments.post_training.task_curation.task_neighbors import (
+    PopulationIndex,
+    TaskContent,
+    content_rows,
+    strip_boilerplate,
+)
 from infra.marina.apps.rl_data_catalog.server.source_identity import original_source_id
 
 logger = logging.getLogger(__name__)
+
+
+CONTENT_SCHEMA = pa.schema(
+    [
+        ("task_id", pa.string()),
+        ("instruction_hash", pa.string()),
+        ("text", pa.large_string()),
+        ("reference_hash", pa.string()),
+        ("tests_hash", pa.string()),
+        ("state_hash", pa.string()),
+    ]
+)
+HASH_COLUMNS = [name for name in CONTENT_SCHEMA.names if name != "text"]
 
 
 class PreparedPopulation(BaseModel):
@@ -111,18 +130,8 @@ def cache_population(
             raise ValueError(f"Prepared population count differs: {source_id}")
         pending.rename(path)
         return path
-    schema = pa.schema(
-        [
-            ("task_id", pa.string()),
-            ("instruction_hash", pa.string()),
-            ("text", pa.large_string()),
-            ("reference_hash", pa.string()),
-            ("tests_hash", pa.string()),
-            ("state_hash", pa.string()),
-        ]
-    )
     count = 0
-    with pq.ParquetWriter(path.with_suffix(".pending"), schema, compression="zstd") as writer:
+    with pq.ParquetWriter(path.with_suffix(".pending"), CONTENT_SCHEMA, compression="zstd") as writer:
         for key, digest in sorted(fingerprint.inputs.items()):
             uri = locations.files.get(digest, key)
             if not uri.startswith(f"s3://{source_bucket}/"):
@@ -144,7 +153,7 @@ def cache_population(
                         asdict(row)
                         for row in content_rows(json.loads(encoded) for encoded in batch.column(column).to_pylist())
                     ]
-                    writer.write_table(pa.Table.from_pylist(rows, schema=schema))
+                    writer.write_table(pa.Table.from_pylist(rows, schema=CONTENT_SCHEMA))
                     count += len(rows)
     if count != fingerprint.task_count:
         raise ValueError(f"Population count differs for {source_id}: {count} != {fingerprint.task_count}")
@@ -155,3 +164,29 @@ def cache_population(
 
 def read_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
     return PopulationIndex([TaskContent(**row) for row in pq.read_table(path).to_pylist()], inputs)
+
+
+def read_hash_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
+    """Load the exact census and state gates without reading conversation text."""
+    rows = [TaskContent(text="", **row) for row in pq.read_table(path, columns=HASH_COLUMNS).to_pylist()]
+    return PopulationIndex(rows, inputs)
+
+
+def read_normalized_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
+    """Share one atomic normalization cache across local measurement workers."""
+    normalized_path = path.with_suffix(".normalized-v1.parquet")
+    with path.with_suffix(".normalization.lock").open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if not normalized_path.exists():
+            rows = [TaskContent(**row) for row in pq.read_table(path).to_pylist()]
+            normalized = strip_boilerplate(rows)
+            pending = normalized_path.with_suffix(".pending")
+            pq.write_table(
+                pa.Table.from_pylist([asdict(row) for row in normalized], schema=CONTENT_SCHEMA),
+                pending,
+                compression="zstd",
+            )
+            pending.rename(normalized_path)
+            logger.info("Normalized population %s: %d tasks", path.name, len(rows))
+    normalized = [TaskContent(**row) for row in pq.read_table(normalized_path).to_pylist()]
+    return PopulationIndex([replace(row, text="") for row in normalized], inputs, normalized)

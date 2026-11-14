@@ -70,7 +70,7 @@ def content_rows(documents: Iterable[Mapping]) -> Iterable[TaskContent]:
         )
 
 
-def strip_boilerplate(rows: list[TaskContent]) -> list[TaskContent]:
+def wrapper_lines(rows: list[TaskContent]) -> set[str]:
     """Remove repeated whole wrapper lines, retaining short and task-specific text.
 
     Only long lines shared by at least 90% of a content-seeded panel are stripped.
@@ -94,16 +94,19 @@ def strip_boilerplate(rows: list[TaskContent]) -> list[TaskContent]:
             line.casefold(),
         )
     }
-    result = []
-    for row in rows:
-        text = "\n".join(line for line in row.text.splitlines() if line.strip() not in wrappers).strip()
-        # Empty text must never make unrelated wrapper-only tasks exact matches.
-        text = text or row.text
-        text = " ".join(unicodedata.normalize("NFKC", text).casefold().split())
-        result.append(
-            TaskContent(row.task_id, row.instruction_hash, text, row.reference_hash, row.tests_hash, row.state_hash)
-        )
-    return result
+    return wrappers
+
+
+def normalized_content(row: TaskContent, wrappers: set[str]) -> TaskContent:
+    text = "\n".join(line for line in row.text.splitlines() if line.strip() not in wrappers).strip()
+    text = text or row.text
+    text = " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+    return TaskContent(row.task_id, row.instruction_hash, text, row.reference_hash, row.tests_hash, row.state_hash)
+
+
+def strip_boilerplate(rows: list[TaskContent]) -> list[TaskContent]:
+    wrappers = wrapper_lines(rows)
+    return [normalized_content(row, wrappers) for row in rows]
 
 
 def signatures(rows: list[TaskContent]) -> Iterable[list[int]]:
@@ -132,39 +135,70 @@ def jaccard_similarity(left: set[str], right: set[str]) -> float:
 
 
 class PopulationIndex:
-    """An exact lookup and lazy MinHash/LSH search of every target task."""
+    """Match hashes and state before materializing normalized text or LSH buckets."""
 
-    def __init__(self, rows: list[TaskContent], inputs: dict[str, str]):
+    def __init__(
+        self, rows: list[TaskContent], inputs: dict[str, str], normalized_rows: list[TaskContent] | None = None
+    ):
         if not rows:
             raise ValueError("Overlap requires nonempty source populations")
         self.inputs_sha256 = canonical_sha256(inputs)
-        self.rows = strip_boilerplate(rows)
+        self.raw_rows = rows
         self.exact: dict[str, list[int]] = defaultdict(list)
-        self.stripped: dict[str, list[int]] = defaultdict(list)
-        for index, row in enumerate(self.rows):
+        for index, row in enumerate(rows):
             self.exact[row.instruction_hash].append(index)
-            self.stripped[canonical_sha256((row.text, row.state_hash))].append(index)
+        self.states = {row.state_hash for row in rows}
+        self._normalized = (
+            {id(raw): normalized for raw, normalized in zip(rows, normalized_rows, strict=True)}
+            if normalized_rows is not None
+            else {}
+        )
+        self._rows: list[TaskContent] | None = None
+        self._wrappers: set[str] | None = None
+        self.stripped: dict[str, list[int]] = defaultdict(list)
         self.buckets: dict[tuple[int, tuple[int, ...]], list[int]] | None = None
 
-    def sample(self, size: int) -> list[TaskContent]:
-        # Including the row ordinal samples task occurrences, including repeated
-        # instructions, without biasing toward tasks whose source IDs coincide.
+    def normalized_row(self, row: TaskContent) -> TaskContent:
+        if self._normalized:
+            return self._normalized[id(row)]
+        if self._wrappers is None:
+            self._wrappers = wrapper_lines(self.raw_rows)
+        return normalized_content(row, self._wrappers)
+
+    @property
+    def rows(self) -> list[TaskContent]:
+        if self._rows is None:
+            self._rows = [self.normalized_row(row) for row in self.raw_rows]
+            for index, row in enumerate(self._rows):
+                self.stripped[canonical_sha256((row.text, row.state_hash))].append(index)
+        return self._rows
+
+    def raw_sample(self, size: int) -> list[TaskContent]:
         selected = nsmallest(
-            size, enumerate(self.rows), key=lambda item: seeded_order(f"{item[0]}:{item[1].instruction_hash}", SEED)
+            size, enumerate(self.raw_rows), key=lambda item: seeded_order(f"{item[0]}:{item[1].instruction_hash}", SEED)
         )
         return [row for _, row in selected]
 
-    def neighbors(self, queries: list[TaskContent]) -> list[TaskNeighbor]:
+    def sample(self, size: int) -> list[TaskContent]:
+        return [self.normalized_row(row) for row in self.raw_sample(size)]
+
+    def neighbors(self, queries: list[TaskContent], source: "PopulationIndex | None" = None) -> list[TaskNeighbor]:
         result: list[TaskNeighbor | None] = [None] * len(queries)
+        prepared = {}
         missing = []
         for index, row in enumerate(queries):
-            candidates = self.exact.get(row.instruction_hash) or self.stripped.get(
-                canonical_sha256((row.text, row.state_hash))
-            )
+            candidates = self.exact.get(row.instruction_hash)
+            matching_rows = self.raw_rows
+            if not candidates and row.state_hash not in self.states:
+                result[index] = neighbor_receipt(row, None, 0.0, "unmatched")
+                continue
+            if not candidates:
+                prepared[index] = source.normalized_row(row) if source is not None else row
+                matching_rows = self.rows
+                candidates = self.stripped.get(canonical_sha256((prepared[index].text, row.state_hash)))
             if candidates:
-                # References break content-identical ties only, never select a question.
                 partner = min(
-                    (self.rows[item] for item in candidates),
+                    (matching_rows[item] for item in candidates),
                     key=lambda candidate: (
                         candidate.reference_hash != row.reference_hash,
                         candidate.tests_hash != row.tests_hash,
@@ -180,19 +214,18 @@ class PopulationIndex:
                 for index, signature in enumerate(signatures(self.rows)):
                     for key in lsh_band_keys(signature):
                         self.buckets[key].append(index)
-            for index, signature in zip(missing, signatures([queries[item] for item in missing]), strict=True):
+            for index, signature in zip(missing, signatures([prepared[item] for item in missing]), strict=True):
                 candidates = set()
                 for key in lsh_band_keys(signature):
                     candidates.update(self.buckets.get(key, ()))
-                query = queries[index]
+                query = prepared[index]
                 query_shingles = shingles(query.text)
                 best, score = None, 0.0
                 for candidate in sorted(candidates):
                     partner = self.rows[candidate]
                     if partner.state_hash != query.state_hash:
                         continue
-                    other = shingles(partner.text)
-                    similarity = jaccard_similarity(query_shingles, other)
+                    similarity = jaccard_similarity(query_shingles, shingles(partner.text))
                     if similarity > score:
                         best, score = partner, similarity
                 result[index] = neighbor_receipt(query, best, score, "lsh" if best else "unmatched")
@@ -219,22 +252,22 @@ def directional_overlap(source: PopulationIndex, target: PopulationIndex, sample
     """Estimate task-occurrence overlap, and census exact matches independently."""
     if sample_size <= 0:
         raise ValueError("Sample size must be positive")
-    queries = source.sample(sample_size)
-    neighbors = target.neighbors(queries)
+    queries = source.raw_sample(sample_size)
+    neighbors = target.neighbors(queries, source)
     matched = sum(row.similarity >= SIMILARITY_THRESHOLD for row in neighbors)
-    exact = sum(row.instruction_hash in target.exact for row in source.rows)
+    exact = sum(row.instruction_hash in target.exact for row in source.raw_rows)
     fraction = matched / len(queries)
     interval = wilson_interval(matched, len(queries))
-    low, high = (fraction, fraction) if len(queries) == len(source.rows) else (interval.low, interval.high)
+    low, high = (fraction, fraction) if len(queries) == len(source.raw_rows) else (interval.low, interval.high)
     return DirectionalOverlap(
-        population=len(source.rows),
+        population=len(source.raw_rows),
         sampled=len(queries),
         matched=matched,
         fraction=fraction,
         ci_low=low,
         ci_high=high,
         exact_matched=exact,
-        exact_fraction=exact / len(source.rows),
+        exact_fraction=exact / len(source.raw_rows),
         neighbors=neighbors,
         neighbors_sha256=canonical_sha256([row.model_dump(mode="json") for row in neighbors]),
     )
@@ -318,11 +351,11 @@ def exact_reference_integrity(source: PopulationIndex, target: PopulationIndex) 
     """Census answer agreement for identical complete instructions, preserving conflicts."""
     checked, mismatch, missing = 0, 0, 0
     examples = []
-    for row in source.rows:
+    for row in source.raw_rows:
         candidates = target.exact.get(row.instruction_hash, ())
         if not candidates:
             continue
-        references = {target.rows[index].reference_hash for index in candidates}
+        references = {target.raw_rows[index].reference_hash for index in candidates}
         if row.reference_hash is None or references == {None}:
             missing += 1
             continue
@@ -330,18 +363,18 @@ def exact_reference_integrity(source: PopulationIndex, target: PopulationIndex) 
         if row.reference_hash not in references:
             mismatch += 1
             if len(examples) < 20:
-                partner = target.rows[candidates[0]]
+                partner = target.raw_rows[candidates[0]]
                 examples.append(
                     {
                         "task_id": row.task_id,
                         "partner_task_id": partner.task_id,
-                        "question": row.text[:2000],
+                        "question": source.normalized_row(row).text[:2000],
                         "reference_sha256": row.reference_hash,
                         "partner_reference_sha256": partner.reference_hash,
                     }
                 )
     return {
-        "population": len(source.rows),
+        "population": len(source.raw_rows),
         "checked": checked,
         "mismatched": mismatch,
         "missing_reference": missing,

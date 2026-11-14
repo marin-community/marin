@@ -31,7 +31,9 @@ from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     cache_population,
     population_preflight,
+    read_hash_population,
     read_locator_manifest,
+    read_normalized_population,
     read_population,
 )
 from experiments.post_training.task_curation.task_neighbors import (
@@ -82,7 +84,8 @@ def discover_pairs(
     selected = {(pair.left, pair.right): pair for pair in pairs}
     buckets = defaultdict(list)
     rows = []
-    for source_id, path in paths.items():
+    for source_id in sorted(paths, key=original_source_id):
+        path = paths[source_id]
         population = read_population(path, fingerprints[source_id].inputs)
         panel = population.sample(256)
         del population
@@ -110,6 +113,86 @@ def discover_pairs(
     return list(selected.values())
 
 
+def measure_target(
+    target_id: str,
+    partners: list[str],
+    paths: dict[str, Path],
+    inputs: dict[str, dict[str, str]],
+    sample_size: int,
+    output_root: str,
+    reuse_neighbor_root: str | None,
+) -> tuple[dict[tuple[str, str], DirectionalOverlap], list[dict]]:
+    """Measure one target shard, reusing its index and immutable prior receipts."""
+    logging.basicConfig(level=logging.INFO)
+    configure_coreweave_s3()
+    output = StoragePath(output_root)
+    target = read_hash_population(paths[target_id], inputs[target_id])
+    normalized_target = None
+    directions = {}
+    integrity = []
+    for source_id in partners:
+        direction_key = canonical_sha256(
+            {
+                "source": original_source_id(source_id),
+                "target": original_source_id(target_id),
+                "sample_size": sample_size,
+                "source_inputs": inputs[source_id],
+                "target_inputs": inputs[target_id],
+                "method": CURRENT_OVERLAP_VERSION,
+            }
+        )
+        receipt_uri = str(output / "neighbors" / f"{direction_key}.json")
+        candidates = [receipt_uri]
+        if reuse_neighbor_root is not None:
+            candidates.append(str(StoragePath(reuse_neighbor_root) / "neighbors" / f"{direction_key}.json"))
+        prior_uri = next((uri for uri in candidates if StoragePath(uri).exists()), None)
+        if prior_uri is not None:
+            direction = DirectionalOverlap.model_validate_json(StoragePath(prior_uri).read_bytes())
+            if direction.neighbors_sha256 != canonical_sha256(
+                [row.model_dump(mode="json") for row in direction.neighbors]
+            ):
+                raise ValueError(f"Incomplete neighbor receipt: {prior_uri}")
+            write_json(receipt_uri, direction.model_dump(mode="json"))
+        else:
+            source = read_hash_population(paths[source_id], inputs[source_id])
+            needs_text = any(
+                row.instruction_hash not in target.exact and row.state_hash in target.states
+                for row in source.raw_sample(sample_size)
+            )
+            if needs_text:
+                if normalized_target is None:
+                    normalized_target = read_normalized_population(paths[target_id], inputs[target_id])
+                source = read_normalized_population(paths[source_id], inputs[source_id])
+                direction = directional_overlap(source, normalized_target, sample_size)
+            else:
+                direction = directional_overlap(source, target, sample_size)
+            write_json(receipt_uri, direction.model_dump(mode="json"))
+            del source
+        directions[source_id, target_id] = direction.model_copy(
+            update={"neighbors": direction.neighbors[:20], "neighbor_receipts_uri": receipt_uri}
+        )
+        logger.info(
+            "NN %s -> %s: %.4f, exact %.4f%s",
+            original_source_id(source_id),
+            original_source_id(target_id),
+            direction.fraction,
+            direction.exact_fraction,
+            " (reused)" if prior_uri else "",
+        )
+        if "openq" in original_source_id(source_id) and "openq" in original_source_id(target_id):
+            source = read_normalized_population(paths[source_id], inputs[source_id])
+            result = {
+                "source": original_source_id(source_id),
+                "target": original_source_id(target_id),
+                **exact_reference_integrity(source, target),
+            }
+            integrity.append(result)
+            write_json(str(output / "integrity" / f"{direction_key}.json"), result)
+            logger.warning("OPENQA INTEGRITY %s", json.dumps(result))
+            del source
+    return directions, integrity
+
+
 def rerun(
     survey: SourceIdentitySurvey,
     output_root: str,
@@ -119,6 +202,7 @@ def rerun(
     only_openqa: bool,
     allocated_cpus: int,
     locations: PopulationLocations,
+    reuse_neighbor_root: str | None = None,
 ) -> dict:
     output = StoragePath(output_root)
     started = time.monotonic()
@@ -158,55 +242,29 @@ def rerun(
         pairs = discover_pairs(paths, fingerprints, pairs)
     directions: dict[tuple[str, str], DirectionalOverlap] = {}
     integrity = []
-    for target_id in sources:
-        target = read_population(paths[target_id], fingerprints[target_id].inputs)
-        partners = sorted(
-            {
-                pair.left if pair.right == target_id else pair.right
-                for pair in pairs
-                if target_id in (pair.left, pair.right)
-            },
-            key=original_source_id,
-        )
-        for source_id in partners:
-            source = read_population(paths[source_id], fingerprints[source_id].inputs)
-            direction_key = canonical_sha256(
+    inputs = {source: fingerprint.inputs for source, fingerprint in fingerprints.items()}
+    with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as executor:
+        pending = {}
+        for target_id in sources:
+            partners = sorted(
                 {
-                    "source": original_source_id(source_id),
-                    "target": original_source_id(target_id),
-                    "sample_size": sample_size,
-                    "source_inputs": fingerprints[source_id].inputs,
-                    "target_inputs": fingerprints[target_id].inputs,
-                    "method": CURRENT_OVERLAP_VERSION,
-                }
+                    pair.left if pair.right == target_id else pair.right
+                    for pair in pairs
+                    if target_id in (pair.left, pair.right)
+                },
+                key=original_source_id,
             )
-            receipt_uri = str(output / "neighbors" / f"{direction_key}.json")
-            if StoragePath(receipt_uri).exists():
-                direction = DirectionalOverlap.model_validate_json(StoragePath(receipt_uri).read_bytes())
-            else:
-                direction = directional_overlap(source, target, sample_size)
-                write_json(receipt_uri, direction.model_dump(mode="json"))
-            directions[source_id, target_id] = direction.model_copy(
-                update={"neighbors": direction.neighbors[:20], "neighbor_receipts_uri": receipt_uri}
-            )
-            logger.info(
-                "NN %s -> %s: %.4f, exact %.4f",
-                original_source_id(source_id),
-                original_source_id(target_id),
-                direction.fraction,
-                direction.exact_fraction,
-            )
-            if "openq" in original_source_id(source_id) and "openq" in original_source_id(target_id):
-                result = {
-                    "source": original_source_id(source_id),
-                    "target": original_source_id(target_id),
-                    **exact_reference_integrity(source, target),
-                }
-                integrity.append(result)
-                write_json(str(output / "integrity" / f"{direction_key}.json"), result)
-                logger.warning("OPENQA INTEGRITY %s", json.dumps(result))
-            del source
-        del target
+            if partners:
+                future = executor.submit(
+                    measure_target, target_id, partners, paths, inputs, sample_size, output_root, reuse_neighbor_root
+                )
+                pending[future] = target_id
+        for future in as_completed(pending):
+            measured, checked = future.result()
+            directions.update(measured)
+            integrity.extend(checked)
+            logger.info("Measured %d/%d directions", len(directions), 2 * len(pairs))
+    integrity.sort(key=lambda row: (row["source"], row["target"]))
     prior = {(row.similarity.left, row.similarity.right): row for row in survey.reviews}
     reviews, diff = [], []
     for pair in pairs:
@@ -293,7 +351,8 @@ def main() -> None:
     )
     parser.add_argument("--work-dir", type=Path, default=Path("/tmp/content-nn-v2"))
     parser.add_argument("--allocated-cpus", type=int, required=True)
-    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--reuse-neighbor-root")
     parser.add_argument("--sample-size", type=int, default=SAMPLE_SIZE)
     parser.add_argument("--only-openqa", action="store_true")
     args = parser.parse_args()
@@ -310,6 +369,7 @@ def main() -> None:
         args.only_openqa,
         args.allocated_cpus,
         read_locator_manifest(args.population_locators),
+        args.reuse_neighbor_root,
     )
 
 

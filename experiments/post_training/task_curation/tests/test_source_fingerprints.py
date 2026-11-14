@@ -39,10 +39,12 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
     pair_similarity,
 )
+from experiments.post_training.task_curation.source_neighbor_survey import measure_target
 from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     PreparedPopulation,
     cache_population,
+    read_normalized_population,
     read_population,
 )
 from experiments.post_training.task_curation.task_neighbors import (
@@ -421,3 +423,55 @@ def test_failed_prepared_population_is_rejected_again_on_retry(tmp_path, monkeyp
     for _ in range(2):
         with pytest.raises(ValueError, match="Prepared population count differs"):
             cache_population("fixture", fingerprint, cache, locations, {}, source_bucket="marin-us-east-02a")
+
+
+def test_normalized_population_cache_preserves_neighbors_with_repeated_task_ids(tmp_path):
+    wrapper = "Follow these instructions carefully and explain your reasoning before giving the final answer."
+    left = [
+        TaskContent(
+            "reused-id",
+            f"hash-{index}",
+            f"{wrapper}\n" + " ".join(f"substance{index}_{word}" for word in range(60)) + " detail.",
+            "ref",
+            "test",
+            "state",
+        )
+        for index in range(30)
+    ]
+    right = [
+        TaskContent("partner", f"other-{index}", row.text.replace("detail.", "detail!"), "ref", "test", "state")
+        for index, row in enumerate(left)
+    ]
+    paths = {}
+    for name, rows in [("left", left), ("right", right)]:
+        paths[name] = tmp_path / f"{name}.parquet"
+        pq.write_table(pa.Table.from_pylist([asdict(row) for row in rows]), paths[name])
+    pair = pair_similarity(
+        "left",
+        fingerprint_source([task_document("a", "a")], {}),
+        "right",
+        fingerprint_source([task_document("b", "b")], {}),
+    )
+    expected = compare_populations(pair, PopulationIndex(left, {}), PopulationIndex(right, {}), 30)
+    assert expected.measurement.left_to_right.matched == 30
+    for _ in range(2):
+        actual = compare_populations(
+            pair, read_normalized_population(paths["left"], {}), read_normalized_population(paths["right"], {}), 30
+        )
+        assert actual.model_dump(mode="json") == expected.model_dump(mode="json")
+    directions, _ = measure_target(
+        "right", ["left"], paths, {"left": {}, "right": {}}, 30, str(tmp_path / "prior"), None
+    )
+    resumed, _ = measure_target(
+        "right",
+        ["left"],
+        {**paths, "left": tmp_path / "not-downloaded.parquet"},
+        {"left": {}, "right": {}},
+        30,
+        str(tmp_path / "resumed"),
+        str(tmp_path / "prior"),
+    )
+    assert resumed["left", "right"].model_dump(exclude={"neighbor_receipts_uri"}) == directions[
+        "left", "right"
+    ].model_dump(exclude={"neighbor_receipts_uri"})
+    assert resumed["left", "right"].neighbors_sha256 == expected.measurement.left_to_right.neighbors_sha256
