@@ -425,6 +425,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model", choices=sorted(TARGETS), default="hero")
     parser.add_argument("--hosts", type=int, default=4)
+    parser.add_argument("--cpu", type=int, default=100, help="CPU request per host")
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--phases", default="gates,long,load")
     parser.add_argument("--concurrencies", default="64,256,512")
@@ -475,7 +476,7 @@ def main() -> None:
     resources = ResourceConfig.with_gpu(
         target.accelerator,
         count=target.gpus_per_host,
-        cpu=100,
+        cpu=args.cpu,
         ram="880g",
         disk="1t",
         replicas=geometry.task_count,
