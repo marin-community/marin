@@ -240,10 +240,6 @@ class NativeLlamaLmConfig(LlamaConfig):
         fields.update(config_overrides or {})
         return HfLlamaConfig.from_dict(fields)
 
-    def hf_export_converter(self, tokenizer: MarinTokenizer | None) -> HFCheckpointConverter:
-        """Build a local-export converter without resolving reference weights or metadata."""
-        return HFCheckpointConverter(type(self), HfConfigClass=HfLlamaConfig, tokenizer=tokenizer)
-
     def hf_checkpoint_converter(
         self, ref_checkpoint: str | None = None, *, tokenizer: MarinTokenizer | None = None
     ) -> HFCheckpointConverter:
