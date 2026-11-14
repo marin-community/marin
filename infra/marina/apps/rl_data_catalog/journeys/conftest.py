@@ -22,6 +22,7 @@ from sqlalchemy import text
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog.server.app import migrate
 from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
+from infra.marina.apps.rl_data_catalog.tests.backend_fixtures import backend_source_maps
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import pending_review_declaration, review_declarations
@@ -124,83 +125,14 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                         "completeness": json.dumps(review_completeness(declaration, [], [])),
                     },
                 )
-            connection.execute(
-                text(
-                    "INSERT INTO atlas_backend_sources (load_id,source_id,capabilities) "
-                    "VALUES ('lexical','Marin:clean',CAST(:capabilities AS JSONB))"
-                ),
-                {
-                    "capabilities": json.dumps(
-                        {
-                            "source_id": "Marin:clean",
-                            "basis": "converted_spec_census",
-                            "task_count": 3,
-                            "inputs": {"s3://test/task-specs.parquet": "d" * 64},
-                            "role_backend_assignments": {"agent": {"daytona": 3}, "grader": {"local": 3}},
-                            "demands": {"agent": {"docker_image": 3}, "grader": {"packages_lock": 3}},
-                            "resource_ranges": {},
-                            "backends": {
-                                "docker": {
-                                    "support": "supported",
-                                    "roles": {"agent": {"supported": 3}, "grader": {"supported": 3}},
-                                    "blockers": {},
-                                    "validation_errors": {},
-                                },
-                                "local": {
-                                    "support": "partial",
-                                    "roles": {"agent": {"unsupported": 3}, "grader": {"supported": 3}},
-                                    "blockers": {"agent:docker_image": 3},
-                                    "validation_errors": {},
-                                },
-                                "daytona": {
-                                    "support": "unsupported",
-                                    "roles": {"agent": {"supported": 3}, "grader": {"unsupported": 3}},
-                                    "blockers": {"grader:packages_lock": 3},
-                                    "validation_errors": {},
-                                },
-                            },
-                        }
-                    )
-                },
-            )
-            connection.execute(
-                text(
-                    "INSERT INTO atlas_backend_sources (load_id,source_id,capabilities) "
-                    "VALUES ('lexical','Marin:eval',CAST(:capabilities AS JSONB))"
-                ),
-                {
-                    "capabilities": json.dumps(
-                        {
-                            "source_id": "Marin:eval",
-                            "basis": "converted_spec_census",
-                            "task_count": 3,
-                            "backends": {
-                                "local": {
-                                    "support": "supported",
-                                    "roles": {"agent": {"role_absent": 3}, "grader": {"supported": 3}},
-                                    "not_applicable": {},
-                                    "blockers": {},
-                                    "validation_errors": {},
-                                },
-                                "shellsim": {
-                                    "support": "not_applicable",
-                                    "roles": {"agent": {"role_absent": 3}, "grader": {"not_applicable": 3}},
-                                    "not_applicable": {"grader:host_image": 3},
-                                    "blockers": {},
-                                    "validation_errors": {},
-                                },
-                                "qemu": {
-                                    "support": "unsupported",
-                                    "roles": {"agent": {"unsupported": 2, "not_applicable": 1}},
-                                    "not_applicable": {"agent:host_image": 1},
-                                    "blockers": {"agent:packages_lock": 2},
-                                    "validation_errors": {"agent:packages_lock": 1},
-                                },
-                            },
-                        }
-                    )
-                },
-            )
+            for source in backend_source_maps():
+                connection.execute(
+                    text(
+                        "INSERT INTO atlas_backend_sources (load_id,source_id,capabilities) "
+                        "VALUES ('lexical',:source,CAST(:capabilities AS JSONB))"
+                    ),
+                    {"source": source.source_id, "capabilities": source.model_dump_json()},
+                )
             connection.execute(
                 text("INSERT INTO atlas_backend_surveys VALUES ('lexical','survey-fixture',CAST(:survey AS JSONB))"),
                 {
