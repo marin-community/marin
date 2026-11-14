@@ -61,15 +61,20 @@ function collapsed(rows) {
     if (!groups.has(group.group_id)) { const entry = {row: null, members: []}; groups.set(group.group_id, entry); entries.push(entry); }
     groups.get(group.group_id).members.push(row);
   }
+  const projected = [];
   for (const entry of entries) {
-    if (!entry.members) continue;
+    if (!entry.members) { projected.push(entry); continue; }
     const canonicalId = entry.members[0].duplicate_group.canonical_source_id;
-    const canonical = entry.members.find(row => row.id === canonicalId) || entry.members[0];
+    const canonical = entry.members.find(row => row.id === canonicalId);
+    if (!canonical) {
+      projected.push(...entry.members.map(row => ({row, others: []})));
+      continue;
+    }
     entry.row = canonical;
     entry.others = entry.members.filter(row => row !== canonical).sort((a, b) => (sourceOverlap(b) ?? 0) - (sourceOverlap(a) ?? 0));
-    delete entry.members;
+    delete entry.members; projected.push(entry);
   }
-  return entries.sort((a, b) => rows.indexOf(a.row) - rows.indexOf(b.row));
+  return projected.sort((a, b) => rows.indexOf(a.row) - rows.indexOf(b.row));
 }
 const expandedGroups = new Set();
 
@@ -142,7 +147,10 @@ function containmentNote(row, otherId, otherName, fraction, reverse = null) {
   return note;
 }
 function partialOverlapNotes(row) {
-  return (row.partial_overlaps || []).map(pair => containmentNote(row, pair.other_id, pair.other_display_name, pair.contained_fraction, pair.reverse_fraction));
+  return (row.partial_overlaps || []).map(pair => {
+    const other = state.sources.find(source => source.id === pair.other_id);
+    return containmentNote(row, pair.other_id, other.display_name, pair.source_fraction, pair.other_fraction);
+  });
 }
 function partialOverlapDetails(row) {
   if (!row.partial_overlaps?.length) return null;
@@ -155,7 +163,7 @@ function sourceRow(row, others, canonical) {
     name.append(open, node('span', [originOf(row), row.build_path].filter(Boolean).join(' · '), 'source-subtitle'));
     const datasets = datasetLinks(row);
     if (datasets) name.append(datasets);
-    if (canonical) {
+    if (row.duplicate_group && row.duplicate_group.canonical_source_id !== row.id) {
       const reference = state.sources.find(item => item.id === row.duplicate_group.canonical_source_id);
       name.append(containmentNote(row, reference.id, reference.display_name, sourceOverlap(row)));
     } else if (others.length) {

@@ -78,23 +78,23 @@ def check_view(
     hidden_ids = {row["id"] for row in hidden}
     eligible = [row for row in sources if row["id"] not in hidden_ids and (use == "all" or row["intended_use"] == use)]
     eligible_ids = {row["id"] for row in eligible}
-    groups = {row["duplicate_group"]["group_id"] for row in eligible if row.get("duplicate_group")}
-    count = len(eligible) if expanded else len(groups) + sum(not row.get("duplicate_group") for row in eligible)
-    expect(page.locator("#rows tr")).to_have_count(count)
+    groups = {
+        row["duplicate_group"]["group_id"]: row["duplicate_group"] for row in eligible if row.get("duplicate_group")
+    }
+    foldable = {key for key, group in groups.items() if group["canonical_source_id"] in eligible_ids}
+    standalone = {
+        row["id"]
+        for row in eligible
+        if not row.get("duplicate_group") or row["duplicate_group"]["group_id"] not in foldable
+    }
+    expected_ids = eligible_ids if expanded else standalone | {groups[key]["canonical_source_id"] for key in foldable}
+    expect(page.locator("#rows tr")).to_have_count(len(expected_ids))
     rendered = page.locator("#rows tr").evaluate_all(
         "rows=>rows.map(r=>({id:r.dataset.sourceId,examples:r.cells[1].textContent}))"
     )
     displayed_ids = [row["id"] for row in rendered]
-    if len(set(displayed_ids)) != len(displayed_ids) or not set(displayed_ids) <= eligible_ids:
-        raise ValueError("Displayed rows are duplicated or violate active filters")
-    if expanded and set(displayed_ids) != eligible_ids:
-        raise ValueError("Show everything omitted eligible sources")
-    if not expanded:
-        displayed_groups = [
-            rows[key]["duplicate_group"]["group_id"] for key in displayed_ids if rows[key].get("duplicate_group")
-        ]
-        if set(displayed_groups) != groups or len(displayed_groups) != len(groups):
-            raise ValueError("Collapsed rows do not represent every eligible duplicate group exactly once")
+    if len(set(displayed_ids)) != len(displayed_ids) or set(displayed_ids) != expected_ids:
+        raise ValueError("Displayed sources violate filters or fold under an absent/non-canonical representative")
     for row in rendered:
         counts = rows[row["id"]]["filtration"]
         expected = (

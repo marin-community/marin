@@ -110,6 +110,13 @@ def test_release_gate_preserves_archived_packets_even_during_an_explicit_catalog
     verify_preservation(before, catalog_state(catalog_query))
     assert before["archives"][0]["sources"] == 1
     assert before["archives"][0]["packets"] == 3
+    with catalog_database.begin() as connection:
+        connection.execute(text("UPDATE atlas_sources SET duplicate_group='{}'::jsonb"))
+    with pytest.raises(ValueError):
+        verify_preservation(before, catalog_state(catalog_query))
+    with catalog_database.begin() as connection:
+        connection.execute(text("UPDATE atlas_sources SET duplicate_group=NULL"))
+    verify_preservation(before, catalog_state(catalog_query))
     publish_sample(root, "after")
     load_catalog(CurationCatalog(root), catalog_query)
     after = catalog_state(catalog_query)

@@ -164,3 +164,9 @@ breakdowns sum to the area count, and that labels distinguish taxonomy wrappers
 from their subjects. Source geometry is checked after column resizing as well as
 at automatic widths. Package verification compares every tracked packaged input
 against the landed cut, applying only the preview preparation transformations.
+
+Code-only history checks also checksum stored source fingerprints, duplicate
+groups, identity survey records and pair reviews. Recomputing display groups from
+those records must preserve their archived bytes. A filtered-out canonical source
+leaves its eligible group members unfolded; the checker rejects sibling folding
+without the canonical representative.

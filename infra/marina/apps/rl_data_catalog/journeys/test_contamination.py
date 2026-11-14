@@ -12,6 +12,46 @@ from playwright.sync_api import expect
 from infra.marina.apps.rl_data_catalog.release_browser import TABLE_BOUNDS, check_view
 
 
+def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey) -> None:
+    page = journey.page
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    payload = page.evaluate("async()=> (await fetch('api/sources')).json()")
+    rows = [row for row in payload["sources"] if row["id"] in {"Marin:clean", "Marin:eval", "Marin:required"}]
+    group = {
+        "group_id": "containment-star",
+        "canonical_source_id": "Marin:clean",
+        "members": [
+            {"source_id": "Marin:clean", "overlap_with_canonical": 1},
+            {"source_id": "Marin:eval", "overlap_with_canonical": 0.97},
+            {"source_id": "Marin:required", "overlap_with_canonical": 0.96},
+        ],
+    }
+    for row in rows:
+        row.update(
+            duplicate_group=group,
+            quality="SAMPLE",
+            result="GOOD",
+            intended_use="train" if row["id"] == "Marin:clean" else "eval",
+        )
+    page.route("**/api/sources", lambda route: route.fulfill(json={**payload, "sources": rows}))
+    page.reload()
+    expect(page.locator("#rows tr")).to_have_count(1)
+    expect(page.locator("#rows tr")).to_have_attribute("data-source-id", "Marin:clean")
+    page.locator("#use").select_option("eval")
+    check_view(page, rows, use="eval")
+    expect(page.locator("#rows tr")).to_have_count(2)
+    expect(page.locator(".duplicate-toggle")).to_have_count(0)
+    expect(page.locator('tr[data-source-id="Marin:eval"] .duplicate-note')).to_contain_text(
+        "97% of eval's tasks are in clean"
+    )
+    page.locator("#use").select_option("all")
+    check_view(page, rows)
+    page.locator(".duplicate-toggle").click()
+    check_view(page, rows, expanded=True)
+    expect(page.locator("#rows tr").first).to_have_attribute("data-source-id", "Marin:clean")
+
+
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("width", [1440, 390])
 def test_partial_overlap_notes_preserve_both_directions_and_open_evidence(
@@ -30,9 +70,8 @@ def test_partial_overlap_notes_preserve_both_directions_and_open_evidence(
             row["partial_overlaps"] = [
                 {
                     "other_id": "Marin:eval",
-                    "other_display_name": "eval",
-                    "contained_fraction": 0.23,
-                    "reverse_fraction": 0.04,
+                    "source_fraction": 0.23,
+                    "other_fraction": 0.04,
                 }
             ]
     page.route("**/api/sources", lambda route: route.fulfill(json={**payload, "sources": rows}))
