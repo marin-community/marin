@@ -1691,6 +1691,12 @@ This writes an unchanged private `task-spec.json` payload and the task map. The
 wrapper's `task.toml` supplies missing CPU, RAM, disk, agent-timeout and
 verifier-timeout budgets, starting at 1 CPU, 2048 MiB RAM, 2048 MiB disk, 300
 seconds and 60 seconds. Source limits remain fixed. Preparation does not apply deduplication or lexical drops.
+Limits are checked against explicit execution requirements and preserved `task.toml`
+resources in the shared, worker, verifier, and oracle roles. CrossCode repairs also
+retain `source_archive/task.toml` among oracle resources. The archived limits are
+read only with the accompanying `taskcompendium/crosscode-remediation.json` record,
+whose version must match the TaskSpec's remediation label and which records the
+original task hash. Conflicting declarations reject preparation.
 Run `calibrate` against the emitted `task-map.json` with `--environment local`
 and the worker's delegated cgroup-v2 directory (`cgroup_parent`) and writable
 loop-device backing directory (`disk_root`) in `--environment-kwargs`. The

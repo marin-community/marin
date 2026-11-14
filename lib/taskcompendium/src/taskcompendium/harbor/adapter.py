@@ -4,6 +4,7 @@
 """Package unchanged TaskSpecs for Harbor's TaskSpec trial workload."""
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -16,22 +17,37 @@ from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import conversation_messages
 
 TASK_SPEC_FILE = "task-spec.json"
+ARCHIVED_SOURCE_CONFIG = "source_archive/task.toml"
+ARCHIVED_SOURCE_PROVENANCE = "taskcompendium/crosscode-remediation.json"
 
 
 def declared_execution_limits(task: TaskSpec) -> dict[str, int | float]:
-    """Read source limits from all preserved resource roles, rejecting disagreements."""
-    if task.execution_requirements is not None:
-        return task.execution_requirements.model_dump()
-    declared = {}
-    for resources in (task.resources.all, task.resources.worker, task.resources.verifier, task.resources.oracle):
-        for resource in resources:
-            if resource.path != "task.toml":
-                continue
-            limits = native_execution_limits(tomllib.loads(resource_bytes(resource).decode()))
-            for name, value in limits.declared.items():
-                if name in declared and declared[name] != value:
-                    raise ValueError(f"{task.id}: conflicting original {name} declarations")
-                declared[name] = value
+    """Read source limits, including provenance-bound oracle archives, rejecting disagreements."""
+    declared = task.execution_requirements.model_dump() if task.execution_requirements is not None else {}
+    configurations = [
+        resource
+        for resources in (task.resources.all, task.resources.worker, task.resources.verifier, task.resources.oracle)
+        for resource in resources
+        if resource.path == "task.toml"
+    ]
+    oracle = {resource.path: resource for resource in task.resources.oracle}
+    if ARCHIVED_SOURCE_CONFIG in oracle:
+        if ARCHIVED_SOURCE_PROVENANCE not in oracle:
+            raise ValueError(f"{task.id}: archived source configuration requires repair provenance")
+        provenance = json.loads(resource_bytes(oracle[ARCHIVED_SOURCE_PROVENANCE]))
+        if (
+            not provenance["version"]
+            or provenance["version"] != task.labels.get("remediation_version")
+            or re.fullmatch(r"[0-9a-f]{64}", provenance["original_task_sha256"]) is None
+        ):
+            raise ValueError(f"{task.id}: archived source configuration has conflicting repair provenance")
+        configurations.append(oracle[ARCHIVED_SOURCE_CONFIG])
+    for resource in configurations:
+        limits = native_execution_limits(tomllib.loads(resource_bytes(resource).decode()))
+        for name, value in limits.declared.items():
+            if name in declared and declared[name] != value:
+                raise ValueError(f"{task.id}: conflicting original {name} declarations")
+            declared[name] = value
     return declared
 
 
