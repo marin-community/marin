@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-from typing import Annotated
+from typing import Annotated, Literal
 
 import pyarrow as pa
 import pytest
@@ -85,3 +85,18 @@ def test_annotated_optional_source_ids_preserve_the_arrow_storage_contract():
     assert decoded[0].source_id == "first"
     assert decoded[0].related == ["second"]
     assert decoded[1].source_id is None
+
+
+class VersionedPolicy(BaseModel):
+    version: Literal[1]
+    execution_required: Literal[False]
+    status: Literal["retained", "excluded"]
+
+
+def test_literal_policy_fields_round_trip_through_arrow():
+    policy = VersionedPolicy(version=1, execution_required=False, status="retained")
+    table = pa.Table.from_pylist([policy.model_dump()], schema=arrow_schema(VersionedPolicy))
+    assert table.schema == pa.schema(
+        [("version", pa.int64()), ("execution_required", pa.bool_()), ("status", pa.string())]
+    )
+    assert [VersionedPolicy.model_validate(row) for row in table.to_pylist()] == [policy]
