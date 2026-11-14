@@ -92,8 +92,36 @@ def test_reference_attention_eval_shape_supports_model_sharded_grouped_query_hea
     assert output.sharding == q_sharding
 
 
+@pytest.mark.multidevice
+def test_splash_head_sharding_partitions_sparse_mask_metadata():
+    if len(jax.devices()) < 2:
+        pytest.skip("Sparse metadata partitioning needs two devices.")
+    mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:2]), ("model",), axis_types=(AxisType.Explicit,))
+    qkv = jax.ShapeDtypeStruct(
+        (1, 128, 4, 128), jnp.bfloat16, sharding=NamedSharding(mesh, P(None, None, "model", None))
+    )
+    segments = jax.ShapeDtypeStruct((1, 128), jnp.int32, sharding=NamedSharding(mesh, P()))
+    with jax.set_mesh(mesh):
+        traced = jax.make_jaxpr(
+            lambda q, k, v, ids: attention(
+                q, k, v, AttentionMask.causal().with_segment_ids(ids), implementation="tpu_splash"
+            )
+        )(qkv, qkv, qkv, segments)
+    mapped = next(eqn for eqn in traced.jaxpr.eqns if eqn.primitive.name == "shard_map")
+    metadata = [
+        var.aval for var in mapped.params["jaxpr"].invars if var.aval.dtype == jnp.int8 and len(var.aval.shape) == 3
+    ]
+    # Identical causal heads need one sparse mask group on each head shard. Global
+    # mask groups must not reach a shard-local Splash invocation.
+    assert metadata
+    assert all(aval.shape[0] == 1 for aval in metadata)
+
+
 @pytest.mark.tpu
-def test_real_tpu_splash_attention_matches_reference():
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("sequence_length", [256, 1024])
+@pytest.mark.parametrize("segmented", [False, True])
+def test_real_tpu_splash_attention_matches_reference(dtype, sequence_length, segmented):
     if jax.default_backend() != "tpu":
         pytest.skip("Splash attention requires a TPU backend.")
 
@@ -104,16 +132,42 @@ def test_real_tpu_splash_attention_matches_reference():
     )
     sharding = NamedSharding(mesh, P(None, None, "model", None))
     q_key, k_key, v_key = jax.random.split(jax.random.PRNGKey(0), 3)
-    q = jax.device_put(jax.random.normal(q_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
-    k = jax.device_put(jax.random.normal(k_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
-    v = jax.device_put(jax.random.normal(v_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
+    shape = (1, sequence_length, 8, 128)
+    q, k, v = (
+        jax.device_put((jax.random.normal(key, shape) * 0.02).astype(dtype), sharding) for key in (q_key, k_key, v_key)
+    )
     mask = AttentionMask.causal()
+    if segmented:
+        ids = jax.device_put(jnp.arange(sequence_length, dtype=jnp.int32) // 64, NamedSharding(mesh, P()))
+        mask = mask.with_segment_ids(ids)
 
-    with jax.set_mesh(mesh):
+    with jax.set_mesh(mesh), jax.default_matmul_precision("default"):
         actual = jax.jit(lambda q, k, v: attention(q, k, v, mask, implementation="tpu_splash"))(q, k, v)
         expected = jax.jit(lambda q, k, v: reference_attention(q, k, v, mask, logits_dtype=jnp.float32))(q, k, v)
 
     np.testing.assert_allclose(actual, expected, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.tpu
+def test_real_tpu_splash_attention_gradients_match_reference():
+    if jax.default_backend() != "tpu":
+        pytest.skip("Splash attention requires a TPU backend.")
+    mesh = jax.sharding.Mesh(np.asarray(jax.devices()), ("model",), axis_types=(AxisType.Explicit,))
+    sharding = NamedSharding(mesh, P(None, None, "model", None))
+    keys = jax.random.split(jax.random.PRNGKey(114), 3)
+    q, k, v = (jax.device_put(jax.random.normal(key, (1, 128, 32, 128)) * 0.5, sharding) for key in keys)
+    ids = jax.device_put(jnp.arange(128, dtype=jnp.int32) // 64, NamedSharding(mesh, P()))
+    mask = AttentionMask.causal().with_segment_ids(ids)
+
+    def objective(q, k, v, implementation):
+        output = attention(q, k, v, mask, implementation=implementation)
+        return jnp.sum(jnp.sin(output))
+
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+        actual = jax.jit(jax.grad(lambda q, k, v: objective(q, k, v, "tpu_splash"), argnums=(0, 1, 2)))(q, k, v)
+        expected = jax.jit(jax.grad(lambda q, k, v: objective(q, k, v, "reference"), argnums=(0, 1, 2)))(q, k, v)
+    for observed, reference in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(observed, reference, atol=1e-3, rtol=1e-3)
 
 
 def test_token_validity_uses_padding_ids_without_excluding_packed_boundaries():
