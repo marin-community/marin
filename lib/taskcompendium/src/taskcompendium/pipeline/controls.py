@@ -21,7 +21,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     GradingAttempt,
     NoGrader,
-    ScriptGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
@@ -45,10 +44,17 @@ from taskcompendium.pipeline.models import (
 from taskcompendium.pipeline.verification import answer_event, control_result
 from taskcompendium.runtime.environment import prepare_machine_spec, setup_user, validate_machine_spec
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
+from taskcompendium.runtime.oracle import (
+    OracleAnswerError,
+    oracle_answer_attempt,
+    oracle_environment,
+    read_oracle_answer,
+    run_oracle_command,
+)
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "19"
+CONTROLS_REVISION = "20"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -203,16 +209,6 @@ class _Sandbox:
     grader: tuple[MachineFactory, MachineSpec]
 
 
-def _oracle_environment(task: TaskSpec) -> EnvironmentRequirements:
-    """Use the agent's requirements, falling back to the grader only for an empty agent environment."""
-    if task.environment_requirements != EnvironmentRequirements():
-        return task.environment_requirements
-    grader = task.grader
-    if not isinstance(grader, VerifyitGrader | ScriptGrader) or grader.environment is None:
-        raise ValueError("An oracle requires a grader environment")
-    return grader.environment
-
-
 async def _control(
     task: TaskSpec,
     name: str,
@@ -224,7 +220,7 @@ async def _control(
     if isinstance(submission, OracleCommand):
         if sandbox is None:
             raise ValueError("An oracle command requires a sandbox grader")
-        environment = _oracle_environment(task)
+        environment = oracle_environment(task, submission)
         factory, spec = _selected_machine(sandbox.machines, environment, sandbox.memory_mb)
         try:
             attempt = await _oracle_attempt(task, submission, factory, spec, environment)
@@ -300,24 +296,19 @@ async def _oracle_attempt(
             Command(("sh", "-c", setup), cwd=workspace, timeout=ORACLE_TIMEOUT, user=setup_user(factory.backend))
             for setup in environment.setup_commands
         )
-        commands.append(
-            Command(
-                (
-                    "/bin/bash",
-                    "-lc",
-                    command.command,
-                ),
-                cwd=workspace,
-                timeout=ORACLE_TIMEOUT,
-                output_limit_bytes=ORACLE_OUTPUT_LIMIT_BYTES,
-            )
-        )
         for step in commands:
             result = await machine.run(step)
             if result.exit_code != 0:
                 raise OracleFailed(
                     f"Oracle command exited {result.exit_code}: {result.stderr.decode(errors='replace')[-2000:]}"
                 )
+        result = await run_oracle_command(
+            machine, command, cwd=workspace, timeout=ORACLE_TIMEOUT, output_limit_bytes=ORACLE_OUTPUT_LIMIT_BYTES
+        )
+        if result.exit_code != 0:
+            raise OracleFailed(
+                f"Oracle command exited {result.exit_code}: {result.stderr.decode(errors='replace')[-2000:]}"
+            )
         if command.answer_file is None:
             evidence = await ShellEnvironment(
                 machine, task.output_paths, ORACLE_TIMEOUT, ORACLE_OUTPUT_LIMIT_BYTES
@@ -325,18 +316,16 @@ async def _oracle_attempt(
             return GradingAttempt(
                 ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE)), evidence.files
             )
-        # Relative answers are read from the same workspace as the oracle command.
-        answer = await machine.run(
-            Command(
-                ("cat", command.answer_file),
+        try:
+            answer = await read_oracle_answer(
+                machine,
+                command.answer_file,
                 cwd=workspace,
                 timeout=ORACLE_TIMEOUT,
                 output_limit_bytes=ORACLE_OUTPUT_LIMIT_BYTES,
             )
-        )
-        if answer.exit_code != 0 or answer.stdout_truncated:
-            raise OracleFailed(f"Oracle wrote no readable answer file {command.answer_file}")
-        reply = TextMessage(role="assistant", content=answer.stdout.decode(errors="replace"))
-        return GradingAttempt(ConversationTrace(events=(*task.context.events, reply)))
+        except OracleAnswerError as error:
+            raise OracleFailed(str(error)) from error
+        return oracle_answer_attempt(task, answer)
     finally:
         await machine.close()
