@@ -21,24 +21,63 @@ use crate::errors::StatsError;
 use crate::proto::finelog::stats::{CatalogColumnBounds, ObjectRef};
 use crate::store::segment::metadata_int64_bounds;
 
-/// Column name to the segment's inclusive `(min, max)` over its non-null values.
-pub type ColumnBounds = BTreeMap<String, (i64, i64)>;
+/// One flagged column's recorded range over a segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnRange {
+    /// The inclusive range of the segment's non-null values; `min <= max`.
+    Range { min: i64, max: i64 },
+    /// No usable range: the column is all null, absent from a file written
+    /// before it existed, not Int64, or without footer statistics. Planning
+    /// always scans the segment. Recording it still ends the segment's
+    /// backfill, so it never holds a backfill slot again.
+    Unknown,
+}
 
-/// Recorded for a column the segment's range cannot be known or used for: all
-/// null, absent from a file written before the column existed, or without
-/// footer statistics. Its min exceeds its max, so it excludes no range;
-/// recording it still ends the segment's backfill, so it never holds a backfill
-/// slot again.
-pub const ALWAYS_SCAN: (i64, i64) = (i64::MAX, i64::MIN);
+impl ColumnRange {
+    /// The range `min..=max`, or `Unknown` when `min > max`, so a `Range`
+    /// always holds a non-empty range.
+    pub fn new(min: i64, max: i64) -> Self {
+        if min > max {
+            Self::Unknown
+        } else {
+            Self::Range { min, max }
+        }
+    }
+
+    /// The stored form: `Some` for both ends of a range, `None` for both when
+    /// unknown.
+    fn ends(self) -> (Option<i64>, Option<i64>) {
+        match self {
+            Self::Range { min, max } => (Some(min), Some(max)),
+            Self::Unknown => (None, None),
+        }
+    }
+
+    /// The inverse of `ends`; `None` for an entry with only one end, which is
+    /// dropped so its column is backfilled again.
+    fn from_ends(min: Option<i64>, max: Option<i64>) -> Option<Self> {
+        match (min, max) {
+            (Some(min), Some(max)) => Some(Self::new(min, max)),
+            (None, None) => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
+/// Column name to the segment's recorded range for that column.
+pub type ColumnBounds = BTreeMap<String, ColumnRange>;
 
 /// The `source_json` key that carries the bounds beside the `ObjectRef` fields.
 const SOURCE_JSON_KEY: &str = "columnBounds";
 
+/// One `source_json` entry; an unknown range has neither `min` nor `max`.
 #[derive(Serialize, Deserialize)]
 struct StoredColumnBounds {
     column: String,
-    min: i64,
-    max: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    min: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -56,7 +95,7 @@ fn widen(bounds: &mut Option<(i64, i64)>, low: i64, high: i64) {
 
 /// The bounds of `columns` over `batches`, computed while the rows are still in
 /// memory (flush and merge outputs). A column the batches do not hold, or that
-/// is not Int64, is always scanned.
+/// is not Int64, is `Unknown`.
 pub fn from_batches(batches: &[RecordBatch], columns: &[String]) -> ColumnBounds {
     let mut bounds = ColumnBounds::new();
     for column in columns {
@@ -76,21 +115,26 @@ pub fn from_batches(batches: &[RecordBatch], columns: &[String]) -> ColumnBounds
                 widen(&mut range, low, high);
             }
         }
-        let range = if typed { range } else { None };
-        bounds.insert(column.clone(), range.unwrap_or(ALWAYS_SCAN));
+        let range = match range {
+            Some((min, max)) if typed => ColumnRange::new(min, max),
+            _ => ColumnRange::Unknown,
+        };
+        bounds.insert(column.clone(), range);
     }
     bounds
 }
 
 /// The bounds of `columns` from a Parquet footer's row-group statistics, for
 /// segments written before their table flagged a column. A column whose
-/// statistics are missing in any non-empty row group is always scanned.
+/// statistics are missing in any non-empty row group is `Unknown`.
 pub fn from_parquet(metadata: &ParquetMetaData, columns: &[String]) -> ColumnBounds {
     let mut bounds = ColumnBounds::new();
     for column in columns {
         let range = metadata_int64_bounds(metadata, column)
             .and_then(|(minimum, maximum)| minimum.zip(maximum))
-            .unwrap_or(ALWAYS_SCAN);
+            .map_or(ColumnRange::Unknown, |(minimum, maximum)| {
+                ColumnRange::new(minimum, maximum)
+            });
         bounds.insert(column.clone(), range);
     }
     bounds
@@ -122,10 +166,13 @@ pub fn source_json(source: &ObjectRef, bounds: &ColumnBounds) -> Result<String, 
     })?;
     let stored: Vec<_> = bounds
         .iter()
-        .map(|(column, &(min, max))| StoredColumnBounds {
-            column: column.clone(),
-            min,
-            max,
+        .map(|(column, range)| {
+            let (min, max) = range.ends();
+            StoredColumnBounds {
+                column: column.clone(),
+                min,
+                max,
+            }
         })
         .collect();
     object.insert(
@@ -136,6 +183,7 @@ pub fn source_json(source: &ObjectRef, bounds: &ColumnBounds) -> Result<String, 
 }
 
 /// The bounds stored in a `source_json`; empty for one written without them.
+/// An entry with only one end is dropped, so its column is backfilled again.
 pub fn from_source_json(json: &str) -> Result<ColumnBounds, StatsError> {
     let stored: StoredSource = serde_json::from_str(json).map_err(|error| {
         StatsError::Internal(format!("decode object segment column bounds: {error}"))
@@ -143,7 +191,7 @@ pub fn from_source_json(json: &str) -> Result<ColumnBounds, StatsError> {
     Ok(stored
         .column_bounds
         .into_iter()
-        .map(|entry| (entry.column, (entry.min, entry.max)))
+        .filter_map(|entry| Some((entry.column, ColumnRange::from_ends(entry.min, entry.max)?)))
         .collect())
 }
 
@@ -151,21 +199,27 @@ pub fn from_source_json(json: &str) -> Result<ColumnBounds, StatsError> {
 pub fn to_proto(bounds: &ColumnBounds) -> Vec<CatalogColumnBounds> {
     bounds
         .iter()
-        .map(|(column, &(min, max))| CatalogColumnBounds {
-            column: Some(column.clone()),
-            min: Some(min),
-            max: Some(max),
-            ..Default::default()
+        .map(|(column, range)| {
+            let (min, max) = range.ends();
+            CatalogColumnBounds {
+                column: Some(column.clone()),
+                min,
+                max,
+                ..Default::default()
+            }
         })
         .collect()
 }
 
-/// The bounds a checkpoint records; an entry missing a field is dropped, so its
-/// column is scanned and backfilled again.
+/// The bounds a checkpoint records. An entry without a column or with only one
+/// end is dropped, so its column is scanned and backfilled again.
 pub fn from_proto(entries: &[CatalogColumnBounds]) -> ColumnBounds {
     entries
         .iter()
-        .filter_map(|entry| Some((entry.column.clone()?, (entry.min?, entry.max?))))
+        .filter_map(|entry| {
+            let range = ColumnRange::from_ends(entry.min, entry.max)?;
+            Some((entry.column.clone()?, range))
+        })
         .collect()
 }
 
@@ -204,22 +258,25 @@ mod tests {
             &[batch(vec![Some(5), None, Some(9)]), batch(vec![Some(2)])],
             &columns(&["epoch_ms"]),
         );
-        assert_eq!(bounds.get("epoch_ms"), Some(&(2, 9)));
+        assert_eq!(
+            bounds.get("epoch_ms"),
+            Some(&ColumnRange::Range { min: 2, max: 9 })
+        );
     }
 
     #[test]
-    fn an_all_null_absent_or_non_int64_column_is_always_scanned() {
+    fn an_all_null_absent_or_non_int64_column_is_unknown() {
         let bounds = from_batches(
             &[batch(vec![None, None])],
             &columns(&["epoch_ms", "added_later", "key"]),
         );
-        assert_eq!(bounds.get("epoch_ms"), Some(&ALWAYS_SCAN));
-        assert_eq!(bounds.get("added_later"), Some(&ALWAYS_SCAN));
-        assert_eq!(bounds.get("key"), Some(&ALWAYS_SCAN));
+        assert_eq!(bounds.get("epoch_ms"), Some(&ColumnRange::Unknown));
+        assert_eq!(bounds.get("added_later"), Some(&ColumnRange::Unknown));
+        assert_eq!(bounds.get("key"), Some(&ColumnRange::Unknown));
     }
 
     #[test]
-    fn a_footer_without_statistics_is_always_scanned() {
+    fn a_footer_without_statistics_is_unknown() {
         let input = batch(vec![Some(5), Some(9)]);
         let properties = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::None)
@@ -231,8 +288,8 @@ mod tests {
         writer.close().unwrap();
         let reader = SerializedFileReader::new(bytes::Bytes::from(encoded)).unwrap();
         let bounds = from_parquet(reader.metadata(), &columns(&["epoch_ms", "added_later"]));
-        assert_eq!(bounds.get("epoch_ms"), Some(&ALWAYS_SCAN));
-        assert_eq!(bounds.get("added_later"), Some(&ALWAYS_SCAN));
+        assert_eq!(bounds.get("epoch_ms"), Some(&ColumnRange::Unknown));
+        assert_eq!(bounds.get("added_later"), Some(&ColumnRange::Unknown));
         assert!(missing_columns(&bounds, &columns(&["epoch_ms", "added_later"])).is_empty());
     }
 
@@ -243,7 +300,7 @@ mod tests {
             byte_size: Some(42),
             ..Default::default()
         };
-        let bounds = ColumnBounds::from([("epoch_ms".to_string(), (10, 20))]);
+        let bounds = ColumnBounds::from([("epoch_ms".to_string(), ColumnRange::new(10, 20))]);
         let json = source_json(&source, &bounds).unwrap();
         let decoded: ObjectRef = serde_json::from_str(&json).unwrap();
         assert_eq!(
@@ -258,17 +315,56 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_form_round_trips_and_drops_incomplete_entries() {
+    fn unknown_round_trips_without_ends_in_source_json_and_checkpoint() {
         let bounds = ColumnBounds::from([
-            ("epoch_ms".to_string(), (10, 20)),
-            ("empty".to_string(), ALWAYS_SCAN),
+            ("epoch_ms".to_string(), ColumnRange::new(10, 20)),
+            ("empty".to_string(), ColumnRange::Unknown),
         ]);
-        assert_eq!(from_proto(&to_proto(&bounds)), bounds);
-        let incomplete = CatalogColumnBounds {
+        let json = source_json(&ObjectRef::default(), &bounds).unwrap();
+        assert!(
+            json.contains(r#"{"column":"empty"}"#),
+            "unknown has no ends: {json}"
+        );
+        assert_eq!(from_source_json(&json).unwrap(), bounds);
+
+        let checkpoint = to_proto(&bounds);
+        let empty = checkpoint
+            .iter()
+            .find(|entry| entry.column.as_deref() == Some("empty"))
+            .unwrap();
+        assert_eq!((empty.min, empty.max), (None, None));
+        assert_eq!(from_proto(&checkpoint), bounds);
+    }
+
+    #[test]
+    fn an_inverted_range_is_never_a_range() {
+        assert_eq!(ColumnRange::new(i64::MAX, i64::MIN), ColumnRange::Unknown);
+        assert_eq!(
+            ColumnRange::new(7, 7),
+            ColumnRange::Range { min: 7, max: 7 }
+        );
+
+        let inverted = r#"{"columnBounds":[{"column":"epoch_ms","min":9223372036854775807,"max":-9223372036854775808}]}"#;
+        let unknown = ColumnBounds::from([("epoch_ms".to_string(), ColumnRange::Unknown)]);
+        assert_eq!(from_source_json(inverted).unwrap(), unknown);
+        let entry = CatalogColumnBounds {
+            column: Some("epoch_ms".to_string()),
+            min: Some(i64::MAX),
+            max: Some(i64::MIN),
+            ..Default::default()
+        };
+        assert_eq!(from_proto(&[entry]), unknown);
+    }
+
+    #[test]
+    fn an_entry_with_one_end_is_dropped_for_backfill() {
+        let entry = CatalogColumnBounds {
             column: Some("epoch_ms".to_string()),
             min: Some(1),
             ..Default::default()
         };
-        assert!(from_proto(&[incomplete]).is_empty());
+        assert!(from_proto(&[entry]).is_empty());
+        let json = r#"{"columnBounds":[{"column":"epoch_ms","max":5}]}"#;
+        assert!(from_source_json(json).unwrap().is_empty());
     }
 }

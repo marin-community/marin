@@ -1773,6 +1773,7 @@ mod tests {
         partition_field, OperatingPolicy, PartitionField, PartitionSpec, RemoteRetentionPolicy,
         SourceLayout, TableMigrationStatus, TableSpec, TableSpecView,
     };
+    use crate::store::column_bounds::ColumnRange;
     use crate::store::schema::{
         schema_to_arrow, schema_to_proto_owned, with_implicit_cluster, with_implicit_seq,
         CoveringProjection,
@@ -5400,7 +5401,7 @@ mod tests {
         }
 
         /// The bounds the catalog records for each segment, in segment order.
-        fn recorded_bounds(&self) -> Vec<Option<(i64, i64)>> {
+        fn recorded_bounds(&self) -> Vec<Option<ColumnRange>> {
             let records = self.store.catalog.object_segments("iris.worker").unwrap();
             self.paths
                 .iter()
@@ -5425,9 +5426,9 @@ mod tests {
         assert_eq!(
             table.recorded_bounds(),
             vec![
-                Some((1_000, 1_500)),
-                Some((2_000, 2_500)),
-                Some((3_000, 3_500))
+                Some(ColumnRange::new(1_000, 1_500)),
+                Some(ColumnRange::new(2_000, 2_500)),
+                Some(ColumnRange::new(3_000, 3_500))
             ]
         );
         table.cleanup();
@@ -5455,9 +5456,9 @@ mod tests {
         assert_eq!(
             table.recorded_bounds(),
             vec![
-                Some((1_000, 1_500)),
-                Some((2_000, 2_500)),
-                Some((3_000, 3_500))
+                Some(ColumnRange::new(1_000, 1_500)),
+                Some(ColumnRange::new(2_000, 2_500)),
+                Some(ColumnRange::new(3_000, 3_500))
             ]
         );
         let sources_after: Vec<_> = table
@@ -5569,7 +5570,7 @@ mod tests {
         (store, empty_data_dir)
     }
 
-    fn log_epoch_bounds(store: &Store) -> Vec<Option<(i64, i64)>> {
+    fn log_epoch_bounds(store: &Store) -> Vec<Option<ColumnRange>> {
         store
             .catalog
             .object_segments(LOG_NAMESPACE_NAME)
@@ -5598,7 +5599,7 @@ mod tests {
         );
         write_log_rows(&store, 5_000).await;
         assert!(
-            log_epoch_bounds(&store).contains(&Some((5_000, 5_500))),
+            log_epoch_bounds(&store).contains(&Some(ColumnRange::new(5_000, 5_500))),
             "a segment flushed after recovery records epoch_ms bounds"
         );
 
@@ -5651,7 +5652,7 @@ mod tests {
             .is_none());
         assert_eq!(
             log_epoch_bounds(&store),
-            vec![Some((1_000, 1_500))],
+            vec![Some(ColumnRange::new(1_000, 1_500))],
             "the backfill records the pre-recovery segment's bounds from its footer"
         );
 
