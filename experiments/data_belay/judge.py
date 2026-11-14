@@ -9,7 +9,8 @@ Welch t interval over the values of both arms. Each group has two:
 * the gain, against the shared control, which trains on the base mix alone;
 * the harm, against the dilution references at the treatment's share, which give that share to text no eval measures.
   Giving up the share of the base mix costs Uncheatable about 2% on its own at a 20% share, past its harm limit, so
-  the harm is what the treatment costs beyond that. Without references at the share, the harm is against the control.
+  the harm is what the treatment costs beyond that. Without references, as for the control, which gives up no share,
+  the harm is against the control.
 
 Against another candidate (``report --against``), both are against that candidate: the two give up the same share.
 

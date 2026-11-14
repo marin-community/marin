@@ -35,6 +35,13 @@ DILUTION_REFERENCES = {
     )
 }
 REFERENCE_SEEDS = (0, 1, 2)
+# The Datakit registry source of each dilution reference, by the label that `prepare-datakit` gives its runs.
+DILUTION_REFERENCE_SOURCES = {
+    "dk-climblab-ja": "climblab-ja",
+    "dk-finepdfs-cmn_hani": "finepdfs/cmn_Hani",
+    "dk-finepdfs-tha_thai": "finepdfs/tha_Thai",
+    "dk-finepdfs-arb_arab": "finepdfs/arb_Arab",
+}
 # Choice loss and accuracy of each run's final checkpoint, one JSON per run id, in this directory under the training
 # cluster's MARIN_PREFIX. Outside the runs' 30-day TTL root, so the verdicts can be recomputed after the checkpoints
 # are gone.

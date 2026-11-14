@@ -33,11 +33,14 @@ from experiments.data_belay.prepare import (
 from experiments.data_belay.results import (
     CHOICE_DIR,
     CONTROL_SEEDS,
+    DILUTION_REFERENCE_SOURCES,
+    REFERENCE_SEEDS,
     arm_metrics,
     arm_mix,
     arm_share,
     control_run_id,
     dilution_arm,
+    dilution_references,
     run_exists,
     run_scored,
     treatment_run_id,
@@ -355,8 +358,6 @@ def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
     arms = (candidate,) if against is None else (candidate, against)
     for name in arms:
         click.echo(_data_line(rung, name, seed_list))
-    if against is None and not against_dilution:
-        click.echo("no dilution references at this share and rung: harm is against the control")
     click.echo(
         f"| group | Δ against {baseline_name} | interval | Δ against {harm_name} | interval | harm limit | call |"
     )
@@ -424,9 +425,28 @@ def _rung_result(
             f"{candidate} trained at a share of {share:g} and {against} at {against_share:g}; "
             "compare candidates at one share"
         )
+    if against is None:
+        require_dilution_references(candidate, share, rung)
     dilution = dilution_arm(choice_root, rung, candidate, share) if against is None else None
     baseline, treatment = arm_metrics(choice_root, rung, baseline_ids), arm_metrics(choice_root, rung, treatment_ids)
     return judge(baseline, treatment, limits, dilution), dilution is not None
+
+
+def require_dilution_references(candidate: str, share: float, rung: str) -> None:
+    """Refuse to judge a candidate against the control at a share without dilution references, where the harm would
+    include what giving up the share costs; the control gives up none."""
+    if share == 0 or dilution_references(candidate, share):
+        return
+    prepare = "\n".join(
+        f"  uv run data-belay prepare-datakit --label {label} --source {source} --share {share:g} --submit"
+        for label, source in DILUTION_REFERENCE_SOURCES.items()
+    )
+    raise click.ClickException(
+        f"{candidate} trained at a share of {share * 100:g}%, which has no dilution references, so its harm would "
+        "include what giving up the share costs. Compare it with another candidate at that share (--against), or "
+        f"build the references:\n{prepare}\nthen train seeds {', '.join(map(str, REFERENCE_SEEDS))} of each at "
+        f"{rung}, score them, and add their labels to results.DILUTION_REFERENCES[{share:g}]."
+    )
 
 
 def _arm_run_ids(rung: str, candidate: str, seeds: list[int], against: str | None) -> tuple[list[str], list[str]]:

@@ -104,14 +104,15 @@ at (`results.DILUTION_REFERENCES`): four Datakit sources at 20% whose text no ev
 evals do not share (ClimbLab Japanese, and FinePDFs Chinese, Thai and Arabic). Giving up 20% of the base mix costs
 every group 1.3% to 3.6% on its own at d512 and d768, past every group's harm limit, so the harm is what a candidate
 costs beyond that. The reference arm holds one value per reference, the mean of its seeds, because the references
-differ from each other by more than their seeds do. At a share without references, the harm is against the control.
+differ from each other by more than their seeds do. Only 20% has references so far. `report` refuses a candidate at
+another share, unless `--against` is given, because its harm against the control would include what giving up the
+share costs. The refusal prints the commands that build the references at that share.
 
 Use `--against` when the question is A instead of B at one share: a filtered dataset against its source, or two
 candidates for one place in the mix. Both the gain and the harm are then against B's runs, since both arms give up
 the same share: `better` means A beats B, and `worse` means A costs more than B past the harm limit. Use the
 default, against the control, for a dataset that has no B: the gain is what it adds over the base mix despite giving
-up the share, and the harm is what it costs beyond the dilution references. At a share without references, that harm
-includes the cost of giving up the share, so a `worse` group there may be dilution alone.
+up the share, and the harm is what it costs beyond the dilution references.
 
 A group is `better` (gain interval below 0, and a gain of at least 1%), `worse` (harm interval above its harm limit),
 `neutral` (harm interval below the limit) or `unresolved`. The harm limit is 1%, or 2.5 seed SDs of the d512 control
@@ -174,6 +175,10 @@ with seeds 0–2 on both models, so the 6-seed vanilla arms below count their fi
 | Cosmopedia web samples, 20% | no gain | no gain | no gain | no gain |
 | FineWeb, 50% | hurts | hurts | hurts | hurts |
 | Null: control seeds 6–8 | no gain | no gain | no gain | not run |
+
+FineWeb at 50% was judged with its harm against the control, which `report` now refuses at a share without
+references. Its `hurts` comes from math and code, +3.5% and +8.6% against the control at d512, and part of that may
+be what giving up half the base mix costs on its own.
 
 The gains agree: across the 30 pairs of arm and group at each rung, the two models' `Δ`s against the control
 correlate at 0.99, and where their signs differ both are within 1%. The one rung that turns from no to yes, FineWeb
