@@ -554,10 +554,7 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
                             "api_base": "https://candidate.fixture/v1",
                             "max_turns": 1,
                             "max_tokens": 128,
-
-
                             "request_parameters": {"temperature": 0.7, "top_p": 0.95, "extra_body": {"top_k": 20}},
-
                         }
                         if agent_name == "task-spec-chat"
                         else {}
@@ -627,8 +624,7 @@ async def test_candidate_sampling_cannot_replace_original_task_tools(tmp_path, m
             task=TaskConfig(path=directory), trial_name="tool-replacement", trials_dir=tmp_path / "trials",
             agent=AgentConfig(name="task-spec-chat", model_name="openai/candidate", kwargs={
                 "api_base": "https://candidate.fixture/v1", "max_turns": 1, "max_tokens": 128,
-                  "request_parameters": override,
-
+                "request_parameters": override,
             }),
         ))
     assert calls == []
@@ -860,9 +856,7 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
                     "api_base": "https://candidate.fixture/v1",
                     "max_turns": 3,
                     "max_tokens": 128,
-
                     "request_parameters": {"temperature": 0.7},
-
                 },
             ),
             environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
