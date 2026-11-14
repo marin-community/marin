@@ -58,7 +58,7 @@ expired jobs about once a minute. An expired, killed or preempted machine raises
 Daytona disables the provider's inactivity auto-stop while retaining the wall-clock
 TTL and caller-owned teardown. If a container-IP control failure reveals a stopped,
 paused, archived, failed or destroyed sandbox, the command raises `MachineTerminated`.
-Pending startup continues to use provider recovery.
+Pending startup keeps the existing control retries.
 
 ```python
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
