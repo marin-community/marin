@@ -98,13 +98,14 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
+from cloud.iris.role_topology import RoleTopology
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
     resolve_ray_spill_target,
     validate_ray_spill_dir,
 )
-from cloud.iris.launch_config import RunMode, hugging_face_models, load_launch_config
+from cloud.iris.launch_config import RunMode, derive_launch_topology, hugging_face_models, load_launch_config
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -1229,6 +1230,8 @@ def _ray_mem_flags() -> list[str]:
 def ray_start_head(
     head_ip: str,
     spill_target: RaySpillTarget,
+    *,
+    labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1243,6 +1246,7 @@ def ray_start_head(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.head_flags(),
+        *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray HEAD: {' '.join(cmd)}")
@@ -1256,6 +1260,8 @@ def ray_start_worker(
     ray_port: int,
     node_ip: str,
     spill_target: RaySpillTarget,
+    *,
+    labels: dict[str, str] | None = None,
 ) -> None:
     spill_target.prepare_node()
     cmd = [
@@ -1266,6 +1272,7 @@ def ray_start_worker(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.worker_flags(),
+        *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray WORKER: {' '.join(cmd)}")
@@ -1294,7 +1301,12 @@ def ray_stop() -> None:
     _log(f"Ray stop completed (exit {completed.returncode})")
 
 
-def wait_for_nodes(ray_address: str, expected_nodes: int, timeout: int, rewrite_cb=None) -> None:
+def wait_for_nodes(
+    ray_address: str,
+    expected_nodes: int,
+    timeout: int,
+    rewrite_cb=None,
+) -> None:
     """Block until the Ray cluster reports ``expected_nodes`` alive nodes.
 
     ``rewrite_cb`` (head only): a no-arg callable invoked on every poll to RE-PUBLISH
@@ -1964,6 +1976,7 @@ def run_head(
     ray_start_head(
         head_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        labels=args.ray_labels,
     )
     _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
 
@@ -2089,6 +2102,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
         ray_port,
         node_ip,
         resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        labels=args.ray_labels,
     )
     wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout)
     _log(f"Worker rank {rank} joined Ray cluster at {ray_address}; parking until the head finishes.")
@@ -2172,6 +2186,8 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
+        role_topology=derive_launch_topology(_container(config)).role_topology,
+        ray_labels={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
         rendezvous_dir=str(config.ray.rendezvous_dir),
@@ -2296,6 +2312,8 @@ def main() -> None:
     launch_config = load_launch_config(config_path)
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
+    if args.role_topology is not None:
+        args.ray_labels = args.role_topology.node_labels(_rank())
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.
