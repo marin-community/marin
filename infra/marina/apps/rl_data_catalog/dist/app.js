@@ -12,8 +12,6 @@ const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
 const state = {sources: [], sort: 'display_name', direction: 1, origin: 'all', syncedAt: null, daytonaLimit: null};
 const day = value => value ? new Date(value).toLocaleDateString('en-US', {month: 'short', day: '2-digit', year: 'numeric', timeZone: 'UTC'}) : '—';
 
-const originLabels = {tasktrove: 'TaskTrove', evalchemy: 'Evalchemy', harbor_hub: 'Harbor Hub', nemotron: 'Nemotron', 'Task Trove': 'TaskTrove'};
-function originOf(row) { return originLabels[row.origin] || row.origin; }
 function resultKey(row) { return row.result || 'none'; }
 function value(row, key) {
   if (key === 'examples') return row.filtration.example_count;
@@ -138,35 +136,12 @@ function render() {
   $('visible-count').textContent = `${number.format(displayed.length)} displayed sources` +
     (folded ? ` · ${number.format(folded)} duplicate/subset members folded` : '') + (hidden ? ` · ${number.format(hidden)} QUICK or BAD hidden` : '');
 }
-const containmentPercent = new Intl.NumberFormat('en-US', {style: 'percent', maximumFractionDigits: 1});
-function containmentNote(row, otherId, otherName, fraction, reverse = null) {
-  const note = node('span', undefined, 'source-subtitle duplicate-note');
-  const link = () => { const anchor = node('a', otherName); anchor.href = evidenceLink({id: otherId}); return anchor; };
-  note.append(fraction == null ? 'Unmeasured containment with ' : `${containmentPercent.format(fraction)} of ${row.display_name}'s tasks are in `, link());
-  if (reverse != null) note.append(` · ${containmentPercent.format(reverse)} of `, link(), `'s tasks are in ${row.display_name}`);
-  return note;
-}
-function partialOverlapNotes(row) {
-  return (row.partial_overlaps || []).map(pair => {
-    const other = state.sources.find(source => source.id === pair.other_id);
-    return containmentNote(row, pair.other_id, other.display_name, pair.source_fraction, pair.other_fraction);
-  });
-}
-function partialOverlapDetails(row) {
-  if (!row.partial_overlaps?.length) return null;
-  const content = node('div'); content.append(...partialOverlapNotes(row)); return content;
-}
 function sourceRow(row, others, canonical) {
     const tr = node('tr', undefined, canonical ? 'duplicate-member' : ''); tr.dataset.sourceId = row.id;
     const name = node('td'), open = node('button', row.display_name, 'source-name');
     open.title = row.display_name; open.addEventListener('click', () => details(row));
-    name.append(open, node('span', [originOf(row), row.build_path].filter(Boolean).join(' · '), 'source-subtitle'));
-    const datasets = datasetLinks(row);
-    if (datasets) name.append(datasets);
-    if (row.duplicate_group && row.duplicate_group.canonical_source_id !== row.id) {
-      const reference = state.sources.find(item => item.id === row.duplicate_group.canonical_source_id);
-      name.append(containmentNote(row, reference.id, reference.display_name, sourceOverlap(row)));
-    } else if (others.length) {
+    name.append(open);
+    if (others.length) {
       const groupId = row.duplicate_group.group_id, expanded = expandedGroups.has(groupId);
       const toggle = node('button', expanded ? '▾' : '▸', 'text-button duplicate-toggle');
       toggle.title = `${others.length} duplicate/subset member${others.length === 1 ? '' : 's'}`;
@@ -175,7 +150,6 @@ function sourceRow(row, others, canonical) {
       toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); update(); });
       name.prepend(toggle);
     }
-    name.append(...partialOverlapNotes(row));
     const examples = node('td', row.filtration.example_count == null ? (row.filtration.state === 'pending_oracle' ? 'Pending oracle filtration' : 'Pending') : number.format(row.filtration.example_count), 'num');
     examples.title = row.filtration.reason;
     const filtration = node('td', undefined, 'filtration-cell'); filtration.append(filtrationChip(row.filtration));
@@ -211,7 +185,6 @@ function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   $('detail-difficulty-bars').replaceChildren(AtlasDifficulty.comparison(row.difficulty));
   const controls = row.curation?.verification;
-  const canonical = row.duplicate_group && state.sources.find(source => source.id === row.duplicate_group.canonical_source_id);
   const fields = [
     ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
     ['Content review', row.quality_review_status],
@@ -224,8 +197,7 @@ function details(row) {
     ['Dataset revision', row.dataset_revision], ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
     ['Control status', controls?.status], ['Control counts', controls?.counts],
     ['Duplicate group', row.duplicate_group && `${row.duplicate_group.group_id}; canonical ${row.duplicate_group.canonical_source_id}`],
-    ['Measured containment', canonical && canonical.id !== row.id ? containmentNote(row, canonical.id, canonical.display_name, sourceOverlap(row)) : null],
-    ['Partial overlaps (not folded)', partialOverlapDetails(row)],
+    ['Cross-source overlap', overlapEvidence(row, state.sources)],
     ['Grading boundary required', gradingChips(row)], ['Grading census', row.grading_environment],
     ['Backend fit by role', backendDetails(row)],
     ['Lexical measurement method', row.lexical_contamination && `${row.lexical_contamination.ngram_length}-gram overlap`],

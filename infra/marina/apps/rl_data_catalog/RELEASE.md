@@ -178,3 +178,9 @@ layouts, checking field/table bounds and the Daytona verdict and operations link
 Hosted verification also compares recomputed duplicate groups and directional
 notes against the input-bound projection and checks that stored groups remain
 accessible as archived evidence.
+
+Design invariants: every main-table source cell contains only the source-name
+button and optional fold toggle. Source subtitles, dataset links, overlap notes
+and all other secondary content belong in Evidence/detail views. Enum chips
+carry their label without secondary text underneath. The browser gates enforce
+both invariants at 1440/390 in light/dark themes before every publication.

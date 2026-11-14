@@ -184,7 +184,16 @@ class CatalogReader:
         key = url.path + ("?" + query if query else "")
         if key not in self.cache:
             params = dict(parse_qsl(url.query))
-            if self.query is not None and url.path in {"api/curriculum/area", "api/curriculum/tasks"}:
+            if self.query is not None and url.path == "api/source-labels":
+                catalog = self.get("api/sources")
+                data = {
+                    "sources": [
+                        {key: row[key] for key in ("id", "display_name", "origin", "build_path")}
+                        for row in catalog["sources"]
+                    ],
+                    "snapshot_id": catalog["snapshot_id"],
+                }
+            elif self.query is not None and url.path in {"api/curriculum/area", "api/curriculum/tasks"}:
                 release = params.get("release", "")
                 if release not in self.releases:
                     self.releases[release] = self.query(RELEASE_SQL, {"release": release})["rows"][0]

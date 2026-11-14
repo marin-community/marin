@@ -197,6 +197,21 @@ def create_api(services: AppletServices) -> FastAPI:
     counts = {item.source_id: item for item in SourceCounts.model_validate_json(SOURCE_COUNTS).sources}
     register_curriculum_routes(api, engine)
 
+    @api.get("/source-labels")
+    def source_labels() -> dict[str, Any]:
+        with engine.connect() as connection:
+            metadata = loaded_catalog(connection)
+            rows = connection.execute(
+                text(
+                    "SELECT id,declaration->>'display_name' AS display_name, "
+                    "declaration->>'origin' AS origin,declaration->>'build_path' AS build_path "
+                    "FROM atlas_sources WHERE load_id=:load_id ORDER BY id"
+                ),
+                {"load_id": metadata["load_id"]},
+            ).mappings()
+            labels = [{**row, "id": canonical_source_id(row["id"])} for row in rows]
+        return {"sources": labels, "snapshot_id": metadata["snapshot_id"]}
+
     @api.get("/sources")
     def sources() -> dict[str, Any]:
         with engine.connect() as connection:

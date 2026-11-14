@@ -71,7 +71,6 @@ th.num button { justify-content: flex-end; }
 .resizing-column, .resizing-column * { cursor: col-resize !important; user-select: none; }
 .source-name { border: 0; background: none; padding: 0; color: #244a37; font-size: 14px; font-weight: 550; text-align: left; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-name:hover { text-decoration: underline; }
-.source-subtitle { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .use-cell { font-size: 12px; color: #617168; }
 .area-link { font-size: 12px; line-height: 1.5; display: inline-block; }
 .muted { color: #8c9890; }
@@ -209,7 +208,6 @@ a.secondary:hover { text-decoration: none; }
 .duplicate-toggle { display: inline-block; margin-right: 6px; padding: 2px 4px; font-size: 16px; }
 .duplicate-member td { background: #fafcfa; }
 .duplicate-member td:first-child { padding-left: 34px; border-left: 3px solid #d8e6dc; }
-.duplicate-note { color: #6b7f72; max-width: 420px; white-space: normal; overflow-wrap: anywhere; }
 
 @media (prefers-color-scheme: dark) {
   :root { color-scheme: dark; color: #d9e5dd; background: #151d19; --muted: #a1b3a7; --line: #34493b; --green: #7dd5a8; }
@@ -295,3 +293,5 @@ a.secondary:hover { text-decoration: none; }
 .backend-table th, .backend-table td { padding: 9px 12px; vertical-align: top; }
 .backend-table th { position: static; white-space: nowrap; }
 .backend-table .record-list { min-width: max-content; }
+
+.overlap-note { margin: 6px 0; line-height: 1.6; overflow-wrap: anywhere; }

@@ -102,3 +102,8 @@
 .area-source button { text-align: left; overflow-wrap: anywhere; }
 .area-source b { font-variant-numeric: tabular-nums; }
 @media (max-width:650px) { .area-source { grid-template-columns: minmax(0,1fr) auto; } .area-source a { grid-column: 1 / -1; } }
+
+.task-column-label { display: block; font-size: 10px; color: var(--muted); }
+#source-breakdown { margin: 16px 20px; font-size: 12px; }
+#source-breakdown summary { cursor: pointer; color: var(--green); padding: 8px 0; }
+#area-sources { max-height: 340px; overflow: auto; }

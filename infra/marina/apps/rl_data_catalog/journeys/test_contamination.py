@@ -42,9 +42,11 @@ def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey
     check_view(page, rows, use="eval")
     expect(page.locator("#rows tr")).to_have_count(2)
     expect(page.locator(".duplicate-toggle")).to_have_count(0)
-    expect(page.locator('tr[data-source-id="Marin:eval"] .duplicate-note a')).to_have_attribute(
+    page.locator('tr[data-source-id="Marin:eval"] .source-name').click()
+    expect(page.locator("#detail-fields .overlap-note a")).to_have_attribute(
         "href", "source.html#source_id=Marin%3Aclean"
     )
+    page.locator("#close-details").click()
     page.locator("#use").select_option("all")
     check_view(page, rows)
     page.locator(".duplicate-toggle").click()
@@ -54,7 +56,7 @@ def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("width", [1440, 390])
-def test_partial_overlap_notes_preserve_both_directions_and_open_evidence(
+def test_source_cells_are_names_only_and_overlap_evidence_qualifies_colliding_names(
     journey: Journey, theme: str, width: int
 ) -> None:
     page = journey.page
@@ -63,32 +65,41 @@ def test_partial_overlap_notes_preserve_both_directions_and_open_evidence(
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     expect(page.locator("#rows tr").first).to_be_visible()
     payload = page.evaluate("async()=> (await fetch('api/sources')).json()")
+    detail = page.evaluate("async()=> (await fetch('api/source?source_id=Marin%3Aclean')).json()")
     rows = [row for row in payload["sources"] if row["id"] in {"Marin:clean", "Marin:eval"}]
     for row in rows:
-        row.update(duplicate_group=None, quality="SAMPLE", result="GOOD", partial_overlaps=[])
+        row.update(display_name="aime24", duplicate_group=None, quality="SAMPLE", result="GOOD", partial_overlaps=[])
+        row.update(
+            origin="HuggingFaceH4" if row["id"] == "Marin:clean" else "Evalchemy",
+            build_path="MarinSkyRL" if row["id"] == "Marin:clean" else "Evalchemy",
+        )
         if row["id"] == "Marin:clean":
-            row["partial_overlaps"] = [
-                {
-                    "other_id": "Marin:eval",
-                    "source_fraction": 0.23,
-                    "other_fraction": 0.04,
-                }
-            ]
+            row["partial_overlaps"] = [{"other_id": "Marin:eval", "source_fraction": 0.23, "other_fraction": 0.04}]
+            detail["declaration"].update({key: row[key] for key in ["display_name", "origin", "build_path"]})
+            detail.update(duplicate_group=None, partial_overlaps=row["partial_overlaps"])
+    labels = [{key: row[key] for key in ["id", "display_name", "origin", "build_path"]} for row in rows]
     page.route("**/api/sources", lambda route: route.fulfill(json={**payload, "sources": rows}))
+    page.route("**/api/source-labels", lambda route: route.fulfill(json={"sources": labels}))
+    page.route("**/api/source?source_id=Marin%3Aclean", lambda route: route.fulfill(json=detail))
     page.reload()
+    check_view(page, rows)
     expect(page.locator("#rows tr")).to_have_count(2)
-    row = page.locator('tr[data-source-id="Marin:clean"]')
-    expect(row.locator(".duplicate-note")).to_contain_text("23% of clean's tasks are in eval")
-    expect(row.locator(".duplicate-note")).to_contain_text("4% of eval's tasks are in clean")
-    expect(page.locator(".duplicate-toggle")).to_have_count(0)
-    row.locator(".source-name").click()
-    expect(page.locator("#detail-fields")).to_contain_text("23% of clean's tasks are in eval")
-    expect(page.locator("#detail-fields")).to_contain_text("4% of eval's tasks are in clean")
-    page.locator("#close-details").click()
-    assert page.locator(".source-table").evaluate(TABLE_BOUNDS) == []
-    row.locator(".duplicate-note a").first.click()
-    expect(page).to_have_url(re.compile(r"/source\.html#source_id=Marin%3Aeval$"))
-    expect(page.locator("#title")).to_have_text("eval")
+    expect(page.locator("#rows .overlap-note")).to_have_count(0)
+    cell = page.locator('tr[data-source-id="Marin:clean"] td').first
+    cell.evaluate("e=>e.append(document.createTextNode('TaskTrove · Task Trove'))")
+    with pytest.raises(ValueError):
+        check_view(page, rows)
+    cell.evaluate("e=>e.lastChild.remove()")
+    cell.locator(".source-name").click()
+    expect(page.locator("#detail-fields .overlap-note")).to_contain_text("HuggingFaceH4 · MarinSkyRL aime24")
+    expect(page.locator("#detail-fields .overlap-note")).to_contain_text("Evalchemy · aime24")
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    expect(page.locator("#title")).to_have_text("aime24")
+    note = page.locator("#sections .overlap-note")
+    expect(note).to_contain_text("23% of HuggingFaceH4 · MarinSkyRL aime24's tasks are in Evalchemy · aime24")
+    expect(note).to_contain_text("4% of Evalchemy · aime24's tasks are in HuggingFaceH4 · MarinSkyRL aime24")
+    expect(note.locator("a").first).to_have_attribute("href", "source.html#source_id=Marin%3Aeval")
+    check_evidence(page)
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
@@ -453,7 +464,7 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     )
     expect(oracle_field).to_have_text(re.compile(r"^N/A\b"))
     expect(admitted_field).to_have_text("2")
-    expect(page.locator(".backend-table tbody tr")).to_have_count(3)
+    expect(page.locator(".backend-table tbody tr")).to_have_count(5)
     expect(page.locator(".backend-table")).to_contain_text("packages lock")
     expect(page.locator(".backend-table")).to_contain_text("docker image")
     for right_edge in (False, True):
@@ -539,9 +550,15 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
         "href",
         "https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#snapshot-preflight-and-reclamation",
     )
-    expect(page.locator("#fit .backend-table tbody tr")).to_have_count(3)
+    expect(page.locator("#fit .backend-table tbody tr")).to_have_count(5)
     expect(page.locator("#fit")).to_contain_text("docker image")
     expect(page.locator("#fit")).to_contain_text("packages lock")
+    for backend in ["gVisor", "QEMU"]:
+        binary = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name=backend, exact=True))
+        expect(binary.locator(".chip")).to_have_text("UNSUPPORTED")
+        expect(binary.locator("td").nth(2)).to_have_text("unsupported: 3")
+        expect(binary.locator("td").nth(4)).to_contain_text("agent: 3")
+    expect(page.locator("#fit")).not_to_contain_text(re.compile(r"\bpartial\b", re.I))
     expect(page.locator("#provenance")).to_contain_text("survey-fixture")
     expect(page.locator("#provenance")).to_contain_text("b" * 40)
     expect(page.locator("#provenance")).to_contain_text("c" * 64)
@@ -569,21 +586,22 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     expect(local.locator("td").nth(2)).to_have_text("N/A (no role): 3")
     expect(local.locator("td").nth(3)).to_have_text("supported: 3")
     shellsim = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name="ShellSim", exact=True))
-    expect(shellsim.locator(".chip")).to_have_text("N/A")
-    expect(shellsim.locator("td").nth(4)).to_have_text("grader:host image: 3")
-    expect(shellsim.locator("td").nth(5)).to_have_text("None measured")
+    expect(shellsim.locator(".chip")).to_have_text("UNSUPPORTED")
+    expect(shellsim.locator("td").nth(4)).to_contain_text("grader: 3")
+    expect(shellsim.locator("td").nth(5)).to_contain_text("grader:unsupported environment kind:host image: 3")
     page.go_back()
     expect(page.locator("#title")).to_have_text("clean")
-    expect(page.locator("#fit .backend-table tbody tr")).to_have_count(3)
+    expect(page.locator("#fit .backend-table tbody tr")).to_have_count(5)
     page.get_by_role("link", name="By source", exact=True).click()
     page.locator("#show-all").check()
     page.locator('tr[data-source-id="Marin:stale-clean"] .backends-link').click()
     qemu = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name="QEMU", exact=True))
     expect(qemu.locator("td").nth(2)).to_contain_text("unsupported: 2")
     expect(qemu.locator("td").nth(2)).to_contain_text("supported: 1")
-    expect(qemu.locator("td").nth(3)).to_have_text("Not measured")
-    expect(qemu.locator("td").nth(4)).to_have_text("None measured")
-    expect(qemu.locator("td").nth(5)).to_have_text("agent:packages lock: 2")
+    expect(qemu.locator("td").nth(3)).to_have_text("unsupported: 3")
+    expect(qemu.locator("td").nth(4)).to_contain_text("grader: 3")
+    expect(qemu.locator("td").nth(5)).to_contain_text("agent:packages lock: 2")
+    expect(qemu.locator("td").nth(5)).to_contain_text("grader:not measured: 3")
     expect(qemu.locator("td").nth(6)).to_have_text("agent:packages lock: 1")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     journey.shoot(f"backend-role-na-{theme}-{width}")
@@ -653,16 +671,23 @@ def test_curriculum_parents_equal_displayed_children_and_remainder(journey: Jour
     assert_partition()
     earth.get_by_role("button", name="Other/unlisted (subject only)", exact=True).click()
     expect(page.locator("#area-summary")).to_contain_text("7,078 task instances")
-    expect(page.locator("#area-sources")).to_contain_text("7,078")
+    expect(page.locator("#area-sources b")).to_have_text(["7,076", "2"])
+    expect(page.locator("#source")).to_have_value("")
+    expect(page.locator("#task-list .task-row")).to_have_count(2)
+    expect(page.locator("#task-list .task-column-label")).to_have_text(["Source", "Source"])
+    expect(page.locator("#source-breakdown")).not_to_have_attribute("open", "")
+    expect(page.locator("#task-list")).to_be_in_viewport()
+    page.locator("#source-breakdown summary").click()
     with page.expect_navigation():
-        page.get_by_role("link", name="Source evidence ↗", exact=True).click()
+        page.get_by_role("link", name="Source evidence ↗", exact=True).first.click()
     expect(page.locator("#title")).to_have_text("clean")
     page.go_back()
     expect(page.locator(".domain-card")).to_have_count(2)
     earth.get_by_role("button", name="Other/unlisted (subject only)", exact=True).click()
-    expect(page.locator("#task-list .task-row")).to_have_count(1)
+    expect(page.locator("#task-list .task-row")).to_have_count(2)
     expect(page.locator("#task-list")).to_contain_text("earth-only")
-    page.locator("#task-list .task-row").click()
+    expect(page.locator("#task-list")).to_contain_text("other-source-example")
+    page.locator("#task-list .task-row").filter(has_text="earth-only").click()
     expect(page.locator("#detail-task-id")).to_have_text("earth-only")
     page.locator("#close-detail").click()
     page.locator("#close-tasks").click()

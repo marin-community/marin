@@ -3,6 +3,11 @@
 Follow the canonical [release procedure](RELEASE.md) and its `release_check`
 entry point for every preview release.
 
+The main table's source cell contains only its source-name button and, where
+needed, the fold toggle. No origin/build subtitle, dataset link, overlap note or
+other secondary text belongs in that cell. Put those details in Evidence or the
+detail pane. The release checker enforces this at all four layouts.
+
 Enum chips carry the entire state label. Never put text below a Quality, Result,
 Contamination or Filtration chip. Put numeric issue rates and lexical overlap counts
 in their own columns, using an em dash for missing measurements. Keep review

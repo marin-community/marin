@@ -29,6 +29,21 @@ def backend_source_maps() -> list[BackendSourceMap]:
                     "blockers": {},
                     "validation_errors": {},
                 },
+                "gvisor": {
+                    "support": "partial",
+                    "task_counts": {"partial": 3},
+                    "roles": {"agent": {"partial": 3}, "grader": {"supported": 3}},
+                    "blockers": {"agent:cpus": 3},
+                    "validation_errors": {},
+                },
+                "qemu": {
+                    "support": "supported",
+                    "task_counts": {"supported": 3},
+                    "roles": {"agent": {"not_applicable": 3}, "grader": {"supported": 3}},
+                    "not_applicable": {"agent:docker_image": 3},
+                    "blockers": {},
+                    "validation_errors": {},
+                },
                 "local": {
                     "support": "unsupported",
                     "task_counts": {"unsupported": 3},

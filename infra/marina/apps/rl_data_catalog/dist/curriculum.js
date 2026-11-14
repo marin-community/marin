@@ -275,7 +275,7 @@ async function loadTasks() {
     for (const task of data.tasks) {
       const item = button('', 'task-row', () => openDetail(task));
       const source = state.data.sources.find(source => source.source_id === task.source_id);
-      const identity = node('span', source?.name || task.source_id, 'task-source'); identity.append(node('span', task.task_id, 'task-id'));
+      const identity = node('span', '', 'task-source'); identity.append(node('span', 'Source', 'task-column-label'), node('span', source?.name || task.source_id), node('span', task.task_id, 'task-id')); identity.title = task.source_id;
       item.append(identity, node('span', task.task_preview || (task.outcome === 'skipped' ? 'Embedding skipped; open details for the failure.' : 'Instructions do not establish the requested operation.'), 'task-description'), node('span', outcomes[task.outcome], 'task-outcome'));
       $('task-list').append(item);
     }

@@ -98,9 +98,40 @@ function contaminationChip(status) {
   return chip;
 }
 
+const originLabels = {tasktrove: 'TaskTrove', evalchemy: 'Evalchemy', harbor_hub: 'Harbor Hub', nemotron: 'Nemotron', 'Task Trove': 'TaskTrove'};
+function originOf(row) { return originLabels[row.origin] || row.origin; }
+function qualifiedSourceName(row) {
+  const origin = originOf(row), build = row.build_path || '';
+  const normalize = value => value.replaceAll(/\s/g, '').toLowerCase();
+  const name = build && normalize(build) !== normalize(origin) ? `${build} ${row.display_name}` : row.display_name;
+  return `${origin} · ${name}`;
+}
+const containmentPercent = new Intl.NumberFormat('en-US', {style: 'percent', maximumFractionDigits: 1});
+function containmentNote(source, other, fraction, reverse = null) {
+  const ownName = qualifiedSourceName(source), otherName = qualifiedSourceName(other);
+  const note = node('p', undefined, 'overlap-note');
+  const link = () => { const anchor = node('a', otherName); anchor.href = `source.html#${new URLSearchParams({source_id: other.id})}`; return anchor; };
+  note.append(`${containmentPercent.format(fraction)} of ${ownName}'s tasks are in `, link());
+  if (reverse != null) note.append(` · ${containmentPercent.format(reverse)} of `, link(), `'s tasks are in ${ownName}`);
+  return note;
+}
+function overlapEvidence(source, labels) {
+  const declaration = source.declaration || source, byId = new Map(labels.map(row => [row.id, row]));
+  const content = node('div'), group = source.duplicate_group;
+  if (group) {
+    const canonical = byId.get(group.canonical_source_id);
+    for (const member of group.members) {
+      if (member.source_id === canonical.id || (declaration.id !== canonical.id && member.source_id !== declaration.id)) continue;
+      content.append(containmentNote(byId.get(member.source_id), canonical, member.overlap_with_canonical));
+    }
+  }
+  for (const pair of source.partial_overlaps || []) content.append(containmentNote(declaration, byId.get(pair.other_id), pair.source_fraction, pair.other_fraction));
+  return content.children.length ? content : null;
+}
+
 const backendNames = {local: 'LOCAL', daytona: 'Daytona', docker: 'Docker', gvisor: 'gVisor', qemu: 'QEMU', shellsim: 'ShellSim', iris: 'Iris'};
-const supportClasses = {supported: 'good', partial: 'some_issues', unsupported: 'bad', not_applicable: 'unassessed', role_absent: 'unassessed'};
-const backendStatusLabels = {not_applicable: 'N/A', role_absent: 'N/A (no role)'};
+const supportClasses = {supported: 'good', unsupported: 'bad', role_absent: 'unassessed'};
+const backendStatusLabels = {role_absent: 'N/A (no role)'};
 function readableRecord(value) {
   if (value instanceof Node) return value;
   if (value === null || value === undefined) return node('span', 'Not measured', 'muted');
@@ -113,10 +144,29 @@ function readableRecord(value) {
   }
   return list;
 }
+function binaryBackendFit(fit, taskCount) {
+  const roles = {}, affected = {}, blockers = {...fit.blockers};
+  for (const role of ['agent', 'grader']) {
+    const counts = {supported: 0, unsupported: 0, role_absent: 0};
+    for (const [state, count] of Object.entries(fit.roles[role] || {})) counts[state === 'supported' || state === 'role_absent' ? state : 'unsupported'] += count;
+    const known = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    if (known < taskCount) { counts.unsupported += taskCount - known; blockers[`${role}:not_measured`] = taskCount - known; }
+    roles[role] = Object.fromEntries(Object.entries(counts).filter(([, count]) => count > 0));
+    affected[role] = counts.unsupported;
+  }
+  for (const [reason, count] of Object.entries(fit.not_applicable || {})) {
+    const [role, ...kind] = reason.split(':'); blockers[`${role}:unsupported_environment_kind:${kind.join(':')}`] = count;
+  }
+  if (fit.support === 'partial' && !Object.keys(blockers).length) blockers.incomplete_requirement_support = fit.task_counts.partial || taskCount;
+  const absent = Object.values(roles).every(counts => (counts.role_absent || 0) === taskCount);
+  const failed = ['partial', 'unsupported', 'not_applicable'].includes(fit.support) || Object.values(affected).some(count => count > 0) || Object.keys(blockers).length || Object.keys(fit.validation_errors).length;
+  return {...fit, roles, blockers, affected_roles: affected, support: absent ? 'role_absent' : failed ? 'unsupported' : 'supported'};
+}
 function backendLabels(source) {
   const capabilities = source.backend_capabilities;
   if (!capabilities || capabilities.basis === 'unassessed') return [];
-  return Object.entries(capabilities.backends).map(([key, fit]) => {
+  return Object.entries(capabilities.backends).map(([key, recorded]) => {
+    const fit = binaryBackendFit(recorded, capabilities.task_count);
     const reasons = [...new Set(Object.keys(fit.blockers).map(reason => reason.split(':').slice(1).join(':') || reason))];
     if (!reasons.length && Object.keys(fit.validation_errors).length) reasons.push('validation');
     const name = backendNames[key] || key;
@@ -178,7 +228,7 @@ function gradingChips(source) {
 function backendDetails(source) {
   const wrap = node('div', undefined, 'table-wrap'); wrap.tabIndex = 0; wrap.setAttribute('aria-label', 'Backend fit by execution role');
   const table = node('table', undefined, 'backend-table'), head = node('thead'), headings = node('tr');
-  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Not applicable', 'Blockers', 'Validation errors']) headings.append(node('th', title));
+  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Affected tasks by role', 'Blockers', 'Validation errors']) headings.append(node('th', title));
   head.append(headings); table.append(head); const body = node('tbody');
   for (const {key, fit} of backendLabels(source)) {
     const row = node('tr'); row.append(node('td', backendNames[key] || key));
@@ -188,13 +238,13 @@ function backendDetails(source) {
       const counts = Object.fromEntries(Object.entries(fit.roles[role] || {}).filter(([, count]) => count > 0).map(([state, count]) => [backendStatusLabels[state] || state, count]));
       cell.append(Object.keys(counts).length ? readableRecord(counts) : node('span', 'Not measured', 'muted')); row.append(cell);
     }
-    for (const counts of [fit.not_applicable, fit.blockers, fit.validation_errors]) {
+    for (const counts of [fit.affected_roles, fit.blockers, fit.validation_errors]) {
       const cell = node('td');
       cell.append(counts === undefined ? node('span', 'Not measured', 'muted') : Object.keys(counts).length ? readableRecord(counts) : node('span', 'None measured')); row.append(cell);
     }
     body.append(row);
   }
-  if (!body.children.length) return node('p', source.backend_capabilities?.reason || 'Backend requirements have not been measured.', 'muted');
+  if (!body.children.length) return node('p', `Unsupported: current backend fit is not measured. ${source.backend_capabilities?.reason || ''}`, 'muted');
   table.append(body); wrap.append(table); return wrap;
 }
 function filtrationChip(filtration) {

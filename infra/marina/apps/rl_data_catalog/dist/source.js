@@ -80,7 +80,7 @@ async function render(data, sourceId) {
   difficulty.insertBefore(AtlasDifficulty.comparison(data.difficulty), difficulty.children[1] || null);
   sections.push(difficulty);
   sections.push(card('Filtration ledger', filtrationRows({...d, filtration: data.filtration, contamination_status: data.contamination_status, oracle_inventory: data.oracle_inventory}), 'Examples requires complete current-pin filtration and admission proof. A source filtered to zero is excluded. Pre-filtration retained counts are shown separately.'));
-  sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Agent and grader support are measured separately. The Daytona safety label covers the actor only.'));
+  sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Supported requires all present task/roles to be supported. Otherwise the backend is Unsupported; N/A is only for absent roles. Affected task counts are per role and may overlap. The Daytona safety label covers the actor only.'));
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
   sections.push(card('Oversight evidence', [
     ['Declared level', d.oversight], ['Campaign', d.oversight_evidence?.campaign], ['Recipe revision', d.oversight_evidence?.recipe_revision],
@@ -182,7 +182,8 @@ async function render(data, sourceId) {
     ['Measurement basis', capabilities?.basis], ['Measured tasks', capabilities?.basis === 'converted_spec_census' ? capabilities.task_count : null],
     ['Unassessed reason', capabilities?.basis === 'unassessed' ? capabilities.reason : null],
     ['Role assignments', capabilities?.role_backend_assignments], ['Declared requirements', capabilities?.demands],
-    ['Duplicate group', data.duplicate_group],
+    ['Duplicate group ID', data.duplicate_group?.group_id],
+    ['Measured cross-source overlap', overlapEvidence(data, data.source_labels)],
     ['Full backend matrix', link('Open the backend survey', 'api/backends')],
     ['Overlap reviews', link('Open recorded duplicate opinions', 'api/source-duplicates')],
   ]));
@@ -222,7 +223,7 @@ async function render(data, sourceId) {
 const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
 window.addEventListener('hashchange', () => location.reload());
 if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';
-else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json'), json('measurements/oracle-inventory.json')])
-  .then(([data, progress, inventory]) => render({...data, content_progress: boundProgress(data.declaration, progress), oracle_inventory: boundOracleInventory(data.declaration, inventory)}, sourceId)).catch(error => {
+else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json'), json('measurements/oracle-inventory.json'), json('api/source-labels')])
+  .then(([data, progress, inventory, labels]) => render({...data, source_labels: labels.sources, content_progress: boundProgress(data.declaration, progress), oracle_inventory: boundOracleInventory(data.declaration, inventory)}, sourceId)).catch(error => {
   $('title').textContent = 'Source evidence'; $('message').textContent = error.message; $('message').classList.add('error');
 });

@@ -93,6 +93,15 @@ def check_view(
         "rows=>rows.map(r=>({id:r.dataset.sourceId,examples:r.cells[1].textContent}))"
     )
     displayed_ids = [row["id"] for row in rendered]
+    if not page.locator("#rows tr td:first-child").evaluate_all(
+        """cells=>cells.every(cell=>
+      cell.querySelectorAll(':scope > .source-name').length===1 &&
+      [...cell.children].every(child=>child.matches('button.source-name,button.duplicate-toggle')) &&
+      [...cell.childNodes].filter(child=>child.nodeType===Node.TEXT_NODE).every(child=>!child.textContent.trim()))"""
+    ):
+        raise ValueError(
+            "Source cells must contain only the source name and fold toggle; secondary content belongs in Evidence"
+        )
     if len(set(displayed_ids)) != len(displayed_ids) or set(displayed_ids) != expected_ids:
         raise ValueError("Displayed sources violate filters or fold under an absent/non-canonical representative")
     for row in rendered:

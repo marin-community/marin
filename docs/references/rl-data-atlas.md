@@ -114,7 +114,7 @@ for its sample; the Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
 
-The default view hides QUICK and BAD entries and folds measured duplicate/subset groups.
+The default view hides QUICK and BAD entries and folds measured duplicate/subset groups. Source cells contain only the source name and optional fold toggle. Origin/build information, dataset links and qualified overlap notes belong in Evidence/detail views.
 Expand a group to inspect matching members, or enable **Show QUICK-quality and
 BAD-result sources**. Search and filters apply before grouping; a hidden canonical
 member cannot reappear through a group. Search names, datasets or tags, select a
@@ -153,8 +153,9 @@ not describe residual overlap in the retained release or semantic decontaminatio
 The source table legend and Getting started guide define the same five states.
 The compact **Backends ›** link opens a source's backend evidence page, with
 agent and grader fit, task counts, blockers, validation errors and survey provenance.
-Explicit `not_applicable` counts display N/A when a backend cannot run that environment kind;
-`role_absent` displays N/A (no role). Missing role evidence remains not measured.
+The display projects incomplete support and environment-kind mismatches to Unsupported;
+`role_absent` displays N/A (no role). Missing role evidence is Unsupported with
+an explicit not-measured blocker.
 The evidence table scrolls horizontally on small screens.
 Grading shows the required SHARED or SEPARATE boundary from the complete census;
 a declaration mismatch uses a warning variant and remains explicit in Evidence.
@@ -162,6 +163,13 @@ N/A requires an applicable measured absence; missing evidence remains unmeasured
 Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
 Result from incomplete content review carries a provisional variant within its
 chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
+
+Backend fit is binary in the display: Supported requires every present task/role
+to be supported on that backend. A conditional capability, missing measurement,
+validation failure or incompatible environment kind produces Unsupported with its
+typed blockers. N/A is reserved for absent roles. Affected-task counts are exact
+per role; roles can overlap, so those counts are not a unique task union. The
+immutable survey can retain its original conditional-support states as evidence.
 
 **Daytona safety**, shown in the Backends tooltip and evidence page, measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;
