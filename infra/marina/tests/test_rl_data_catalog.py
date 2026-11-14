@@ -1381,17 +1381,22 @@ def test_difficulty_archive_load_and_source_pin_change_preserve_history(
 ):
     declaration = with_declaration_admission_census(contamination_declarations()[0][1])
     measurement = difficulty_measurement(declaration, Solver.SMALL)
+    measurement = measurement.model_copy(update={"created_at": "2026-11-13T01:00:00+00:00"})
+    older = difficulty_measurement(declaration, Solver.SMALL, solved=3).model_copy(
+        update={"created_at": "2026-11-13T02:00:00+02:00"}
+    )
     archive = str(tmp_path / "difficulty")
     with DataStore.open(archive) as store:
         register_difficulty(store)
         with store.transaction() as transaction:
             transaction.table(MEASUREMENTS).add(measurement.model_dump(mode="json"))
+            transaction.table(MEASUREMENTS).add(older.model_dump(mode="json"))
     records = [
         DifficultyMeasurement.model_validate(row)
         for row in ReadView(archive).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields))
     ]
-    assert records == [measurement]
-    assert load_measurements(records, catalog_query)["inserted"] == 1
+    assert {record.measurement_id for record in records} == {measurement.measurement_id, older.measurement_id}
+    assert load_measurements(records, catalog_query)["inserted"] == 2
     assert load_measurements(records, catalog_query)["inserted"] == 0
     with catalog_database.begin() as connection:
         connection.execute(text("INSERT INTO atlas_loads VALUES ('difficulty','fixture','difficulty',NOW(),NOW())"))
