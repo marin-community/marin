@@ -499,7 +499,7 @@ pub(crate) fn segment_metadata_from_parquet(
     })
 }
 
-fn metadata_int64_bounds(
+pub(crate) fn metadata_int64_bounds(
     md: &ParquetMetaData,
     key_column: &str,
 ) -> Option<(Option<i64>, Option<i64>)> {

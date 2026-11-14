@@ -27,6 +27,7 @@ use crate::errors::StatsError;
 use crate::partition_policy::{select_rows, SegmentPartition};
 use crate::proto::finelog::stats::{partition_field, SourceLayout};
 use crate::store::catalog::Catalog;
+use crate::store::column_bounds::{self, ColumnBounds};
 use crate::store::segment::{
     write_segment_to_dir_with_max_row_group_rows, write_segment_with_max_row_group_rows,
 };
@@ -85,6 +86,8 @@ pub fn flush_local(target: FlushTarget<'_>, table_dir: &Path) -> Result<(), Stat
         max_key_value: max_key,
         partition: None,
         location: SegmentLocation::Local,
+        // A legacy table's catalog has nowhere to keep column bounds.
+        column_bounds: ColumnBounds::new(),
         artifacts: LocalArtifacts::default(),
     };
     // Persist the catalog row BEFORE committing the in-RAM flush: the file is
@@ -164,6 +167,10 @@ async fn write_sealed_objects(
             .stage_parquet(Bytes::from(parquet))
             .await?;
         let (min_key, max_key) = target.format.key_bounds(&batch);
+        let column_bounds = column_bounds::from_batches(
+            std::slice::from_ref(&batch),
+            target.format.bounds_columns(),
+        )?;
         let segment = LocalSegment {
             path: stored.path.to_string_lossy().into_owned(),
             size_bytes: stored.byte_size,
@@ -176,6 +183,7 @@ async fn write_sealed_objects(
             max_key_value: max_key,
             partition,
             location: SegmentLocation::Both,
+            column_bounds: column_bounds.clone(),
             artifacts: LocalArtifacts::default(),
         };
         descriptors.push(SegmentDescriptor {
@@ -183,6 +191,7 @@ async fn write_sealed_objects(
             source: stored.source,
             // L0 is unindexed: a flush advertises no derived artifacts.
             artifacts: ArtifactReferences::default(),
+            column_bounds,
         });
         segments.push(segment);
     }
@@ -343,14 +352,7 @@ fn batch_seq_bounds(batch: &RecordBatch) -> Result<(i64, i64), StatsError> {
         .column_by_name("seq")
         .and_then(|column| column.as_any().downcast_ref::<Int64Array>())
         .ok_or_else(|| StatsError::Internal("object-backed batch has no Int64 seq".to_string()))?;
-    (0..seq.len())
-        .filter(|index| !seq.is_null(*index))
-        .map(|index| seq.value(index))
-        .fold(None, |bounds: Option<(i64, i64)>, value| {
-            let (min, max) = bounds.unwrap_or((value, value));
-            Some((min.min(value), max.max(value)))
-        })
-        .ok_or_else(|| {
-            StatsError::Internal("object-backed batch has no sequence values".to_string())
-        })
+    column_bounds::int64_range([seq]).ok_or_else(|| {
+        StatsError::Internal("object-backed batch has no sequence values".to_string())
+    })
 }

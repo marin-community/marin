@@ -147,6 +147,7 @@ def test_schema_returns_one_machine_readable_schema() -> None:
         "trigram_index": False,
         "exact_values": [],
         "value_counts": False,
+        "catalog_bounds": False,
     }
 
 

@@ -9,6 +9,7 @@
 //! durable remotely, and [`Catalog::replace_with_published_snapshot`] rebuilds
 //! the whole projection from a verified remote state after recovery.
 
+use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 use super::segments::{remove_segments_in, upsert_segment_in};
@@ -16,6 +17,7 @@ use super::table_specs::{migration_phase_from_str, migration_phase_str};
 use super::*;
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{MigrationPhase, NamespaceCatalog, ObjectRef};
+use crate::store::column_bounds::{self, ColumnBounds};
 use crate::store::object_store::ObjectId;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::Schema;
@@ -25,12 +27,22 @@ use crate::store::types::SegmentRow;
 
 pub(crate) const MIGRATION_SOURCE_ID_SEPARATOR: char = '\n';
 
+/// Bounds the footer backfill recovered for one live object segment: its key
+/// bounds when the catalog lacked them, and the flagged columns it lacked.
+#[derive(Debug, Clone)]
+pub struct RecoveredBounds {
+    pub path: String,
+    pub key: Option<(String, String)>,
+    pub columns: ColumnBounds,
+}
+
 #[derive(Debug, Clone)]
 pub struct ObjectSegmentRecord {
     pub path: String,
     pub table_spec_version: u64,
     pub source: ObjectRef,
     pub artifacts: ArtifactReferences,
+    pub column_bounds: ColumnBounds,
     pub migration_backfill: bool,
     pub migration_source_id: Option<String>,
     pub migration_source_rows: Option<i64>,
@@ -42,6 +54,7 @@ pub struct PublishedObjectSegment {
     pub table_spec_version: u64,
     pub source: ObjectRef,
     pub artifacts: ArtifactReferences,
+    pub column_bounds: ColumnBounds,
     pub migration_backfill: bool,
     pub migration_source_id: Option<String>,
     pub migration_source_rows: Option<i64>,
@@ -94,15 +107,14 @@ fn insert_object_segments_in(
             row,
             source,
             artifacts,
+            column_bounds,
         } = descriptor;
         if row.namespace != namespace {
             return Err(StatsError::Internal(
                 "one object commit cannot span namespaces".to_string(),
             ));
         }
-        let source_json = serde_json::to_string(source).map_err(|error| {
-            StatsError::Internal(format!("serialize object segment source: {error}"))
-        })?;
+        let source_json = column_bounds::source_json(source, column_bounds)?;
         upsert_segment_in(transaction, row)?;
         let (sql, source_id, source_rows) = match mode {
             SegmentInsert::Upsert => (
@@ -287,9 +299,7 @@ impl Catalog {
             {
                 continue;
             }
-            let source_json = serde_json::to_string(&segment.source).map_err(|error| {
-                StatsError::Internal(format!("serialize published object source: {error}"))
-            })?;
+            let source_json = column_bounds::source_json(&segment.source, &segment.column_bounds)?;
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO object_segments
@@ -414,40 +424,105 @@ impl Catalog {
         Ok(revision)
     }
 
-    /// Fill key bounds for existing immutable object segments and advance one
-    /// catalog generation. The object identity and every other segment field
-    /// remain unchanged.
-    pub fn update_object_segment_key_bounds(
+    /// Fill key and column bounds the footer backfill recovered for existing
+    /// immutable object segments, and advance one catalog generation. The object
+    /// identity and every other segment field remain unchanged; recovered column
+    /// bounds are added to those the segment already records.
+    pub fn update_object_segment_bounds(
         &self,
         namespace: &str,
-        bounds: &[(String, String, String)],
+        recovered: &[RecoveredBounds],
     ) -> Result<TableRevision, StatsError> {
-        if bounds.is_empty() {
+        if recovered.is_empty() {
             return Err(StatsError::Internal(
-                "a key-bounds update must carry at least one segment".to_string(),
+                "a bounds update must carry at least one segment".to_string(),
             ));
         }
         let mut inner = self.inner.lock().unwrap();
         let transaction = inner.conn.transaction().map_err(sqlite_err)?;
-        for (path, minimum, maximum) in bounds {
-            let changed = transaction
+        for segment in recovered {
+            let path = &segment.path;
+            let no_longer_live = || {
+                StatsError::SchemaConflict(format!(
+                    "object segment {path:?} is no longer live in {namespace:?}"
+                ))
+            };
+            let source_json: Option<String> = transaction
+                .query_row(
+                    "SELECT source_json FROM object_segments WHERE namespace = ?1 AND path = ?2",
+                    rusqlite::params![namespace, path],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sqlite_err)?;
+            let Some(source_json) = source_json else {
+                return Err(no_longer_live());
+            };
+            if let Some((minimum, maximum)) = &segment.key {
+                let changed = transaction
+                    .execute(
+                        "UPDATE segments
+                         SET min_key_value = ?1, max_key_value = ?2
+                         WHERE namespace = ?3 AND path = ?4",
+                        rusqlite::params![minimum, maximum, namespace, path],
+                    )
+                    .map_err(sqlite_err)?;
+                if changed != 1 {
+                    return Err(no_longer_live());
+                }
+            }
+            if segment.columns.is_empty() {
+                continue;
+            }
+            let source: ObjectRef = serde_json::from_str(&source_json).map_err(|error| {
+                StatsError::Internal(format!("decode object segment source: {error}"))
+            })?;
+            let mut bounds = column_bounds::from_source_json(&source_json)?;
+            bounds.extend(segment.columns.clone());
+            transaction
                 .execute(
-                    "UPDATE segments
-                     SET min_key_value = ?1, max_key_value = ?2
-                     WHERE namespace = ?3 AND path = ?4
-                       AND EXISTS (
-                         SELECT 1 FROM object_segments
-                         WHERE namespace = ?3 AND path = ?4
-                       )",
-                    rusqlite::params![minimum, maximum, namespace, path],
+                    "UPDATE object_segments SET source_json = ?1 WHERE namespace = ?2 AND path = ?3",
+                    rusqlite::params![
+                        column_bounds::source_json(&source, &bounds)?,
+                        namespace,
+                        path
+                    ],
                 )
                 .map_err(sqlite_err)?;
-            if changed != 1 {
-                return Err(StatsError::SchemaConflict(format!(
-                    "object segment {path:?} is no longer live in {namespace:?}"
-                )));
-            }
         }
+        let revision = advance_generation_in(&transaction, namespace)?;
+        transaction.commit().map_err(sqlite_err)?;
+        Ok(revision)
+    }
+
+    /// Drop a segment's column bounds, as for a segment written before its table
+    /// flagged the column.
+    #[cfg(test)]
+    pub fn clear_object_segment_column_bounds(
+        &self,
+        namespace: &str,
+        path: &str,
+    ) -> Result<TableRevision, StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let transaction = inner.conn.transaction().map_err(sqlite_err)?;
+        let source_json: String = transaction
+            .query_row(
+                "SELECT source_json FROM object_segments WHERE namespace = ?1 AND path = ?2",
+                rusqlite::params![namespace, path],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_err)?;
+        let source: ObjectRef = serde_json::from_str(&source_json).unwrap();
+        transaction
+            .execute(
+                "UPDATE object_segments SET source_json = ?1 WHERE namespace = ?2 AND path = ?3",
+                rusqlite::params![
+                    column_bounds::source_json(&source, &ColumnBounds::new())?,
+                    namespace,
+                    path
+                ],
+            )
+            .map_err(sqlite_err)?;
         let revision = advance_generation_in(&transaction, namespace)?;
         transaction.commit().map_err(sqlite_err)?;
         Ok(revision)
@@ -637,6 +712,7 @@ impl Catalog {
                 table_spec_version: row.get::<_, i64>(1).map_err(sqlite_err)? as u64,
                 source,
                 artifacts: parse_artifacts(artifacts_json.as_deref())?,
+                column_bounds: column_bounds::from_source_json(&source_json)?,
                 migration_backfill: row.get(3).map_err(sqlite_err)?,
                 migration_source_id: row.get(4).map_err(sqlite_err)?,
                 migration_source_rows: row.get(5).map_err(sqlite_err)?,

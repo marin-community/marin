@@ -78,6 +78,9 @@ class Column:
     exact_values: tuple[str, ...] = ()
     # Persist exact per-value counts for GROUP BY + COUNT queries.
     value_counts: bool = False
+    # Keep each segment's min/max of this column in the catalog. INT64 columns
+    # only.
+    catalog_bounds: bool = False
 
 
 @dataclass(frozen=True)
@@ -146,7 +149,10 @@ LOG_REGISTERED_SCHEMA = Schema(
         Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
         # Substring-searched via contains()/LIKE.
         Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
-        Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        # Flagged so the catalog records each segment's time range: each segment
+        # covers a short span, but the key column is `key`, so key bounds say
+        # nothing about time.
+        Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False, catalog_bounds=True),
         Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
     ),
     # Per-source tail reads (``WHERE key = $key ORDER BY seq DESC``) dominate;
@@ -182,6 +188,7 @@ def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
                 trigram_index=c.index.trigram,
                 exact_values=tuple(c.index.exact_values),
                 value_counts=c.index.value_counts,
+                catalog_bounds=c.index.catalog_bounds,
             )
         )
     projections = tuple(
@@ -236,6 +243,7 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
                     trigram=c.trigram_index,
                     exact_values=c.exact_values,
                     value_counts=c.value_counts,
+                    catalog_bounds=c.catalog_bounds,
                 ),
             )
         )
