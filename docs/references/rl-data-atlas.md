@@ -223,7 +223,7 @@ and body scroll together without widening the page.
 
 ## Updating Atlas
 
-Use the app's canonical [release procedure](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/RELEASE.md)
+Use the app's canonical [release procedure](https://github.com/marin-community/marin/blob/atlas-env-audit/infra/marina/apps/rl_data_catalog/RELEASE.md)
 and `release_check` entry point for preview package validation, browser gates and
 post-release preservation checks. Catalog loading remains a separate operation.
 
@@ -1168,7 +1168,7 @@ release has been authorized. Preserve the previous artifacts and receipts.
 
 ### Refreshing displayed measurements without replacing the catalog
 
-The [release procedure](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/RELEASE.md#intended-measurement-refreshes)
+The [release procedure](https://github.com/marin-community/marin/blob/atlas-env-audit/infra/marina/apps/rl_data_catalog/RELEASE.md#intended-measurement-refreshes)
 provides pinned overlap-survey, derived Grader-profile and confidence-export load
 commands. Overlap refreshes bind to the frozen fingerprint inputs and preserve
 legacy survey/review bytes for retained revisions. Grader profiles bind the full
