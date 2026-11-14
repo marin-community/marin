@@ -8,6 +8,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tarfile
 import venv
 from dataclasses import replace
@@ -86,7 +87,7 @@ def test_protected_observation_reads_the_lock_beside_the_managed_environment(tmp
     for path in files:
         path.write_text("")
     expected = ExpectedRuntime(
-        python_version=(3, 12),
+        python_version=(sys.version_info.major, sys.version_info.minor),
         verifyit_root=str(package),
         files={
             str(path): RuntimeFile(
