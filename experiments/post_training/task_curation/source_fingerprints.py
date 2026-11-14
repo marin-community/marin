@@ -3,7 +3,6 @@
 
 """Deterministic source fingerprints and candidate ranking over normalized tasks."""
 
-import hashlib
 import itertools
 import re
 import unicodedata
@@ -17,8 +16,6 @@ from taskcompendium.models import TaskSpec, VerifyitGrader, format_conversation
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from taskcompendium.source_fingerprints import (
     DuplicateGroup,
-    DuplicateGroupMember,
-    DuplicateLabel,
     DuplicateReview,
     FingerprintSample,
     PairSimilarity,
@@ -26,6 +23,7 @@ from taskcompendium.source_fingerprints import (
     SourceLineage,
 )
 
+from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding, fold_groups
 from infra.marina.apps.rl_data_catalog.server.source_identity import (
     canonical_source_id,
     canonical_source_map,
@@ -211,41 +209,6 @@ def candidate_pairs(
     return [selected[key] for key in sorted(selected, key=lambda pair: tuple(map(original_source_id, pair)))]
 
 
-def duplicate_groups(reviews: list[DuplicateReview]) -> list[DuplicateGroup]:
-    """Group advisory flags; absent canonical-pair estimates remain unknown."""
-    edges = {}
-    neighbors = {}
-    for review in reviews:
-        if review.verdict.label == DuplicateLabel.DISTINCT:
-            continue
-        pair = review.similarity
-        edges[frozenset((pair.left, pair.right))] = review.verdict.overlap_fraction
-        neighbors.setdefault(pair.left, set()).add(pair.right)
-        neighbors.setdefault(pair.right, set()).add(pair.left)
-    pending = set(neighbors)
-    groups = []
-    while pending:
-        frontier, members = [min(pending, key=original_source_id)], set()
-        while frontier:
-            member = frontier.pop()
-            if member in members:
-                continue
-            members.add(member)
-            frontier.extend(neighbors[member] - members)
-        pending -= members
-        canonical = min(members, key=original_source_id)
-        group_id = hashlib.sha256("\n".join(sorted(map(original_source_id, members))).encode()).hexdigest()[:20]
-        groups.append(
-            DuplicateGroup(
-                group_id=group_id,
-                canonical_source_id=canonical,
-                members=[
-                    DuplicateGroupMember(
-                        source_id=member,
-                        overlap_with_canonical=1.0 if member == canonical else edges.get(frozenset((canonical, member))),
-                    )
-                    for member in sorted(members, key=original_source_id)
-                ],
-            )
-        )
-    return sorted(groups, key=lambda group: group.group_id)
+def duplicate_groups(reviews: list[DuplicateReview], standings: Mapping[str, SourceStanding]) -> list[DuplicateGroup]:
+    """Fold directly measured subsets under their containing source."""
+    return fold_groups(reviews, standings)

@@ -19,6 +19,7 @@ from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
 from .difficulty import difficulty_records, difficulty_summary
+from .duplicate_folding import SourceStanding, fold_groups, partial_overlap_notes
 from .filtration import filtration
 from .quality import intended_use, issue_rate, quality_display, result
 from .schema import SCHEMA_SQL
@@ -93,6 +94,44 @@ def canonical_duplicate_review(row: dict[str, Any]) -> dict[str, Any]:
             },
         }
     ).model_dump(mode="json")
+
+
+def duplicate_projection(
+    connection: Connection, load_id: str, sources: list[dict[str, Any]]
+) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, str | float]]]]:
+    """Recompute folds from the selected load's measured reviews and current display counts."""
+    reviews = [
+        DuplicateReview.model_validate(canonical_duplicate_review(row))
+        for row in connection.execute(
+            text(
+                "SELECT review FROM atlas_duplicate_reviews WHERE load_id = :load_id ORDER BY left_source, right_source"
+            ),
+            {"load_id": load_id},
+        ).scalars()
+    ]
+    standings = {
+        canonical_source_id(row["id"]): SourceStanding(
+            task_count=row["declaration"]["within_source_dedup"]["unique_count"],
+            quality=quality_display(row["declaration"], row["curation"], row["assessment_key"]).quality,
+        )
+        for row in sources
+    }
+    reviews = [row for row in reviews if row.similarity.left in standings and row.similarity.right in standings]
+    groups = fold_groups(reviews, standings)
+    return (
+        {member.source_id: group.model_dump(mode="json") for group in groups for member in group.members},
+        partial_overlap_notes(reviews, groups),
+    )
+
+
+def loaded_duplicate_projection(
+    connection: Connection, load_id: str
+) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, str | float]]]]:
+    rows = connection.execute(
+        text("SELECT id, declaration, curation, assessment_key FROM atlas_sources WHERE load_id = :load_id"),
+        {"load_id": load_id},
+    ).mappings()
+    return duplicate_projection(connection, load_id, [dict(row) for row in rows])
 
 
 def canonical_source_record(row: dict[str, Any]) -> dict[str, Any]:
@@ -183,6 +222,8 @@ def create_api(services: AppletServices) -> FastAPI:
                 ),
                 {"load_id": metadata["load_id"]},
             ).mappings()
+            rows = list(rows)
+            groups, overlaps = duplicate_projection(connection, metadata["load_id"], [dict(row) for row in rows])
             inventory = []
             for retained_row in rows:
                 row = canonical_source_record(dict(retained_row))
@@ -206,6 +247,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         "difficulty": difficulty_summary(row["declaration"], measurements.get(row["id"], [])),
                         "intended_use": intended_use(row["declaration"]),
                         "backend_capabilities": row["backend_capabilities"],
+                        "partial_overlaps": overlaps.get(row["id"], []),
                         "source_fingerprint": (
                             {
                                 key: value
@@ -223,7 +265,7 @@ def create_api(services: AppletServices) -> FastAPI:
                             if row["source_fingerprint"] is not None
                             else None
                         ),
-                        "duplicate_group": row["duplicate_group"],
+                        "duplicate_group": groups.get(row["id"]),
                         "assessment": {
                             "status": "complete" if row["assessment_key"] else row["latest_attempt_status"],
                             "pipeline_key": row["assessment_key"],
@@ -299,22 +341,24 @@ def create_api(services: AppletServices) -> FastAPI:
                 .scalars()
                 .all()
             )
-            groups = (
-                connection.execute(
-                    text(
-                        "SELECT DISTINCT duplicate_group FROM atlas_sources WHERE load_id = :load_id "
-                        "AND duplicate_group IS NOT NULL"
-                    ),
-                    parameters,
-                )
-                .scalars()
-                .all()
-            )
+            projected, overlaps = loaded_duplicate_projection(connection, metadata["load_id"])
+            groups = {group["group_id"]: group for group in projected.values()}
             return {
                 "survey_id": survey["survey_id"],
                 **survey["metadata"],
                 "reviews": [canonical_duplicate_review(row) for row in reviews],
-                "groups": [canonical_duplicate_group(row) for row in groups],
+                "groups": list(groups.values()),
+                "stored_groups": [
+                    canonical_duplicate_group(row)
+                    for row in connection.execute(
+                        text(
+                            "SELECT DISTINCT duplicate_group FROM atlas_sources WHERE load_id = :load_id "
+                            "AND duplicate_group IS NOT NULL"
+                        ),
+                        parameters,
+                    ).scalars()
+                ],
+                "partial_overlaps": overlaps,
             }
 
     @api.get("/assessment")
@@ -447,6 +491,7 @@ def create_api(services: AppletServices) -> FastAPI:
                     "original_source_id": original_source_id(source_id),
                 },
             ).scalar_one_or_none()
+            groups, overlaps = loaded_duplicate_projection(connection, source["load_id"])
             load = loaded_catalog(connection)
             coverage = source_coverage(connection).get(canonical_source_id(source_id))
             difficulty = difficulty_summary(
@@ -465,7 +510,8 @@ def create_api(services: AppletServices) -> FastAPI:
             "curation": source["curation"],
             "diagnostics": source["diagnostics"],
             "backend_capabilities": capabilities,
-            "duplicate_group": source["duplicate_group"],
+            "duplicate_group": groups.get(declaration["id"]),
+            "partial_overlaps": overlaps.get(declaration["id"], []),
             "latest_attempt": {
                 "key": source["latest_attempt_key"],
                 "status": source["latest_attempt_status"],

@@ -1,0 +1,724 @@
+{
+  "survey_id": "3c2eb925063cadfc2654dd6cd89f16bd93a8d6918f09289c4e1aafe161a1aab6",
+  "snapshot_id": "atlas-preview-v93-20261114-v1",
+  "sources": [
+    {
+      "id": "agentica-org:deepscaler",
+      "task_count": 39689,
+      "quality": "SAMPLE"
+    },
+    {
+      "id": "AI-MO:numina_math",
+      "task_count": 810703,
+      "quality": "SAMPLE"
+    },
+    {
+      "id": "BytedTsinghua-SIA:dapo_math",
+      "task_count": 16901,
+      "quality": "SAMPLE"
+    },
+    {
+      "id": "di-zhang-fdu:aime_1983_2024",
+      "task_count": 933,
+      "quality": "SAMPLE"
+    },
+    {
+      "id": "EleutherAI:hendrycks_math",
+      "task_count": 1705,
+      "quality": "SAMPLE"
+    },
+    {
+      "id": "Evalchemy:aime24",
+      "task_count": 30,
+      "quality": "FULL"
+    },
+    {
+      "id": "Evalchemy:math500",
+      "task_count": 500,
+      "quality": "SAMPLE"
+    },
+    {
+      "id": "HuggingFaceH4:aime24",
+      "task_count": 30,
+      "quality": "SAMPLE"
+    },
+    {
+      "id": "HuggingFaceH4:math500",
+      "task_count": 500,
+      "quality": "SAMPLE"
+    }
+  ],
+  "reviews": [
+    {
+      "similarity": {
+        "left": "agentica-org:deepscaler",
+        "right": "AI-MO:numina_math",
+        "rank_score": 0.20625,
+        "instruction_similarity": 0.28125,
+        "instruction_overlap": 0.04580152671755725,
+        "reference_overlap": 0.046875,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.042236328125,
+        "reason": "Content NN A\u2192B=0.7295 (95% CI 0.7157-0.7429); B\u2192A=0.0422 (95% CI 0.0365-0.0488). Full exact fractions=0.7126/0.0368. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "b54f5d4bad3149459285dc42cb55ac045dbf38e2abb07aa47cd69b7b37bc2209",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "2116d716c225443da527ee497b8f40e08afce4b028d631d6dcfa6a0ad41188d7",
+        "right_inputs_sha256": "093273481211ea73dd3ab724fce73acf96d5b7275b04e21d97b13b5d3fab664c",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 39689,
+          "sampled": 4096,
+          "matched": 2988,
+          "fraction": 0.7294921875,
+          "ci_low": 0.7156777792948699,
+          "ci_high": 0.7428765377154214,
+          "exact_matched": 28284,
+          "exact_fraction": 0.7126407820806773,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/eeb968a94b4863ba7a9bce28f7d80649c30ff193966c0741cc8790e8a728a53f.json",
+          "neighbors_sha256": "6384f0127f3175a4c5094cf91122abdbc332257ab07720e534fabcb6c7b7420b"
+        },
+        "right_to_left": {
+          "population": 810703,
+          "sampled": 4096,
+          "matched": 173,
+          "fraction": 0.042236328125,
+          "ci_low": 0.036493778036933766,
+          "ci_high": 0.048836706649985046,
+          "exact_matched": 29872,
+          "exact_fraction": 0.03684703276045605,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/8cfd8de6c797c0c8cadd99b9174d555ebfdcf8799432aa4c9f4664bdda9b8704.json",
+          "neighbors_sha256": "acc01a9240ee72e36ab97a58dd7570d286543b0491ed4a93288cd2f985fa06f0"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "agentica-org:deepscaler",
+        "right": "EleutherAI:hendrycks_math",
+        "rank_score": 0.1265625,
+        "instruction_similarity": 0.15625,
+        "instruction_overlap": 0.05426356589147287,
+        "reference_overlap": 0.0859375,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.046142578125,
+        "reason": "Content NN A\u2192B=0.0461 (95% CI 0.0401-0.0530); B\u2192A=0.9771 (95% CI 0.9771-0.9771). Full exact fractions=0.0420/0.9771. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "3e23ef85c8e742d0fb48676beb351af6b1d127dc941c41018f042821433fe08b",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "2116d716c225443da527ee497b8f40e08afce4b028d631d6dcfa6a0ad41188d7",
+        "right_inputs_sha256": "338719dcad8fabfa75855449d57bc865c1c080b3b6517f11e3309b4502b37692",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 39689,
+          "sampled": 4096,
+          "matched": 189,
+          "fraction": 0.046142578125,
+          "ci_low": 0.040131960884305345,
+          "ci_high": 0.053003703666618426,
+          "exact_matched": 1667,
+          "exact_fraction": 0.04200156214568268,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/e947fd3b324b9f80a12782070267c5061f747ebd81c32b7823906d49e5531444.json",
+          "neighbors_sha256": "ca5607cfcfef92139ab2ac174a7887b38fa0c7302e29615b875daf0d0970842e"
+        },
+        "right_to_left": {
+          "population": 1705,
+          "sampled": 1705,
+          "matched": 1666,
+          "fraction": 0.9771260997067449,
+          "ci_low": 0.9771260997067449,
+          "ci_high": 0.9771260997067449,
+          "exact_matched": 1666,
+          "exact_fraction": 0.9771260997067449,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/df117f39f59d3f5d9b5ad05182fb0fb69f7cc59615085819332817f4023740a6.json",
+          "neighbors_sha256": "9e513b26686c00c12c92c58103a2ba5499f306807069bed25a2046c29fe013b5"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "BytedTsinghua-SIA:dapo_math",
+        "right": "agentica-org:deepscaler",
+        "rank_score": 0.21558003597122302,
+        "instruction_similarity": 0.28125,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.09352517985611511,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.007568359375,
+        "reason": "Content NN A\u2192B=0.0195 (95% CI 0.0157-0.0242); B\u2192A=0.0076 (95% CI 0.0053-0.0107). Full exact fractions=0.0000/0.0000. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "a9cbb7487be79be6a737fcf19dcde5c56c272b5f982cc73a07da91161886bff8",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "85b02b8ee1e8fe3f3e99c131d0f74ef1195cf40793d0c702c708afacbf2dc133",
+        "right_inputs_sha256": "2116d716c225443da527ee497b8f40e08afce4b028d631d6dcfa6a0ad41188d7",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 16901,
+          "sampled": 4096,
+          "matched": 80,
+          "fraction": 0.01953125,
+          "ci_low": 0.015721675338006252,
+          "ci_high": 0.02424120138938373,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/d4692c881ea2c205363d983eafa26960fe270b4dad14691ed891014fa9f0c694.json",
+          "neighbors_sha256": "1170ad89ecee1989aa89f7ad2d4e0e2c1f8580c3df9163005018047f42c90b56"
+        },
+        "right_to_left": {
+          "population": 39689,
+          "sampled": 4096,
+          "matched": 31,
+          "fraction": 0.007568359375,
+          "ci_low": 0.005337063044036356,
+          "ci_high": 0.010722450349838443,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/c2524de7b5259950f8311db82f463b48a8c9a44aa7a4e1bf370c9cfcfe4e7608.json",
+          "neighbors_sha256": "4489025a0fb04d7b58c1152bb2d698d3eddcae0f06b1e3c6b07ecc9a0d7d8968"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "di-zhang-fdu:aime_1983_2024",
+        "right": "agentica-org:deepscaler",
+        "rank_score": 0.0859375,
+        "instruction_similarity": 0.109375,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.046875,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.024658203125,
+        "reason": "Content NN A\u2192B=0.7363 (95% CI 0.7363-0.7363); B\u2192A=0.0247 (95% CI 0.0203-0.0299). Full exact fractions=0.2079/0.0064. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "608a4bc264caf9755c8c9e0e50f1e00528886d50438a22955ab448f2e3ead4e3",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "21d6b84d71c4ceb75438fffb78a27224f3859c51ba99e1709e4a610284adcf86",
+        "right_inputs_sha256": "2116d716c225443da527ee497b8f40e08afce4b028d631d6dcfa6a0ad41188d7",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 933,
+          "sampled": 933,
+          "matched": 687,
+          "fraction": 0.7363344051446945,
+          "ci_low": 0.7363344051446945,
+          "ci_high": 0.7363344051446945,
+          "exact_matched": 194,
+          "exact_fraction": 0.20793140407288319,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/20920375c9fc5fc68fe7fab01bbe0b394f33815a2ce89dcd19d7b32ed5fe0b71.json",
+          "neighbors_sha256": "d3b87de88d8b83562493900c6e66a6049f5bb4ed240d61fcb73e2d44682b8d04"
+        },
+        "right_to_left": {
+          "population": 39689,
+          "sampled": 4096,
+          "matched": 101,
+          "fraction": 0.024658203125,
+          "ci_low": 0.020335690936602244,
+          "ci_high": 0.029871484362294254,
+          "exact_matched": 253,
+          "exact_fraction": 0.006374562221270377,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/2c91436128fafd7ce8a9849da7611d71c739303a1d4f44dabc610bb9c74095a7.json",
+          "neighbors_sha256": "b8add77b5d9e185dbef78240095a72955ccbf6632111e96d5037d92775cf433c"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "di-zhang-fdu:aime_1983_2024",
+        "right": "BytedTsinghua-SIA:dapo_math",
+        "rank_score": 0.14339874031007752,
+        "instruction_similarity": 0.140625,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.2248062015503876,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.004150390625,
+        "reason": "Content NN A\u2192B=0.0579 (95% CI 0.0579-0.0579); B\u2192A=0.0042 (95% CI 0.0026-0.0066). Full exact fractions=0.0000/0.0000. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "a74acebda475a5902ca5546ebfbda0218417efdbe0f8a9f1ee667a48517adeda",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "21d6b84d71c4ceb75438fffb78a27224f3859c51ba99e1709e4a610284adcf86",
+        "right_inputs_sha256": "85b02b8ee1e8fe3f3e99c131d0f74ef1195cf40793d0c702c708afacbf2dc133",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 933,
+          "sampled": 933,
+          "matched": 54,
+          "fraction": 0.05787781350482315,
+          "ci_low": 0.05787781350482315,
+          "ci_high": 0.05787781350482315,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/f97dd9da3e594144b2cd7414672d710aff7965fb77a9c4b84a7424d2a0d0c40a.json",
+          "neighbors_sha256": "cdf5406f1d19395c66c140f5691a7c2757c9e4cd41f944e5f1d7e18777a36ba1"
+        },
+        "right_to_left": {
+          "population": 16901,
+          "sampled": 4096,
+          "matched": 17,
+          "fraction": 0.004150390625,
+          "ci_low": 0.0025929778542005417,
+          "ci_high": 0.0066370031586699164,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/f5dd4baeddd11eb8d590a2c024c2d23b8a09534a19d8fde0bd1c2dd3ecf5fad9.json",
+          "neighbors_sha256": "d29d7eb4d3726e5ae907dee55f690873d1fdff64834200732146b76f9987ecc7"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "di-zhang-fdu:aime_1983_2024",
+        "right": "EleutherAI:hendrycks_math",
+        "rank_score": 0.23239350558659216,
+        "instruction_similarity": 0.296875,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.12290502793296089,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "distinct",
+        "overlap_fraction": 0.0,
+        "reason": "Content NN A\u2192B=0.0011 (95% CI 0.0011-0.0011); B\u2192A=0.0006 (95% CI 0.0006-0.0006). Full exact fractions=0.0000/0.0000. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "e43e6435a3f82388c63a7ad0d5a01002b2fedac8de11affdd9e10016ec24c278",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "21d6b84d71c4ceb75438fffb78a27224f3859c51ba99e1709e4a610284adcf86",
+        "right_inputs_sha256": "338719dcad8fabfa75855449d57bc865c1c080b3b6517f11e3309b4502b37692",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 933,
+          "sampled": 933,
+          "matched": 1,
+          "fraction": 0.0010718113612004287,
+          "ci_low": 0.0010718113612004287,
+          "ci_high": 0.0010718113612004287,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/c8fc3eec4ef6f1fac168274adf58d24b81befdc34bc9da3e6c3d47df25c881d9.json",
+          "neighbors_sha256": "b69508cdbc17fc26c29f04210e560ef6bf9810bdcef7a15d58b500a5caa3db17"
+        },
+        "right_to_left": {
+          "population": 1705,
+          "sampled": 1705,
+          "matched": 1,
+          "fraction": 0.0005865102639296188,
+          "ci_low": 0.0005865102639296188,
+          "ci_high": 0.0005865102639296188,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/094514aef3d7f9980e9d7c64b5044e0508ddc72638016ef864eb698e7dd95305.json",
+          "neighbors_sha256": "71e6fc8ab8e6796a151b1df2dc7452121abfe90494d6c10816fb6688cd2ad0e3"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "di-zhang-fdu:aime_1983_2024",
+        "right": "HuggingFaceH4:math500",
+        "rank_score": 0.16571691176470588,
+        "instruction_similarity": 0.203125,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.11764705882352941,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.0053590568060021436,
+        "reason": "Content NN A\u2192B=0.0054 (95% CI 0.0054-0.0054); B\u2192A=0.0100 (95% CI 0.0100-0.0100). Full exact fractions=0.0011/0.0020. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "e2b2dd03ad42f2ae72aa0697d2a49af3f03805ad7d3db2350b149e835f567ab8",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "21d6b84d71c4ceb75438fffb78a27224f3859c51ba99e1709e4a610284adcf86",
+        "right_inputs_sha256": "49b41cdb9fc143071998062ea4e93f9303b9b5717dafc9c58132c819d4eb0fc2",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 933,
+          "sampled": 933,
+          "matched": 5,
+          "fraction": 0.0053590568060021436,
+          "ci_low": 0.0053590568060021436,
+          "ci_high": 0.0053590568060021436,
+          "exact_matched": 1,
+          "exact_fraction": 0.0010718113612004287,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/d83fd2d0cbf67dc330b57a86d044388d0612565bc112bc9e44615ada6ab0099d.json",
+          "neighbors_sha256": "f4140ce4e8c48d75877c2b5a47121638127596aa1dc7399f80a23157156d7129"
+        },
+        "right_to_left": {
+          "population": 500,
+          "sampled": 500,
+          "matched": 5,
+          "fraction": 0.01,
+          "ci_low": 0.01,
+          "ci_high": 0.01,
+          "exact_matched": 1,
+          "exact_fraction": 0.002,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/4a3bf2c0f08c8e3451f215948e32d0413a78552584e00ed67e9405b1668a3bea.json",
+          "neighbors_sha256": "9aba32fe7973a940348311d2c98e1ae51a76278387f5be164346ca8ed57f5272"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "EleutherAI:hendrycks_math",
+        "right": "HuggingFaceH4:math500",
+        "rank_score": 0.16876977848101266,
+        "instruction_similarity": 0.203125,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.13291139240506328,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "distinct",
+        "overlap_fraction": 0.0,
+        "reason": "Content NN A\u2192B=0.0000 (95% CI 0.0000-0.0000); B\u2192A=0.0000 (95% CI 0.0000-0.0000). Full exact fractions=0.0000/0.0000. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "5a734be134dd80a5eb063981b346c289282b665ec91b6bc591e071940722f2c1",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "338719dcad8fabfa75855449d57bc865c1c080b3b6517f11e3309b4502b37692",
+        "right_inputs_sha256": "49b41cdb9fc143071998062ea4e93f9303b9b5717dafc9c58132c819d4eb0fc2",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 1705,
+          "sampled": 1705,
+          "matched": 0,
+          "fraction": 0.0,
+          "ci_low": 0.0,
+          "ci_high": 0.0,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/ea29fcda7692c6d63e38c5ee6df7b25cde2f68cb8635b48f7953895c3a006c09.json",
+          "neighbors_sha256": "3d4a12a6fe667e19ee8358e4d037ebc2771089659d16a358245b3da4f38cff54"
+        },
+        "right_to_left": {
+          "population": 500,
+          "sampled": 500,
+          "matched": 0,
+          "fraction": 0.0,
+          "ci_low": 0.0,
+          "ci_high": 0.0,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/279aba71e347bc45970204fe9b048719c2c8bf6f3a94068416845b27077e29f3.json",
+          "neighbors_sha256": "d9c5ba12420436e6006437e99c4cd6bc25570ff09120d65589f3fbf884131914"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "Evalchemy:aime24",
+        "right": "HuggingFaceH4:aime24",
+        "rank_score": 0.56875,
+        "instruction_similarity": 0.8125,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.0,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.26666666666666666,
+        "reason": "Content NN A\u2192B=0.2667 (95% CI 0.2667-0.2667); B\u2192A=0.2667 (95% CI 0.2667-0.2667). Full exact fractions=0.0000/0.0000. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "34f9b87e6edc1a0d018606745d0e24c5dab5fddb059fff17502d3f5e9d75448d",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "e379536e8a3023f43354404f7acf7cb627ae228b19a7069037bc1ae6789871f7",
+        "right_inputs_sha256": "1d99d937eb68d2f48eaa29c993c9a5c08a8ee4bf138f753b06b36d37c799b24a",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 30,
+          "sampled": 30,
+          "matched": 8,
+          "fraction": 0.26666666666666666,
+          "ci_low": 0.26666666666666666,
+          "ci_high": 0.26666666666666666,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/07a0705aa7d320b7286a23b68e50eaf16b7cd28871ad847f61efe08551b8d687.json",
+          "neighbors_sha256": "a620c1b8026c413508d75a694f594be37947f27d9f7b8410e543f9f5e0527a5c"
+        },
+        "right_to_left": {
+          "population": 30,
+          "sampled": 30,
+          "matched": 8,
+          "fraction": 0.26666666666666666,
+          "ci_low": 0.26666666666666666,
+          "ci_high": 0.26666666666666666,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/812ea1c49bcaff59bf68f8461a5bf9442e4a7f867404204319dfafd0a89b6ab7.json",
+          "neighbors_sha256": "ee95fa1ae9d5e1515e92e70085bee0115fb99709a9c552f19ddce27703b27df3"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "Evalchemy:math500",
+        "right": "HuggingFaceH4:math500",
+        "rank_score": 0.7999999999999999,
+        "instruction_similarity": 1.0,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.0,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.36416184971098264,
+        "url_overlap": 0.0,
+        "shared_lineage": true
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.098,
+        "reason": "Content NN A\u2192B=0.0980 (95% CI 0.0980-0.0980); B\u2192A=0.0980 (95% CI 0.0980-0.0980). Full exact fractions=0.0000/0.0000. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "424f50013ad0f6fe0bb9525d897cae6be75fe33a3a2f6122801e91a0881d7f20",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "c0d6f58a8ad445bf8546e5d0cd4a03ecbca966ea0d5e82505bc6d133afd95874",
+        "right_inputs_sha256": "49b41cdb9fc143071998062ea4e93f9303b9b5717dafc9c58132c819d4eb0fc2",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 500,
+          "sampled": 500,
+          "matched": 49,
+          "fraction": 0.098,
+          "ci_low": 0.098,
+          "ci_high": 0.098,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/69cdb62df73fe98700bf726fe1a2a1929ca8156bf82bc8ba63d112a9ade48d7e.json",
+          "neighbors_sha256": "dda15e21dd22d8fd907b79bc4a6ae531b683c6cd38e4e57168d677f96ae9aec0"
+        },
+        "right_to_left": {
+          "population": 500,
+          "sampled": 500,
+          "matched": 49,
+          "fraction": 0.098,
+          "ci_low": 0.098,
+          "ci_high": 0.098,
+          "exact_matched": 0,
+          "exact_fraction": 0.0,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/c9835b8fac320f16ab7b03defe9255e5f80e48c75aaeb17766fd8139e7f405dc.json",
+          "neighbors_sha256": "65e1c5f1451b0385a4f6c73c4eeb70c167e3cba787eb4a4de0e8604426c87bea"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "HuggingFaceH4:aime24",
+        "right": "di-zhang-fdu:aime_1983_2024",
+        "rank_score": 0.04375,
+        "instruction_similarity": 0.0625,
+        "instruction_overlap": 0.0,
+        "reference_overlap": 0.0,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": false
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.006430868167202572,
+        "reason": "Content NN A\u2192B=0.2000 (95% CI 0.2000-0.2000); B\u2192A=0.0064 (95% CI 0.0064-0.0064). Full exact fractions=0.0333/0.0011. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "fd3e8ced042a82f018b1054c58755e4efd05613c7717fa922b1865113af0eca6",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "1d99d937eb68d2f48eaa29c993c9a5c08a8ee4bf138f753b06b36d37c799b24a",
+        "right_inputs_sha256": "21d6b84d71c4ceb75438fffb78a27224f3859c51ba99e1709e4a610284adcf86",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 30,
+          "sampled": 30,
+          "matched": 6,
+          "fraction": 0.2,
+          "ci_low": 0.2,
+          "ci_high": 0.2,
+          "exact_matched": 1,
+          "exact_fraction": 0.03333333333333333,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/a6c5a63ec5cdc9df9a192450ef64fc36db6b89db3cf1ca79d5f0c6d49ee33ab3.json",
+          "neighbors_sha256": "64f73313c99c4d3a428efe5da4c95a981f0c01c2a1c6e8b3007304a1ba58180d"
+        },
+        "right_to_left": {
+          "population": 933,
+          "sampled": 933,
+          "matched": 6,
+          "fraction": 0.006430868167202572,
+          "ci_low": 0.006430868167202572,
+          "ci_high": 0.006430868167202572,
+          "exact_matched": 1,
+          "exact_fraction": 0.0010718113612004287,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/5b02d78452fca3d2f7d92070ba83d180f15016f1414b59fcea6cb2ded10d669c.json",
+          "neighbors_sha256": "b3a3981470472749f9981a7a48754f8b510d16fb8bb41498f2acad9aedc11a07"
+        }
+      }
+    }
+  ]
+}

@@ -1412,13 +1412,14 @@ def test_historical_alias_urls_keep_assessments_packets_and_sql_counts(catalog_d
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         source = client.get("/sources").json()["sources"][0]
         assert source["id"] == source["backend_capabilities"]["source_id"] == current
-        assert source["duplicate_group"]["canonical_source_id"] == current
-        assert [member["source_id"] for member in source["duplicate_group"]["members"]] == [
+        assert source["duplicate_group"] is None
+        duplicates = client.get("/source-duplicates").json()
+        assert duplicates["groups"] == []
+        assert duplicates["stored_groups"][0]["canonical_source_id"] == current
+        assert [member["source_id"] for member in duplicates["stored_groups"][0]["members"]] == [
             current,
             canonical_source_id(peer),
         ]
-        duplicates = client.get("/source-duplicates").json()
-        assert duplicates["groups"] == [source["duplicate_group"]]
         assert duplicates["reviews"][0]["similarity"]["left"] == current
         assert duplicates["reviews"][0]["similarity"]["right"] == canonical_source_id(peer)
         for identifier in (old, current):
@@ -1930,3 +1931,75 @@ def test_role_projection_requires_receipt_and_preserves_frozen_sample_roles(cata
         for ref in documents.values():
             assert hashlib.sha256(Path(ref["release_uri"]).read_bytes()).hexdigest() == ref["release_sha256"]
             assert hashlib.sha256(Path(ref["coverage_uri"]).read_bytes()).hexdigest() == ref["coverage_sha256"]
+
+
+def test_frozen_catalog_projects_measured_math_folds_and_directional_notes(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "frozen")
+    load_catalog(CurationCatalog(root), catalog_query)
+    fixture = Path("experiments/post_training/task_curation/tests/fixtures/math_overlap_reviews.json")
+    evidence = json.loads(fixture.read_text())
+    stored = {
+        "group_id": "old-partial-chain",
+        "canonical_source_id": "AI-MO:numina_math",
+        "members": [{"source_id": row["id"], "overlap_with_canonical": None} for row in evidence["sources"]],
+    }
+    with catalog_database.begin() as connection:
+        template = dict(connection.execute(text("SELECT * FROM atlas_sources")).mappings().one())
+        for source in evidence["sources"]:
+            declaration = {
+                **template["declaration"],
+                "id": source["id"],
+                "within_source_dedup": {
+                    **template["declaration"]["within_source_dedup"],
+                    "unique_count": source["task_count"],
+                },
+            }
+            connection.execute(
+                text(
+                    "INSERT INTO atlas_sources SELECT (jsonb_populate_record(NULL::atlas_sources, "
+                    "to_jsonb(s) || CAST(:patch AS JSONB))).* FROM atlas_sources s WHERE id = :template"
+                ),
+                {
+                    "template": template["id"],
+                    "patch": json.dumps(
+                        {
+                            "id": source["id"],
+                            "declaration": declaration,
+                            "duplicate_group": stored,
+                        }
+                    ),
+                },
+            )
+        connection.execute(text("DELETE FROM atlas_sources WHERE id = :id"), {"id": template["id"]})
+        for review in evidence["reviews"]:
+            connection.execute(
+                text("INSERT INTO atlas_duplicate_reviews VALUES (:load_id, :left, :right, CAST(:review AS JSONB))"),
+                {
+                    "load_id": template["load_id"],
+                    "left": review["similarity"]["left"],
+                    "right": review["similarity"]["right"],
+                    "review": json.dumps(review),
+                },
+            )
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        rows = {row["id"]: row for row in client.get("/sources").json()["sources"]}
+        assert rows["AI-MO:numina_math"]["duplicate_group"] is None
+        assert rows["BytedTsinghua-SIA:dapo_math"]["duplicate_group"] is None
+        assert rows["EleutherAI:hendrycks_math"]["duplicate_group"]["canonical_source_id"] == "agentica-org:deepscaler"
+        notes = rows["agentica-org:deepscaler"]["partial_overlaps"]
+        assert next(row for row in notes if row["other_id"] == "AI-MO:numina_math") == {
+            "other_id": "AI-MO:numina_math",
+            "source_fraction": 0.7294921875,
+            "other_fraction": 0.042236328125,
+        }
+        detail = client.get("/source", params={"source_id": "agentica-org:deepscaler"}).json()
+        assert detail["partial_overlaps"] == notes
+        assert detail["duplicate_group"] == rows["agentica-org:deepscaler"]["duplicate_group"]
+        duplicates = client.get("/source-duplicates").json()
+        assert duplicates["stored_groups"] == [stored | {"advisory": True}]
+        assert {g["group_id"] for g in duplicates["groups"]} == {
+            row["duplicate_group"]["group_id"] for row in rows.values() if row["duplicate_group"] is not None
+        }
+    with catalog_database.connect() as connection:
+        assert connection.execute(text("SELECT DISTINCT duplicate_group FROM atlas_sources")).scalar_one() == stored

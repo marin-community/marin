@@ -28,7 +28,9 @@ from taskcompendium.models import (
     ToolResult,
 )
 from taskcompendium.source_fingerprints import (
+    DirectionalOverlap,
     DuplicateLabel,
+    DuplicateReview,
     SourceFingerprint,
     SourceIdentitySurvey,
 )
@@ -38,6 +40,7 @@ from experiments.post_training.task_curation.duplicate_review import review_pair
 from experiments.post_training.task_curation.source_duplicate_ci import changed_source_declarations
 from experiments.post_training.task_curation.source_duplicates import fingerprint_manifest
 from experiments.post_training.task_curation.source_fingerprints import (
+    SourceStanding,
     candidate_pairs,
     duplicate_groups,
     fingerprint_source,
@@ -65,6 +68,7 @@ from experiments.post_training.task_curation.task_neighbors import (
     exact_reference_integrity,
     measured_review,
 )
+from infra.marina.apps.rl_data_catalog.server.duplicate_folding import partial_overlap_notes
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
@@ -143,7 +147,7 @@ def test_measured_review_acknowledgement_is_bound_to_content_evidence(tmp_path):
     )
     assert acknowledged.acknowledgement == "Retain both histories"
     assert acknowledged.prompt_sha256 == first.prompt_sha256
-    assert len(duplicate_groups([acknowledged])) == 1
+    assert len(duplicate_groups([acknowledged], {key: SourceStanding(25) for key in populations})) == 1
     changed = {**populations, "right": PopulationIndex(list(content_rows(rows)), {"shard": "changed-input-digest"})}
     reviewed = next(
         review_pairs(
@@ -590,3 +594,104 @@ def test_frozen_shortlist_keeps_population_and_pair_identity(tmp_path):
     path.write_bytes(payload)
     replayed = read_pair_shortlist(str(path), hashlib.sha256(payload).hexdigest(), "frozen-survey", survey)
     assert shortlist_pairs(survey, replayed) == [pair]
+
+
+def overlap_review(left: str, right: str, fraction: float, reverse: float) -> DuplicateReview:
+    empty = fingerprint_source([], {})
+    directions = [
+        DirectionalOverlap(
+            population=1000,
+            sampled=1000,
+            matched=round(value * 1000),
+            fraction=value,
+            ci_low=value,
+            ci_high=value,
+            exact_matched=round(value * 1000),
+            exact_fraction=value,
+            neighbors=[],
+            neighbors_sha256=canonical_sha256([]),
+        )
+        for value in (fraction, reverse)
+    ]
+    return measured_review(pair_similarity(left, empty, right, empty), *directions, 1000, "left", "right")
+
+
+def test_duplicate_groups_partial_chain_stays_unfolded_with_directional_notes():
+    reviews = [overlap_review("a", "b", 0.23, 0.04), overlap_review("b", "c", 0.7, 0.3)]
+    groups = duplicate_groups(reviews, {key: SourceStanding(1000) for key in "abc"})
+    assert groups == []
+    notes = partial_overlap_notes(reviews, groups)
+    assert notes["a"] == [{"other_id": "b", "source_fraction": 0.23, "other_fraction": 0.04}]
+    assert notes["b"][0] == {"other_id": "a", "source_fraction": 0.04, "other_fraction": 0.23}
+
+
+@pytest.mark.parametrize("fraction,folded", [(0.949, False), (0.95, True), (0.97, True)])
+def test_duplicate_groups_measured_subset_threshold(fraction, folded):
+    reviews = [overlap_review("small", "large", fraction, 0.1)]
+    groups = duplicate_groups(reviews, {"small": SourceStanding(100), "large": SourceStanding(1000)})
+    assert len(groups) == int(folded)
+    if folded:
+        assert groups[0].canonical_source_id == "large"
+        assert {m.source_id: m.overlap_with_canonical for m in groups[0].members} == {"large": 1, "small": fraction}
+        assert partial_overlap_notes(reviews, groups) == {}
+
+
+@pytest.mark.parametrize(
+    "standings,canonical",
+    [
+        ({"a": SourceStanding(10, "FULL"), "b": SourceStanding(20, "QUICK")}, "b"),
+        ({"a": SourceStanding(20, "SAMPLE"), "b": SourceStanding(20, "FULL")}, "b"),
+        ({"a": SourceStanding(20, "QUICK"), "b": SourceStanding(20, "SAMPLE")}, "b"),
+        ({"a": SourceStanding(20, "FULL"), "b": SourceStanding(20, "FULL")}, "a"),
+    ],
+)
+def test_duplicate_groups_mutual_duplicates_choose_count_quality_then_id(standings, canonical):
+    groups = duplicate_groups([overlap_review("a", "b", 1, 1)], standings)
+    assert len(groups) == 1
+    assert groups[0].canonical_source_id == canonical
+
+
+def test_duplicate_groups_unmeasured_duplicate_verdict_never_folds():
+    review = overlap_review("a", "b", 1, 1).model_copy(update={"measurement": None})
+    assert duplicate_groups([review], {key: SourceStanding(100) for key in "ab"}) == []
+    assert partial_overlap_notes([review], []) == {}
+
+
+def test_duplicate_groups_containment_chain_requires_direct_canonical_measurement():
+    reviews = [overlap_review("a", "b", 0.97, 0.1), overlap_review("b", "c", 0.97, 0.1)]
+    groups = duplicate_groups(
+        reviews, {key: SourceStanding(count) for key, count in zip("abc", [10, 100, 1000], strict=True)}
+    )
+    assert len(groups) == 1
+    assert groups[0].canonical_source_id == "c"
+    assert {m.source_id for m in groups[0].members} == {"b", "c"}
+
+
+def test_duplicate_groups_one_way_superset_precedes_inconsistent_population_count():
+    groups = duplicate_groups(
+        [overlap_review("a", "b", 0.97, 0.1)], {"a": SourceStanding(1000), "b": SourceStanding(100)}
+    )
+    assert groups[0].canonical_source_id == "b"
+
+
+def test_duplicate_groups_real_numina_dapo_deepscaler_hendrycks_regression():
+    # Frozen served v9.3 survey; neighbor rows omitted, all measured fractions retained.
+    document = json.loads((Path(__file__).parent / "fixtures/math_overlap_reviews.json").read_text())
+    reviews = [DuplicateReview.model_validate(row) for row in document["reviews"]]
+    standings = {row["id"]: SourceStanding(row["task_count"], row["quality"]) for row in document["sources"]}
+    groups = duplicate_groups(reviews, standings)
+    folded = {
+        m.source_id: g.canonical_source_id for g in groups for m in g.members if m.source_id != g.canonical_source_id
+    }
+    assert "AI-MO:numina_math" not in folded
+    assert "BytedTsinghua-SIA:dapo_math" not in folded
+    assert folded["EleutherAI:hendrycks_math"] == "agentica-org:deepscaler"
+    notes = partial_overlap_notes(reviews, groups)
+    assert next(n for n in notes["agentica-org:deepscaler"] if n["other_id"] == "AI-MO:numina_math") == {
+        "other_id": "AI-MO:numina_math",
+        "source_fraction": 0.7294921875,
+        "other_fraction": 0.042236328125,
+    }
+    assert not any(
+        {r.similarity.left, r.similarity.right} == {"AI-MO:numina_math", "BytedTsinghua-SIA:dapo_math"} for r in reviews
+    )

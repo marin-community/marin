@@ -653,7 +653,16 @@ the larger of each direction's interval lower bound and exact census fraction.
 Partial overlap requires a lower bound of at least 1% in either direction.
 Remaining pairs are distinct at that reporting threshold. The scalar partial
 overlap fraction is the smaller positive directional estimate; the two
-explicit directions remain authoritative for asymmetric subsets. LSH is
+explicit directions remain authoritative for asymmetric subsets. Atlas folds a source
+only when its directly measured containment in the canonical is at least 95%,
+using the larger of the directional nearest-neighbor estimate and exact census
+fraction. Every folded member must have that measurement against the canonical;
+partial edges and unmeasured pairs cannot chain groups together. A one-way
+superset is canonical; mutual duplicates prefer larger retained task counts,
+then FULL, SAMPLE, QUICK, then source ID. Other measured non-distinct pairs
+remain directional overlap notes with links. The API recomputes display groups
+from the selected SQL load; `/source-duplicates` also retains the archived groups
+under `stored_groups`. LSH is
 approximate, and the intervals describe sampling uncertainty, not retrieval
 recall. The labels use deterministic measurements; no model can downgrade them.
 

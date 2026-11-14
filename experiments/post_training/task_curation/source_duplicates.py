@@ -17,6 +17,7 @@ from experiments.post_training.task_curation.backend_capabilities import convert
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey
 from experiments.post_training.task_curation.duplicate_review import review_pairs
 from experiments.post_training.task_curation.source_fingerprints import (
+    SourceStanding,
     candidate_pairs,
     duplicate_groups,
     fingerprint_source,
@@ -110,7 +111,14 @@ def scan(
         update={
             "generated_at": datetime.now(UTC).isoformat(),
             "reviews": reviews,
-            "groups": duplicate_groups(reviews),
+            "groups": duplicate_groups(
+                reviews,
+                {
+                    key: SourceStanding(value.task_count)
+                    for key, value in survey.fingerprints.items()
+                    if value is not None
+                },
+            ),
             "judge": None,
         }
     )

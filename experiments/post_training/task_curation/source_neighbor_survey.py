@@ -28,7 +28,7 @@ from taskcompendium.source_fingerprints import (
 )
 
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
-from experiments.post_training.task_curation.source_fingerprints import duplicate_groups, pair_similarity
+from experiments.post_training.task_curation.source_fingerprints import SourceStanding, duplicate_groups, pair_similarity
 from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     cache_population,
@@ -386,7 +386,14 @@ def rerun(
         update={
             "generated_at": datetime.now(UTC).isoformat(),
             "reviews": reviews,
-            "groups": duplicate_groups(reviews),
+            "groups": duplicate_groups(
+                reviews,
+                {
+                    key: SourceStanding(value.task_count)
+                    for key, value in survey.fingerprints.items()
+                    if value is not None
+                },
+            ),
             "judge": None,
         }
     )
