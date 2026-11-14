@@ -201,10 +201,14 @@ LEADER_ARGS = ("--api-server-count", "1")
 # Leader-only flag overrides per candidate label (API servers start only on the leader).
 LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4")}
 
-# Environment added to every vLLM process for a candidate label.
+MOE_CONFIG_DIR = "experiments/evaluation/hero_vllm_hillclimb/moe_configs"
+
+# Environment added to every vLLM process for a candidate label; "{workspace}" is the job's workspace.
 LABEL_ENV = {
     # NCCL symmetric-memory windows for the MoE all-gather / reduce-scatter (lower-latency kernels).
     "fg128symm": (("VLLM_USE_NCCL_SYMM_MEM", "1"),),
+    # Fused-MoE Triton configs tuned for Hero's EP16 decode shapes on GB200 (moe_tune.py).
+    "fg128moe": (("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),),
 }
 
 # Local torch-profiler trace directory on every host; traces are uploaded after the server exits.
@@ -270,6 +274,12 @@ CANDIDATE_ARGS = {
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
     "fg128": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    "fg128moe": (
         "--max-num-seqs",
         "128",
         "--compilation-config",
@@ -423,7 +433,10 @@ def run_arm(config: ArmConfig, instance: int = 0) -> str | None:
         data_parallel_size_local=geometry.data_parallel_size,
         instance=instance,
     ) as launch:
-        subprocess_env = {**launch.subprocess_env, **dict(config.env)}
+        subprocess_env = {
+            **launch.subprocess_env,
+            **{key: value.format(workspace=Path.cwd()) for key, value in config.env},
+        }
         extra_args = (*launch.extra_cli_args, *(config.leader_args if launch.is_leader else ()))
         with backend.start(spec, extra_args=extra_args, subprocess_env=subprocess_env) as environment:
             if launch.is_leader:
