@@ -940,6 +940,12 @@ has no default. The agent runs as UID 10001 and may change dependencies and
 filesystem state outside the protected harness. Grading uses that same container,
 with its pytest child running as a separate UID, 10002.
 
+Native source adapters construct this package through
+`taskcompendium.harbor.shared_package.harden_shared_swe`, passing its file map,
+typed Verifyit specification and explicit dependency policy. The helper validates
+the private bootstrap payload and constructs pre-agent protection. Each changed
+package requires a new version and fresh qualification evidence.
+
 Before agent access, the harness captures the task-reference tests and conftests,
 third-party pytest and plugin implementations, the test interpreter and the
 control program. It discovers the task repository's pytest configuration and root

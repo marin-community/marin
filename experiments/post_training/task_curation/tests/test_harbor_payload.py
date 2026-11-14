@@ -13,6 +13,7 @@ from typing import cast
 import pytest
 import tomlkit
 from taskcompendium.convert.answers import exact_answer_task
+from taskcompendium.harbor.shared_package import harden_shared_swe
 from taskcompendium.harbor.snapshots import file_map_snapshot, task_snapshot
 from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, shared_preamble
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, Source, TaskSpec
@@ -28,7 +29,6 @@ from experiments.post_training.task_curation.tasktrove.harbor_export import (
     harbor_payload,
     harbor_record,
 )
-from experiments.post_training.task_curation.tasktrove.shared_swe import harden_shared_swe
 
 
 @pytest.mark.parametrize(

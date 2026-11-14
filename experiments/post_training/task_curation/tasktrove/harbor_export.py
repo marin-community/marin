@@ -24,6 +24,7 @@ from finestore.schema import arrow_schema
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.script_grader import GRADE_ARGV
 from taskcompendium.grading_environment import SharedGradingPolicy
+from taskcompendium.harbor.shared_package import harden_shared_swe
 from taskcompendium.models import (
     DOCKER_IMAGE_PATTERN,
     AnswerType,
@@ -68,7 +69,6 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     VERIFYIT_VERDICT_REWARD,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.verifyit_build import VERIFYIT_CONTEXT
-from experiments.post_training.task_curation.tasktrove.shared_swe import harden_shared_swe
 from experiments.post_training.task_curation.tasktrove.source_images import ARC_SOURCES, PYTEST_ENV, source_actor_build
 
 
