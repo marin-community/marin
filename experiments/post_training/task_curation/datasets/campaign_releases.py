@@ -113,6 +113,49 @@ def _tasktrove_qa_release(
     )
 
 
+PUZZLES_QA_REPAIR_REVISION = "44528e65eee00f092ab971a0099f61e6ae4e27ce"
+PUZZLES_QA_PIN = PrebuiltCohort(
+    intended_use=IntendedUse.TRAIN,
+    name="tasktrove-puzzles-qa",
+    version="2026.11.14.1",
+    repo="open-athena/tasktrove-puzzles-taskcompendium-20261114",
+    revision="adfcbd4a8ddefc9e69febc91931c08ba03372bad",
+    expected_rows=6921,
+)
+PUZZLES_QA_NOTES = (
+    "QA-format repair of TaskTrove:laion__all-puzzles-v2: non-agentic one-message conversation tasks "
+    "graded in process by the source's pinned Verifyit exact/math grader against the reference "
+    "mechanically extracted from each task's original solution/solve.sh oracle. Grader mode and "
+    "instruction text unchanged from the canonical conversion. Task labels carry per-task lineage "
+    "(original_task_id, original_solve_sh_sha256, oracle_extraction). All 6,926 rows converted with "
+    "zero rejections; 5 exact duplicates collapse under the pipeline dedup key, 6,921 retained. "
+    "Full-population oracle filter through the production in-process grading path: 6,921/6,921 "
+    "admitted, zero typed exclusions, empty-submission controls 0.0 on every task. Full-population "
+    "fidelity against the canonical cohort: 6,921/6,921 content-equal. Lexical 13-gram "
+    "decontamination: 0 of 6,921 contaminated. SAMPLE content QC pending."
+)
+
+
+def _puzzles_qa_release() -> RlDataSource[PrebuiltCohort]:
+    """The puzzles QA-format repair cohort over its published private pin."""
+    return _qa_cohort(
+        PUZZLES_QA_PIN,
+        SourceInfo(
+            id="TaskTrove:tasktrove-puzzles-qa",
+            upstream_dataset="tasktrove-puzzles-qa",
+            upstream_name="tasktrove-puzzles-qa",
+            subset=None,
+            build_path="Campaign Release",
+            origin=SourceOrigin.TASKTROVE,
+            upstream_url=TASKTROVE_UPSTREAM_URL,
+            family="math-answer",
+            tags=("rlvr", "single-turn", "qa-format-repair", "campaign-release", "converted"),
+            oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+            notes=PUZZLES_QA_NOTES,
+        ),
+    )
+
+
 def sources() -> list[RlDataSource]:
     swesmith_repaired = PrebuiltCohort(
         intended_use=IntendedUse.TRAIN,
@@ -1207,4 +1250,5 @@ def sources() -> list[RlDataSource]:
                 "every task hash re-validated."
             ),
         ),
+        _puzzles_qa_release(),
     ]

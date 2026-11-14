@@ -90,7 +90,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 count=6926,
                 notes=(
                     "Numeric compare on real puzzles. Gold lives in /tests, which the harness must hide; "
-                    "fine under the new grader."
+                    "fine under the new grader. QA-format repair published separately as "
+                    "TaskTrove:tasktrove-puzzles-qa: the same archives converted to non-agentic one-message "
+                    "tasks graded by the pinned Verifyit grader against the reference extracted from each "
+                    "task's original solution/solve.sh oracle; private pin "
+                    "open-athena/tasktrove-puzzles-taskcompendium-20261114."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),
