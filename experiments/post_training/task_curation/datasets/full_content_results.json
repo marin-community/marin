@@ -800,5 +800,87 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/function-calling-pivot.json",
       "sha256": "74fbedc3123ae5d14fbdb6f6b883a537d3b808384227fc9bd20827720ce628c9"
     }
+  },
+  "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered": {
+    "source_id": "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered",
+    "input": {
+      "dataset_id": "open-athena/task-trove-sankalpkj-nemotron-code-oracle-filtered-b254a4c8-retained-20261113-v1",
+      "dataset_revision": "f2b8131f6442d5da098f2ba15a4af3d3c64d6149",
+      "converter_version": "2026.11.13.1",
+      "converter_revision": "2f4b27ba2e",
+      "measured_tasks": 15156,
+      "task_specs_sha256": "59c599f3a4255840f8f81cc8226d0abbdc63b693c8ca8dd11a5f0185034ba450",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/b254a4c8ee0e86e5c37b/actor/.artifact.json"
+    },
+    "contract_index": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/8d0bde67c4f12715562c/2026.11.12.2/attempts/d3e2691c20704f459f2feba2afd7534a/contracts.parquet",
+      "sha256": "62341a6bb14085b037cf8326116ad694fc15a9073fbfacf1990c41530ba53453"
+    },
+    "review_receipt": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/8d0bde67c4f12715562c/attempts/7f57a071a93e41909bfc0c4cf6309089/.artifact.json",
+      "sha256": "df7aa7434d37dd937ae066dab14419a51ce8f60bb2f33c5490be208eb6726872"
+    },
+    "records": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/8d0bde67c4f12715562c/attempts/7f57a071a93e41909bfc0c4cf6309089/reviews.parquet",
+      "sha256": "747855a9405ba7cdd7ecf5e3de8121f7234949e90f51bdcc7f0269c0fc15785f"
+    },
+    "result": {
+      "reviewed": 15151,
+      "issue_count": 1033,
+      "issues": [],
+      "repair_recommendation": "Inspect all task-level issue evidence and qualify repairs with renewed QA. Resolve unavailable and uncertain observations before source-wide conclusions.",
+      "unavailable_count": 5,
+      "uncertain_count": 0,
+      "sample_count": 15156,
+      "issue_rate": 0.06818031813081644,
+      "verdict": "good"
+    },
+    "coverage_complete": false,
+    "finalization": "accepted_incomplete",
+    "waiver": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/code-oracle.json",
+      "sha256": "426b815441442e73fe8aad5cfc92515aa1225b2e0b5474de79ca1717b7de5644"
+    }
+  },
+  "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": {
+    "source_id": "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier",
+    "input": {
+      "dataset_id": "open-athena/task-trove-dcagent-inferredbugs-sandboxes-verifier-d35a1a27-taskcompendium-20261112",
+      "dataset_revision": "85ec560970adec8b9e1d409e6a63206422736834",
+      "converter_version": "2026.11.12.1",
+      "converter_revision": "18bdabdd278b7a19cf3c06ec786cbf2c7359ed3f6e61e81ebc2ebc526660cfa1",
+      "measured_tasks": 9659,
+      "task_specs_sha256": "f9f03d1fde38852abec09cc431096980ad5979ad72b6a03275279d0c09ad2920",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/757e7303df5aa6dbdc70/2026.11.12.4/.artifact.json"
+    },
+    "contract_index": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/757e7303df5aa6dbdc70/2026.11.12.2/attempts/4251292e47b54392b7d6668daa551f7a/contracts.parquet",
+      "sha256": "abba44bdc66c1dc6d40f62fc2b018104ff7b6dfe14954b0edda436abc95db6e4"
+    },
+    "review_receipt": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/757e7303df5aa6dbdc70/attempts/6817ef0cfba04ccc8638ebb6975eac76/.artifact.json",
+      "sha256": "8c4e65221962b7abc900cff18794fd3fc7590983eee862a82d0c9e6e63ba58f4"
+    },
+    "records": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/757e7303df5aa6dbdc70/attempts/6817ef0cfba04ccc8638ebb6975eac76/reviews.parquet",
+      "sha256": "b5086f7f71f72784df3e285abce1dd290a8d4a6ee236309b69f47bdb168d671a"
+    },
+    "result": {
+      "reviewed": 9655,
+      "issue_count": 3987,
+      "issues": [],
+      "repair_recommendation": "Inspect all task-level issue evidence and qualify repairs with renewed QA. Resolve unavailable and uncertain observations before source-wide conclusions.",
+      "unavailable_count": 4,
+      "uncertain_count": 0,
+      "sample_count": 9659,
+      "issue_rate": 0.41294665976178146,
+      "verdict": "some_issues"
+    },
+    "coverage_complete": false,
+    "finalization": "accepted_incomplete",
+    "waiver": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/inferredbugs.json",
+      "sha256": "42ea9b92fa5ab803fcd8498dff9d04b2125b2759588cec20d1e002fbb88d6637"
+    }
   }
 }
