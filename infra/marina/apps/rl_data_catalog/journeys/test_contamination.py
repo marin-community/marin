@@ -9,7 +9,13 @@ import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
-from infra.marina.apps.rl_data_catalog.release_browser import TABLE_BOUNDS, check_evidence, check_view, evidence_sweep
+from infra.marina.apps.rl_data_catalog.release_browser import (
+    TABLE_BOUNDS,
+    check_evidence,
+    check_view,
+    curriculum_sweep,
+    evidence_sweep,
+)
 
 
 def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey) -> None:
@@ -881,3 +887,43 @@ def test_grader_filter_and_mixed_profile_keep_counts_on_evidence(journey: Journe
         "href", "https://example.org/derived-receipt.json"
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+def test_release_checker_sweeps_exported_confidence_levels_and_historical_population(journey: Journey, tmp_path):
+    page = journey.page
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    root = page.url.split("#")[0]
+    releases = page.evaluate("async () => (await fetch('api/curriculum/releases')).json()")["releases"]
+    views = curriculum_sweep(page, root, releases, tmp_path)
+    levels = [view for view in views if "confidence" in view]
+    assert len(levels) == 5 * 3 * 4
+    assert {view["use"] for view in levels} == {"all", "train", "eval"}
+    assert {(view["theme"], view["width"]) for view in levels} == {
+        ("light", 1440),
+        ("light", 390),
+        ("dark", 1440),
+        ("dark", 390),
+    }
+    assert all(not view["failures"] for view in views)
+
+
+def test_default_source_column_bounds_long_names_and_viewer_can_expand(journey: Journey) -> None:
+    page = journey.page
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    payload = page.evaluate("async () => (await fetch('api/sources')).json()")
+    source = next(row for row in payload["sources"] if row["id"] == "Marin:clean")
+    source["display_name"] = "A long descriptive source name with provenance encoded in its dataset name " * 4
+    page.route("**/api/sources", lambda route: route.fulfill(json=payload))
+    page.reload()
+    page.locator("#show-all").check()
+    header = page.locator("#headers th").first
+    expect(page.locator('tr[data-source-id="Marin:clean"] .source-name')).to_have_text(source["display_name"].strip())
+    before = header.evaluate("element => element.getBoundingClientRect().width")
+    assert before <= 330
+    handle = page.get_by_role("separator", name="Resize Source column", exact=True)
+    handle.press("ArrowRight")
+    handle.press("Shift+ArrowRight")
+    assert header.evaluate("element => element.getBoundingClientRect().width") >= before + 78
+    assert page.locator(".source-table").evaluate(TABLE_BOUNDS) == []

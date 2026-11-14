@@ -69,7 +69,8 @@ th.num button { justify-content: flex-end; }
 .column-resize-handle::after { content: ''; position: absolute; top: 25%; bottom: 25%; left: 5px; width: 2px; background: var(--line); }
 .column-resize-handle:hover::after, .column-resize-handle:focus-visible::after { background: var(--green); }
 .resizing-column, .resizing-column * { cursor: col-resize !important; user-select: none; }
-.source-name { border: 0; background: none; padding: 0; color: #244a37; font-size: 14px; font-weight: 550; text-align: left; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-table.resized-columns .source-name { max-width: 100%; }
+.source-name { border: 0; background: none; padding: 0; color: #244a37; font-size: 14px; font-weight: 550; text-align: left; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-name:hover { text-decoration: underline; }
 .use-cell { font-size: 12px; color: #617168; }
 .area-link { font-size: 12px; line-height: 1.5; display: inline-block; }

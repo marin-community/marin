@@ -446,6 +446,7 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             reader.cache["measurements/oracle-inventory.json"] = json.loads(
                 (package / "dist/measurements/oracle-inventory.json").read_text()
             )
+            receipt.gate = "local-browser-sweep"
             with static_preview(package / "dist") as root:
                 receipt.gate = "browser-sweep"
                 receipt.browser = browser_checks(

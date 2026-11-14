@@ -294,12 +294,15 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
         page.set_viewport_size({"width": width, "height": 1000})
         for release in releases:
             for use in ("all", "train", "eval"):
+                page.goto("about:blank")
                 page.goto(root + "curriculum.html#" + urlencode({"release": release["release_id"], "intended_use": use}))
                 result = check_map(page)
                 confidence = page.evaluate(
-                    "async()=> (await fetch('api/curriculum?' + new URLSearchParams({release:docume"
-                    "nt.querySelector('#release').value,intended_use:document.querySelector('#use')"
-                    ".value}))).json())"
+                    """async () => {
+                    const params = new URLSearchParams({release: document.querySelector('#release').value,
+                        intended_use: document.querySelector('#use').value});
+                    return (await fetch('api/curriculum?' + params)).json();
+                }"""
                 )
                 levels = confidence.get("confidence", {}).get("levels", []) if confidence.get("confidence") else []
                 for index, level in enumerate(levels):
@@ -316,8 +319,8 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
                         )
                         == vectors["denominator"]
                     )
-                    assert integers(page.locator("#task-count").inner_text()) == [vectors["denominator"]]
-                    assert integers(page.locator("#capability-count").inner_text()) == [vectors.get("assigned", 0)]
+                    expect(page.locator("#task-count")).to_have_text(f"{vectors['denominator']:,}")
+                    expect(page.locator("#capability-count")).to_have_text(f"{vectors.get('assigned', 0):,}")
                     assert (
                         sum(integers(value)[0] for value in page.locator("#outcomes b").all_inner_texts())
                         == vectors["denominator"]
@@ -333,6 +336,7 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
                         }
                     )
                 results.append({"theme": theme, "width": width, "release": release["release_id"], "use": use, **result})
+        page.goto("about:blank")
         page.goto(root + "curriculum.html")
         check_map(page)
         coverage = page.evaluate("async()=> (await fetch('api/curriculum')).json()")
@@ -360,8 +364,10 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
             assert rendered_nodes == expected_nodes, "A taxonomy node (including an empty capability) is unreachable"
             count = integers(page.locator(".domain-count").inner_text())[0]
             expect(page.locator("#area-summary")).to_contain_text(f"{count:,} task instances")
+            page.locator("#source-breakdown summary").click()
             breakdown = page.locator("#area-sources b").all_inner_texts()
             assert sum(integers(value)[0] for value in breakdown) == count
+            page.locator("#source-breakdown summary").click()
             expect(page.locator("#task-message")).to_contain_text(
                 re.compile("sampled examples|No task examples|No stored sample examples")
             )
@@ -369,6 +375,7 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
             page.locator("#search").fill("__release_check_unmatched_search__")
             check_map(page)
             page.locator("#search").fill("")
+        page.goto("about:blank")
         page.goto(root + "curriculum.html")
         check_map(page)
         page.screenshot(path=str(shots / f"curriculum-{theme}-{width}.png"), full_page=True)
