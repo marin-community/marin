@@ -2138,6 +2138,44 @@ def test_overlap_refresh_binds_frozen_inputs_and_preserves_legacy_reviews(catalo
                 },
             )
         connection.execute(text("DELETE FROM atlas_sources WHERE id=:source"), {"source": template["id"]})
+    # An empty Parquet population still has a pinned manifest path and digest.
+    empty_fingerprint = SourceFingerprint(
+        version=1,
+        seed=0,
+        task_count=0,
+        within_source_duplicates=0,
+        sample_sha256="a" * 64,
+        sample=[],
+        instruction_minhash=[],
+        instruction_hashes=[],
+        reference_hashes=[],
+        test_hashes=[],
+        task_id_hashes=[],
+        url_hashes=[],
+        lineage=[],
+        inputs={"empty.parquet": "c" * 64},
+    )
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO atlas_sources SELECT (jsonb_populate_record(NULL::atlas_sources, "
+                "to_jsonb(s) || CAST(:patch AS JSONB))).* FROM atlas_sources s LIMIT 1"
+            ),
+            {
+                "patch": json.dumps(
+                    {
+                        "id": "Marin:empty",
+                        "declaration": {
+                            **template["declaration"],
+                            "id": "Marin:empty",
+                            "within_source_dedup": {**template["declaration"]["within_source_dedup"], "unique_count": 0},
+                        },
+                        "source_fingerprint": empty_fingerprint.model_dump(mode="json"),
+                    }
+                )
+            },
+        )
+    fingerprints["Marin:empty"] = None
     survey = {
         "version": 1,
         "catalog_root": "fixture",
@@ -2172,6 +2210,7 @@ def test_overlap_refresh_binds_frozen_inputs_and_preserves_legacy_reviews(catalo
         )
     before = catalog_state(catalog_query)
     first = load_identity(reference, catalog_query)
+    assert first["excluded_empty_sources"] == ["Marin:empty"]
     assert load_identity(reference, catalog_query) == first
     after = catalog_state(catalog_query)
     assert before["archives"] == after["archives"]

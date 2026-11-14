@@ -25,12 +25,11 @@ def load_identity(reference: ManifestReference, query: AppletQuery) -> dict[str,
     )["rows"][0]
     load_id = current["load_id"]
     sources = query(
-        (
-            "SELECT id,source_fingerprint->'inputs' AS inputs,source_fingerprint->'task_count' AS "
-            "task_count,source_fingerprint->'sample_sha256' AS "
-            "sample_sha256,source_fingerprint->'seed' AS seed FROM atlas_sources WHERE "
-            "load_id=:load_id ORDER BY id"
-        ),
+        "SELECT id,source_fingerprint->'inputs' AS inputs,"
+        "source_fingerprint->'task_count' AS task_count,"
+        "source_fingerprint->'sample_sha256' AS sample_sha256,source_fingerprint->'seed' AS seed,"
+        "declaration->'within_source_dedup'->'unique_count' AS retained FROM atlas_sources "
+        "WHERE load_id=:load_id ORDER BY id",
         {"load_id": load_id},
     )["rows"]
     active = set()
@@ -38,7 +37,7 @@ def load_identity(reference: ManifestReference, query: AppletQuery) -> dict[str,
     for row in sources:
         source_id = canonical_source_id(row["id"])
         fingerprint = survey.fingerprints.get(source_id)
-        if row["task_count"] == 0 and row["inputs"] == {}:
+        if row["task_count"] == 0 and row["retained"] == 0:
             empty_sources.append(source_id)
             continue
         if row["inputs"] is None:
