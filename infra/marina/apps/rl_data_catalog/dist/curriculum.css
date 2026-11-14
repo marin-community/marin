@@ -62,10 +62,10 @@
 #task-detail pre { font: max(var(--type-min), 12px)/1.7 ui-monospace, monospace; background: var(--soft); padding: 16px; border-radius: 5px; }
 #task-detail .description { font-size: max(var(--type-min), 14px); line-height: 1.7; overflow-wrap: anywhere; }
 #task-detail details { margin-top: 22px; font-size: max(var(--type-min), 12px); }
-#detail-matches table { table-layout: auto; }
-#detail-matches td { height: auto; padding: 9px 7px; font-size: max(var(--type-min), 12px); line-height: 1.5; overflow-wrap: anywhere; }
+#detail-matches table { table-layout: auto; min-width: 560px; }
+#detail-matches td { height: auto; padding: 9px 7px; font-size: max(var(--type-min), 12px); line-height: 1.5; overflow-wrap: normal; }
 #detail-matches th { position: static; padding: 9px 7px; font-size: max(var(--type-min), 12px); }
-#detail-matches .score { text-align: right; font-variant-numeric: tabular-nums; }
+#detail-matches .score { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
 .score-status { color: var(--muted); font-size: max(var(--type-min), 12px); }
 .score-status.outside { color: var(--bad-text); }
 @media (max-width: 1200px) {

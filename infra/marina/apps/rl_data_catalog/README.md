@@ -156,7 +156,9 @@ house rule. Targets need [24 × 24 px or the spacing exception](https://www.w3.o
 primary mobile controls need 44 × 44 px.
 
 Text must resize to 200% and [reflow at 320 CSS px](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html).
-Only data tables may scroll horizontally within their own containers. The guide
+Only data tables may scroll horizontally within their own containers. Keep
+match scores on one line; the task dialog uses a table wide enough for its
+headers and decimal values, with scrolling inside the dialog. The guide
 uses the diagram's same labels and live counts in a linear reading order when
 its diagram cannot fit or text spacing increases. Allow the WCAG
 [text-spacing overrides](https://www.w3.org/WAI/WCAG22/Understanding/text-spacing.html):

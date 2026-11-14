@@ -216,6 +216,7 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
         if not opened_task and page.locator(".task-row").count():
             page.locator(".task-row").first.click()
             expect(page.locator("#task-detail")).to_be_visible()
+            expect(page.locator("#detail-description")).not_to_have_text("Loading…", timeout=60000)
             page.locator("#task-detail details").evaluate_all("es=>es.forEach(e=>e.open=true)")
             capture("public-instructions", focus=True)
             page.keyboard.press("Escape")

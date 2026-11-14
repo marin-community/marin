@@ -697,6 +697,13 @@ def test_curriculum_parents_equal_displayed_children_and_remainder(journey: Jour
     expect(page.locator("#task-list")).to_contain_text("other-source-example")
     page.locator("#task-list .task-row").filter(has_text="earth-only").click()
     expect(page.locator("#detail-task-id")).to_have_text("earth-only")
+    expect(page.locator("#detail-matches .score").first).to_be_visible()
+    assert page.locator("#detail-matches .score").evaluate_all(
+        """cells => cells.filter(e=>e.checkVisibility()).every(e=>{
+          const range=document.createRange(); range.selectNodeContents(e);
+          return range.getClientRects().length===1;
+        })"""
+    )
     page.locator("#close-detail").click()
     page.locator("#close-tasks").click()
     page.locator("#domain").select_option("D05")
