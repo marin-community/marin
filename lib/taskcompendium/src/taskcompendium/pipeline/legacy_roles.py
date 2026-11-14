@@ -3,7 +3,7 @@
 
 """Bounded allocation qualification for completed trials from the frozen producer."""
 
-from typing import Literal
+from typing import Literal, Protocol
 
 from finestore.rl.curation import ContentEvidenceReference
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -21,6 +21,48 @@ class LegacyRoleAllocation(BaseModel):
     network: NetworkPolicy
     gpus: Literal[0]
     machine_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class LegacyAllocationContract(Protocol):
+    """Frozen packet and role observations shared by the producer-specific receipts."""
+
+    source_task_sha256: str
+    source_task_checksum: str
+    consumed_task_sha256: str
+    consumed_task_checksum: str
+    source_runtime: TaskSpecRuntimeBinding
+    actor: LegacyRoleAllocation | None
+    oracle_helper: LegacyRoleAllocation | None
+    verifier: LegacyRoleAllocation
+
+
+def require_legacy_allocation_contract(qualification: LegacyAllocationContract) -> None:
+    """Require the unchanged packet and allocations consistent with its frozen runtime."""
+    if (
+        qualification.source_runtime.task_sha256 != qualification.source_task_sha256
+        or qualification.consumed_task_sha256 != qualification.source_task_sha256
+        or qualification.consumed_task_checksum != qualification.source_task_checksum
+    ):
+        raise ValueError("Legacy qualification requires the unchanged original packet")
+    if (qualification.actor is None) == (qualification.oracle_helper is None):
+        raise ValueError("Legacy qualification requires the actual actor or its actorless oracle helper")
+    allocations: tuple[tuple[MachineRole, LegacyRoleAllocation | None], ...] = (
+        ("task_machine", qualification.actor),
+        ("verifier_machine", qualification.oracle_helper),
+        ("verifier_machine", qualification.verifier),
+    )
+    for role, allocation in allocations:
+        if allocation is None:
+            continue
+        for name, value in qualification.source_runtime.resource_limits(role).items():
+            if getattr(allocation.execution_requirements, name) != value:
+                raise ValueError(f"Legacy allocation differs from original {role}.{name}")
+        network = qualification.source_runtime.network(role)
+        if network is not None and allocation.network != network:
+            raise ValueError(f"Legacy allocation differs from original {role}.network")
+        original = qualification.source_runtime.runtime.get(role) or {}
+        if original.get("gpus") not in (None, allocation.gpus):
+            raise ValueError(f"Legacy allocation differs from original {role}.gpus")
 
 
 class LegacyRoleAdoptionDecision(BaseModel):
@@ -122,29 +164,5 @@ class LegacyRoleQualificationReceipt(BaseModel):
         require_legacy_adoption_scope(self.adoption_decision, self.input_partition, self.audit, self.small_scope)
         if self.adoption_decision.producer_revision != self.producer_revision:
             raise ValueError("Legacy adoption decision scope differs from its frozen partition or audit")
-        if (
-            self.source_runtime.task_sha256 != self.source_task_sha256
-            or self.consumed_task_sha256 != self.source_task_sha256
-            or self.consumed_task_checksum != self.source_task_checksum
-        ):
-            raise ValueError("Legacy qualification requires the unchanged original packet")
-        if (self.actor is None) == (self.oracle_helper is None):
-            raise ValueError("Legacy qualification requires the actual actor or its actorless oracle helper")
-        allocations: tuple[tuple[MachineRole, LegacyRoleAllocation | None], ...] = (
-            ("task_machine", self.actor),
-            ("verifier_machine", self.oracle_helper),
-            ("verifier_machine", self.verifier),
-        )
-        for role, allocation in allocations:
-            if allocation is None:
-                continue
-            for name, value in self.source_runtime.resource_limits(role).items():
-                if getattr(allocation.execution_requirements, name) != value:
-                    raise ValueError(f"Legacy allocation differs from original {role}.{name}")
-            network = self.source_runtime.network(role)
-            if network is not None and allocation.network != network:
-                raise ValueError(f"Legacy allocation differs from original {role}.network")
-            original = self.source_runtime.runtime.get(role) or {}
-            if original.get("gpus") not in (None, allocation.gpus):
-                raise ValueError(f"Legacy allocation differs from original {role}.gpus")
+        require_legacy_allocation_contract(self)
         return self

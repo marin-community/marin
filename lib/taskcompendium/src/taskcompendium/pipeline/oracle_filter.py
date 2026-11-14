@@ -7,7 +7,7 @@ import hashlib
 import math
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from finestore.rl.curation import ContentEvidenceReference, NoOracleExecutabilityPolicy, NoOracleStaticBlocker, SourceUse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -36,6 +36,7 @@ from taskcompendium.models import (
     decode_json_value,
 )
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
+from taskcompendium.pipeline.legacy_producer_1485 import LegacyProducer1485QualificationReceipt
 from taskcompendium.pipeline.legacy_roles import LegacyRoleQualificationReceipt
 from taskcompendium.pipeline.models import SourceRecipe
 from taskcompendium.pipeline.resource_calibration import (
@@ -1183,9 +1184,13 @@ class OracleTaskReceipt(BaseModel):
     harbor_task_checksum: str
     source_task_sha256: str | None = Field(default=None, exclude_if=lambda value: value is None)
     source_task_checksum: str | None = Field(default=None, exclude_if=lambda value: value is None)
-    legacy_role_qualification: LegacyRoleQualificationReceipt | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
+    legacy_role_qualification: (
+        Annotated[
+            LegacyRoleQualificationReceipt | LegacyProducer1485QualificationReceipt,
+            Field(discriminator="producer_revision"),
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
     native_success_policy: NativeOracleSuccessPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
     negative_control: OracleNegativeControlReceipt | None = Field(default=None, exclude_if=lambda value: value is None)
     negative_control_applicability: NegativeControlApplicability | None = Field(
@@ -1227,6 +1232,12 @@ class OracleTaskReceipt(BaseModel):
         if qualification is None:
             return self
         final = self.calibration.attempts[-1]
+        recorded_runtime = final.result["config"]["task"].get("source_runtime")
+        runtime_matches = (
+            recorded_runtime is None
+            if isinstance(qualification, LegacyProducer1485QualificationReceipt)
+            else qualification.source_runtime.model_dump(mode="json") == recorded_runtime
+        )
         if (
             not self.has_oracle
             or self.calibration.oracle_kind != "original"
@@ -1239,8 +1250,7 @@ class OracleTaskReceipt(BaseModel):
             or qualification.consumed_task_checksum != self.harbor_task_checksum
             or qualification.published_task_sha256 != self.task_sha256
             or qualification.source_runtime.runtime_sha256 != self.runtime_sha256
-            or qualification.source_runtime.model_dump(mode="json")
-            != final.result["config"]["task"].get("source_runtime")
+            or not runtime_matches
             or qualification.result_sha256 != final.result_sha256
             or qualification.calibration_sha256 != canonical_sha256(self.calibration.model_dump(mode="json"))
         ):

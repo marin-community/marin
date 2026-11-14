@@ -894,7 +894,8 @@ def test_approved_verifier_initialization_preserves_null_history_and_allows_genu
             load_oracle_filter(str(path))
 
 
-def test_collection_preserves_earlier_source_deadline_without_rewriting_final_results(tmp_path, retry_case):
+@pytest.mark.parametrize("inputs", ["root", "multiple", "results"])
+def test_collection_preserves_earlier_source_deadline_without_rewriting_final_results(tmp_path, retry_case, inputs):
     case = retry_case
     mapping = json.loads(case.parent_map.read_text())["task"]
     trial = OracleTrialReceipt.model_validate(mapping["calibration"]["attempts"][-1])
@@ -915,7 +916,18 @@ def test_collection_preserves_earlier_source_deadline_without_rewriting_final_re
     proof = preserved_phase_failure(tmp_path, archive_case, trial, archive_root=str(trial_dir.parent))
     bound = tmp_path / "deadline-bound-map.json"
     bind_prior_phase_failures(case.parent_map, {trial.result_sha256: proof}, bound)
-    receipt = filter_cohort(case.cohort, bound, tmp_path, tmp_path / "filtered/tasks.parquet")
+    locations = [tmp_path]
+    if inputs != "root":
+        results = [Path(attempt["path"]) for attempt in mapping["calibration"]["attempts"]]
+        locations = results if inputs == "results" else [path.parent.parent for path in results]
+        locations.append(results[0].parent.parent)
+    receipt = filter_cohort(
+        case.cohort,
+        bound,
+        locations[0],
+        tmp_path / "filtered/tasks.parquet",
+        additional_trial_inputs=tuple(locations[1:]),
+    )
     entry = receipt.tasks["task"]
     assert entry.exclusion_reason is OracleExclusionReason.AGENT_TIMEOUT
     assert not entry.passed
@@ -955,7 +967,8 @@ def test_public_loader_rejects_retry_history_attached_to_foreign_task_or_package
                 load_oracle_filter(str(path))
 
 
-def test_collect_cli_retains_explicit_standing_policy_and_source_trials(tmp_path, retry_case, monkeypatch):
+@pytest.mark.parametrize("inputs", ["root", "multiple", "results"])
+def test_collect_cli_retains_explicit_standing_policy_and_source_trials(tmp_path, retry_case, monkeypatch, inputs):
     case = retry_case
     plan = tmp_path / "plan"
     write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, plan)
@@ -968,6 +981,22 @@ def test_collect_cli_retains_explicit_standing_policy_and_source_trials(tmp_path
     policy = tmp_path / "policy.json"
     policy.write_text(receipt.negative_control_policy.model_dump_json())
     output = tmp_path / "cli/tasks.parquet"
+    locations = [tmp_path / "initial", run]
+    if inputs == "results":
+        entry = receipt.tasks["task"]
+        locations = [
+            Path(attempt.path)
+            for phase in (
+                *(transition.parent_calibration for transition in entry.infrastructure_retries),
+                entry.calibration,
+            )
+            for attempt in phase.attempts
+        ]
+    input_args = (
+        ["--jobs-dir", str(tmp_path)]
+        if inputs == "root"
+        else [value for location in locations for value in ("--trial-input", str(location))]
+    )
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -977,8 +1006,7 @@ def test_collect_cli_retains_explicit_standing_policy_and_source_trials(tmp_path
             str(case.cohort),
             "--task-map",
             str(combined),
-            "--jobs-dir",
-            str(tmp_path),
+            *input_args,
             "--output",
             str(output),
             "--negative-controls",

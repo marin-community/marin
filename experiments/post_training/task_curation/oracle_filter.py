@@ -34,6 +34,8 @@ from taskcompendium.harbor.protected_runtime import read_runtime_binding
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, read_source_runtime
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
+from taskcompendium.pipeline.legacy_producer_1485 import LegacyProducer1485QualificationReceipt
+from taskcompendium.pipeline.legacy_roles import LegacyRoleQualificationReceipt
 from taskcompendium.pipeline.oracle_filter import (
     LOCAL_EXECUTION_HOST_FIELDS,
     BackendFixIdentity,
@@ -79,6 +81,10 @@ from taskcompendium.runtime.resources import has_oracle_solution
 
 from experiments.post_training.task_curation.calibration_projection import calibrated_task_spec
 from experiments.post_training.task_curation.harbor_inspection import harbor_inspection
+from experiments.post_training.task_curation.legacy_producer_1485_qualification import (
+    LegacyProducer1485QualificationEvidence,
+    legacy_producer_1485_qualifications,
+)
 from experiments.post_training.task_curation.legacy_role_qualification import (
     LegacyRoleQualificationEvidence,
     legacy_role_qualifications,
@@ -112,6 +118,7 @@ BACKEND_CODE_FILES = {
     "experiments/post_training/task_curation/harbor_inspection.py",
     "experiments/post_training/task_curation/calibration_projection.py",
     "experiments/post_training/task_curation/legacy_role_qualification.py",
+    "experiments/post_training/task_curation/legacy_producer_1485_qualification.py",
 }
 FAILURE_LOG_BYTES = 64 * 1024
 CALIBRATION_ATTEMPT_TIMEOUT = 72 * 60 * 60
@@ -299,7 +306,13 @@ def cohort_sha256(cohort: Path) -> str:
 
 
 def trial_result_paths(jobs: Path) -> list[Path]:
-    """Find persisted trials without descending into task-controlled outputs."""
+    """Read an exact Result path or find trials without descending into task-controlled outputs."""
+    if jobs.name in {"result.json", "lifecycle-result.json"} and not jobs.exists():
+        raise FileNotFoundError(jobs)
+    if jobs.is_file():
+        if jobs.name not in {"result.json", "lifecycle-result.json"}:
+            raise ValueError(f"Explicit trial input must name a production Result: {jobs}")
+        return [jobs]
     results = []
     for directory, subdirectories, files in jobs.walk():
         if "task.toml" in files and "instruction.md" in files:
@@ -318,10 +331,12 @@ def trial_result_paths(jobs: Path) -> list[Path]:
     return sorted(results)
 
 
-def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
+def collect_trials(
+    jobs: Path, *, additional_inputs: tuple[Path, ...] = ()
+) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
     trials: dict[tuple[str, str], list[OracleTrialReceipt]] = {}
     seen = {}
-    paths = trial_result_paths(jobs)
+    paths = sorted({path for source in (jobs, *additional_inputs) for path in trial_result_paths(source)})
     validated = harbor_inspection("results", [str(path) for path in paths])
     documents = {}
     for path in paths:
@@ -423,6 +438,8 @@ def filter_cohort(
     negative_controls: Path | None = None,
     negative_control_policy: NegativeControlPolicy | None = None,
     legacy_role_qualification_evidence: LegacyRoleQualificationEvidence | None = None,
+    additional_trial_inputs: tuple[Path, ...] = (),
+    legacy_producer_1485_qualification_evidence: LegacyProducer1485QualificationEvidence | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -441,11 +458,19 @@ def filter_cohort(
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
-    legacy = (
+    legacy: dict[str, LegacyRoleQualificationReceipt | LegacyProducer1485QualificationReceipt] = dict(
         legacy_role_qualifications(legacy_role_qualification_evidence, frozenset(mappings))
         if legacy_role_qualification_evidence is not None
         else {}
     )
+    older = (
+        legacy_producer_1485_qualifications(legacy_producer_1485_qualification_evidence, frozenset(mappings))
+        if legacy_producer_1485_qualification_evidence is not None
+        else {}
+    )
+    if legacy.keys() & older.keys():
+        raise ValueError("A source task cannot receive qualifications from two different producers")
+    legacy.update(older)
     policies = {}
     checked_evidence = set()
     if native_success_policies is not None:
@@ -465,7 +490,7 @@ def filter_cohort(
                     raise ValueError("Native success policy evidence bytes changed")
                 checked_evidence.add(key)
             policies[task_id] = policy
-    trials = collect_trials(jobs)
+    trials = collect_trials(jobs, additional_inputs=additional_trial_inputs)
     controls = {}
     if executability_runs is not None:
         for line in executability_runs.read_text().splitlines():
@@ -1461,7 +1486,14 @@ def main() -> None:
     collect = commands.add_parser("collect")
     collect.add_argument("--cohort", type=Path, required=True)
     collect.add_argument("--task-map", type=Path, required=True)
-    collect.add_argument("--jobs-dir", type=Path, required=True)
+    collect.add_argument("--jobs-dir", type=Path)
+    collect.add_argument(
+        "--trial-input",
+        type=Path,
+        action="append",
+        default=[],
+        help="original trial root or exact Result path; repeat for multiple inputs",
+    )
     collect.add_argument("--output", type=Path, required=True)
     collect.add_argument("--conversion-manifest", type=Path)
     collect.add_argument("--executability-runs", type=Path, help="strong-model production-control JSONL receipts")
@@ -1471,6 +1503,7 @@ def main() -> None:
     collect.add_argument("--negative-control-policy", type=Path, required=True, help="global standing policy JSON")
     collect.add_argument("--negative-controls", type=Path)
     collect.add_argument("--legacy-role-qualification-evidence", type=Path)
+    collect.add_argument("--legacy-producer-1485-qualification-evidence", type=Path)
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
@@ -1573,10 +1606,13 @@ def main() -> None:
             host_admission=host_admission,
         )
         return
+    trial_inputs = ([args.jobs_dir] if args.jobs_dir is not None else []) + args.trial_input
+    if not trial_inputs:
+        raise ValueError("Collection requires an original trial root or exact Result path")
     filter_cohort(
         args.cohort,
         args.task_map,
-        args.jobs_dir,
+        trial_inputs[0],
         args.output,
         args.conversion_manifest,
         args.executability_runs,
@@ -1592,6 +1628,14 @@ def main() -> None:
         (
             LegacyRoleQualificationEvidence.model_validate_json(args.legacy_role_qualification_evidence.read_text())
             if args.legacy_role_qualification_evidence is not None
+            else None
+        ),
+        additional_trial_inputs=tuple(trial_inputs[1:]),
+        legacy_producer_1485_qualification_evidence=(
+            LegacyProducer1485QualificationEvidence.model_validate_json(
+                args.legacy_producer_1485_qualification_evidence.read_text()
+            )
+            if args.legacy_producer_1485_qualification_evidence is not None
             else None
         ),
     )

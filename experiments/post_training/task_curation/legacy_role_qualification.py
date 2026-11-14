@@ -33,14 +33,16 @@ class LegacyRoleQualificationEvidence(BaseModel):
     small_scope: LegacySmallRoleScope | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
-def _verified_bytes(reference: ContentEvidenceReference) -> bytes:
+def verified_legacy_evidence_bytes(reference: ContentEvidenceReference) -> bytes:
+    """Read an immutable evidence object and reject changed bytes."""
     data = StoragePath(reference.uri).read_bytes()
     if hashlib.sha256(data).hexdigest() != reference.sha256:
         raise ValueError(f"Legacy qualification evidence bytes changed: {reference.uri}")
     return data
 
 
-def _allocation(observation: dict | None, deadlines: ExecutionRequirements) -> LegacyRoleAllocation | None:
+def legacy_role_allocation(observation: dict | None, deadlines: ExecutionRequirements) -> LegacyRoleAllocation | None:
+    """Record captured capacity with the original phase deadlines."""
     if observation is None:
         return None
     return LegacyRoleAllocation(
@@ -101,21 +103,21 @@ def legacy_role_qualifications(
     evidence: LegacyRoleQualificationEvidence, task_ids: frozenset[str]
 ) -> dict[str, LegacyRoleQualificationReceipt]:
     """Verify audit membership and original bytes before qualifying the requested subset."""
-    inputs = json.loads(_verified_bytes(evidence.input_partition))
-    audit = json.loads(_verified_bytes(evidence.audit))
+    inputs = json.loads(verified_legacy_evidence_bytes(evidence.input_partition))
+    audit = json.loads(verified_legacy_evidence_bytes(evidence.audit))
     decision = TypeAdapter(LegacyRoleAdoptionDecision | LegacySmallRoleAdoptionDecision).validate_json(
-        _verified_bytes(evidence.decision)
+        verified_legacy_evidence_bytes(evidence.decision)
     )
     require_legacy_adoption_scope(decision, evidence.input_partition, evidence.audit, evidence.small_scope)
     if decision.producer_revision != inputs["backend_revision"]:
         raise ValueError("Legacy adoption decision scope differs from the requested partition or audit")
     if isinstance(decision, LegacySmallRoleAdoptionDecision):
         assert evidence.small_scope is not None
-        _verified_bytes(evidence.small_scope.ruling)
-        manifest = json.loads(_verified_bytes(evidence.small_scope.audit_manifest))
+        verified_legacy_evidence_bytes(evidence.small_scope.ruling)
+        manifest = json.loads(verified_legacy_evidence_bytes(evidence.small_scope.audit_manifest))
         _require_small_partition(inputs, audit, manifest, decision)
     else:
-        _verified_bytes(decision.ruling)
+        verified_legacy_evidence_bytes(decision.ruling)
     if (
         audit["version"] != 2
         or audit["input_partition_sha256"] != evidence.input_partition.sha256
@@ -126,8 +128,8 @@ def legacy_role_qualifications(
         raise ValueError("Legacy qualification requires its exact frozen offline allocation audit")
     producer = ContentEvidenceReference(uri=inputs["producer_manifest_uri"], sha256=inputs["producer_manifest_sha256"])
     closure = ContentEvidenceReference(uri=inputs["closure_uri"], sha256=inputs["closure_sha256"])
-    _verified_bytes(producer)
-    _verified_bytes(closure)
+    verified_legacy_evidence_bytes(producer)
+    verified_legacy_evidence_bytes(closure)
     rows = {row["task_id"]: row for row in audit["rows"]}
     if len(rows) != len(audit["rows"]):
         raise ValueError("Legacy audit repeats a task")
@@ -143,7 +145,9 @@ def legacy_role_qualifications(
             raise ValueError("Legacy allocation audit changed its original input or source outcome")
         observation = row["observation"]
         mapping = json.loads(
-            _verified_bytes(ContentEvidenceReference(uri=entry["receipt_uri"], sha256=entry["receipt_sha256"]))
+            verified_legacy_evidence_bytes(
+                ContentEvidenceReference(uri=entry["receipt_uri"], sha256=entry["receipt_sha256"])
+            )
         )["receipt"]
         calibration = ResourceCalibrationReceipt.model_validate(mapping["calibration"])
         final = calibration.attempts[-1]
@@ -173,7 +177,7 @@ def legacy_role_qualifications(
         if not calibration.passed:
             continue
         deadlines = final.execution_requirements
-        verifier = _allocation(observation["verifier"], deadlines)
+        verifier = legacy_role_allocation(observation["verifier"], deadlines)
         if verifier is None:
             raise ValueError("Legacy qualification requires an observed verifier MachineSpec")
         published = calibrated_task_spec(
@@ -191,8 +195,8 @@ def legacy_role_qualifications(
             calibration_sha256=canonical_sha256(calibration.model_dump(mode="json")),
             input_cohort_sha256=entry["cohort_sha256"],
             source_runtime=observation["source_runtime"],
-            actor=_allocation(observation["actor"], deadlines),
-            oracle_helper=_allocation(observation["oracle_helper"], deadlines),
+            actor=legacy_role_allocation(observation["actor"], deadlines),
+            oracle_helper=legacy_role_allocation(observation["oracle_helper"], deadlines),
             verifier=verifier,
             producer_manifest=producer,
             producer_closure=closure,

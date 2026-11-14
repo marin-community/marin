@@ -1857,8 +1857,9 @@ anchors are checked against their entry task/package identity; an unanchored
 partial-source projection is rejected. Absent anchors remain omitted so archived
 history hashes are unchanged.
 
-Use a fresh phase directory under the existing calibration root so `collect` can
-inspect both phases through one `--jobs-dir`. No prior file is overwritten.
+Use a fresh phase directory and collect both original trial roots with repeated
+`--trial-input` arguments, or keep one calibration root under `--jobs-dir`.
+No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
 three infrastructure attempts applies independently to this approved phase. A new scored
@@ -2274,8 +2275,16 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
 uv run python -m experiments.post_training.task_curation.oracle_filter collect \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/oracle-run-v2/task-map.json \
   --jobs-dir /path/to/oracle-run-v2 --output /path/to/filtered-v2/tasks.parquet \
+  --negative-control-policy /path/to/global-negative-control-policy.json \
   --conversion-manifest /path/to/quick/manifest.json
 ~~~
+
+For trials stored under different original roots, repeat `--trial-input PATH`
+with each root or exact `result.json`/`lifecycle-result.json` path. This replaces
+`--jobs-dir` when collecting exact files. Overlapping inputs are deduplicated;
+conflicting Result bytes for one trial ID fail. Collection preserves original
+Result paths and bytes and retains source-deadline exclusions alongside them,
+without creating aliases.
 
 DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
 when the cohort's snapshot identities fit the cap. The `iris-sandbox` environment
@@ -3127,6 +3136,30 @@ Only the passes receive qualification. A conclusive original scored failure
 remains excluded with its original TaskSpec and raw history, without requiring a
 passing allocation qualification. Existing receipts omit `small_scope` and
 serialize exactly as before.
+
+Producer `1485f1b6c64640b5c15a1bffc113d49eefdc60b6` has a separate adoption
+route. Pass `--legacy-producer-1485-qualification-evidence evidence.json` with
+`input_partition`, `audit`, and `decision` evidence references, each with the
+`uri`/`sha256` shape shown above. Its
+`LegacyProducer1485AdoptionDecision` records `version=1`, `disposition="adopted"`,
+the fixed producer revision, `input_index_sha256`, `audit_sha256`, `adopted_count`,
+`excluded_unscored`, and a `ruling` reference. The qualifier verifies the complete
+32-parent partition and its 18 adopted passes; the 14 unscored parents receive no
+qualification. It checks the actual producer closure, original and consumed
+TaskSpec/runtime bytes, archived Result, verdict, and oracle exit record.
+The producer closure names the pinned code manifests; the constructor capture
+records the MachineSpecs that code passes to its backend without creating a
+provider. Those old Result configs omit `task.source_runtime`. The qualifier
+checks that the archived `original-packet/source-runtime.json` is byte-identical
+to the consumed runtime file and binds its task/runtime hashes to the archived
+Result. Raw JSON stays unchanged.
+
+Supply both `--legacy-role-qualification-evidence` and
+`--legacy-producer-1485-qualification-evidence` when one source contains completed
+passes from both producers. `legacy_role_qualification` selects the distinct
+receipt schema by its fixed `producer_revision`; the existing 2c5 schemas and
+serialized receipts stay unchanged. A task qualified by both inputs fails
+collection. The audit and input-partition references retain the archive proof.
 
 Qualification does not supply a workspace negative control or content review.
 Qualified tasks still use the full-population collector and its grading/network

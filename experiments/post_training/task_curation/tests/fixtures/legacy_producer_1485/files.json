@@ -1,0 +1,214 @@
+{
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/1f7ab8d4028e7bcdd876fcb721add64d1af6350ffb9475b43da0defa2dfabe2b.json": {
+    "path": "00.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/2939f39352b5c1eba754c3d4a08f299232d7964c88ef40d1da75fd246c6ef102.json": {
+    "path": "01.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/3d975e33e345ec44fa23d617294ddf6bd9797fad297542ead77c0faf695a2f1a.json": {
+    "path": "02.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/48b0698770bad7e2ee55eca9999eedb2cfd7b62b486ecc3a415ae9bd2ceb3f81.json": {
+    "path": "03.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/538fa256050d2d4b1993cbef21348695059b47470770f6aad6423d1ef2d28f3b.json": {
+    "path": "04.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/trial-artifacts/538fa256050d2d4b1993cbef21348695059b47470770f6aad6423d1ef2d28f3b.tar.gz": {
+    "path": "04.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/6e2667d6f413dece6a1ed8fd366623f072c2cf66032817d2a8ce34ac70d7d5c9.json": {
+    "path": "05.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/trial-artifacts/6e2667d6f413dece6a1ed8fd366623f072c2cf66032817d2a8ce34ac70d7d5c9.tar.gz": {
+    "path": "05.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/92ae9078dec83db6389e9baf085da3159bc58e025fe0d36d7cd386b37d3cca62.json": {
+    "path": "06.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/trial-artifacts/92ae9078dec83db6389e9baf085da3159bc58e025fe0d36d7cd386b37d3cca62.tar.gz": {
+    "path": "06.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/tasks/e7f4fadce06d1acdf83dd06937579fd9da8550b22ea5b02d863bca486998b608.json": {
+    "path": "07.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/4e46190654f9df9c72cc/trial-artifacts/e7f4fadce06d1acdf83dd06937579fd9da8550b22ea5b02d863bca486998b608.tar.gz": {
+    "path": "07.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/1fb9c78ff3dfa62eb4f06661d5faad2caef65d7dde436da4b6e6f9da3f9646c9.json": {
+    "path": "08.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/793489b7a764e8903c2ece81811af8db51038f92f903c7c0a77b33403fa348dd.json": {
+    "path": "09.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/79f6022648c0d51ccdf2c70dc8afccd79b3142d6ad78691592a435e57bb4ab4e.json": {
+    "path": "10.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/79f6022648c0d51ccdf2c70dc8afccd79b3142d6ad78691592a435e57bb4ab4e.tar.gz": {
+    "path": "10.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/a08feffaae57eae0b76d0c23a58a940a108d491bacd74a423c754e75d4347b04.json": {
+    "path": "11.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/a08feffaae57eae0b76d0c23a58a940a108d491bacd74a423c754e75d4347b04.tar.gz": {
+    "path": "11.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/b77155b71892fa63701e4ebd5f4e2b5553544e759b257f55d3da89e8b89e4eb4.json": {
+    "path": "12.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/b77155b71892fa63701e4ebd5f4e2b5553544e759b257f55d3da89e8b89e4eb4.tar.gz": {
+    "path": "12.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/cda4d4f0d0dbfc1ccd8bc455414445411942ee86a165f62d82b83746989da065.json": {
+    "path": "13.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/cda4d4f0d0dbfc1ccd8bc455414445411942ee86a165f62d82b83746989da065.tar.gz": {
+    "path": "13.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/da35d5f3b143d1aa39f3efff97edb61401673d9a7d2fc54fcd1f60ee38f1e2fd.json": {
+    "path": "14.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/da35d5f3b143d1aa39f3efff97edb61401673d9a7d2fc54fcd1f60ee38f1e2fd.tar.gz": {
+    "path": "14.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/tasks/e6d742cb9fecba2cc7c728c92ef33a5fdb21b9bae55ff096cac32640818ae5a9.json": {
+    "path": "15.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/6c371a420a064bef5946/trial-artifacts/e6d742cb9fecba2cc7c728c92ef33a5fdb21b9bae55ff096cac32640818ae5a9.tar.gz": {
+    "path": "15.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/1f2e82065b5c2864c901a04334b97c26b33c9db721275c23a0e4d373276bf4f6.json": {
+    "path": "16.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/trial-artifacts/1f2e82065b5c2864c901a04334b97c26b33c9db721275c23a0e4d373276bf4f6.tar.gz": {
+    "path": "16.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/21fb14dd6b0ee3302d80dfd05eac931048eadf575bb621f6ca4c24b7d34770b7.json": {
+    "path": "17.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/26c0a23f8a9833f91f61161b9c82d0b60079f13d83c3ba72713f88ac40fab00c.json": {
+    "path": "18.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/5dbee2bf28cb968a56faa0fce6e19761f786439b4494912af98b72419b452009.json": {
+    "path": "19.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/64b97539506488d5672899ac7d6d55856d298d9332136d8a191a32392d440e77.json": {
+    "path": "20.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/trial-artifacts/64b97539506488d5672899ac7d6d55856d298d9332136d8a191a32392d440e77.tar.gz": {
+    "path": "20.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/a9e0e0f2a2aba69eedca61d86c2dfa01c6855ad9fde725965ceaf3a4bb3878f6.json": {
+    "path": "21.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/c8dec7cde39310861df930cdbc1e7ced317b942eaf5dc701c923167d7ae69415.json": {
+    "path": "22.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/trial-artifacts/c8dec7cde39310861df930cdbc1e7ced317b942eaf5dc701c923167d7ae69415.tar.gz": {
+    "path": "22.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/tasks/fae48144e57174a3b204f153c0249f06dca35fa2200fd77a679e1b65e241e27c.json": {
+    "path": "23.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/72ea16180a238d201038/trial-artifacts/fae48144e57174a3b204f153c0249f06dca35fa2200fd77a679e1b65e241e27c.tar.gz": {
+    "path": "23.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/09cb3ad395a3557074e4d3aee6408d48c5901e033e53b89acba569a930e2e31e.json": {
+    "path": "24.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/trial-artifacts/09cb3ad395a3557074e4d3aee6408d48c5901e033e53b89acba569a930e2e31e.tar.gz": {
+    "path": "24.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/0daf11322529dbf0973dbb4489e0a7fadfeb8db3e0e741b311f9c52da2573013.json": {
+    "path": "25.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/trial-artifacts/0daf11322529dbf0973dbb4489e0a7fadfeb8db3e0e741b311f9c52da2573013.tar.gz": {
+    "path": "25.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/4507fa9e6a5cc1897c7069e1823f56f582fa44a38c323b84ce4242ecc3a739f7.json": {
+    "path": "26.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/trial-artifacts/4507fa9e6a5cc1897c7069e1823f56f582fa44a38c323b84ce4242ecc3a739f7.tar.gz": {
+    "path": "26.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/534d3b92ee95f5d4b5ae9bb3b3c1067d6514a9c13ad2cebff4327fb0759c9af3.json": {
+    "path": "27.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/622b9cda12226791f6d2432c958452dfe58547330746ac29ab2730cf32bc3feb.json": {
+    "path": "28.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/6aff8d6b476492ca54f966bd3299f617d1bfa05559121156e46ba7fbad352e44.json": {
+    "path": "29.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/9930838b5728ab88f8d9a4c7dd2ac66a18f0773853481e1e18d2abadb0cff27e.json": {
+    "path": "30.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/trial-artifacts/9930838b5728ab88f8d9a4c7dd2ac66a18f0773853481e1e18d2abadb0cff27e.tar.gz": {
+    "path": "30.tar.gz",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.30-raw-candidate-trials/bc301818cccd454da3de/tasks/cbb3b09f46b797db053e609047f03ed0c31c188d2d06e86d9f0e47944b97084b.json": {
+    "path": "31.receipt.json.gz",
+    "gzip": true
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.29-candidate-packets/backend/producer-manifest.json": {
+    "path": "producer-manifest.json",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.29-candidate-packets/backend/closure.json": {
+    "path": "closure.json",
+    "gzip": false
+  },
+  "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.29-candidate-packets/backend/backend-identity.json": {
+    "path": "backend-identity.json",
+    "gzip": false
+  }
+}
