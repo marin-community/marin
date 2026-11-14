@@ -452,11 +452,16 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
             cohort,
         )
     receipt = oracle_receipt([spec], failed=frozenset({spec.id}) if state == "failed" else frozenset())
-    receipt.tasks[spec.id] = receipt.tasks[spec.id].model_copy(
+    entry = receipt.tasks[spec.id]
+    runtime_sha256 = canonical_sha256(envelope["runtime"]) if encoding is prebuilt.PrebuiltEncoding.LOWERED else None
+    receipt.tasks[spec.id] = entry.model_copy(
         update={
-            "runtime_sha256": (
-                canonical_sha256(envelope["runtime"]) if encoding is prebuilt.PrebuiltEncoding.LOWERED else None
-            )
+            "runtime_sha256": runtime_sha256,
+            "negative_control": (
+                entry.negative_control.model_copy(update={"runtime_sha256": runtime_sha256})
+                if entry.negative_control is not None
+                else None
+            ),
         }
     )
     receipt_path = tmp_path / prebuilt.ORACLE_FILTER_FILENAME

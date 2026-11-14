@@ -14,7 +14,6 @@ from taskcompendium.pipeline.oracle_filter import PriorPhaseFailureReceipt, Reso
 from experiments.post_training.task_curation.archive_evidence import verified_archive_members
 
 
-
 def require_prior_phase_failure(evidence: PriorPhaseFailureReceipt, result: dict) -> None:
     """Verify the original exception, archived config, actual Trial and declared phase."""
     if evidence.result_sha256 != canonical_sha256(result):

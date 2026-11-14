@@ -11,7 +11,12 @@ from copy import deepcopy
 
 import zstandard
 from finestore.rl.curation import ContentEvidenceReference
-from taskcompendium.pipeline.oracle_filter import NegativeControlApplicability, OracleExclusionReason, OracleTaskReceipt
+from taskcompendium.pipeline.oracle_filter import (
+    NegativeControlApplicability,
+    OracleExclusionReason,
+    OracleTaskReceipt,
+    ResourceCalibrationReceipt,
+)
 
 from experiments.post_training.task_curation.negative_controls import negative_control_from_archive
 from experiments.post_training.task_curation.oracle_filter import filter_cohort
@@ -19,6 +24,12 @@ from experiments.post_training.task_curation.oracle_filter import filter_cohort
 
 def filter_with_negative_controls(cohort, task_map, jobs, output, *args, **kwargs):
     """Supply explicit offline-provider nop evidence to existing source-result cases."""
+    mappings = json.loads(task_map.read_text())
+    if kwargs.get("native_success_policies") is None and all(
+        "calibration" in mapping and not ResourceCalibrationReceipt.model_validate(mapping["calibration"]).passed
+        for mapping in mappings.values()
+    ):
+        return filter_cohort(cohort, task_map, jobs, output, *args, **kwargs)
     pending = output.parent / "nop-fixture-input/tasks.parquet"
     receipt = filter_cohort(cohort, task_map, jobs, pending, *args, **kwargs)
     records = []
