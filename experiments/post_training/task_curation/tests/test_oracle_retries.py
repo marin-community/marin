@@ -136,19 +136,21 @@ def retry_case(tmp_path, monkeypatch, request):
             "exception_info": (
                 {
                     "exception_type": (
-                        {"infra": "ConnectionError", "oom": "OutOfMemoryError"}.get(current, "RuntimeError")
+                        {"infra": "ConnectionError", "oom": "OutOfMemoryError", "timeout": "AgentTimeoutError"}.get(
+                            current, "RuntimeError"
+                        )
                     ),
                     "exception_message": "Provider connection failed",
                     "exception_traceback": "",
                     "occurred_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
                 }
-                if current in {"infra", "unknown", "oom"}
+                if current in {"infra", "unknown", "oom", "timeout"}
                 else None
             ),
         }
         (root / "result.json").write_text(json.dumps(result))
         (root / "config.json").write_text(json.dumps(result["config"]))
-        if current != "unknown":
+        if current not in {"unknown", "timeout"}:
             (root / "verifier/verdict.json").write_text(
                 json.dumps(
                     {
@@ -157,7 +159,7 @@ def retry_case(tmp_path, monkeypatch, request):
                     }
                 )
             )
-        if current not in {"infra", "unknown", "oom"}:
+        if current not in {"infra", "unknown", "oom", "timeout"}:
             (root / "agent/exit-code.txt").write_text("0")
         return subprocess.CompletedProcess(args, 0)
 
@@ -208,18 +210,19 @@ def retry_case(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.parametrize(
-    ("retry_case", "expected_passed", "expected_attempts"),
+    ("retry_case", "expected_passed", "expected_attempts", "expected_reason"),
     [
-        ("pass", True, 1),
-        ("infra", False, 3),
-        ("zero", False, 1),
-        ("unknown", False, 3),
-        ("legacy-unknown", True, 1),
+        ("pass", True, 1, None),
+        ("infra", False, 3, OracleExclusionReason.INFRASTRUCTURE),
+        ("zero", False, 1, OracleExclusionReason.ORACLE_FAILED),
+        ("timeout", False, 1, OracleExclusionReason.AGENT_TIMEOUT),
+        ("unknown", False, 3, OracleExclusionReason.INFRASTRUCTURE),
+        ("legacy-unknown", True, 1, None),
     ],
     indirect=["retry_case"],
 )
-def test_fixed_backend_phase_preserves_parent_attempts_and_never_turns_failed_retry_into_source_negative(
-    tmp_path, retry_case, expected_passed, expected_attempts
+def test_fixed_backend_phase_retains_parent_and_classifies_its_actual_final_source_outcome(
+    tmp_path, retry_case, expected_passed, expected_attempts, expected_reason
 ):
     case = retry_case
     parent_bytes = case.parent_map.read_bytes()
@@ -242,7 +245,7 @@ def test_fixed_backend_phase_preserves_parent_attempts_and_never_turns_failed_re
     assert all(Path(attempt.path).exists() for attempt in transition.parent_calibration.attempts)
     assert entry.passed is expected_passed
     assert len(entry.calibration.attempts) == expected_attempts
-    assert entry.exclusion_reason is (None if expected_passed else OracleExclusionReason.INFRASTRUCTURE)
+    assert entry.exclusion_reason is expected_reason
     assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == int(expected_passed)
     assert len(case.calls) == parent_attempt_count + len(entry.calibration.attempts)
 
