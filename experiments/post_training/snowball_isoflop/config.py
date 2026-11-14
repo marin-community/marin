@@ -55,10 +55,11 @@ class Mask(StrEnum):
 class RuntimePolicy(StrEnum):
     SOURCE = "source"
     SYNCHRONOUS = "synchronous"
+    SYNCHRONOUS_COLLECTIVES = "synchronous_collectives"
     LOSS_CURVE = "loss_curve"
 
 
-# Each arm reproduced the source-runtime first-update stall before approval.
+# Only observed source-runtime stalls receive the approved loss-phase workaround.
 LOSS_CURVE_RECOVERY_ARMS = frozenset((size, mask) for size in (512, 768, 1024) for mask in (Mask.FULL, Mask.ASSISTANT))
 CALIBRATION_RECOVERY_ARMS = LOSS_CURVE_RECOVERY_ARMS - {(1024, Mask.ASSISTANT)}
 WANDB_NAME_LIMIT = 128
@@ -205,6 +206,7 @@ def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE)
         runtime = (
             RuntimePolicy.SYNCHRONOUS if (cell.size, cell.mask) in LOSS_CURVE_RECOVERY_ARMS else RuntimePolicy.SOURCE
         )
+    synchronous = runtime in (RuntimePolicy.SYNCHRONOUS, RuntimePolicy.SYNCHRONOUS_COLLECTIVES)
     e1 = recipe()
     receipt = model_receipt(cell.size)
     hf_config = receipt["config"]
@@ -302,8 +304,13 @@ def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE)
             "--xla_gpu_shard_autotuning=false",
             "--xla_gpu_nccl_termination_timeout_seconds=600",
         )
-        + (("--xla_gpu_enable_command_buffer=",) if runtime == RuntimePolicy.SYNCHRONOUS else ()),
-        cuda_launch_blocking=True if runtime == RuntimePolicy.SYNCHRONOUS else None,
+        + (("--xla_gpu_enable_command_buffer=",) if synchronous else ())
+        + (
+            ("--xla_gpu_disable_async_collectives=ALLCOLLECTIVES",)
+            if runtime == RuntimePolicy.SYNCHRONOUS_COLLECTIVES
+            else ()
+        ),
+        cuda_launch_blocking=True if synchronous else None,
         jax_port=32768 + int(hashlib.sha256(cell.name.encode()).hexdigest()[:8], 16) % 20000,
         wandb_project="snowball-isoflop",
         checkpointer=checkpointer,
