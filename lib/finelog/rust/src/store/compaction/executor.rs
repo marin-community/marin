@@ -505,7 +505,7 @@ fn apply_merge(
             max_key_value: metadata.max_key_value,
             partition: metadata.partition,
             location: SegmentLocation::Local,
-            column_bounds: column_bounds::from_batches(&batches, execution.layout.bounds_columns),
+            column_bounds: column_bounds::from_batches(&batches, execution.layout.bounds_columns)?,
             artifacts: local_sidecar_artifacts(&merged_path),
         });
     }
@@ -590,25 +590,18 @@ fn batch_int64_bounds(
     batches: &[RecordBatch],
     column: &str,
 ) -> Result<Option<(i64, i64)>, StatsError> {
-    let mut minimum = None;
-    let mut maximum = None;
-    for batch in batches {
-        let values = batch
-            .column_by_name(column)
-            .and_then(|array| array.as_any().downcast_ref::<Int64Array>())
-            .ok_or_else(|| {
-                StatsError::Internal(format!("compaction output lacks Int64 {column:?}"))
-            })?;
-        for index in 0..values.len() {
-            if values.is_null(index) {
-                continue;
-            }
-            let value = values.value(index);
-            minimum = Some(minimum.map_or(value, |current: i64| current.min(value)));
-            maximum = Some(maximum.map_or(value, |current: i64| current.max(value)));
-        }
-    }
-    Ok(minimum.zip(maximum))
+    let arrays = batches
+        .iter()
+        .map(|batch| {
+            batch
+                .column_by_name(column)
+                .and_then(|array| array.as_any().downcast_ref::<Int64Array>())
+                .ok_or_else(|| {
+                    StatsError::Internal(format!("compaction output lacks Int64 {column:?}"))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(column_bounds::int64_range(arrays))
 }
 
 #[cfg(test)]
