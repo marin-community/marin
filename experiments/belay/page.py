@@ -45,6 +45,10 @@ MARINA_IDENTITY_URL = "https://marina.oa.dev/api/marina/me"
 TERMINAL_RUN_STATES = ("succeeded", "failed", "killed", "worker_failed", "unschedulable")
 
 
+# Idea states a session still acts on.
+IN_PLAY_STATES = ("approved", "planned", "running")
+
+
 @dataclass(frozen=True)
 class Idea:
     id: int
@@ -124,11 +128,16 @@ class PageState:
         raise SystemExit(f"no idea #{idea_id} on the Belay page")
 
     def idea_for(self, registry_id: str) -> Idea | None:
-        """The idea behind ``registry_id``; None for an experiment a maintainer launched without one."""
+        """The idea behind ``registry_id`` (None for an experiment a maintainer launched without one). An entry can carry
+        several ideas, such as a speedrun idea and a later one taking it up the ladder: the one still in play (approved,
+        planned or running) is its idea, else the newest; two in play at once is refused."""
         ideas = [i for i in self.ideas if i.registry_id == registry_id]
-        if len(ideas) > 1:
-            raise SystemExit(f"{len(ideas)} ideas on the Belay page have registry id {registry_id}")
-        return ideas[0] if ideas else None
+        in_play = [i for i in ideas if i.state in IN_PLAY_STATES]
+        if len(in_play) > 1:
+            raise SystemExit(f"{len(in_play)} ideas in play on the Belay page have registry id {registry_id}")
+        if in_play:
+            return in_play[0]
+        return max(ideas, key=lambda i: i.id) if ideas else None
 
 
 class PageRequestError(RuntimeError):
