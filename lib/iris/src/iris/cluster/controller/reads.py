@@ -116,6 +116,7 @@ class PendingDispatchRow:
     # Coscheduling + priority drive Kueue gang admission on the direct path.
     has_coscheduling: bool
     coscheduling_group_by: str  # "" when not coscheduled
+    coscheduling_group_sizes: list[int]
     # Current tasks.priority_band. Before first direct dispatch, the drain
     # resolves parent inheritance from job_config and stamps the result; a
     # redrive reads that fixed band back from the task row.
@@ -638,6 +639,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.constraints_json,
             job_config_table.c.has_coscheduling,
             job_config_table.c.coscheduling_group_by,
+            job_config_table.c.coscheduling_group_sizes,
             job_config_table.c.scheduling_timeout_ms,
             job_config_table.c.max_task_failures,
             job_config_table.c.entrypoint_json,
@@ -1004,6 +1006,7 @@ ATTEMPT_COLS = (
     task_attempts_table.c.pod_name,
     task_attempts_table.c.pod_uid,
     task_attempts_table.c.node_name,
+    task_attempts_table.c.topology_json,
     task_attempts_table.c.terminal_reason,
     task_attempt_outputs_table.c.archive_json.label("output_archive_json"),
 )
@@ -1693,6 +1696,7 @@ PENDING_DISPATCH_COLS = (
     job_config_table.c.termination_grace_ms,
     job_config_table.c.has_coscheduling,
     job_config_table.c.coscheduling_group_by,
+    job_config_table.c.coscheduling_group_sizes,
     # Current stamped task band; see PendingDispatchRow.priority_band.
     local_tasks.c.priority_band,
     job_config_table.c.container_profile,
@@ -1725,6 +1729,7 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         termination_grace_ms=int(r.termination_grace_ms),
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),
+        coscheduling_group_sizes=list(r.coscheduling_group_sizes),
         priority_band=int(r.priority_band),
         container_profile=int(r.container_profile),
         egress_policy=int(r.egress_policy),

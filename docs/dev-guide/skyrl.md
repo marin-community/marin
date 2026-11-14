@@ -119,6 +119,25 @@ tested batch shape, but both retained existing batch-shape sensitivity. This
 option does not establish exact batch invariance; see the
 [numerical checks](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-invariance-01a13c0f/reports/HERO-NCCL-BATCH-INVARIANCE.md).
 
+## Keep each model group within one NVLink domain
+
+On NVL72, set `IrisSkyRLExecution.role_topology` to
+`RoleTopologyMode.NVLINK_DOMAIN` (from `skyrlrecipe.locality`), or use
+`iris.role_topology: nvlink.domain` in a launch document, to keep the trainer
+within one rack and each vLLM engine within one rack. Each group may use at
+most 16 four-GPU hosts (64 GPUs) in one rack. Each trainer or engine must fit
+within that limit. Groups may share a rack when capacity permits. This mode
+uses separate trainer and inference GPUs. Inference requires tensor and pipeline
+parallelism of one (TP=PP=1), with expert parallelism equal to data parallelism
+(EP=DP). A reference model may share trainer GPUs.
+For example, a 32-GPU trainer and a 64-GPU engine request 24 four-GPU
+hosts in groups of eight and sixteen. Marin rounds each group up to whole hosts.
+Iris admits the job together; Ray confines each role to its group. Deploy an Iris
+controller with [grouped coscheduling](https://github.com/marin-community/marin/pull/11449)
+before enabling this mode. Explicit groups lose the default preference
+for nearby racks on InfiniBand. Cross-rack transport between trainer and
+inference still needs validation. Omitting the option keeps existing placement.
+
 ## Expert-block weight sync placement
 
 Expert-block sync publishes each Grug expert from the Megatron rank that owns it to the

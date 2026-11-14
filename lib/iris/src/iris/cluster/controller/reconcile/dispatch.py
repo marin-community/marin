@@ -95,6 +95,7 @@ def build_run_request(
     # Coscheduling drives Kueue gang admission on the direct path.
     if row.has_coscheduling:
         run_req.coscheduling.group_by = row.coscheduling_group_by
+        run_req.coscheduling.group_sizes.extend(row.coscheduling_group_sizes)
     # Stamp the attempt's uid so the K8s backend can label the pod with it and
     # tell this attempt's own pod apart from a stale pod a previous job left at
     # the same (task_hash, attempt_id) name. Visible in this tx for both paths:
