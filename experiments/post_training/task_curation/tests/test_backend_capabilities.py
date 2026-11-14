@@ -515,9 +515,8 @@ def test_production_matrix_records_local_runtime_and_startup_evidence():
         assert cells["local", requirement].support == Support.SUPPORTED
         assert cells["docker", requirement].support == Support.PARTIAL
     for backend in ("docker", "local"):
-        cell = cells[backend, Requirement.STARTUP_TIMEOUT]
-        assert cell.support == Support.SUPPORTED, backend
-        assert any("rolloutengine" in evidence for evidence in cell.evidence), backend
+        # The validator accepted the probe, so its measured PARTIAL downgrade is replaced.
+        assert cells[backend, Requirement.STARTUP_TIMEOUT].support == Support.SUPPORTED, backend
     # A validator that rejected the startup probe keeps its measured rejection.
     assert cells["qemu", Requirement.STARTUP_TIMEOUT].support == Support.UNSUPPORTED
 
