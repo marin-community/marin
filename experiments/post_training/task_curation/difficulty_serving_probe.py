@@ -23,7 +23,9 @@ from experiments.post_training.task_curation.difficulty_sampling import request_
 def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, settings: SamplingSettings) -> dict:
     """Verify pinned tools/thinking tokenization against authoritative serving usage."""
     pin = PINS[solver]
-    with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=300) as client:
+    # A cold vLLM engine can still be compiling when the endpoint accepts connections;
+    # the probe must outlast warmup instead of killing the campaign at 300 s.
+    with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=1800) as client:
         models = client.get(endpoint.rstrip("/") + "/models")
         models.raise_for_status()
         parameters = request_parameters(settings)
