@@ -68,3 +68,10 @@ continuations per trial. The original response stays in the transcript.
 Synthetic feedback exists only in model context: no malformed or repaired call
 is executed, and retry requests consume the trial's existing turn, token and
 time budgets. Valid JSON with wrong tool arguments is outside this policy.
+
+Feedback recovery requires its original response in active context. If
+compaction or another extension loses that association, Pi aborts and Harbor
+records `ContextManagementInfrastructureError`, rather than a scored model
+failure. Retain raw Pi JSONL and outbound model requests: ATIF does not include
+the synthetic context-only feedback. Retry entries carry the original response
+SHA256 and source entry ID. Non-hosted providers cannot enable this policy.

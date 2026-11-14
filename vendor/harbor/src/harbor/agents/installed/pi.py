@@ -18,7 +18,7 @@ from harbor.agents.installed.base import (
     with_prompt_template,
 )
 from harbor.environments.base import BaseEnvironment
-from harbor.llms.base import ContextLengthExceededError
+from harbor.llms.base import ContextLengthExceededError, ContextManagementInfrastructureError
 from harbor.literal.proxy import CORRELATION_ID_HEADER, LITERAL_LOG_FILENAME
 from harbor.literal.rollout_build import (
     build_rollout_details_from_pairs,
@@ -76,14 +76,17 @@ class Pi(BaseInstalledAgent):
     _SETTINGS_CONFIG_RELATIVE_PATH = ".pi/agent/settings.json"
     _AUTHENTICATION_FAILURE_MARKER = "HARBOR_PI_MODEL_AUTHENTICATION_ERROR"
     _CONTEXT_LENGTH_FAILURE_MARKER = "HARBOR_PI_CONTEXT_LENGTH_EXCEEDED"
+    _PARSE_ERROR_FAILURE_MARKER = "HARBOR_PI_PARSE_ERROR_PROJECTION_FAILURE"
     _VALIDATE_OUTPUT_SCRIPT = (
         """
 const readline = require("readline");
 let lastAssistantStopReason;
 let lastAssistantErrorMessage;
+let projectionFailed = false;
 const lines = readline.createInterface({ input: process.stdin });
 lines.on("line", (line) => {
   process.stdout.write(line + "\\n");
+  if (line.trim() === "__PARSE_ERROR_FAILURE_MARKER__") projectionFailed = true;
   try {
     const event = JSON.parse(line);
     const message = event.type === "message_end" ? event.message : undefined;
@@ -97,6 +100,11 @@ lines.on("line", (line) => {
   }
 });
 lines.on("close", () => {
+  if (projectionFailed) {
+    process.stderr.write("__PARSE_ERROR_FAILURE_MARKER__\\n");
+    process.exitCode = 1;
+    return;
+  }
   if (lastAssistantStopReason !== "error") return;
   if (/authentication required|authenticationerror/i.test(lastAssistantErrorMessage ?? "")) {
     process.stderr.write("__AUTHENTICATION_FAILURE_MARKER__\\n");
@@ -109,6 +117,7 @@ lines.on("close", () => {
             "__AUTHENTICATION_FAILURE_MARKER__", _AUTHENTICATION_FAILURE_MARKER
         )
         .replace("__CONTEXT_LENGTH_FAILURE_MARKER__", _CONTEXT_LENGTH_FAILURE_MARKER)
+        .replace("__PARSE_ERROR_FAILURE_MARKER__", _PARSE_ERROR_FAILURE_MARKER)
         .strip()
     )
     _REGISTER_PROVIDER_SCRIPT = """
@@ -340,8 +349,10 @@ function contextBudget(pi) {
                 "model request with a trial correlation ID"
             )
 
-        if parse_error_retries not in (0, 1, 2):
+        if type(parse_error_retries) is not int or parse_error_retries not in (0, 1, 2):
             raise ValueError("parse_error_retries must be 0, 1 or 2")
+        if parse_error_retries and api_base is None:
+            raise ValueError("parse_error_retries requires a hosted api_base")
         self._parse_error_retries = parse_error_retries
         self._api_base = api_base
         self._api_key = api_key or "EMPTY"
@@ -730,6 +741,10 @@ function contextBudget(pi) {
                 if error.result is not None
                 else []
             )
+            if self._PARSE_ERROR_FAILURE_MARKER.lower() in error_lines:
+                raise ContextManagementInfrastructureError(
+                    "Pi parse-error feedback projection failed; trial is invalid"
+                ) from error
             if self._AUTHENTICATION_FAILURE_MARKER.lower() in error_lines:
                 raise ModelAuthenticationError(
                     "Pi could not authenticate to its model endpoint "

@@ -20,7 +20,7 @@ from harbor.agents.installed.base import (
     NonZeroAgentExitCodeError,
 )
 from harbor.agents.installed.pi import Pi
-from harbor.llms.base import ContextLengthExceededError
+from harbor.llms.base import ContextLengthExceededError, ContextManagementInfrastructureError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories.trajectory import Trajectory
@@ -1595,3 +1595,13 @@ class TestPiTrajectoryConversion:
         assert not (temp_dir / "trajectory.json").exists()
         assert context.n_input_tokens == 0
         assert context.n_output_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_pi_projection_failure_is_a_harness_error_despite_model_stop(temp_dir, monkeypatch):
+    shell = _local_pi_shell(temp_dir, monkeypatch, '#!/bin/sh\nprintf \'%s\\n\' \'HARBOR_PI_PARSE_ERROR_PROJECTION_FAILURE\' \'{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}\'\n')
+    agent = Pi(logs_dir=temp_dir, model_name="fixture", model_alias="hosted_vllm/fixture",
+               api_base="http://fixture/v1", thinking_format="chat-template", parse_error_retries=2)
+    with pytest.raises(ContextManagementInfrastructureError, match="trial is invalid"):
+        await agent.run("Fix the bug", shell.environment, AgentContext())
+    assert "HARBOR_PI_PARSE_ERROR_PROJECTION_FAILURE" in (shell.artifact_dir / "pi.txt").read_text()

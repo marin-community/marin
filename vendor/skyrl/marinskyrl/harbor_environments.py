@@ -22,7 +22,7 @@ class HarborTaskBinding(BaseModel):
     environment_resources: EnvironmentResourceOverrides = Field(default_factory=EnvironmentResourceOverrides)
     agent_mcp_servers: list[MCPServerConfig] | None = None
     verifier_environment: dict[str, str] | None = None
-    parse_error_retries: int | None = Field(default=None, ge=0, le=2)
+    parse_error_retries: int | None = Field(default=None, ge=0, le=2, strict=True)
 
 
 def apply_task_binding(config: TrialConfig, binding: HarborTaskBinding | None) -> TrialConfig:
