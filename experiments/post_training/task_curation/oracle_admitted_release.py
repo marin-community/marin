@@ -37,6 +37,7 @@ from experiments.post_training.task_curation.full_content_binding import (
 )
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.oracle_release import verify_oracle_release
+from experiments.post_training.task_curation.oversight_binding import bind_derived_oversight
 from experiments.post_training.task_curation.prebuilt import (
     PrebuiltCohort,
     import_oracle_harbor_cohort,
@@ -342,6 +343,7 @@ def main() -> None:
             if proof is not None and file_sha256(StoragePath(proof.uri)) != proof.sha256:
                 raise ValueError("Whole-source content evidence bytes changed")
     bound = bind_oracle_admitted_release(source, receipt)
+    bound = bind_derived_oversight(bound, receipt.sample, receipt.full_content)
     load = import_oracle_harbor_cohort if receipt.task_format is TaskFormat.HARBOR else import_taskcompendium_cohort
     published = Path(load(bound.config))
     if file_sha256(StoragePath(str(published))) != item.filtration.tasks_parquet.sha256:
