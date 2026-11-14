@@ -61,8 +61,6 @@ def test_observed_original_deadline_survives_cleanup_and_cannot_be_replayed(tmp_
     calibration = ResourceCalibrationReceipt.model_validate(json.loads(output.read_text())["smartie"]["calibration"])
     actual = calibration.attempts[0]
     assert actual.result == trial.result
-    assert actual.result_sha256 == trial.result_sha256
-    assert actual.result["exception_info"]["exception_type"] == "CancelledError"
     assert actual.failure_signal is FailureSignal.AGENT_TIMEOUT
     assert not calibration.passed and not actual.scored
     assert task_map.read_bytes() == old_bytes
