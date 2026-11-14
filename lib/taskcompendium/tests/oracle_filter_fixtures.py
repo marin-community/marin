@@ -3,11 +3,13 @@
 
 """External Harbor receipt fixtures for curation admission tests."""
 
+from finestore.rl.curation import ContentEvidenceReference
+
 from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
-    NoOracleLivenessReceipt,
+    ExecutabilityRunReceipt,
     OracleExclusionReason,
     OracleFilterReceipt,
     OracleTaskReceipt,
@@ -23,10 +25,11 @@ def oracle_receipt(
     recipe_identity: str | None = None,
     *,
     failed: frozenset[str] = frozenset(),
-    no_oracle_liveness: bool = True,
+    executability: bool = True,
 ):
     entries = {}
     for task in tasks:
+        oracle = has_oracle_solution(task)
         reward = 0 if task.id in failed else 1
         checksum = canonical_sha256({"native_task": task.id})
         result = {
@@ -46,6 +49,15 @@ def oracle_receipt(
             "completion": {"trajectory_present": False},
             "verifier_result": {"rewards": {"reward": reward}},
         }
+        if not oracle and executability:
+            result["agent_info"] = {"name": "task-spec-chat"}
+            result["config"]["agent"] = {
+                "name": "task-spec-chat",
+                "model_name": "openai/glm-5.3",
+                "kwargs": {"max_turns": 3, "request_parameters": {"temperature": 0.7}},
+            }
+            if task.id in failed:
+                result["exception_info"] = {"exception_type": "SourceContractError"}
         trial = OracleTrialReceipt(
             path=f"jobs/{task.id}/result.json",
             result=result,
@@ -65,28 +77,19 @@ def oracle_receipt(
                 oracle_kind="original" if has_oracle_solution(task) else "calibration_only",
                 attempts=(trial,),
             ),
-            no_oracle_liveness=(
-                NoOracleLivenessReceipt(
-                    task_id=task.id,
-                    task_sha256=canonical_sha256(task.model_dump(mode="json")),
-                    runtime_sha256=None,
-                    submission_kind="empty",
-                    outcome="negative_verdict",
-                    exit_code=0,
-                    reward=0,
-                    tests_executed=2,
+            executability_run=(
+                ExecutabilityRunReceipt(
+                    actor_turns=1,
+                    trial=trial,
+                    model_evidence=(ContentEvidenceReference(uri="s3://fixtures/model-evidence.json", sha256="b" * 64),),
                 )
-                if not has_oracle_solution(task) and no_oracle_liveness
+                if not oracle and executability
                 else None
             ),
             exclusion_reason=(
                 OracleExclusionReason.ORACLE_FAILED
                 if reward == 0
-                else (
-                    OracleExclusionReason.NO_ORACLE_LIVENESS
-                    if not has_oracle_solution(task) and not no_oracle_liveness
-                    else None
-                )
+                else (OracleExclusionReason.EXECUTABILITY_PROOF_MISSING if not oracle and not executability else None)
             ),
         )
     return OracleFilterReceipt(

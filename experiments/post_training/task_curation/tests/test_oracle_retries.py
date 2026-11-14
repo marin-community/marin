@@ -120,6 +120,7 @@ def retry_case(tmp_path, monkeypatch, request):
             ),
         }
         (root / "result.json").write_text(json.dumps(result))
+        (root / "config.json").write_text(json.dumps(result["config"]))
         if current != "unknown":
             (root / "verifier/verdict.json").write_text(
                 json.dumps(
