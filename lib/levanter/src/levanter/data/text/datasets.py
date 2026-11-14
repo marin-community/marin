@@ -1306,6 +1306,8 @@ class LmDataConfig:
             return {}
 
         catalog = self._loaded_cache_catalog
+        # cached_property does not serialize concurrent first loads.
+        tokenizer = self.the_tokenizer
 
         # Loads are pure GCS metadata reads and parallelize cleanly. Builds may
         # enter `_distributed_build_cache`, which uses unidentified jax
@@ -1328,7 +1330,7 @@ class LmDataConfig:
                     entry.cache_dir,
                     entry.ledger,
                     component.format,
-                    self.the_tokenizer,
+                    tokenizer,
                     self.enforce_eos,
                 )
                 return name, cache, None
@@ -1340,7 +1342,7 @@ class LmDataConfig:
 
             if source is None:
                 try:
-                    cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                    cache = load_lm_dataset_cache(cache_path, component.format, tokenizer, self.enforce_eos)
                 except FileNotFoundError:
                     raise ValueError(f"No source and no cache found for component {name} split {split}")
                 return name, cache, None
@@ -1352,18 +1354,18 @@ class LmDataConfig:
                 if not cache_exists:
                     logger.warning(f"No source for {name} in {split} split and no cache at {cache_path}, skipping")
                     return name, None, None
-                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                cache = load_lm_dataset_cache(cache_path, component.format, tokenizer, self.enforce_eos)
                 return name, cache, None
 
             if not self.auto_build_caches:
                 if not cache_exists:
                     raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
-                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                cache = load_lm_dataset_cache(cache_path, component.format, tokenizer, self.enforce_eos)
                 return name, cache, None
 
             if cache_exists:
                 try:
-                    cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                    cache = load_lm_dataset_cache(cache_path, component.format, tokenizer, self.enforce_eos)
                     return name, cache, None
                 except FileNotFoundError:
                     logger.warning(
@@ -1401,7 +1403,7 @@ class LmDataConfig:
 
         for name, (cache_path, shard_source, fmt) in to_build:
             caches[name] = build_lm_dataset_cache(
-                cache_path, shard_source, fmt, self.the_tokenizer, self.cache_options, self.enforce_eos
+                cache_path, shard_source, fmt, tokenizer, self.cache_options, self.enforce_eos
             )
         return caches
 

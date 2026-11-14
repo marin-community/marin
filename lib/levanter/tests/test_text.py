@@ -4,6 +4,8 @@
 import json
 import shutil
 import tempfile
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -14,6 +16,7 @@ import pytest
 
 import haliax as hax
 
+from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.cache import build_lm_dataset_cache
 from levanter.data.text.datasets import (
@@ -33,7 +36,7 @@ from levanter.data.text.formats import (
     preprocessor_for_format,
 )
 from levanter.data.text.preference import PreferenceChatLmDatasetFormat, PreferenceChatProcessor
-from levanter.tokenizers import load_tokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
 from levanter.schedule import BatchSchedule
@@ -381,6 +384,66 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
     np.testing.assert_array_equal(np.asarray(example.tokens), np.array(records[0]["input_ids"], dtype=np.int32))
     expected_loss_weight = np.array([2.0, 1.0, 0.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
+
+
+@dataclass(frozen=True)
+class ObservedPrebuiltFormat(PrebuiltLmDatasetFormat):
+    observed: list[MarinTokenizer] = field(default_factory=list, compare=False)
+    workers: threading.Barrier = field(default_factory=lambda: threading.Barrier(4), compare=False)
+
+    def build_preprocessor(self, tokenizer, *, enforce_eos=True, enforce_bos=True):
+        self.observed.append(tokenizer)
+        self.workers.wait(timeout=10)
+        return super().build_preprocessor(tokenizer, enforce_eos=enforce_eos, enforce_bos=enforce_bos)
+
+
+@pytest.mark.parametrize("use_catalog", [False, True])
+def test_build_caches_parallel_reads_share_loaded_tokenizer(tmp_path, monkeypatch, use_catalog):
+    count = 4
+    loads = threading.Barrier(count)
+
+    def load_tokenizer(_path):
+        tokenizer = PassthroughTokenizer(16)
+        # Model concurrent tokenizer staging at the I/O boundary without sleeps.
+        # Loading before the pool avoids this race entirely.
+        if threading.current_thread() is not threading.main_thread():
+            loads.wait(timeout=10)
+        return tokenizer
+
+    monkeypatch.setattr("levanter.data.text.datasets.load_marin_tokenizer", load_tokenizer)
+    records = [{"input_ids": np.array([1, 2, 3, 4], dtype=np.int32)}]
+    components = {}
+    for index in range(count):
+        path = tmp_path / f"cache-{index}"
+        write_levanter_cache(records, str(path), metadata={})
+        components[str(index)] = DatasetComponent(
+            source=None, cache_dir=str(path), format=PrebuiltLmDatasetFormat(), flat_cache=True
+        )
+    catalog = tmp_path / "catalog.json"
+    if use_catalog:
+        LmDataConfig(components=components, tokenizer="passthrough", vocab_size=16).build_cache_catalog(str(catalog))
+    observed = []
+    workers = threading.Barrier(count)
+    components = {
+        name: DatasetComponent(
+            source=None,
+            cache_dir=component.cache_dir,
+            format=ObservedPrebuiltFormat(observed=observed, workers=workers),
+            flat_cache=True,
+        )
+        for name, component in components.items()
+    }
+    config = LmDataConfig(
+        components=components, tokenizer="test-tokenizer", cache_catalog=str(catalog) if use_catalog else None
+    )
+
+    caches = config.build_caches("train")
+
+    assert len(observed) == count
+    assert all(tokenizer is config.the_tokenizer for tokenizer in observed)
+    assert set(caches) == set(components)
+    for cache in caches.values():
+        np.testing.assert_array_equal(cache.get_batch_sync([0])[0]["input_ids"], records[0]["input_ids"])
 
 
 def test_build_caches_surfaces_component_failure(tmp_path):
