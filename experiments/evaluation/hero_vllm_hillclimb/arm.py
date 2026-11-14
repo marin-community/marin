@@ -54,6 +54,7 @@ from experiments.evaluation.hero_vllm_hillclimb.probes import (
     Client,
     LoadConfig,
     ProbeConfig,
+    decode_consistency,
     gate_probes,
     load_sweep,
     long_probes,
@@ -308,7 +309,13 @@ def _copy_native_logs(log_dir: str, output_uri: str) -> None:
                 shutil.copyfileobj(source, target)
 
 
-_PHASES = {"gates": gate_probes, "long": long_probes, "load": load_sweep, "profile": profile_points}
+_PHASES = {
+    "gates": gate_probes,
+    "long": long_probes,
+    "load": load_sweep,
+    "profile": profile_points,
+    "decode": decode_consistency,
+}
 
 
 async def _run_probes(base_url: str, config: ArmConfig, cases: dict) -> None:

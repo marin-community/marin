@@ -208,6 +208,47 @@ async def gate_probes(client: Client, cases: dict, config: ProbeConfig) -> dict:
     return results
 
 
+async def _decode_and_rescore(client: Client, tokens: list[int], max_tokens: int, rank: int) -> dict:
+    """Greedy-decode, then score prompt + output by prefill; return both chosen-token log-probs."""
+    decoded = await client.greedy(tokens, max_tokens, rank=rank)
+    generated = decoded["tokens"]
+    decode_lp = [
+        dict((int(t), lp) for t, lp in top)[token] for top, token in zip(decoded["top2"], generated, strict=True)
+    ]
+    scored = await client.score(tokens + generated, rank=rank)
+    # score() positions predict tokens[1:] then the next token; generated token i sits at len(tokens) + i.
+    prefill_lp = []
+    for i, token in enumerate(generated):
+        top = dict((int(t), lp) for t, lp in scored["positions"][len(tokens) - 1 + i])
+        prefill_lp.append(top.get(token))
+    return {"tokens": generated, "decode_lp": decode_lp, "prefill_lp": prefill_lp}
+
+
+async def decode_consistency(client: Client, cases: dict, config: ProbeConfig) -> dict:
+    """Decode-path check: decode-time log-probs against prefill scoring of the same tokens.
+
+    Prefill scoring is gated against JAX (gate b), but decode can take a different execution path
+    (e.g. full CUDA graphs). Greedy continuations are decoded alone on engine 0 and then 32 at a
+    time on every engine (a larger decode graph), and each continuation is re-scored by prefill
+    on the same engine. A decode-path bug shows up as decode/prefill disagreement far beyond the
+    BF16 noise floor that the control shows.
+    """
+    gate = cases["gate"]
+    alone = {}
+    for case in gate:
+        alone[case["case_id"]] = await _decode_and_rescore(client, case["tokens"], config.greedy_tokens, 0)
+    logger.info("decode consistency: %d cases alone on engine 0", len(alone))
+    batched_cases = [(rank, index, case) for rank in range(config.data_parallel_size) for index, case in enumerate(gate)]
+    results = await asyncio.gather(
+        *(_decode_and_rescore(client, case["tokens"], config.greedy_tokens, rank) for rank, _, case in batched_cases)
+    )
+    batched = {
+        f"{rank}:{case['case_id']}": result for (rank, _, case), result in zip(batched_cases, results, strict=True)
+    }
+    logger.info("decode consistency: %d cases batched on all engines", len(batched))
+    return {"alone": alone, "batched": batched}
+
+
 async def long_probes(client: Client, cases: dict, config: ProbeConfig) -> dict:
     results = {}
     for case in cases["long"]:
