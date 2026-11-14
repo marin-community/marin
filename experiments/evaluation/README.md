@@ -55,7 +55,7 @@ uv run python -m experiments.evaluation.cli launch \
 | `--limit N` | Cap items or tasks per evaluation. |
 | `--instances N` | Start N candidate serving instances, each with the selected accelerator shape. Default: 1. |
 | `--max-concurrent N` | Run at most N evaluators at once on shared serving. Default: 1. |
-| `--seed N` | Override the curated run seed. |
+| `--seed N` | Override the curated run seed. Default: 0, or unseeded on TPU vLLM, which rejects seeded sampling. |
 | `--version <label>` | Set the cohort label. Labels do not change evaluator settings. |
 | `--records-prefix <URI>` | Choose the root for records and default result paths. |
 | `--run-id <id>` | Set a launch ID that you can reuse to retry failed evaluations. |

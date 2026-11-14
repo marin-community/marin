@@ -20,6 +20,7 @@ from finestore.rl.curation import (
     CurationSummary,
     DaytonaSafety,
     IndependentQC,
+    OracleValidation,
     Verdict,
     register_catalog,
 )
@@ -205,7 +206,6 @@ def test_publication_round_trips_daytona_safety_to_the_inventory(tmp_path):
             runnable.info,
             id="fixture:agent",
             tags=("agentic",),
-            daytona_safety=DaytonaSafety.UNSAFE,
             daytona_snapshot_count=25,
             daytona_count_basis="shellbox-identity over pinned payloads",
         )
@@ -231,14 +231,15 @@ def test_an_unselected_runnable_source_picks_up_the_current_safety_verdict(tmp_p
     repaired = RlDataSource(
         info=replace(
             agent.info,
-            daytona_safety=DaytonaSafety.SAFE,
             daytona_snapshot_count=5,
             daytona_count_basis="shellbox-identity over pinned payloads",
+            oracle_validation=OracleValidation.VERIFIER_EXECUTED,
         )
     )
     publish_catalog(root, "second", [reassessed, repaired])
     rows = selected_sources(root)
     assert rows["fixture:agent"].declaration.daytona_safety is DaytonaSafety.SAFE
+    assert rows["fixture:agent"].declaration.oracle_validation is OracleValidation.VERIFIER_EXECUTED
     assert rows["fixture:agent"].assessment_key == "key-b"
     assert rows[reassessed.info.id].assessment_key == "key-a"
 

@@ -363,10 +363,10 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
     assert model.requests[0].messages == ({"role": "user", "content": content},)
     assert record.rollout.conversations[-1].response_token_ids == (20,)
     assert record.rollout.conversations[-1].loss_mask == (1,)
-    assert record.grade.verifier_setup_seconds == 8.0
-    assert record.rollout.metrics["timing/setup"] == 10.0
+    assert record.grade.verifier_setup_seconds == 13.0
+    assert record.rollout.metrics["timing/setup"] == 15.0
     assert record.rollout.metrics["timing/grading"] == 20.0
-    assert [event.payload.duration for event in observer.events if isinstance(event.payload, Graded)] == [28.0]
+    assert [event.payload.duration for event in observer.events if isinstance(event.payload, Graded)] == [33.0]
     assert released.is_set()
     assert len(factory.machines) == 2
     for machine in factory.machines:
