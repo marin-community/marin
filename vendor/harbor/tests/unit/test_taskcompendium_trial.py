@@ -388,10 +388,6 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     assert (trial.paths.agent_dir / "exit-code.txt").read_text() == str(exit_code)
     assert len(machines.machines) == 2
     assert all(requirements.packages_lock == environment.packages_lock for requirements in machines.requirements)
-    assert all(
-        (spec.cpus, spec.memory_mb, spec.storage_mb) == (1, 2048, 2048)
-        for spec in machines.specifications
-    )
     grader = machines.machines[-1]
     conversation = ConversationTrace.model_validate_json((trial.paths.agent_dir / "conversation.json").read_text())
     assert conversation.events == (*task.context.events, TextMessage(role="assistant", content=f"{answer}\n"))

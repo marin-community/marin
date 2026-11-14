@@ -33,7 +33,12 @@ def test_all_forty_original_fc4_attempts_keep_old_history_and_recover_exact_role
         assert binding.runtime_sha256 == mapping["runtime_sha256"]
         parent = ResourceCalibrationReceipt.model_validate(mapping["calibration"])
         original = parent.model_dump(mode="json")
-        shape, preserved, verifier = recovered_source_runtime_requirements(parent, binding)
+        recovered = recovered_source_runtime_requirements(parent, binding)
+        shape, preserved, verifier = (
+            recovered.execution_requirements,
+            recovered.preserved_requirements,
+            recovered.verifier,
+        )
         assert shape == ExecutionRequirements(
             cpus=2,
             memory_mb=4096,

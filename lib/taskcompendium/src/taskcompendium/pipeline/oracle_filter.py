@@ -5,6 +5,7 @@
 
 import hashlib
 import math
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -498,9 +499,16 @@ class LocalExecutionHostTransition(BaseModel):
         return self
 
 
+@dataclass(frozen=True)
+class RecoveredRuntimeRequirements:
+    execution_requirements: ExecutionRequirements
+    preserved_requirements: dict[ResourceDimension, float]
+    verifier: VerifierResourceProfile
+
+
 def recovered_source_runtime_requirements(
     parent: ResourceCalibrationReceipt, binding: TaskSpecRuntimeBinding
-) -> tuple[ExecutionRequirements, dict[ResourceDimension, float], VerifierResourceProfile]:
+) -> RecoveredRuntimeRequirements:
     """Recover only explicit original role budgets missed by unqualified old attempts."""
     actor = {ResourceDimension(name): value for name, value in binding.resource_limits("task_machine").items()}
     grader = {ResourceDimension(name): value for name, value in binding.resource_limits("verifier_machine").items()}
@@ -525,7 +533,7 @@ def recovered_source_runtime_requirements(
     preserved = {**parent.preserved_requirements, **actor}
     verifier = parent.verifier.model_copy(update={"fixed": {**parent.verifier.fixed, **grader}})
     shape = parent.execution_requirements.model_copy(update={name.value: value for name, value in actor.items()})
-    return shape, preserved, verifier
+    return RecoveredRuntimeRequirements(shape, preserved, verifier)
 
 
 class InfrastructureRetryPlan(BaseModel):
@@ -814,9 +822,10 @@ class OracleTaskReceipt(BaseModel):
             expected_preserved = previous.preserved_requirements
             expected_verifier = previous.verifier
             if transition.source_runtime_resource_recovery is not None:
-                expected_start, expected_preserved, expected_verifier = recovered_source_runtime_requirements(
-                    previous, transition.source_runtime_resource_recovery
-                )
+                recovered = recovered_source_runtime_requirements(previous, transition.source_runtime_resource_recovery)
+                expected_start = recovered.execution_requirements
+                expected_preserved = recovered.preserved_requirements
+                expected_verifier = recovered.verifier
             expected_verifier_start = previous.attempts[-1].verifier_execution_requirements
             if transition.source_runtime_resource_recovery is not None:
                 expected_verifier_start = initial_verifier_requirements(expected_start, expected_verifier)

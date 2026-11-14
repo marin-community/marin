@@ -1081,7 +1081,8 @@ def write_retry_plan(
                     recovery.require_task(task)
                     if recovery != source_binding:
                         raise ValueError(f"Recovery differs from the original frozen runtime: {task.id}")
-                    _, preserved, verifier = recovered_source_runtime_requirements(calibration, recovery)
+                    recovered = recovered_source_runtime_requirements(calibration, recovery)
+                    preserved, verifier = recovered.preserved_requirements, recovered.verifier
                 else:
                     preserved, verifier = calibration.preserved_requirements, calibration.verifier
                 if preserved != declared_native_requirements(
@@ -1198,8 +1199,10 @@ def retry_cohort(
     for task_id, parent in parents.items():
         calibration = ResourceCalibrationReceipt.model_validate(parent["calibration"])
         if plan.source_runtime_resource_recovery is not None:
-            actor, _, profile = recovered_source_runtime_requirements(calibration, plan.source_runtime_resource_recovery)
-            verifier_starts[task_id] = initial_verifier_requirements(actor, profile)
+            recovered = recovered_source_runtime_requirements(calibration, plan.source_runtime_resource_recovery)
+            verifier_starts[task_id] = initial_verifier_requirements(
+                recovered.execution_requirements, recovered.verifier
+            )
         else:
             verifier_starts[task_id] = calibration.attempts[-1].verifier_execution_requirements
         native = Path(parent["task_path"])
@@ -1247,7 +1250,7 @@ def retry_cohort(
                 recovered_source_runtime_requirements(
                     ResourceCalibrationReceipt.model_validate(parent["calibration"]),
                     plan.source_runtime_resource_recovery,
-                )[0]
+                ).execution_requirements
                 if plan.source_runtime_resource_recovery is not None
                 else ResourceCalibrationReceipt.model_validate(parent["calibration"]).execution_requirements
             )
