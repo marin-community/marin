@@ -137,7 +137,9 @@ dashboard demo.
 The native wheel uses Cargo's `wheel` profile: size optimization, thin LTO,
 and one codegen unit for the embedded fallback. Maturin selects this profile
 for Python builds; the release workflow honors the same package setting.
-Standalone deployments use the separate `release` or `fast` profiles.
+Standalone deployments use the separate `release` or `fast` profiles, which
+keep the symbol table so profilers and gdb report function names on a deployed
+server. The wheel strips it.
 
 By default the extension comes from the pre-built PyPI wheel, so in-dir
 `uv run` never compiles Rust. To build it from source (live Rust dev), run
