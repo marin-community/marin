@@ -90,8 +90,10 @@ def main(
     )
     if stage == "rl":
         return rl
-    # The RL CLI routes its coordinator from the RL step's execution, so the SFT-only stage carries it too.
-    return replace(sft, runtime_args={**sft.runtime_args, **rl.runtime_args})
+    # The RL CLI routes its coordinator from the RL step's execution, so the SFT-only stage carries it
+    # too, without the RL-only credentials that execution requires at submission.
+    routing = {name: replace(execution, required_env_vars=()) for name, execution in rl.runtime_args.items()}
+    return replace(sft, runtime_args={**sft.runtime_args, **routing})
 
 
 if __name__ == "__main__":
