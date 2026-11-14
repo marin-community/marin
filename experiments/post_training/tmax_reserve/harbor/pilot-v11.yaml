@@ -1,6 +1,6 @@
-# The k=8 pilot policy below on the TMax v1.1 verifiers: tasks/pilot-v11, written by
-# `python -m experiments.post_training.tmax_reserve.v11` from tasks/pilot-200-shared minus exclusions/tmax-pilot-exclusions-v1.json,
-# the tasks v1.1 dropped and the tasks whose v1.1 image was rebuilt (136 tasks; see tasks/pilot-v11.manifest.json).
+# The k=8 pilot policy below on the TMax v1.1 verifiers: tasks/pilot-v11-x1, written by
+# `python -m experiments.post_training.tmax_reserve.v11` from tasks/pilot-200-shared minus exclusions/tmax-v11-exclusions-v1.json,
+# the tasks v1.1 dropped and the tasks whose v1.1 image was rebuilt (136 tasks; see tasks/pilot-v11-x1.manifest.json).
 # TMax-15K reserve pilot: the TBLite scoring policy (eval-campaign-09-25-unlabeled/harbor-configs/
 # ot-tblite-recovery.yaml) with four changes: the local 200-task shared-image dataset (written by
 # `python -m experiments.post_training.tmax_reserve.shared_image`), k=8 attempts, 64 concurrent trials, and
@@ -54,6 +54,6 @@ agents:
     model_info:
       max_input_tokens: 32768
 datasets:
-- path: ../tasks/pilot-v11
+- path: ../tasks/pilot-v11-x1
 verifier:
   override_timeout_sec: 300

@@ -1,12 +1,13 @@
 {
- "counts": {
-  "environment_defect": 5,
-  "tmux_rc143": 20,
-  "verifier_or_task_defect": 28
- },
+ "name": "tmax-v11-exclusions-v1",
  "created": "2026-11-14",
- "name": "tmax-15k-pilot-exclusions",
- "source": "TMax-15K-Harbor@48a77eb0 pilot-200 (seed 20261113); Qwen3.6-27B k=8 run pilot-8h-v1; hand review primary.csv + blind 10/10 agreement",
+ "source": "tmax-pilot-exclusions-v1 minus 3 tasks the v1.1 verifier fixes (004403, 004472, 004789; hand review), plus 3 defects the v1.1 verifier adds (hand review of 10 random rewritten tasks); TMaxxx/tmax-13k-v1.1-harbor@5305c260",
+ "counts": {
+  "verifier_or_task_defect": 25,
+  "tmux_rc143": 20,
+  "environment_defect": 5,
+  "v11_verifier_defect": 3
+ },
  "tasks": [
   {
    "evidence": "Test hardcodes wasserstein_distance 0.0208333; recomputing from the setup data (real GC [1,0,.5,.625,1,0] vs synthetic [1,0,.5,1,0]) gives 0.070833, which all 8 attempts reported. Expected KDE mass 0.169 also differs from recomputed 0.129.",
@@ -164,16 +165,6 @@
    "task": "task_003978_c139acc8"
   },
   {
-   "evidence": "Default TfidfVectorizer gives E4-F4 cosine 0.327 < 0.45 threshold (recomputed), so E4 must be skipped; test expects E4 included.",
-   "reason": "verifier_or_task_defect",
-   "task": "task_004403_35d5db69"
-  },
-  {
-   "evidence": "Recomputing RidgeCV(cv=5) on the seeded data: CV scores increase with alpha, best alpha=100, R2=0.871; test expects alpha 10 and R2 0.9928.",
-   "reason": "verifier_or_task_defect",
-   "task": "task_004472_73c3c832"
-  },
-  {
    "evidence": "TmuxBatchProtocolError in the Qwen3.6-27B k=8 pilot; cause unknown",
    "reason": "tmux_rc143",
    "task": "task_004506_11e96840"
@@ -187,11 +178,6 @@
    "evidence": "TmuxBatchProtocolError in the Qwen3.6-27B k=8 pilot; cause unknown",
    "reason": "tmux_rc143",
    "task": "task_004706_f8e2995a"
-  },
-  {
-   "evidence": "Test ingests 3 points (10,12,100) and requires 100 > mean+2*std; with 3 points the max z-score is 1.15, so a correct v1.0 analyzer on clean state never flags it. Attempts only show leftover entries from their own testing.",
-   "reason": "verifier_or_task_defect",
-   "task": "task_004789_dc784e52"
   },
   {
    "evidence": "The 6 data points give slope 1.188571 in any order (exact sums); test expects '1.18571'.",
@@ -272,7 +258,21 @@
    "evidence": "The provided program diverges: a numpy re-implementation of the same GD (lr 0.005, h 1e-4) jumps alpha to 0.98 at step 1 and then to ~-1e256, matching attempts' 9e256. The test expects 0.027878 although the instruction says to save the value 'exactly as output by the program' with unchanged output.",
    "reason": "verifier_or_task_defect",
    "task": "task_009672_11cb1b21"
+  },
+  {
+   "task": "task_000297_dd740392",
+   "reason": "v11_verifier_defect",
+   "evidence": "v1.1 test_vm_dynamic_programs_and_all_underflows asserts assert_vm('POP\\n','Error: Stack Underflow\\n',1) and assert_vm('PUSH v\\nPOP\\n','',0), so it requires a new POP opcode. Setup main.c parses only PUSH/ADD/PRINT and the fixtures never use POP; the instruction says to fix overflow/underflow, never to add an opcode ('POP operation' plausibly means vm_pop). All 8 Qwen attempts keep the 3-opcode parser, so all fail here under -x. Other new checks (Makefile unchanged, make clean && make, ELF, runner run with a logging wrapper, report has exactly the discovered .asm set) are justified. Secondary strict-but-stated check: invocation log needs the literal arg 'tests/<name>'; 2/8 runners (2SRvqYu, SnPrDJe) pass absolute paths."
+  },
+  {
+   "task": "task_009458_1bff453d",
+   "reason": "v11_verifier_defect",
+   "evidence": "test_build_tags_select_only_the_correct_linux_architecture reads sys/sys_linux_arm.go and requires 'GOOS=linux GOARCH=arm64 go list ./sys' == {'sys_linux_arm.go'}. This cannot pass: by Go's filename rule, the _linux_arm suffix limits the file to linux/arm (32-bit) whatever its //go:build line says. Qwen's own run (kBus5ut) shows 'build constraints exclude all Go files in .../sys' for arm64 even with '//go:build linux && arm64'. Every passer had to rename the file (e.g. sys_arm64.go) to build the arm64 binary. A renamed file breaks the pathlib read; a kept name breaks the arm64 build in test_source_builds. Upstream marks it not_validated with n_solved=0. Other new checks (2 commits with HEAD~1 = broken state, patch byte-equal to git diff, exact file output, go vet, go version -m path) are mostly instruction-backed."
+  },
+  {
+   "task": "task_009570_fa1c4ca2",
+   "reason": "v11_verifier_defect",
+   "evidence": "test_00 deletes validation.txt and fails with 'Running calc_energy.sh did not create validation.txt'. The instruction asks only to 'run it to generate /home/user/features.txt'; step 4 never says the script must write validation.txt. 3/4 passers (9Dp6svD, LBG5Wz7, P9dwXCr) wrote validation.txt outside the script and fail only here; their values (0.0000000000, 0.000000000025684) match the v1.1 expected value at their precision. The 4th (vEc5yaD) writes it in-script, but with %.20f of a double difference: 0.00000000002568356638 vs expected 0.00000000002568359375. That fails the exact-at-reported-precision check, which is too tight (error 2.7e-17, while the original bound was <=1e-10). Probe graphs (numeric sort with +-1e16) are justified; recomputed probe sums are 0.0000000000 and -12.0000000000."
   }
- ],
- "version": 1
+ ]
 }
