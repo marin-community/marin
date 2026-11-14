@@ -331,7 +331,7 @@ class ResourceCalibrationReceipt(BaseModel):
                     if self.declared_requirements is not None
                     else self.preserved_requirements
                 )
-                if original.get(f"{prior_failure.phase}_timeout_sec") != prior_failure.timeout_sec:
+                if original.get(ResourceDimension(f"{prior_failure.phase}_timeout_sec")) != prior_failure.timeout_sec:
                     raise ValueError("Earlier phase failure must match the original source-declared deadline")
             if trial.execution_requirements != expected:
                 raise ValueError("Calibration changed an unfailed resource or a task-declared limit")
