@@ -118,3 +118,35 @@ with the campaign's six Evalchemy configs (AIME24 and OlympiadBench at temperatu
 MATH-500, GSM8K 0-shot, HumanEval+, IFBench at the server default), served DP8 on one 8xH100 node with
 `max_model_len` 73,728. The published step-222 checkpoint was evaluated without a `generation_config.json`;
 these exports write one with stop tokens, so comparison with the published numbers is looser than between arms.
+
+## 2026-11-14: control arm finished and evaluated
+
+`/dml/sft-patch-11188-control-cw-rno2a-r4` committed permanent step 222 at 05:55 UTC (8 h 49 min of training,
+no failures or preemptions; final logged loss 0.583). Exported in the stacked-expert layout to
+`runs/control/serve-step222/hf` and evaluated as run group `sft11188-control-s222` on Reno.
+
+| Benchmark | Fresh control, step 222 | Published repro, step 222 |
+|---|---|---|
+| AIME24 accuracy / outputs >= 100k chars / no boxed | 71.3% / 33.3% / 24.3% | 72.3% / 37.0% / 25.3% |
+| OlympiadBench accuracy / outputs >= 100k chars / no boxed | 22.3% / 48.3% / 24.7% | 25.0% / 53.3% / 22.3% |
+| MATH-500 | 95.0% | |
+| GSM8K 0-shot | 81.2% | |
+| HumanEval+ pass@1 | 68.3% | |
+| IFBench strict prompt | 19.7% | |
+
+The fresh control reproduces the published checkpoint within 3.7 points (AIME24) and 5.0 points
+(OlympiadBench) on the long-output share. Passing the primary rule therefore needs at most 16.7% (AIME24)
+and 24.2% (OlympiadBench) long outputs in a patched arm.
+
+**Rehearsal on control step 100** (run group `sft11188-control-s100b`): AIME24 69.7% / 36.0% / 26.3%,
+OlympiadBench 22.0% / 49.0% / 23.7%, MATH-500 92.8%, GSM8K 86.3%, HumanEval+ 65.2%, IFBench 19.7%. The habit
+is at full strength by step 100.
+
+**Pipeline fixes found by the rehearsal.**
+
+- Export memory peaks at about 420 GB; 64 GB and 400 GB were OOM-killed. CPU nodes on `cw-us-east-02a` are
+  full of other jobs' file cache and stall allocation (40+ minutes); a Reno GPU node restores in 5-12 minutes.
+- The baseline launcher at `e0cd563` is rejected by the controller as too old; evals run from main at
+  `12f0ceff06`, the last commit with the Evalchemy route. The six benchmark configs are unchanged.
+- The eval stack's vLLM release rejects per-expert tensors (`Unexpected GrugMoE weight
+  'model.layers.2.mlp.experts.72.down_proj.weight'`); `patch_arm.py export` now writes stacked tensors.
