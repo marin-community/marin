@@ -192,7 +192,8 @@ def layout_throughput(size: int, layout_overrides: dict[int, tuple[Layout, ...]]
             shards = layout.batch_shards * batch.microbatch
             if batch.batch_size % shards:
                 raise ValueError(
-                    f"The B-selected batch {batch.batch_size} does not divide layout {layout.label} at microbatch {batch.microbatch}"
+                    f"The B-selected batch {batch.batch_size} does not divide "
+                    f"layout {layout.label} at microbatch {batch.microbatch}"
                 )
             candidates.append(
                 Probe(
