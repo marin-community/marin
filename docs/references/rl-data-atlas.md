@@ -83,7 +83,7 @@ not declared*. Edit the rules in the reference first, then the page text in
 
 ## Browsing sources
 
-**By source** lists each source's post-filtration admitted example count, training/evaluation use,
+**By source** currently shows Pending for post-filtration admitted Examples, and lists training/evaluation use,
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
 curriculum area. The levels define required content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
@@ -280,7 +280,12 @@ replace `dist/measurements/content-progress.json`. Its JSON object contains
 The renderer requires an exact current ID, pin and unique-count match. Progress
 never determines FULL or Result.
 
-An optional `dist/measurements/oracle-inventory.json` carries a `sources` list
+Pass `--oracle-inventory /path/to/current-310-oracle-inventory-ledger-v2.json`
+to `prepare_preview.py` to package an immutable full-population ledger produced
+from task curation's typed `SampleInventory` receipts. The preparer validates each
+receipt against its `ActorCensusInput`, checks population totals, canonicalizes
+source aliases and records input/output byte hashes. It emits
+`dist/measurements/oracle-inventory.json` with a `sources` list
 of frozen population observations: `source_id`, the complete `ActorCensusInput`
 object as `input`, `oracle_tasks`, `execution_qualification` and `evidence_url`.
 The renderer requires the entire actor input, current dataset pin, converter

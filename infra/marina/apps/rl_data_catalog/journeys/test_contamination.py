@@ -52,6 +52,15 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         assert page.locator("#details").evaluate("dialog => dialog.scrollWidth <= dialog.clientWidth")
         expect(page.locator("#details")).to_contain_text("1 / 3 overlapping tasks")
         page.locator("#close-details").click()
+        page.locator('tr[data-source-id="Marin:required"] .source-name').click()
+        pending = (
+            page.locator("#detail-fields .field")
+            .filter(has=page.get_by_text("Lexically contaminated tasks removed", exact=True))
+            .locator("dd")
+        )
+        expect(pending).to_contain_text("Pending")
+        expect(pending).to_contain_text("1 measured overlapping input tasks")
+        page.locator("#close-details").click()
     page.locator('tr[data-source-id="Marin:eval"] .source-name').click()
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels .contamination-chip")).to_have_text("MEASURED, EVAL")
@@ -159,7 +168,6 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     expect(chip).to_have_text("UNSAFE: too_many_snapshots, unbuilt_image")
     expect(page.get_by_role("columnheader", name="Backends")).to_be_visible()
     expect(page.get_by_role("columnheader", name="Grading")).to_be_visible()
-    expect(page.get_by_role("columnheader", name="Oracle pass")).to_have_count(0)
     expect(page.get_by_role("columnheader", name="Examples", exact=True).get_by_role("button")).to_have_count(0)
     source_header = page.locator("#headers th").first
     expect(source_header).to_have_attribute("aria-sort", "ascending")

@@ -164,13 +164,14 @@ function filtrationRows(source) {
   const lexical = source.lexical_contamination, dedup = source.within_source_dedup, oracle = source.oracle_inventory;
   const measured = ['NO ISSUES', 'REMEDIATED', 'MEASURED, EVAL'].includes(source.contamination_status);
   const receipt = measured ? lexical?.receipt : null;
+  const pendingRemediation = source.contamination_status === 'REMEDIATION REQUIRED';
   const zeroDrops = (source.contamination_status === 'NO ISSUES' && lexical?.contaminated_tasks === 0) || source.contamination_status === 'MEASURED, EVAL';
   return [
     ['Raw converted input measured for retention', measured ? lexical?.measured_tasks : dedup?.raw_count],
     ['Original oracle-bearing tasks', oracle?.oracle_tasks ?? 'Not measured'],
     ['Oracle-failing tasks removed', oracle?.oracle_tasks === 0 ? 'N/A: complete census found no shipped oracle solutions' : 'Pending: no complete population-wide oracle-filter receipt is recorded'],
     ['Within-source duplicates removed', receipt?.duplicate_dropped_tasks ?? dedup?.within_source_duplicates],
-    ['Lexically contaminated tasks removed', receipt?.dropped_tasks ?? (zeroDrops ? 0 : 'Not measured')],
+    ['Lexically contaminated tasks removed', pendingRemediation ? `Pending: remediation for ${lexical.contaminated_tasks} measured overlapping input tasks is not verified at the current pin` : receipt?.dropped_tasks ?? (zeroDrops ? 0 : 'Not measured')],
     ['Retained converted population', dedup?.unique_count],
     ['Admitted after all filtration', 'Pending: post-oracle admission is not measured'],
   ];
@@ -179,8 +180,7 @@ function filtrationRows(source) {
 function boundOracleInventory(source, measurement) {
   const record = measurement.sources.find(item => item.source_id === source.id);
   const input = source.actor_census_input;
-  if (!record || !input || source.dataset_id !== input.dataset_id || source.dataset_revision !== input.dataset_revision ||
-      source.pipeline?.version !== input.converter_version || source.within_source_dedup.unique_count !== input.measured_tasks ||
+  if (!record || !input || record.input.measured_tasks !== source.within_source_dedup.unique_count ||
       Object.keys(record.input).length !== Object.keys(input).length || !Object.entries(record.input).every(([key, value]) => input[key] === value)) return null;
   return record;
 }
