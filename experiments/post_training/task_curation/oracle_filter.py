@@ -48,6 +48,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleFilterReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
+    PriorPhaseFailureReceipt,
     ResourceCalibrationReceipt,
     SourcePytestEnvironment,
     VerifierResourceProfile,
@@ -66,6 +67,7 @@ from taskcompendium.pipeline.resource_calibration import (
 from taskcompendium.runtime.resources import has_oracle_solution, inline_resource
 
 from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
+from experiments.post_training.task_curation.prior_phase_failures import require_prior_phase_failure
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HARBOR_PROJECT = PROJECT_ROOT / "vendor/harbor"
@@ -148,7 +150,11 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
 
 
 def receipt_from_trial(
-    path: Path, document: dict, native_checksum: str, native_grade: NativeVerifierGrade | None = None
+    path: Path,
+    document: dict,
+    native_checksum: str,
+    native_grade: NativeVerifierGrade | None = None,
+    prior_phase_failure: PriorPhaseFailureReceipt | None = None,
 ) -> OracleTrialReceipt:
     """Read a trial's evidence against its measured native checksum."""
     native = Path(document["config"]["task"]["path"])
@@ -176,6 +182,7 @@ def receipt_from_trial(
         result_sha256=canonical_sha256(document),
         execution_requirements=native_requirements(native),
         native_grade=native_grade,
+        prior_phase_failure=prior_phase_failure,
         resource_usage=(
             ResourceUsage.model_validate_json(usage_path.read_text()) if usage_path.exists() else ResourceUsage()
         ),
@@ -263,10 +270,14 @@ def trial_result_paths(jobs: Path) -> list[Path]:
         subdirectories[:] = [name for name in subdirectories if name == "attempts"]
         if "result.json" in files:
             results.append(directory / "result.json")
+        elif "lifecycle-result.json" in files:
+            results.append(directory / "lifecycle-result.json")
     return sorted(results)
 
 
-def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
+def collect_trials(
+    jobs: Path, prior_phase_failures: dict[str, PriorPhaseFailureReceipt] | None = None
+) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
     trials: dict[tuple[str, str], list[OracleTrialReceipt]] = {}
     seen = {}
     paths = trial_result_paths(jobs)
@@ -291,11 +302,15 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
     for path, document in documents.items():
         native = document["config"]["task"]["path"]
         grade = native_grades.get(str(path))
+        prior_failure = (prior_phase_failures or {}).get(canonical_sha256(document))
+        if prior_failure is not None:
+            require_prior_phase_failure(prior_failure, document)
         receipt = receipt_from_trial(
             path,
             document,
             packages[native]["task_checksum"],
             NativeVerifierGrade.model_validate(grade) if grade is not None else None,
+            prior_failure,
         )
         trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
@@ -376,7 +391,22 @@ def filter_cohort(
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
-    trials = collect_trials(jobs)
+    prior_failures = {}
+    for mapping in mappings.values():
+        phases = [
+            mapping.get("calibration", {}),
+            *(item["parent_calibration"] for item in mapping.get("infrastructure_retries", [])),
+        ]
+        for phase in phases:
+            for attempt in phase.get("attempts", []):
+                if attempt.get("prior_phase_failure") is None:
+                    continue
+                evidence = PriorPhaseFailureReceipt.model_validate(attempt["prior_phase_failure"])
+                key = evidence.raw_result_sha256
+                if key in prior_failures and prior_failures[key] != evidence:
+                    raise ValueError("Conflicting earlier phase evidence for the same production Trial")
+                prior_failures[key] = evidence
+    trials = collect_trials(jobs, prior_failures)
     controls = {}
     if executability_runs is not None:
         for line in executability_runs.read_text().splitlines():
