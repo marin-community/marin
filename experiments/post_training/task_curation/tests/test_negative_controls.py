@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import ContentEvidenceReference
+from taskcompendium.harbor.negative_control import NegativeControlSetupKind
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
@@ -33,6 +34,37 @@ def retained_archive(tmp_path, name):
     path = tmp_path / f"{name}.tar.zst"
     path.write_bytes(gzip.decompress((FIXTURES / f"{name}.tar.zst.gz").read_bytes()))
     return path
+
+
+@pytest.mark.parametrize(
+    "name", ["tau-prepared", "language-mixing-prepared", "tau-missing-lock", "language-mixing-missing-lock"]
+)
+def test_production_taskspec_nop_preparation_archives_preserve_failed_setup_and_scored_negatives(tmp_path, name):
+    index = json.loads((FIXTURES / "converted-preparation-index.json").read_text())[name]
+    archive = retained_archive(tmp_path, name)
+    original_bytes = archive.read_bytes()
+    receipt = negative_control_from_archive(
+        ContentEvidenceReference(uri=str(archive), sha256=index["archive_sha256"]),
+        index["control_member"],
+        source_task_sha256=index["source_task_sha256"],
+        source_task_checksum=index["source_task_checksum"],
+        execution_requirements=ExecutionRequirements.model_validate(index["execution_requirements"]),
+    )
+    loaded = OracleNegativeControlReceipt.model_validate_json(receipt.model_dump_json())
+    require_negative_control(loaded)
+    assert loaded.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION
+    assert loaded.preparation_artifact is not None
+    assert loaded.setup_exit_code is None
+    assert loaded.conclusive is index["conclusive"]
+    assert not loaded.passed(None)
+    assert loaded.trial.result["agent_info"]["name"] == "nop"
+    if index["conclusive"]:
+        assert loaded.score == 0
+        assert loaded.trial.result["environment_setup"]["finished_at"] is not None
+    else:
+        assert loaded.score is None
+        assert loaded.trial.result["exception_info"]["exception_type"] == "FileNotFoundError"
+    assert archive.read_bytes() == original_bytes
 
 
 @pytest.mark.parametrize(

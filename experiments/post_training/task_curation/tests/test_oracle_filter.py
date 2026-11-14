@@ -588,9 +588,14 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         else:
             retained = TaskSpec.model_validate(json.loads(retained_row["lowered_task_spec"])["task"])
         assert retained.execution_requirements.memory_mb == 4096
-        assert require_oracle_filter(
-            retained, receipt, None if canonical and not task_spec_package else envelope["runtime"]
-        )
+        runtime = None if canonical and not task_spec_package else envelope["runtime"]
+        if task_spec_package:
+            assert require_oracle_filter(retained, receipt, runtime)
+        else:
+            # This legacy-export fixture exercises resource growth only; a converted
+            # TaskSpec cannot use a native-script control as admission evidence.
+            with pytest.raises(ValueError, match="preparation differs from the original source workload"):
+                require_oracle_filter(retained, receipt, runtime)
         assert len(entry.calibration.attempts) == 2
 
 

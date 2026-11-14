@@ -20,6 +20,7 @@ from taskcompendium.grading_environment import (
     assess_grading_environment,
 )
 from taskcompendium.harbor.adapter import actor_machine_required
+from taskcompendium.harbor.negative_control import NegativeControlSetupKind, negative_control_setup_kind
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, ScriptGrader, TaskSpec, VerifyitGrader, decode_json_value
@@ -895,6 +896,8 @@ class OracleNegativeControlReceipt(BaseModel):
     control: ContentEvidenceReference
     result_artifact: ContentEvidenceReference
     setup_artifact: ContentEvidenceReference
+    setup_kind: NegativeControlSetupKind | None = Field(default=None, exclude_if=lambda value: value is None)
+    preparation_artifact: ContentEvidenceReference | None = Field(default=None, exclude_if=lambda value: value is None)
     verdict_artifact: ContentEvidenceReference | None
     trial: OracleTrialReceipt
     score: float | None
@@ -908,6 +911,12 @@ class OracleNegativeControlReceipt(BaseModel):
     @model_validator(mode="after")
     def validate_physical_control(self):
         result = self.trial.result
+        if (self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION) != (
+            self.preparation_artifact is not None
+        ):
+            raise ValueError("TaskSpec negative controls require their physical preparation manifest")
+        if self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION and self.setup_exit_code is not None:
+            raise ValueError("TaskSpec preparation has no aggregate shell exit code")
         agent = result.get("config", {}).get("agent", {})
         if (result.get("agent_info") or {}).get("name") != "nop" or agent.get("name") != "nop":
             raise ValueError("Negative control requires an actual production nop agent")
@@ -938,7 +947,8 @@ class OracleNegativeControlReceipt(BaseModel):
                 "consumed_task_checksum",
             )
             if any(getattr(self, name) != getattr(parent, name) for name in anchors) or (
-                self.trial.execution_requirements != parent.trial.execution_requirements
+                self.setup_kind != parent.setup_kind
+                or self.trial.execution_requirements != parent.trial.execution_requirements
                 or result["config"]["agent"] != parent.trial.result["config"]["agent"]
                 or result["config"].get("task", {}).get("verifier_execution_requirements")
                 != parent.trial.result["config"].get("task", {}).get("verifier_execution_requirements")
@@ -955,15 +965,32 @@ class OracleNegativeControlReceipt(BaseModel):
 
     @property
     def completed_public_setup(self) -> bool:
-        return (
-            self.setup_exit_code == 0
-            and self.original_public_setup
-            and self.trial.result.get("finished_at") is not None
-            and self.trial.result.get("completion") is not None
-            and not self.trial.result.get("secondary_exception_info")
-            and not self.trial.resource_usage.oom_kills
-            and not self.trial.verifier_resource_usage.oom_kills
-        )
+        if (
+            self.trial.result.get("finished_at") is None
+            or self.trial.result.get("completion") is None
+            or self.trial.result.get("secondary_exception_info")
+            or self.trial.resource_usage.oom_kills
+            or self.trial.verifier_resource_usage.oom_kills
+        ):
+            return False
+        if self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION:
+            preparation = self.trial.result.get("environment_setup") or {}
+            configured_runtime = self.trial.result["config"]["task"].get("source_runtime")
+            return (
+                self.original_public_setup
+                and self.setup_exit_code is None
+                and preparation.get("started_at") is not None
+                and preparation.get("finished_at") is not None
+                and network_policy_qualified(
+                    (
+                        TaskSpecRuntimeBinding.model_validate(configured_runtime)
+                        if configured_runtime is not None
+                        else None
+                    ),
+                    self.trial.network_policy,
+                )
+            )
+        return self.setup_exit_code == 0 and self.original_public_setup
 
     @property
     def accepted_source_deadline(self) -> bool:
@@ -1053,8 +1080,7 @@ class OracleNegativeControlReceipt(BaseModel):
     @property
     def conclusive(self) -> bool:
         return (
-            self.setup_exit_code == 0
-            and self.original_public_setup
+            self.completed_public_setup
             and self.trial.result.get("exception_info") is None
             and self.trial.result.get("finished_at") is not None
             and self.trial.result.get("completion") is not None
@@ -1417,6 +1443,11 @@ class OracleFilterReceipt(BaseModel):
             return outcome and assess_grading_environment(task).status is GradingEnvironmentStatus.MATCHED
         if entry.has_oracle and entry.negative_control_applicability != negative_control_applicability(task):
             raise ValueError(f"Negative-control applicability differs from the source grading contract: {task.id}")
+        if entry.negative_control is not None:
+            expected_setup = negative_control_setup_kind(task)
+            observed_setup = entry.negative_control.setup_kind or NegativeControlSetupKind.NATIVE_SCRIPT
+            if expected_setup != observed_setup:
+                raise ValueError(f"Negative-control preparation differs from the original source workload: {task.id}")
         if task.execution_requirements is None:
             raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         if task.execution_requirements != entry.calibration.execution_requirements:

@@ -509,6 +509,7 @@ class TaskSpecTrial(Trial):
 
     async def _run(self) -> None:
         task = self.specification
+        await self._emit(TrialEvent.AGENT_START)
         self.result.agent_execution = TimingInfo(started_at=self._now())
         try:
             async with self._oracle_machine() as machine:

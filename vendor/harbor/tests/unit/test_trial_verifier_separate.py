@@ -9,7 +9,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
+import pytest
+from taskcompendium.harbor.negative_control import NativeInstructionSetup, NegativeControlSource
+from taskcompendium.models import ExecutionRequirements
+
 from harbor.environments.base import ExecResult
+from harbor.host_capabilities import HostCapabilities
+from harbor.models.task.task import Task
+from harbor.trial.negative_control import run_negative_control
 from harbor.models.trial.config import TaskConfig as TrialTaskConfig
 from harbor.models.trial.config import (
     AgentConfig,
@@ -473,3 +480,61 @@ class TestMultiStepMixedVerifierLifecycle:
             assert len(verifier_session_id) <= 63
             assert re.fullmatch(r"[A-Za-z0-9._-]+", verifier_session_id)
             assert verifier_session_id.startswith("very-long-trial-name")
+
+
+@pytest.mark.parametrize("setup_exit", [0, 7])
+async def test_physical_nop_writer_preserves_native_public_setup_and_its_failure(tmp_path, monkeypatch, setup_exit):
+    task = _single_step_task_with_separate_verifier(tmp_path)
+    (task / "task.toml").write_text(
+        "[agent]\ntimeout_sec=10\n[verifier]\ntimeout_sec=10\n"
+        "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
+    )
+    public_setup = "printf source-setup > /workspace/public-marker"
+    (task / "instruction.md").write_text("Prepare the original workspace.\n```bash\n" + public_setup + "\n```\n")
+    (task / "tests/test.sh").write_text("echo 0 > /logs/verifier/reward.txt\n")
+    checksum = Task(task).checksum
+    root = tmp_path / "control"
+    environment = _stock_mock_env()
+    observed = []
+
+    async def execute(command, **kwargs):
+        if command.startswith("bash -c "):
+            observed.append(command)
+            return ExecResult(stdout="source setup", stderr="", return_code=setup_exit)
+        if "/tests/test.sh" in command:
+            verifier = root / "trials/native-nop/verifier"
+            verifier.mkdir(parents=True, exist_ok=True)
+            (verifier / "reward.txt").write_text("0")
+        return ExecResult(stdout="/", stderr="", return_code=0)
+
+    environment.exec.side_effect = execute
+    environment.exec_control.side_effect = execute
+    monkeypatch.setattr(
+        "harbor.trial.trial.EnvironmentFactory.create_environment_from_config", lambda **kwargs: environment
+    )
+    record = await run_negative_control(
+        TrialConfig(
+            task=TrialTaskConfig(path=task), trial_name="native-nop", trials_dir=root / "trials",
+            agent=AgentConfig(name="nop"), environment=EnvironmentConfig(type="local"),
+        ),
+        NegativeControlSource(
+            task_id="task", source_task_sha256="a" * 64, source_task_checksum=checksum,
+            task_sha256="b" * 64, runtime_sha256=None, task_checksum=checksum,
+            execution_requirements=ExecutionRequirements(
+                cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=10, verifier_timeout_sec=10,
+            ),
+            verifier_execution_requirements=None,
+        ),
+        root, NativeInstructionSetup(block_index=0), HostCapabilities(),
+    )
+    assert (root / "original-public-setup.sh").read_text() == public_setup
+    assert len(observed) == 1
+    assert record["setup"]["setup_exit_code"] == setup_exit
+    assert record["setup"]["preparation_completed"] is (setup_exit == 0)
+    assert record["trial_result"]["agent_info"]["name"] == "nop"
+    assert record["native_package_unchanged"]
+    if setup_exit:
+        assert record["trial_result"]["exception_info"]["exception_type"] == "RuntimeError"
+        assert record["trial_result"]["verifier_result"] is None
+    else:
+        assert record["trial_result"]["verifier_result"]["rewards"] == {"reward": 0}

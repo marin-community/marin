@@ -2974,6 +2974,33 @@ The collector verifies the archive, setup script, physical result and verdict
 bytes before binding the control to the exact original and consumed contracts.
 Original oracle trials and reward maps remain unchanged.
 
+Run one control with `python -m harbor.cli.curation_control`, passing a JSON
+request on stdin with `trial` (the production `TrialConfig`), `source`
+(`NegativeControlSource`), a fresh `output_root`, and `native_setup`. The Trial's
+`trials_dir` must be `output_root/trials`, and `output_root` must not exist.
+The request models are defined in
+[`TrialConfig`](../../vendor/harbor/src/harbor/models/trial/config.py) and
+[`NegativeControlSource` / `NativeInstructionSetup`](../../lib/taskcompendium/src/taskcompendium/harbor/negative_control.py).
+The caller acquires the LOCAL physical-host slot described above and
+archives/uploads the complete output directory; the writer performs no source
+commands outside the Trial and accepts no actor or budget overrides.
+
+For native Harbor packages, `native_setup: {"block_index": 0}` selects the first
+fenced `bash` block in the original `instruction.md`; later blocks increment
+the zero-based index. The writer executes that verbatim
+public setup inside the Trial and preserves its actual exit code. For converted
+TaskSpecs, pass `native_setup: null`. Production TaskSpec preparation installs
+the original environment and public resources before `agent_start`; the writer
+records `setup_kind: task_spec_preparation`, the exact source TaskSpec, a
+`task-spec-preparation.json` manifest, and the observed preparation timing.
+There is no aggregate shell exit code for this path: `setup_exit_code` remains
+null. Its receipt binds `preparation_artifact` as well as the actual
+`setup_artifact`. Failed preparation produces `negative_control_pending` during
+collection; retain the failed archive before resolving its source or provider
+failure. Admission derives the
+preparation kind from the source contract; verifier allocation presence does
+not select it.
+
 A passing nop excludes the task as `negative_control_passed`. Missing controls,
 setup failures, zero-test reports and unresolved infrastructure outcomes remain
 `negative_control_pending`. A completed source verifier deadline keeps its absent

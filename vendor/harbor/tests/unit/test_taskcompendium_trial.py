@@ -23,6 +23,7 @@ from shellbox.image import RegistryImage
 from shellbox.machine import Backend, ExitReason, NetworkPolicy, Result, UnsupportedMachineSpec
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.harbor.oracle import ORACLE_COMMAND_FILE, write_oracle_command
+from taskcompendium.harbor.negative_control import NegativeControlSource, public_task_preparation
 from taskcompendium.harbor.protected_runtime import (
     RUNTIME_OBSERVATION_SCRIPT,
     ExpectedRuntime,
@@ -68,6 +69,9 @@ from harbor.models.trial.config import (
     TaskConfig,
     TrialConfig,
 )
+from harbor.models.task.task import Task
+from harbor.host_capabilities import HostCapabilities
+from harbor.trial.negative_control import run_negative_control
 from harbor.trial import taskcompendium as adapter
 from harbor.trial.trial import Trial
 from experiments.post_training.task_curation.tests.review_server import (
@@ -160,6 +164,79 @@ def bind_factory(monkeypatch, machines, disk_root):
 
 def original_task(name):
     return TaskSpec.model_validate_json((FIXTURES / f"{name}.json").read_text())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["tau-rlvr1-repaired", "language-mixing"])
+@pytest.mark.parametrize("missing_lock", [False, True])
+async def test_physical_nop_writer_records_original_preparation_without_shell_exit_or_actor(
+    tmp_path, monkeypatch, name, missing_lock
+):
+    task = original_task(name)
+    packet = tmp_path / "source"
+    write_harbor_task(task, packet, INITIAL_REQUIREMENTS)
+    before = (packet / "task-spec.json").read_bytes()
+    checksum = Task(packet).checksum
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    # Availability is an external artifact boundary; no task lock is installed by a judge worker.
+    monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: not missing_lock)
+    root = tmp_path / "control"
+    judge = verifyit_spec(task.grader)
+    with running_review_server() as server:
+        endpoint = f"http://127.0.0.1:{server.server_port}/v1"
+
+        async def relay_boundary(machine, stack, service_tasks, *, judge, candidate):
+            machines.machines[-1].env[BASE_URL_ENV] = endpoint
+
+        monkeypatch.setattr(adapter, "start_model_relays", relay_boundary)
+        record = await run_negative_control(
+            TrialConfig(
+                task=TaskConfig(
+                    path=packet, verifier_execution_requirements=INITIAL_REQUIREMENTS.model_dump(mode="json")
+                ),
+                trial_name="physical-nop",
+                trials_dir=root / "trials",
+                agent=AgentConfig(name="nop"),
+                environment=EnvironmentConfig(
+                    kwargs={"model_endpoint": endpoint, "model_name": judge.model, "disk_root": str(tmp_path / "disks")}
+                ),
+            ),
+            NegativeControlSource(
+                task_id=task.id,
+                source_task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                source_task_checksum=checksum,
+                task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                runtime_sha256=None,
+                task_checksum=checksum,
+                execution_requirements=INITIAL_REQUIREMENTS,
+                verifier_execution_requirements=INITIAL_REQUIREMENTS,
+            ),
+            root,
+            None,
+            HostCapabilities(),
+        )
+        assert server.requests == []
+    setup = json.loads((root / "setup-receipt.json").read_text())
+    preparation = json.loads((root / "task-spec-preparation.json").read_text())
+    assert setup["setup_exit_code"] is None
+    assert setup["preparation_completed"] is not missing_lock
+    assert record["hook_calls"] == (0 if missing_lock else 1)
+    assert record["native_package_unchanged"] is True
+    assert preparation["actor_required"] is False
+    assert preparation["public_preparation_sha256"] == canonical_sha256(public_task_preparation(task))
+    assert (root / "source-task-spec.json").read_bytes() == before == (packet / "task-spec.json").read_bytes()
+    assert not (root / "original-public-setup.sh").exists()
+    if missing_lock:
+        assert record["trial_result"]["exception_info"]["exception_type"] == "FileNotFoundError"
+        assert record["physical_verdict"] is None
+        assert machines.machines == []
+    else:
+        assert record["physical_verdict"]["status"] == "scored"
+        assert record["physical_verdict"]["reward"] == 0
+        assert setup["environment_setup"] == record["trial_result"]["environment_setup"]
+        assert len(machines.machines) == 1
+        assert all(machine.closed for machine in machines.machines)
 
 
 @pytest.mark.parametrize(

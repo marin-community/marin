@@ -8,6 +8,7 @@ from copy import deepcopy
 from finestore.rl.curation import ContentEvidenceReference
 
 from taskcompendium.grading_environment import GradingEnvironmentMode
+from taskcompendium.harbor.negative_control import NegativeControlSetupKind, negative_control_setup_kind
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
@@ -91,6 +92,11 @@ def oracle_receipt(
             nop["agent_info"] = {"name": "nop"}
             nop["config"]["agent"] = {"name": "nop"}
             nop["exception_info"] = None
+            setup_kind = negative_control_setup_kind(task)
+            converted = setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION
+            if converted:
+                nop["config"]["task"] = {}
+                nop["environment_setup"] = {"started_at": "2026-11-12T12:59:00Z", "finished_at": "2026-11-12T12:59:01Z"}
             nop["verifier_result"] = {"rewards": {"reward": 0}, "exit_code": 0}
             evidence = ContentEvidenceReference(uri="s3://fixtures/nop.tar.zst", sha256="e" * 64)
             negative = OracleNegativeControlReceipt(
@@ -103,6 +109,8 @@ def oracle_receipt(
                 control=evidence,
                 result_artifact=evidence,
                 setup_artifact=evidence,
+                setup_kind=setup_kind,
+                preparation_artifact=evidence if converted else None,
                 verdict_artifact=evidence,
                 trial=OracleTrialReceipt(
                     path=f"nop/{task.id}/result.json",
@@ -114,7 +122,7 @@ def oracle_receipt(
                 ),
                 score=0,
                 verifier_exit_code=0,
-                setup_exit_code=0,
+                setup_exit_code=None if converted else 0,
                 original_public_setup=True,
             )
         entries[task.id] = OracleTaskReceipt(
