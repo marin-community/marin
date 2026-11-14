@@ -135,6 +135,10 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                             "source_id": "Marin:clean",
                             "basis": "converted_spec_census",
                             "task_count": 3,
+                            "inputs": {"s3://test/task-specs.parquet": "d" * 64},
+                            "role_backend_assignments": {"agent": {"daytona": 3}, "grader": {"local": 3}},
+                            "demands": {"agent": {"docker_image": 3}, "grader": {"packages_lock": 3}},
+                            "resource_ranges": {},
                             "backends": {
                                 "docker": {
                                     "support": "supported",
@@ -155,6 +159,58 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                                     "validation_errors": {},
                                 },
                             },
+                        }
+                    )
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO atlas_backend_sources (load_id,source_id,capabilities) "
+                    "VALUES ('lexical','Marin:eval',CAST(:capabilities AS JSONB))"
+                ),
+                {
+                    "capabilities": json.dumps(
+                        {
+                            "source_id": "Marin:eval",
+                            "basis": "converted_spec_census",
+                            "task_count": 3,
+                            "backends": {
+                                "local": {
+                                    "support": "supported",
+                                    "roles": {"agent": {"not_applicable": 3}, "grader": {"supported": 3}},
+                                    "blockers": {},
+                                    "validation_errors": {},
+                                },
+                                "shellsim": {
+                                    "support": "not_applicable",
+                                    "roles": {"agent": {"not_applicable": 3}, "grader": {"not_applicable": 3}},
+                                    "blockers": {},
+                                    "validation_errors": {},
+                                },
+                                "qemu": {
+                                    "support": "partial",
+                                    "roles": {"agent": {"supported": 2, "not_applicable": 1}},
+                                    "blockers": {"agent:packages_lock": 2},
+                                    "validation_errors": {"agent:packages_lock": 1},
+                                },
+                            },
+                        }
+                    )
+                },
+            )
+            connection.execute(
+                text("INSERT INTO atlas_backend_surveys VALUES ('lexical','survey-fixture',CAST(:survey AS JSONB))"),
+                {
+                    "survey": json.dumps(
+                        {
+                            "catalog_root": "fixture",
+                            "snapshot_id": "lexical",
+                            "generated_at": "2026-11-14T10:00:00Z",
+                            "git_revision": "b" * 40,
+                            "schema_sha256": "c" * 64,
+                            "runtime_defaults": {"agent": {"backend": "daytona"}, "grader": {"backend": "local"}},
+                            "deployment_limits": {},
+                            "local_disk_pool": None,
                         }
                     )
                 },

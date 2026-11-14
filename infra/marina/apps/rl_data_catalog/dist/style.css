@@ -171,6 +171,7 @@ a.secondary:hover { text-decoration: none; }
 .level-sample { color: #1f5f59; background: #e6f2f1; }
 .level-quick { color: #66746b; background: #f0f3f0; }
 .evidence-link { font-size: 12px; white-space: nowrap; }
+.backends-cell { width: 1%; white-space: nowrap; }
 .date-cell { font-size: 12px; color: #617168; white-space: nowrap; }
 .header-label { display: block; padding: 13px 18px; font-size: 12px; font-weight: 600; }
 .page-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; border-top: 1px solid var(--line); padding: 20px 0; color: #8c988d; font-size: 9px; }

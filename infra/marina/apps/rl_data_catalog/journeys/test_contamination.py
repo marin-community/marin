@@ -227,11 +227,9 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     )
     source_header.get_by_role("button").click()
     clean = page.locator('tr[data-source-id="Marin:clean"]')
-    assert set(clean.locator(".backend-chips .chip").all_text_contents()) == {
-        "Docker",
-        "LOCAL: PARTIAL: docker_image",
-        "Daytona: UNSUPPORTED: packages_lock",
-    }
+    expect(clean.locator(".backends-cell .chip")).to_have_count(0)
+    expect(clean.locator(".backends-link")).to_have_text("Backends \u203a")
+    assert clean.locator(".backends-cell").evaluate("cell => cell.getBoundingClientRect().width < 150")
     expect(clean.locator(".grading-chips .chip")).to_have_text("SEPARATE")
     expect(clean.locator("td").nth(1)).to_have_text("Pending")
     assert page.locator(".enum-chips").evaluate_all(
@@ -331,3 +329,60 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
         .locator("dd")
     )
     expect(original_oracles).to_have_text("Not measured")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, theme: str, width: int) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.locator("#show-all").check()
+    page.locator('tr[data-source-id="Marin:clean"] .backends-link').click()
+    expect(page).to_have_url(re.compile(r"/backends\.html#source_id=Marin%3Aclean$"))
+    expect(page.locator("#title")).to_have_text("clean")
+    expect(page.locator("#fit .backend-table tbody tr")).to_have_count(3)
+    expect(page.locator("#fit")).to_contain_text("docker image")
+    expect(page.locator("#fit")).to_contain_text("packages lock")
+    expect(page.locator("#provenance")).to_contain_text("survey-fixture")
+    expect(page.locator("#provenance")).to_contain_text("b" * 40)
+    expect(page.locator("#provenance")).to_contain_text("c" * 64)
+    expect(page.locator("#provenance")).to_contain_text("2026-11-14T10:00:00Z")
+    expect(page.locator("#census")).to_contain_text("d" * 64)
+    expect(
+        page.locator('#census a[href="https://filer.marina.oa.dev/#s3%3A%2F%2Ftest%2Ftask-specs.parquet"]')
+    ).to_be_visible()
+    for right in (False, True):
+        page.locator("#fit .table-wrap").evaluate("(e,right)=>e.scrollLeft=right?e.scrollWidth:0", right)
+        assert page.locator("#fit table").evaluate(
+            """table => [...table.tBodies[0].rows].every(row => [...row.cells].every((cell,i,cells) => {
+              const bounds=cell.getBoundingClientRect(), next=cells[i+1]?.getBoundingClientRect();
+              const head=table.tHead.rows[0].cells[i].getBoundingClientRect();
+              return (!next || bounds.right<=next.left+1) && Math.abs(bounds.left-head.left)<=1 &&
+                Math.abs(bounds.right-head.right)<=1;
+            }))"""
+        )
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    journey.shoot(f"backends-{theme}-{width}")
+    page.get_by_role("link", name="By source", exact=True).click()
+    page.locator("#show-all").check()
+    page.locator('tr[data-source-id="Marin:eval"] .backends-link').click()
+    local = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name="LOCAL", exact=True))
+    expect(local.locator("td").nth(2)).to_have_text("N/A: 3")
+    expect(local.locator("td").nth(3)).to_have_text("supported: 3")
+    shellsim = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name="ShellSim", exact=True))
+    expect(shellsim.locator(".chip")).to_have_text("N/A")
+    qemu = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name="QEMU", exact=True))
+    expect(qemu.locator("td").nth(2)).to_contain_text("N/A: 1")
+    expect(qemu.locator("td").nth(3)).to_have_text("Not measured")
+    expect(qemu.locator("td").nth(4)).to_have_text("agent:packages lock: 2")
+    expect(qemu.locator("td").nth(5)).to_have_text("agent:packages lock: 1")
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    journey.shoot(f"backend-role-na-{theme}-{width}")
+    page.get_by_role("link", name="By source", exact=True).click()
+    page.locator("#show-all").check()
+    page.locator('tr[data-source-id="Marin:unmeasured"] .backends-link').click()
+    expect(page.locator("#fit")).to_have_text("Backend requirements have not been measured.")
+    expect(page.locator("#fit .chip")).to_have_count(0)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

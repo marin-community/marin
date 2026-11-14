@@ -130,8 +130,10 @@ without recorded Use display Unknown.
 Counts describe the measured input before duplicate and lexical exclusions. They do
 not describe residual overlap in the retained release or semantic decontamination.
 The source table legend and Getting started guide define the same five states.
-Backends shows each measured backend's fit, with partial or unsupported requirement
-variants inside its chip. Evidence separates agent and grader support and blockers.
+The compact **Backends ›** link opens a source's backend evidence page, with
+agent and grader fit, task counts, blockers, validation errors and survey provenance.
+Explicit `not_applicable` role counts display N/A; missing role evidence remains
+not measured. The evidence table scrolls horizontally on small screens.
 Grading shows the required SHARED or SEPARATE boundary from the complete census;
 a declaration mismatch uses a warning variant and remains explicit in Evidence.
 N/A requires an applicable measured absence; missing evidence remains unmeasured.

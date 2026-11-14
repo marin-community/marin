@@ -186,7 +186,7 @@ function sourceRow(row, others, canonical) {
     const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
     const contamination = contaminationCell(row);
     const difficulty = node('td', undefined, 'difficulty-cell'); difficulty.append(AtlasDifficulty.comparison(row.difficulty));
-    const backends = node('td'); backends.append(backendChips(row));
+    const backends = node('td', undefined, 'backends-cell'); backends.append(backendLink(row.id));
     const grading = node('td'); grading.append(gradingChips(row));
     tr.append(name, examples, use, quality, result, issueRate, contamination, overlap, daytonaCell(row), backends, grading, area, updated, evidence, difficulty); return tr;
 }
