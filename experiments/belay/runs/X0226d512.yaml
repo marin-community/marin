@@ -1,0 +1,14 @@
+experiment: X0226d512
+track: competitive-d512
+runs:
+  seed0:
+    seed: 0
+    variant: space/case-normalised byte rows on input embeddings
+    flags:
+    - --model-set
+    - spelling_byte_embeds=true
+  control:
+    seed: 0
+    variant: competitive-d512 control
+    control: true
+    shared: s7n-d512
