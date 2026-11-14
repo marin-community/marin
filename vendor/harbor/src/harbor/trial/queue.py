@@ -39,6 +39,7 @@ class _HookGate:
 
 
 class _TrialAttempt(Protocol):
+    config: TrialConfig
     result: TrialResult
     first_phase_timeout: asyncio.TimeoutError | None
     has_result: bool
@@ -225,12 +226,14 @@ class TrialQueue:
         attempt: int,
         state: _AttemptState,
     ) -> TrialResult:
-        trial = await Trial.create(
-            trial_config,
-            attempt_index=attempt,
-            host_capabilities=self._host_capabilities,
-            guest_environment=self._guest_environment,
-        )
+        trial = state.trial
+        if trial is None:
+            trial = await Trial.create(
+                trial_config,
+                attempt_index=attempt,
+                host_capabilities=self._host_capabilities,
+                guest_environment=self._guest_environment,
+            )
         state.trial = trial
         self._setup_hooks(trial, state, trial_config, attempt)
         return await trial.run()
@@ -367,7 +370,10 @@ class TrialQueue:
             state.gate.active = False
 
     async def _run_admitted_attempt(
-        self, trial_config: TrialConfig, attempt: int
+        self,
+        trial_config: TrialConfig,
+        attempt: int,
+        prepared_trial: _TrialAttempt | None = None,
     ) -> TrialResult:
         queue_started = time.monotonic()
         try:
@@ -380,7 +386,7 @@ class TrialQueue:
             raise
         record_queue_wait(time.monotonic() - queue_started, outcome=OUTCOME_SUCCEEDED)
 
-        state = _AttemptState(gate=_HookGate())
+        state = _AttemptState(gate=_HookGate(), trial=prepared_trial)
         started_at = datetime.now(timezone.utc)
         attempt_task = asyncio.create_task(
             self._run_attempt_lifecycle(trial_config, attempt, state)
@@ -463,6 +469,22 @@ class TrialQueue:
     def submit(self, trial_config: TrialConfig) -> Coroutine[Any, Any, TrialResult]:
         """Return a coroutine that executes one trial."""
         return self._run_trial(trial_config)
+
+    async def run_prepared(
+        self, trial: _TrialAttempt, *, attempt_index: int
+    ) -> TrialResult:
+        """Supervise one prepared attempt without adding retries.
+
+        The caller constructs the trial with the same attempt index. Admission,
+        deadline publication and cancellation quarantine match submitted trials.
+        """
+        identity = AttemptIdentity(
+            trial_name=trial.config.trial_name,
+            planned_attempt=self._planned_attempts.get(trial.config.trial_name, 1),
+            infrastructure_retry=attempt_index,
+        )
+        with bind_attempt(identity):
+            return await self._run_admitted_attempt(trial.config, attempt_index, trial)
 
     def submit_batch(
         self, configs: list[TrialConfig]

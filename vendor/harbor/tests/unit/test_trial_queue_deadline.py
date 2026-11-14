@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from harbor.agents.base import TurnCapExhaustedError
 from harbor.environments.base import SandboxDiskFullError
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
@@ -756,8 +755,9 @@ async def test_cancelling_queued_trial_does_not_start_or_retry_it(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("submission", ["config", "prepared"])
 async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, submission: str
 ) -> None:
     never = asyncio.Event()
 
@@ -765,10 +765,17 @@ async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
         await never.wait()
 
     config = _config(tmp_path, "hung", attempt_timeout=0.01)
-    _install_factory(monkeypatch, {("hung", 0): FakeTrial(config, 0, hang)})
+    trial = FakeTrial(config, 0, hang)
+    queue = TrialQueue(n_concurrent=1)
+    if submission == "config":
+        _install_factory(monkeypatch, {("hung", 0): trial})
+        execution = queue.submit(config)
+    else:
+        queue = TrialQueue(n_concurrent=1, retry_config=RetryConfig(max_retries=2))
+        execution = queue.run_prepared(trial, attempt_index=0)
 
     async with asyncio.timeout(1):
-        result = await TrialQueue(n_concurrent=1).submit(config)
+        result = await execution
 
     assert result.exception_info is not None
     assert result.exception_info.exception_type == "TrialTimeoutError"
@@ -776,6 +783,9 @@ async def test_attempt_deadline_returns_trial_timeout_and_persists_selection(
         (tmp_path / "trials" / "hung" / "result.json").read_text()
     )
     assert selected.exception_info == result.exception_info
+    assert sorted(
+        path.name for path in (tmp_path / "trials" / "hung" / "attempts").iterdir()
+    ) == ["000"]
 
 
 @pytest.mark.unit

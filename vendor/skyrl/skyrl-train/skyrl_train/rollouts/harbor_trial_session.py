@@ -8,6 +8,7 @@ from pathlib import Path
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from harbor.trial.queue import TrialQueue
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.external import AgentCompletion, messages_equal
 from rolloutengine.models import (
@@ -79,6 +80,8 @@ async def run_harbor_trial(
     backend: AgentInferenceBackend,
     complete: AgentCompletion,
     evidence_dir: Path,
+    *,
+    trial_queue: TrialQueue,
 ) -> TrialResult:
     """Let Harbor own setup, verification and cleanup while the engine serves tokens."""
     if not isinstance(trial.agent, BaseInstalledAgent):
@@ -89,7 +92,7 @@ async def run_harbor_trial(
     evidence_dir.mkdir(parents=True, exist_ok=True)
     trace_path = evidence_dir / "turns.jsonl"
     with backend.session(correlation_id, recorded_completion(complete, trace_path)):
-        return await trial.run()
+        return await trial_queue.run_prepared(trial, attempt_index=0)
 
 
 class HarborTrialHarness:

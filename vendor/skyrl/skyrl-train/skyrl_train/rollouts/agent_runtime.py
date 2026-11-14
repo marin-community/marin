@@ -18,6 +18,8 @@ from harbor.host_capabilities import HostCapabilities, model_api_url, task_model
 from harbor.utils.env import protected_environment_values
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
+from harbor.models.job.config import RetryConfig as HarborRetryConfig
+from harbor.trial.queue import TrialQueue
 from harbor.trial.trial import Trial
 from shellbox.backends.daytona.connection import DaytonaConnection
 from marinskyrl.harbor_environments import (
@@ -48,12 +50,11 @@ from skyrl_train.rollouts.daytona_snapshot_pool import shared_snapshot_leaser
 
 
 async def publish_attempt(evidence: Path, destination: str) -> None:
-    """Publish attempt evidence and retain the local copy if publication fails."""
+    """Publish attempt evidence; the caller owns the local copy's lifetime."""
     if io.is_cloud_path(destination):
         await asyncio.to_thread(io.upload_directory, str(evidence), destination)
     else:
         await asyncio.to_thread(shutil.copytree, evidence, destination)
-    shutil.rmtree(evidence)
 
 
 class InstalledAgentSettings(BaseModel):
@@ -112,6 +113,7 @@ class InstalledAgentRuntime:
             )
         self.resources = AsyncExitStack()
         self.port: int | None = None
+        self._original_trial_queues: dict[str, TrialQueue] = {}
 
     async def startup(self) -> None:
         set_global_state(self.backend, None)
@@ -159,6 +161,7 @@ class InstalledAgentRuntime:
             await self._run_trial(machine, complete, lowered, trial_dir, messages[0]["content"], attempt_id)
         finally:
             await publish_attempt(trial_dir, destination)
+            shutil.rmtree(trial_dir)
 
     def original_harness(
         self, lowered: TaskRolloutSpec, session_id: str, settings: HarborTaskSettings, phase: str
@@ -187,7 +190,10 @@ class InstalledAgentRuntime:
         if binding is not None and binding.verifier_environment is not None:
             verifier_environment.update(binding.verifier_environment)
         if (
-            (model_api_url(verifier_environment) is not None or model_api_url(package_config.environment.env) is not None)
+            (
+                model_api_url(verifier_environment) is not None
+                or model_api_url(package_config.environment.env) is not None
+            )
             and self.judge is not None
             and self.settings.judge_model is not None
         ):
@@ -214,6 +220,12 @@ class InstalledAgentRuntime:
             trial_attempt_timeout_sec=lowered.limits.attempt_timeout,
             trial_cleanup_grace_sec=lowered.limits.cleanup_timeout,
         )
+        if phase not in self._original_trial_queues:
+            self._original_trial_queues[phase] = TrialQueue(
+                n_concurrent=settings.concurrent_trials,
+                retry_config=HarborRetryConfig(max_retries=0),
+            )
+        trial_queue = self._original_trial_queues[phase]
 
         async def run(complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> TrialResult:
             return await self.run_original_trial(
@@ -222,6 +234,7 @@ class InstalledAgentRuntime:
                 session_id=session_id,
                 config=config,
                 host_capabilities=host_capabilities,
+                trial_queue=trial_queue,
             )
 
         return HarborTrialHarness(run, self.settings.trial_reward_key)
@@ -234,6 +247,7 @@ class InstalledAgentRuntime:
         session_id: str,
         config: TrialConfig,
         host_capabilities: HostCapabilities,
+        trial_queue: TrialQueue,
     ) -> TrialResult:
         """Execute the original package with Harbor-owned environments and verification."""
         if self.port is None:
@@ -272,6 +286,7 @@ class InstalledAgentRuntime:
                 )
                 trial = await Trial.create(
                     trial_config,
+                    attempt_index=0,
                     host_capabilities=host_capabilities,
                     guest_environment=(
                         task_model_environment(self.settings.judge_model)
@@ -281,10 +296,20 @@ class InstalledAgentRuntime:
                         else {}
                     ),
                 )
-                result = await run_harbor_trial(trial, self.backend, complete, evidence / "engine")
-                return result.model_copy(update={"trial_uri": join_resource_path(destination, "trials", attempt_id)})
+                result = await run_harbor_trial(
+                    trial, self.backend, complete, evidence / "engine", trial_queue=trial_queue
+                )
+                relative_trial = str(trial.paths.trial_dir.relative_to(trial_config.trials_dir))
+                result = result.model_copy(
+                    update={"trial_uri": join_resource_path(destination, "trials", relative_trial)}
+                )
         finally:
             await publish_attempt(evidence, destination)
+        # Harbor certifies completion after provider shutdown and artifact flush.
+        # Deadline returns without it must leave evidence available to late cleanup.
+        if result.completion is not None:
+            shutil.rmtree(evidence)
+        return result
 
     @asynccontextmanager
     async def _served_agent(

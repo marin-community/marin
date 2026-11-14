@@ -3,6 +3,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 from harbor.host_capabilities import HostCapabilities, task_model_environment
@@ -41,8 +42,9 @@ class UnusedDecoder:
 @pytest.mark.parametrize("phase", ["train", "eval"])
 @pytest.mark.parametrize("with_judge", [False, True])
 @pytest.mark.parametrize("declares_judge", [False, True])
+@pytest.mark.parametrize("provider_failure", ["unavailable", "stalled"])
 async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
-    tmp_path, monkeypatch, phase, with_judge, declares_judge
+    tmp_path, monkeypatch, phase, with_judge, declares_judge, provider_failure
 ):
     package = tmp_path / "package"
     package.mkdir()
@@ -55,7 +57,13 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         + ('[verifier.env]\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n' if declares_judge else "")
     )
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
-    lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
+    lowered = lowered_task(
+        task,
+        "harbor_trial",
+        attempt_timeout=0.25 if provider_failure == "stalled" else 15,
+        total_turn_timeout=5,
+        cleanup_timeout=0.05 if provider_failure == "stalled" else 5,
+    )
     settings = InstalledAgentSettings(
         agent=AgentConfig(name="pi", kwargs={"thinking_format": "qwen-chat-template"}),
         judge_model="fixture-judge" if with_judge else None,
@@ -92,6 +100,8 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
 
         async def __aenter__(self):
             attempted.append(self.config)
+            if provider_failure == "stalled":
+                await asyncio.Event().wait()
             raise ProviderUnavailable("fixture provider unavailable")
 
         async def __aexit__(self, *args):
@@ -109,12 +119,14 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     monkeypatch.setattr(agent_runtime, "registered_agent_endpoint", registered_endpoint)
     await runtime.startup()
     try:
-        result = await harness.run_trial(unexpected_model_request)
+        result = await asyncio.wait_for(harness.run_trial(unexpected_model_request), timeout=2)
     finally:
         await runtime.shutdown()
 
-    assert result.exception_info.exception_type == "ProviderUnavailable"
-    assert result.exception_info.exception_message == "fixture provider unavailable"
+    expected_failure = "TrialTimeoutError" if provider_failure == "stalled" else "ProviderUnavailable"
+    assert result.exception_info.exception_type == expected_failure
+    if provider_failure == "unavailable":
+        assert result.exception_info.exception_message == "fixture provider unavailable"
     assert len(attempted) == 1
     selected = connections[phase]
     assert (attempted[0].api_key, attempted[0].api_url, attempted[0].target) == (
@@ -127,11 +139,15 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     assert (attempts[0] / "identity.json").is_file()
     assert list((attempts[0] / "trials").glob("*/result.json"))
     consumed = json.loads(next((attempts[0] / "trials").glob("*/config.json")).read_text())
+    selected_attempt = json.loads((Path(result.trial_uri) / "result.json").read_text())
+    assert selected_attempt["exception_info"]["exception_type"] == expected_failure
+    local_evidence = Path(consumed["task"]["path"]).parent
+    if provider_failure == "stalled":
+        assert local_evidence.exists()
     # The provider-facing trial must not require a Python relay for shell-only
     # verifiers merely because this run has a judge available.
     expected_endpoint = "http://127.0.0.1:2/v1" if with_judge and declares_judge else None
     assert consumed["environment"]["kwargs"].get("model_endpoint") == expected_endpoint
-
 
 
 @pytest.mark.asyncio
@@ -173,25 +189,39 @@ async def test_verifier_guest_relay_binding_keeps_real_credentials_on_host(tmp_p
     (package / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
     (package / "instruction.md").write_text("Answer in answer.txt")
     (package / "task.toml").write_text(
-        '[environment]\ndocker_image = "fixture/image:latest"\n'
-        '[verifier.env]\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n'
+        '[environment]\ndocker_image = "fixture/image:latest"\n[verifier.env]\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n'
     )
-    task = harbor_trial_task(package, source=Source(dataset="bixbench-fixture", revision="1", row="0", importer_revision="1"))
+    task = harbor_trial_task(
+        package, source=Source(dataset="bixbench-fixture", revision="1", row="0", importer_revision="1")
+    )
     lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
-    settings = InstalledAgentSettings(agent=AgentConfig(name="pi"), judge_model="fixture-judge",
-        output_path=str(tmp_path / "attempts"), setup_timeout=5, run_timeout=5, cleanup_timeout=5,
-        service_startup_timeout=5, service_shutdown_timeout=5)
+    settings = InstalledAgentSettings(
+        agent=AgentConfig(name="pi"),
+        judge_model="fixture-judge",
+        output_path=str(tmp_path / "attempts"),
+        setup_timeout=5,
+        run_timeout=5,
+        cleanup_timeout=5,
+        service_startup_timeout=5,
+        service_shutdown_timeout=5,
+    )
     connection = DaytonaConnection("synthetic-daytona-secret", "https://fixture.invalid", "us")
-    runtime = InstalledAgentRuntime(settings,
-        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()), 128,
+    runtime = InstalledAgentRuntime(
+        settings,
+        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
+        128,
         judge=JudgeConnection("https://host-judge.invalid/v1", judge_key),
-        daytona_connection=connection, eval_daytona_connection=connection)
+        daytona_connection=connection,
+        eval_daytona_connection=connection,
+    )
 
     async def check_binding(complete, *, host_capabilities, **kwargs):
         assert host_capabilities.model_authentication["https://host-judge.invalid/v1"] == judge_key
-        resolved = resolve_env_vars({"OPENAI_API_KEY": "${OPENAI_API_KEY}",
-            "OPENAI_BASE_URL": "${OPENAI_BASE_URL}"}, source=task_model_environment("fixture-judge"),
-            protected_values=host_capabilities.protected_values)
+        resolved = resolve_env_vars(
+            {"OPENAI_API_KEY": "${OPENAI_API_KEY}", "OPENAI_BASE_URL": "${OPENAI_BASE_URL}"},
+            source=task_model_environment("fixture-judge"),
+            protected_values=host_capabilities.protected_values,
+        )
         assert resolved["OPENAI_API_KEY"] == "EMPTY"
         assert resolved["OPENAI_BASE_URL"].startswith("http://127.0.0.1:")
         for secret in ["synthetic-daytona-secret"] + ([judge_key] if judge_key != "EMPTY" else []):
