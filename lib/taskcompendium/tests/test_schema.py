@@ -225,19 +225,17 @@ def test_grader_configuration_rejects_nested_nonfinite_json_numbers(specificatio
     "base_path,alias",
     [("foo", "foo."), ("foo", "foo "), ("inputs/answer", "inputs/answer:backup"), ("foo", "FOO"), ("a/b", "a\\b")],
 )
-def test_resource_groups_preserve_distinct_linux_files(tmp_path, specification, base_path, alias):
+def test_resource_groups_preserve_distinct_linux_files(specification, base_path, alias):
     wire = specification.model_dump(mode="json")
     wire["resources"] = {
         "all": [{"path": base_path, "source": {"kind": "inline_file", "content_base64": "cHVibGlj"}}],
         "worker": [{"path": alias, "source": {"kind": "inline_file", "content_base64": "b3ZlcndyaXRl"}}],
     }
     task = TaskSpec.model_validate(wire)
-    for resource in task.resources.all + task.resources.worker:
-        target = tmp_path / resource.path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(base64.b64decode(resource.source.content_base64))
-    assert (tmp_path / base_path).read_bytes() == b"public"
-    assert (tmp_path / alias).read_bytes() == b"overwrite"
+    assert {
+        resource.path: base64.b64decode(resource.source.content_base64)
+        for resource in task.resources.all + task.resources.worker
+    } == {base_path: b"public", alias: b"overwrite"}
 
 
 @pytest.mark.parametrize("candidate,reward", [("done", 1.0), ("incorrect", 0.0)])

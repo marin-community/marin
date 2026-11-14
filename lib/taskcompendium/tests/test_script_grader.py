@@ -262,6 +262,7 @@ def local_artifact_factory(tmp_path):
         "tar_failed",
     ],
 )
+@pytest.mark.asyncio
 async def test_artifact_transfer_grades_valid_files_and_rejects_invalid_submissions(
     local_artifact_factory, artifact_case, monkeypatch
 ):
