@@ -124,9 +124,16 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
 
 def native_task_toml(task: Mapping) -> bytes:
     # Native counting is also used in Harbor's standalone optional-dependency environment.
-    from taskcompendium.models import TaskResource  # noqa: PLC0415
+    from taskcompendium.harbor.adapter import ARCHIVED_SOURCE_CONFIG, source_task_configurations  # noqa: PLC0415
+    from taskcompendium.models import TaskResource, TaskSpec  # noqa: PLC0415
     from taskcompendium.runtime.resources import resource_bytes  # noqa: PLC0415
 
+    if any(row["path"] == ARCHIVED_SOURCE_CONFIG for row in task["resources"].get("oracle", ())):
+        parsed = TaskSpec.model_validate(task)
+        configurations = source_task_configurations(parsed)
+        if len(configurations) != 1:
+            raise ValueError(f"{parsed.id}: expected one archived source task configuration")
+        return resource_bytes(configurations[0])
     resource = next(row for row in task["resources"]["verifier"] if row["path"] == "task.toml")
     return resource_bytes(TaskResource.model_validate(resource))
 

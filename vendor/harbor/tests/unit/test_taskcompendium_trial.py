@@ -506,6 +506,7 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
                             "api_base": "https://candidate.fixture/v1",
                             "max_turns": 1,
                             "max_tokens": 128,
+                            "request_parameters": {"temperature": 0.7, "top_p": 0.95, "extra_body": {"top_k": 20}},
                         }
                         if agent_name == "task-spec-chat"
                         else {}
@@ -530,6 +531,9 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
             assert conversation.events[-1].content == ""
     if agent_name == "task-spec-chat":
         assert candidate_requests[0]["messages"] == conversation_messages(task.context.events)
+        assert {key: candidate_requests[0][key] for key in ("temperature", "top_p", "top_k", "max_tokens")} == {
+            "temperature": 0.7, "top_p": 0.95, "top_k": 20, "max_tokens": 128,
+        }
     else:
         assert candidate_requests == []
     if agent_name == "task-spec-chat":
@@ -777,6 +781,7 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
                     "api_base": "https://candidate.fixture/v1",
                     "max_turns": 3,
                     "max_tokens": 128,
+                    "request_parameters": {"temperature": 0.7},
                 },
             ),
             environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),

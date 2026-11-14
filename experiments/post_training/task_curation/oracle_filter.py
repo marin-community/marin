@@ -37,6 +37,7 @@ from taskcompendium.pipeline.oracle_filter import (
     InfrastructureRetryPlan,
     InfrastructureRetryTransition,
     MechanicalOracleTaskReceipt,
+    NativeVerifierGrade,
     OracleExclusionReason,
     OracleFilterReceipt,
     OracleTaskReceipt,
@@ -129,7 +130,9 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
     return canonical_sha256({"task": document, "files": files})
 
 
-def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> OracleTrialReceipt:
+def receipt_from_trial(
+    path: Path, document: dict, native_checksum: str, native_grade: NativeVerifierGrade | None = None
+) -> OracleTrialReceipt:
     """Read a trial's evidence against its measured native checksum."""
     native = Path(document["config"]["task"]["path"])
     if native_checksum != document["task_checksum"]:
@@ -155,6 +158,7 @@ def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> Orac
         oracle_exit_code=int(exit_path.read_text()) if exit_path.exists() else None,
         result_sha256=canonical_sha256(document),
         execution_requirements=native_requirements(native),
+        native_grade=native_grade,
         resource_usage=(
             ResourceUsage.model_validate_json(usage_path.read_text()) if usage_path.exists() else ResourceUsage()
         ),
@@ -178,7 +182,19 @@ def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> Orac
 def harbor_inspection(kind: str, paths: list[str]) -> dict:
     """Validate in Harbor's locked runtime without importing it into the curation environment."""
     result = subprocess.run(
-        ["uv", "run", "--project", str(HARBOR_PROJECT), "--frozen", "python", "-m", "harbor.cli.curation_inspect", kind],
+        [
+            "uv",
+            "run",
+            "--project",
+            str(HARBOR_PROJECT),
+            "--frozen",
+            "--extra",
+            "taskcompendium",
+            "python",
+            "-m",
+            "harbor.cli.curation_inspect",
+            kind,
+        ],
         input=json.dumps(paths),
         text=True,
         capture_output=True,
@@ -219,6 +235,9 @@ def trial_result_paths(jobs: Path) -> list[Path]:
     """Find persisted trials without descending into task-controlled outputs."""
     results = []
     for directory, subdirectories, files in jobs.walk():
+        if "task.toml" in files and "instruction.md" in files:
+            subdirectories.clear()
+            continue
         if "config.json" not in files:
             continue
         config = decode_json_value((directory / "config.json").read_text())
@@ -251,9 +270,16 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
         documents[path] = document
     native_paths = sorted({document["config"]["task"]["path"] for document in documents.values()})
     packages = harbor_inspection("tasks", native_paths) if native_paths else {}
+    native_grades = harbor_inspection("native-grades", [str(path) for path in documents]) if documents else {}
     for path, document in documents.items():
         native = document["config"]["task"]["path"]
-        receipt = receipt_from_trial(path, document, packages[native]["task_checksum"])
+        grade = native_grades.get(str(path))
+        receipt = receipt_from_trial(
+            path,
+            document,
+            packages[native]["task_checksum"],
+            NativeVerifierGrade.model_validate(grade) if grade is not None else None,
+        )
         trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
 
@@ -500,6 +526,16 @@ def filter_cohort(
                     reason = OracleExclusionReason.ORACLE_FAILED
                 if reason is None and not trial_network_qualified(task, row_runtime(row), final):
                     reason = OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED
+                if (
+                    not oracle
+                    and reason in {None, OracleExclusionReason.ORACLE_FAILED}
+                    and not (control is not None and control.passed and control.trial == final)
+                ):
+                    reason = (
+                        OracleExclusionReason.EXECUTABILITY_PROOF_MISSING
+                        if control is None
+                        else OracleExclusionReason.EXECUTABILITY_RUN_FAILED
+                    )
                 entry = OracleTaskReceipt(
                     task_sha256=canonical_sha256(task.model_dump(mode="json")),
                     runtime_sha256=row_runtime_hash(row),
@@ -512,17 +548,6 @@ def filter_cohort(
                     source_environment_incompatibility=incompatibility,
                     infrastructure_retries=history,
                 )
-                if not oracle and not entry.passed and reason is not OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED:
-                    reason = (
-                        OracleExclusionReason.INFRASTRUCTURE
-                        if final.failure_signal is FailureSignal.INFRASTRUCTURE
-                        else (
-                            OracleExclusionReason.EXECUTABILITY_PROOF_MISSING
-                            if control is None
-                            else OracleExclusionReason.EXECUTABILITY_RUN_FAILED
-                        )
-                    )
-                    entry = entry.model_copy(update={"exclusion_reason": reason})
                 entries[task.id] = entry
                 if entry.passed:
                     kept.append(row)

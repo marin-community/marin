@@ -29,7 +29,8 @@ for value in paths:
     with path.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     files[value] = {"sha256": digest, "mode": stat.S_IMODE(path.stat().st_mode)}
-lock = Path(sys.prefix).parent / "requirements.lock"
+# LocalRuntime places the venv at runtime.root/env/venv and its lock at runtime.root.
+lock = Path(sys.prefix).parents[1] / "requirements.lock"
 with lock.open("rb") as stream:
     lock_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
 print(json.dumps({"executable": sys.executable, "version": list(sys.version_info[:3]),

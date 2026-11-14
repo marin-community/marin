@@ -1711,6 +1711,11 @@ ORACLE agent over the complete converted population. The filter retains exactly
 the tasks with a completed trial, solution exit zero, and structured scored
 reward one. Numeric reward files alone are insufficient. Retain failed oracles
 and unresolved infrastructure errors as exclusions with reasons and counts.
+Native Harbor `reward.txt` and `reward.json` outputs qualify through the production
+reward parser when their exact reward dictionary matches the validated Trial's
+`VerifierResult`. The collector records `native_grade` with the raw artifact SHA-256,
+result hash and native task checksum. This path is unavailable to TaskSpec payloads
+and cannot replace a missing or infrastructure-failed structured verdict.
 Retry infrastructure failures up to two times before excluding them.
 
 Keep the task's environment, network permission, setup and solution scripts.
@@ -1773,6 +1778,9 @@ retain `source_archive/task.toml` among oracle resources. The archived limits ar
 read only with the accompanying `taskcompendium/crosscode-remediation.json` record,
 whose version must match the TaskSpec's remediation label and which records the
 original task hash. Conflicting declarations reject preparation.
+The actor census uses the same provenance-bound archive reader. Repaired native
+tasks retain their archived allocation settings while snapshot identities use
+their current declared actor and grader images.
 Run `calibrate` against the emitted `task-map.json` with `--environment local`
 and the worker's delegated cgroup-v2 directory (`cgroup_parent`) and writable
 loop-device backing directory (`disk_root`) in `--environment-kwargs`. The

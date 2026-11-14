@@ -19,7 +19,12 @@ from taskcompendium.harbor.protected_runtime import ExpectedRuntime, RuntimeRole
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.models import Controls, IntendedUse
-from taskcompendium.pipeline.oracle_filter import ExecutabilityRunReceipt, OracleExclusionReason, require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import (
+    ExecutabilityRunReceipt,
+    OracleExclusionReason,
+    load_oracle_filter,
+    require_oracle_filter,
+)
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 
@@ -39,6 +44,75 @@ from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, imp
 from experiments.post_training.task_curation.task_spec_harbor import prepare
 
 from .prebuilt_fixtures import prebuilt_task
+
+
+@pytest.mark.parametrize("kind", ["native_text", "native_json", "task_spec_missing", "task_spec_infra"])
+def test_production_native_reward_formats_qualify_without_bypassing_taskspec_verdicts(tmp_path, kind):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("native-grade")["lowered_task_spec"])["task"])
+    native = tmp_path / "native"
+    for name in ("environment", "tests"):
+        (native / name).mkdir(parents=True)
+    (native / "environment/Dockerfile").write_text("FROM fixture@sha256:" + "a" * 64 + "\n")
+    (native / "instruction.md").write_text("Answer the original task.")
+    (native / "tests/test.sh").write_text("true\n")
+    (native / "task.toml").write_text(
+        "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
+        "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
+    )
+    if kind.startswith("task_spec"):
+        (native / "task-spec.json").write_text(task.model_dump_json())
+        (native / "tests/taskcompendium-verifier.toml").write_text("")
+    checksum = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
+    trial = tmp_path / "jobs/trial"
+    (trial / "verifier").mkdir(parents=True)
+    artifact = trial / "verifier" / ("reward.json" if kind == "native_json" else "reward.txt")
+    artifact.write_text('{"reward":0.25}' if kind == "native_json" else "0.25")
+    result = {
+        "id": str(uuid4()),
+        "task_name": "native",
+        "trial_name": "trial",
+        "trial_uri": trial.as_uri(),
+        "task_id": {"path": str(native)},
+        "task_checksum": checksum,
+        "config": {
+            "task": {"path": str(native)},
+            "agent": {
+                "name": "terminus-2",
+                "model_name": "openai/glm-5.3",
+                "kwargs": {"max_turns": 3, "temperature": 0.7},
+            },
+            "environment": {"type": "local"},
+            "resolved_timeouts": {"agent": 300, "verifier": 60, "agent_setup": 360, "environment_build": 600},
+            "trials_dir": str(trial.parent),
+            "trial_name": "trial",
+        },
+        "agent_info": {"name": "terminus-2", "version": "1"},
+        "verifier_result": {"rewards": {"reward": 0.25}},
+        "finished_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
+        "completion": {"trajectory_present": True},
+        "exception_info": None,
+    }
+    (trial / "result.json").write_text(json.dumps(result))
+    (trial / "config.json").write_text(json.dumps(result["config"]))
+    if kind == "task_spec_infra":
+        (trial / "verifier/verdict.json").write_text(
+            json.dumps({"status": "infra_error", "reward": 0.25, "detail": {"error": "provider unavailable"}})
+        )
+    receipt = collect_trials(trial.parent)[("native", checksum)][0]
+    control = ExecutabilityRunReceipt(
+        actor_turns=1,
+        trial=receipt,
+        model_evidence=(ContentEvidenceReference(uri="s3://fixtures/model.json", sha256="b" * 64),),
+    )
+    assert control.passed == kind.startswith("native")
+    if kind.startswith("task_spec"):
+        assert receipt.native_grade is None
+        return
+    assert receipt.native_grade.artifact_sha256 == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    assert receipt.native_grade.rewards == {"reward": 0.25}
+    artifact.write_text("0.75" if kind == "native_text" else '{"reward":0.75}')
+    with pytest.raises(subprocess.CalledProcessError):
+        collect_trials(trial.parent)
 
 
 @pytest.mark.parametrize("binding", ["oracle_command", "calendar_original", "protected_runtime", "source_runtime"])
@@ -134,12 +208,14 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         "newer-env",
         "invalid-reward",
         "calibration-only",
+        "no-oracle-env",
+        "no-oracle-oom",
         "live",
     ):
         row = prebuilt_task(task_id)
         envelope = json.loads(row["lowered_task_spec"])
         task = TaskSpec.model_validate(envelope["task"])
-        if task_id not in {"calibration-only", "live"}:
+        if task_id not in {"calibration-only", "live", "no-oracle-env", "no-oracle-oom"}:
             task = task.model_copy(
                 update={
                     "resources": task.resources.model_copy(
@@ -161,7 +237,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
             "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
             + (
                 '[environment.setup]\ncommand="pip install -q pytest==6.2.5"\ntimeout_sec=300\n'
-                if task_id == "source-env"
+                if task_id in {"source-env", "no-oracle-env"}
                 else ""
             )
             + "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
@@ -175,7 +251,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
             "runtime_sha256": canonical_sha256(envelope["runtime"]),
         }
         for attempt in range(
-            3 if task_id in {"infra", "source-env", "unmatched-env", "observed-env", "newer-env"} else 1
+            3 if task_id in {"infra", "source-env", "unmatched-env", "observed-env", "newer-env", "no-oracle-env"} else 1
         ):
             root = tmp_path / "jobs" / f"{task_id}-{attempt}"
             (root / "verifier").mkdir(parents=True)
@@ -202,12 +278,12 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                 "completion": {"trajectory_present": False},
                 "exception_info": (
                     {
-                        "exception_type": "RuntimeError",
+                        "exception_type": "OutOfMemoryError" if task_id == "no-oracle-oom" else "RuntimeError",
                         "exception_message": "backend unavailable",
                         "exception_traceback": "",
                         "occurred_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
                     }
-                    if task_id == "infra"
+                    if task_id in {"infra", "no-oracle-oom"}
                     else None
                 ),
             }
@@ -236,7 +312,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                         )
                     },
                 }
-                if task_id in {"source-env", "unmatched-env", "observed-env", "newer-env"}
+                if task_id in {"source-env", "unmatched-env", "observed-env", "newer-env", "no-oracle-env"}
                 else {"status": "scored", "reward": 1}
             )
             if task_id == "invalid-reward":
@@ -270,9 +346,9 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     conversion_manifest.write_text(
         json.dumps(
             {
-                "input_rows": 13,
-                "converted_rows": 11,
-                "within_source_dedup": {"raw_count": 13, "unique_count": 11, "within_source_duplicates": 2},
+                "input_rows": 15,
+                "converted_rows": 13,
+                "within_source_dedup": {"raw_count": 15, "unique_count": 13, "within_source_duplicates": 2},
                 "oracle_recipe_identity": "fixture-recipe",
             }
         )
@@ -281,7 +357,10 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         cohort, task_map, tmp_path / "jobs", output, conversion_manifest=conversion_manifest, executability_runs=controls
     )
     assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
-    assert receipt.input_rows == 11
+    assert receipt.input_rows == 13
+    assert load_oracle_filter(str(output.parent / "oracle-filter.json")) == receipt
+    assert receipt.tasks["no-oracle-env"].exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
+    assert receipt.tasks["no-oracle-oom"].exclusion_reason is OracleExclusionReason.OOM
     assert receipt.conversion_rejections == 0
     assert receipt.tasks["invalid-reward"].exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     incompatible = receipt.tasks["source-env"]
