@@ -170,6 +170,8 @@ def _smoke_test(server_url: str, model_id: str) -> dict:
         json={
             "model": model_id,
             "messages": [{"role": "user", "content": SMOKE_PROMPT}],
+            # Override --default-thinking: reasoning can fill the token budget and end with "length".
+            "chat_template_kwargs": {"enable_thinking": False},
             "temperature": 0,
             "max_tokens": 128,
         },
