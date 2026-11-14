@@ -399,7 +399,7 @@ async def _verifyit_reward(
         verdict = Path(directory) / "verdict.json"
         await machine.download(VERDICT_PATH, verdict)
         grade = parse_grade_result(spec, verdict.read_bytes())
-        return replace(grade, diagnostics={**grade.diagnostics, "verifyit_runtime_sha256": runtime_sha256})
+        return replace(grade, diagnostics={**diagnostics, **grade.diagnostics})
 
 
 @dataclass(frozen=True)
