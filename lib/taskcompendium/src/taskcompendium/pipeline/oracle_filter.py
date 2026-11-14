@@ -20,7 +20,11 @@ from taskcompendium.grading_environment import (
     assess_grading_environment,
 )
 from taskcompendium.harbor.adapter import actor_machine_required
-from taskcompendium.harbor.negative_control import NegativeControlSetupKind, negative_control_setup_kind
+from taskcompendium.harbor.negative_control import (
+    NegativeControlSetupKind,
+    negative_control_setup_kind,
+    require_nop_trial_config,
+)
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, ScriptGrader, TaskSpec, VerifyitGrader, decode_json_value
@@ -911,17 +915,15 @@ class OracleNegativeControlReceipt(BaseModel):
     @model_validator(mode="after")
     def validate_physical_control(self):
         result = self.trial.result
+        require_nop_trial_config(result.get("config") or {})
         if (self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION) != (
             self.preparation_artifact is not None
         ):
             raise ValueError("TaskSpec negative controls require their physical preparation manifest")
         if self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION and self.setup_exit_code is not None:
             raise ValueError("TaskSpec preparation has no aggregate shell exit code")
-        agent = result.get("config", {}).get("agent", {})
-        if (result.get("agent_info") or {}).get("name") != "nop" or agent.get("name") != "nop":
+        if (result.get("agent_info") or {}).get("name") != "nop":
             raise ValueError("Negative control requires an actual production nop agent")
-        if any(agent.get(name) for name in ("model_name", "model_alias", "kwargs", "env", "skills", "mcp_servers")):
-            raise ValueError("Negative control cannot carry an actor, model or source-command override")
         if result.get("task_checksum") != self.consumed_task_checksum:
             raise ValueError("Negative control belongs to another consumed native package")
         if self.score != (self.trial.verdict or {}).get("reward"):

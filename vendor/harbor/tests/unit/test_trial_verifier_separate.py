@@ -72,9 +72,7 @@ def _multi_step_task_mixed(tmp: Path) -> Path:
     (env_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
     tests_dir = task_dir / "tests"
     tests_dir.mkdir()
-    (tests_dir / "test.sh").write_text(
-        "#!/bin/bash\necho 1 > /logs/verifier/reward.txt\n"
-    )
+    (tests_dir / "test.sh").write_text("#!/bin/bash\necho 1 > /logs/verifier/reward.txt\n")
     (tests_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
     for step in ("build", "grade"):
         step_dir = task_dir / "steps" / step
@@ -83,9 +81,7 @@ def _multi_step_task_mixed(tmp: Path) -> Path:
     return task_dir
 
 
-def _make_factory_recorder(
-    agent_env: MagicMock, verifier_envs: list[MagicMock]
-) -> tuple[MagicMock, list[dict]]:
+def _make_factory_recorder(agent_env: MagicMock, verifier_envs: list[MagicMock]) -> tuple[MagicMock, list[dict]]:
     """Returns (patched_factory_fn, captured_call_records).
 
     The first call returns ``agent_env``, subsequent calls cycle through
@@ -102,9 +98,7 @@ def _make_factory_recorder(
             return agent_env
         if idx - 1 < len(verifier_envs):
             return verifier_envs[idx - 1]
-        raise AssertionError(
-            f"Unexpected factory call #{idx}: {kwargs.get('session_id')}"
-        )
+        raise AssertionError(f"Unexpected factory call #{idx}: {kwargs.get('session_id')}")
 
     return fake_create, calls
 
@@ -249,9 +243,7 @@ class TestSingleStepSeparateVerifierLifecycle:
             async def stop_agent(delete: bool):
                 events.append("agent_stop")
 
-            async def verifier_start(
-                force_build: bool, *, service_tasks: asyncio.TaskGroup
-            ):
+            async def verifier_start(force_build: bool, *, service_tasks: asyncio.TaskGroup):
                 events.append("verifier_start")
 
             agent_env.stop.side_effect = stop_agent
@@ -268,10 +260,7 @@ def _multi_step_task_with_step_tests(tmp: Path) -> Path:
     task_dir = tmp / "task"
     task_dir.mkdir()
     (task_dir / "task.toml").write_text(
-        "[environment]\n\n"
-        "[[steps]]\n"
-        'name = "grade"\n'
-        '[steps.verifier]\nenvironment_mode = "separate"\n'
+        "[environment]\n\n" "[[steps]]\n" 'name = "grade"\n' '[steps.verifier]\nenvironment_mode = "separate"\n'
     )
     env_dir = task_dir / "environment"
     env_dir.mkdir()
@@ -289,11 +278,7 @@ def _multi_step_task_inheriting_separate_with_step_tests(tmp: Path) -> Path:
     task_dir = tmp / "task"
     task_dir.mkdir()
     (task_dir / "task.toml").write_text(
-        "[verifier]\n"
-        'environment_mode = "separate"\n'
-        "[environment]\n\n"
-        "[[steps]]\n"
-        'name = "grade"\n'
+        "[verifier]\n" 'environment_mode = "separate"\n' "[environment]\n\n" "[[steps]]\n" 'name = "grade"\n'
     )
     env_dir = task_dir / "environment"
     env_dir.mkdir()
@@ -323,9 +308,7 @@ def _multi_step_task_all_separate(tmp: Path) -> Path:
     (env_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
     tests_dir = task_dir / "tests"
     tests_dir.mkdir()
-    (tests_dir / "test.sh").write_text(
-        "#!/bin/bash\necho 1 > /logs/verifier/reward.txt\n"
-    )
+    (tests_dir / "test.sh").write_text("#!/bin/bash\necho 1 > /logs/verifier/reward.txt\n")
     (tests_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
     for step in ("build", "grade"):
         step_dir = task_dir / "steps" / step
@@ -350,10 +333,7 @@ class TestMultiStepMixedVerifierLifecycle:
             await _run_trial(task_dir, trials_dir, fake_create)
 
             verifier_call = calls[1]
-            assert (
-                verifier_call["environment_dir"]
-                == (task_dir / "steps" / "grade" / "tests").resolve()
-            )
+            assert verifier_call["environment_dir"] == (task_dir / "steps" / "grade" / "tests").resolve()
 
     async def test_step_inheriting_task_separate_uses_step_tests_context(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -370,10 +350,7 @@ class TestMultiStepMixedVerifierLifecycle:
             assert len(calls) == 2
             verifier_call = calls[1]
             assert verifier_call["session_id"].endswith("__verifier__grade")
-            assert (
-                verifier_call["environment_dir"]
-                == (task_dir / "steps" / "grade" / "tests").resolve()
-            )
+            assert verifier_call["environment_dir"] == (task_dir / "steps" / "grade" / "tests").resolve()
 
     async def test_final_separate_step_keeps_agent_env_until_verification(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -388,9 +365,7 @@ class TestMultiStepMixedVerifierLifecycle:
             async def stop_agent(delete: bool):
                 events.append("agent_stop")
 
-            async def verifier_start(
-                force_build: bool, *, service_tasks: asyncio.TaskGroup
-            ):
+            async def verifier_start(force_build: bool, *, service_tasks: asyncio.TaskGroup):
                 events.append("verifier_start")
 
             agent_env.stop.side_effect = stop_agent
@@ -415,14 +390,10 @@ class TestMultiStepMixedVerifierLifecycle:
             async def stop_agent(delete: bool):
                 events.append("agent_stop")
 
-            async def build_start(
-                force_build: bool, *, service_tasks: asyncio.TaskGroup
-            ):
+            async def build_start(force_build: bool, *, service_tasks: asyncio.TaskGroup):
                 events.append("build_verifier_start")
 
-            async def grade_start(
-                force_build: bool, *, service_tasks: asyncio.TaskGroup
-            ):
+            async def grade_start(force_build: bool, *, service_tasks: asyncio.TaskGroup):
                 events.append("grade_verifier_start")
 
             agent_env.stop.side_effect = stop_agent
@@ -514,18 +485,31 @@ async def test_physical_nop_writer_preserves_native_public_setup_and_its_failure
     )
     record = await run_negative_control(
         TrialConfig(
-            task=TrialTaskConfig(path=task), trial_name="native-nop", trials_dir=root / "trials",
-            agent=AgentConfig(name="nop"), environment=EnvironmentConfig(type="local"),
+            task=TrialTaskConfig(path=task),
+            trial_name="native-nop",
+            trials_dir=root / "trials",
+            agent=AgentConfig(name="nop"),
+            environment=EnvironmentConfig(type="local"),
         ),
         NegativeControlSource(
-            task_id="task", source_task_sha256="a" * 64, source_task_checksum=checksum,
-            task_sha256="b" * 64, runtime_sha256=None, task_checksum=checksum,
+            task_id="task",
+            source_task_sha256="a" * 64,
+            source_task_checksum=checksum,
+            task_sha256="b" * 64,
+            runtime_sha256=None,
+            task_checksum=checksum,
             execution_requirements=ExecutionRequirements(
-                cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=10, verifier_timeout_sec=10,
+                cpus=1,
+                memory_mb=2048,
+                storage_mb=2048,
+                agent_timeout_sec=10,
+                verifier_timeout_sec=10,
             ),
             verifier_execution_requirements=None,
         ),
-        root, NativeInstructionSetup(block_index=0), HostCapabilities(),
+        root,
+        NativeInstructionSetup(block_index=0),
+        HostCapabilities(),
     )
     assert (root / "original-public-setup.sh").read_text() == public_setup
     assert len(observed) == 1
@@ -538,3 +522,51 @@ async def test_physical_nop_writer_preserves_native_public_setup_and_its_failure
         assert record["trial_result"]["verifier_result"] is None
     else:
         assert record["trial_result"]["verifier_result"]["rewards"] == {"reward": 0}
+
+
+@pytest.mark.parametrize(
+    "verifier_override",
+    [
+        {"import_path": "harbor.verifier.verifier:Verifier"},
+        {"kwargs": {"skip_tests_upload": True}},
+        {"env": {"SOURCE_GRADER_MODE": "always-pass"}},
+    ],
+)
+async def test_physical_nop_writer_rejects_grading_overrides_before_source_setup(tmp_path, verifier_override):
+    task = _single_step_task_with_separate_verifier(tmp_path)
+    (task / "task.toml").write_text(
+        "[agent]\ntimeout_sec=10\n[verifier]\ntimeout_sec=10\n"
+        "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
+    )
+    (task / "instruction.md").write_text("```bash\nprintf source-setup > /workspace/public-marker\n```\n")
+    (task / "tests/test.sh").write_text("echo 0 > /logs/verifier/reward.txt\n")
+    checksum = Task(task).checksum
+    root = tmp_path / "control"
+    config = TrialConfig(
+        task=TrialTaskConfig(path=task),
+        trial_name="native-nop",
+        trials_dir=root / "trials",
+        agent=AgentConfig(name="nop"),
+        environment=EnvironmentConfig(type="local"),
+        verifier=VerifierConfig(**verifier_override),
+    )
+    source = NegativeControlSource(
+        task_id="task",
+        source_task_sha256="a" * 64,
+        source_task_checksum=checksum,
+        task_sha256="b" * 64,
+        runtime_sha256=None,
+        task_checksum=checksum,
+        execution_requirements=ExecutionRequirements(
+            cpus=1,
+            memory_mb=2048,
+            storage_mb=2048,
+            agent_timeout_sec=10,
+            verifier_timeout_sec=10,
+        ),
+        verifier_execution_requirements=None,
+    )
+    with pytest.raises(ValueError, match="cannot override its source grading"):
+        await run_negative_control(config, source, root, NativeInstructionSetup(block_index=0), HostCapabilities())
+    assert not root.exists()
+    assert Task(task).checksum == checksum

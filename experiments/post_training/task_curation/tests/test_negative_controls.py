@@ -37,6 +37,35 @@ def retained_archive(tmp_path, name):
 
 
 @pytest.mark.parametrize(
+    "verifier_override",
+    [
+        {"import_path": "harbor.verifier.verifier:Verifier"},
+        {"kwargs": {"skip_tests_upload": True}},
+        {"env": {"SOURCE_GRADER_MODE": "always-pass"}},
+    ],
+)
+def test_public_nop_receipt_rejects_grading_overrides_with_a_consistent_result_hash(tmp_path, verifier_override):
+    index = json.loads((FIXTURES / "index.json").read_text())["negative"]
+    archive = retained_archive(tmp_path, "negative")
+    original_bytes = archive.read_bytes()
+    task = TaskSpec.model_validate_json(gzip.decompress((FIXTURES / "negative.task-spec.json.gz").read_bytes()))
+    receipt = negative_control_from_archive(
+        ContentEvidenceReference(uri=str(archive), sha256=index["archive_sha256"]),
+        index["control_member"],
+        source_task_sha256="a" * 64,
+        source_task_checksum="b" * 64,
+        execution_requirements=task.execution_requirements,
+    )
+    document = receipt.model_dump(mode="json")
+    result = document["trial"]["result"]
+    result["config"]["verifier"] = {**result["config"].get("verifier", {}), **verifier_override}
+    document["trial"]["result_sha256"] = canonical_sha256(result)
+    with pytest.raises(ValueError, match="cannot override its source grading"):
+        OracleNegativeControlReceipt.model_validate_json(json.dumps(document))
+    assert archive.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize(
     "name", ["tau-prepared", "language-mixing-prepared", "tau-missing-lock", "language-mixing-missing-lock"]
 )
 def test_production_taskspec_nop_preparation_archives_preserve_failed_setup_and_scored_negatives(tmp_path, name):

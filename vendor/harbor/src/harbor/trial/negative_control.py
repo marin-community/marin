@@ -18,6 +18,7 @@ from taskcompendium.harbor.negative_control import (
     NegativeControlSetupKind,
     NegativeControlSource,
     public_task_preparation,
+    require_nop_trial_config,
 )
 from taskcompendium.identity import canonical_sha256
 
@@ -35,35 +36,7 @@ def _write_json(path: Path, value: dict) -> None:
 
 
 def _require_nop_configuration(config: TrialConfig, source: NegativeControlSource, task: Task) -> None:
-    agent = config.agent
-    if agent.name != "nop" or any(
-        getattr(agent, name) for name in ("model_name", "model_alias", "kwargs", "env", "skills", "mcp_servers")
-    ):
-        raise ValueError("A physical negative control requires the unmodified nop agent")
-    if (
-        config.timeout_multiplier != 1
-        or config.agent_timeout_multiplier not in (None, 1)
-        or config.verifier_timeout_multiplier not in (None, 1)
-        or agent.override_timeout_sec is not None
-        or agent.max_timeout_sec is not None
-        or config.verifier.override_timeout_sec is not None
-        or config.verifier.max_timeout_sec is not None
-        or config.verifier.disable
-        or config.artifacts
-        or config.extra_instruction_paths
-    ):
-        raise ValueError("A physical negative control cannot override its task or phase budgets")
-    environment = config.environment
-    if (
-        environment.force_build
-        or environment.mounts
-        or environment.env
-        or any(
-            getattr(environment, name) is not None
-            for name in ("override_cpus", "override_memory_mb", "override_storage_mb", "override_gpus", "override_tpu")
-        )
-    ):
-        raise ValueError("A physical negative control cannot override its source environment")
+    require_nop_trial_config(config.model_dump(mode="json"))
     shape = source.execution_requirements
     if (
         any(

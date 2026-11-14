@@ -36,6 +36,40 @@ class NativeInstructionSetup(BaseModel):
     block_index: int = Field(ge=0)
 
 
+def require_nop_trial_config(config: dict) -> None:
+    """Reject actor, environment, grading and timeout overrides in a physical control."""
+    agent = config.get("agent") or {}
+    environment = config.get("environment") or {}
+    verifier = config.get("verifier") or {}
+    if agent.get("name") != "nop" or any(
+        agent.get(name) for name in ("model_name", "model_alias", "kwargs", "env", "skills", "mcp_servers")
+    ):
+        raise ValueError("A physical negative control requires the unmodified nop agent")
+    if (
+        config.get("timeout_multiplier", 1) != 1
+        or config.get("agent_timeout_multiplier") not in (None, 1)
+        or config.get("verifier_timeout_multiplier") not in (None, 1)
+        or any(
+            agent.get(name) is not None
+            for name in ("override_timeout_sec", "override_setup_timeout_sec", "max_timeout_sec")
+        )
+        or any(verifier.get(name) is not None for name in ("override_timeout_sec", "max_timeout_sec", "import_path"))
+        or verifier.get("disable")
+        or verifier.get("kwargs")
+        or verifier.get("env")
+        or config.get("artifacts")
+        or config.get("extra_instruction_paths")
+        or environment.get("force_build")
+        or environment.get("mounts")
+        or environment.get("env")
+        or any(
+            environment.get(name) is not None
+            for name in ("override_cpus", "override_memory_mb", "override_storage_mb", "override_gpus", "override_tpu")
+        )
+    ):
+        raise ValueError("A physical negative control cannot override its source grading, environment or budgets")
+
+
 def public_task_preparation(task: TaskSpec) -> dict:
     """Describe the environment and files installed before a TaskSpec actor starts."""
     return {
