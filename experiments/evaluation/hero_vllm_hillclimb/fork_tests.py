@@ -37,7 +37,7 @@ from experiments.evaluation.hero_vllm_hillclimb.arm import OUTPUT_ROOT, RELEASES
 
 CLUSTER = "cw-us-east-08a"
 TEST_ROOT = "/tmp/vllm-fork-tests"
-TEST_REQUIREMENTS = ("pytest", "anthropic")
+TEST_REQUIREMENTS = ("pytest", "pytest-asyncio", "anthropic", "tblib", "pillow")
 
 
 def run_fork_tests(release: VllmGpuRelease, tests_tgz: str, output_uri: str, pytest_args: tuple[str, ...]) -> None:
