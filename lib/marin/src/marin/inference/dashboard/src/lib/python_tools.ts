@@ -20,7 +20,7 @@ interface ModelToolCall {
 
 export type ModelMessage =
   | { role: 'system' | 'user'; content: string }
-  | { role: 'assistant'; content: string; tool_calls?: ModelToolCall[] }
+  | { role: 'assistant'; content: string; reasoning?: string; tool_calls?: ModelToolCall[] }
   | { role: 'tool'; name: string; tool_call_id: string; content: string }
 
 /** Build structured history for the served model's active chat template. */
@@ -34,6 +34,10 @@ export function modelMessages(conversation: Conversation): ModelMessage[] {
         role: 'assistant',
         content: message.content,
       }
+      // Return earlier reasoning so the template decides whether to render it: Marin SFT data keeps
+      // every turn's thinking, and the model stops thinking when its history has none. Use `reasoning`:
+      // vLLM chat completions also accept the deprecated `reasoning_content`, but /tokenize drops it.
+      if (message.thinking) assistant.reasoning = message.thinking
       if (message.toolCalls?.length) assistant.tool_calls = message.toolCalls.map(modelToolCall)
       request.push(assistant)
     } else if (message.role === 'tool') {
