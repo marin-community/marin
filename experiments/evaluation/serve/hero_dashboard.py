@@ -12,7 +12,7 @@ Example::
 
     PARALLEL_API_KEY=... uv run python -m experiments.evaluation.serve.hero_dashboard \\
       --weights s3://marin-us-east-02a/marin/exports/... --model-id hero-sft-step400407 \\
-      --name hero-sft-step400407-bf16 --nodes 4 --max-model-len 262144 --quantization none \\
+      --name hero-sft-step400407-bf16 --nodes 4 --max-model-len 262144 --quantization none --default-thinking enabled \\
       --tokenizer marin-community/marin-tokenizer-tools --tokenizer-revision <commit> \\
       --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
 """
@@ -97,6 +97,15 @@ class Quantization(StrEnum):
     FP8 = "fp8"
 
 
+class DefaultThinking(StrEnum):
+    """Server-side ``enable_thinking`` for chat requests that do not set it; a request's own value wins."""
+
+    # Send nothing: MARIN_CHAT_TEMPLATE then omits the "Reasoning:" header, and the SFT model answers without thinking.
+    TEMPLATE = "template"
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+
+
 @dataclass(frozen=True)
 class HeroDashboardConfig:
     """One Hero dashboard deployment: weights, tokenizer, served name, endpoint, gang size and lifetime.
@@ -113,6 +122,7 @@ class HeroDashboardConfig:
     tokenizer_revision: str
     lifetime_hours: float | None
     quantization: Quantization
+    default_thinking: DefaultThinking
 
     @property
     def data_parallel_size(self) -> int:
@@ -146,6 +156,9 @@ def _vllm_args(config: HeroDashboardConfig, task_index: int, primary_host: str, 
     )
     if config.quantization is Quantization.FP8:
         args += ("--quantization", "fp8")
+    if config.default_thinking is not DefaultThinking.TEMPLATE:
+        enable_thinking = config.default_thinking is DefaultThinking.ENABLED
+        args += ("--default-chat-template-kwargs", json.dumps({"enable_thinking": enable_thinking}))
     if task_index:
         args += ("--headless", "--data-parallel-start-rank", str(task_index * GPUS_PER_NODE))
     return args
@@ -256,6 +269,7 @@ def _serve_dashboard(config: HeroDashboardConfig, environment: VllmEnvironment, 
         "cuda_graph_mode": COMPILATION_CONFIG["cudagraph_mode"],
         "max_model_len": str(config.max_model_len),
         "quantization": config.quantization.value,
+        "default_thinking": config.default_thinking.value,
         "streaming": "true",
         PROXY_TIMEOUT_METADATA_KEY: str(REQUEST_TIMEOUT_SECONDS),
     }
@@ -307,6 +321,12 @@ _PRIORITIES = {
     required=True,
     help="Online weight quantization; fp8 needs no separate export.",
 )
+@click.option(
+    "--default-thinking",
+    type=click.Choice([mode.value for mode in DefaultThinking]),
+    required=True,
+    help="enable_thinking for chat requests that omit it; 'template' leaves it to the chat template.",
+)
 @click.option("--lifetime-hours", type=float, help="Serve this long, then exit; omit to serve until cancelled.")
 @click.option("--cluster", default="marin", show_default=True)
 @click.option("--target-cluster", default="cw-us-east-08a", show_default=True)
@@ -328,6 +348,7 @@ def main(
     tokenizer: str,
     tokenizer_revision: str,
     quantization: str,
+    default_thinking: str,
     lifetime_hours: float | None,
     cluster: str,
     target_cluster: str,
@@ -349,6 +370,7 @@ def main(
         tokenizer_revision=tokenizer_revision,
         lifetime_hours=lifetime_hours,
         quantization=Quantization(quantization),
+        default_thinking=DefaultThinking(default_thinking),
     )
     resources = ResourceConfig.with_gpu(
         "GB200",
