@@ -323,5 +323,46 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/identity-following.json",
       "sha256": "8da84b0b7a200d840ac09fcc310af3d10723e9c77f64ec8551b3383440ae5545"
     }
+  },
+  "TaskTrove:GAIR__OpenSWE__openswe_oss": {
+    "source_id": "TaskTrove:GAIR__OpenSWE__openswe_oss",
+    "input": {
+      "dataset_id": "open-athena/task-trove-gair-openswe-openswe-oss-658e9af0-taskcompendium-20261112",
+      "dataset_revision": "4e04b64825c93f2247eb6ef105d2129eb6419cb2",
+      "converter_version": "2026.11.12.1",
+      "converter_revision": "bd0ca09ef25d27bae269ac52212934b77d8a6a82fc086f53dd36e668e046d612",
+      "measured_tasks": 36884,
+      "task_specs_sha256": "79eda3984fdc665d2968183064d0477acaa1fb09810a8129c1cf78b16c26e6ad",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/6e4e5da8db3735a37590/2026.11.12.4/.artifact.json"
+    },
+    "contract_index": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/6e4e5da8db3735a37590/2026.11.12.2/attempts/18fc76441d254bc2904bd1a2936778c8/contracts.parquet",
+      "sha256": "13ca67e6473414b0bfc128cc351e9e6370b7293e2be10f19b8031f54a4e192b1"
+    },
+    "review_receipt": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/6e4e5da8db3735a37590/attempts/0f7e1522de0f44c5bc04ed880417a59e/.artifact.json",
+      "sha256": "40d48dc66b5a202e89be93877fe80cb8ffdd9d121ee88d379a3c6d19c96d4d4b"
+    },
+    "records": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/6e4e5da8db3735a37590/attempts/0f7e1522de0f44c5bc04ed880417a59e/reviews.parquet",
+      "sha256": "a94e607cba6e450ee3cc165c98200a92254e8700d907ace9ed799fed6fa2d19b"
+    },
+    "result": {
+      "reviewed": 36828,
+      "issue_count": 3805,
+      "issues": [],
+      "repair_recommendation": "Inspect all task-level issue evidence and qualify repairs with renewed QA. Resolve unavailable and uncertain observations before source-wide conclusions.",
+      "unavailable_count": 9,
+      "uncertain_count": 47,
+      "sample_count": 36884,
+      "issue_rate": 0.1033181275116759,
+      "verdict": "some_issues"
+    },
+    "coverage_complete": false,
+    "finalization": "accepted_incomplete",
+    "waiver": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/openswe.json",
+      "sha256": "d18666899d9901581ca8deb8e2999a005e1af924edd1b64e4f00a37be15bee66"
+    }
   }
 }
