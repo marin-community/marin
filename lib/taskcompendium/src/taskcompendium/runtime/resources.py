@@ -5,7 +5,7 @@
 
 import base64
 
-from taskcompendium.models import InlineFile, TaskResource
+from taskcompendium.models import InlineFile, TaskResource, TaskSpec
 
 
 def inline_resource(path: str, data: bytes) -> TaskResource:
@@ -16,3 +16,11 @@ def inline_resource(path: str, data: bytes) -> TaskResource:
 def resource_bytes(resource: TaskResource) -> bytes:
     """Decode a validated inline resource."""
     return base64.b64decode(resource.source.content_base64, validate=True)
+
+
+def has_oracle_solution(task: TaskSpec) -> bool:
+    resources = task.resources
+    return any(
+        resource.path.startswith("solution/")
+        for resource in (*resources.all, *resources.worker, *resources.verifier, *resources.oracle)
+    )

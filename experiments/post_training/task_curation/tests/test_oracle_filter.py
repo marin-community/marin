@@ -13,10 +13,12 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.oracle_filter import NoOracleLivenessReceipt, OracleExclusionReason, require_oracle_filter
+from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation.oracle_filter import (
@@ -232,10 +234,20 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         collect_trials(tmp_path / "jobs")
 
 
-@pytest.mark.parametrize(("declared", "native_declared"), [(True, True), (False, False), (False, True)])
-@pytest.mark.parametrize("canonical", [False, True])
+@pytest.mark.parametrize(
+    ("declared", "native_declared", "canonical", "task_spec_package"),
+    [
+        (True, True, False, False),
+        (True, True, True, False),
+        (False, False, False, False),
+        (False, False, True, False),
+        (False, True, False, False),
+        (False, True, True, False),
+        (False, False, True, True),
+    ],
+)
 def test_population_calibration_doubles_missing_limits_but_preserves_swe_declarations(
-    tmp_path, monkeypatch, declared, native_declared, canonical
+    tmp_path, monkeypatch, declared, native_declared, canonical, task_spec_package
 ):
     row = prebuilt_task("task")
     envelope = json.loads(row["lowered_task_spec"])
@@ -256,11 +268,15 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
     if canonical:
         serialized = task.model_dump_json()
         row = {"path": task.id, "task_spec": serialized, "task_sha256": hashlib.sha256(serialized.encode()).hexdigest()}
+        if task_spec_package:
+            row["runtime"] = json.dumps(envelope["runtime"])
     cohort = tmp_path / "tasks.parquet"
     pq.write_table(pa.Table.from_pylist([row]), cohort)
     native = tmp_path / "native" / "task"
+    if task_spec_package:
+        write_harbor_task(task, native, INITIAL_REQUIREMENTS)
     for folder in ("environment", "tests", "solution"):
-        (native / folder).mkdir(parents=True)
+        (native / folder).mkdir(parents=True, exist_ok=True)
     (native / "instruction.md").write_text("Solve the task.")
     (native / "tests/test.sh").write_text("true\n")
     (native / "solution/solve.sh").write_text("true\n")
@@ -270,6 +286,10 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         if native_declared
         else "[environment]\n"
     )
+    if task_spec_package:
+        (native / "task.toml").write_text(
+            '[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\nenvironment_mode="separate"\n'
+        )
     native_document = (native / "task.toml").read_bytes()
     mapping = tmp_path / "map.json"
     write_task_map(cohort, native.parent, mapping)
@@ -283,6 +303,8 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         package = Path(config["task"]["path"])
         shape = native_requirements(package)
         shapes.append(shape)
+        if task_spec_package:
+            assert TaskSpec.model_validate_json((package / "task-spec.json").read_text()) == task
         config["resolved_timeouts"] = {
             "agent": shape.agent_timeout_sec,
             "verifier": shape.verifier_timeout_sec,
@@ -352,5 +374,7 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         else:
             retained = TaskSpec.model_validate(json.loads(retained_row["lowered_task_spec"])["task"])
         assert retained.execution_requirements.memory_mb == 4096
-        assert require_oracle_filter(retained, receipt, None if canonical else envelope["runtime"])
+        assert require_oracle_filter(
+            retained, receipt, None if canonical and not task_spec_package else envelope["runtime"]
+        )
         assert len(entry.calibration.attempts) == 2

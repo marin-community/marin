@@ -44,4 +44,6 @@ def contamination(declaration: dict[str, Any]) -> Contamination:
         and receipt.release.format == "taskcompendium"
     ):
         return Contamination.REMEDIATED
+    if intended_use(declaration) == "unknown":
+        return Contamination.NOT_MEASURED
     return Contamination.REMEDIATION_REQUIRED

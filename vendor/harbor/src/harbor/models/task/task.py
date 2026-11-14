@@ -76,7 +76,7 @@ class Task:
         else:
             self.name = self.paths.task_dir.name
 
-        if not disable_verification:
+        if not disable_verification and not self.paths.task_spec_path.is_file():
             self._validate_tests(self.config, self.paths)
         if self.has_steps:
             self.instruction = ""
@@ -112,6 +112,8 @@ class Task:
         except (OSError, tomllib.TOMLDecodeError, ValidationError):
             return False
 
+        if paths.task_spec_path.is_file():
+            return not config.steps and paths.instruction_path.exists()
         if disable_verification:
             if config.steps:
                 return all(

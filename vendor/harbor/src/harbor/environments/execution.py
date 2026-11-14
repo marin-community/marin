@@ -9,6 +9,13 @@ from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, ExecResult, Sandbo
 from shellbox.machine import Command, ExitReason, Machine, ResourceLimit, ResourceLimitExceeded
 
 
+def root_command_user(user: str | int | None) -> str:
+    """Resolve root aliases to the numeric identity supported by prepared images."""
+    if user is None or str(user) in {"root", "0", "0:0"}:
+        return "0"
+    raise ValueError("Prepared sandboxes support only root commands")
+
+
 async def execute_shellbox_command(
     machine: Machine,
     command: str,

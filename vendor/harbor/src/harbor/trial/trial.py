@@ -252,10 +252,21 @@ class Trial(ABC):
         guest_environment: Mapping[str, str] = {},
     ) -> "Trial":
         task = await cls._load_task(config)
-        if task.has_steps:
+        if task.paths.task_spec_path.is_file():
+            # TaskSpec execution requires the optional taskcompendium extra.
+            from harbor.trial.taskcompendium import TaskSpecTrial  # noqa: PLC0415
+
+            trial: Trial = TaskSpecTrial(
+                config,
+                _task=task,
+                _attempt_index=attempt_index,
+                host_capabilities=host_capabilities,
+                guest_environment=guest_environment,
+            )
+        elif task.has_steps:
             from harbor.trial.multi_step import MultiStepTrial
 
-            trial: Trial = MultiStepTrial(
+            trial = MultiStepTrial(
                 config,
                 _task=task,
                 _attempt_index=attempt_index,

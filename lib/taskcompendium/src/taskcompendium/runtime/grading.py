@@ -50,6 +50,7 @@ from taskcompendium.models import (
     VerifierCommand,
     VerifyitGrader,
     grader_workspace,
+    judge_spec,
     under_grader_root,
     validate_output_paths,
     verifyit_answer_file,
@@ -581,12 +582,13 @@ async def _grade_staged(
                     prepared = replace(prepared, workdir=grading.workspace)
                 if attempt.stop_reason is not None:
                     prepared = replace(prepared, env={**prepared.env, "TASKCOMPENDIUM_STOP_REASON": attempt.stop_reason})
-                if isinstance(grading.grader, ScriptGrader) and grading.grader.judge is not None:
+                judge = judge_spec(grading.grader)
+                if judge is not None:
                     if judge_connection is None:
-                        raise ValueError("A script judge requires an explicit connection")
-                    model = grading.grader.judge.model.strip() or (judge_connection.default_model or "").strip()
+                        raise ValueError("A sandbox judge requires an explicit connection")
+                    model = judge.model.strip() or (judge_connection.default_model or "").strip()
                     if not model:
-                        raise ValueError("A script judge requires an explicit model")
+                        raise ValueError("A sandbox judge requires an explicit model")
                     prepared = replace(
                         prepared,
                         env={
