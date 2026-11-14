@@ -305,11 +305,13 @@ counts remain Pending. Backend requirement fit alone does not establish executio
 
 After the package release, load the complete catalog with the
 [catalog loader](#updating-atlas), using the explicit preview app ID above.
-Use the [curriculum loader](#curriculum-coverage) twice: first pass the deployment's
-pre-remediation `release.json` and `coverage.json`, then the retained pair.
-Each successful load selects its release and retains the previous selection,
-so this order makes retained coverage primary and pre-remediation coverage previous
-evidence. Keep the exact input URIs and hashes in the deployment record.
+Use the [curriculum loader](#curriculum-coverage) to select the verified live-source
+`release.json` and `coverage.json`. Preserve the existing retained 59-source load
+as the previous selectable release. On a new app, load that retained pair before
+the live-source pair. Older pre-remediation and archived all-source artifacts
+remain immutable historical evidence in the SHA-bound provenance receipt; they
+are not additional selectable releases. Keep exact input URIs and hashes in the
+deployment record.
 
 Production remains on hold. Before a production release, the shared runtime must
 carry these canonical modules natively; this preview staging command always targets
@@ -659,7 +661,10 @@ sample, and `/source-duplicates` returns review provenance, opinions and groups.
 Choose a domain from the picker or open an area to see its topics and skills.
 Breadcrumbs return to parent areas or all domains. Search names and descriptions
 across the curriculum, and filter counts by source or training/evaluation use.
-The URL preserves the selected area, release and filters. The coverage-population picker keeps the retained release primary and makes the previous pre-remediation release available as evidence. Select a count to read sampled
+The URL preserves the selected area, release and filters. The coverage-population
+picker shows the selected live-source release and the previous retained 59-source
+release. Older pre-remediation and archived all-source artifacts remain historical
+evidence through their SHA-bound provenance receipts. Select a count to read sampled
 examples, then open an example for its public instruction preview, embedding
 text, cosine similarity to curriculum anchors and alternative matches.
 Long instruction previews record the original character count and truncation.

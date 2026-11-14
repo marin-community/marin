@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import LexicalUse, SourceDeclaration, SourceOrigin, source_identifier
+from finestore.rl.curation import LexicalUse, SourceDeclaration, SourceOrigin, SourceUse, source_identifier
 from finestore.schema import arrow_schema
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
@@ -285,7 +285,10 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
         source_manifest=reference(tmp_path / "repaired/manifest.json"),
         public_inputs=reference(tmp_path / "repaired/public-inputs.json"),
     )
-    current = [declarations[0].model_copy(update={"notes": "New content review"}), changed]
+    current = [
+        declarations[0].model_copy(update={"notes": "New content review", "intended_use": SourceUse.TRAIN}),
+        changed,
+    ]
     (tmp_path / "uses.json").write_text(json.dumps([row.model_dump(mode="json") for row in use_bindings(current)]))
     (tmp_path / "live.json").write_text(json.dumps([row.model_dump(mode="json") for row in current]))
     (tmp_path / "retirements.json").write_text(
@@ -371,13 +374,16 @@ def test_projection_cannot_silently_drop_a_live_source_or_restore_a_retired_sour
             )
 
 
-@pytest.mark.parametrize("changed", ["pin", "use"])
+@pytest.mark.parametrize("changed", ["pin", "use", "declaration"])
 def test_registered_use_must_match_the_current_pin_and_archived_role(archived, changed):
     archive, declarations, _, _ = archived
     inventory = declarations[:2]
     bindings = use_bindings(inventory)
-    bindings[0] = bindings[0].model_copy(
-        update={"dataset_revision": "different"} if changed == "pin" else {"use": LexicalUse.EVAL}
-    )
-    with pytest.raises(ValueError, match=r"different converter or dataset pin|population or intended use"):
+    if changed == "declaration":
+        inventory[0] = inventory[0].model_copy(update={"intended_use": SourceUse.EVAL})
+    else:
+        bindings[0] = bindings[0].model_copy(
+            update={"dataset_revision": "different"} if changed == "pin" else {"use": LexicalUse.EVAL}
+        )
+    with pytest.raises(ValueError, match=r"different converter or dataset pin|population or intended use|Declared Use"):
         projection_selection(archive, inventory, frozenset({declarations[2].id}), (), source_uses=bindings)

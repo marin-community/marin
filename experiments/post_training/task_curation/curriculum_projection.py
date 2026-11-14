@@ -54,6 +54,7 @@ METADATA_FIELDS = frozenset(
         "quality_result_finalization",
         "quality_result_waiver",
         "independent_qc",
+        "intended_use",
         "notes",
         "status",
     }
@@ -134,6 +135,8 @@ def projection_selection(
         ) != (declaration.dataset_id, declaration.dataset_revision, declaration.pipeline.version):
             raise ValueError(f"Registered Use belongs to a different converter or dataset pin: {identifier}")
         expected_use = "train" if binding.use is LexicalUse.TRAIN else "eval"
+        if declaration.intended_use is not None and declaration.intended_use.value != expected_use:
+            raise ValueError(f"Declared Use differs from the registered converter: {identifier}")
         if source.basis != "matched" or source.intended_use != expected_use:
             raise ValueError(f"Projection changes a source's population or intended use: {identifier}")
         if identifier in replacements:
