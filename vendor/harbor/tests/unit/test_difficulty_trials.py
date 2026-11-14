@@ -195,6 +195,38 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory)}),
     ]})
     source_path.write_text(json.dumps([available.model_dump(mode="json")]))
+    previous_root = campaign
+    if workload == "task_spec" and upstream_failure is None:
+        original_relay = difficulty_trials.budget_relay
+
+        def broken_relay(**kwargs):
+            raise RuntimeError("framework failure before visiting sources")
+
+        async def broken_dispatch(configuration, authentication):
+            raise RuntimeError("framework failure before source aggregate")
+
+        for phase in ("relay", "dispatch"):
+            interrupted = tmp_path / f"interrupted-{phase}"
+            interrupted.mkdir()
+            (interrupted / "prepared.json").write_text(json.dumps({
+                "source_queue_sha256": "1" * 64, "sources": [available.model_dump(mode="json")],
+            }))
+            (interrupted / "serving.json").write_bytes(serving_bytes)
+            monkeypatch.setattr(difficulty_trials, "budget_relay", broken_relay if phase == "relay" else original_relay)
+            monkeypatch.setattr(difficulty_trials, "execute_trial", broken_dispatch)
+            monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
+                                            "--output-root", str(interrupted / "trials"),
+                                            "--local-root", str(tmp_path / f"interrupted-{phase}-local"),
+                                            "--previous-campaign", str(previous_root),
+                                            "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
+                                            "--source-queue-sha256", "1" * 64])
+            with pytest.raises(RuntimeError, match="framework failure"):
+                difficulty_trials.main()
+            assert (interrupted / "trials/model-requests-final.json").exists()
+            assert not list((interrupted / "trials").glob("*/attempts.json"))
+            previous_root = interrupted
+        monkeypatch.setattr(difficulty_trials, "budget_relay", original_relay)
+        monkeypatch.setattr(difficulty_trials, "execute_trial", physical_trial)
     second = tmp_path / "continuation"
     second.mkdir()
     (second / "prepared.json").write_text(json.dumps({
@@ -203,7 +235,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     (second / "serving.json").write_bytes(serving_bytes)
     monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
                                     "--output-root", str(second / "trials"), "--local-root", str(tmp_path / "continued-local"),
-                                    "--previous-campaign", str(campaign), "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
+                                    "--previous-campaign", str(previous_root), "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
                                     "--source-queue-sha256", "1" * 64])
     if workload == "native" and legacy_buffer:
         with pytest.raises(ValueError, match="Native continuation requires"):
