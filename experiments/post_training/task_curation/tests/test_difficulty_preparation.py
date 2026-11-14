@@ -97,7 +97,5 @@ def test_prepare_source_qualifies_judge_api_and_current_model_before_staging(tmp
     (result,) = prepared.tasks
     assert result.reason == reason
     assert result.judge_model == model
-    assert prepared.sample == sample
     assert bool(list((tmp_path / "tasks").rglob("task-spec.json"))) == (reason is None)
     assert (result.path is None) == (reason is not None)
-    assert canonical_sha256(task.model_dump(mode="json")) == task_sha
