@@ -3,6 +3,7 @@
 
 """TaskTrove math, question-answering, instruction-following and judged-response declarations."""
 
+import hashlib
 import io
 import json
 import tarfile
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from taskcompendium.convert.answers import source_evidence
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     ConversationTrace,
@@ -44,6 +46,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import (
     judged,
     multichallenge,
     puzzles,
+    puzzles_qa,
     qa,
 )
 from experiments.post_training.task_curation.datasets.tasktrove import math as math_sources
@@ -67,6 +70,7 @@ RECIPES = {
         instruction_following.sources,
         multichallenge.sources,
         puzzles.sources,
+        puzzles_qa.sources,
     )
     for source in candidates()
 }
@@ -236,6 +240,29 @@ def puzzle_row(gold: dict) -> dict:
         "Sort these words in ascending ASCII order as a comma-separated list: chair, Defect, Salt"
     )
     return tasktrove_row({"instruction.md": instruction.encode(), "tests/gold.json": json.dumps(gold).encode()})
+
+
+def puzzle_qa_row(
+    gold: dict,
+    answer: str,
+    *,
+    instruction: str | None = None,
+    script: bytes | None = None,
+) -> dict:
+    """A puzzle archive whose original oracle writes a literal answer to /app/answer.txt."""
+    instruction = instruction or (
+        "# Alphabetical Sorting Puzzle\n\nWrite ONLY your final answer to **`/app/answer.txt`** (a single line). "
+        "The verifier reads that file and compares it to the gold answer.\n\n"
+        "Sort these words in ascending ASCII order as a comma-separated list: chair, Defect, Salt"
+    )
+    solve_sh = script or (f"#!/usr/bin/env bash\nmkdir -p /app\nprintf '%s\\n' '{answer}' > /app/answer.txt\n").encode()
+    return tasktrove_row(
+        {
+            "instruction.md": instruction.encode(),
+            "tests/gold.json": json.dumps(gold).encode(),
+            "solution/solve.sh": solve_sh,
+        }
+    )
 
 
 ROWS: dict[str, dict] = {
@@ -727,6 +754,86 @@ def test_puzzles_grade_by_answer_type_and_pass_their_reference(gold, expected):
 @pytest.mark.parametrize("gold", [{"gold": "", "answer_type": "exact"}, {"gold": "x", "answer_type": "regex"}])
 def test_puzzles_reject_unusable_keys(gold):
     assert rejection_of("tasktrove-puzzles", puzzle_row(gold)).reason == "invalid_puzzle_key"
+
+
+@pytest.mark.parametrize(
+    "gold,answer,expected",
+    [
+        (
+            {"gold": "Defect, Salt, chair", "answer_type": "ordered_list"},
+            "Defect, Salt, chair",
+            ExactSpec(("Defect", "Salt", "chair")),
+        ),
+        ({"gold": "41.634", "answer_type": "number"}, "41.634", MathSpec("41.634")),
+        ({"gold": "undetermined", "answer_type": "choice"}, "undetermined", ExactSpec(("undetermined",))),
+        ({"gold": "(6.105, 1.474)", "answer_type": "coords"}, "(6.105, 1.474)", MathSpec("(6.105, 1.474)")),
+    ],
+)
+def test_puzzle_qa_grades_the_extracted_oracle_reference(gold, answer, expected):
+    task = task_of("tasktrove-puzzles-qa", puzzle_qa_row(gold, answer))
+    assert isinstance(task.grader, VerifyitGrader)
+    assert verifyit_spec(task.grader) == expected
+    assert "Return ONLY your final answer in the assistant response" in prompt_of(task)
+    assert task.environment_requirements == EnvironmentRequirements()
+    golden = reference_reply(task)
+    assert golden is not None
+    assert grade_reply(task, golden) == 1.0
+    assert grade_reply(task, answer_reply(task, "__incorrect_answer__")) == 0.0
+
+
+def test_puzzle_qa_keeps_oracle_lineage_and_declared_contract():
+    script = b"#!/usr/bin/env bash\nmkdir -p /app\nprintf '%s\\n' 'Defect, Salt, chair' > /app/answer.txt\n"
+    row = puzzle_qa_row(
+        {"gold": "Defect, Salt, chair", "answer_type": "ordered_list"}, "Defect, Salt, chair", script=script
+    )
+    task = task_of("tasktrove-puzzles-qa", row)
+    evidence = source_evidence(task)
+    assert evidence["extraction"] == "literal_printf_template"
+    assert evidence["solve_sh_path"] == "solution/solve.sh"
+    assert evidence["extracted_answer"] == "Defect, Salt, chair"
+    assert evidence["solve_sh_sha256"] == hashlib.sha256(script).hexdigest()
+    assert evidence["task_id"] == task.id
+
+
+def test_puzzle_qa_rejects_a_computed_oracle():
+    script = b"#!/usr/bin/env bash\nmkdir -p /app\n" b"printf '%s\\n' \"$(python3 -c 'print(6*7)')\" > /app/answer.txt\n"
+    rejection = rejection_of(
+        "tasktrove-puzzles-qa",
+        puzzle_qa_row({"gold": "42", "answer_type": "number"}, "42", script=script),
+    )
+    assert (rejection.kind, rejection.reason) == (ImportFailureKind.UNSUPPORTED, "oracle_answer_not_extractable")
+
+
+def test_puzzle_qa_rejects_a_missing_oracle():
+    instruction = "# Puzzle\n\nWrite ONLY your final answer to **`/app/answer.txt`** (a single line).\n"
+    row = tasktrove_row(
+        {
+            "instruction.md": instruction.encode(),
+            "tests/gold.json": json.dumps({"gold": "42", "answer_type": "number"}).encode(),
+        }
+    )
+    rejection = rejection_of("tasktrove-puzzles-qa", row)
+    assert (rejection.kind, rejection.reason) == (ImportFailureKind.SOURCE_DEFECT, "missing_input")
+
+
+def test_puzzle_qa_rejects_an_answer_that_disagrees_with_the_declared_key():
+    rejection = rejection_of(
+        "tasktrove-puzzles-qa",
+        puzzle_qa_row({"gold": "40", "answer_type": "number"}, "42"),
+    )
+    assert (rejection.kind, rejection.reason) == (
+        ImportFailureKind.SOURCE_DEFECT,
+        "oracle_answer_disagrees_with_declared_key",
+    )
+    assert "42" in rejection.detail and "40" in rejection.detail
+
+
+def test_puzzle_qa_accepts_member_normalized_list_joins():
+    task = task_of(
+        "tasktrove-puzzles-qa",
+        puzzle_qa_row({"gold": "Defect, Salt, chair", "answer_type": "ordered_list"}, "Defect,Salt,chair"),
+    )
+    assert verifyit_spec(task.grader) == ExactSpec(("Defect", "Salt", "chair"))
 
 
 def test_multichallenge_judges_each_source_requirement_against_the_conversation():
