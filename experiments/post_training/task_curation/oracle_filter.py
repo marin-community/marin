@@ -182,7 +182,19 @@ def receipt_from_trial(
 def harbor_inspection(kind: str, paths: list[str]) -> dict:
     """Validate in Harbor's locked runtime without importing it into the curation environment."""
     result = subprocess.run(
-        ["uv", "run", "--project", str(HARBOR_PROJECT), "--frozen", "python", "-m", "harbor.cli.curation_inspect", kind],
+        [
+            "uv",
+            "run",
+            "--project",
+            str(HARBOR_PROJECT),
+            "--frozen",
+            "--extra",
+            "taskcompendium",
+            "python",
+            "-m",
+            "harbor.cli.curation_inspect",
+            kind,
+        ],
         input=json.dumps(paths),
         text=True,
         capture_output=True,
