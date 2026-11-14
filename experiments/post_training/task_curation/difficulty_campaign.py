@@ -15,7 +15,6 @@ from pathlib import Path
 
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SOLVER_THINKING, Solver
 from huggingface_hub import hf_hub_download
-from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.serving_config import inference_config_for_model
@@ -105,9 +104,6 @@ def solver_endpoint(solver: Solver):
         yield resolve_glm_base_url(GLM_RELAY_JOB), GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), []
         return
     definition = serving_model(solver)
-    parent = get_job_info()
-    if parent is None or parent.worker_region is None or parent.worker_region.lower() != TARGET_REGION:
-        raise ValueError("Difficulty serving requires a coordinator already placed in cw-rno2a/RNO2A")
     hardware = AcceleratorChoice(
         Platform.GPU, gpu_type="H100", gpu_count=PINS[solver].gpus, target_cluster=TARGET_CLUSTER
     )
