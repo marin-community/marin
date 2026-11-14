@@ -13,6 +13,7 @@ import pytest
 import requests
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
+from infra.marina.apps.rl_data_catalog import release_check
 from infra.marina.apps.rl_data_catalog.release_browser import verify_rendered_partition
 from infra.marina.apps.rl_data_catalog.release_check import main
 from infra.marina.apps.rl_data_catalog.release_evidence import projected_sources, task_totals
@@ -64,7 +65,7 @@ def test_release_checker_rejects_population_or_admission_reconciliation_regressi
         verify_rendered_partition(110, 60, shown, admitted, omitted)
 
 
-@pytest.mark.parametrize("failure", ["command", "production"])
+@pytest.mark.parametrize("failure", ["command", "production", "workspace"])
 def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -72,6 +73,13 @@ def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
     baseline.write_text(
         json.dumps(
             {
+                "version": 1,
+                "source_revision": "a" * 40,
+                "preview_base_version": 1,
+                "package": {},
+                "evidence_before": {},
+                "expected_sources": {},
+                "browser": {},
                 "passed": True,
                 "phase": "preflight",
                 "production_version": 76,
@@ -122,6 +130,8 @@ def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
     monkeypatch.setattr(subprocess, "check_output", git_output)
     monkeypatch.setattr(subprocess, "run", process)
     monkeypatch.setattr("requests.Session.request", response)
+    if failure == "workspace":
+        monkeypatch.setattr(release_check, "ROOT", tmp_path)
     with pytest.raises(SystemExit) as exit_code:
         main()
     result = json.loads(receipt.read_text())
@@ -129,6 +139,8 @@ def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
     if failure == "command":
         assert result["commands"][-1]["exit_code"] == 7
         assert Path(result["commands"][-1]["log"]).exists()
-    else:
-        assert result["error"]["type"] == "ValueError"
+    elif failure == "production":
+        assert result["error"]["exception_type"] == "ValueError"
         assert result["error"]["gate"] == "production-version"
+    else:
+        assert result["error"]["gate"] == "workspace-environment"

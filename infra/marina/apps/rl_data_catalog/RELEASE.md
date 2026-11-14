@@ -20,6 +20,10 @@ authenticate with `uv run iris login`, and install Chromium with
 Docker, so a working Docker daemon is required. Alternatively,
 `MARINA_TEST_DATABASE_URL` may point to a test server where the test user can
 create/drop throwaway databases; never set it to a serving database.
+Sync this checkout's own environment with
+`uv sync --frozen --package marin-marina --package marin-dupekit --group test`;
+the deduplication package is needed by the repository-wide type check. Do not reuse editable
+workspace libraries from another worktree.
 
 ## Prepare a landed cut
 

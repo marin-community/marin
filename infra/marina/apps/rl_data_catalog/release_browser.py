@@ -13,7 +13,7 @@ from playwright.sync_api import Page, expect
 
 from .release_evidence import admission_text, task_totals
 
-LAYOUTS = [(theme, width) for theme in ("light", "dark") for width in (1440, 390)]
+LAYOUTS = tuple((theme, width) for theme in ("light", "dark") for width in (1440, 390))
 
 TABLE_BOUNDS = """table => {
  const heads=[...table.tHead.rows[0].cells].map(c=>c.getBoundingClientRect()), failures=[];

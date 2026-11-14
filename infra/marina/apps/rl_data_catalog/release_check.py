@@ -7,6 +7,7 @@ import argparse
 import ast
 import functools
 import hashlib
+import importlib
 import json
 import logging
 import subprocess
@@ -14,6 +15,7 @@ import threading
 import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,15 +26,21 @@ import requests
 from marina.client import applet_query, bearer_token, marina_request, marina_token_provider
 from playwright.sync_api import Route, sync_playwright
 
-from .prepare_preview import APP_SOURCE, IMPORT_RELOCATIONS, oracle_inventory_payload
+from .prepare_preview import APP_SOURCE, IMPORT_RELOCATIONS, PREVIEW_APP_ID, PRODUCTION_APP_ID, oracle_inventory_payload
 from .release_browser import curriculum_sweep, source_sweep
 from .release_evidence import (
-    PREVIEW_ID,
-    PRODUCTION_ID,
     catalog_state,
     json_sha256,
     projected_sources,
     verify_preservation,
+)
+from .release_receipts import (
+    CommandResult,
+    PreflightBaseline,
+    ReleaseFailure,
+    ReleaseInputs,
+    ReleaseReceipt,
+    ReleaseTarget,
 )
 from .server.source_counts import SourceCounts
 
@@ -55,9 +63,21 @@ def landed_cut() -> str:
     return git("rev-parse", "HEAD")
 
 
+def check_workspace_imports() -> None:
+    """Reject editable workspace dependencies resolved from a different checkout."""
+    for name, relative in (
+        ("finestore", "lib/finestore/src/finestore/__init__.py"),
+        ("taskcompendium", "lib/taskcompendium/src/taskcompendium/__init__.py"),
+        ("marina", "infra/marina/src/marina/__init__.py"),
+    ):
+        location = importlib.import_module(name).__file__
+        if location is None or Path(location).resolve() != ROOT / relative:
+            raise ValueError(f"{name} resolves outside this checkout; sync its own virtual environment")
+
+
 def check_package(package: Path, head: str, count_raw: bytes, inventory_raw: bytes) -> dict[str, Any]:
     """Verify preview identity and source/model/count bytes against the landed cut."""
-    if tomllib.loads((package / "applet.toml").read_text())["applet_id"] != PREVIEW_ID:
+    if tomllib.loads((package / "applet.toml").read_text())["applet_id"] != PREVIEW_APP_ID:
         raise ValueError("The package must declare the preview UUID")
     metadata = json.loads((package / "dist/bundled-model-provenance.json").read_text())
     if metadata["source_revision"] != head or metadata["preview_only"] is not True:
@@ -195,13 +215,13 @@ def browser_checks(
             browser.close()
 
 
-def run_command(command: list[str], label: str, artifacts: Path, receipt: dict[str, Any]) -> None:
+def run_command(command: list[str], label: str, artifacts: Path, receipt: ReleaseReceipt) -> None:
     LOGGER.info("Gate: %s", label)
-    receipt["gate"] = label
+    receipt.gate = label
     log = artifacts / f"{label}.log"
     with log.open("x") as output:
         result = subprocess.run(command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT)
-    receipt["commands"].append({"gate": label, "command": command, "exit_code": result.returncode, "log": str(log)})
+    receipt.commands.append(CommandResult(label, command, result.returncode, str(log)))
     if result.returncode:
         raise RuntimeError(f"{label} failed (exit {result.returncode}); see {log}")
 
@@ -213,31 +233,29 @@ def app_details(service_url: str, app_id: str, session: requests.Session) -> dic
     return value
 
 
-def run_checks(args: argparse.Namespace, artifacts: Path, receipt: dict[str, Any]) -> None:
-    receipt["gate"] = "landed-cut"
+def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceipt) -> None:
+    receipt.gate = "workspace-environment"
+    check_workspace_imports()
+    receipt.gate = "landed-cut"
     head = landed_cut()
-    receipt["source_revision"] = head
-    baseline: dict[str, Any] = json.loads(args.baseline.read_text()) if args.baseline else {}
-    if baseline and (baseline["passed"] is not True or baseline["phase"] != "preflight"):
-        raise ValueError("--baseline must be a successful preflight JSON receipt")
-    if baseline and baseline["production_version"] != args.production_version:
+    receipt.source_revision = head
+    baseline = PreflightBaseline.model_validate_json(args.baseline.read_bytes()) if args.baseline else None
+    if baseline and baseline.production_version != args.production_version:
         raise ValueError("The production hold must match the preflight baseline")
-    count_raw = (
-        args.source_counts.read_bytes() if args.source_counts else baseline["inputs"]["source_counts_json"].encode()
-    )
+    if not args.source_counts and baseline is None:
+        raise ValueError("A count manifest or successful preflight baseline is required")
+    count_raw = args.source_counts.read_bytes() if args.source_counts else baseline.inputs.source_counts_json.encode()
     counts = SourceCounts.model_validate_json(count_raw)
-    if baseline and hashlib.sha256(count_raw).hexdigest() != baseline["inputs"]["source_counts_sha256"]:
+    if baseline and hashlib.sha256(count_raw).hexdigest() != baseline.inputs.source_counts_sha256:
         raise ValueError("Hosted count inputs must match the preflight baseline")
-    receipt["inputs"] = {
-        "source_counts_sha256": hashlib.sha256(count_raw).hexdigest(),
-        "source_counts_json": count_raw.decode(),
-    }
+    inputs = ReleaseInputs(hashlib.sha256(count_raw).hexdigest(), count_raw.decode())
+    receipt.inputs = inputs
     package = args.dist.resolve() if args.dist else None
     if package:
-        receipt["gate"] = "package-inputs"
+        receipt.gate = "package-inputs"
         inventory_raw = args.oracle_inventory.read_bytes()
-        receipt["inputs"]["oracle_inventory_sha256"] = hashlib.sha256(inventory_raw).hexdigest()
-        receipt["package"] = check_package(package, head, count_raw, inventory_raw)
+        receipt.inputs = replace(inputs, oracle_inventory_sha256=hashlib.sha256(inventory_raw).hexdigest())
+        receipt.package = check_package(package, head, count_raw, inventory_raw)
         run_command(["uv", "run", "--no-sync", "marina", "validate", str(package)], "package", artifacts, receipt)
     lint_paths = git(
         "ls-files", str(APP_SOURCE), "docs/references/rl-data-atlas.md", "docs/references/task-curation.md"
@@ -275,51 +293,54 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: dict[str, Any
         receipt,
     )
     with requests.Session() as session:
-        receipt["gate"] = "production-version"
-        production = app_details(args.service_url, PRODUCTION_ID, session)
+        receipt.gate = "production-version"
+        production = app_details(args.service_url, PRODUCTION_APP_ID, session)
         if production["current_version"] != args.production_version:
             raise ValueError("Production changed from the explicitly expected revision")
-        details = app_details(args.service_url, PREVIEW_ID, session)
+        details = app_details(args.service_url, PREVIEW_APP_ID, session)
         if details["mode"] != "private":
             raise ValueError("The preview app is no longer private")
         revision = args.revision or details["current_version"]
         provider = marina_token_provider()
-        reader = CatalogReader(f"{args.app_origin.rstrip('/')}/a/{PREVIEW_ID}/v/{revision}/", session)
-        query = applet_query(args.service_url, PREVIEW_ID, session=session, token_provider=provider)
+        reader = CatalogReader(f"{args.app_origin.rstrip('/')}/a/{PREVIEW_APP_ID}/v/{revision}/", session)
+        query = applet_query(args.service_url, PREVIEW_APP_ID, session=session, token_provider=provider)
         before = catalog_state(query)
         actual = reader.get("api/sources")
-        expected = (
-            projected_sources(actual, counts) if package or args.refresh_snapshot else baseline["expected_sources"]
-        )
-        receipt.update(
-            evidence_before=before,
-            production_version=args.production_version,
-            preview_base_version=details["current_version"],
-            expected_sources=expected,
-        )
+        if package or args.refresh_snapshot:
+            expected = projected_sources(actual, counts)
+        else:
+            if baseline is None:
+                raise ValueError("Hosted checks require a preflight baseline")
+            expected = baseline.expected_sources
+        receipt.evidence_before = before
+        receipt.production_version = args.production_version
+        receipt.preview_base_version = details["current_version"]
+        receipt.expected_sources = expected
         if baseline:
-            verify_preservation(baseline["evidence_before"], before, refresh_snapshot=args.refresh_snapshot)
+            verify_preservation(baseline.evidence_before, before, refresh_snapshot=args.refresh_snapshot)
             provenance = reader.get("bundled-model-provenance.json")
-            if provenance != baseline["package"]:
+            if provenance != baseline.package:
                 raise ValueError("Hosted package provenance differs from the checked preflight package")
         if package:
             reader.cache["measurements/oracle-inventory.json"] = json.loads(
                 (package / "dist/measurements/oracle-inventory.json").read_text()
             )
             with static_preview(package / "dist") as root:
-                receipt["gate"] = "browser-sweep"
-                receipt["browser"] = browser_checks(reader, root, expected, artifacts / "screenshots", local=True)
+                receipt.gate = "browser-sweep"
+                receipt.browser = browser_checks(reader, root, expected, artifacts / "screenshots", local=True)
         else:
-            receipt["gate"] = "hosted-browser-sweep"
-            receipt["browser"] = browser_checks(reader, reader.root, expected, artifacts / "screenshots", local=False)
-            if receipt["browser"]["inventory_sha256"] != baseline["browser"]["inventory_sha256"]:
+            if baseline is None:
+                raise ValueError("Hosted checks require a preflight baseline")
+            receipt.gate = "hosted-browser-sweep"
+            receipt.browser = browser_checks(reader, reader.root, expected, artifacts / "screenshots", local=False)
+            if receipt.browser["inventory_sha256"] != baseline.browser["inventory_sha256"]:
                 raise ValueError("Hosted oracle inventory differs from the preflight input")
         after = catalog_state(query)
-        receipt["gate"] = "history-preservation"
+        receipt.gate = "history-preservation"
         verify_preservation(before, after)
-        receipt["evidence_after"] = after
-        receipt["gate"] = "production-version-after"
-        production_after = app_details(args.service_url, PRODUCTION_ID, session)
+        receipt.evidence_after = after
+        receipt.gate = "production-version-after"
+        production_after = app_details(args.service_url, PRODUCTION_APP_ID, session)
         if production_after["current_version"] != args.production_version:
             raise ValueError("Production changed during the release check")
 
@@ -348,28 +369,25 @@ def main() -> None:
     artifacts = args.receipt.with_suffix("")
     artifacts.mkdir(parents=True)
     (artifacts / "screenshots").mkdir()
-    receipt: dict[str, Any] = {
-        "version": 1,
-        "phase": "preflight" if args.dist else "hosted",
-        "revision": args.revision,
-        "started_at": datetime.now(UTC).isoformat(),
-        "passed": False,
-        "commands": [],
-        "target": {"id": PREVIEW_ID, "origin": args.app_origin, "service_url": args.service_url},
-        "production_id": PRODUCTION_ID,
-    }
+    receipt = ReleaseReceipt(
+        phase="preflight" if args.dist else "hosted",
+        revision=args.revision,
+        started_at=datetime.now(UTC).isoformat(),
+        target=ReleaseTarget(PREVIEW_APP_ID, args.app_origin, args.service_url),
+        production_id=PRODUCTION_APP_ID,
+    )
     with args.receipt.open("x") as output:
         try:
             run_checks(args, artifacts, receipt)
-            receipt["passed"] = True
+            receipt.passed = True
         except Exception as error:
-            receipt["error"] = {"gate": receipt.get("gate"), "type": type(error).__name__, "message": str(error)}
+            receipt.error = ReleaseFailure(receipt.gate, type(error).__name__, str(error))
             LOGGER.error("Release gate failed: %s", error)
-        receipt["finished_at"] = datetime.now(UTC).isoformat()
-        json.dump(receipt, output, indent=2)
+        receipt.finished_at = datetime.now(UTC).isoformat()
+        json.dump(asdict(receipt), output, indent=2)
         output.write("\n")
     LOGGER.info("Receipt: %s", args.receipt)
-    raise SystemExit(0 if receipt["passed"] else 1)
+    raise SystemExit(0 if receipt.passed else 1)
 
 
 if __name__ == "__main__":

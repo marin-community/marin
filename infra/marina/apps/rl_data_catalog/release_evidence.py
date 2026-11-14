@@ -12,8 +12,6 @@ from typing import Any
 from .server.filtration import filtration
 from .server.source_counts import SourceCounts
 
-PREVIEW_ID = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
-PRODUCTION_ID = "fb11c931-5861-4878-8bb5-a964d652b45f"
 SqlQuery = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
