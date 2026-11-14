@@ -27,7 +27,7 @@ pub enum ColumnRange {
     /// The inclusive range of the segment's non-null values; `min <= max`.
     Range { min: i64, max: i64 },
     /// No usable range: the column is all null, absent from a file written
-    /// before it existed, not Int64, or without footer statistics. Planning
+    /// before it existed, or without footer statistics. Planning
     /// always scans the segment. Recording it still ends the segment's
     /// backfill, so it never holds a backfill slot again.
     Unknown,
@@ -86,42 +86,46 @@ struct StoredSource {
     column_bounds: Vec<StoredColumnBounds>,
 }
 
-fn widen(bounds: &mut Option<(i64, i64)>, low: i64, high: i64) {
-    *bounds = Some(match *bounds {
-        None => (low, high),
-        Some((minimum, maximum)) => (minimum.min(low), maximum.max(high)),
-    });
+/// The inclusive range of the non-null values in `arrays`; `None` when every
+/// value is null.
+pub fn int64_range<'a>(arrays: impl IntoIterator<Item = &'a Int64Array>) -> Option<(i64, i64)> {
+    arrays.into_iter().fold(None, |range, values| {
+        let (Some(low), Some(high)) = (arrow::compute::min(values), arrow::compute::max(values))
+        else {
+            return range;
+        };
+        Some(range.map_or((low, high), |(minimum, maximum): (i64, i64)| {
+            (minimum.min(low), maximum.max(high))
+        }))
+    })
 }
 
 /// The bounds of `columns` over `batches`, computed while the rows are still in
-/// memory (flush and merge outputs). A column the batches do not hold, or that
-/// is not Int64, is `Unknown`.
-pub fn from_batches(batches: &[RecordBatch], columns: &[String]) -> ColumnBounds {
+/// memory (flush and merge outputs). A column the batches do not hold is
+/// `Unknown`; one that is not Int64 is an error, since schema validation allows
+/// `catalog_bounds` only on INT64 columns.
+pub fn from_batches(
+    batches: &[RecordBatch],
+    columns: &[String],
+) -> Result<ColumnBounds, StatsError> {
     let mut bounds = ColumnBounds::new();
     for column in columns {
-        let mut range = None;
-        let mut typed = true;
+        let mut arrays = Vec::with_capacity(batches.len());
         for batch in batches {
             let Some(array) = batch.column_by_name(column) else {
                 continue;
             };
-            let Some(values) = array.as_any().downcast_ref::<Int64Array>() else {
-                typed = false;
-                break;
-            };
-            if let (Some(low), Some(high)) =
-                (arrow::compute::min(values), arrow::compute::max(values))
-            {
-                widen(&mut range, low, high);
-            }
+            let values = array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+                StatsError::Internal(format!("catalog_bounds column {column:?} is not Int64"))
+            })?;
+            arrays.push(values);
         }
-        let range = match range {
-            Some((min, max)) if typed => ColumnRange::new(min, max),
-            _ => ColumnRange::Unknown,
-        };
+        let range = int64_range(arrays).map_or(ColumnRange::Unknown, |(min, max)| {
+            ColumnRange::new(min, max)
+        });
         bounds.insert(column.clone(), range);
     }
-    bounds
+    Ok(bounds)
 }
 
 /// The bounds of `columns` from a Parquet footer's row-group statistics, for
@@ -257,7 +261,8 @@ mod tests {
         let bounds = from_batches(
             &[batch(vec![Some(5), None, Some(9)]), batch(vec![Some(2)])],
             &columns(&["epoch_ms"]),
-        );
+        )
+        .unwrap();
         assert_eq!(
             bounds.get("epoch_ms"),
             Some(&ColumnRange::Range { min: 2, max: 9 })
@@ -265,14 +270,14 @@ mod tests {
     }
 
     #[test]
-    fn an_all_null_absent_or_non_int64_column_is_unknown() {
+    fn an_all_null_or_absent_column_is_unknown() {
         let bounds = from_batches(
             &[batch(vec![None, None])],
-            &columns(&["epoch_ms", "added_later", "key"]),
-        );
+            &columns(&["epoch_ms", "added_later"]),
+        )
+        .unwrap();
         assert_eq!(bounds.get("epoch_ms"), Some(&ColumnRange::Unknown));
         assert_eq!(bounds.get("added_later"), Some(&ColumnRange::Unknown));
-        assert_eq!(bounds.get("key"), Some(&ColumnRange::Unknown));
     }
 
     #[test]
