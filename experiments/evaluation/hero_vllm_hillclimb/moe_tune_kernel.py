@@ -17,6 +17,7 @@ import argparse
 import itertools
 import json
 import time
+import traceback
 
 import torch
 import torch.multiprocessing as mp
@@ -96,6 +97,7 @@ def _worker(rank: int, args, configs, queue) -> None:
     w2 = torch.randn(args.local_experts, args.hidden, args.intermediate, device=device, dtype=torch.bfloat16) / 30
     inputs = {m: _inputs(args, m, device) for m in args.ms}
     results = []
+    errors_shown: list[bool] = []
     for index, config in enumerate(configs):
         row = {"config": config, "ms": {}}
         for m in args.ms:
@@ -103,7 +105,10 @@ def _worker(rank: int, args, configs, queue) -> None:
                 row["ms"][m] = _time(args, (w1, w2), inputs[m], config)
             except Exception as error:  # Out-of-resource configs are skipped, not fatal.
                 row["ms"][m] = None
-                row["error"] = repr(error)[:200]
+                row["error"] = repr(error)[:2000]
+                if not errors_shown:
+                    traceback.print_exc()
+                    errors_shown.append(True)
                 break
         results.append(row)
         if index % 50 == 0:
@@ -149,6 +154,8 @@ def main() -> None:
     for m in args.ms:
         timed = [(row["ms"][m], row["config"]) for row in rows if row["ms"].get(m) is not None]
         timed.sort(key=lambda item: item[0])
+        if not timed:
+            raise RuntimeError(f"no config ran at M={m}")
         default_time = next((t for t, c in timed if c == default[m]), None)
         best[m] = {"config": timed[0][1], "ms": timed[0][0], "default_ms": default_time, "default": default[m]}
         print(f"M={m}: best {timed[0][0]:.4f} ms {timed[0][1]}; default {default_time}", flush=True)
