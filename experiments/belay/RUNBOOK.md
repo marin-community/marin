@@ -36,7 +36,9 @@ A human then decides what happens. Never work around a refusal.
      commits (`merged origin/marin_belay_v1_recipe into ...`); you do nothing for that;
    - `no events`: stop;
    - a numbered `do these in order:` list. Work through it from the top. Each item names its section and its
-     first command. An item marked `skip:` needs nothing; go on to the next one.
+     first command. An item marked `skip:` needs nothing; go on to the next one. An idea's item may carry a
+     `MAINTAINER NOTE`: follow it. When it names another command (`B run-finished X####` for runs that already
+     finished, say), run that instead of `new-idea`.
 
 ## 1. new-idea (events `approved` and `work_pending`)
 

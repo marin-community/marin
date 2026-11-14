@@ -25,8 +25,10 @@ from experiments.belay import __main__ as belay_main
 from experiments.belay import page
 from experiments.belay.__main__ import (
     carried_ideas,
+    idea_step,
     ladder_rungs_left,
     launch,
+    names_entry,
     prior_trials_hold,
     reproduce,
     score_value,
@@ -1065,3 +1067,20 @@ def test_an_ideas_track_is_named_then_inferred_then_its_reruns_then_speedrun() -
     assert resolve_tracks(speedrun, False, None, None) == (speedrun, TrackSource.DEFAULT)
     with pytest.raises(SystemExit, match="not one of"):
         resolve_tracks(speedrun, False, "the-ladder", None)
+
+
+def test_starts_work_list_carries_the_maintainers_note_for_an_idea() -> None:
+    plain = intake_idea(None)
+    assert idea_step(plain) == "section 1: uv run python -m experiments.belay new-idea --idea-id 3"
+    noted = dataclasses.replace(plain, note="Maintainer ClassicLarry: runs finished; run B run-finished X0001")
+    assert "MAINTAINER NOTE" in idea_step(noted) and "run B run-finished X0001" in idea_step(noted)
+    escalated = dataclasses.replace(plain, note="Escalated: something")
+    assert idea_step(escalated).startswith("skip:")
+
+
+def test_an_idea_names_an_entry_by_its_id_or_its_registry_name() -> None:
+    name = "Spelling-normalised byte embeddings"
+    text = "Given the speedrun win of spelling-normalised byte embeddings, run its 4 rung scaling ladder."
+    assert names_entry(text, "X0226", name)
+    assert names_entry("Take X0226 up the ladder.", "X0226", name)
+    assert not names_entry("Run the ladder for byte embeddings.", "X0226", name)
