@@ -139,7 +139,7 @@ class SamplingSettings(CatalogRecord):
 
 
 class DifficultyMeasurement(CatalogRecord):
-    """One source/model result; infrastructure errors never enter the solve denominator."""
+    """A source and solver observation with scored coverage or a missing reason."""
 
     measurement_id: str
     protocol_id: str

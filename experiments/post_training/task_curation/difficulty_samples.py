@@ -46,7 +46,7 @@ def relocated_panel(inventory: SampleInventory, path: str, root: StoragePath) ->
 def prepare_sample(
     declaration: SourceDeclaration, inventory: SampleInventory, output_root: str, resume_root: str | None
 ) -> DifficultySource:
-    """Check an existing seeded selection and preserve its pre-oracle-filter status."""
+    """Prepare a difficulty source from a verified SAMPLE QC panel."""
     binding = declaration.actor_census_input
     assert declaration.pipeline is not None
     if binding is None or (

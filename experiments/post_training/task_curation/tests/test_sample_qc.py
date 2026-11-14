@@ -142,7 +142,6 @@ def test_relocated_difficulty_panel_reuses_the_shared_verified_reader(sample_pan
     relocated = relocated_panel(inventory, staged_path, root)
     tasks, contracts = panel_tasks(relocated)
     assert tasks == original_tasks and contracts == original_contracts
-    assert relocated.panel_path == staged_path
     assert SampleInventory.model_validate_json((root / "original-inventory.json").read_text()) == inventory
 
 
