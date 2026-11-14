@@ -911,6 +911,9 @@ If a native service lacks a pinned prepared image, Harbor records a
 `missing_environment_artifact:prepared_image` pending reason before execution.
 The campaign continues to other tasks without assigning a solver grade or
 counting an infrastructure attempt for that missing image.
+A source blocked entirely by missing images is `not_measured`; diagnostic
+messages remain separate from its stable missing-artifact reason.
+
 GLM judges use the same production host service at temperature 0.7. The host
 records requested and effective parameters while preserving each source's
 TaskSpec, rubric and grading token limits. A blank declared judge model uses the explicitly recorded

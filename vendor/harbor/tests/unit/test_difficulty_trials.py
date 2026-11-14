@@ -45,9 +45,12 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
     *[(reward, None, "native", buffer, False) for reward in (0.0, 1.0) for buffer in (0, 8)],
     (1.0, "input_tokenize", "native", 0, False),
     (0.0, "missing_image", "native", 0, False),
+    (0.0, "missing_images", "native", 0, False),
 ])
 def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure, graded_reward, workload, legacy_buffer, with_judge):
-    infrastructure_first = upstream_failure not in {None, "missing_image"}
+    infrastructure_first = upstream_failure not in {
+        None, "missing_image", "missing_images", "actor_recovered", "judge_recovered",
+    }
     unserved = upstream_failure == "input_tokenize"
     provider_wait = upstream_failure in {"json", "html"}
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
@@ -74,13 +77,14 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
         task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
     ).model_dump_json())
-    if upstream_failure == "missing_image":
+    if upstream_failure in {"missing_image", "missing_images"}:
         (directory / "task.toml").write_text('[environment]\ndocker_image = "example.test/native:latest"\nworkdir = "/app"\n')
         (directory / "instruction.md").write_text("Original native task")
         (directory / "tests").mkdir()
         (directory / "tests/test.sh").write_text("exit 0\n")
         source = source.model_copy(update={"tasks": [
-            source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory)}),
+            source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory),
+                                               "workload": "native" if upstream_failure == "missing_images" else "task_spec"}),
         ]})
     config = CandidateRun(
         solver=Solver.HOSTED,
@@ -157,7 +161,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     async def physical_trial(configuration, authentication):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
-        if upstream_failure == "missing_image" and configuration.agent.name == "terminus-2":
+        if upstream_failure in {"missing_image", "missing_images"} and configuration.agent.name == "terminus-2":
             return await original_execute_trial(configuration, authentication)
         if configuration.agent.name == "terminus-2":
             llm = OpenAILLM(model_name="openai/fixture", api_key="fixture",
@@ -229,18 +233,23 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
-    if upstream_failure == "missing_image":
-        assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("pending", 1, 0, 1)
+    if upstream_failure in {"missing_image", "missing_images"}:
+        all_missing = upstream_failure == "missing_images"
+        assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
+            ("not_measured", 0, 0, 2) if all_missing else ("pending", 1, 0, 1))
+        assert measurement.reason == difficulty_trials.MISSING_PREPARED_IMAGE_REASON
         assert measurement.infrastructure_attempts == 0
         evidence = json.loads(next(output.glob("*/attempts/*/*/construction-error.json")).read_text())
         assert evidence["runtime_sha256"] == runtime_sha256
         assert evidence["exception_type"] == "MissingPreparedImageError"
+        assert evidence["reason"] == difficulty_trials.MISSING_PREPARED_IMAGE_REASON
+        assert "@sha256" in evidence["message"]
         ledger = json.loads(next(output.glob("*/attempts.json")).read_text())
         assert [(attempt["task_id"], attempt["status"], attempt["reward"]) for attempt in ledger["attempts"]] == [
-            ("scored", "pending", None), ("blocked", "scored", 0.0),
+            ("scored", "pending", None), ("blocked", "pending" if all_missing else "scored", None if all_missing else 0.0),
         ]
         assert not candidate_requests
-        assert len(physical_attempts) == 1
+        assert len(physical_attempts) == (0 if all_missing else 1)
         failed_log = next((tmp_path / "local").rglob("trial.log"))
         size = failed_log.stat().st_size
         harbor_logger.getChild("harbor.trial.trial.candidate").warning("Later candidate log after construction failure")

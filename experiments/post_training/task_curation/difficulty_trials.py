@@ -60,6 +60,7 @@ INPUT_BUDGET_REASON = (
     "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned."
 )
 PROVIDER_WAIT_REASON = "Awaiting shared model provider capacity; provider waits are excluded from task attempts."
+MISSING_PREPARED_IMAGE_REASON = "missing_environment_artifact:prepared_image"
 
 
 @dataclass(frozen=True)
@@ -238,7 +239,7 @@ def run_task(
         try:
             trial, result = asyncio.run(execute_trial(configuration, authentication))
         except MissingPreparedImageError as error:
-            pending_reason = f"missing_environment_artifact:prepared_image:{error}"
+            pending_reason = MISSING_PREPARED_IMAGE_REASON
             write_json_evidence(
                 destination / f"{number:02d}" / "construction-error.json",
                 {
@@ -247,6 +248,7 @@ def run_task(
                     "backend": task.backend,
                     "exception_type": type(error).__name__,
                     "reason": pending_reason,
+                    "message": str(error),
                 },
             )
             attempts.append(DifficultyAttempt(task_id=task.task_id, status="pending", reward=None))
@@ -463,7 +465,7 @@ def main() -> None:
                     args.local_root / source_key / "model-requests.tar.gz",
                     output / source_key / "model-requests.tar.gz",
                 )
-                source_has_judge = any(task.judge_model is not None for task in tasks)
+                source_has_judge = any(task.judge_model is not None and task.reason is None for task in tasks)
                 judge_traffic = (
                     archive_model_traffic(
                         judge_root / "model-requests",
@@ -541,8 +543,14 @@ def main() -> None:
                     output_tokens=output_tokens,
                 )
                 measurement = measurement_from_attempts(DifficultyMeasurement(**payload), attempts)
-                blocked = sorted({task.reason for task in tasks if task.reason is not None})
-                if not scored and tasks and all(task.reason is not None for task in tasks):
+                blocked_tasks = {task.task_id for task in tasks if task.reason is not None}
+                blocked_tasks.update(
+                    task.task_id
+                    for task, outcome in zip(tasks, outcomes, strict=True)
+                    if outcome.pending_reason == MISSING_PREPARED_IMAGE_REASON
+                )
+                blocked = sorted({pending_reasons[task_id] for task_id in blocked_tasks})
+                if not scored and tasks and len(blocked_tasks) == len(tasks):
                     measurement = DifficultyMeasurement.model_validate(
                         {
                             **measurement.model_dump(mode="json"),
