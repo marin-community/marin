@@ -17,6 +17,7 @@ import optax
 import pytest
 import tensorstore as ts
 from chex import assert_trees_all_close
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from jax.experimental.array_serialization import serialization as array_ser
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -623,3 +624,38 @@ def test_a_leaf_absent_from_the_exemplar_is_not_read_back():
 
     assert restored["params"].dtype == jnp.bfloat16
     assert_trees_not_close(restored["params"].astype(jnp.float32), fp32)
+
+
+def test_tensorstore_s3_reads_with_mounted_credentials(tmp_path, monkeypatch):
+    credentials = tmp_path / "credentials"
+    credentials.write_text("[default]\naws_access_key_id = test-key\naws_secret_access_key = test-secret\n")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_CONFIG_FILE", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+
+    authorized_request = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if "Credential=test-key/" in self.headers.get("Authorization", ""):
+                authorized_request.set()
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, _format, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            monkeypatch.setenv("AWS_ENDPOINT_URL", f"http://127.0.0.1:{server.server_port}")
+            spec = build_kvstore_spec("s3://bucket/cache")
+            # The local server has no bucket subdomain; only credential delivery is under test.
+            spec["endpoint"] = f"http://127.0.0.1:{server.server_port}"
+            store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
+            assert store.read("missing").result(timeout=_ASYNC_TEST_TIMEOUT).state == "missing"
+            assert authorized_request.is_set()
+        finally:
+            server.shutdown()
+            thread.join()
