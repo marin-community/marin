@@ -3,35 +3,36 @@
 
 """Count the distinct Daytona snapshots a task cohort provisions.
 
-Measurement runs the production naming path: each pinned task's environment
-is materialized to a build context, the shellbox ``MachineSpec`` is built
-through Harbor's own task-config mapping, and the snapshot name comes from
-``shellbox.backends.daytona.machine.snapshot_identity`` — the same function
-the Daytona factory uses to name and create snapshots. A task the production
-validation rejects is counted as a failure and reported; it is not
-Daytona-safe. No Daytona API calls are made.
+Measurement runs the production naming path. Native cohort tars are
+materialized to a build context and mapped through Harbor's task-config
+mapping; lowered TaskCompendium specs build the shellbox ``MachineSpec``
+directly from their declared requirements. Either way the snapshot name comes
+from ``shellbox.backends.daytona.snapshot.snapshot_request_for_spec`` — the
+same derivation the Daytona factory uses to name and create snapshots. A task
+the production validation rejects is counted as a failure and reported; it is
+not Daytona-safe. No Daytona API calls are made.
 """
 
 import base64
-import gzip
-import io
-import json
-import math
-import tarfile
 import tempfile
 import tomllib
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from daytona import Resources
 from harbor.environments.daytona import machine_spec
 from harbor_config.models.task.config import EnvironmentConfig
-from shellbox.backends.daytona.machine import UnsupportedMachineSpec, snapshot_identity
-from shellbox.image import RegistryImage
+from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
+from shellbox.image import DockerfileSource, RegistryImage
+from shellbox.machine import HostImage, MachineSpec, NetworkPolicy, UnsupportedMachineSpec
+from taskcompendium.models import EnvironmentRequirements, ScriptGrader, VerifyitGrader, require_resolved_environment
 
-ENVIRONMENT_PREFIX = "environment/"
+from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_PREFIX
+from experiments.post_training.task_curation.lowered_envelope import LoweredSpec, MachineShape
+from experiments.post_training.task_curation.task_tars import open_task_tar
+
 DOCKERFILE = "Dockerfile"
 
 
@@ -50,16 +51,9 @@ class SnapshotIdentityCount:
     distinct: int
     sizes: dict[str, int] = field(default_factory=dict)
     failures: list[tuple[str, str]] = field(default_factory=list)
-
-
-def _machine_resources(cpus: int | None, memory_mb: int | None, storage_mb: int | None, gpus: int = 0) -> Resources:
-    """The ``Resources`` construction mirroring ``DaytonaMachineFactory._prepare``."""
-    return Resources(
-        cpu=cpus,
-        memory=math.ceil(memory_mb / 1024) if memory_mb is not None else None,
-        disk=math.ceil(storage_mb / 1024) if storage_mb is not None else None,
-        gpu=gpus or None,
-    )
+    # Tasks whose declared execution requirements the Daytona backend refuses, so a
+    # snapshot count alone must not call them safe.
+    execution_failures: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _write_context(root: Path, name: str, content: bytes, mode: int = 0o644) -> None:
@@ -70,13 +64,20 @@ def _write_context(root: Path, name: str, content: bytes, mode: int = 0o644) -> 
     target.chmod(mode & 0o7777)
 
 
-def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], bytes | None]:
+@dataclass(frozen=True)
+class EnvironmentEntry:
+    """One file inside a native task archive's ``environment/`` build context."""
+
+    path: str
+    content: bytes
+    mode: int
+
+
+def _unpack_environment(payload: bytes) -> tuple[list[EnvironmentEntry], bytes | None]:
     """The extracted ``environment/`` entries and the task's own ``task.toml``."""
-    entries: list[tuple[str, bytes, int]] = []
+    entries: list[EnvironmentEntry] = []
     task_toml: bytes | None = None
-    with tarfile.open(
-        fileobj=io.BytesIO(gzip.decompress(payload) if payload[:2] == b"\x1f\x8b" else payload)
-    ) as archive:
+    with open_task_tar(payload) as archive:
         for member in archive.getmembers():
             if member.isdir() or member.issym():
                 continue
@@ -84,13 +85,17 @@ def _unpack_environment(payload: bytes) -> tuple[list[tuple[str, bytes, int]], b
                 task_toml = archive.extractfile(member).read()
                 continue
             if member.name.startswith(ENVIRONMENT_PREFIX):
-                entries.append((member.name[len(ENVIRONMENT_PREFIX) :], archive.extractfile(member).read(), member.mode))
+                entries.append(
+                    EnvironmentEntry(
+                        member.name[len(ENVIRONMENT_PREFIX) :], archive.extractfile(member).read(), member.mode
+                    )
+                )
     return entries, task_toml
 
 
 def _registry_identity(reference: str) -> str:
     """Production snapshot name for a registry reference with default resources."""
-    return snapshot_identity(RegistryImage(reference), Resources())
+    return snapshot_request_for_spec(MachineSpec(source=RegistryImage(reference))).name
 
 
 def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentityCount:
@@ -101,8 +106,8 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
         entries, task_toml = _unpack_environment(payload)
         with tempfile.TemporaryDirectory() as tmp:
             try:
-                for name, content, mode in entries:
-                    _write_context(Path(tmp), name, content, mode)
+                for entry in entries:
+                    _write_context(Path(tmp), entry.path, entry.content, entry.mode)
                 config = _task_environment_config(task_toml)
                 if not config.docker_image and not (Path(tmp) / DOCKERFILE).exists():
                     raise UnsupportedMachineSpec(f"missing {ENVIRONMENT_PREFIX}{DOCKERFILE}")
@@ -114,9 +119,7 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
                     memory_mb=config.memory_mb,
                     storage_mb=config.storage_mb,
                 )
-                name = snapshot_identity(
-                    spec.source, _machine_resources(spec.cpus, spec.memory_mb, spec.storage_mb, spec.gpus)
-                )
+                name = snapshot_request_for_spec(spec).name
             except UnsupportedMachineSpec as error:
                 failures.append((task_id, str(error)))
                 continue
@@ -124,87 +127,136 @@ def count_task_identities(tasks: Iterable[tuple[str, bytes]]) -> SnapshotIdentit
     return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
 
 
-def _decoded_source(source: Mapping) -> bytes:
-    if source.get("kind") == "inline_file":
-        return base64.b64decode(source.get("content_base64", ""))
-    return json.dumps(source, sort_keys=True).encode()
+def count_lowered_spec_identities(tasks: Iterable[tuple[str, LoweredSpec]]) -> SnapshotIdentityCount:
+    """Measure each declared agent and grader machine through production identities.
 
-
-def _verifier_files(spec: Mapping) -> Iterator[tuple[str, bytes, int]]:
-    resources = (spec.get("task") or {}).get("resources", {})
-    items = list(resources.get("verifier", [])) + list(resources.get("all", []))
-    for item in items:
-        path = item.get("path", "")
-        if path.startswith(ENVIRONMENT_PREFIX) and item.get("source", {}).get("kind") != "directory":
-            yield (
-                path[len(ENVIRONMENT_PREFIX) :],
-                _decoded_source(item["source"]),
-                int(item.get("mode") or "644", 8),
-            )
-
-
-def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> SnapshotIdentityCount:
-    """Count snapshot identities for lowered Harbor task specs.
-
-    Each spec contributes a verifier identity — its registry image or its
-    materialized ``environment/`` context with the verifier machine shape —
-    and a task-machine identity on the registry image or shellbox's default
-    agent image with the task machine shape.
+    Package-lock graders require a local host and are recorded as execution
+    failures for Daytona. They never borrow the agent's image or contribute a
+    fabricated snapshot. Unbuilt contexts retain their identity but are refused
+    by the runtime's unresolved-environment check.
     """
     sizes: Counter[str] = Counter()
     failures: list[tuple[str, str]] = []
+    execution_failures: list[tuple[str, str]] = []
+    factory = DaytonaMachineFactory()
     for task_id, spec in tasks:
-        task = spec.get("task") or {}
-        runtime = spec.get("runtime") or {}
-        requirements = task.get("environment_requirements") or {}
-        docker_image = requirements.get("docker_image")
-        with tempfile.TemporaryDirectory() as tmp:
-            try:
-                for name, content, mode in _verifier_files(spec):
-                    _write_context(Path(tmp), name, content, mode)
-                if not docker_image and not (Path(tmp) / DOCKERFILE).exists():
-                    raise UnsupportedMachineSpec(f"no docker_image and no {ENVIRONMENT_PREFIX}{DOCKERFILE}")
-                verifier_machine = runtime.get("verifier_machine") or {}
-                task_machine_spec = runtime.get("task_machine") or {}
-                verifier = machine_spec(
-                    EnvironmentConfig(
-                        docker_image=docker_image,
-                        workdir=requirements.get("working_directory"),
-                        cpus=verifier_machine.get("cpus"),
-                        memory_mb=verifier_machine.get("memory_mb"),
-                        storage_mb=verifier_machine.get("storage_mb"),
-                    ),
-                    Path(tmp),
-                    {},
-                    cpus=verifier_machine.get("cpus"),
-                    memory_mb=verifier_machine.get("memory_mb"),
-                    storage_mb=verifier_machine.get("storage_mb"),
-                )
-                task_machine = machine_spec(
-                    EnvironmentConfig(
-                        docker_image=docker_image,
-                        workdir=requirements.get("working_directory"),
-                        cpus=task_machine_spec.get("cpus"),
-                        memory_mb=task_machine_spec.get("memory_mb"),
-                        storage_mb=task_machine_spec.get("storage_mb"),
-                    ),
-                    Path(tmp),
-                    {},
-                    cpus=task_machine_spec.get("cpus"),
-                    memory_mb=task_machine_spec.get("memory_mb"),
-                    storage_mb=task_machine_spec.get("storage_mb"),
-                )
-                # Identities are derived while the context exists: the production hash
-                # reads the Dockerfile and every file of the staged tree.
-                for machine in (verifier, task_machine):
-                    name = snapshot_identity(
-                        machine.source,
-                        _machine_resources(machine.cpus, machine.memory_mb, machine.storage_mb, machine.gpus),
-                    )
-                    sizes[name] += 1
-            except UnsupportedMachineSpec as error:
-                failures.append((task_id, str(error)))
-    return SnapshotIdentityCount(distinct=len(sizes), sizes=dict(sizes), failures=failures)
+        grader = spec.task.grader
+        # Only a grader that runs in a machine declares one; the other kinds borrow none.
+        grader_environment = grader.environment if isinstance(grader, ScriptGrader | VerifyitGrader) else None
+        slots = (
+            ("agent", spec.task.environment_requirements, spec.task_machine),
+            ("grader", grader_environment, spec.verifier_machine),
+        )
+        mapping_errors: list[str] = []
+        execution_errors: list[str] = []
+        for role, declared, shape in slots:
+            measured = _declared_identity(role, declared, shape, factory)
+            if measured.name is not None:
+                sizes[measured.name] += 1
+            if measured.mapping_error is not None:
+                mapping_errors.append(measured.mapping_error)
+            if measured.execution_error is not None:
+                execution_errors.append(measured.execution_error)
+        if mapping_errors:
+            failures.append((task_id, "; ".join(mapping_errors)))
+        if execution_errors:
+            execution_failures.append((task_id, "; ".join(execution_errors)))
+    return SnapshotIdentityCount(
+        distinct=len(sizes), sizes=dict(sizes), failures=failures, execution_failures=execution_failures
+    )
+
+
+@dataclass(frozen=True)
+class _DeclaredIdentity:
+    """One declared machine's snapshot name, mapping refusal and execution refusal."""
+
+    name: str | None = None
+    mapping_error: str | None = None
+    execution_error: str | None = None
+
+
+def declared_machine(
+    requirements: EnvironmentRequirements,
+    context: Path,
+    *,
+    network: NetworkPolicy,
+    cpus: int | None,
+    memory_mb: int | None,
+    storage_mb: int | None,
+    gpus: int = 0,
+) -> MachineSpec:
+    """The shellbox MachineSpec a task's declared requirements and machine shape resolve to.
+
+    A Docker build context is materialized into ``context``; a registry image, package
+    spec or host requirement maps onto the matching source, with the declared
+    working directory. The measurement never invents a source the requirements
+    do not declare.
+    """
+    if requirements.docker_build is not None:
+        for resource in requirements.docker_build.files:
+            _write_context(
+                context,
+                resource.path,
+                base64.b64decode(resource.source.content_base64, validate=True),
+                int(resource.mode or "644", 8),
+            )
+        source = DockerfileSource(context, context / DOCKERFILE)
+    elif requirements.docker_image is not None:
+        source = RegistryImage(requirements.docker_image)
+    elif requirements.packages_lock is not None:
+        source = HostImage()
+    else:
+        if requirements.package_spec is None:
+            raise ValueError("declared requirements name no environment")
+        source = requirements.package_spec
+    return MachineSpec(
+        source=source,
+        workdir=requirements.working_directory or "",
+        network=network,
+        cpus=cpus,
+        memory_mb=memory_mb,
+        storage_mb=storage_mb,
+        gpus=gpus,
+    )
+
+
+def _declared_identity(
+    role: str,
+    declared: EnvironmentRequirements | None,
+    shape: MachineShape | None,
+    factory: DaytonaMachineFactory,
+) -> _DeclaredIdentity:
+    """Measure one declared agent or grader machine through the production identity."""
+    if declared is None or shape is None:
+        return _DeclaredIdentity()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            machine = declared_machine(
+                declared,
+                Path(tmp),
+                network=NetworkPolicy.ALLOW,
+                cpus=shape.cpus,
+                memory_mb=shape.memory_mb,
+                storage_mb=shape.storage_mb,
+                gpus=shape.gpus,
+            )
+        except ValueError as error:
+            return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=f"{role}: {error}")
+        try:
+            factory.check_environment(declared, machine)
+            require_resolved_environment(declared)
+        except UnsupportedMachineSpec as error:
+            # An execution refusal still reports the identity: snapshot counts measure
+            # what the cohort would provision, whether or not Daytona would run it.
+            execution_error = f"{role}: {error}"
+        else:
+            execution_error = None
+        if not isinstance(machine.source, RegistryImage | DockerfileSource):
+            return _DeclaredIdentity(execution_error=execution_error)
+        try:
+            return _DeclaredIdentity(snapshot_request_for_spec(machine).name, execution_error=execution_error)
+        except UnsupportedMachineSpec as error:
+            return _DeclaredIdentity(mapping_error=f"{role}: {error}", execution_error=execution_error)
 
 
 def count_registry_identities(references: Iterable[str]) -> SnapshotIdentityCount:

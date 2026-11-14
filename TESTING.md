@@ -49,6 +49,10 @@ When adding a new `lib/<name>/` package, run its unit tests through
 These registrations include the library in pull request, push, and full-suite
 runs.
 
+Harbor's isolated test environment includes TaskCompendium for task-curation
+rebuild and snapshot-identity checks; rebuild tests skip in environments without
+Harbor.
+
 Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
 Levanter TPU lane runs for those changes when the resolved dependencies of
 `marin-levanter` with its `tpu` extra and `test` group change, including
