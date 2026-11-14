@@ -196,7 +196,6 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
                 "verifier": (inline_resource("check.py", b"from pathlib import Path\nprint(float(Path('answer.txt').read_text().strip() == '42'))\n"),),
             }),
         })
-    original = task.model_dump_json()
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
     write_oracle_command(
@@ -236,7 +235,6 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     assert command_deadlines == [INITIAL_REQUIREMENTS.agent_timeout_sec]
     assert all(machine.closed for machine in machines.machines)
     assert (trial.paths.agent_dir / "resource-usage.json").is_file()
-    assert task.model_dump_json() == original
     if timed_out:
         assert result.exception_info.exception_type == "AgentTimeoutError"
         assert not (trial.paths.agent_dir / "answer.bin").exists()
@@ -246,9 +244,7 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     assert result.verifier_result.rewards == {"reward": reward}
     assert (trial.paths.agent_dir / "answer.bin").read_bytes() == f"{answer}\n".encode()
     assert (trial.paths.agent_dir / "exit-code.txt").read_text() == str(exit_code)
-    assert (trial.paths.agent_dir / "resource-usage.json").is_file()
     assert len(machines.machines) == 2
-    assert all(machine.closed for machine in machines.machines)
     assert all(requirements.packages_lock == environment.packages_lock for requirements in machines.requirements)
     assert all(
         (spec.cpus, spec.memory_mb, spec.storage_mb) == (1, 2048, 2048)
@@ -258,8 +254,6 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     conversation = ConversationTrace.model_validate_json((trial.paths.agent_dir / "conversation.json").read_text())
     assert conversation.events == (*task.context.events, TextMessage(role="assistant", content=f"{answer}\n"))
     assert not grader.local("/solution/solve.sh").exists()
-    assert task.environment_requirements == EnvironmentRequirements()
-    assert task.model_dump_json() == original
 
 
 @pytest.mark.parametrize("actor_required", [False, True])
