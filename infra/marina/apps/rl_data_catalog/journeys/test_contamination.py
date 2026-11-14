@@ -3,7 +3,9 @@
 
 """A reader distinguishes measured overlap, remediation and missing evidence."""
 
+import json
 import re
+from urllib.parse import urlencode
 
 import pytest
 from marina.journeys import Journey
@@ -906,6 +908,80 @@ def test_release_checker_sweeps_exported_confidence_levels_and_historical_popula
         ("dark", 390),
     }
     assert all(not view["failures"] for view in views)
+
+
+def test_frozen_declaration_oversight_cards_show_derived_level_receipts_and_notes(journey: Journey) -> None:
+    """Frozen pre-derivation declarations keep one derived level, real receipt links and historical notes."""
+    page = journey.page
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    root = page.url.split("#")[0]
+    base = page.evaluate("async()=> (await fetch('api/source?source_id=Marin%3Afull-complete')).json()")
+    full_binding = {
+        "source_id": "Marin:frozen-full",
+        "review_receipt": {"uri": "s3://marin-us-east-02a/frozen/full/review.json", "sha256": "d" * 64},
+        "coverage_complete": True,
+        "finalization": "complete",
+    }
+    historical = {
+        "campaign": "Frozen campaign",
+        "recipe_revision": "2026.01.01",
+        "verification": "Hand-written historical verification prose",
+        "reviewed": 3,
+        "admitted": 2,
+    }
+    cases = [
+        ("full", "FULL", "full", full_binding, None),
+        ("sample", "SAMPLE", "sample", None, "https://example.org/frozen-sample-review.json"),
+        # A stale hand-written FULL claim must never override the effective QUICK level.
+        ("quick", "QUICK", "full", None, "https://example.org/frozen-release-qc.json"),
+    ]
+    for slug, quality, declared, binding, qc_url in cases:
+        detail = json.loads(json.dumps(base))
+        detail["quality"] = quality
+        declaration = detail["declaration"]
+        declaration.pop("recipe_qa_history", None)
+        declaration.pop("full_content_result_binding", None)
+        declaration["oversight"] = declared
+        declaration["oversight_evidence"] = {**historical, "level": declared}
+        if binding is not None:
+            declaration["full_content_result_binding"] = binding
+        declaration["independent_qc"] = (
+            None
+            if qc_url is None
+            else {"verdict": "good", "method": "Fixture QC", "reviewed": 2, "evidence_url": qc_url}
+        )
+        source_id = f"Marin:frozen-{slug}"
+        page.route(
+            f"**/api/source?source_id=Marin%3Afrozen-{slug}",
+            lambda route, _request, detail=detail: route.fulfill(json=detail),
+        )
+        page.goto(root + "source.html#" + urlencode({"source_id": source_id}))
+        expect(page.locator("#labels .chip").first).to_have_text(f"Quality {quality}")
+        oversight = page.locator("#sections .assessment-card").filter(
+            has=page.get_by_role("heading", name="Oversight evidence")
+        )
+        notes = page.locator("#sections .assessment-card").filter(
+            has=page.get_by_role("heading", name="Historical recipe QA notes")
+        )
+        expect(notes.locator("dt")).to_have_text(["Campaign", "Recipe revision", "Verification", "Reviewed", "Admitted"])
+        expect(notes).to_contain_text(historical["verification"])
+        if quality == "QUICK":
+            content = oversight.locator(".field").filter(has=page.locator("dt", has_text="Content review"))
+            expect(content.locator("dd")).to_have_text("Conversion-only — no content-review receipt exists")
+            expect(
+                oversight.locator(".field").filter(has=page.locator("dt", has_text=re.compile("Receipt|QA evidence")))
+            ).to_have_count(0)
+            expect(oversight).not_to_contain_text("frozen-release-qc.json")
+        elif binding is not None:
+            receipt = oversight.locator(".field").filter(has=page.locator("dt", has_text="Receipt"))
+            expect(receipt).to_have_count(1)
+            expect(receipt.locator("dd")).to_contain_text(full_binding["review_receipt"]["uri"])
+        else:
+            evidence = oversight.locator(".field").filter(has=page.locator("dt", has_text="QA evidence"))
+            expect(evidence).to_have_count(1)
+            expect(evidence.locator("dd a").first).to_have_attribute("href", qc_url)
+        check_evidence(page)
 
 
 def test_default_source_column_bounds_long_names_and_viewer_can_expand(journey: Journey) -> None:

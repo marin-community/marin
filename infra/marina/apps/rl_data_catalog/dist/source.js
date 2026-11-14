@@ -83,17 +83,34 @@ async function render(data, sourceId) {
   sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Supported requires all present task/roles to be supported. Otherwise the backend is Unsupported; N/A is only for absent roles. Affected task counts are per role and may overlap. The Daytona safety label covers the actor only.'));
   sections.push(card('Grader profile', [['Grader', graderChip(d)], ['Per-type task counts', d.grader_type_counts], ['Judge rubrics', d.judge_rubric_counts], ['Judge tasks with reference', d.judge_reference_count], ['Judge tasks without reference', d.judge_no_reference_count], ['Current-input census receipt', d.derived_contract_receipt && pointer(d.derived_contract_receipt.uri)], ['Census binding', d.derived_contract_receipt?.input], ['Scanned TaskSpec bytes', d.derived_contract_receipt?.scanned_task_specs_sha256]], 'Derived from the measured task contracts. Unbound or changed inputs remain Pending.'));
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
+  // Catalogs frozen before the derived-oversight fields keep the historical prose in
+  // oversight_evidence and their receipt pointers at the FULL binding or QC evidence paths.
+  const derivedReceipt = d.oversight_evidence?.receipt_uri;
+  const bindingReceipt = d.full_content_result_binding?.review_receipt;
+  const receiptUri = derivedReceipt ?? bindingReceipt?.uri ?? (data.quality === 'QUICK' ? null : d.independent_qc?.evidence_url);
+  const receiptRow = data.quality === 'QUICK'
+    ? ['Content review', 'Conversion-only — no content-review receipt exists']
+    : receiptUri
+      ? [derivedReceipt || bindingReceipt ? 'Receipt' : 'QA evidence', pointer(receiptUri)]
+      : null;
+  // The five historical note fields may live in recipe_qa_history or, in frozen catalogs,
+  // in oversight_evidence itself; never render that block's level.
+  const historicalNotes = d.recipe_qa_history ?? (d.oversight_evidence && {
+    campaign: d.oversight_evidence.campaign, recipe_revision: d.oversight_evidence.recipe_revision,
+    verification: d.oversight_evidence.verification, reviewed: d.oversight_evidence.reviewed,
+    admitted: d.oversight_evidence.admitted,
+  });
   sections.push(card('Oversight evidence', [
     ['Level', node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`)],
     ['Basis', d.oversight_evidence?.verification],
-    ['Receipt', d.oversight_evidence?.receipt_uri && pointer(d.oversight_evidence.receipt_uri)],
+    ...(receiptRow ? [receiptRow] : []),
     ['Reviewed', d.oversight_evidence?.reviewed],
     ['Sampled grader qualification', d.oracle_validation],
-  ], 'The level is derived from the same QA evidence as the main-table Quality column: a current-pin FULL binding, SAMPLE receipt, or conversion-only QUICK.'));
+  ], 'The level is derived from the same QA evidence as the main-table Quality column: a current-pin FULL binding, SAMPLE receipt, or conversion-only QUICK. Catalogs frozen before the derived fields keep their receipt pointer at the FULL binding or recorded QC evidence.'));
   sections.push(card('Historical recipe QA notes', [
-    ['Campaign', d.recipe_qa_history?.campaign], ['Recipe revision', d.recipe_qa_history?.recipe_revision],
-    ['Verification', d.recipe_qa_history?.verification], ['Reviewed', d.recipe_qa_history?.reviewed],
-    ['Admitted', d.recipe_qa_history?.admitted],
+    ['Campaign', historicalNotes?.campaign], ['Recipe revision', historicalNotes?.recipe_revision],
+    ['Verification', historicalNotes?.verification], ['Reviewed', historicalNotes?.reviewed],
+    ['Admitted', historicalNotes?.admitted],
   ], 'Historical recipe-QA prose, kept for the record. It can never assert an oversight level; the current level is the evidence-derived one above.'));
   sections.push(card('Recorded grader controls', [
     ['Last curation', curation && `${curation.mode} pass, ${curation.status}`], ['Control status', controls?.status],
