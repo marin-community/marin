@@ -5,7 +5,6 @@
 
 import pytest
 from taskcompendium.grader import verifyit_package
-from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -53,8 +52,6 @@ def test_prepare_source_qualifies_judge_api_and_current_model_before_staging(
         source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
     )
     source = difficulty_source(task)
-    sample = source.sample
-    task_sha = sample.tasks[0].task_sha256
     # The frozen panel reader is the I/O boundary; qualification and staging remain real.
     monkeypatch.setattr(difficulty_preparation, "panel_task_runtimes", lambda panel: ([task], [{}]))
     prepared = difficulty_preparation.prepare_source(source, tmp_path / "tasks")
