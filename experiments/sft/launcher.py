@@ -291,6 +291,11 @@ def _levanter_pod_config(
         output_path=ctx.output_path,
         env_vars={
             **({"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else {}),
+            **(
+                {"CUDA_LAUNCH_BLOCKING": "1" if spec.cuda_launch_blocking else "0"}
+                if spec.cuda_launch_blocking is not None
+                else {}
+            ),
             **({"IRIS_PORT_JAX": str(spec.jax_port)} if spec.jax_port is not None else {}),
         },
         auto_build_caches=data_config.auto_build_caches,
@@ -325,7 +330,7 @@ def _levanter_train_job(
                     "format": "SFTSpec",
                     "dispatch_environment": {
                         name: environment[name]
-                        for name in ("XLA_FLAGS", "JAX_PLATFORMS", "JAX_COMPILATION_CACHE_DIR")
+                        for name in ("XLA_FLAGS", "CUDA_LAUNCH_BLOCKING", "JAX_PLATFORMS", "JAX_COMPILATION_CACHE_DIR")
                         if name in environment
                     },
                     "train_config": draccus.encode(pod_config.train_config),
@@ -644,8 +649,10 @@ class SFTSpec:
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
     xla_flags: Sequence[str] = ()
-    jax_port: int | None = None
     """Explicit compiler flags for the training process and its validation callbacks."""
+    cuda_launch_blocking: bool | None = None
+    """Synchronize CUDA launches when true; None preserves the runtime's default."""
+    jax_port: int | None = None
     wandb_project: str = "marin-sft-launcher"
     checkpointer: CheckpointerConfig = field(
         default_factory=lambda: CheckpointerConfig(

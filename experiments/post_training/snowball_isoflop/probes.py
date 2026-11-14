@@ -18,6 +18,7 @@ from experiments.post_training.snowball_isoflop.config import (
     VERSION,
     Cell,
     Mask,
+    RuntimePolicy,
     baseline_optimizer,
     build_spec,
     resources,
@@ -128,7 +129,10 @@ def at_budget(probe: Probe, budget: float, phase: str) -> Probe:
 
 
 def build_probe_pod(probe: Probe) -> TrainLmOnPodConfig:
-    spec = build_spec(probe.cell)
+    runtime = (
+        RuntimePolicy.SOURCE if probe.phase.startswith("B") or probe.phase.startswith("C") else RuntimePolicy.LOSS_CURVE
+    )
+    spec = build_spec(probe.cell, runtime=runtime)
     assert spec.trainer_config is not None and spec.model_config is not None and spec.snowball_sft is not None
     optimizer = draccus.encode(baseline_optimizer(probe.size))
     optimizer["learning_rate"] = probe.learning_rate

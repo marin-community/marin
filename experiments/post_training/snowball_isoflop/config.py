@@ -37,7 +37,7 @@ BATCH_SIZE = 8
 SCHEDULE_STEPS = 4750
 TASK_TIMEOUT = 259200
 PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/snowball-isoflop"
-VERSION = "2026.11.13.9"
+VERSION = "2026.11.13.10"
 REFERENCE_VERSION = "2026.11.13.8"
 BUDGETS = (3e18, 1e19, 3e19)
 SIZES = (512, 768, 1024)
@@ -49,6 +49,12 @@ REFERENCE_SOURCES = ("pretrain/c01q2", "pretrain/c02q4", "pretrain/c20q2", "pret
 class Mask(StrEnum):
     FULL = "full"
     ASSISTANT = "assistant"
+
+
+class RuntimePolicy(StrEnum):
+    SOURCE = "source"
+    SYNCHRONOUS = "synchronous"
+    LOSS_CURVE = "loss_curve"
 
 
 @dataclass(frozen=True)
@@ -176,7 +182,9 @@ def reference_data_config() -> LmDataConfig:
     )
 
 
-def build_spec(cell: Cell) -> SFTSpec:
+def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE) -> SFTSpec:
+    if runtime == RuntimePolicy.LOSS_CURVE:
+        runtime = RuntimePolicy.SYNCHRONOUS if cell.size == 1024 else RuntimePolicy.SOURCE
     e1 = recipe()
     receipt = model_receipt(cell.size)
     hf_config = receipt["config"]
@@ -269,7 +277,12 @@ def build_spec(cell: Cell) -> SFTSpec:
         tensorstore_cache_bytes=2**31,
         data_seed=cell.seed,
         hf_save_dtype="bfloat16",
-        xla_flags=("--xla_gpu_shard_autotuning=false", "--xla_gpu_nccl_termination_timeout_seconds=600"),
+        xla_flags=(
+            "--xla_gpu_shard_autotuning=false",
+            "--xla_gpu_nccl_termination_timeout_seconds=600",
+        )
+        + (("--xla_gpu_enable_command_buffer=",) if runtime == RuntimePolicy.SYNCHRONOUS else ()),
+        cuda_launch_blocking=True if runtime == RuntimePolicy.SYNCHRONOUS else None,
         jax_port=32768 + int(hashlib.sha256(cell.name.encode()).hexdigest()[:8], 16) % 20000,
         wandb_project="snowball-isoflop",
         checkpointer=checkpointer,
@@ -280,8 +293,10 @@ def resources() -> ResourceConfig:
     return ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="1500GB", disk="500GB", replicas=1, preemptible=False)
 
 
-def build_pod(cell: Cell, output_prefix: str = PREFIX) -> TrainLmOnPodConfig:
-    spec = build_spec(cell)
+def build_pod(
+    cell: Cell, output_prefix: str = PREFIX, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE
+) -> TrainLmOnPodConfig:
+    spec = build_spec(cell, runtime=runtime)
     output = f"{output_prefix}/{VERSION}/{cell.name}"
     pod = spec.model.build_train_config(
         StepContext.for_run(output, output_prefix), spec, spec.prepared_data, resources(), cell.stop_step

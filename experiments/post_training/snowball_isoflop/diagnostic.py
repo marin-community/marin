@@ -13,7 +13,7 @@ from marin.training.training import TrainLmOnPodConfig
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.snowball_isoflop.budget import budgeted_map
-from experiments.post_training.snowball_isoflop.config import PREFIX, VERSION, Cell, Mask, build_pod
+from experiments.post_training.snowball_isoflop.config import PREFIX, VERSION, Cell, Mask, RuntimePolicy, build_pod
 from experiments.post_training.snowball_isoflop.run import run_training_pod
 
 
@@ -25,7 +25,7 @@ class RuntimeControl(StrEnum):
 
 
 def diagnostic_pod(cell: Cell) -> TrainLmOnPodConfig:
-    pod = build_pod(cell)
+    pod = build_pod(cell, runtime=RuntimePolicy.SOURCE)
     environment = dict(pod.env_vars or {})
     if cell.phase == f"diagnostic-{RuntimeControl.SERIAL}":
         environment["XLA_FLAGS"] += " --xla_gpu_disable_async_collectives=ALLCOLLECTIVES"
