@@ -1410,6 +1410,26 @@ releases need a separately versioned projection preserving task IDs, provenance
 and resource bytes. Only an identical content-review payload can reuse a review;
 reconversion can change importer provenance even when task files stay identical.
 
+Conversation oracle packets can include `oracle-command.json`, binding the
+source's declared `OracleCommand` to the exact TaskSpec, runtime and resource
+bytes, with its pinned source definition. The command runs inside production
+Harbor Trial. An actor-less task uses a separate machine of its original grader
+environment in the grader workspace; it keeps the original agent budgets and
+deadline and closes before verification. The captured answer becomes the final
+assistant text with the original conversation preserved, using the canonical
+UTF-8 replacement policy. Trial artifacts retain the untouched `answer.bin`
+bytes, actual source exit and resource usage. This control
+adds no candidate actor. Changed task, resource or runtime bindings fail closed.
+
+An explicitly repaired managed environment can also supply `expected-runtime.json`,
+bound to its TaskSpec and runtime. Selected source-grader and oracle-control
+machines record protected interpreter, import-path, module-origin, dependency-lock
+and file-hash observations before source commands run. A mismatch or observation
+timeout is unscored infrastructure failure. The probe has its own five-second
+host and guest cap, bounded by the source phase deadline; the original command
+keeps its full declared deadline. Packets without this binding trigger
+no probe. The source projection does not replace the trusted host judge framework.
+
 Calibration runs inside the full-population oracle filter. Tasks with declared
 limits are validated at exactly those limits. For a task without declared limits,
 stage a new package at 1 CPU, 2 GiB memory, 2 GiB disk, a five-minute agent

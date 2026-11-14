@@ -4,15 +4,16 @@
 """Execute original TaskSpecs within Harbor's trial lifecycle and verdict contract."""
 
 import asyncio
+import json
 import sys
 import time
 from tempfile import TemporaryDirectory
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 
 from rigging.filesystem.storage_path import StoragePath
-from rolloutengine.machines import grading_machine_factory, task_machine
+from rolloutengine.machines import grading_machine_factory, prepare_machine, task_machine
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
 from shellbox.backends.local.disk import verified_local_disk_pool
 from shellbox.backends.local.machine import SYSTEM_DIRECTORIES, LocalMachineFactory
@@ -37,7 +38,13 @@ from taskcompendium.harbor.adapter import (
     declared_execution_limits,
     unsupported_harbor_contract,
 )
+from taskcompendium.harbor.protected_runtime import (
+    RUNTIME_OBSERVATION_TIMEOUT,
+    RuntimeRole,
+    read_runtime_binding,
+)
 from taskcompendium.models import (
+    DEFAULT_WORKSPACE,
     ExecutionRequirements,
     TaskSpec,
     VerifyitGrader,
@@ -74,9 +81,11 @@ from harbor.resource_usage import (
     resource_counters,
     write_resource_usage,
 )
+from harbor.runtime_observation import observe_runtime
 from harbor.trial.errors import (
     AgentTimeoutError,
     EnvironmentStartTimeoutError,
+    RuntimeServiceError,
     VerifierTimeoutError,
 )
 from harbor.trial.hooks import TrialEvent
@@ -137,15 +146,17 @@ class _MeasuredMachine:
         await self.machine.close()
 
 
-class _VerifierFactory:
+class _TrialMachineFactory:
     def __init__(
         self,
         factory: MachineFactory,
         trial: "TaskSpecTrial",
         relay: ModelRelay | None,
         stack: AsyncExitStack,
+        role: RuntimeRole,
     ):
         self.factory, self.trial, self.relay, self.stack = factory, trial, relay, stack
+        self.role = role
 
     @property
     def backend(self):
@@ -165,16 +176,19 @@ class _VerifierFactory:
                 judge=self.relay,
                 candidate=None,
             )
+            await self.trial._observe_runtime(machine, self.role)
+            if self.role is RuntimeRole.ORACLE_CONTROL:
+                return machine
             measured = await _MeasuredMachine.start(
                 machine,
                 self.trial.verdicts,
                 self.trial.paths.verifier_dir / "resource-usage.json",
             )
+            self.stack.push_async_callback(measured.finish_usage)
         except BaseException:
             async with asyncio.timeout(self.trial.config.trial_cleanup_grace_sec):
                 await machine.close()
             raise
-        self.stack.push_async_callback(measured.finish_usage)
         return measured
 
 
@@ -205,6 +219,11 @@ class TaskSpecTrial(Trial):
 
     def _init_agent_environment(self) -> None:
         self.specification = TaskSpec.model_validate_json((self.task.paths.task_dir / TASK_SPEC_FILE).read_text())
+        if isinstance(self.agent, TaskSpecOracleAgent) and self.agent.command is not None:
+            self.agent.command.require_task(self.specification)
+        self.runtime_binding = read_runtime_binding(self.task.paths.task_dir)
+        if self.runtime_binding is not None:
+            self.runtime_binding.require_task(self.specification)
         unsupported = unsupported_harbor_contract(self.specification)
         if unsupported is not None:
             raise ValueError(unsupported)
@@ -357,11 +376,12 @@ class TaskSpecTrial(Trial):
         task = self.specification
         self.result.agent_execution = TimingInfo(started_at=self._now())
         try:
-            self.attempt = await self._await_phase(
-                self.agent.run_task(task, self.machine, self.limits),
-                timeout_sec=self.shape.agent_timeout_sec,
-                timeout_error=AgentTimeoutError("TaskSpec agent deadline expired"),
-            )
+            async with self._oracle_machine() as machine:
+                self.attempt = await self._await_phase(
+                    self.agent.run_task(task, machine, self.limits),
+                    timeout_sec=self.shape.agent_timeout_sec,
+                    timeout_error=AgentTimeoutError("TaskSpec agent deadline expired"),
+                )
         except AgentTimeoutError as error:
             self.attempt = self.agent.attempt or self.attempt
             await self._record_exception(error)
@@ -377,6 +397,8 @@ class TaskSpecTrial(Trial):
                         str(self.agent.exit_code),
                     )
                 await _persist(self.paths.agent_dir / "oracle.txt", self.agent.output)
+                if self.agent.answer is not None:
+                    await _persist(self.paths.agent_dir / "answer.bin", self.agent.answer)
         if self.machine is not None and task.output_paths:
             files = await captured_output_files(
                 self.machine,
@@ -404,6 +426,66 @@ class TaskSpecTrial(Trial):
         finally:
             self.result.verifier.finished_at = self._now()
             await self._emit(TrialEvent.VERIFICATION_END)
+
+    @asynccontextmanager
+    async def _oracle_machine(self):
+        """Use the declared grader environment for an actor-less source OracleCommand."""
+        task = self.specification
+        if self.machine is not None or not isinstance(self.agent, TaskSpecOracleAgent) or self.agent.command is None:
+            yield self.machine
+            return
+        if task.grader.environment is None:
+            raise ValueError("An actor-less OracleCommand requires its original grader environment")
+        environment = task.grader.environment
+        if environment.working_directory is None:
+            # OracleCommand falls back to the grader workspace, not the actor workspace.
+            environment = environment.model_copy(update={"working_directory": DEFAULT_WORKSPACE})
+        async with AsyncExitStack() as stack:
+            machine = await self._await_phase(
+                stack.enter_async_context(
+                    prepare_machine(
+                        environment,
+                        task.resources.all + task.resources.worker,
+                        _TrialMachineFactory(self.factory, self, None, stack, RuntimeRole.ORACLE_CONTROL),
+                        self.runtime,
+                        cleanup_timeout=self.config.trial_cleanup_grace_sec,
+                    )
+                ),
+                timeout_sec=self._environment_build_timeout_sec,
+                timeout_error=EnvironmentStartTimeoutError("TaskSpec oracle environment setup timed out"),
+            )
+            measured = await _MeasuredMachine.start(machine, self.verdicts, self.paths.agent_dir / "resource-usage.json")
+            try:
+                yield measured
+            finally:
+                await measured.finish_usage()
+
+    async def _observe_runtime(self, machine: Machine, role: RuntimeRole) -> None:
+        if self.runtime_binding is None or role is RuntimeRole.HOST_FRAMEWORK:
+            return
+        expected = self.runtime_binding.roles.get(role)
+        if expected is None:
+            return
+        if role is RuntimeRole.ORACLE_CONTROL:
+            directory = self.paths.agent_dir
+            deadline = self.shape.agent_timeout_sec
+        else:
+            directory = self.paths.verifier_dir
+            deadline = self.shape.verifier_timeout_sec
+        timeout = min(RUNTIME_OBSERVATION_TIMEOUT, deadline)
+        try:
+            await self._await_phase(
+                observe_runtime(machine, expected, role, directory / "protected-runtime.json", timeout),
+                timeout_sec=timeout,
+                timeout_error=RuntimeServiceError(f"Protected {role.value} runtime observation timed out"),
+            )
+        except RuntimeServiceError as error:
+            await _persist(
+                directory / "protected-runtime-failure.json",
+                json.dumps({"role": role.value, "status": "infrastructure_pending", "timeout_sec": timeout,
+                            "detail": str(error), "stdout": None, "stderr": None}),
+            )
+            raise
 
     async def _grade(self) -> GradeResult:
         task, grader = self.specification, self.specification.grader
@@ -437,7 +519,7 @@ class TaskSpecTrial(Trial):
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
-                    _VerifierFactory(self.factory, self, relay, stack),
+                    _TrialMachineFactory(self.factory, self, relay, stack, RuntimeRole.SOURCE_GRADER),
                     self.runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
@@ -494,7 +576,7 @@ class TaskSpecTrial(Trial):
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
-                    _VerifierFactory(self.factory, self, relay, stack),
+                    _TrialMachineFactory(self.factory, self, relay, stack, RuntimeRole.HOST_FRAMEWORK),
                     self.runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )

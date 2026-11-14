@@ -20,6 +20,7 @@ from rolloutengine.models import (
 from rolloutengine.recorder import harness_rollout
 from shellbox.machine import Command, ExitReason, Machine
 from taskcompendium.chat import assistant_message, chat_conversation, chat_input
+from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -167,8 +168,37 @@ class TaskSpecOracleAgent(TaskSpecAgent):
         self.task_dir = task_dir
         self.exit_code: int | None = None
         self.output = b""
+        self.answer: bytes | None = None
+        self.command = read_oracle_command(task_dir)
 
     async def run_task(self, task: TaskSpec, machine: Machine | None, limits: RolloutLimits) -> GradingAttempt:
+        if self.command is not None:
+            self.command.require_task(task)
+            if machine is None:
+                raise ValueError("The declared OracleCommand requires its original execution environment")
+            self.attempt = empty_attempt(task)
+            await upload_resources(machine, task.resources.oracle, limits.total_turn_timeout, user=None)
+            result = await machine.run(
+                Command(("/bin/bash", "-lc", self.command.submission.command), timeout=limits.total_turn_timeout)
+            )
+            self.exit_code = result.exit_code
+            self.output = result.stdout + result.stderr
+            if result.reason == ExitReason.TIMED_OUT:
+                raise AgentTimeoutError("TaskSpec oracle command timed out")
+            answer_file = self.command.submission.answer_file
+            assert answer_file is not None
+            answer = await machine.run(Command(("cat", answer_file), timeout=limits.total_turn_timeout))
+            if answer.reason == ExitReason.TIMED_OUT:
+                raise AgentTimeoutError("TaskSpec oracle answer capture timed out")
+            if answer.exit_code != 0 or answer.stdout_truncated:
+                raise ValueError("The original OracleCommand did not produce a complete readable answer file")
+            self.answer = answer.stdout
+            self.attempt = GradingAttempt(
+                ConversationTrace(
+                    events=(*task.context.events, TextMessage(role="assistant", content=self.answer.decode(errors="replace")))
+                )
+            )
+            return self.attempt
         if not has_oracle_solution(task):
             response = json.loads((self.task_dir / "solution/response.json").read_text())
             self.attempt = control_attempt(task, response)
