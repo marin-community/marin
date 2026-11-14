@@ -1,7 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from iris.rpc import job_pb2
+
+
+@pytest.mark.parametrize("groups", [(8, 16), (16, 16, 16)])
+def test_locality_groups_after_restart_retry_and_cancel_remain_one_job(journey, groups):
+    job = journey.submit("locality-groups", tasks=sum(groups), locality_groups=groups, failure_retries=1)
+    journey.settle()
+    journey.restart()
+    assert tuple(journey.controller.get_job_status(job.wire_id).request.coscheduling.group_sizes) == groups
+
+    journey.fail(job[groups[0]])
+    journey.settle()
+    launched = journey.backend_events(kind="launched")
+    assert len(launched) == 2 * sum(groups)
+    assert all(event.group_sizes == groups for event in launched)
+    assert all(len(journey.task(job[index]).attempts) == 2 for index in range(job.tasks))
+
+    journey.cancel(job)
+    journey.settle()
+    assert journey.job(job).state == job_pb2.JOB_STATE_KILLED
+    assert all(journey.task(job[index]).state == job_pb2.TASK_STATE_KILLED for index in range(job.tasks))
 
 
 def test_coscheduled_job_when_one_task_exhausts_retries_stops_the_gang(journey):

@@ -1732,6 +1732,33 @@ def test_kueue_required_topology_for_nvlink_domain():
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
 
 
+@pytest.mark.parametrize("groups", [(8, 16), (16, 16, 16)])
+def test_locality_groups_emit_one_gang_with_separate_ranked_pod_sets(groups):
+    manifests = []
+    for index in range(sum(groups)):
+        request = _sliced_req(f"/job/task/{index}", num_tasks=sum(groups), group_by="nvlink.domain")
+        request.coscheduling.group_sizes.extend(groups)
+        manifests.append(_build_pod_manifest(request, pod_config()))
+
+    assert len({pod["metadata"]["labels"][KUEUE_POD_GROUP_NAME] for pod in manifests}) == 1
+    offset = 0
+    role_hashes = set()
+    for size in groups:
+        members = manifests[offset : offset + size]
+        hashes = {pod["metadata"]["annotations"]["kueue.x-k8s.io/role-hash"] for pod in members}
+        assert len(hashes) == 1
+        role_hashes.update(hashes)
+        assert [int(pod["metadata"]["labels"][KUEUE_POD_GROUP_POD_INDEX]) for pod in members] == list(range(size))
+        for index, pod in enumerate(members, start=offset):
+            annotations = pod["metadata"]["annotations"]
+            assert annotations[KUEUE_POD_GROUP_TOTAL] == str(sum(groups))
+            assert annotations[KUEUE_REQUIRED_TOPOLOGY] == "ds.coreweave.com/nvlink.domain"
+            assert annotations["iris.task_id"] == f"/job/task/{index}"
+            assert KUEUE_SLICE_SIZE not in annotations
+        offset += size
+    assert len(role_hashes) == len(groups)
+
+
 def test_kueue_required_nvlink_gang_rejects_above_schedulable_slice():
     """A hard nvlink.domain gang larger than a rack's guaranteed-schedulable slice can hang
     whenever the rack is short a node, so it must fail fast (the guard for a programmatic or

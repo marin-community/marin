@@ -280,6 +280,7 @@ def insert_job_and_config(
         constraints_json=constraints_json,
         has_coscheduling=bool(has_cosched),
         coscheduling_group_by=cosched_group,
+        coscheduling_group_sizes=request.coscheduling.group_sizes,
         scheduling_timeout_ms=sched_timeout,
         max_task_failures=max_failures,
         entrypoint_json=entrypoint_json,

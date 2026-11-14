@@ -40,6 +40,7 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
+from skyrlrecipe.locality import RoleTopologyMode
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -365,6 +366,46 @@ def test_cross_host_ep_launch_reserves_policy_and_rollout_nodes(trainer_gpus, ro
 
     assert allocation["num_nodes"] == expected_nodes
     assert allocation["num_nodes"] * allocation["gpus_per_node"] == trainer_gpus + rollout_gpus
+
+
+def test_nvlink_launch_requests_extra_hosts_when_each_group_rounds_up():
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        num_inference_engines=7,
+        inference_engine_data_parallel_size=18,
+        inference_engine_expert_parallel_size=18,
+    )
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+    )
+    execution = dataclasses.replace(_execution(), role_topology=RoleTopologyMode.NVLINK_DOMAIN)
+    step = skyrl_step(spec, execution)
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://test/run", prefix="s3://test", runtime_args=step.runtime_args, deps=step.deps
+        )
+    )
+    allocation = yaml.safe_load(config.launch_config_yaml)["iris"]["allocation"]
+    assert allocation["num_nodes"] == 34
+
+
+def test_nvlink_launch_rejects_tensor_parallel_inference_before_submission():
+    plan = dataclasses.replace(
+        _role_plan(), colocate_all=False, num_inference_engines=1, inference_engine_tensor_parallel_size=2
+    )
+    spec = dataclasses.replace(
+        _spec(),
+        topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
+    )
+    step = skyrl_step(spec, dataclasses.replace(_execution(), role_topology=RoleTopologyMode.NVLINK_DOMAIN))
+    with pytest.raises(ValueError, match="requires vLLM TP1/PP1 EP=DP"):
+        step.build_config(
+            StepContext.for_run(
+                output_path="s3://test/run", prefix="s3://test", runtime_args=step.runtime_args, deps=step.deps
+            )
+        )
 
 
 @pytest.mark.parametrize(

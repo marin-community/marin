@@ -165,9 +165,11 @@ other configured counts with valid Megatron geometry, with no rack-size cap. Run
 for this cross-host path covers the 48/12 layout within one NVLink domain. Other layouts,
 including engines that share or partly fill a host, need separate runtime qualification.
 
-Resource-count validation does not ensure that an expert-parallel group stays within one
-NVLink domain. Iris places the combined policy and rollout allocation, and Ray assigns workers
-within it. An expert group may communicate across the interconnect between hosts or racks.
+Resource-count validation alone does not keep an expert-parallel group within one
+NVLink domain. Without a locality policy, Iris places the combined policy and rollout
+allocation, and Ray assigns workers within it. An expert group may communicate across
+the interconnect between hosts or racks. To keep the trainer and each engine local,
+enable [NVLink role placement](../dev-guide/skyrl.md#keep-each-model-group-within-one-nvlink-domain).
 Check placement and communication-backend support before running a new layout. Accepting a
 72-GPU policy in the planner does not establish a full-rack NVL72 trainer with inference elsewhere.
 

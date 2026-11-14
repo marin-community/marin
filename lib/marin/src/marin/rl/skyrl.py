@@ -20,11 +20,13 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
+from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from skyrlrecipe.locality import RoleTopologyMode, plan_nvlink_roles
 
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
@@ -457,6 +459,7 @@ class IrisSkyRLExecution:
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
+    role_topology: RoleTopologyMode | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -852,6 +855,25 @@ def _launch_config_yaml(
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    num_nodes = spec.topology.num_nodes
+    if execution.role_topology is not None:
+        if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
+            raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
+        plan = spec.topology.role_plan
+        locality = plan_nvlink_roles(
+            policy_gpus=plan.policy_num_nodes * plan.policy_num_gpus_per_node,
+            num_inference_engines=plan.num_inference_engines,
+            tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
+            pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
+            data_parallel_size=plan.inference_engine_data_parallel_size,
+            expert_parallel_size=plan.inference_engine_expert_parallel_size,
+            inference_backend=cast(str, _declared_config_value(recipe, "generator.backend")),
+            colocate_all=plan.colocate_all,
+            colocate_policy_ref=plan.colocate_policy_ref,
+            gpus_per_node=spec.topology.gpus_per_node,
+            max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
+        )
+        num_nodes = locality.num_nodes
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
@@ -876,8 +898,9 @@ def _launch_config_yaml(
             "cluster_config": execution.cluster_config,
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
             "wandb_entity": execution.wandb_entity,
+            "role_topology": execution.role_topology.value if execution.role_topology is not None else None,
             "allocation": {
-                "num_nodes": spec.topology.num_nodes,
+                "num_nodes": num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,
                 "gpu_variant": spec.topology.gpu_variant,
                 "cpu": execution.cpu,

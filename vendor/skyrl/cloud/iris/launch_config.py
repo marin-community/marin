@@ -22,6 +22,7 @@ from cloud.iris.rl_config_translation import (
     training_type_for_entrypoint,
 )
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from cloud.iris.role_topology import RoleTopology, derive_role_topology
 from cloud.iris.runtime_environment import RuntimeMode, runtime_profile_for_strategy
 from marinskyrl.distillation import (
     TeacherModelSpec,
@@ -103,6 +104,7 @@ class LaunchTopology:
     num_nodes: int
     gpus_per_node: int
     gpu_variant: str
+    role_topology: RoleTopology | None = None
 
 
 @dataclass
@@ -120,6 +122,8 @@ class IrisConfig:
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
     container_profile: str | None = None
+    # OmegaConf serializes enum names; launch documents use enum values.
+    role_topology: str | None = None
 
 
 @dataclass
@@ -290,8 +294,8 @@ def _validate_inputs(inputs: dict[str, Any]) -> None:
             data_source(value)
 
 
-def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
-    """Validate explicit Iris resources against the launch mode's active roles."""
+def derive_launch_topology(config: dict[str, Any]) -> LaunchTopology:
+    """Derive placement from one role plan and check the requested allocation."""
     skyrl = config["skyrl"]
     if not isinstance(skyrl, dict):
         raise TypeError("skyrl must be a mapping")
@@ -299,7 +303,8 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
     plan = derive_policy_export_role_plan(skyrl) if checkpoint_export else derive_role_plan(skyrl)
     allocation = config["iris"]["allocation"]
     policy = plan.claim("policy")
-    expected_nodes = derive_num_nodes(plan)
+    role_topology = derive_role_topology(config, plan)
+    expected_nodes = role_topology.num_nodes if role_topology is not None else derive_num_nodes(plan)
     if allocation["num_nodes"] != expected_nodes:
         raise ValueError(
             f"iris.allocation.num_nodes={allocation['num_nodes']} does not match SkyRL role plan's "
@@ -315,7 +320,13 @@ def validate_iris_allocation(config: dict[str, Any]) -> IrisAllocationConfig:
             f"iris.allocation.gpus_per_node={allocation['gpus_per_node']} does not match SkyRL policy "
             f"placement ({policy.gpus_per_node})"
         )
-    return IrisAllocationConfig(**allocation)
+    validated = IrisAllocationConfig(**allocation)
+    return LaunchTopology(
+        num_nodes=validated.num_nodes,
+        gpus_per_node=validated.gpus_per_node,
+        gpu_variant=validated.gpu_variant,
+        role_topology=role_topology,
+    )
 
 
 def validate_launch_config(config: DictConfig) -> LaunchTopology:
@@ -343,7 +354,7 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         RaySpillBackend(ray["spill_backend"]),
         ray["spill_dir"],
     )
-    allocation = validate_iris_allocation(raw)
+    topology = derive_launch_topology(raw)
     skyrl = raw["skyrl"]
     run = raw["run"]
     if run["mode"] == RunMode.TRAIN:
@@ -374,8 +385,4 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     trainer_seed = skyrl.get("trainer", {}).get("seed")
     if trainer_seed != run["seed"]:
         raise ValueError(f"run.seed={run['seed']} does not match skyrl.trainer.seed={trainer_seed!r}")
-    return LaunchTopology(
-        num_nodes=allocation.num_nodes,
-        gpus_per_node=allocation.gpus_per_node,
-        gpu_variant=allocation.gpu_variant,
-    )
+    return topology
