@@ -711,7 +711,7 @@ def main() -> None:
     )
     releases = args.sequence.split(",") if args.sequence else [args.release]
     assert all(item.split(":")[0] in RELEASES for item in releases), releases
-    assert all(item.split(":")[1] in (*CANDIDATE_ARGS, "tp2") for item in releases if ":" in item), releases
+    assert all(item.split(":")[1] in (*CANDIDATE_ARGS, "tp2", "tp2fg") for item in releases if ":" in item), releases
     configs = [
         _variant_config(
             args,
@@ -794,6 +794,28 @@ TP2_FLAGS = (
 )
 
 
+TP2FG_FLAGS = (
+    "--disable-custom-all-reduce",
+    "",
+    "--max-num-seqs",
+    "128",
+    "--compilation-config",
+    json.dumps(
+        BASE_COMPILATION
+        | {
+            "cudagraph_mode": "FULL_AND_PIECEWISE",
+            "pass_config": {"fuse_allreduce_rms": False, "enable_sp": False, "fuse_gemm_comms": False},
+        }
+    ),
+)
+
+
+def label_overlays_spec(args, label: str) -> str:
+    spec = dict(entry.split("=", 1) for entry in args.label_overlay).get(label)
+    assert spec, f"{label} needs --label-overlay {label}=FILE:SHA256"
+    return spec
+
+
 def _overlay(release: VllmGpuRelease, spec: str) -> VllmGpuRelease:
     url_file, sha256 = spec.rsplit(":", 1)
     url = Path(url_file).read_text().strip()
@@ -812,6 +834,13 @@ def _variant_config(args, target: ServedTarget, name, item, geometry, iris_confi
     tensor_parallel_size = args.tensor_parallel_size
     env = (*(tuple(entry.split("=", 1)) for entry in args.env), *LABEL_ENV.get(label, ()))
     flags: tuple[str, ...] = CANDIDATE_ARGS[label] if label in CANDIDATE_ARGS else ()
+    if label == "tp2fg":
+        # TP2/DP8 with full decode graphs: the #119 overlay plus the ShortConv guard relaxation.
+        release = _overlay(release, label_overlays_spec(args, label))
+        tensor_parallel_size = 2
+        geometry = replace(geometry, tensor_parallel_size=2, data_parallel_size=target.gpus_per_host // 2)
+        env = (*env, *TP2_ENV)
+        flags = TP2FG_FLAGS
     if label == "tp2":
         assert tag == "0ac9dcb", "the #119 overlay is built on 0ac9dcb"
         assert args.tp2_overlay, "tp2 needs --tp2-overlay FILE:SHA256 (the #119 overlay wheel)"
@@ -821,7 +850,7 @@ def _variant_config(args, target: ServedTarget, name, item, geometry, iris_confi
         env = (*env, *TP2_ENV)
         flags = TP2_FLAGS
     label_overlays = dict(entry.split("=", 1) for entry in args.label_overlay)
-    if label in label_overlays:
+    if label in label_overlays and label != "tp2fg":
         release = _overlay(release, label_overlays[label])
     if args.overlay_wheel:
         url_file, sha256 = args.overlay_wheel.rsplit(":", 1)
