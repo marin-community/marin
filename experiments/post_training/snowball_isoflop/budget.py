@@ -19,12 +19,15 @@ logger = logging.getLogger(__name__)
 
 
 def allocated_seconds(task: TaskStatus, now: Timestamp, job_started_at: Timestamp | None) -> float:
-    """Include job setup when worker build timestamps are missing, plus all attempts."""
-    starts = [job_started_at, task.started_at]
+    """Charge known worker time, excluding unadmitted pods without assigned nodes."""
+    starts = [task.started_at]
     if task.build_metrics is not None:
         starts.append(task.build_metrics.started_at)
     starts.extend(attempt.started_at for attempt in task.attempts)
     present = [value.epoch_seconds() for value in starts if value is not None]
+    assigned = bool(task.worker_id) or any(attempt.node_name for attempt in task.attempts)
+    if not present and assigned and job_started_at is not None:
+        present.append(job_started_at.epoch_seconds())
     if not present:
         return 0.0
     end = task.finished_at or now
