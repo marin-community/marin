@@ -50,6 +50,7 @@ class ProbeConfig:
     filler_tokens: int = 2048
     data_parallel_size: int = 16
     profile_per_engine: tuple[int, ...] = (1, 32, 128)
+    d1_peer_loads: tuple[int, ...] = (1, 2, 8, 32)
 
 
 def _top(entry: dict | None) -> list[list]:
@@ -251,6 +252,37 @@ async def decode_consistency(client: Client, cases: dict, config: ProbeConfig) -
     }
     logger.info("decode consistency: %d cases batched on all engines", len(batched))
     return {"alone": alone, "batched": batched}
+
+
+async def peer_load_sweep(client: Client, cases: dict, config: ProbeConfig) -> dict:
+    """D1 discrimination: engine 0 greedy decode alone and with every peer engine at k requests.
+
+    With DP padding, engine 0 runs at the largest token count of any engine. If D1 comes from
+    batch-shape-dependent kernels, engine 0 stays bitwise identical while peers stay at or below its
+    own graph bucket and changes once peer load moves it to a larger padded graph.
+    """
+    gate = cases["gate"]
+    probe_cases = gate[: config.invariance_cases // 2] + gate[-config.invariance_cases // 2 :]
+    filler_prompts = [case["tokens"] for case in cases["load"][:64]]
+    peers = list(range(1, config.data_parallel_size))
+
+    async def decode_all() -> dict:
+        return {case["case_id"]: await client.greedy(case["tokens"], 64, rank=0) for case in probe_cases}
+
+    results = {"alone_before": await decode_all(), "peer_load": {}}
+    for per_rank in config.d1_peer_loads:
+        jobs = await _filler(client, filler_prompts, peers, per_rank, config.filler_tokens)
+        busy = await _wait_engines_busy(client, peers)
+        decoded = await decode_all()
+        after = _running_by_engine(await client.metrics_text())
+        for job in jobs:
+            job.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
+        results["peer_load"][str(per_rank)] = {"greedy": decoded, "busy_before": busy, "busy_after": after}
+        logger.info("D1 sweep: peers at %d per engine done; busy=%s", per_rank, busy)
+        await asyncio.sleep(5.0)
+    results["alone_after"] = await decode_all()
+    return results
 
 
 async def long_probes(client: Client, cases: dict, config: ProbeConfig) -> dict:

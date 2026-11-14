@@ -60,6 +60,7 @@ from experiments.evaluation.hero_vllm_hillclimb.probes import (
     long_probes,
     long_repeats,
     long_repeats_profiled,
+    peer_load_sweep,
     profile_points,
 )
 
@@ -320,6 +321,13 @@ CANDIDATE_ARGS = {
         "--compilation-config",
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
+    # D1 test: one capture size, so every decode step pads to the same graph regardless of peer load.
+    "fg128cap1": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [128]}),
+    ),
     "fg128symm": (
         "--max-num-seqs",
         "128",
@@ -380,6 +388,7 @@ _PHASES = {
     "decode": decode_consistency,
     "longrep": long_repeats,
     "longprof": long_repeats_profiled,
+    "d1": peer_load_sweep,
 }
 
 
