@@ -898,6 +898,24 @@ Inspect `serving.json`, `prepared.json`, `trials/*/measurement.json` and
 pending or unmeasured sources. Each infrastructure retry receives a fresh trial
 directory. Keep existing run prefixes immutable.
 
+To continue a campaign after its worker has stopped and sealed
+`trials/model-requests-final.json`, select a new output prefix and add
+`--previous-campaign <old-run-prefix> --previous-serving-sha256 <old-serving.json-sha256>`.
+Use the same frozen source queue. The worker verifies the source selection,
+model revision, tokenizer, template, sampling and runtime before reading the
+previous attempt receipts. It verifies each scored archive and rechecks TaskSpec
+network qualification. A task's first valid score, including zero, is retained;
+only unfinished tasks execute. Individual attempt receipts also survive a source
+aggregate interrupted by a framework failure. Every continuation writes a new
+catalog and retains references to the previous attempts.
+A continuation records its parent serving and source-queue bindings before
+dispatch. Later runs verify this ancestry even when an interrupted worker never
+visited a source or wrote its aggregate; inherited scores remain reusable once.
+
+Per-source token and GPU figures sum available source aggregates. An interrupted
+source may lack those totals; use every campaign's final model-traffic receipt
+and Iris serving allocation durations for the complete per-model cost report.
+
 Typed `difficulty_measurements` live in a FineStore catalog or campaign archive.
 Load them into an installed Atlas after its schema migration:
 
