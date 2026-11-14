@@ -565,6 +565,20 @@ def test_replica_aware_restore_broadcasts_across_processes():
     eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
+def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
+    """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
+    assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
+
+
+def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
+    """A lock file left by a crashed save would otherwise block every later save to that step."""
+    results = eight_device_checkpoints.resave_after_interrupted_save_across_processes()
+
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in results:
+        np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
+
+
 def test_checkpoint_written_on_one_mesh_loads_on_another():
     """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
     run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)

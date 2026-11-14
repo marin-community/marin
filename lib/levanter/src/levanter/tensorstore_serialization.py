@@ -9,6 +9,7 @@ import ctypes
 import logging
 import math
 import os
+import pathlib
 import sys
 import threading
 import time
@@ -17,7 +18,7 @@ import zlib
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache, partial
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Literal, Optional, Sequence
 
 import equinox
 import haliax as hax
@@ -47,7 +48,11 @@ from levanter.utils.byte_budget import HostByteBudget
 logger = logging.getLogger(__name__)
 
 ARRAY_DRIVER = "zarr3"
+FileIoLocking = Literal["os", "lockfile", "none"]
 KVSTORE_DRIVER = "ocdbt"
+_FILE_KVSTORE_DRIVER = "file"
+# TensorStore's file driver writes a key through "<key>.__lock" and renames it into place.
+_LOCK_FILE_SUFFIX = ".__lock"
 # JAX's memory kind for host memory a device can address. Offloaded optimizer state lives here.
 _HOST_MEMORY_KIND = "pinned_host"
 _PAGEABLE_HOST_MEMORY_KIND = "unpinned_host"
@@ -155,7 +160,7 @@ def build_kvstore_spec(path: str) -> dict:
         return {"driver": "gcs", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
     elif parsed.scheme in ("", "file"):
         file_path = urllib.parse.unquote(parsed.path) if parsed.scheme == "file" else path
-        return {"driver": "file", "path": os.path.abspath(file_path)}
+        return {"driver": _FILE_KVSTORE_DRIVER, "path": os.path.abspath(file_path)}
     else:
         raise ValueError(f"Unsupported URI scheme for tensorstore: {parsed.scheme!r} in {path!r}")
 
@@ -224,6 +229,17 @@ class TensorStoreWriteConfig:
     data_copy_concurrency: int = 16
     """Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data."""
 
+    file_io_locking: FileIoLocking | None = None
+    """How TensorStore's file driver locks a key while committing it.
+
+    None picks ``lockfile`` when several processes save to a local path, and TensorStore's default
+    otherwise. The default advisory OS locks do not exclude writers on different NFS clients, which
+    then race on the OCDBT manifest commit (``Failed to rename ... manifest.ocdbt.__lock``); an
+    exclusively created lock file is enforced by the NFS server. A lock file outlives a process that
+    crashes mid-commit and would then block every later save to that directory, so a ``lockfile``
+    save first removes lock files abandoned there by an earlier, interrupted save.
+    """
+
     def __post_init__(self) -> None:
         if self.max_write_replicas < 1:
             raise ValueError(f"max_write_replicas must be at least 1, got {self.max_write_replicas}")
@@ -287,11 +303,51 @@ def _tensorstore_read_context(config: TensorStoreReadConfig) -> ts.Context:
     return ts.Context(spec)
 
 
-def _tensorstore_write_context(config: TensorStoreWriteConfig) -> ts.Context:
+def _file_io_locking(config: TensorStoreWriteConfig, checkpoint_dir: str) -> FileIoLocking | None:
+    if config.file_io_locking is not None:
+        return config.file_io_locking
+    if jax.process_count() > 1 and build_kvstore_spec(checkpoint_dir)["driver"] == _FILE_KVSTORE_DRIVER:
+        return "lockfile"
+    return None
+
+
+def _remove_abandoned_lock_files(checkpoint_dir: str) -> None:
+    """Delete lock files that an interrupted save left in a local checkpoint directory.
+
+    Callers run this before any process opens the checkpoint's stores, so every lock file present
+    belongs to a commit that can no longer finish. Removing it leaves the OCDBT database as OS
+    locking would see it: the last committed manifest, plus unreferenced data files.
+    """
+    kvstore = build_kvstore_spec(checkpoint_dir)
+    if kvstore["driver"] != _FILE_KVSTORE_DRIVER or not os.path.isdir(kvstore["path"]):
+        return
+    for lock_file in pathlib.Path(kvstore["path"]).rglob(f"*{_LOCK_FILE_SUFFIX}"):
+        logger.warning("Removing lock file %s abandoned by an interrupted save", lock_file)
+        lock_file.unlink(missing_ok=True)
+
+
+def _prepare_file_io_locking(config: TensorStoreWriteConfig, checkpoint_dir: str) -> FileIoLocking | None:
+    """Resolve the save's locking mode and, for ``lockfile``, clear abandoned lock files.
+
+    Call once every process has finished its previous save and before any opens this one's stores.
+    Process 0 sweeps while the others wait at a barrier, so no lock file it removes is held by a
+    live commit.
+    """
+    file_io_locking = _file_io_locking(config, checkpoint_dir)
+    if file_io_locking == "lockfile":
+        if jax.process_index() == 0:
+            _remove_abandoned_lock_files(checkpoint_dir)
+        jax_utils.barrier_sync()
+    return file_io_locking
+
+
+def _tensorstore_write_context(config: TensorStoreWriteConfig, file_io_locking: FileIoLocking | None) -> ts.Context:
     spec = ts_impl._TS_CONTEXT.spec.to_json()
     spec["cache_pool"] = {"total_bytes_limit": config.cache_pool_bytes}
     spec["cache_pool#remote"] = {"total_bytes_limit": config.cache_pool_bytes}
     spec["data_copy_concurrency"] = {"limit": config.data_copy_concurrency}
+    if file_io_locking is not None:
+        spec["file_io_locking"] = {"mode": file_io_locking}
     return ts.Context(spec)
 
 
@@ -668,6 +724,7 @@ def tree_serialize_leaves_tensorstore(
         plans,
         manager,
         write_config,
+        str(checkpoint_dir),
         commit_callback,
         on_local_commit,
         on_staged,
@@ -690,6 +747,7 @@ def _serialize_arrays(
     plans: Sequence[_WritePlan],
     manager: array_ser.GlobalAsyncCheckpointManager,
     config: TensorStoreWriteConfig,
+    checkpoint_dir: str,
     commit_callback: Callable,
     on_local_commit: Optional[Callable[[str], None]],
     on_staged: Optional[Callable[[int], None]],
@@ -704,9 +762,11 @@ def _serialize_arrays(
     """
     manager.wait_until_finished()
 
+    file_io_locking = _prepare_file_io_locking(config, checkpoint_dir)
+
     # JAX's process-lifetime context accumulates caches across saves, since each save writes a
     # new OCDBT database (#6785). Give each save bounded caches and copy concurrency of its own.
-    context = _tensorstore_write_context(config)
+    context = _tensorstore_write_context(config, file_io_locking)
     gate = HostByteBudget(config.max_staged_host_bytes)
     commit_futures: list[ts.Future] = []
 

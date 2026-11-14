@@ -181,6 +181,9 @@ rolls through it.
 | `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 16 GiB  |
 | `checkpointer.write.cache_pool_bytes`      | Soft limit for each TensorStore write cache.                                            | 1 GiB   |
 | `checkpointer.write.data_copy_concurrency` | Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data.           | 16      |
+| `checkpointer.write.file_io_locking`       | TensorStore file driver locking: `os`, `lockfile`, or `none`.                          | unset   |
+
+When unset, `file_io_locking` selects `lockfile` for multi-process saves to local paths, such as a shared NFS directory, and TensorStore's default otherwise. TensorStore's default advisory OS locks do not exclude writers on different NFS clients, so their manifest commits race; the NFS server enforces an exclusively created lock file. Before a `lockfile` save, process 0 removes `*.__lock` files that an interrupted save left in the checkpoint directory, while the other processes wait.
 
 #### Checkpoint Telemetry
 
