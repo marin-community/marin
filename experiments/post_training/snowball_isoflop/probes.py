@@ -13,6 +13,7 @@ from marin.execution.lazy import StepContext
 from marin.training.training import TrainLmOnPodConfig, apply_output_path
 
 from experiments.post_training.snowball_isoflop.config import (
+    BATCH_SIZE,
     PREFIX,
     SEQ_LEN,
     VERSION,
@@ -94,10 +95,14 @@ class Probe:
         return Cell(self.size, Mask.ASSISTANT, self.seed, self.steps, (self.steps,), label)
 
 
-def batch_probes(size: int) -> tuple[Probe, ...]:
+def batch_probes(size: int, layout: Layout = Layout()) -> tuple[Probe, ...]:
     # The accumulation-only probe diagnoses overhead; five microbatch increases
     # select a training batch with at least the approved baseline exposure.
-    return (Probe("B-accumulation", size, 1, 1), *(Probe("B", size, microbatch, 4) for microbatch in (1, 2, 4, 8, 16)))
+    accumulation = BATCH_SIZE // layout.batch_shards
+    return (
+        Probe("B-accumulation", size, 1, 1, layout=layout),
+        *(Probe("B", size, microbatch, accumulation, layout=layout) for microbatch in (1, 2, 4, 8, 16)),
+    )
 
 
 def layout_probes(batch_probe: Probe) -> tuple[Probe, ...]:
@@ -162,7 +167,7 @@ def build_probe_pod(probe: Probe) -> TrainLmOnPodConfig:
                 else spec.trainer_config.max_eval_batches
             ),
         ),
-        snowball_sft=replace(spec.snowball_sft, record_dispatch_counts=probe.phase.startswith("C")),
+        snowball_sft=replace(spec.snowball_sft, record_dispatch_counts=probe.phase.startswith(("B", "C"))),
         mesh=probe.layout.mesh(),
         batch_size=probe.batch_size,
         per_device_parallelism=probe.microbatch,

@@ -94,12 +94,20 @@ def run_probe(probe: Probe) -> dict:
 def batch_saturation(size: int) -> dict:
     candidates = batch_probes(size)
     diagnostic = run_probe(candidates[0])
+    result = saturation_search(size, candidates[1:])
+    return {**result, "accumulation_diagnostic": diagnostic}
+
+
+def saturation_search(size: int, candidates: tuple[Probe, ...]) -> dict:
+    """Bracket batch throughput using at most seven safe-layout measurements."""
+    if not candidates or any(probe.size != size for probe in candidates):
+        raise ValueError("Batch candidates must share the requested model size")
     reports = []
     valid = []
     small_gains = 0
     selected = None
     reason = "search_limit_before_bracketed_saturation"
-    pending = list(candidates[1:])
+    pending = list(candidates)
     accumulating = False
     while len(reports) < 7:
         if not pending:
@@ -112,6 +120,9 @@ def batch_saturation(size: int) -> dict:
         report = run_probe(probe)
         reports.append(report)
         memory_limited = report["status"] == "memory_limit"
+        if not memory_limited and any(report["measurement"][key] != 0 for key in ("sender_dropped", "receiver_dropped")):
+            reason = "missing_or_nonzero_dispatch_counts"
+            break
         headroom = None if memory_limited else report["measurement"]["minimum_memory_headroom_fraction"]
         if not memory_limited and headroom is None:
             reason = "missing_memory_statistics"
@@ -143,7 +154,6 @@ def batch_saturation(size: int) -> dict:
         "selected": selected,
         "reason": reason,
         "accumulation_growth_used": accumulating,
-        "accumulation_diagnostic": diagnostic,
         "probes": reports,
     }
 
