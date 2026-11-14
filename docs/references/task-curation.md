@@ -1992,6 +1992,10 @@ Each attempt uses a fresh container and a fresh native package directory.
 Preserve the original packages, trials and published prefixes; select a new
 output version when rerunning.
 
+Native Trial results retain the verifier script's return code in
+`verifier_result.exit_code`, separately from its reward. Negative controls
+require the observed exit code; a reward file alone does not establish exit zero.
+
 The collector requires every task's trial, preserves its independent
 solution exit code and structured verifier verdict, and emits oracle-filter.json
 plus oracle-filter-summary.json. It writes the final calibrated requirements
