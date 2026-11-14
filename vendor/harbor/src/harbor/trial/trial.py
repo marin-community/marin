@@ -223,10 +223,14 @@ class Trial(ABC):
         self._pending_cleanup_tasks: set[asyncio.Task[Any]] = set()
 
         self._init_logger()
-        self._init_timeouts()
-        self._init_agent()
-        self._init_agent_environment()
-        self._init_artifact_handler()
+        try:
+            self._init_timeouts()
+            self._init_agent()
+            self._init_agent_environment()
+            self._init_artifact_handler()
+        except BaseException:
+            self._close_logger_handler()
+            raise
 
     @property
     def result(self) -> TrialResult:

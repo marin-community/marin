@@ -14,6 +14,7 @@ import httpx
 import pytest
 from finestore.reader import ReadView
 from harbor.llms.openai_llm import OpenAILLM
+from harbor.utils.logger import logger as harbor_logger
 from harbor.llms.vllm_tokenization import completion_budget_from_count, tokenize_url
 from finestore.rl.difficulty import (
     MEASUREMENTS,
@@ -220,6 +221,10 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         ]
         assert not candidate_requests
         assert len(physical_attempts) == 1
+        failed_log = next((tmp_path / "local").rglob("trial.log"))
+        size = failed_log.stat().st_size
+        harbor_logger.getChild("harbor.trial.trial.candidate").warning("Later candidate log after construction failure")
+        assert failed_log.stat().st_size == size
         return
     assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
         "pending", 0 if unserved or provider_wait else 1, 0 if unserved or provider_wait else int(graded_reward), 2 if unserved or provider_wait else 1)
