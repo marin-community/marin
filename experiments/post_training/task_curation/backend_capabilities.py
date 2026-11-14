@@ -24,13 +24,14 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.local.disk import LocalDiskPool
-from shellbox.machine import UnsupportedMachineSpec
+from shellbox.machine import HostImage, PackageSpec, RegistryImage, UnsupportedMachineSpec
 from shellbox.requirements import Requirement, Support
 from shellbox.survey import CapabilityCell, Checker, capability_matrix, production_checkers
 from taskcompendium.backend_requirements import (
     BackendFit,
     BackendSourceMap,
     BackendSurvey,
+    FitSupport,
     RuntimeProfile,
     backend_schema_sha256,
     execution_resource_shape,
@@ -42,37 +43,87 @@ from experiments.post_training.task_curation.catalog_identity import canonical_b
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 SUPPORT_ORDER = (Support.SUPPORTED, Support.PARTIAL, Support.UNSUPPORTED)
+APPLICABLE_ORDER = (FitSupport.SUPPORTED, FitSupport.PARTIAL, FitSupport.UNSUPPORTED)
 RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")
 
 
+def environment_kind(source) -> Requirement:
+    """The environment kind a converted role resolves to, named by its machine source.
+
+    The matrix cell keyed by this requirement records each validator's acceptance of a
+    minimal probe of the kind, so backend applicability is read from the same measured
+    cells and cannot drift from the validators.
+    """
+    if isinstance(source, HostImage):
+        return Requirement.HOST_IMAGE
+    if isinstance(source, PackageSpec):
+        return Requirement.PACKAGE_SPEC
+    if isinstance(source, RegistryImage):
+        return Requirement.DOCKER_IMAGE
+    raise ValueError(
+        f"Converted environments resolve to RegistryImage, HostImage or PackageSpec, not {type(source).__name__}"
+    )
+
+
+def combined_fit(values: Iterable[FitSupport]) -> FitSupport:
+    """The worst applicable outcome; applicability outcomes never dominate a real verdict."""
+    applicable = [value for value in values if value in APPLICABLE_ORDER]
+    if applicable:
+        return max(applicable, key=APPLICABLE_ORDER.index)
+    return FitSupport.NOT_APPLICABLE if FitSupport.NOT_APPLICABLE in values else FitSupport.ROLE_ABSENT
+
+
 def production_matrix(checkers: dict[str, Checker]) -> list[CapabilityCell]:
-    """Combine factory evidence with production setup and cleanup orchestration."""
-    return [
-        (
-            cell.model_copy(
-                update={
-                    "support": Support.SUPPORTED,
-                    "evidence": (*cell.evidence, "lib/rolloutengine/src/rolloutengine/cleanup.py"),
-                    "note": "Rolloutengine bounds cleanup independently of factory creation.",
-                }
+    """Combine factory evidence with production setup, startup and cleanup orchestration."""
+    orchestrated = {
+        Requirement.CLEANUP_TIMEOUT: (
+            "lib/rolloutengine/src/rolloutengine/cleanup.py",
+            "Rolloutengine bounds cleanup independently of factory creation.",
+        ),
+        Requirement.STARTUP_TIMEOUT: (
+            "lib/rolloutengine/src/rolloutengine/machines.py:_prepare_machine",
+            "Rolloutengine bounds machine startup with the runtime startup deadline; "
+            "Daytona also enforces it at creation.",
+        ),
+    }
+    cells = []
+    for cell in capability_matrix(checkers):
+        upgrade = orchestrated.get(cell.requirement)
+        if upgrade is not None and cell.support != Support.UNSUPPORTED:
+            evidence, note = upgrade
+            cells.append(
+                cell.model_copy(
+                    update={"support": Support.SUPPORTED, "evidence": (*cell.evidence, evidence), "note": note}
+                )
             )
-            if cell.requirement == Requirement.CLEANUP_TIMEOUT
-            else (
+        elif cell.requirement == Requirement.SETUP:
+            cells.append(
                 cell.model_copy(
                     update={
-                        "evidence": (*cell.evidence, "lib/rolloutengine/src/rolloutengine/machines.py:_prepare_machine"),
+                        "evidence": (
+                            *cell.evidence,
+                            "lib/rolloutengine/src/rolloutengine/machines.py:_prepare_machine",
+                        ),
                         "note": (
                             "Rolloutengine runs setup as root through sh; "
                             "the image or simulator must support each command."
                         ),
                     }
                 )
-                if cell.requirement == Requirement.SETUP
-                else cell
             )
-        )
-        for cell in capability_matrix(checkers)
-    ]
+        elif cell.requirement in {Requirement.FILE_UPLOAD, Requirement.COMMAND_TIMEOUT} and cell.backend == "local":
+            cells.append(
+                cell.model_copy(
+                    update={
+                        "support": Support.SUPPORTED,
+                        "evidence": (*cell.evidence, "vendor/harbor/src/harbor/trial/taskcompendium.py"),
+                        "note": "Production LOCAL grading trials upload grader inputs and enforce command deadlines.",
+                    }
+                )
+            )
+        else:
+            cells.append(cell)
+    return cells
 
 
 def combined_support(values: Iterable[Support]) -> Support:
@@ -89,13 +140,20 @@ def source_map(
     grading_environment: dict | None = None,
     integrity_contracts: dict | None = None,
 ) -> BackendSourceMap:
-    """Count every converted task, validating combined demands in each machine slot."""
+    """Count every converted task, validating combined demands in each machine slot.
+
+    A role is measured only where it is a candidate: roles the population does
+    not declare are role_absent, and roles whose environment kind the backend
+    cannot host are not_applicable with their exclusion counted. Neither is a
+    failure; genuine demand failures stay typed on candidate backends.
+    """
     cells = {(cell.backend, cell.requirement): cell for cell in matrix}
     demand_counts = defaultdict(Counter)
     ranges = defaultdict(dict)
     task_counts = defaultdict(Counter)
     role_counts = {backend: defaultdict(Counter) for backend in checkers}
     blockers = defaultdict(Counter)
+    exclusions = defaultdict(Counter)
     errors = defaultdict(Counter)
     assignments = defaultdict(Counter)
     count = 0
@@ -128,35 +186,51 @@ def source_map(
                         low, high = ranges[role].get(name, (value, value))
                         ranges[role][name] = (min(low, value), max(high, value))
         for backend, check in checkers.items():
-            statuses = []
-            for role, needs in demands.items():
+            outcomes: list[FitSupport] = []
+            for role in ("agent", "grader"):
+                if role not in demands:
+                    role_counts[backend][role][FitSupport.ROLE_ABSENT] += 1
+                    outcomes.append(FitSupport.ROLE_ABSENT)
+                    continue
                 if role in failures:
                     error = failures[role]
-                    role_counts[backend][role][Support.UNSUPPORTED] += 1
+                    role_counts[backend][role][FitSupport.UNSUPPORTED] += 1
                     for capability in error.capabilities:
                         blockers[backend][f"{role}:{capability}"] += 1
                     errors[backend][str(error)] += 1
-                    statuses.append(Support.UNSUPPORTED)
+                    outcomes.append(FitSupport.UNSUPPORTED)
                     continue
-                status = combined_support(cells[backend, need].support for need in needs)
-                for need in needs:
-                    if cells[backend, need].support != Support.SUPPORTED:
-                        blockers[backend][f"{role}:{need.value}"] += 1
                 declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
                 shape = runtime.get("task_machine" if role == "agent" else "verifier_machine")
                 requirements = EnvironmentRequirements.model_validate(declared)
                 settings = MachineRuntimeSpec.model_validate({**shape, "backend": backend})
                 try:
                     spec = _machine_spec(requirements, settings)
-                    if backend == "local":
-                        spec = replace(spec, memory_mb=None)
+                except UnsupportedMachineSpec as error:
+                    role_counts[backend][role][FitSupport.UNSUPPORTED] += 1
+                    errors[backend][f"{role}: {error}"] += 1
+                    outcomes.append(FitSupport.UNSUPPORTED)
+                    continue
+                kind = environment_kind(spec.source)
+                if cells[backend, kind].support == Support.UNSUPPORTED:
+                    role_counts[backend][role][FitSupport.NOT_APPLICABLE] += 1
+                    exclusions[backend][f"{role}:{kind.value}"] += 1
+                    outcomes.append(FitSupport.NOT_APPLICABLE)
+                    continue
+                if backend == "local":
+                    spec = replace(spec, memory_mb=None)
+                status = combined_support(cells[backend, need].support for need in demands[role])
+                for need in demands[role]:
+                    if cells[backend, need].support != Support.SUPPORTED:
+                        blockers[backend][f"{role}:{need.value}"] += 1
+                try:
                     check(requirements, spec)
                 except UnsupportedMachineSpec as error:
                     status = Support.UNSUPPORTED
                     errors[backend][f"{role}: {error}"] += 1
-                role_counts[backend][role][status] += 1
-                statuses.append(status)
-            task_counts[backend][combined_support(statuses)] += 1
+                role_counts[backend][role][FitSupport(status.value)] += 1
+                outcomes.append(FitSupport(status.value))
+            task_counts[backend][combined_fit(outcomes)] += 1
     if not count:
         raise ValueError(f"Converted-spec census is empty: {source_id}")
     return BackendSourceMap(
@@ -171,10 +245,11 @@ def source_map(
         integrity_contracts=integrity_contracts,
         backends={
             backend: BackendFit(
-                support=combined_support(task_counts[backend]),
-                task_counts=dict(task_counts[backend]),
+                support=combined_fit(task_counts[backend]),
+                task_counts={**task_counts[backend]},
                 roles=dict(role_counts[backend]),
                 blockers=dict(blockers[backend]),
+                not_applicable=dict(exclusions[backend]),
                 validation_errors=dict(errors[backend]),
             )
             for backend in checkers
