@@ -80,7 +80,7 @@ def main() -> None:
     name = f"{args.name}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
     output_uri = f"{OUTPUT_ROOT}/{name}"
     pytest_args = tuple(arg for arg in args.pytest_args if arg != "--")
-    resources = ResourceConfig.with_gpu("GB200", count=4, cpu=32, ram="400g", disk="200g", replicas=1, preemptible=False)
+    resources = ResourceConfig.with_gpu("GB200", count=4, cpu=32, ram="800g", disk="200g", replicas=1, preemptible=False)
     print(f"{name} -> {output_uri} pytest {pytest_args}")
     workspace = Path.cwd()
     with connect_controller(cluster_name=CLUSTER) as endpoint:
