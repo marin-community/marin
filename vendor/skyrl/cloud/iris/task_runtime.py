@@ -1161,11 +1161,8 @@ def _ray_port_flags() -> list[str]:
 
 
 # --- Ray cgroup-aware memory ----------------------------------------------------
-# In a memory-cgroup-limited pod, Ray can read the HOST's physical RAM (~2 TB via
-# /proc/meminfo) instead of the --memory cgroup limit, and size its plasma object
-# store at the default ~30% of that (~600 GB). That can overrun the container
-# limit once training also allocates memory. Read the cgroup limit and pass it
-# to `ray start` as --memory, and bound the plasma store.
+# Ray advertises worker heap separately from plasma object-store memory.
+# Subtract the bounded store from the cgroup budget so their sum fits the pod.
 RAY_OBJECT_STORE_CAP_GIB = 96  # bounded plasma; default can be ~30% of *detected* RAM (huge if host is misread)
 # Per-job override (env) for the plasma cap, in GiB. Default = RAY_OBJECT_STORE_CAP_GIB
 # (96). The min(., cgroup//8) OOM guard below still applies as the HARD ceiling.
@@ -1180,7 +1177,8 @@ def _cgroup_mem_limit_bytes() -> int | None:
         "/sys/fs/cgroup/memory/memory.limit_in_bytes",
     ):  # cgroup v1
         try:
-            raw = open(path).read().strip()
+            with open(path) as source:
+                raw = source.read().strip()
         except OSError:
             continue
         if raw in ("max", ""):  # v2 unlimited
@@ -1197,7 +1195,7 @@ def _cgroup_mem_limit_bytes() -> int | None:
 
 def _ray_mem_flags() -> list[str]:
     """Make `ray start` cgroup-aware (see the block comment above). Always bounds the
-    plasma object store; additionally pins --memory to the cgroup limit when readable."""
+    plasma store; --memory advertises the remaining cgroup budget when readable."""
     try:
         cap_gib = float(os.environ.get(_RAY_STORE_CAP_ENV, RAY_OBJECT_STORE_CAP_GIB))
     except ValueError:
@@ -1213,9 +1211,11 @@ def _ray_mem_flags() -> list[str]:
     flags: list[str] = []
     if limit:
         store_cap = min(store_cap, limit // 8)  # never let the store exceed ~1/8 of the container
-        flags.append(f"--memory={limit}")
+        worker_memory = limit - store_cap
+        flags.append(f"--memory={worker_memory}")
         _log(
-            f"Ray cgroup-aware: --memory={limit} (~{limit / (1 << 30):.0f}GiB cgroup limit), "
+            f"Ray cgroup-aware: --memory={worker_memory} (~{worker_memory / (1 << 30):.0f}GiB worker heap), "
+            f"cgroup limit={limit}, "
             f"--object-store-memory={store_cap} (~{store_cap / (1 << 30):.0f}GiB plasma cap)"
         )
     else:
