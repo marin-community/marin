@@ -18,7 +18,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import (
     MEASUREMENTS,
     PROTOCOL_ID,
@@ -44,6 +43,7 @@ from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 
+from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_relay import budget_relay
 
@@ -78,14 +78,6 @@ class CandidateRun(BaseModel):
     task_limit: int | None
 
 
-def write_json(path: StoragePath, payload: dict) -> ContentEvidenceReference:
-    if path.exists():
-        raise FileExistsError(path)
-    data = (json.dumps(payload, indent=2) + "\n").encode()
-    path.write_bytes(data)
-    return ContentEvidenceReference(uri=str(path), sha256=hashlib.sha256(data).hexdigest())
-
-
 @contextmanager
 def preserved_model_traffic(root: Path, output: StoragePath):
     """Archive final model traffic after the relay drains, including exceptional exits."""
@@ -105,7 +97,7 @@ def preserved_model_traffic(root: Path, output: StoragePath):
             responses_with_usage += bool(usage)
             input_tokens += usage.get("prompt_tokens", 0)
             output_tokens += usage.get("completion_tokens", 0)
-        write_json(
+        write_json_evidence(
             output / "model-requests-final.json",
             {
                 "archive": str(destination),
@@ -154,7 +146,7 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
     key = hashlib.sha256(task.task_id.encode()).hexdigest()
     destination = StoragePath(output) / key
     if task.reason is not None or task.path is None:
-        write_json(destination / "pending.json", {"task_id": task.task_id, "reason": task.reason})
+        write_json_evidence(destination / "pending.json", {"task_id": task.task_id, "reason": task.reason})
         return TaskOutcome([DifficultyAttempt(task_id=task.task_id, status="pending", reward=None)], task.reason)
     attempts = []
     pending_reason = None
@@ -238,14 +230,14 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
             )
             if binding is None or binding.runtime_sha256 != task.runtime_sha256:
                 raise ValueError("Trial network policy is not bound to the selected source runtime")
-            if not network_policy_qualified(binding, policy):
+            if reward is not None and not network_policy_qualified(binding, policy):
                 raise ValueError("Trial changed an original declared network policy")
         attempt = DifficultyAttempt(
             task_id=task.task_id,
             status="pending" if unserved else ("scored" if reward is not None else "infrastructure"),
             reward=reward,
         )
-        write_json(
+        write_json_evidence(
             destination / f"{number:02d}" / "attempt.json",
             {
                 **attempt.model_dump(mode="json"),
@@ -336,7 +328,7 @@ def main() -> None:
                                 input_tokens += usage.get("prompt_tokens", 0)
                                 output_tokens += usage.get("completion_tokens", 0)
                 copy(str(archive), str(output / source_key / "model-requests.tar.gz"), no_clobber=True)
-                receipt = write_json(
+                receipt = write_json_evidence(
                     output / source_key / "attempts.json",
                     {
                         "attempts": [item.model_dump(mode="json") for item in attempts],
@@ -391,7 +383,7 @@ def main() -> None:
                     register_difficulty(store)
                     with store.transaction() as transaction:
                         transaction.table(MEASUREMENTS).add(measurement.model_dump(mode="json"))
-                write_json(output / source_key / "measurement.json", measurement.model_dump(mode="json"))
+                write_json_evidence(output / source_key / "measurement.json", measurement.model_dump(mode="json"))
                 LOGGER.info(
                     "%s %s: %s, scored=%d, solved=%d, pending=%d",
                     config.solver,

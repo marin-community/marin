@@ -21,7 +21,7 @@ from transformers import AutoTokenizer
 CONTEXT_TOKENS, INPUT_TOKENS, OUTPUT_TOKENS = (int(value) for value in PROTOCOLS[PROTOCOL_ID].sampling[:3])
 
 LOGGER = logging.getLogger(__name__)
-REQUEST_TIMEOUT = 300
+REQUEST_TIMEOUT = 600
 
 
 class ReceiptHTTPServer(ThreadingHTTPServer):

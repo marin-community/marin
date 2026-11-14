@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SOLVER_THINKING, Solver
 from huggingface_hub import hf_hub_download
 from marin.evaluation.hardware import AcceleratorChoice, Platform
@@ -28,6 +27,7 @@ from rigging.timing import Duration
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
+from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import prepare_source
 from experiments.post_training.task_curation.difficulty_protocol import (
     GLM_RELAY_JOB,
@@ -42,14 +42,6 @@ from experiments.post_training.task_curation.difficulty_serving_probe import pro
 LOGGER = logging.getLogger(__name__)
 PRIORITY = 100
 JOB_TIMEOUT = Duration.from_seconds(259200)
-
-
-def publish(path: StoragePath, value: dict) -> ContentEvidenceReference:
-    if path.exists():
-        raise FileExistsError(path)
-    data = (json.dumps(value, indent=2) + "\n").encode()
-    path.write_bytes(data)
-    return ContentEvidenceReference(uri=str(path), sha256=hashlib.sha256(data).hexdigest())
 
 
 def worker_limits(root: Path) -> dict:
@@ -216,7 +208,7 @@ def main() -> None:
     prepared = [prepare_source(source, args.local_root / "prepared") for source in sources]
     prepared_path = args.local_root / "prepared-sources.json"
     prepared_path.write_text(json.dumps([source.model_dump(mode="json") for source in prepared]) + "\n")
-    publish(
+    write_json_evidence(
         output / "prepared.json",
         {
             "sources": [source.model_dump(mode="json") for source in prepared],
@@ -229,7 +221,7 @@ def main() -> None:
         probe = probe_endpoint(args.solver, endpoint, api_model, api_key)
         completion = probe["tools_thinking_probe"]["completion"]
         revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
-        receipt = publish(
+        receipt = write_json_evidence(
             output / "serving.json",
             {
                 "protocol": PROTOCOL_ID,
@@ -299,7 +291,7 @@ def main() -> None:
         config_path = args.local_root / "candidate.json"
         config_path.write_text(json.dumps(config) + "\n")
         run_trial_worker(prepared_path, config_path, args.local_root, output, api_key)
-        publish(output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0})
+        write_json_evidence(output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0})
 
 
 if __name__ == "__main__":
