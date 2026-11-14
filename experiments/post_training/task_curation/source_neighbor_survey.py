@@ -33,7 +33,6 @@ from experiments.post_training.task_curation.source_population_cache import (
     population_preflight,
     read_hash_population,
     read_locator_manifest,
-    read_normalized_population,
     read_population,
 )
 from experiments.post_training.task_curation.task_neighbors import (
@@ -127,7 +126,6 @@ def measure_target(
     configure_coreweave_s3()
     output = StoragePath(output_root)
     target = read_hash_population(paths[target_id], inputs[target_id])
-    normalized_target = None
     directions = {}
     integrity = []
     for source_id in partners:
@@ -155,17 +153,7 @@ def measure_target(
             write_json(receipt_uri, direction.model_dump(mode="json"))
         else:
             source = read_hash_population(paths[source_id], inputs[source_id])
-            needs_text = any(
-                row.instruction_hash not in target.exact and row.state_hash in target.states
-                for row in source.raw_sample(sample_size)
-            )
-            if needs_text:
-                if normalized_target is None:
-                    normalized_target = read_normalized_population(paths[target_id], inputs[target_id])
-                source = read_normalized_population(paths[source_id], inputs[source_id])
-                direction = directional_overlap(source, normalized_target, sample_size)
-            else:
-                direction = directional_overlap(source, target, sample_size)
+            direction = directional_overlap(source, target, sample_size)
             write_json(receipt_uri, direction.model_dump(mode="json"))
             del source
         directions[source_id, target_id] = direction.model_copy(
@@ -180,7 +168,7 @@ def measure_target(
             " (reused)" if prior_uri else "",
         )
         if "openq" in original_source_id(source_id) and "openq" in original_source_id(target_id):
-            source = read_normalized_population(paths[source_id], inputs[source_id])
+            source = read_hash_population(paths[source_id], inputs[source_id])
             result = {
                 "source": original_source_id(source_id),
                 "target": original_source_id(target_id),

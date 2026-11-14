@@ -44,7 +44,7 @@ from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     PreparedPopulation,
     cache_population,
-    read_normalized_population,
+    read_hash_population,
     read_population,
 )
 from experiments.post_training.task_curation.task_neighbors import (
@@ -456,7 +456,7 @@ def test_normalized_population_cache_preserves_neighbors_with_repeated_task_ids(
     assert expected.measurement.left_to_right.matched == 30
     for _ in range(2):
         actual = compare_populations(
-            pair, read_normalized_population(paths["left"], {}), read_normalized_population(paths["right"], {}), 30
+            pair, read_hash_population(paths["left"], {}), read_hash_population(paths["right"], {}), 30
         )
         assert actual.model_dump(mode="json") == expected.model_dump(mode="json")
     directions, _ = measure_target(
@@ -475,3 +475,34 @@ def test_normalized_population_cache_preserves_neighbors_with_repeated_task_ids(
         "left", "right"
     ].model_dump(exclude={"neighbor_receipts_uri"})
     assert resumed["left", "right"].neighbors_sha256 == expected.measurement.left_to_right.neighbors_sha256
+
+
+def test_lazy_population_direction_combines_exact_matches_and_disjoint_states(tmp_path):
+    left = [
+        TaskContent(
+            str(i), f"hash-{i}", f"Solve chemistry problem {i}.", "ref", "test", "left" if i < 5 else "left-other"
+        )
+        for i in range(10)
+    ]
+    right = [
+        TaskContent(
+            f"partner-{i}",
+            f"hash-{i}" if i < 5 else f"different-{i}",
+            f"Solve chemistry problem {i}.",
+            "ref",
+            "test",
+            "left" if i < 5 else "right",
+        )
+        for i in range(10)
+    ]
+    paths = {}
+    for name, rows in [("left", left), ("right", right)]:
+        paths[name] = tmp_path / f"{name}.parquet"
+        pq.write_table(pa.Table.from_pylist([asdict(row) for row in rows]), paths[name])
+    directions, _ = measure_target("right", ["left"], paths, {"left": {}, "right": {}}, 10, str(tmp_path / "out"), None)
+    result = directions["left", "right"]
+    assert result.fraction == result.exact_fraction == 0.5
+    assert {row.method for row in result.neighbors} == {"exact", "unmatched"}
+    assert {row.partner_task_id for row in result.neighbors if row.method == "exact"} == {
+        f"partner-{i}" for i in range(5)
+    }

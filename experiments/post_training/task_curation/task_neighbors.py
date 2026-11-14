@@ -7,7 +7,7 @@ import itertools
 import re
 import unicodedata
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from heapq import nsmallest
 
@@ -138,7 +138,10 @@ class PopulationIndex:
     """Match hashes and state before materializing normalized text or LSH buckets."""
 
     def __init__(
-        self, rows: list[TaskContent], inputs: dict[str, str], normalized_rows: list[TaskContent] | None = None
+        self,
+        rows: list[TaskContent],
+        inputs: dict[str, str],
+        normalized_loader: Callable[[], list[TaskContent]] | None = None,
     ):
         if not rows:
             raise ValueError("Overlap requires nonempty source populations")
@@ -148,17 +151,18 @@ class PopulationIndex:
         for index, row in enumerate(rows):
             self.exact[row.instruction_hash].append(index)
         self.states = {row.state_hash for row in rows}
-        self._normalized = (
-            {id(raw): normalized for raw, normalized in zip(rows, normalized_rows, strict=True)}
-            if normalized_rows is not None
-            else {}
-        )
+        self._normalized_loader = normalized_loader
+        self._normalized: dict[int, TaskContent] = {}
         self._rows: list[TaskContent] | None = None
         self._wrappers: set[str] | None = None
         self.stripped: dict[str, list[int]] = defaultdict(list)
         self.buckets: dict[tuple[int, tuple[int, ...]], list[int]] | None = None
 
     def normalized_row(self, row: TaskContent) -> TaskContent:
+        if self._normalized_loader is not None:
+            normalized = self._normalized_loader()
+            self._normalized = {id(raw): ready for raw, ready in zip(self.raw_rows, normalized, strict=True)}
+            self._normalized_loader = None
         if self._normalized:
             return self._normalized[id(row)]
         if self._wrappers is None:

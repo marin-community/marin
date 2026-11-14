@@ -8,7 +8,8 @@ import hashlib
 import json
 import logging
 import tempfile
-from dataclasses import asdict, replace
+from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -19,7 +20,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
+from taskcompendium.source_fingerprints import CURRENT_OVERLAP_VERSION, SourceFingerprint, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.task_neighbors import (
@@ -167,14 +168,14 @@ def read_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
 
 
 def read_hash_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
-    """Load the exact census and state gates without reading conversation text."""
+    """Read hash gates now; load normalized conversation text only when matching needs it."""
     rows = [TaskContent(text="", **row) for row in pq.read_table(path, columns=HASH_COLUMNS).to_pylist()]
-    return PopulationIndex(rows, inputs)
+    return PopulationIndex(rows, inputs, partial(read_normalized_rows, path))
 
 
-def read_normalized_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
+def read_normalized_rows(path: Path) -> list[TaskContent]:
     """Share one atomic normalization cache across local measurement workers."""
-    normalized_path = path.with_suffix(".normalized-v1.parquet")
+    normalized_path = path.with_suffix(f".normalized-{CURRENT_OVERLAP_VERSION}.parquet")
     with path.with_suffix(".normalization.lock").open("a") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         if not normalized_path.exists():
@@ -188,5 +189,4 @@ def read_normalized_population(path: Path, inputs: dict[str, str]) -> Population
             )
             pending.rename(normalized_path)
             logger.info("Normalized population %s: %d tasks", path.name, len(rows))
-    normalized = [TaskContent(**row) for row in pq.read_table(normalized_path).to_pylist()]
-    return PopulationIndex([replace(row, text="") for row in normalized], inputs, normalized)
+    return [TaskContent(**row) for row in pq.read_table(normalized_path).to_pylist()]

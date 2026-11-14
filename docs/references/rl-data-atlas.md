@@ -615,8 +615,9 @@ checks for the OpenQA pairs are checkpointed under `integrity/` as soon as they
 complete. Cross-source agreement cannot exclude an answer defect shared by
 both sources. Use a fresh output root; old evidence is never overwritten.
 
-Exact instruction hashes and disjoint conversation states are checked before loading
-text. Remaining directions share an atomic local normalization cache per source,
+During direction measurement, exact instruction hashes and disjoint conversation
+states are checked before loading text. Discovery still prepares every population
+and scans its full text on a resumed run. Remaining directions share an atomic local normalization cache per source,
 and target populations are sharded across `--workers` CPU processes. To resume a
 run in a fresh output prefix, pass `--reuse-neighbor-root <prior-output-root>`;
 complete direction receipts are reused only under their input-bound direction
