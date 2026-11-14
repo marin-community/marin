@@ -41,6 +41,75 @@ from experiments.post_training.task_curation.task_spec_harbor import prepare
 from .prebuilt_fixtures import prebuilt_task
 
 
+@pytest.mark.parametrize("kind", ["native_text", "native_json", "task_spec_missing", "task_spec_infra"])
+def test_production_native_reward_formats_qualify_without_bypassing_taskspec_verdicts(tmp_path, kind):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("native-grade")["lowered_task_spec"])["task"])
+    native = tmp_path / "native"
+    for name in ("environment", "tests"):
+        (native / name).mkdir(parents=True)
+    (native / "environment/Dockerfile").write_text("FROM fixture@sha256:" + "a" * 64 + "\n")
+    (native / "instruction.md").write_text("Answer the original task.")
+    (native / "tests/test.sh").write_text("true\n")
+    (native / "task.toml").write_text(
+        "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
+        "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
+    )
+    if kind.startswith("task_spec"):
+        (native / "task-spec.json").write_text(task.model_dump_json())
+        (native / "tests/taskcompendium-verifier.toml").write_text("")
+    checksum = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
+    trial = tmp_path / "jobs/trial"
+    (trial / "verifier").mkdir(parents=True)
+    artifact = trial / "verifier" / ("reward.json" if kind == "native_json" else "reward.txt")
+    artifact.write_text('{"reward":0.25}' if kind == "native_json" else "0.25")
+    result = {
+        "id": str(uuid4()),
+        "task_name": "native",
+        "trial_name": "trial",
+        "trial_uri": trial.as_uri(),
+        "task_id": {"path": str(native)},
+        "task_checksum": checksum,
+        "config": {
+            "task": {"path": str(native)},
+            "agent": {
+                "name": "terminus-2",
+                "model_name": "openai/glm-5.3",
+                "kwargs": {"max_turns": 3, "temperature": 0.7},
+            },
+            "environment": {"type": "local"},
+            "resolved_timeouts": {"agent": 300, "verifier": 60, "agent_setup": 360, "environment_build": 600},
+            "trials_dir": str(trial.parent),
+            "trial_name": "trial",
+        },
+        "agent_info": {"name": "terminus-2", "version": "1"},
+        "verifier_result": {"rewards": {"reward": 0.25}},
+        "finished_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
+        "completion": {"trajectory_present": True},
+        "exception_info": None,
+    }
+    (trial / "result.json").write_text(json.dumps(result))
+    (trial / "config.json").write_text(json.dumps(result["config"]))
+    if kind == "task_spec_infra":
+        (trial / "verifier/verdict.json").write_text(
+            json.dumps({"status": "infra_error", "reward": 0.25, "detail": {"error": "provider unavailable"}})
+        )
+    receipt = collect_trials(trial.parent)[("native", checksum)][0]
+    control = ExecutabilityRunReceipt(
+        actor_turns=1,
+        trial=receipt,
+        model_evidence=(ContentEvidenceReference(uri="s3://fixtures/model.json", sha256="b" * 64),),
+    )
+    assert control.passed == kind.startswith("native")
+    if kind.startswith("task_spec"):
+        assert receipt.native_grade is None
+        return
+    assert receipt.native_grade.artifact_sha256 == hashlib.sha256(artifact.read_bytes()).hexdigest()
+    assert receipt.native_grade.rewards == {"reward": 0.25}
+    artifact.write_text("0.75" if kind == "native_text" else '{"reward":0.75}')
+    with pytest.raises(subprocess.CalledProcessError):
+        collect_trials(trial.parent)
+
+
 @pytest.mark.parametrize("binding", ["oracle_command", "calendar_original", "protected_runtime", "source_runtime"])
 def test_changed_original_command_runtime_stops_before_trial(tmp_path, binding):
     envelope = json.loads(prebuilt_task("bound-original")["lowered_task_spec"])

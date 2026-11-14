@@ -58,6 +58,17 @@ class SourcePytestEnvironment(BaseModel):
     pytest_metadata_version: str | None
 
 
+class NativeVerifierGrade(BaseModel):
+    """Production-parsed native reward bytes bound to the actual Trial result."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    rewards: dict[str, Any] = Field(min_length=1)
+    artifact_path: str
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    task_checksum: str
+
+
 class OracleTrialReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     path: str
@@ -72,11 +83,17 @@ class OracleTrialReceipt(BaseModel):
     infrastructure_retry: InfrastructureRetryContext | None = None
     source_environment: SourcePytestEnvironment | None = None
     network_policy: TaskNetworkPolicyReceipt | None = None
+    native_grade: NativeVerifierGrade | None = None
 
     @model_validator(mode="after")
     def validate_result_hash(self):
         if canonical_sha256(self.result) != self.result_sha256:
             raise ValueError("Oracle trial result hash differs from its receipt")
+        if self.native_grade is not None and (
+            self.native_grade.result_sha256 != self.result_sha256
+            or self.native_grade.task_checksum != self.result.get("task_checksum")
+        ):
+            raise ValueError("Native grade belongs to another production Trial")
         config = self.result.get("config", {})
         environment = config.get("environment", {})
         if any(environment.get(name) == "ignore" for name in ("cpu_enforcement_policy", "memory_enforcement_policy")):
@@ -119,10 +136,31 @@ class OracleTrialReceipt(BaseModel):
         return signal
 
     @property
-    def scored(self) -> bool:
-        result = self.result
+    def graded(self) -> bool:
         verdict = self.verdict or {}
         reward = verdict.get("reward")
+        actual = (self.result.get("verifier_result") or {}).get("rewards") or {}
+        if self.verdict is not None:
+            return (
+                verdict.get("status") == "scored"
+                and isinstance(reward, (int, float))
+                and not isinstance(reward, bool)
+                and math.isfinite(reward)
+                and actual.get("reward") == reward
+            )
+        native = self.native_grade
+        return (
+            native is not None
+            and canonical_sha256(actual) == canonical_sha256(native.rewards)
+            and all(
+                isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+                for value in native.rewards.values()
+            )
+        )
+
+    @property
+    def scored(self) -> bool:
+        result = self.result
         return (
             (result.get("agent_info") or {}).get("name") == "oracle"
             and result.get("config", {}).get("agent", {}).get("name") == "oracle"
@@ -131,11 +169,7 @@ class OracleTrialReceipt(BaseModel):
             and result.get("finished_at") is not None
             and result.get("completion") is not None
             and self.oracle_exit_code is not None
-            and verdict.get("status") == "scored"
-            and isinstance(reward, (int, float))
-            and not isinstance(reward, bool)
-            and math.isfinite(reward)
-            and ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward") == reward
+            and self.graded
         )
 
     def passed(self, task_checksum: str) -> bool:
@@ -143,7 +177,7 @@ class OracleTrialReceipt(BaseModel):
             self.scored
             and self.result.get("task_checksum") == task_checksum
             and self.oracle_exit_code == 0
-            and (self.verdict or {}).get("reward") == 1
+            and ((self.result.get("verifier_result") or {}).get("rewards") or {}).get("reward") == 1
         )
 
 
@@ -408,7 +442,6 @@ class ExecutabilityRunReceipt(BaseModel):
             if name == "task-spec-chat"
             else kwargs.get("temperature")
         )
-        reward = (self.trial.verdict or {}).get("reward")
         return (
             name in {"task-spec-chat", "terminus-2"}
             and (result.get("agent_info") or {}).get("name") == name
@@ -419,11 +452,7 @@ class ExecutabilityRunReceipt(BaseModel):
             and result.get("exception_info") is None
             and result.get("finished_at") is not None
             and result.get("completion") is not None
-            and (self.trial.verdict or {}).get("status") == "scored"
-            and isinstance(reward, (int, float))
-            and not isinstance(reward, bool)
-            and math.isfinite(reward)
-            and ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward") == reward
+            and self.trial.graded
         )
 
 
