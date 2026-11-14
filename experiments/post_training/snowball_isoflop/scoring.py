@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 from dataclasses import dataclass, replace
+from enum import StrEnum
 
 import draccus
 from fray.current_client import current_client
@@ -32,19 +33,27 @@ from experiments.post_training.snowball_isoflop.config import (
     build_pod,
     evaluation_data_config,
     primary_cells,
+    reference_data_config,
     resources,
 )
 from experiments.post_training.snowball_isoflop.measurements import read_json, training_history
+
+
+class ScoringDistribution(StrEnum):
+    SFT = "sft"
+    PRETRAIN = "pretrain"
 
 
 @dataclass(frozen=True)
 class Endpoint:
     cell: Cell
     updates: int
+    distribution: ScoringDistribution = ScoringDistribution.SFT
 
     @property
     def name(self) -> str:
-        return f"score-{self.cell.name}-u{self.updates}"
+        suffix = "" if self.distribution == ScoringDistribution.SFT else "-pretrain"
+        return f"score-{self.cell.name}-u{self.updates}{suffix}"
 
     @property
     def checkpoint(self) -> str:
@@ -63,13 +72,13 @@ def scoring_config(endpoint: Endpoint) -> EvalLmConfig:
         baseline.trainer,
         id=f"{VERSION}-{endpoint.name}",
         seed=0,
-        max_eval_batches=4,
+        max_eval_batches=4 if endpoint.distribution == ScoringDistribution.SFT else 1,
         tracker=JsonFileTrackerConfig(output_path=endpoint.output),
     )
     return EvalLmConfig(
         checkpoint_path=endpoint.checkpoint,
         trainer=trainer,
-        data=evaluation_data_config(),
+        data=(evaluation_data_config() if endpoint.distribution == ScoringDistribution.SFT else reference_data_config()),
         max_eval_length=SEQ_LEN,
         model=baseline.model,
         audit_token_ids=SPECIAL_IDS,
@@ -106,18 +115,38 @@ def score_endpoint(endpoint: Endpoint) -> dict:
     result = read_json(f"{endpoint.output}/result.json")
     if any(not math.isfinite(result["metrics"][key]) for key in ("eval/loss", "eval/macro_loss")):
         raise ValueError(f"Nonfinite endpoint evaluation: {endpoint.name}")
-    return {"checkpoint": endpoint.checkpoint, "output": endpoint.output, **result}
+    return {
+        "checkpoint": endpoint.checkpoint,
+        "output": endpoint.output,
+        "distribution": endpoint.distribution,
+        **result,
+    }
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--calibration-size", type=int, choices=(512, 768, 1024))
+    parser.add_argument(
+        "--distribution",
+        type=ScoringDistribution,
+        choices=tuple(ScoringDistribution),
+        action="append",
+        help="repeat to score SFT and pretrain retention under one shared allocation cap",
+    )
     parser.add_argument("--max-concurrent", type=int, choices=range(1, 9), default=1)
     parser.add_argument("--h100-hour-limit", type=float, required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
-    endpoints = tuple(Endpoint(cell, step) for cell in primary_cells() for step in cell.checkpoint_steps)
+    distributions = tuple(dict.fromkeys(args.distribution or (ScoringDistribution.SFT,)))
+    endpoints = tuple(
+        Endpoint(cell, step, distribution)
+        for distribution in distributions
+        for cell in primary_cells()
+        for step in cell.checkpoint_steps
+    )
     if args.calibration_size is not None:
+        if distributions != (ScoringDistribution.SFT,):
+            parser.error("The calibration reload comparison uses the native SFT validation set")
         endpoints = (Endpoint(Cell(args.calibration_size, Mask.ASSISTANT, 0, 20, (20,), "calibration"), 20),)
     ceiling = 3 if args.calibration_size is not None else 48
     if not 0 < args.h100_hour_limit <= ceiling:
@@ -125,7 +154,8 @@ def main():
     if not args.run:
         print(json.dumps({endpoint.name: draccus.encode(scoring_config(endpoint)) for endpoint in endpoints}))
         return
-    manager = StoragePath(f"{PREFIX}/{VERSION}/manager-scoring-{args.calibration_size or 'A'}")
+    suffix = "" if distributions == (ScoringDistribution.SFT,) else "-" + "-".join(distributions)
+    manager = StoragePath(f"{PREFIX}/{VERSION}/manager-scoring-{args.calibration_size or 'A'}{suffix}")
     results = budgeted_map(
         {endpoint.name: endpoint for endpoint in endpoints},
         score_endpoint,
@@ -133,9 +163,10 @@ def main():
         args.h100_hour_limit,
         args.max_concurrent,
     )
-    audits = [result["input_audit"] for result in results.values()]
-    if any(audit != audits[0] for audit in audits):
-        raise ValueError("Endpoint scoring inputs differ across arms/seeds/budgets")
+    for distribution in distributions:
+        audits = [result["input_audit"] for result in results.values() if result["distribution"] == distribution]
+        if any(audit != audits[0] for audit in audits):
+            raise ValueError(f"Endpoint scoring inputs differ across arms/seeds/budgets for {distribution}")
     if args.calibration_size is not None:
         endpoint = endpoints[0]
         state, rows = training_history(endpoint.cell.name, endpoint.updates)
