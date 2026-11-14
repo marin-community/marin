@@ -86,6 +86,14 @@ class LaunchModelLocator:
 
 
 @dataclass
+class NativeCheckpointLocator:
+    """Completed native state read by the trainer without staging a model export."""
+
+    uri: str = MISSING
+    identity: str = MISSING
+
+
+@dataclass
 class IrisAllocationConfig:
     """Explicit whole-node resources checked against SkyRL placement."""
 
@@ -154,13 +162,14 @@ class ArtifactsConfig:
 
 @dataclass
 class InputsConfig:
-    """Immutable model and data locators resolved by Marin."""
+    """Immutable model, data and starting-checkpoint locators resolved by Marin."""
 
     model: LaunchModelLocator = field(default_factory=LaunchModelLocator)
     hugging_face_models: list[HuggingFaceModelCache] = field(default_factory=list)
     data_kind: str = MISSING
     train_data: list[dict[str, Any]] = field(default_factory=list)
     validation_data: list[dict[str, Any]] = field(default_factory=list)
+    starting_checkpoint: NativeCheckpointLocator | None = None
 
 
 @dataclass
@@ -186,7 +195,8 @@ def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
 
 def _is_source_recipe(config: DictConfig) -> bool:
     return (
-        config.run.mode == RunMode.TRAIN and not config.runtime.entrypoint
+        config.run.mode == RunMode.TRAIN
+        and not config.runtime.entrypoint
         or "context_budget" in config.skyrl
         or "config_groups" in config.skyrl
     )
@@ -196,6 +206,9 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
     raw_skyrl = OmegaConf.to_container(config.skyrl, resolve=False)
     if not isinstance(raw_skyrl, dict):
         raise TypeError("skyrl must be a mapping")
+    if config.inputs.starting_checkpoint is not None:
+        trainer = raw_skyrl.setdefault("trainer", {})
+        trainer["resume_path"] = str(config.inputs.starting_checkpoint.uri)
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
     model_is_cloud = is_cloud_uri(model_uri)
@@ -363,6 +376,13 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
+    if raw["inputs"]["starting_checkpoint"] is not None and entrypoint in (
+        RL_ENTRYPOINTS[RLEntrypoint.GENERATE],
+        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
+    ):
+        raise ValueError(
+            "Generation cannot restore inputs.starting_checkpoint; inputs.model requires a Hugging Face model."
+        )
     if (
         skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
         and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")

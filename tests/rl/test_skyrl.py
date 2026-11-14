@@ -18,7 +18,7 @@ from typing import IO
 import pytest
 import yaml
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -617,6 +617,27 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
     ]
+
+
+def test_starting_checkpoint_binds_dependency_identity_and_path() -> None:
+    spec = _spec()
+    checkpoints = [
+        ArtifactStep.adopt("tests/native", f"2026.11.13.{step}", f"s3://checkpoints/global_step_{step}")
+        for step in (2, 5)
+    ]
+    runs = [
+        skyrl_step(dataclasses.replace(spec, starting_checkpoint=checkpoint), _execution()) for checkpoint in checkpoints
+    ]
+    for run, checkpoint in zip(runs, checkpoints, strict=True):
+        config = materialized_config(run, prefix="s3://marin-us-east-08a")
+        launch = yaml.safe_load(config.launch_config_yaml)
+        assert checkpoint in run.deps
+        assert launch["inputs"]["starting_checkpoint"] == {
+            "uri": checkpoint.adopt_source,
+            "identity": artifact_identity(checkpoint),
+        }
+        assert not checkpoint.adopt_source.startswith(config.output.checkpoint_root)
+    assert runs[0].fingerprint() != runs[1].fingerprint()
 
 
 def test_skyrl_step_routes_disposable_state_to_ttl_storage(
