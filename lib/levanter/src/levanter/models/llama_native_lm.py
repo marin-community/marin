@@ -568,9 +568,6 @@ class NativeLlamaLmHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Nativ
         for index in range(config.num_layers):
             layer = self.native.layers.get_layer(index)
             q, k, v = layer.self_attn.project_qkv(layer.input_layernorm(hidden), positions, sharding=layout)
-            if config.upcast_attn:
-                q = q.astype(jnp.float32)
-                k = k.astype(jnp.float32)
             q = q.reshape(count, config.num_kv_heads, config.num_heads // config.num_kv_heads, config.actual_head_dim)
             k = k.reshape(count, config.num_kv_heads, config.actual_head_dim)
             v = v.reshape(count, config.num_kv_heads, config.actual_head_dim)

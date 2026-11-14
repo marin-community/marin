@@ -17,7 +17,7 @@ from jax.sharding import AxisType, Mesh, PartitionSpec as P
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.models.llama_native_lm import NativeLlamaLmConfig
-from levanter.models.llama_native import NativeLlamaSharding
+from levanter.models.llama_native import NativeLlamaAttention, NativeLlamaConfig, NativeLlamaSharding
 from levanter.checkpoint import CheckpointerConfig, discover_latest_checkpoint
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
@@ -42,6 +42,28 @@ def test_native_model_matches_named_hf_weights_loss_and_all_gradients(kv_heads, 
     _assert_named_native_loss_and_gradients(
         kv_heads, gradient_checkpointing=False, compute_dtype=compute_dtype, upcast_attn=upcast_attn
     )
+
+
+def test_native_bfloat16_reference_attention_upcasts_before_query_scaling():
+    # An eight-wide head exposes BF16 rounding in the inverse square root scale.
+    config = NativeLlamaConfig(vocab_size=32, hidden_dim=8, num_heads=1, num_kv_heads=1, upcast_attn=True)
+    layout = NativeLlamaSharding()
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
+        attention = NativeLlamaAttention.init(config, layout, key=jax.random.PRNGKey(0))
+        policy = jmp.Policy(param_dtype=jnp.float32, compute_dtype=jnp.bfloat16, output_dtype=jnp.float32)
+        attention = policy.cast_to_compute(attention)
+        x = jax.random.normal(jax.random.PRNGKey(1), (1, 8, config.hidden_dim), dtype=jnp.bfloat16)
+        positions = jnp.arange(x.shape[1])[None, :]
+        mask = positions[:, :, None] >= positions[:, None, :]
+
+        q, k, v = attention.project_qkv(x, positions, sharding=layout)
+        q, k = q[:, :, 0].astype(jnp.float32), k[:, :, 0].astype(jnp.float32)
+        scores = (q @ k.swapaxes(-1, -2)) * (config.actual_head_dim**-0.5)
+        weights = jax.nn.softmax(jnp.where(mask, scores, -1e9), axis=-1).astype(v.dtype)
+        expected = attention.project_output((weights @ v[:, :, 0])[:, :, None], dtype=x.dtype, sharding=layout)
+        actual = eqx.filter_jit(attention, compiler_options={"xla_allow_excess_precision": False})(x, mask, positions)
+        np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
 
 
 def test_native_gqa_checkpointed_scan_matches_named_loss_and_all_gradients():

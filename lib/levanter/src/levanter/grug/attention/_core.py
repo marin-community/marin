@@ -242,7 +242,6 @@ def _reference_attention_math(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     logits_dtype: jnp.dtype | None,
-    attention_dtype: jnp.dtype | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
@@ -253,9 +252,6 @@ def _reference_attention_math(
     # Keep query groups in the contraction so KV gradients sum before BF16 rounding.
     q = q.reshape(*q.shape[:2], num_kv_heads, groups, head_dim)
     scaled_q = q * (1.0 / math.sqrt(head_dim))
-    if attention_dtype is not None:
-        scaled_q = scaled_q.astype(attention_dtype)
-        k = k.astype(attention_dtype)
     scores = jnp.einsum("bqhgd,bkhd->bhgqk", scaled_q, k)
 
     explicit = None
@@ -299,17 +295,16 @@ def reference_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     logits_dtype: jnp.dtype | None,
-    attention_dtype: jnp.dtype | None = None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Scale in the query dtype, optionally cast Q/K, and preserve query output sharding."""
+    """Scale Q in its dtype, optionally cast scores before softmax, and preserve Q sharding."""
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
-        return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype, attention_dtype=attention_dtype)
+        return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
     # Explicit axes cannot infer every score contraction layout when heads or
     # head dimensions are sharded. Run under Auto axes and pin the output layout.
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
-    return wrapped(q, k, v, mask, logits_dtype=logits_dtype, attention_dtype=attention_dtype)
+    return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
 
 
 def _tpu_splash_attention(
