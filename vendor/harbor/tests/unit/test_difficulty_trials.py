@@ -248,6 +248,29 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     assert (continued.status, continued.n, continued.solved, continued.pending_tasks) == ("measured", 2, 1 + int(graded_reward), 0)
     assert continued.infrastructure_attempts == int(infrastructure_first)
     assert len(physical_attempts) == 2 + int(infrastructure_first)
+    if workload == "task_spec" and upstream_failure is None and graded_reward == 0:
+        for corruption in ("cycle", "serving", "queue"):
+            invalid = tmp_path / f"invalid-{corruption}"
+            (invalid / "trials").mkdir(parents=True)
+            (invalid / "prepared.json").write_bytes((second / "prepared.json").read_bytes())
+            (invalid / "serving.json").write_bytes(serving_bytes)
+            (invalid / "trials/model-requests-final.json").write_bytes(
+                (second / "trials/model-requests-final.json").read_bytes())
+            parent = invalid if corruption == "cycle" else campaign
+            (invalid / "trials/parent-campaign.json").write_text(json.dumps({
+                "root": str(parent), "source_queue_sha256": "2" * 64 if corruption == "queue" else "1" * 64,
+                "serving_receipt": {"uri": str(parent / "serving.json"),
+                                    "sha256": "f" * 64 if corruption == "serving" else hashlib.sha256(serving_bytes).hexdigest()},
+            }))
+            monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
+                                            "--output-root", str(tmp_path / f"invalid-{corruption}-output"),
+                                            "--local-root", str(tmp_path / f"invalid-{corruption}-local"),
+                                            "--previous-campaign", str(invalid),
+                                            "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
+                                            "--source-queue-sha256", "1" * 64])
+            with pytest.raises(ValueError, match="cycle|ancestry|serving"):
+                difficulty_trials.main()
+            assert len(physical_attempts) == 2
     assert len(list((second / "trials").glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1
     assert json.loads(next(output.glob("*/measurement.json")).read_text())["n"] == 1
 
