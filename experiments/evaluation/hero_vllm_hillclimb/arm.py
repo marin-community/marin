@@ -263,6 +263,12 @@ CANDIDATE_ARGS = {
         "--compilation-config",
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
+    "fg128": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
     "fg128prof": (
         "--max-num-seqs",
         "128",
