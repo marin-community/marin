@@ -477,6 +477,7 @@ generator:
     skip_special_tokens: true
 
   eval_sampling_params:
+    seed: null
     ignore_eos: false
     max_generate_length: ${generator.sampling_params.max_generate_length}
     repetition_penalty: 1.0

@@ -156,14 +156,14 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
     for binding, summary in summaries.items():
         (StoragePath(presets.selection_artifact(binding).path()) / presets.SUMMARY_FILENAME).write_text(summary)
     revisions = {
-        "speed-short": {"2026.11.13.1": "e492dd1e"},
-        "data-short": {"2026.11.13.1": "f29bf661"},
-        "speed-medium": {"2026.11.12.1": "1af00f32"},
-        "learning-medium": {"2026.11.12.1": "5d01147c"},
-        "data-medium": {"2026.11.12.1": "5d01147c"},
-        "speed-long": {"2026.11.11.1": "ebab276e"},
-        "train-long": {"2026.11.11.1": "05f0a068"},
-        "train-long-harbor": {"2026.11.14.1": "2daffa92"},
+        "speed-short": {"2026.11.13.1": "a608b2a7"},
+        "data-short": {"2026.11.13.1": "a3fd45b6"},
+        "speed-medium": {"2026.11.12.1": "99f423fc"},
+        "learning-medium": {"2026.11.12.1": "45612c96"},
+        "data-medium": {"2026.11.12.1": "45612c96"},
+        "speed-long": {"2026.11.11.1": "45b7228f"},
+        "train-long": {"2026.11.11.1": "81da52f9"},
+        "train-long-harbor": {"2026.11.14.1": "ae66bb64"},
     }
     paths = []
     for name in revisions:

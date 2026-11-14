@@ -14,7 +14,6 @@ sources have no controls and their kept rows are admitted without them.
 import re
 from dataclasses import dataclass, field
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
@@ -29,7 +28,7 @@ from experiments.post_training.task_curation.datasets.environments import GRADER
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import VERIFIER_DATA, archive_file
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 REWRITE_REASON = "Replace source response-file delivery with the assistant response convention"
 
@@ -215,7 +214,7 @@ SOURCES = (
                 "ships under tests/, which the agent never sees. Kept as rubric-only (tag no-"
                 "reference)."
             ),
-            daytona_safety=DaytonaSafety.SAFE,
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     JudgedSource(
@@ -233,7 +232,7 @@ SOURCES = (
                 "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
             ),
-            daytona_safety=DaytonaSafety.SAFE,
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     JudgedSource(
@@ -252,7 +251,7 @@ SOURCES = (
                 "(tag no-reference): the principle is specific to each prompt (refuse the harmful "
                 "ones, help with the benign ones)."
             ),
-            daytona_safety=DaytonaSafety.SAFE,
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     JudgedSource(
@@ -270,7 +269,7 @@ SOURCES = (
                 "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as "
                 "rubric-only (tag no-reference)."
             ),
-            daytona_safety=DaytonaSafety.SAFE,
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     JudgedSource(
@@ -288,7 +287,7 @@ SOURCES = (
                 "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-"
                 "only (tag no-reference)."
             ),
-            daytona_safety=DaytonaSafety.SAFE,
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     JudgedSource(
@@ -306,7 +305,7 @@ SOURCES = (
                 "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates "
                 "fall to the dedup step. Kept as rubric-only (tag no-reference)."
             ),
-            daytona_safety=DaytonaSafety.SAFE,
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     JudgedSource(
@@ -324,7 +323,7 @@ SOURCES = (
                 "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-"
                 "only (tag no-reference)."
             ),
-            daytona_safety=DaytonaSafety.SAFE,
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     JudgedSource(
@@ -342,7 +341,7 @@ SOURCES = (
                 "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept "
                 "as rubric-only (tag no-reference)."
             ),
-            daytona_safety=DaytonaSafety.SAFE,
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
 )
@@ -357,7 +356,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name=source.name,
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, convert_judged),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 grader=GRADER_PACKAGES,
