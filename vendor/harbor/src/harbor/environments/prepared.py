@@ -19,7 +19,7 @@ from harbor.environments.base import (
 from harbor.environments.capabilities import (
     EnvironmentCapabilities,
 )
-from harbor.environments.execution import execute_shellbox_command
+from harbor.environments.execution import execute_shellbox_command, root_command_user
 from harbor.environments.model_relay import (
     JudgeAccess,
     ModelRelay,
@@ -114,10 +114,7 @@ class PreparedEnvironment(BaseEnvironment):
         self._validate_task_resources()
 
     def _command_user(self, user: str | int | None) -> str:
-        selected = self._resolve_user(user)
-        if selected is None or str(selected) in {"root", "0", "0:0"}:
-            return "0"
-        raise ValueError("Prepared sandboxes support only root commands")
+        return root_command_user(self._resolve_user(user))
 
     def _maybe_resolve_task_env(self) -> None:
         # Task and Compose values belong to the imported machine specification.

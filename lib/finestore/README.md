@@ -16,6 +16,20 @@ different metadata`. Create a new writable archive at a fresh root with
 `DataStore.open`; use a fresh cache root with `PersistentKvCache.at`. Keep the
 original files while any manifest still references them.
 
+After verifying a byte-for-byte copy, `finestore.admin.fork_relocated_archive`
+can create a fresh writable manifest that references the copied immutable shards.
+It preserves commit bounds and shard sequences and accepts prior roots for an
+archive that moved more than once. It refuses an existing destination archive:
+
+```bash
+uv run python -m finestore.admin fork-relocated \
+  --original-root ORIGINAL --copied-root VERIFIED_COPY --output-root NEW_ARCHIVE \
+  --reference-root PRIOR_ROOT
+```
+
+The original and copied archives are preserved. Only the new archive receives
+new metadata and a new HEAD.
+
 ## Transactions
 
 Register table contracts on the store, then use a transaction when several tables

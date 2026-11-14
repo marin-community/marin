@@ -63,7 +63,11 @@ def canonical_identity_survey(document: dict) -> SourceIdentitySurvey:
 
 def identity_survey_payload(survey: SourceIdentitySurvey) -> dict:
     """Keep persisted survey and review-cache identities tied to original source IDs."""
-    return _identity_source_ids(survey.model_dump(mode="json"), original_source_id)
+    document = survey.model_dump(mode="json")
+    for review in document["reviews"]:
+        if review["measurement"] is None:
+            del review["measurement"]
+    return _identity_source_ids(document, original_source_id)
 
 
 def canonical_backend_survey(document: dict) -> BackendSurvey:

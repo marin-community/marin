@@ -8,6 +8,7 @@ from dataclasses import replace
 from finestore.rl.curation import IndependentQC
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from experiments.post_training.task_curation.full_content_binding import clear_stale_full_content_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleQCReview
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
@@ -31,6 +32,7 @@ def bind_sample_result[ConfigT: CatalogConfig](
     source: RlDataSource[ConfigT], receipt: SampleQCReceipt | None
 ) -> RlDataSource[ConfigT]:
     """Attach exact-input content evidence while preserving execution qualification."""
+    source = clear_stale_full_content_result(source)
     if receipt is None:
         return source
     panel = receipt.review.panel
@@ -56,6 +58,8 @@ def bind_sample_result[ConfigT: CatalogConfig](
         )
     ):
         raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
+    if source.info.full_content_result_binding is not None:
+        return source
     result = receipt.review.result
     return replace(
         source,

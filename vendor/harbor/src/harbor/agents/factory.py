@@ -34,24 +34,20 @@ class AgentFactory:
         )
     }
 
-    _TASK_SPEC_AGENTS = {
-        "task-spec-chat": "TaskSpecChatAgent",
-        "task-spec-empty": "TaskSpecEmptyAgent",
-        "task-spec-response": "TaskSpecResponseAgent",
-    }
+    _TASK_SPEC_AGENT_NAMES = tuple(member.value for member in AgentName if member.name.startswith("TASK_SPEC_"))
 
     @classmethod
     def _unsupported(cls, name: str) -> ValueError:
         return ValueError(
             f"Agent {name!r} is not supported by Marin's vendored Harbor. "
-            f"Supported agents: {', '.join((*cls._AGENT_MAP, *cls._TASK_SPEC_AGENTS))}"
+            f"Supported agents: {', '.join((*cls._AGENT_MAP, *cls._TASK_SPEC_AGENT_NAMES))}"
         )
 
     @classmethod
     def get_agent_class(cls, name: str) -> type[BaseAgent]:
-        if name in cls._TASK_SPEC_AGENTS:
+        if name in cls._TASK_SPEC_AGENT_NAMES:
             module = importlib.import_module("harbor.agents.taskcompendium")
-            return getattr(module, cls._TASK_SPEC_AGENTS[name])
+            return module.TASK_SPEC_AGENTS[name]
         try:
             return cls._AGENT_MAP[name]
         except KeyError as exc:

@@ -57,6 +57,15 @@ def actor_machine_required(task: TaskSpec) -> bool:
     return task.environment_requirements != EnvironmentRequirements() or bool(task.resources.worker)
 
 
+def require_trial_budget(task: TaskSpec, requirements: ExecutionRequirements) -> None:
+    """Require wrapper budgets to preserve every declared TaskSpec limit."""
+    if task.execution_requirements is not None and task.execution_requirements != requirements:
+        raise ValueError(f"{task.id}: trial budgets conflict with execution_requirements")
+    for name, value in declared_execution_limits(task).items():
+        if getattr(requirements, name) != value:
+            raise ValueError(f"{task.id}: trial budget conflicts with original {name}")
+
+
 def write_harbor_task(task: TaskSpec, directory: Path, requirements: ExecutionRequirements) -> None:
     """Write a private TaskSpec payload and its trial budgets, preserving the task itself.
 
@@ -66,11 +75,7 @@ def write_harbor_task(task: TaskSpec, directory: Path, requirements: ExecutionRe
     unsupported = unsupported_harbor_contract(task)
     if unsupported is not None:
         raise ValueError(f"{task.id}: {unsupported}")
-    if task.execution_requirements is not None and task.execution_requirements != requirements:
-        raise ValueError(f"{task.id}: trial budgets conflict with execution_requirements")
-    for name, value in declared_execution_limits(task).items():
-        if getattr(requirements, name) != value:
-            raise ValueError(f"{task.id}: trial budget conflicts with original {name}")
+    require_trial_budget(task, requirements)
     directory.mkdir(parents=True, exist_ok=False)
     (directory / "environment").mkdir()
     (directory / TASK_SPEC_FILE).write_text(task.model_dump_json() + "\n")
