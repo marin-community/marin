@@ -47,12 +47,8 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 from filelock import FileLock
-from iris.client.client import iris_ctx
-from iris.cluster.platforms.k8s.coreweave_topology import CW_LABEL_NVLINK_DOMAIN
-from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
-from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from cloud.iris.artifacts import (
     ArtifactSource,
@@ -103,8 +99,6 @@ from marinskyrl.process_diagnostics import (
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
 from cloud.iris.role_topology import (
-    LOCALITY_GROUP_LABEL,
-    NVLINK_DOMAIN_LABEL,
     RoleTopology,
     derive_role_topology,
 )
@@ -1236,35 +1230,6 @@ def _ray_mem_flags() -> list[str]:
     return flags
 
 
-def locality_node_labels(topology: RoleTopology, rank: int, timeout: int) -> dict[str, str]:
-    labels = {LOCALITY_GROUP_LABEL: str(topology.locality.group_for_rank(rank))}
-    if not topology.rack_based:
-        return {**labels, NVLINK_DOMAIN_LABEL: os.environ["IRIS_NODE_NAME"]}
-    ctx = iris_ctx()
-    if ctx.client is None or ctx.task_attempt is None:
-        raise RuntimeError("NVLink placement needs the running Iris task's client and attempt identity")
-    client, task = ctx.client, ctx.task_attempt
-    attempt_uid = os.environ[IRIS_ATTEMPT_UID_ENV]
-    duration = Duration.from_seconds(timeout)
-    deadline = Deadline.from_now(duration)
-
-    def assigned() -> bool:
-        status = client.task_status(task.task_id, deadline=deadline)
-        for attempt in status.attempts:
-            if attempt.attempt_uid == attempt_uid:
-                domain = attempt.topology.get(CW_LABEL_NVLINK_DOMAIN)
-                if domain:
-                    labels[NVLINK_DOMAIN_LABEL] = domain
-                    return True
-        return False
-
-    ExponentialBackoff(initial=0.1, maximum=2).wait_until_or_raise(
-        assigned, timeout=duration,
-        error_message="Iris has not reported an NVLink domain for this attempt; the controller must support locality groups",
-    )
-    return labels
-
-
 def ray_start_head(
     head_ip: str,
     spill_target: RaySpillTarget,
@@ -1284,7 +1249,7 @@ def ray_start_head(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.head_flags(),
-        *([f"--labels={json.dumps(labels)}"] if labels else []),
+        *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray HEAD: {' '.join(cmd)}")
@@ -1310,7 +1275,7 @@ def ray_start_worker(
         *_ray_port_flags(),
         *_ray_mem_flags(),
         *spill_target.worker_flags(),
-        *([f"--labels={json.dumps(labels)}"] if labels else []),
+        *([f"--labels={','.join(f'{key}={value}' for key, value in labels.items())}"] if labels else []),
     ]
     _log(spill_target.description())
     _log(f"Starting Ray WORKER: {' '.join(cmd)}")
@@ -2351,7 +2316,7 @@ def main() -> None:
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
     if args.role_topology is not None:
-        args.ray_labels = locality_node_labels(args.role_topology, _rank(), args.cluster_join_timeout)
+        args.ray_labels = args.role_topology.node_labels(_rank())
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.

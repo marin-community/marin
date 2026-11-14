@@ -5,24 +5,17 @@ import json
 import socket
 import sys
 from types import ModuleType, SimpleNamespace
-from typing import cast
 
 import pytest
 import ray
 import yaml
-from iris.client import IrisClient
-from iris.client.client import IrisContext, iris_ctx_scope
-from iris.cluster.client import ClusterClient
-from iris.cluster.types import JobName, TaskAttempt
-from iris.rpc import job_pb2
 from omegaconf import OmegaConf
 from ray.cluster_utils import Cluster
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from cloud.iris.launch_config import load_launch_config
-from cloud.iris.role_topology import LOCALITY_GROUP_LABEL, NVLINK_DOMAIN_LABEL, derive_role_topology
+from cloud.iris.role_topology import LOCALITY_GROUP_LABEL, derive_role_topology
 from cloud.iris.skyrl_entrypoint import run_config
-from cloud.iris.task_runtime import locality_node_labels
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from skyrl_train.entrypoints.main_base import BasePPOExp, create_ray_wrapped_inference_engines_from_config
 
@@ -67,35 +60,6 @@ def test_single_domain_mode_rejects_a_trainer_that_needs_multiple_racks(tmp_path
         load_launch_config(path)
 
 
-def test_ray_labels_use_the_current_iris_attempts_topology(tmp_path, monkeypatch):
-    path = launch_config(tmp_path, nodes=24, policy_nodes=8, engines=1)
-    config = load_launch_config(path)
-    topology = derive_role_topology(OmegaConf.to_container(config, resolve=True))
-    replies = []
-    for uid, domain in (("old-uid", "rack-old"), ("current-uid", "rack-current")):
-        status = job_pb2.TaskStatus(task_id="/user/job/8", state=job_pb2.TASK_STATE_RUNNING)
-        status.attempts.add(
-            attempt_id=0, attempt_uid=uid, state=job_pb2.TASK_STATE_RUNNING,
-            topology={"ds.coreweave.com/nvlink.domain": domain},
-        )
-        replies.append(status)
-
-    class ControllerTransport:
-        def get_task_status(self, _task_name, *, deadline=None):
-            return replies.pop(0)
-
-    client = IrisClient(cast(ClusterClient, ControllerTransport()))
-    ctx = IrisContext(
-        job_id=JobName.from_wire("/user/job"),
-        task_attempt=TaskAttempt(JobName.from_wire("/user/job/8"), 0),
-        client=client,
-    )
-    monkeypatch.setenv("IRIS_ATTEMPT_UID", "current-uid")
-    with iris_ctx_scope(ctx):
-        labels = locality_node_labels(topology, 8, timeout=2)
-    assert labels == {LOCALITY_GROUP_LABEL: "1", NVLINK_DOMAIN_LABEL: "rack-current"}
-
-
 @pytest.mark.slow
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("locality,dp", [(True, 1), (False, 1), (True, 4)])
@@ -113,6 +77,7 @@ def test_production_factories_constrain_workers_and_preserve_default_placement(t
     raw["inputs"]["model"]["tokenizer_uri"] = str(model)
     raw["skyrl"]["generator"]["enforce_eager"] = False
     path.write_text(yaml.safe_dump(raw))
+    topology = derive_role_topology(OmegaConf.to_container(load_launch_config(path), resolve=True))
     captured = []
     monkeypatch.setattr("skyrl_train.entrypoints.main_base.run", captured.append)
     run_config(path)
@@ -126,11 +91,11 @@ def test_production_factories_constrain_workers_and_preserve_default_placement(t
         for _ in range(engine_nodes):
             cluster.add_node(
                 num_cpus=8, num_gpus=2 if dp > 1 else 8,
-                labels={LOCALITY_GROUP_LABEL: "1"} if locality else {},
+                labels=topology.node_labels(1) if locality else {},
                 object_store_memory=80 * 1024**2, include_dashboard=False,
             )
         cluster.add_node(
-            num_cpus=8, num_gpus=8, labels={LOCALITY_GROUP_LABEL: "0"} if locality else {},
+            num_cpus=8, num_gpus=8, labels=topology.node_labels(0) if locality else {},
             object_store_memory=80 * 1024**2, include_dashboard=False,
         )
         ray.init(address=cluster.address)

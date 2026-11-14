@@ -128,15 +128,17 @@ each eight-GPU H100 host is one NVLink domain. On NVL72, a domain is one rack
 of four-GPU hosts.
 
 This option supports separate trainer and local vLLM inference GPUs, with
-TP=PP=1 and EP=DP for inference. A reference model may share the trainer's
+tensor and pipeline parallelism of one (TP=PP=1), and expert parallelism equal
+to data parallelism (EP=DP). A reference model may share the trainer's
 GPUs. Other independent local roles and colocated trainer/inference launches
 are outside this mode. Omitting the option keeps existing placement behavior.
 
 Iris admits the whole job together, with task groups sized for the models.
 A 32-GPU trainer and a 64-GPU engine use 24 four-GPU hosts in groups of eight
 and sixteen. A 64-GPU trainer and two 64-GPU engines use three groups of
-sixteen hosts. Smaller engines can share a group. Each group rounds its GPU
-demand up to whole hosts, so the allocation must include any padding.
+sixteen hosts. Place the trainer first, then put each engine in the first group
+with enough free GPUs, creating a new group when needed. Round each group up
+to whole hosts when setting the allocation.
 
 Each trainer or engine must fit one domain: at most 64 GPUs on NVL72 or eight
 on H100. CoreWeave guarantees 16 schedulable four-GPU hosts per NVL72 rack.
@@ -144,11 +146,15 @@ This mode keeps the RL trainer within one rack; multi-rack trainers
 need a separate placement policy. NVL72 launches require an Iris controller
 that supports `CoschedulingConfig.group_sizes`.
 
-Each Ray node carries its Iris group label and the NVLink domain reported by
-Iris. Ray reserves the trainer's GPUs first, then restricts every model's
-placement group to its assigned Iris group. Startup trusts Iris's topology
-labels. Physical fabric checks belong in diagnostic probes. This option does
-not select or qualify the transport between trainer and inference domains.
+Each Ray node carries its Iris group label. Ray reserves the trainer's GPUs
+first, then restricts every model's placement group to its assigned Iris group.
+Startup trusts Iris's placement guarantee. Iris attempt status exposes the
+assigned Node's topology labels for diagnostics. Use separate probes to check
+physical connectivity.
+
+On NVL72, explicit groups do not retain the default sliced layout's soft
+preference for nearby racks on InfiniBand. This option does not select or
+qualify the transport between trainer and inference domains.
 
 ## Expert-block weight sync placement
 

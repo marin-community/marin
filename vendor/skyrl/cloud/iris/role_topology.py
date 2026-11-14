@@ -11,7 +11,6 @@ from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_policy_exp
 
 NVLINK_ROLE_TOPOLOGY = "nvlink.domain"
 LOCALITY_GROUP_LABEL = "iris.locality_group"
-NVLINK_DOMAIN_LABEL = "iris.nvlink_domain"
 
 
 @dataclass(frozen=True)
@@ -26,6 +25,9 @@ class RoleTopology:
 
     def selector(self, role: str) -> dict[str, str]:
         return {LOCALITY_GROUP_LABEL: str(self.locality.role_groups[self.roles.index(role)])}
+
+    def node_labels(self, rank: int) -> dict[str, str]:
+        return {LOCALITY_GROUP_LABEL: str(self.locality.group_for_rank(rank))}
 
 
 def derive_role_topology(config: Mapping[str, Any]) -> RoleTopology | None:

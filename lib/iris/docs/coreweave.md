@@ -155,7 +155,7 @@ topology level, and at most ten groups. `nvlink.domain` is a required level;
 preferred and sliced levels cannot be used with explicit groups. Each NVLink
 group is limited to 16 tasks. Omitting `group_sizes` keeps the existing rules above.
 
-The task status API exposes the scheduler's assigned node-label values in
+The task status API exposes the assigned Node's topology labels in
 `attempt.topology`, including `ds.coreweave.com/nvlink.domain` for NVLink
 placement. The mapping is empty until Iris observes the assignment. It is
 recorded per attempt and retained after the Pod is deleted. These values
@@ -176,6 +176,10 @@ Pulumi pins `cks-kueue` 1.5.0, which contains Kueue 0.18.3. Iris explicitly
 enables `TASRecomputeAssignmentWithinSchedulingCycle`, added in Kueue 0.18.2,
 so a workload's hostname assignment is recomputed when an earlier admission in
 the same scheduling cycle consumes that domain.
+
+When upgrading Kueue, check that unequal groups remain separate PodSets and
+that each PodSet's Pod indices start at zero. Iris uses preset role-hash
+annotations to keep those groups separate.
 
 #### TAS preemption and CPU spillover
 

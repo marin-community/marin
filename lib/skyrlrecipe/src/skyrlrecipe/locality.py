@@ -26,9 +26,7 @@ class LocalityPlan:
         raise ValueError("Task rank exceeds the locality allocation")
 
 
-def plan_locality_groups(
-    role_gpus: Sequence[int], *, gpus_per_node: int, max_nodes_per_domain: int
-) -> LocalityPlan:
+def plan_locality_groups(role_gpus: Sequence[int], *, gpus_per_node: int, max_nodes_per_domain: int) -> LocalityPlan:
     """Place roles in order, reusing space in the first domain that fits.
 
     Put the trainer first, followed by equally sized inference engines. Each
