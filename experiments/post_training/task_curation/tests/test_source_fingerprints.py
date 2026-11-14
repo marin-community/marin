@@ -81,6 +81,20 @@ def task_document(identifier: str, instruction: str) -> dict:
     return task.model_dump(mode="json")
 
 
+def test_empty_release_fingerprints_without_overlap_candidates():
+    empty = fingerprint_source([], {"empty-release.parquet": "digest"})
+    populated = fingerprint_source([task_document("task", "Solve this task")], {})
+
+    assert empty.task_count == 0
+    assert empty.inputs == {"empty-release.parquet": "digest"}
+    assert empty.sample_sha256 == canonical_sha256([])
+    assert pair_similarity("empty", empty, "populated", populated).rank_score == 0
+    assert pair_similarity("empty", empty, "also-empty", empty).instruction_similarity == 0
+    assert candidate_pairs({"empty": empty, "populated": populated}, {"empty", "populated"}, 3) == []
+    with pytest.raises(ValueError, match="Empty populations"):
+        SourceFingerprint.model_validate({**empty.model_dump(), "sample": populated.sample})
+
+
 def source_input_declaration(identifier: str, revision: str = "pin") -> dict:
     return {
         "id": identifier,

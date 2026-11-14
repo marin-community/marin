@@ -35,7 +35,7 @@ class SourceFingerprint(BaseModel):
 
     version: Literal[1] = 1
     seed: int
-    task_count: int = Field(gt=0)
+    task_count: int = Field(ge=0)
     within_source_duplicates: int = Field(ge=0)
     sample_sha256: str
     sample: list[FingerprintSample]
@@ -47,6 +47,24 @@ class SourceFingerprint(BaseModel):
     url_hashes: list[str]
     lineage: list[SourceLineage]
     inputs: dict[str, str]
+
+    @model_validator(mode="after")
+    def validate_empty_population(self) -> "SourceFingerprint":
+        if self.task_count == 0 and any(
+            (
+                self.within_source_duplicates,
+                self.sample,
+                self.instruction_minhash,
+                self.instruction_hashes,
+                self.reference_hashes,
+                self.test_hashes,
+                self.task_id_hashes,
+                self.url_hashes,
+                self.lineage,
+            )
+        ):
+            raise ValueError("Empty populations cannot contain task fingerprints")
+        return self
 
 
 class PairSimilarity(BaseModel):
