@@ -69,8 +69,7 @@ SERVED_NAME = "hero-sft-step400407"
 CASES_URI = "s3://marin-us-east-02a/tmp/ttl=14d/hero-vllm-hillclimb/inputs/cases-0baf4938.json"
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=14d/hero-vllm-hillclimb/runs"
 CLUSTER = "marin"
-TARGET_CLUSTER = "cw-us-east-08a"
-GPUS_PER_HOST = 4
+SNOWBALL_WEIGHTS = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm/"
 
 
 def _release(tag: str, commit: str, date: str, sha_arm: str, sha_x86: str) -> VllmGpuRelease:
@@ -148,6 +147,52 @@ BASELINE_ARGS = (
     "--compilation-config",
     json.dumps(BASE_COMPILATION),
 )
+# Snowball (Grug 67B-A2B, no ShortConv layers) shares the GrugMoE code path; it serves as the
+# small-model comparison for per-step overhead. Same flags as Hero except context length and the
+# ShortConv split point.
+SNOWBALL_COMPILATION = BASE_COMPILATION | {
+    "splitting_ops": ["vllm::unified_attention_with_output", "vllm::unified_kv_cache_update"]
+}
+SNOWBALL_ARGS = (
+    *BASELINE_ARGS[: BASELINE_ARGS.index("--max-model-len")],
+    "--max-model-len",
+    "65536",
+    *BASELINE_ARGS[BASELINE_ARGS.index("--max-model-len") + 2 : BASELINE_ARGS.index("--compilation-config")],
+    "--compilation-config",
+    json.dumps(SNOWBALL_COMPILATION),
+)
+
+
+@dataclass(frozen=True)
+class ServedTarget:
+    """A model export and the hardware it is served on."""
+
+    weights: str
+    tokenizer: str
+    tokenizer_revision: str | None
+    served_name: str
+    accelerator: str
+    gpus_per_host: int
+    cluster: str
+    baseline_args: tuple[str, ...]
+
+
+TARGETS = {
+    "hero": ServedTarget(
+        WEIGHTS, TOKENIZER, TOKENIZER_REVISION, SERVED_NAME, "GB200", 4, "cw-us-east-08a", BASELINE_ARGS
+    ),
+    "snowball": ServedTarget(
+        SNOWBALL_WEIGHTS,
+        "marin-community/marin-tokenizer",
+        None,
+        "snowball-sft-step630",
+        "H100",
+        8,
+        "cw-us-east-02a",
+        SNOWBALL_ARGS,
+    ),
+}
+
 # Rafal's server runs a single API server process (its log shows one APIServer pid). Only the
 # leader starts API servers; headless followers reject the flag.
 LEADER_ARGS = ("--api-server-count", "1")
@@ -183,6 +228,15 @@ CANDIDATE_ARGS = {
     "mns256": ("--max-num-seqs", "256"),
     "mns128api4": ("--max-num-seqs", "128"),
     "mns128prof": ("--max-num-seqs", "128", "--profiler-config", json.dumps(PROFILER_CONFIG)),
+    # Two-host Hero (DP8/EP8): experts take ~130 GB per GPU, so KV fits only with gmu 0.95.
+    "mns32prof95": (
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.95",
+        "--profiler-config",
+        json.dumps(PROFILER_CONFIG),
+    ),
     # Inductor still fuses combo kernels but picks them without timing benchmarks (compile determinism test).
     "bckoff": (
         "--compilation-config",
@@ -243,7 +297,7 @@ async def _run_probes(base_url: str, config: ArmConfig, cases: dict) -> None:
     The load sweep is saved after every concurrency point so a preemption keeps finished points.
     """
     failures = []
-    async with Client(base_url, SERVED_NAME) as client:
+    async with Client(base_url, config.probes.model) as client:
         for phase in config.phases:
             started = time.time()
             uri = f"{config.output_uri}/{phase}.json"
@@ -369,6 +423,7 @@ def _parse_args() -> argparse.Namespace:
         help="Comma-separated releases to run back to back on the same gang (e.g. 3004cd8,0ac9dcb,3004cd8); "
         "overrides --release",
     )
+    parser.add_argument("--model", choices=sorted(TARGETS), default="hero")
     parser.add_argument("--hosts", type=int, default=4)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--phases", default="gates,long,load")
@@ -394,8 +449,8 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _baseline_args(drop: list[str]) -> tuple[str, ...]:
-    args = list(BASELINE_ARGS)
+def _baseline_args(baseline: tuple[str, ...], drop: list[str]) -> tuple[str, ...]:
+    args = list(baseline)
     for flag in drop:
         index = args.index(flag)
         has_value = index + 1 < len(args) and not args[index + 1].startswith("--")
@@ -408,17 +463,18 @@ def main() -> None:
     configure_logging()
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     name = f"{args.name}-{stamp}"
-    local_dp = GPUS_PER_HOST // args.tensor_parallel_size
+    target = TARGETS[args.model]
+    local_dp = target.gpus_per_host // args.tensor_parallel_size
     geometry = ServingGeometry(
         tensor_parallel_size=args.tensor_parallel_size,
         data_parallel_size=local_dp,
         pipeline_parallel_size=1,
-        gpus_per_task=GPUS_PER_HOST,
+        gpus_per_task=target.gpus_per_host,
         data_parallel_hosts=args.hosts,
     )
     resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=GPUS_PER_HOST,
+        target.accelerator,
+        count=target.gpus_per_host,
         cpu=100,
         ram="880g",
         disk="1t",
@@ -438,14 +494,19 @@ def main() -> None:
     assert all(item.split(":")[1] in (*CANDIDATE_ARGS, "tp2") for item in releases if ":" in item), releases
     configs = [
         _variant_config(
-            args, name if len(releases) == 1 else f"{name}-v{i}-{item.replace(':', '-')}", item, geometry, iris_config
+            args,
+            target,
+            name if len(releases) == 1 else f"{name}-v{i}-{item.replace(':', '-')}",
+            item,
+            geometry,
+            iris_config,
         )
         for i, item in enumerate(releases)
     ]
     config = configs[0]
     engine = config.engine
-    submission = resources if args.direct else replace(resources, target_cluster=TARGET_CLUSTER)
-    cluster = TARGET_CLUSTER if args.direct else CLUSTER
+    submission = resources if args.direct else replace(resources, target_cluster=target.cluster)
+    cluster = target.cluster if args.direct else CLUSTER
     coscheduling = resolve_coscheduling(submission, submission.replicas)
     print(
         json.dumps(
@@ -525,7 +586,7 @@ def _overlay(release: VllmGpuRelease, spec: str) -> VllmGpuRelease:
     )
 
 
-def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
+def _variant_config(args, target: ServedTarget, name, item, geometry, iris_config) -> ArmConfig:
     tag, _, label = item.partition(":")
     release = RELEASES[tag]
     tensor_parallel_size = args.tensor_parallel_size
@@ -536,7 +597,7 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
         assert args.tp2_overlay, "tp2 needs --tp2-overlay FILE:SHA256 (the #119 overlay wheel)"
         release = _overlay(release, args.tp2_overlay)
         tensor_parallel_size = 2
-        geometry = replace(geometry, tensor_parallel_size=2, data_parallel_size=GPUS_PER_HOST // 2)
+        geometry = replace(geometry, tensor_parallel_size=2, data_parallel_size=target.gpus_per_host // 2)
         env = (*env, *TP2_ENV)
         flags = TP2_FLAGS
     if args.overlay_wheel:
@@ -554,13 +615,13 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
         source=VllmSource.MARIN_FORK,
         gpu_release=release,
         startup_timeout_seconds=3600,
-        extra_args=_with_flags((*_baseline_args(args.drop_arg), *args.vllm_arg), flags),
+        extra_args=_with_flags((*_baseline_args(target.baseline_args, args.drop_arg), *args.vllm_arg), flags),
     )
     model = ServedModelConfig(
-        weights=WEIGHTS,
-        api_model=SERVED_NAME,
-        tokenizer=TOKENIZER,
-        tokenizer_revision=TOKENIZER_REVISION,
+        weights=target.weights,
+        api_model=target.served_name,
+        tokenizer=target.tokenizer,
+        tokenizer_revision=target.tokenizer_revision,
         dtype="bfloat16",
         tensor_parallel_size=tensor_parallel_size,
     )
@@ -574,7 +635,7 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
         iris=iris_config,
         phases=tuple(args.phases.split(",")),
         probes=ProbeConfig(
-            model=SERVED_NAME,
+            model=target.served_name,
             load=LoadConfig(
                 concurrencies=tuple(int(c) for c in args.concurrencies.split(",")),
                 max_tokens=args.max_tokens,
