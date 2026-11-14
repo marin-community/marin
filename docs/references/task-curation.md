@@ -1894,6 +1894,23 @@ unqualified history and overlays only the missed explicit role resources. All
 other limits, original files, grading mode and prior phase hashes remain fixed.
 Ordinary retries without this field keep their existing strict invariants.
 
+When the frozen runtime has no numeric role limits, an approved infrastructure
+retry with an unknown historical separate-verifier allocation may use
+`retry-plan --legacy-verifier-initialization INITIALIZATION.json`.
+`LegacyVerifierInitialization` binds `source_runtime`, immutable `scope` and
+`approval` URI/SHA-256 references, exact `parent_mapping_sha256` and
+`parent_result_sha256`, and the fresh `verifier_execution_requirements`.
+The scope must identify the same task and parent in the original approved index.
+Its fresh capacity must match the calibration base of 1 CPU / 2,048 MiB RAM /
+2,048 MiB disk, with the parent's known phase deadlines. The actor resumes its
+exact final allocation. The new field is omitted when absent, preserving old
+receipt hash preimages.
+Every historical verifier allocation stays unknown; only the new phase receives
+the approved allocation and may grow a failing capacity dimension that the source
+left undeclared. A parent with a scored outcome or an observed source-declared
+deadline failure is ineligible for this transition.
+Planning, dispatch, and collection verify the authority and source anchors.
+
 A replacement LOCAL worker may supply `retry-plan --local-host HOST.json`.
 `LocalExecutionHostTransition` records exact `parent_kwargs`, replacement
 `current_kwargs`, and nonempty immutable URI/SHA-256 `scope_evidence`. Only

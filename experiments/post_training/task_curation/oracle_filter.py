@@ -42,6 +42,7 @@ from taskcompendium.pipeline.oracle_filter import (
     InfrastructureRetryContext,
     InfrastructureRetryPlan,
     InfrastructureRetryTransition,
+    LegacyVerifierInitialization,
     LocalExecutionHostTransition,
     MechanicalOracleTaskReceipt,
     NativeOracleSuccessPolicy,
@@ -58,6 +59,7 @@ from taskcompendium.pipeline.oracle_filter import (
     SourcePytestEnvironment,
     VerifierResourceProfile,
     initial_verifier_requirements,
+    initialized_verifier_requirements,
     negative_control_applicability,
     next_trial_allocations,
     oracle_failure_reason,
@@ -390,6 +392,7 @@ def require_retry_provenance(
             or plan.parent_map_sha256 != transition.parent_map_sha256
             or plan.local_host != transition.local_host
             or plan.source_runtime_resource_recovery != transition.source_runtime_resource_recovery
+            or plan.legacy_verifier_initialization != transition.legacy_verifier_initialization
         ):
             raise ValueError(f"Infrastructure retry plan changed: {task_id}")
         parent = parent_document[task_id]
@@ -403,6 +406,8 @@ def require_retry_provenance(
             raise ValueError(f"Infrastructure source identity changed: {task_id}")
         if ResourceCalibrationReceipt.model_validate(parent["calibration"]) != transition.parent_calibration:
             raise ValueError(f"Infrastructure parent attempts changed: {task_id}")
+        if transition.legacy_verifier_initialization is not None:
+            require_legacy_verifier_scope(transition.legacy_verifier_initialization, task_id, parent)
 
 
 def filter_cohort(
@@ -1098,6 +1103,60 @@ def require_backend_fix(identity: BackendFixIdentity) -> None:
         raise ValueError("Runtime source files differ from the pinned backend fix")
 
 
+def require_legacy_verifier_scope(initialization: LegacyVerifierInitialization, task_id: str, parent: dict) -> None:
+    """Bind the fresh allocation to its immutable scope and original infrastructure approval."""
+    documents = []
+    for evidence in (initialization.scope, initialization.approval):
+        path = StoragePath(evidence.uri)
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != evidence.sha256:
+            raise ValueError("Legacy verifier initialization authority changed")
+        documents.append(json.loads(raw))
+    scope, approval = documents
+    if (
+        approval.get("approved") is not True
+        or approval.get("classification") != "our_infrastructure"
+        or scope["approval_uri"] != initialization.approval.uri
+        or scope["approval_sha256"] != initialization.approval.sha256
+        or scope["parent_index_uri"] != approval["index_uri"]
+        or scope["parent_index_sha256"] != approval["index_sha256"]
+    ):
+        raise ValueError("Legacy verifier initialization lacks its original approved scope")
+    original = StoragePath(approval["index_uri"]).read_bytes()
+    if hashlib.sha256(original).hexdigest() != approval["index_sha256"]:
+        raise ValueError("Legacy verifier initialization parent index changed")
+    selected = [entry for entry in scope["entries"] if entry["task_id"] == task_id]
+    approved = [entry for entry in json.loads(original)["entries"] if entry["task_id"] == task_id]
+    if len(selected) != 1 or len(approved) != 1:
+        raise ValueError("Legacy verifier initialization requires exact approved task membership")
+    entry, original_entry = selected[0], approved[0]
+    checksum = parent.get("source_task_checksum", parent["task_checksum"])
+    anchors = {
+        "task_sha256": parent["task_sha256"],
+        "runtime_sha256": parent.get("runtime_sha256"),
+        "source_task_checksum": checksum,
+        "parent_mapping_sha256": canonical_sha256(parent),
+        "parent_result_sha256": initialization.parent_result_sha256,
+    }
+    if any(entry[name] != value or original_entry[name] != value for name, value in anchors.items()):
+        raise ValueError("Legacy verifier initialization belongs to another frozen parent")
+    if initialization.parent_mapping_sha256 != anchors["parent_mapping_sha256"]:
+        raise ValueError("Legacy verifier initialization parent mapping changed")
+    calibration = ResourceCalibrationReceipt.model_validate(parent["calibration"])
+    if (
+        entry["raw_parent_verifier_execution_requirements"] is not None
+        or entry["scored"] is not False
+        or entry["passed"] is not False
+        or entry["source_commands_executed"] != 0
+        or ExecutionRequirements.model_validate(entry["preserved_actor_execution_requirements"])
+        != calibration.execution_requirements
+        or ExecutionRequirements.model_validate(entry["fresh_verifier_initial_execution_requirements"])
+        != initialization.verifier_execution_requirements
+    ):
+        raise ValueError("Legacy verifier initialization changed the approved old or fresh allocations")
+    initialized_verifier_requirements(calibration, initialization)
+
+
 def write_retry_plan(
     cohort: Path,
     task_map: Path,
@@ -1106,6 +1165,7 @@ def write_retry_plan(
     output: Path,
     local_host: LocalExecutionHostTransition | None = None,
     source_runtime_resource_recovery: TaskSpecRuntimeBinding | None = None,
+    legacy_verifier_initialization: LegacyVerifierInitialization | None = None,
 ) -> None:
     """Freeze only explicitly approved infrastructure cases; never change their native packages."""
     if output.exists():
@@ -1120,6 +1180,10 @@ def write_retry_plan(
         raise ValueError("An infrastructure retry requires explicit per-task approvals")
     if source_runtime_resource_recovery is not None and len(approvals) != 1:
         raise ValueError("A source runtime recovery plan must bind one exact original task")
+    if legacy_verifier_initialization is not None and (
+        source_runtime_resource_recovery is not None or len(approvals) != 1
+    ):
+        raise ValueError("Legacy verifier initialization requires one exact task and no runtime recovery")
     mappings = json.loads(task_map.read_text())
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
     schema = pq.read_schema(paths[0])
@@ -1152,11 +1216,17 @@ def write_retry_plan(
                 if (
                     (native / TASK_SPEC_FILE).is_file()
                     and recovery is None
+                    and legacy_verifier_initialization is None
                     and calibration.attempts[-1].verifier_execution_requirements is None
                 ):
                     raise ValueError(
                         f"Legacy separate verifier allocation requires an approved recovery transition: {task.id}"
                     )
+                if legacy_verifier_initialization is not None:
+                    legacy_verifier_initialization.source_runtime.require_task(task)
+                    if legacy_verifier_initialization.source_runtime != source_binding:
+                        raise ValueError(f"Verifier initialization changed the frozen source runtime: {task.id}")
+                    require_legacy_verifier_scope(legacy_verifier_initialization, task.id, mapping)
                 if recovery is not None:
                     recovery.require_task(task)
                     if recovery != source_binding:
@@ -1229,6 +1299,7 @@ def write_retry_plan(
         approvals=approvals,
         local_host=local_host,
         source_runtime_resource_recovery=source_runtime_resource_recovery,
+        legacy_verifier_initialization=legacy_verifier_initialization,
     )
     (output / "plan.json").write_text(plan.model_dump_json(indent=2) + "\n")
 
@@ -1278,7 +1349,12 @@ def retry_cohort(
     verifier_starts = {}
     for task_id, parent in parents.items():
         calibration = ResourceCalibrationReceipt.model_validate(parent["calibration"])
-        if plan.source_runtime_resource_recovery is not None:
+        if plan.legacy_verifier_initialization is not None:
+            require_legacy_verifier_scope(plan.legacy_verifier_initialization, task_id, parent)
+            verifier_starts[task_id] = initialized_verifier_requirements(
+                calibration, plan.legacy_verifier_initialization
+            )
+        elif plan.source_runtime_resource_recovery is not None:
             recovered = recovered_source_runtime_requirements(calibration, plan.source_runtime_resource_recovery)
             verifier_starts[task_id] = initial_verifier_requirements(
                 recovered.execution_requirements, recovered.verifier
@@ -1304,6 +1380,7 @@ def retry_cohort(
             approval=plan.approvals[task_id],
             local_host=plan.local_host,
             source_runtime_resource_recovery=plan.source_runtime_resource_recovery,
+            legacy_verifier_initialization=plan.legacy_verifier_initialization,
         )
     phase = destination / "phase"
     contexts = {
@@ -1415,6 +1492,7 @@ def main() -> None:
     plan.add_argument("--backend-fix", type=Path, required=True)
     plan.add_argument("--local-host", type=Path, help="approved physical LOCAL host transition JSON")
     plan.add_argument("--source-runtime-resource-recovery", type=Path, help="exact approved original runtime binding")
+    plan.add_argument("--legacy-verifier-initialization", type=Path, help="exact approved fresh verifier initialization")
     plan.add_argument("--output-dir", type=Path, required=True)
     retry = commands.add_parser("retry")
     retry.add_argument("--plan", type=Path, required=True)
@@ -1465,6 +1543,11 @@ def main() -> None:
             (
                 TaskSpecRuntimeBinding.model_validate_json(args.source_runtime_resource_recovery.read_text())
                 if args.source_runtime_resource_recovery
+                else None
+            ),
+            (
+                LegacyVerifierInitialization.model_validate_json(args.legacy_verifier_initialization.read_text())
+                if args.legacy_verifier_initialization
                 else None
             ),
         )

@@ -641,6 +641,45 @@ def recovered_source_runtime_requirements(
     return RecoveredRuntimeRequirements(shape, preserved, verifier)
 
 
+class LegacyVerifierInitialization(BaseModel):
+    """Authorize a fresh separate verifier while preserving unknown historical allocations."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    source_runtime: TaskSpecRuntimeBinding
+    scope: ContentEvidenceReference
+    approval: ContentEvidenceReference
+    parent_mapping_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parent_result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    verifier_execution_requirements: ExecutionRequirements
+
+
+def initialized_verifier_requirements(
+    parent: ResourceCalibrationReceipt, initialization: LegacyVerifierInitialization
+) -> ExecutionRequirements:
+    """Resolve only the new approved phase, leaving every historical role allocation intact."""
+    if parent.verifier.mode is not GradingEnvironmentMode.SEPARATE:
+        raise ValueError("Legacy verifier initialization requires separate grading")
+    if parent.attempts[-1].verifier_execution_requirements is not None:
+        raise ValueError("Legacy verifier initialization requires an unknown historical allocation")
+    if initialization.parent_result_sha256 != parent.attempts[-1].result_sha256:
+        raise ValueError("Legacy verifier initialization belongs to another parent result")
+    for role in ("task_machine", "verifier_machine"):
+        if initialization.source_runtime.resource_limits(role):
+            raise ValueError("Explicit original role resources require source runtime recovery")
+    for attempt in parent.attempts:
+        recorded_grade = (
+            attempt.result.get("exception_info") is None
+            and attempt.result.get("finished_at") is not None
+            and bool((attempt.result.get("verifier_result") or {}).get("rewards"))
+        )
+        if attempt.scored or recorded_grade or attempt.prior_phase_failure is not None:
+            raise ValueError("Legacy verifier initialization cannot replay scored or source-deadline evidence")
+    expected = initial_verifier_requirements(parent.execution_requirements, parent.verifier)
+    if initialization.verifier_execution_requirements != expected:
+        raise ValueError("Legacy verifier initialization differs from the fresh canonical verifier budget")
+    return expected
+
+
 class InfrastructureRetryPlan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     cohort_path: str
@@ -657,11 +696,22 @@ class InfrastructureRetryPlan(BaseModel):
     source_runtime_resource_recovery: TaskSpecRuntimeBinding | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    legacy_verifier_initialization: LegacyVerifierInitialization | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_recovery_partition(self):
         if self.source_runtime_resource_recovery is not None and len(self.approvals) != 1:
             raise ValueError("A source runtime recovery plan must bind one exact original task")
+        if self.legacy_verifier_initialization is not None:
+            if self.source_runtime_resource_recovery is not None or len(self.approvals) != 1:
+                raise ValueError("Legacy verifier initialization requires one exact task and no runtime recovery")
+            if (
+                next(iter(self.approvals.values())).parent_result_sha256
+                != self.legacy_verifier_initialization.parent_result_sha256
+            ):
+                raise ValueError("Legacy verifier initialization belongs to another approved result")
         return self
 
 
@@ -710,6 +760,9 @@ class InfrastructureRetryTransition(BaseModel):
     source_runtime_resource_recovery: TaskSpecRuntimeBinding | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    legacy_verifier_initialization: LegacyVerifierInitialization | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_parent_failure(self):
@@ -719,6 +772,17 @@ class InfrastructureRetryTransition(BaseModel):
             if recovery.task_sha256 != self.task_sha256 or recovery.runtime_sha256 != self.runtime_sha256:
                 raise ValueError("Source runtime recovery belongs to another frozen task or runtime")
             recovered_source_runtime_requirements(self.parent_calibration, recovery)
+        initialization = self.legacy_verifier_initialization
+        if initialization is not None:
+            if recovery is not None:
+                raise ValueError("Legacy verifier initialization cannot also recover runtime resources")
+            if (
+                initialization.source_runtime.task_sha256 != self.task_sha256
+                or initialization.source_runtime.runtime_sha256 != self.runtime_sha256
+                or initialization.parent_mapping_sha256 != self.parent_mapping_sha256
+            ):
+                raise ValueError("Legacy verifier initialization belongs to another frozen task or parent")
+            initialized_verifier_requirements(self.parent_calibration, initialization)
         return self
 
 
@@ -1278,6 +1342,10 @@ class OracleTaskReceipt(BaseModel):
             expected_verifier_start = previous.attempts[-1].verifier_execution_requirements
             if transition.source_runtime_resource_recovery is not None:
                 expected_verifier_start = initial_verifier_requirements(expected_start, expected_verifier)
+            if transition.legacy_verifier_initialization is not None:
+                expected_verifier_start = initialized_verifier_requirements(
+                    previous, transition.legacy_verifier_initialization
+                )
             if current.attempts[0].verifier_execution_requirements != expected_verifier_start:
                 raise ValueError("Infrastructure retry did not resume its exact approved verifier allocation")
             if start != expected_start:

@@ -23,11 +23,13 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
     BackendFixIdentity,
+    LegacyVerifierInitialization,
     LocalExecutionHostTransition,
     OracleExclusionReason,
     OracleFilterReceipt,
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
+    initial_verifier_requirements,
     load_oracle_filter,
 )
 from taskcompendium.runtime.resources import inline_resource
@@ -95,12 +97,24 @@ def retry_case(tmp_path, monkeypatch, request):
                     "role-verifier-growth",
                     "role-actor-growth",
                     "role-recovery",
+                    "legacy-verifier-failed",
+                    "legacy-verifier",
+                    "legacy-verifier-growth",
                 }
                 else {}
             ),
         }
     )
-    if outcome in {"role-resources", "role-verifier-oom", "role-verifier-growth", "role-actor-growth", "role-recovery"}:
+    if outcome in {
+        "role-resources",
+        "role-verifier-oom",
+        "role-verifier-growth",
+        "role-actor-growth",
+        "role-recovery",
+        "legacy-verifier-failed",
+        "legacy-verifier",
+        "legacy-verifier-growth",
+    }:
         envelope["runtime"] = (
             {"task_machine": {"cpus": 2}, "verifier_machine": {"memory_mb": 4096}}
             if outcome in {"role-verifier-oom", "role-actor-growth"}
@@ -111,7 +125,11 @@ def retry_case(tmp_path, monkeypatch, request):
         )
     if outcome == "role-verifier-growth":
         envelope["runtime"] = {"task_machine": {"cpus": 2, "memory_mb": 4096}, "verifier_machine": {"storage_mb": 4096}}
-    if outcome == "role-recovery":
+    if outcome in {"legacy-verifier-failed", "legacy-verifier", "legacy-verifier-growth"}:
+        envelope["runtime"] = {
+            role: {"cpus": None, "memory_mb": None, "storage_mb": None} for role in ("task_machine", "verifier_machine")
+        }
+    if outcome in {"role-recovery", "legacy-verifier-failed", "legacy-verifier", "legacy-verifier-growth"}:
         task = task.model_copy(
             update={
                 "resources": task.resources.model_copy(
@@ -145,15 +163,27 @@ def retry_case(tmp_path, monkeypatch, request):
             "role-verifier-growth",
             "role-actor-growth",
             "role-recovery",
+            "legacy-verifier-failed",
+            "legacy-verifier",
+            "legacy-verifier-growth",
         }
         else "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
         "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
     )
-    if outcome in {"role-resources", "role-verifier-oom", "role-verifier-growth", "role-actor-growth", "role-recovery"}:
+    if outcome in {
+        "role-resources",
+        "role-verifier-oom",
+        "role-verifier-growth",
+        "role-actor-growth",
+        "role-recovery",
+        "legacy-verifier-failed",
+        "legacy-verifier",
+        "legacy-verifier-growth",
+    }:
         (native / "task-spec.json").write_text(task.model_dump_json())
         document = tomlkit.parse((native / "task.toml").read_text())
         document["verifier"]["environment_mode"] = "separate"
-        if outcome == "role-recovery":
+        if outcome in {"role-recovery", "legacy-verifier-failed", "legacy-verifier", "legacy-verifier-growth"}:
             document["environment"] = {"cpus": 1, "memory_mb": 2048, "storage_mb": 2048}
         (native / "task.toml").write_text(tomlkit.dumps(document))
     mapping = tmp_path / "original-map.json"
@@ -177,14 +207,27 @@ def retry_case(tmp_path, monkeypatch, request):
         if "retry-run" in package.parts:
             current = (
                 "pass"
-                if outcome in {"legacy-unknown", "grown", "retry-grown", "host", "role-resources", "role-recovery"}
+                if outcome
+                in {
+                    "legacy-unknown",
+                    "grown",
+                    "retry-grown",
+                    "host",
+                    "role-resources",
+                    "role-recovery",
+                    "legacy-verifier-failed",
+                    "legacy-verifier",
+                    "legacy-verifier-growth",
+                }
                 else outcome
             )
+            if outcome == "legacy-verifier-failed":
+                current = "source-failed"
             if outcome == "retry-grown" and len(calls) == 5:
                 current = "oom"
             if outcome == "role-verifier-oom":
                 current = "oom"
-            if outcome in {"role-verifier-growth", "role-actor-growth"}:
+            if outcome in {"role-verifier-growth", "role-actor-growth", "legacy-verifier-growth"}:
                 current = "oom" if len(calls) == 4 else "pass"
         else:
             current = "unknown" if outcome == "legacy-unknown" else "infra"
@@ -226,7 +269,7 @@ def retry_case(tmp_path, monkeypatch, request):
         if outcome == "role-actor-growth" and current == "oom" and "retry-run" in package.parts:
             (root / "agent/resource-usage.json").write_text(json.dumps({"oom_kills": 1}))
         if (
-            outcome in {"role-verifier-oom", "role-verifier-growth"}
+            outcome in {"role-verifier-oom", "role-verifier-growth", "legacy-verifier-growth"}
             and current == "oom"
             and "retry-run" in package.parts
         ):
@@ -257,7 +300,7 @@ def retry_case(tmp_path, monkeypatch, request):
         if outcome == "host"
         else {}
     )
-    if outcome == "role-recovery":
+    if outcome in {"role-recovery", "legacy-verifier-failed", "legacy-verifier", "legacy-verifier-growth"}:
         for index in range(3):
             attempt = initial / f"attempt-{index:02d}"
             attempt.mkdir(parents=True)
@@ -729,6 +772,126 @@ def test_approved_runtime_recovery_retains_unqualified_old_allocations_and_runs_
     assert entry.passed and pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 1
     assert case.parent_map.read_bytes() == original
     assert OracleFilterReceipt.model_validate_json((tmp_path / "filtered/oracle-filter.json").read_text()) == receipt
+
+
+@pytest.fixture
+def legacy_verifier_initialization(tmp_path, retry_case):
+    parent = json.loads(retry_case.parent_map.read_text())["task"]
+    calibration = ResourceCalibrationReceipt.model_validate(parent["calibration"])
+    row = pq.read_table(retry_case.cohort).to_pylist()[0]
+    task = row_task(row)
+    assert task is not None
+    binding = source_runtime_binding(task, row_runtime(row))
+    assert binding is not None
+    fresh = initial_verifier_requirements(calibration.execution_requirements, calibration.verifier)
+    entry = {
+        "task_id": task.id,
+        "task_sha256": parent["task_sha256"],
+        "runtime_sha256": parent["runtime_sha256"],
+        "source_task_checksum": parent["source_task_checksum"],
+        "parent_mapping_sha256": canonical_sha256(parent),
+        "parent_result_sha256": calibration.attempts[-1].result_sha256,
+        "raw_parent_verifier_execution_requirements": None,
+        "scored": False,
+        "passed": False,
+        "source_commands_executed": 0,
+        "preserved_actor_execution_requirements": calibration.execution_requirements.model_dump(mode="json"),
+        "fresh_verifier_initial_execution_requirements": fresh.model_dump(mode="json"),
+    }
+    index = tmp_path / "approved-index.json"
+    index.write_text(json.dumps({"entries": [entry]}))
+    approval = tmp_path / "original-approval.json"
+    approval.write_text(
+        json.dumps(
+            {
+                "approved": True,
+                "classification": "our_infrastructure",
+                "index_uri": str(index),
+                "index_sha256": file_sha256(StoragePath(str(index))),
+            }
+        )
+    )
+    scope = tmp_path / "nullable-scope.json"
+    scope.write_text(
+        json.dumps(
+            {
+                "parent_index_uri": str(index),
+                "parent_index_sha256": file_sha256(StoragePath(str(index))),
+                "approval_uri": str(approval),
+                "approval_sha256": file_sha256(StoragePath(str(approval))),
+                "entries": [entry],
+            }
+        )
+    )
+    return LegacyVerifierInitialization(
+        source_runtime=binding,
+        scope=ContentEvidenceReference(uri=str(scope), sha256=file_sha256(StoragePath(str(scope)))),
+        approval=ContentEvidenceReference(uri=str(approval), sha256=file_sha256(StoragePath(str(approval)))),
+        parent_mapping_sha256=canonical_sha256(parent),
+        parent_result_sha256=calibration.attempts[-1].result_sha256,
+        verifier_execution_requirements=fresh,
+    )
+
+
+@pytest.mark.parametrize(
+    ("retry_case", "attempts", "passed"),
+    [("legacy-verifier", 1, True), ("legacy-verifier-growth", 2, True), ("legacy-verifier-failed", 1, False)],
+    indirect=["retry_case"],
+)
+def test_approved_verifier_initialization_preserves_null_history_and_allows_genuine_growth(
+    tmp_path, retry_case, legacy_verifier_initialization, attempts, passed
+):
+    case = retry_case
+    original = case.parent_map.read_bytes()
+    frozen = tmp_path / "retry-plan"
+    write_retry_plan(
+        case.cohort,
+        case.parent_map,
+        case.approvals,
+        case.backend_fix,
+        frozen,
+        legacy_verifier_initialization=legacy_verifier_initialization,
+    )
+    destination = tmp_path / "retry-run"
+    retry_cohort(frozen / "plan.json", destination, 1)
+    combined = tmp_path / "combined.json"
+    merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    entry = receipt.tasks["task"]
+    previous = entry.infrastructure_retries[0].parent_calibration
+    assert all(attempt.verifier_execution_requirements is None for attempt in previous.attempts)
+    assert entry.infrastructure_retries[0].legacy_verifier_initialization == legacy_verifier_initialization
+    assert all(
+        attempt.execution_requirements == previous.execution_requirements for attempt in entry.calibration.attempts
+    )
+    assert (
+        entry.calibration.attempts[0].verifier_execution_requirements
+        == legacy_verifier_initialization.verifier_execution_requirements
+    )
+    assert len(entry.calibration.attempts) == attempts
+    if attempts == 2:
+        assert entry.calibration.attempts[-1].verifier_execution_requirements.memory_mb == 4096
+    assert entry.passed is passed
+    assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == int(passed)
+    if not passed:
+        assert entry.exclusion_reason is OracleExclusionReason.ORACLE_FAILED
+        with pytest.raises(ValueError, match="scored source result"):
+            oracle_filter.require_infrastructure_retry_parent(
+                entry.calibration, entry.infrastructure_retries[0].approval
+            )
+    assert case.parent_map.read_bytes() == original
+    assert load_oracle_filter(str(tmp_path / "filtered/oracle-filter.json")) == receipt
+    for field in ("parent_mapping_sha256", "parent_result_sha256", "task_sha256"):
+        document = receipt.model_dump(mode="json")
+        initialization = document["tasks"]["task"]["infrastructure_retries"][0]["legacy_verifier_initialization"]
+        if field == "task_sha256":
+            initialization["source_runtime"][field] = "f" * 64
+        else:
+            initialization[field] = "f" * 64
+        path = tmp_path / f"foreign-initialization-{field}.json"
+        path.write_text(json.dumps(document))
+        with pytest.raises(ValueError, match=r"another frozen task or parent|another parent result"):
+            load_oracle_filter(str(path))
 
 
 def test_collection_preserves_earlier_source_deadline_without_rewriting_final_results(tmp_path, retry_case):
