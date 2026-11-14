@@ -714,8 +714,9 @@ wait, run time, and the requested follow-up class. Object-backed relays use the
 
 An object-backed cycle of at least 5 seconds logs `slow maintenance cycle step
 breakdown` with `total_ms`, `compaction_attempts`, and `steps_ms` for
-`flush_and_publish`, `segment_bounds`, `compaction`, `state_gc`, `object_collection`,
-and `index_artifacts`. Compare it with `object compaction rewrite finished`
+`flush_and_publish`, `compaction`, `state_gc`, `object_collection`, `segment_bounds`,
+and `index_artifacts`. While compaction still has runs left, the cycle skips the
+`segment_bounds` and `index_artifacts` backfills. Compare it with `object compaction rewrite finished`
 (`merge_ms`, `upload_ms`) to separate merge time from the cycle's other steps.
 A growing `segment_count` in `finelog namespaces <name>`, with `maintenance cycle
 waited for a slot` reporting waits of many minutes, means compaction is falling

@@ -287,23 +287,25 @@ async fn cycle(
         }
         let mut steps = CycleSteps::new(started);
         steps.mark("flush_and_publish");
-        let bounds_pending = run_one(runtime, TableWork::SegmentBounds)
-            .await?
-            .has_more_work();
-        steps.mark("segment_bounds");
         // The prompt re-poll that pending work earns still queues behind every
         // other table for a shared slot, so drain runs within this visit too.
         let (compaction, runs) = drain_object_compaction(runtime, force_compact_l0).await?;
         steps.mark("compaction");
         runtime.controller.gc_objects().await?;
         steps.mark("state_gc");
-        // Collection and index backfill do not shrink a compaction backlog, yet
-        // they hold the shared slot for minutes on a large table. While runs
-        // remain, hand the slot back: collection waits out its backlog interval
-        // and index backfill waits for the backlog to clear.
+        // Collection and the bounds and index backfills do not shrink a
+        // compaction backlog, yet they hold the shared slot for minutes on a
+        // large table. While runs remain, hand the slot back: collection waits
+        // out its backlog interval and both backfills wait for the backlog to
+        // clear.
         let backlogged = compaction.has_more_work();
         run_one(runtime, TableWork::ObjectCollection { backlogged }).await?;
         steps.mark("object_collection");
+        let bounds_pending = !backlogged
+            && run_one(runtime, TableWork::SegmentBounds)
+                .await?
+                .has_more_work();
+        steps.mark("segment_bounds");
         if !backlogged {
             run_one(runtime, TableWork::IndexArtifacts).await?;
         }

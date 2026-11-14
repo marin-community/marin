@@ -30,12 +30,16 @@ pub async fn maintain(runtime: &TableRuntime) -> Result<bool, StatsError> {
         .into_iter()
         .map(|record| (record.path.clone(), record))
         .collect();
-    let candidates: Vec<_> = runtime
-        .catalog
-        .list_segments(runtime.name())?
+    // L0 segments are skipped: a merge soon rewrites them and records bounds
+    // for its output. The highest levels go first: the final level is never
+    // rewritten, so its segments get bounds only from this backfill.
+    let mut segments = runtime.catalog.list_segments(runtime.name())?;
+    segments.sort_by_key(|row| std::cmp::Reverse(row.level));
+    let candidates: Vec<_> = segments
         .into_iter()
         .filter(|row| {
-            row.row_count > 0
+            row.level > 0
+                && row.row_count > 0
                 && records.get(&row.path).is_some_and(|record| {
                     record.table_spec_version == active_version
                         && (row.min_key_value.is_none()
