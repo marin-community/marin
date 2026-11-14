@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gold-answer BPB on the non-agentic Eval Policy benchmarks (marin#10197), as validation steps.
+"""Gold-answer BPB on the non-agentic Eval Policy benchmarks (`docs/explanations/evaluation.md`), as validation steps.
 
 Small models score near chance on these benchmarks, so this measures how well a model predicts the gold answer after
 the question: each example is ``BOS prompt answer EOS``, and the loss weight is 1 only where the next token is an

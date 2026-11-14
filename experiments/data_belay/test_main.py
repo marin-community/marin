@@ -7,32 +7,38 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from experiments.data_belay.__main__ import RUNS_ROOT, cli, require_dilution_references
+from experiments.data_belay.__main__ import RUNS_ROOT, cli, reference_commands, require_dilution_references
+from experiments.data_belay.results import DILUTION_REFERENCE_SOURCES
 from experiments.grug.fast_track import launch
 
 
-def test_the_launcher_plans_the_train_command_at_the_baseline_budget_under_the_data_belay_run_root():
+def test_the_launcher_parses_the_train_command_as_a_baseline_run_under_the_data_belay_run_root():
     printed = CliRunner().invoke(cli, ["train", "--rung", "d512", "--seed", "0"])
     assert printed.exit_code == 0, printed.output
     command = shlex.split(printed.output)
     args = command[command.index("experiments.grug.fast_track.launch") + 1 :]
-    args.remove("--submit")
 
-    planned = CliRunner().invoke(launch.main, args, standalone_mode=False)
+    params = launch.main.make_context("launch", args).params
 
-    assert planned.exit_code == 0, planned.output
-    assert f"override_output_path='{RUNS_ROOT}/dbelay-main-d512-control-s0'" in planned.output
-    assert '"num_train_steps": 690' in planned.output
+    assert params["output_path"] == f"{RUNS_ROOT}/dbelay-main-d512-control-s0"
+    assert (params["size"], params["dense"], params["seed"]) == ("d512", True, 0)
+    # No step or batch override: the run trains at the dense baseline's budget.
+    assert params["num_steps"] is None and params["batch_size"] is None
 
 
-def test_report_refuses_a_share_without_dilution_references_and_prints_the_commands_that_build_them():
-    with pytest.raises(click.ClickException) as refused:
+def test_the_reference_commands_prepare_every_dilution_reference_at_the_share():
+    prepared = [
+        cli.commands["prepare-datakit"].make_context("prepare-datakit", args[1:]).params
+        for args in reference_commands(0.5)
+    ]
+
+    assert {(p["label"], p["sources"]) for p in prepared} == {(k, (v,)) for k, v in DILUTION_REFERENCE_SOURCES.items()}
+    assert all(p["share"] == 0.5 for p in prepared)
+
+
+def test_report_refuses_a_share_without_dilution_references():
+    with pytest.raises(click.ClickException):
         require_dilution_references("fineweb-sample-10bt-p50-d497e2", 0.5, "d768")
-    message = refused.value.message
-    assert "--against" in message
-    for label, source in [("dk-climblab-ja", "climblab-ja"), ("dk-finepdfs-arb_arab", "finepdfs/arb_Arab")]:
-        assert f"prepare-datakit --label {label} --source {source} --share 0.5 --submit" in message
-    assert "seeds 0, 1, 2 of each at d768" in message
 
 
 @pytest.mark.parametrize(("candidate", "share"), [("fineweb-sample-10bt-p20-cb6b5a", 0.2), ("control", 0.0)])

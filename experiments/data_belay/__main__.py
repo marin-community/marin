@@ -3,6 +3,7 @@
 
 """Data Belay command line: `uv run data-belay <command>`."""
 
+import dataclasses
 import logging
 import math
 import os
@@ -78,7 +79,7 @@ def train_command(rung: str, run_id: str, flags: list[str], seed: int) -> list[s
     return [
         *("uv", "run", "python", "-m", "experiments.grug.fast_track.launch"),
         *("--size", rung, "--dense", "--save-checkpoints", "--version", LAUNCH_VERSION, *flags),
-        *("--seed", str(seed), "--run-id", run_id, "--output-path", f"{RUNS_ROOT}/{run_id}"),
+        *("--seed", str(seed), "--run-id", run_id, "--output-path", prefix_join(RUNS_ROOT, run_id)),
         *("--submit", "--target-cluster", CLUSTER, "--priority", BAND),
     ]
 
@@ -382,20 +383,29 @@ def report(rung: str, candidate: str, seeds: str, against: str | None) -> None:
     click.echo(f"ladder: {rungs} -> {ladder_step(results, len(DATA_BELAY_RUNGS))}")
 
 
-def _arm_reading(rung: str, candidate: str, seeds: list[int]) -> tuple[float, PreparedCache, CacheReading] | None:
-    """The share, cache and reading of the candidate's runs at ``rung``; None for runs on the base mix alone."""
+@dataclasses.dataclass(frozen=True)
+class ArmData:
+    """The second cache that an arm's runs trained on, their share of it, and what they read of it."""
+
+    share: float
+    cache: PreparedCache
+    reading: CacheReading
+
+
+def _arm_data(rung: str, candidate: str, seeds: list[int]) -> ArmData | None:
+    """What the candidate's runs at ``rung`` read; None for runs on the base mix alone."""
     mix = arm_mix([treatment_run_id(rung, candidate, s) for s in seeds])
     if mix is None:
         return None
     cache = PreparedCache.read(mix.cache_root)
-    return mix.share, cache, cache.reading(mix.share, mix.train_tokens)
+    return ArmData(mix.share, cache, cache.reading(mix.share, mix.train_tokens))
 
 
 def _data_line(rung: str, candidate: str, seeds: list[int]) -> str:
-    arm = _arm_reading(rung, candidate, seeds)
+    arm = _arm_data(rung, candidate, seeds)
     if arm is None:
         return f"data: {candidate} trains on the base mix alone"
-    share, cache, reading = arm
+    share, cache, reading = arm.share, arm.cache, arm.reading
     return (
         f"data: {candidate} trained at a share of {share * 100:g}%: read {_tokens(reading.tokens)} tokens, "
         f"{reading.epochs:.2f} epochs of its {_tokens(cache.tokens)}-token cache, {reading.dataset_seen * 100:.2g}% of "
@@ -405,7 +415,7 @@ def _data_line(rung: str, candidate: str, seeds: list[int]) -> str:
 
 def _epochs_note(rung: str, arms: tuple[str, ...], seeds: list[int]) -> str:
     """The epochs of each arm's cache at ``rung``, leaving out an arm on the base mix alone."""
-    epochs = [f"{arm[2].epochs:.2f}" for name in arms if (arm := _arm_reading(rung, name, seeds)) is not None]
+    epochs = [f"{arm.reading.epochs:.2f}" for name in arms if (arm := _arm_data(rung, name, seeds)) is not None]
     return f" ({' and '.join(epochs)} epochs)" if epochs else ""
 
 
@@ -437,16 +447,21 @@ def require_dilution_references(candidate: str, share: float, rung: str) -> None
     include what giving up the share costs; the control gives up none."""
     if share == 0 or dilution_references(candidate, share):
         return
-    prepare = "\n".join(
-        f"  uv run data-belay prepare-datakit --label {label} --source {source} --share {share:g} --submit"
-        for label, source in DILUTION_REFERENCE_SOURCES.items()
-    )
+    prepare = "\n".join(f"  uv run data-belay {shlex.join(args)}" for args in reference_commands(share))
     raise click.ClickException(
         f"{candidate} trained at a share of {share * 100:g}%, which has no dilution references, so its harm would "
         "include what giving up the share costs. Compare it with another candidate at that share (--against), or "
         f"build the references:\n{prepare}\nthen train seeds {', '.join(map(str, REFERENCE_SEEDS))} of each at "
         f"{rung}, score them, and add their labels to results.DILUTION_REFERENCES[{share:g}]."
     )
+
+
+def reference_commands(share: float) -> list[list[str]]:
+    """The `data-belay` arguments that prepare the four dilution references at ``share``."""
+    return [
+        ["prepare-datakit", "--label", label, "--source", source, "--share", f"{share:g}", "--submit"]
+        for label, source in DILUTION_REFERENCE_SOURCES.items()
+    ]
 
 
 def _arm_run_ids(rung: str, candidate: str, seeds: list[int], against: str | None) -> tuple[list[str], list[str]]:
