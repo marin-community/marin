@@ -41,6 +41,8 @@ SELECTION_PREFIX = "rl-data/task-selection"
 DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.11.04"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
+EVAL_TEMPERATURE = 0.6
+EVAL_TOP_P = 0.95
 MAX_NUM_SEQS = 1
 REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
@@ -85,6 +87,7 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
     config = config.merge(
         RecipePatch(
             generator=sections.Generator(
+                eval_sampling_params=EvalSamplingParams(seed=SEED, temperature=EVAL_TEMPERATURE, top_p=EVAL_TOP_P),
                 trajectory_reward_shaping=sections.TrajectoryRewardShaping(
                     enabled=True,
                     # Enabling shaping would also apply the DAPO overlong penalty over the derived l_cache window.
@@ -124,7 +127,8 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
     return config.merge(
         RecipePatch(
             generator=sections.Generator(
-                eval_sampling_params=EvalSamplingParams(seed=SEED),
+                # Exact repeats were qualified with greedy evaluation.
+                eval_sampling_params=EvalSamplingParams(seed=SEED, temperature=0.0, top_p=1.0),
                 enable_prefix_caching=True,
                 max_num_seqs=MAX_NUM_SEQS,
                 vllm_attention_backend="TRITON_ATTN",
@@ -219,7 +223,7 @@ def build_run(
 @click.option(
     "--reproducible-serving",
     is_flag=True,
-    help="Use batch-invariant serving with one sequence per rank and a fixed evaluation seed.",
+    help="Use batch-invariant serving with one sequence per rank and greedy evaluation.",
 )
 @rl_build_options
 def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: bool) -> ArtifactStep[SkyRLRun]:

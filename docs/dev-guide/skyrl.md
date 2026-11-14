@@ -65,6 +65,40 @@ policy. It trades host memory and device-to-host/host-to-device copies for GPU
 headroom; update time can increase. It cannot be combined with Megatron's other
 activation-offload modes.
 
+## Hero EP MuonH
+
+Set `trainer.policy.optimizer_config.optimizer: MuonH` and
+`trainer.policy.optimizer_config.optimizer_kwargs.expert_normalization: all_experts`
+to preserve one Frobenius norm per layer's routed gate, up and down expert
+projection across GPUs. Only norm scalars are exchanged. Each shared expert's
+projections and logical Q/K/V and gate/up matrices keep separate updates.
+Supported routed names end in `mlp.experts.linear_fc[12].weight<N>` or
+`mlp.experts.experts.linear_fc[12].weight<N>`. Unrecognized trainable routed
+expert names raise an error in this mode.
+
+The default `expert_normalization: per_expert` keeps each expert matrix's norm
+separate. Both modes use corrected BF16 rounding and square-matrix orientation,
+so existing per-expert numerical updates also change.
+
+MuonH owns matrix weights, AdamH owns the readout, and Adam owns embeddings,
+routers, attention gates, scalar norm gains and ShortConv kernels. Set
+`optimizer_kwargs.adam_lr` separately. The Hero pretraining settings come from
+`experiments/grug/moe_hero_ep/heuristic.py`.
+
+To match Hero pretraining, set `max_grad_norm: 1.0` (the
+`HERO_MAX_GRAD_NORM` setting in `experiments/grug/moe_hero_ep/hero_recipe.py`).
+Use `weight_decay: 0`, TP=ETP=1, FP32 master parameters and
+`megatron_config.optimizer_config_kwargs.use_distributed_optimizer: false`.
+Megatron's AdamW CPU offload and precision-aware optimizer are unsupported.
+`optimizer_kwargs.offload_momentum: true` keeps Muon momentum in pinned CPU memory.
+
+Native checkpoints record `MuonH:hero_ep_all_experts` or `MuonH` for whole-bank
+or per-expert state. Training-state restore rejects a mismatched recipe;
+model-only restore can start a fresh optimizer with a different recipe.
+Extracted from [the Mochi experiment](https://github.com/marin-community/marin/pull/11199),
+using [Hero EP at 4af96607](https://github.com/marin-community/marin/tree/4af966070e5d0252e87d404196400c35bd04883b/experiments/grug/moe_hero_ep)
+as the numerical reference.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
@@ -118,6 +152,25 @@ One and eight channels produced identical scores and expert choices at each
 tested batch shape, but both retained existing batch-shape sensitivity. This
 option does not establish exact batch invariance; see the
 [numerical checks](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-invariance-01a13c0f/reports/HERO-NCCL-BATCH-INVARIANCE.md).
+
+## Keep each model group within one NVLink domain
+
+On NVL72, set `IrisSkyRLExecution.role_topology` to
+`RoleTopologyMode.NVLINK_DOMAIN` (from `skyrlrecipe.locality`), or use
+`iris.role_topology: nvlink.domain` in a launch document, to keep the trainer
+within one rack and each vLLM engine within one rack. Each group may use at
+most 16 four-GPU hosts (64 GPUs) in one rack. Each trainer or engine must fit
+within that limit. Groups may share a rack when capacity permits. This mode
+uses separate trainer and inference GPUs. Inference requires tensor and pipeline
+parallelism of one (TP=PP=1), with expert parallelism equal to data parallelism
+(EP=DP). A reference model may share trainer GPUs.
+For example, a 32-GPU trainer and a 64-GPU engine request 24 four-GPU
+hosts in groups of eight and sixteen. Marin rounds each group up to whole hosts.
+Iris admits the job together; Ray confines each role to its group. Deploy an Iris
+controller with [grouped coscheduling](https://github.com/marin-community/marin/pull/11449)
+before enabling this mode. Explicit groups lose the default preference
+for nearby racks on InfiniBand. Cross-rack transport between trainer and
+inference still needs validation. Omitting the option keeps existing placement.
 
 ## Expert-block weight sync placement
 

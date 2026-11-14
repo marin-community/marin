@@ -46,7 +46,7 @@ use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
 use crate::query::indexed_scan::{IndexedParquetSource, ScanInputs, SegmentFile};
-use crate::store::column_bounds::ColumnBounds;
+use crate::store::column_bounds::{ColumnBounds, ColumnRange};
 use crate::store::object_store::{ObjectReference, ObjectStore, QueryCacheAdmission};
 use crate::store::table::query_view::SegmentObjectMap;
 
@@ -373,15 +373,16 @@ impl NamespaceProvider {
                             });
                             int_matches && string_matches
                         });
-                // A min above the max records a column whose range is empty or
-                // unknown for the segment; it is scanned, as without bounds.
+                // A column with no entry or an unknown range is scanned, as
+                // without bounds.
                 let column_matches =
                     self.segment_column_bounds
                         .get(path.as_str())
                         .is_none_or(|bounds| {
                             int_ranges.iter().all(|(column, range)| {
-                                bounds.get(column).is_none_or(|&(minimum, maximum)| {
-                                    minimum > maximum || range.overlaps(minimum, maximum)
+                                bounds.get(column).is_none_or(|bound| match *bound {
+                                    ColumnRange::Range { min, max } => range.overlaps(min, max),
+                                    ColumnRange::Unknown => true,
                                 })
                             })
                         });
@@ -1211,17 +1212,14 @@ mod tests {
         let paths: Vec<String> = (0..4)
             .map(|index| format!("/planned/seg_{index}.parquet"))
             .collect();
-        let bounds = |range: (i64, i64)| ColumnBounds::from([("mem_bytes".to_string(), range)]);
+        let bounds = |range: ColumnRange| ColumnBounds::from([("mem_bytes".to_string(), range)]);
         let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
             .unwrap()
             .with_segment_column_bounds(BTreeMap::from([
-                (paths[0].clone(), bounds((100, 199))),
-                (paths[1].clone(), bounds((200, 299))),
+                (paths[0].clone(), bounds(ColumnRange::new(100, 199))),
+                (paths[1].clone(), bounds(ColumnRange::new(200, 299))),
                 // paths[2] has no bounds yet, as before its backfill.
-                (
-                    paths[3].clone(),
-                    bounds(crate::store::column_bounds::ALWAYS_SCAN),
-                ),
+                (paths[3].clone(), bounds(ColumnRange::Unknown)),
             ]));
         let selected = |filters: &[Expr]| {
             provider

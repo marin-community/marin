@@ -335,7 +335,7 @@ def _copy_or_resume(
         raise VerifiedCopyError(f"source size changed while copying {source.path}")
     current_info = source_fs.info(source.source_path)
     current_size = int(current_info.get("size") or 0)
-    current_identity = _source_identity(current_info)
+    current_identity = _source_identity(current_info, matching=source.identity)
     if current_size != source.size or current_identity != source.identity:
         destination_fs.rm(staging_path)
         raise VerifiedCopyError(f"source identity changed while copying {source.path}")
@@ -637,8 +637,8 @@ def _validate_completed_source(
             raise VerifiedCopyError(f"source content changed after destination completion: {source.path}")
 
 
-def _source_identity(info: dict[str, Any]) -> str | None:
-    for key in (
+def _source_identity(info: dict[str, Any], *, matching: str | None = None) -> str | None:
+    keys: tuple[str, ...] = (
         "generation",
         "version_id",
         "VersionId",
@@ -651,8 +651,13 @@ def _source_identity(info: dict[str, Any]) -> str | None:
         "updated",
         "mtime",
         "LastModified",
-    ):
+    )
+    if matching is not None:
+        keys = (matching.partition("=")[0],)
+    for key in keys:
         value = info.get(key)
+        if key in ("version_id", "VersionId") and value in ("", "null"):
+            continue
         if value is not None:
             return f"{key}={value!s}"
     return None

@@ -245,8 +245,8 @@ message CatalogSegment {
   repeated CatalogColumnBounds column_bounds = 20;
 }
 
-// One column's inclusive min/max over a segment's non-null values. A min
-// greater than the max means the range is empty or unknown: the column is all
+// One column's inclusive min/max over a segment's non-null values. An entry
+// with neither min nor max records that the range is unknown: the column is all
 // null, absent, or lacks footer statistics. Planning always scans such a segment.
 message CatalogColumnBounds {
   string column = 1;
