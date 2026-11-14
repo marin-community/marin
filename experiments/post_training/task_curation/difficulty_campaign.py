@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
 
-import httpx
 from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SOLVER_THINKING, Solver
 from huggingface_hub import hf_hub_download
@@ -27,7 +26,6 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SECRETS_DIR_ENV, forwarded_secrets, require_secret
 from rigging.timing import Duration
 from taskcompendium.evaluation.corpus import file_sha256
-from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.task_curation.difficulty_preparation import prepare_source
@@ -39,6 +37,7 @@ from experiments.post_training.task_curation.difficulty_protocol import (
     serving_model,
 )
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
+from experiments.post_training.task_curation.difficulty_serving_probe import probe_endpoint
 
 LOGGER = logging.getLogger(__name__)
 PRIORITY = 100
@@ -137,6 +136,46 @@ def solver_endpoint(solver: Solver):
         yield endpoint.base_url, endpoint.model, endpoint.api_key or "EMPTY", [str(job.job_id) for job in session.jobs]
 
 
+def run_trial_worker(
+    prepared_path: Path, config_path: Path, local_root: Path, output: StoragePath, api_key: str
+) -> None:
+    """Launch the locked Harbor runtime with private host-side secret files."""
+    secrets_dir = local_root / "framework-secrets"
+    secrets_dir.mkdir(mode=0o700)
+    for name, value in {
+        **forwarded_secrets(),
+        "ATLAS_DIFFICULTY_CANDIDATE_TOKEN": api_key,
+        GLM_BULK_TOKEN_ENV: require_secret(GLM_BULK_TOKEN_ENV),
+    }.items():
+        path = secrets_dir / name
+        path.write_text(value)
+        path.chmod(0o600)
+    subprocess.run(
+        [
+            "uv",
+            "run",
+            "--project",
+            "vendor/harbor",
+            "--frozen",
+            "--extra",
+            "runtime",
+            "python",
+            "-m",
+            "experiments.post_training.task_curation.difficulty_trials",
+            "--sources",
+            str(prepared_path),
+            "--config",
+            str(config_path),
+            "--output-root",
+            str(output / "trials"),
+            "--local-root",
+            str(local_root / "trials"),
+        ],
+        check=True,
+        env={**os.environ, "PYTHONPATH": str(Path.cwd()), SECRETS_DIR_ENV: str(secrets_dir)},
+    )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -187,47 +226,8 @@ def main() -> None:
         },
     )
     with solver_endpoint(args.solver) as (endpoint, api_model, api_key, jobs):
-        with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=300) as client:
-            models = client.get(endpoint.rstrip("/") + "/models")
-            models.raise_for_status()
-            parameters = request_parameters(args.solver)
-            probe = {
-                "model": api_model,
-                "messages": [{"role": "user", "content": "Reply with exactly OK."}],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "lookup_record",
-                            "description": "Look up one record.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {"record_id": {"type": "string"}},
-                                "required": ["record_id"],
-                            },
-                        },
-                    }
-                ],
-                "max_tokens": 16384,
-                **{key: value for key, value in parameters.items() if key != "extra_body"},
-                **parameters.get("extra_body", {}),
-            }
-            tokenizer = AutoTokenizer.from_pretrained(SOLVER_MODELS[args.solver], revision=pin.revision)
-            prompt_tokens = len(
-                tokenizer.apply_chat_template(
-                    probe["messages"],
-                    tools=probe["tools"],
-                    add_generation_prompt=True,
-                    tokenize=True,
-                    return_dict=False,
-                    **probe.get("chat_template_kwargs", {}),
-                )
-            )
-            probe_response = client.post(endpoint.rstrip("/") + "/chat/completions", json=probe)
-            probe_response.raise_for_status()
-            completion = probe_response.json()
-            if completion["usage"]["prompt_tokens"] != prompt_tokens:
-                raise ValueError("Pinned tools/thinking rendering differs from authoritative server usage")
+        probe = probe_endpoint(args.solver, endpoint, api_model, api_key)
+        completion = probe["tools_thinking_probe"]["completion"]
         revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
         receipt = publish(
             output / "serving.json",
@@ -240,23 +240,12 @@ def main() -> None:
                 "chat_template_sha256": pin.template_sha256,
                 "model_definition": None if args.solver == Solver.HOSTED else asdict(serving_model(args.solver)),
                 "serving_jobs": jobs,
-                "advertised_models": models.json(),
                 "sampling": request_parameters(args.solver),
                 "compilation_and_cuda_graphs_requested": True,
                 "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
-                "tools_thinking_probe": {"request": probe, "completion": completion, "hf_prompt_tokens": prompt_tokens},
+                **probe,
             },
         )
-        secrets_dir = args.local_root / "framework-secrets"
-        secrets_dir.mkdir(mode=0o700)
-        for name, value in {
-            **forwarded_secrets(),
-            "ATLAS_DIFFICULTY_CANDIDATE_TOKEN": api_key,
-            GLM_BULK_TOKEN_ENV: require_secret(GLM_BULK_TOKEN_ENV),
-        }.items():
-            path = secrets_dir / name
-            path.write_text(value)
-            path.chmod(0o600)
         deviations = (
             [
                 "Hosted weight revision is opaque; tokenizer uses the production config pin. "
@@ -309,30 +298,7 @@ def main() -> None:
         }
         config_path = args.local_root / "candidate.json"
         config_path.write_text(json.dumps(config) + "\n")
-        subprocess.run(
-            [
-                "uv",
-                "run",
-                "--project",
-                "vendor/harbor",
-                "--frozen",
-                "--extra",
-                "runtime",
-                "python",
-                "-m",
-                "experiments.post_training.task_curation.difficulty_trials",
-                "--sources",
-                str(prepared_path),
-                "--config",
-                str(config_path),
-                "--output-root",
-                str(output / "trials"),
-                "--local-root",
-                str(args.local_root / "trials"),
-            ],
-            check=True,
-            env={**os.environ, "PYTHONPATH": str(Path.cwd()), SECRETS_DIR_ENV: str(secrets_dir)},
-        )
+        run_trial_worker(prepared_path, config_path, args.local_root, output, api_key)
         publish(output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0})
 
 
