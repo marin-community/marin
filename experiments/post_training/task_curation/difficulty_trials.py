@@ -206,17 +206,6 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
 
         # Framework exceptions propagate and stop dispatch; they are never fabricated as solver zeros.
         trial, result = asyncio.run(execute_trial(configuration, authentication))
-        reward = scored_reward(result, trial)
-        unserved = (trial.paths.agent_dir / "candidate-budget-rejection.json").exists()
-        route = f"/{root.name}-{key}-{number}"
-        requests = root.parent / "model-requests" / hashlib.sha256(route.encode()).hexdigest()
-        for response_path in requests.glob("*/response.json"):
-            response = json.loads(response_path.read_text())
-            if response["body"].get("error", {}).get("code") == "input_budget_unserved":
-                unserved = True
-        if unserved:
-            reward = None
-            pending_reason = INPUT_BUDGET_REASON
         get_artifact_writer().flush(timeout=300)
         archive = local / "trial-artifacts.tar.gz"
         with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
@@ -225,6 +214,25 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
         if archive_target.exists():
             raise FileExistsError(archive_target)
         copy(str(archive), str(archive_target), no_clobber=True)
+        raw_receipt = {
+            "task_id": task.task_id,
+            "result": result.model_dump(mode="json"),
+            "archive": str(archive_target),
+            "archive_sha256": file_sha256(StoragePath(str(archive))),
+        }
+        write_json_evidence(destination / f"{number:02d}" / "trial.json", raw_receipt)
+        reward = scored_reward(result, trial)
+        unserved = (trial.paths.agent_dir / "candidate-budget-rejection.json").exists()
+        route = f"/{root.name}-{key}-{number}"
+        requests = root.parent / "model-requests" / hashlib.sha256(route.encode()).hexdigest()
+        for response_path in requests.glob("*/response.json"):
+            response = json.loads(response_path.read_text())
+            error = response["body"].get("error")
+            if isinstance(error, dict) and error.get("code") == "input_budget_unserved":
+                unserved = True
+        if unserved:
+            reward = None
+            pending_reason = INPUT_BUDGET_REASON
         if task.workload == "task_spec":
             binding = read_source_runtime(Path(task.path))
             policy = TaskNetworkPolicyReceipt.model_validate_json(
@@ -244,9 +252,7 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
             {
                 **attempt.model_dump(mode="json"),
                 "reason": "input_budget_unserved" if unserved else None,
-                "result": result.model_dump(mode="json"),
-                "archive": str(archive_target),
-                "archive_sha256": file_sha256(StoragePath(str(archive))),
+                **raw_receipt,
             },
         )
         attempts.append(attempt)

@@ -124,8 +124,10 @@ def budget_relay(
                         response = upstream.post(endpoint.rstrip("/") + "/chat/completions", json=body)
                         (root / "upstream-response.body").write_bytes(response.content)
                         (root / "upstream-response-status.json").write_text(json.dumps({"status": response.status_code}))
-                        status, payload = response.status_code, response.json()
-                        if not response.is_success:
+                        status = response.status_code
+                        if response.is_success:
+                            payload = response.json()
+                        else:
                             safe = _upstream_error(status, response.content)
                             status, payload = safe.status, json.loads(safe.body)
                     except httpx.HTTPError as error:

@@ -15,7 +15,6 @@ from pathlib import Path
 
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SOLVER_THINKING, Solver
 from huggingface_hub import hf_hub_download
-from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.serving_config import inference_config_for_model
@@ -44,6 +43,7 @@ from experiments.post_training.task_curation.difficulty_serving_probe import pro
 LOGGER = logging.getLogger(__name__)
 PRIORITY = job_pb2.PRIORITY_BAND_PRODUCTION
 TARGET_REGION = "rno2a"
+MODEL_CACHE_ROOT = "s3://marin-rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
 
 
@@ -105,14 +105,15 @@ def solver_endpoint(solver: Solver):
         yield resolve_glm_base_url(GLM_RELAY_JOB), GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), []
         return
     definition = serving_model(solver)
-    parent = get_job_info()
-    if parent is None or parent.worker_region is None or parent.worker_region.lower() != TARGET_REGION:
-        raise ValueError("Difficulty serving requires a coordinator already placed in cw-rno2a/RNO2A")
     hardware = AcceleratorChoice(
         Platform.GPU, gpu_type="H100", gpu_count=PINS[solver].gpus, target_cluster=TARGET_CLUSTER
     )
     config = inference_config_for_model(
-        definition, hardware, env_vars={}, priority=PRIORITY, api_model=SOLVER_MODELS[solver]
+        definition,
+        hardware,
+        env_vars={"MARIN_TEMP_PREFIX": MODEL_CACHE_ROOT},
+        priority=PRIORITY,
+        api_model=SOLVER_MODELS[solver],
     )
     if not isinstance(config.engine, VllmEngineConfig):
         raise ValueError("Difficulty local solvers require the vLLM engine")
@@ -253,6 +254,7 @@ def main() -> None:
                 "placement": {
                     "root_target_cluster": TARGET_CLUSTER,
                     "child_region": TARGET_REGION,
+                    "model_cache_root": MODEL_CACHE_ROOT,
                     "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                 },
                 "sampling": request_parameters(args.solver),
