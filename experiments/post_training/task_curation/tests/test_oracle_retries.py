@@ -13,9 +13,18 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import ContentEvidenceReference
+from rigging.filesystem.storage_path import StoragePath
+from shellbox.backends.local import cgroup
+from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
-from taskcompendium.pipeline.oracle_filter import BackendFixIdentity, OracleExclusionReason
+from taskcompendium.pipeline.oracle_filter import (
+    BackendFixIdentity,
+    LocalExecutionHostTransition,
+    OracleExclusionReason,
+    OracleFilterReceipt,
+)
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation import oracle_filter
@@ -47,12 +56,16 @@ class RetryCase:
 
 @pytest.fixture
 def retry_case(tmp_path, monkeypatch, request):
+    outcome = getattr(request, "param", "pass")
     row = prebuilt_task("task")
     envelope = json.loads(row["lowered_task_spec"])
     task = TaskSpec.model_validate(envelope["task"])
     task = task.model_copy(
         update={
-            "resources": task.resources.model_copy(update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)})
+            "resources": task.resources.model_copy(
+                update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)}
+            ),
+            **({"execution_requirements": None} if outcome == "grown" else {}),
         }
     )
     envelope["task"] = task.model_dump(mode="json")
@@ -66,14 +79,15 @@ def retry_case(tmp_path, monkeypatch, request):
     (native / "tests/test.sh").write_text("true\n")
     (native / "solution/solve.sh").write_text("true\n")
     (native / "task.toml").write_text(
-        "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
+        "[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=720\n"
+        if outcome == "grown"
+        else "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
         "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
     )
     mapping = tmp_path / "original-map.json"
     write_task_map(cohort, native.parent, mapping)
     production_run = subprocess.run
     calls = []
-    outcome = getattr(request, "param", "pass")
 
     def execute(args, **kwargs):
         if "harbor" not in args:
@@ -89,9 +103,11 @@ def retry_case(tmp_path, monkeypatch, request):
             "environment_build": 600,
         }
         if "retry-run" in package.parts:
-            current = "pass" if outcome == "legacy-unknown" else outcome
+            current = "pass" if outcome in {"legacy-unknown", "grown", "host"} else outcome
         else:
             current = "unknown" if outcome == "legacy-unknown" else "infra"
+            if outcome == "grown" and len(calls) == 1:
+                current = "oom"
         root = Path(config["trials_dir"]) / "oracle"
         (root / "agent").mkdir(parents=True)
         (root / "verifier").mkdir()
@@ -110,12 +126,14 @@ def retry_case(tmp_path, monkeypatch, request):
             "completion": {"trajectory_present": False},
             "exception_info": (
                 {
-                    "exception_type": "ConnectionError" if current == "infra" else "RuntimeError",
+                    "exception_type": (
+                        {"infra": "ConnectionError", "oom": "OutOfMemoryError"}.get(current, "RuntimeError")
+                    ),
                     "exception_message": "Provider connection failed",
                     "exception_traceback": "",
                     "occurred_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
                 }
-                if current in {"infra", "unknown"}
+                if current in {"infra", "unknown", "oom"}
                 else None
             ),
         }
@@ -125,18 +143,29 @@ def retry_case(tmp_path, monkeypatch, request):
             (root / "verifier/verdict.json").write_text(
                 json.dumps(
                     {
-                        "status": "infra_error" if current == "infra" else "scored",
+                        "status": "infra_error" if current in {"infra", "oom"} else "scored",
                         "reward": int(current == "pass"),
                     }
                 )
             )
-        if current not in {"infra", "unknown"}:
+        if current not in {"infra", "unknown", "oom"}:
             (root / "agent/exit-code.txt").write_text("0")
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr(subprocess, "run", execute)
     initial = tmp_path / "initial"
-    calibrate_cohort(cohort, mapping, initial, "local", {}, 1)
+    environment = (
+        {
+            "cgroup_parent": "/dead/worker.scope",
+            "disk_root": "/dead/disks",
+            "registry_authfile": "/dead/auth.json",
+            "image_cache": "/dead/cache",
+            "signature_policy": "/immutable/policy.json",
+        }
+        if outcome == "host"
+        else {}
+    )
+    calibrate_cohort(cohort, mapping, initial, "local", environment, 1)
     parent_map = initial / "task-map.json"
     document = json.loads(parent_map.read_text())
     for attempt in document["task"]["calibration"]["attempts"]:
@@ -259,6 +288,118 @@ def test_retry_requires_approval_for_the_actual_parent_result(tmp_path, retry_ca
     with pytest.raises(ValueError, match="another parent attempt"):
         write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, tmp_path / "plan")
     assert len(case.calls) == 3
+
+
+@pytest.mark.parametrize("retry_case", ["grown"], indirect=True)
+def test_retry_resumes_grown_allocation_and_preserves_partial_source_limits(tmp_path, retry_case):
+    case = retry_case
+    original = case.parent_map.read_bytes()
+    native_bytes = (case.native / "task.toml").read_bytes()
+    frozen = tmp_path / "retry-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen)
+    destination = tmp_path / "retry-run"
+    retry_cohort(frozen / "plan.json", destination, 1)
+    combined = tmp_path / "combined-map.json"
+    merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    entry = receipt.tasks["task"]
+    parent = entry.infrastructure_retries[0].parent_calibration
+    assert [attempt.execution_requirements.memory_mb for attempt in parent.attempts] == [2048, 4096, 4096, 4096]
+    assert entry.calibration.initial_requirements == parent.execution_requirements
+    assert entry.calibration.attempts[0].execution_requirements.memory_mb == 4096
+    assert entry.calibration.declared_requirements is None
+    assert entry.calibration.preserved_requirements == {"agent_timeout_sec": 900, "verifier_timeout_sec": 720}
+    assert entry.passed
+    assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 1
+    assert case.parent_map.read_bytes() == original
+    assert (case.native / "task.toml").read_bytes() == native_bytes
+
+
+@pytest.mark.parametrize("retry_case", ["host"], indirect=True)
+def test_retry_replaces_dead_host_paths_only_inside_the_current_worker_scope(tmp_path, monkeypatch, retry_case):
+    case = retry_case
+    hierarchy = tmp_path / "cgroups"
+    own = hierarchy / "cri-containerd-new.scope"
+    driver = own / "atlas-driver"
+    driver.mkdir(parents=True)
+    (hierarchy / "cgroup.controllers").write_text("cpu memory")
+    for scope in (own, driver):
+        for name, value in {"cgroup.controllers": "cpu memory", "cgroup.procs": "", "cgroup.kill": ""}.items():
+            (scope / name).write_text(value)
+    real_read_text = Path.read_text
+
+    def read_kernel(path, *args, **kwargs):
+        if path == Path("/proc/self/cgroup"):
+            return "0::/cri-containerd-new.scope/atlas-driver\n"
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_kernel)
+    monkeypatch.setattr(cgroup, "CGROUP_ROOT", hierarchy)
+    proof = tmp_path / "worker-scope.json"
+    proof.write_text(json.dumps({"parent": str(own), "driver": str(driver)}))
+    host = LocalExecutionHostTransition(
+        parent_kwargs={
+            "cgroup_parent": "/dead/worker.scope",
+            "disk_root": "/dead/disks",
+            "registry_authfile": "/dead/auth.json",
+            "image_cache": "/dead/cache",
+        },
+        current_kwargs={
+            "cgroup_parent": str(own),
+            "disk_root": str(tmp_path / "new-disks"),
+            "registry_authfile": str(tmp_path / "existing-auth.json"),
+            "image_cache": str(tmp_path / "new-cache"),
+        },
+        scope_evidence=(ContentEvidenceReference(uri=str(proof), sha256=file_sha256(StoragePath(str(proof)))),),
+    )
+    frozen = tmp_path / "retry-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen, host)
+    destination = tmp_path / "retry-run"
+    retry_cohort(frozen / "plan.json", destination, 1)
+    combined = tmp_path / "combined-map.json"
+    merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    entry = receipt.tasks["task"]
+    assert entry.passed
+    assert entry.infrastructure_retries[0].local_host == host
+    assert entry.calibration.attempts[0].result["config"]["environment"]["kwargs"] == {
+        **host.current_kwargs,
+        "signature_policy": "/immutable/policy.json",
+    }
+    count = len(case.calls)
+    proof.write_text("changed scope evidence")
+    with pytest.raises(ValueError, match="scope evidence changed"):
+        retry_cohort(frozen / "plan.json", tmp_path / "another-retry-run", 1)
+    assert len(case.calls) == count
+
+
+@pytest.mark.parametrize("retry_case", ["infra"], indirect=True)
+def test_retry_history_from_archived_field_set_round_trips_across_another_phase(tmp_path, retry_case):
+    case = retry_case
+    first_plan = tmp_path / "first-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, first_plan)
+    first = tmp_path / "first-retry-run"
+    retry_cohort(first_plan / "plan.json", first, 1)
+    first_map = first / "task-map.json"
+    document = json.loads(first_map.read_text())
+    document["task"]["calibration"].pop("initial_requirements")
+    first_map.write_text(json.dumps(document))
+    approvals = json.loads(case.approvals.read_text())
+    approvals["task"]["parent_result_sha256"] = document["task"]["calibration"]["attempts"][-1]["result_sha256"]
+    second_approval = tmp_path / "second-approval.json"
+    second_approval.write_text(json.dumps(approvals))
+    second_plan = tmp_path / "second-plan"
+    write_retry_plan(case.cohort, first_map, second_approval, case.backend_fix, second_plan)
+    second = tmp_path / "second-retry-run"
+    retry_cohort(second_plan / "plan.json", second, 1)
+    combined = tmp_path / "combined-map.json"
+    merge_retry_maps(case.parent_map, [first_map, second / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    reloaded = OracleFilterReceipt.model_validate_json((tmp_path / "filtered/oracle-filter.json").read_text())
+    assert reloaded == receipt
+    assert len(reloaded.tasks["task"].infrastructure_retries) == 2
+    assert not reloaded.tasks["task"].passed
+    assert len(case.calls) == 9
 
 
 @pytest.mark.parametrize("changed", ["parent-file", "reused-attempts", "backend", "phase-context"])

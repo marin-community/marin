@@ -238,18 +238,32 @@ class ResourceCalibrationReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     declared_requirements: ExecutionRequirements | None
     preserved_requirements: dict[ResourceDimension, float] = Field(default_factory=dict)
+    initial_requirements: ExecutionRequirements | None = Field(default=None, exclude_if=lambda value: value is None)
     verifier: VerifierResourceProfile
     oracle_kind: Literal["original", "calibration_only"]
     attempts: tuple[OracleTrialReceipt, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_attempts(self):
-        expected = self.declared_requirements or ExecutionRequirements.model_validate(
-            {
-                **INITIAL_REQUIREMENTS.model_dump(),
-                **self.preserved_requirements,
-            }
+        expected = (
+            self.declared_requirements
+            or self.initial_requirements
+            or ExecutionRequirements.model_validate(
+                {
+                    **INITIAL_REQUIREMENTS.model_dump(),
+                    **self.preserved_requirements,
+                }
+            )
         )
+        if self.initial_requirements is not None:
+            if self.attempts[0].infrastructure_retry is None:
+                raise ValueError("An approved retry context is required to resume a calibrated shape")
+            if self.declared_requirements is not None and self.initial_requirements != self.declared_requirements:
+                raise ValueError("A resumed shape cannot change declared execution requirements")
+            if any(
+                getattr(self.initial_requirements, name) != value for name, value in self.preserved_requirements.items()
+            ):
+                raise ValueError("A resumed shape cannot change a preserved source limit")
         infrastructure_retries = 0
         for index, trial in enumerate(self.attempts):
             if trial.execution_requirements != expected:
@@ -329,6 +343,27 @@ class InfrastructureRetryApproval(BaseModel):
     decision_ref: str = Field(min_length=1)
 
 
+LOCAL_EXECUTION_HOST_FIELDS = frozenset({"cgroup_parent", "disk_root", "image_cache", "registry_authfile"})
+
+
+class LocalExecutionHostTransition(BaseModel):
+    """Bind replacement worker paths without changing the source execution contract."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    parent_kwargs: dict[str, str | None]
+    current_kwargs: dict[str, str | None]
+    scope_evidence: tuple[ContentEvidenceReference, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_host_fields(self):
+        for fields in (self.parent_kwargs, self.current_kwargs):
+            if fields.keys() - LOCAL_EXECUTION_HOST_FIELDS:
+                raise ValueError("Only physical LOCAL worker paths may change across hosts")
+        if not self.current_kwargs.get("cgroup_parent") or not self.current_kwargs.get("disk_root"):
+            raise ValueError("A replacement LOCAL host requires explicit cgroup and disk paths")
+        return self
+
+
 class InfrastructureRetryPlan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     cohort_path: str
@@ -341,21 +376,27 @@ class InfrastructureRetryPlan(BaseModel):
     environment: Literal["local", "daytona"]
     environment_kwargs: dict
     approvals: dict[str, InfrastructureRetryApproval] = Field(min_length=1)
+    local_host: LocalExecutionHostTransition | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 def require_infrastructure_retry_parent(
     calibration: ResourceCalibrationReceipt, approval: InfrastructureRetryApproval
 ) -> None:
     final = calibration.attempts[-1]
-    if calibration.oracle_kind != "original" or calibration.declared_requirements is None:
-        raise ValueError("Infrastructure retries require an original oracle with explicit immutable limits")
+    if calibration.oracle_kind != "original":
+        raise ValueError("Infrastructure retries require an original oracle with immutable source limits")
     if any(
         (attempt.result.get("agent_info") or {}).get("name") != "oracle"
         or attempt.result.get("config", {}).get("agent", {}).get("name") != "oracle"
         for attempt in calibration.attempts
     ):
         raise ValueError("Infrastructure retries require production oracle attempts")
-    if final.scored:
+    recorded_grade = (
+        final.result.get("exception_info") is None
+        and final.result.get("finished_at") is not None
+        and bool((final.result.get("verifier_result") or {}).get("rewards"))
+    )
+    if final.scored or recorded_grade:
         raise ValueError("Infrastructure retry approval cannot replace a scored source result")
     if approval.parent_result_sha256 != final.result_sha256:
         raise ValueError("Infrastructure approval belongs to another parent attempt")
@@ -377,6 +418,7 @@ class InfrastructureRetryTransition(BaseModel):
     parent_calibration: ResourceCalibrationReceipt
     backend_fix: BackendFixIdentity
     approval: InfrastructureRetryApproval
+    local_host: LocalExecutionHostTransition | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_parent_failure(self):
@@ -540,6 +582,8 @@ class OracleTaskReceipt(BaseModel):
     def validate_infrastructure_retry_chain(self):
         history = self.infrastructure_retries
         if not history:
+            if self.calibration.initial_requirements is not None:
+                raise ValueError("A resumed allocation requires its approved parent phase")
             if any(attempt.infrastructure_retry is not None for attempt in self.calibration.attempts):
                 raise ValueError("Infrastructure attempt context requires its approved phase history")
             return self
@@ -549,9 +593,9 @@ class OracleTaskReceipt(BaseModel):
         backend = phases[0].attempts[0].result["config"]["environment"]
         for index, transition in enumerate(history):
             if (
-                transition.task_sha256 != self.task_sha256
+                transition.task_sha256 != history[0].task_sha256
                 or transition.runtime_sha256 != self.runtime_sha256
-                or transition.source_task_checksum != self.harbor_task_checksum
+                or transition.source_task_checksum != history[0].source_task_checksum
             ):
                 raise ValueError("Infrastructure retry changed the task or its native environment")
             if transition.parent_history_sha256 != canonical_sha256(
@@ -559,6 +603,15 @@ class OracleTaskReceipt(BaseModel):
             ):
                 raise ValueError("Infrastructure retry history does not extend its exact parent")
             previous, current = phases[index : index + 2]
+            start = (
+                current.declared_requirements
+                or current.initial_requirements
+                or ExecutionRequirements.model_validate(
+                    {**INITIAL_REQUIREMENTS.model_dump(), **current.preserved_requirements}
+                )
+            )
+            if start != previous.execution_requirements:
+                raise ValueError("Infrastructure retry did not resume the parent's final calibrated shape")
             if (
                 previous.declared_requirements != current.declared_requirements
                 or previous.preserved_requirements != current.preserved_requirements
@@ -577,6 +630,26 @@ class OracleTaskReceipt(BaseModel):
                 if transition is not None
                 else None
             )
+            if transition is not None and transition.local_host is not None:
+                host = transition.local_host
+                if backend["type"] != "local":
+                    raise ValueError("A physical LOCAL host transition cannot change backend type")
+                original_paths = {
+                    key: value for key, value in backend.get("kwargs", {}).items() if key in LOCAL_EXECUTION_HOST_FIELDS
+                }
+                if original_paths != host.parent_kwargs:
+                    raise ValueError("A physical host transition does not describe its actual parent worker")
+                backend = {
+                    **backend,
+                    "kwargs": {
+                        **{
+                            key: value
+                            for key, value in backend.get("kwargs", {}).items()
+                            if key not in LOCAL_EXECUTION_HOST_FIELDS
+                        },
+                        **host.current_kwargs,
+                    },
+                }
             for trial in phase.attempts:
                 if trial.infrastructure_retry != expected_context:
                     raise ValueError("Infrastructure attempt context differs from its approved fixed-backend phase")
