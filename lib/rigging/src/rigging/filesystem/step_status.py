@@ -100,10 +100,10 @@ class StatusFile:
     def write_status(self, status: str) -> None:
         """Write the status file without changing lock ownership.
 
-        ``step_lock`` owns the lock lifetime: it stops the heartbeat before
-        releasing the lock. Keeping status writes separate from lock release
-        prevents the heartbeat from observing our own terminal cleanup as lease
-        loss.
+        The caller that holds the lock owns its lifetime: it stops its heartbeat
+        before it releases the lock. Keeping status writes separate from lock
+        release prevents the heartbeat from observing the holder's own terminal
+        cleanup as lease loss.
         """
         parent = os.path.dirname(self.path)
         if not self.fs.exists(parent):
