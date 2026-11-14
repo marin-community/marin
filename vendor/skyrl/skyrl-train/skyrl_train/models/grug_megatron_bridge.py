@@ -55,6 +55,7 @@ class GrugModelProvider(GPTModelProvider):
     grug_sconv_sites: tuple[str, ...] = ()
     grug_hero: bool = False
     grug_checkpoint_cpu_offload: bool = False
+    grug_batch_invariant_experts: bool = False
 
     def provide(self, pre_process=None, post_process=None, vp_stage=None) -> GrugGPTModel:
         if self.virtual_pipeline_model_parallel_size:

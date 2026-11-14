@@ -117,7 +117,6 @@ def embedding_preprocess_model(request, tmp_path):
             expert_model_parallel_size=1,
             expert_tensor_parallel_size=1,
             bf16=provider.bf16,
-            attention_backend="fused" if provider.bf16 else "unfused",
         )
         provider.recompute_granularity = "full"
         provider.recompute_method = "uniform"
@@ -428,11 +427,11 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
     prompt_length: int,
     response_length: int,
 ):
-    """A rank's log-probs must not change when only the peer expert-parallel rank's rows change.
+    """Explicit BI keeps a rank's log-probs fixed when only another rank's rows change.
 
     Expert parallelism co-batches tokens from every rank in the expert group, so a
-    composition-dependent kernel would make old log-probs depend on which rows the
-    other ranks happened to hold.
+    composition-dependent kernel violates BI. Ordinary RL instead checks scoring
+    versus training at TRAIN_EVAL_LOGPROB_MAX_ABS_TOLERANCE with matching batches.
     """
     require_hoppers(world_size)
     model_path = tmp_path / "model"
@@ -441,6 +440,7 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
         model_path, max_position_embeddings=4096, num_experts_per_tok=num_experts_per_tok, shape=shape
     )
     cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=ep)
+    cfg.trainer.algorithm.batch_invariant = True
     pad_token_id = AutoTokenizer.from_pretrained(model_path).pad_token_id
     rows = _padded_batch(pad_token_id, batch_size=6, prompt_length=prompt_length, response_length=response_length)
     first = rows.slice(0, 4)

@@ -1,4 +1,3 @@
-import importlib
 import ipaddress
 import os
 import time
@@ -409,9 +408,6 @@ def validate_megatron_cfg(cfg: DictConfig):
     # not yet supported + tested features
     assert cfg.generator.weight_sync_backend == "nccl", "only nccl is supported for megatron weight sync"
     assert cfg.trainer.critic.model.path is None, "only GRPO training is currently supported for megatron"
-
-    if cfg.trainer.flash_attn:
-        importlib.import_module("flash_attn")
 
     worker_configs = [(cfg.trainer.policy, "policy"), (cfg.trainer.ref, "ref")]
     for config, worker_type in worker_configs:
