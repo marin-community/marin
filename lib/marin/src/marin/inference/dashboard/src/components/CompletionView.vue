@@ -3,6 +3,7 @@ import { onUnmounted, ref, watch } from 'vue'
 import { isAbortError, requestCompletion } from '../lib/api'
 import { COMPLETION_EXAMPLES } from '../lib/examples'
 import type { SamplingParams } from '../lib/types'
+import LoadingSpinner from './LoadingSpinner.vue'
 
 const props = defineProps<{
   params: SamplingParams
@@ -126,7 +127,7 @@ async function run() {
           <span v-if="error" class="text-status-danger">{{ error }}</span>
           <template v-else>
             <span class="text-text-muted">{{ prompt }}</span><span class="text-text">{{ output }}</span>
-            <span v-if="busy" class="animate-pulse text-text-muted">▍</span>
+            <LoadingSpinner v-if="busy" class="ml-1 align-middle text-text-muted" />
           </template>
         </div>
       </div>

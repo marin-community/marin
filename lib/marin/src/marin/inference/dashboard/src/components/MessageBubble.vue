@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { renderMarkdown } from '../lib/markdown'
 import type { ChatMessage } from '../lib/types'
+import LoadingSpinner from './LoadingSpinner.vue'
 import ThinkingBlock from './ThinkingBlock.vue'
 
 const props = defineProps<{
@@ -109,10 +110,8 @@ async function copy() {
           }}</pre>
         </details>
       </div>
-      <div v-if="streaming && !message.content && !message.thinking" class="flex gap-1 py-2">
-        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-text-muted"></span>
-        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-text-muted [animation-delay:150ms]"></span>
-        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-text-muted [animation-delay:300ms]"></span>
+      <div v-if="streaming && !message.content && !message.thinking" class="py-1 text-text-muted">
+        <LoadingSpinner />
       </div>
       <div v-if="empty" class="text-sm italic text-text-muted">(no output)</div>
       <div v-if="message.error" class="mt-1 whitespace-pre-wrap break-words font-mono text-sm text-status-danger">

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import LoadingSpinner from './LoadingSpinner.vue'
 
 const props = defineProps<{
   thinking: string
@@ -40,10 +41,11 @@ const label = computed(() => {
   <div class="mb-2">
     <button
       class="flex items-center gap-1 text-xs text-text-muted transition-colors hover:text-text-secondary"
-      :class="{ 'animate-pulse': active }"
       @click="open = !open"
     >
+      <LoadingSpinner v-if="active" label="Thinking" />
       <svg
+        v-else
         class="h-3 w-3 transition-transform"
         :class="{ 'rotate-90': open }"
         viewBox="0 0 24 24"

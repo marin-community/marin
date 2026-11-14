@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { ServerStatus, ServingInfo } from '../lib/types'
+import LoadingSpinner from './LoadingSpinner.vue'
 
 const props = defineProps<{
   info: ServingInfo | null
@@ -16,11 +17,8 @@ const STATUS_LABELS: Record<ServerStatus, string> = {
 }
 
 const statusLabel = computed(() => STATUS_LABELS[props.status])
-const dotClass = computed(() => {
-  if (props.status === 'ok') return 'bg-status-success'
-  if (props.status === 'bad') return 'bg-status-danger'
-  return 'bg-text-muted animate-pulse'
-})
+const pending = computed(() => props.status === 'connecting' || props.status === 'loading')
+const dotClass = computed(() => (props.status === 'ok' ? 'bg-status-success' : 'bg-status-danger'))
 
 const chips = computed(() => {
   if (!props.info) return []
@@ -60,7 +58,8 @@ function toggleDark() {
       </span>
     </div>
     <div class="flex items-center gap-1.5 whitespace-nowrap text-xs text-text-muted">
-      <span class="h-2 w-2 rounded-full" :class="dotClass"></span>
+      <LoadingSpinner v-if="pending" :label="statusLabel" />
+      <span v-else class="h-2 w-2 rounded-full" :class="dotClass"></span>
       <span>{{ statusLabel }}</span>
     </div>
     <button
