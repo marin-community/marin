@@ -444,7 +444,11 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     expect(page).to_have_url(re.compile(r"/backends\.html#source_id=Marin%3Aclean$"))
     expect(page.locator("#title")).to_have_text("clean")
     expect(page.locator("#daytona-evidence")).to_contain_text("UNSAFE: too_many_snapshots, unbuilt_image")
-    expect(page.locator("#daytona-evidence")).to_contain_text("More than 10 unique actor snapshot identities is UNSAFE")
+    fields = page.locator("#daytona-evidence .field")
+    expect(
+        fields.filter(has=page.get_by_text("Unique actor snapshot identities", exact=True)).locator("dd")
+    ).to_have_text("11")
+    expect(fields.filter(has=page.get_by_text("Snapshot cap", exact=True)).locator("dd")).to_have_text("10")
     expect(page.locator("#daytona-evidence")).to_contain_text("One actor declares an unbuilt image")
     expect(page.locator("#daytona-evidence")).to_contain_text("f" * 64)
     expect(page.get_by_role("link", name="How to make it safe: Daytona operations ↗")).to_have_attribute(

@@ -138,15 +138,16 @@ function renderMap() {
     children.get(parent).push(area);
   }
   const query = $('search').value.trim().toLowerCase();
-  for (const siblings of children.values()) siblings.sort((a, b) => $('area-sort').value === 'count' ?
-    (counts.get(key(b)) || 0) - (counts.get(key(a)) || 0) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
+  const compareAreas = (a, b) => $('area-sort').value === 'count' ?
+    (counts.get(key(b)) || 0) - (counts.get(key(a)) || 0) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name);
+  for (const siblings of children.values()) siblings.sort(compareAreas);
   const matches = new Map();
   function matching(area) {
     if (!matches.has(key(area))) matches.set(key(area), !query || `${area.name} ${area.description}`.toLowerCase().includes(query) || (children.get(key(area)) || []).some(matching));
     return matches.get(key(area));
   }
   const focused = state.nodes.get(`${state.subject}/${state.parent}`);
-  const roots = focused ? [focused] : data.hierarchy.filter(area => area.kind === 'subject');
+  const roots = focused ? [focused] : data.hierarchy.filter(area => area.kind === 'subject').sort(compareAreas);
   const showSkills = !!focused;
   const maximum = Math.max(1, ...counts.values());
   $('heat-max').textContent = compact.format(maximum);

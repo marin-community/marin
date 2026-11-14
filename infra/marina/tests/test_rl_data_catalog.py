@@ -787,8 +787,9 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         with engine.begin() as connection:
             connection.execute(
                 text(
-                    "INSERT INTO curriculum_matches VALUES "
-                    "('first','Marin:a','two','D02','other','subject_domain',0.9,0.9)"
+                    "INSERT INTO curriculum_matches SELECT load_id,"
+                    "'Marin:a','two','D02','other','subject_domain',0.9,0.9 "
+                    "FROM curriculum_current WHERE name='latest'"
                 )
             )
         local_remainder = client.get("/curriculum/tasks", params=area_params).json()["tasks"]

@@ -155,3 +155,12 @@ SHA, package hash, changelog, exact rendered headers and both checker receipt pa
 to the coordinator. Include any remaining unmeasured evidence. The coordinator
 syncs the release state in the reference docs. Preserve all prior artifacts and
 the source/count/evidence pins used by each release.
+
+The local real-data curriculum sweep uses the candidate code's shared read-only
+SQL and response projections for area breakdowns and sampled task queries. Hosted
+checks call the published API directly. The sweep verifies that every taxonomy
+node, including zero-count capabilities, appears in its domain, that source
+breakdowns sum to the area count, and that labels distinguish taxonomy wrappers
+from their subjects. Source geometry is checked after column resizing as well as
+at automatic widths. Package verification compares every tracked packaged input
+against the landed cut, applying only the preview preparation transformations.
