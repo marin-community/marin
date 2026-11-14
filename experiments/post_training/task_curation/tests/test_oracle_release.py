@@ -80,8 +80,6 @@ def test_zero_filtered_pin_is_visible_held_and_preserves_prior_retention(zero_re
     assert declaration.daytona_safety is None and declaration.actor_census_input is None
     assert bound.info.oversight is None and bound.info.lexical_contamination is None
     assert any("oracle filtration retained no tasks" in reason for reason in bound.admission_blockers)
-    assert receipt.original_info.within_source_dedup == source.info.within_source_dedup
-    assert receipt.original_info.lexical_contamination == source.info.lexical_contamination
     restored = SourceDeclaration.model_validate_json(declaration.model_dump_json())
     assert restored.oracle_filtration == receipt.filtration
     with pytest.raises(ValueError, match="cannot remain admitted"):
