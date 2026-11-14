@@ -8,10 +8,13 @@ import math
 from enum import StrEnum
 from typing import Any, Literal
 
+from finestore.rl.curation import ContentEvidenceReference
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.grading_environment import GradingEnvironmentMode
+from taskcompendium.harbor.adapter import actor_machine_required
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
@@ -69,6 +72,7 @@ class OracleTrialReceipt(BaseModel):
     failure_log: str = ""
     infrastructure_retry: InfrastructureRetryContext | None = None
     source_environment: SourcePytestEnvironment | None = None
+    network_policy: TaskNetworkPolicyReceipt | None = None
 
     @model_validator(mode="after")
     def validate_result_hash(self):
@@ -142,6 +146,31 @@ class OracleTrialReceipt(BaseModel):
             and self.oracle_exit_code == 0
             and (self.verdict or {}).get("reward") == 1
         )
+
+
+def trial_network_qualified(task: TaskSpec, runtime: dict | None, trial: OracleTrialReceipt) -> bool:
+    """Require observed policies for source-declared machine network permissions."""
+    binding = (
+        TaskSpecRuntimeBinding(
+            task_sha256=canonical_sha256(task.model_dump(mode="json")),
+            runtime_sha256=canonical_sha256(runtime),
+            runtime=runtime,
+        )
+        if runtime is not None
+        else None
+    )
+    actor = binding.network("task_machine") if binding else None
+    verifier = binding.network("verifier_machine") if binding else None
+    observed = trial.network_policy
+    if observed is None:
+        return actor is None and verifier is None
+    return (
+        observed.source_runtime_sha256 == (binding.runtime_sha256 if binding else None)
+        and observed.actor_declared == actor
+        and observed.verifier_declared == verifier
+        and (actor is None or not actor_machine_required(task) or observed.actor_effective == actor)
+        and (verifier is None or observed.verifier_effective == verifier)
+    )
 
 
 class VerifierResourceProfile(BaseModel):
@@ -331,6 +360,72 @@ class OracleExclusionReason(StrEnum):
     INFRASTRUCTURE = "resource_calibration:infrastructure"
     NO_ORACLE_LIVENESS = "no_oracle_liveness_missing_or_failed"
     SOURCE_ENV_INCOMPATIBLE_WITH_GRADER = "SOURCE_ENV_INCOMPATIBLE_WITH_GRADER"
+    TOOL_PROVIDER_REQUIRED = "tool_provider_required"
+    SHARED_EXECUTOR_REQUIRED = "shared_executor_required"
+    ENVIRONMENT_BUILD_FAILED = "environment_build_failed"
+    EXECUTABILITY_PROOF_MISSING = "executability_proof_missing"
+    EXECUTABILITY_RUN_FAILED = "executability_run_failed"
+    NETWORK_POLICY_UNSUPPORTED = "network_policy_unsupported"
+    UNPINNED_ENVIRONMENT = "unpinned_environment"
+    ENVIRONMENT_CONTRACT_UNRESOLVED = "environment_contract_unresolved"
+    BACKEND_CONTRACT_UNSUPPORTED = "backend_contract_unsupported"
+
+
+class MechanicalOracleTaskReceipt(BaseModel):
+    """Keep an unexecutable original task and its evidence without inventing a trial."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    outcome: Literal["mechanical"] = "mechanical"
+    task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_sha256: str | None
+    has_oracle: bool
+    exclusion_reason: OracleExclusionReason
+    evidence: tuple[ContentEvidenceReference, ...] = Field(min_length=1)
+
+    @property
+    def passed(self) -> bool:
+        return False
+
+
+class ExecutabilityRunReceipt(BaseModel):
+    """A bounded strong-model production trial; reward is separate from executability."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_name: Literal["glm-5.3"] = "glm-5.3"
+    temperature: float = Field(default=0.7, ge=0.7, le=0.7)
+    max_turns: Literal[3] = 3
+    actor_turns: int = Field(ge=1, le=3)
+    model_evidence: tuple[ContentEvidenceReference, ...] = Field(min_length=1)
+    trial: OracleTrialReceipt
+
+    @property
+    def passed(self) -> bool:
+        result = self.trial.result
+        agent = result.get("config", {}).get("agent", {})
+        name = agent.get("name")
+        kwargs = agent.get("kwargs", {})
+        temperature = (
+            kwargs.get("request_parameters", {}).get("temperature")
+            if name == "task-spec-chat"
+            else kwargs.get("temperature")
+        )
+        reward = (self.trial.verdict or {}).get("reward")
+        return (
+            name in {"task-spec-chat", "terminus-2"}
+            and (result.get("agent_info") or {}).get("name") == name
+            and str(agent.get("model_name", "")).rsplit("/", 1)[-1] == self.model_name
+            and kwargs.get("max_turns") == self.max_turns
+            and temperature == self.temperature
+            and result.get("config", {}).get("environment", {}).get("type") in {"local", "daytona"}
+            and result.get("exception_info") is None
+            and result.get("finished_at") is not None
+            and result.get("completion") is not None
+            and (self.trial.verdict or {}).get("status") == "scored"
+            and isinstance(reward, (int, float))
+            and not isinstance(reward, bool)
+            and math.isfinite(reward)
+            and ((result.get("verifier_result") or {}).get("rewards") or {}).get("reward") == reward
+        )
 
 
 class SourceEnvironmentIncompatibility(BaseModel):
@@ -377,6 +472,7 @@ def source_environment_incompatibility(
 
 class OracleTaskReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+    outcome: Literal["trial"] = "trial"
     task_sha256: str
     runtime_sha256: str | None = None
     harbor_task_checksum: str
@@ -384,6 +480,7 @@ class OracleTaskReceipt(BaseModel):
     trials: tuple[OracleTrialReceipt, ...]
     calibration: ResourceCalibrationReceipt
     no_oracle_liveness: NoOracleLivenessReceipt | None = None
+    executability_run: ExecutabilityRunReceipt | None = None
     exclusion_reason: OracleExclusionReason | None = None
     source_environment_incompatibility: SourceEnvironmentIncompatibility | None = None
     infrastructure_retries: tuple[InfrastructureRetryTransition, ...] = ()
@@ -470,36 +567,44 @@ class OracleTaskReceipt(BaseModel):
 
     @property
     def passed(self) -> bool:
-        if not self.calibration.passed:
+        if self.exclusion_reason is not None:
             return False
         if self.has_oracle:
-            return self.calibration.oracle_kind == "original" and any(
-                trial.passed(self.harbor_task_checksum) for trial in self.trials
+            return (
+                self.calibration.passed
+                and self.calibration.oracle_kind == "original"
+                and any(trial.passed(self.harbor_task_checksum) for trial in self.trials)
             )
-        liveness = self.no_oracle_liveness
+        control = self.executability_run
         return (
             self.calibration.oracle_kind == "calibration_only"
-            and liveness is not None
-            and liveness.passed
-            and liveness.task_sha256 == self.task_sha256
-            and liveness.runtime_sha256 == self.runtime_sha256
+            and control is not None
+            and control.passed
+            and control.trial == self.calibration.attempts[-1]
+            and control.trial.result.get("task_checksum") == self.harbor_task_checksum
         )
 
 
 class OracleFilterReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    version: Literal[2] = 2
+    version: Literal[2, 3] = 3
     recipe_identity: str | None
     input_cohort_sha256: str
     input_rows: int = Field(ge=0)
     conversion_rejections: int = Field(ge=0)
-    tasks: dict[str, OracleTaskReceipt]
+    tasks: dict[str, OracleTaskReceipt | MechanicalOracleTaskReceipt]
 
     @model_validator(mode="after")
     def validate_population(self):
         if len(self.tasks) + self.conversion_rejections != self.input_rows:
             raise ValueError("Oracle filter receipt does not cover the full input population")
         for task_id, entry in self.tasks.items():
+            if isinstance(entry, MechanicalOracleTaskReceipt):
+                if self.version != 3:
+                    raise ValueError("Mechanical outcomes require oracle filter wire version 3")
+                continue
+            if self.version == 2:
+                continue
             if entry.no_oracle_liveness is not None and entry.no_oracle_liveness.task_id != task_id:
                 raise ValueError(f"No-oracle liveness receipt belongs to another task: {task_id}")
             if not entry.passed and not entry.exclusion_reason:
@@ -513,25 +618,31 @@ class OracleFilterReceipt(BaseModel):
         return self
 
     def admits(self, task: TaskSpec, runtime: dict | None = None) -> bool:
+        if self.version != 3:
+            raise ValueError("New admission requires oracle filter wire version 3; version 2 is archival evidence")
         if task.id not in self.tasks:
             raise ValueError(f"Oracle filter receipt omits task {task.id}")
         entry = self.tasks[task.id]
         if entry.task_sha256 != canonical_sha256(task.model_dump(mode="json")):
             raise ValueError(f"Task changed after oracle filtering: {task.id}")
-        if runtime is not None and entry.runtime_sha256 != canonical_sha256(runtime):
+        if entry.runtime_sha256 != (canonical_sha256(runtime) if runtime is not None else None):
             raise ValueError(f"Runtime changed after oracle filtering: {task.id}")
         if entry.has_oracle != has_oracle_solution(task):
             raise ValueError(f"Oracle presence changed after filtering: {task.id}")
+        if isinstance(entry, MechanicalOracleTaskReceipt):
+            return False
+        if task.execution_requirements is None:
+            raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         if task.execution_requirements != entry.calibration.execution_requirements:
             raise ValueError(f"Task execution requirements differ from calibration: {task.id}")
-        return entry.passed
+        return entry.passed and trial_network_qualified(task, runtime, entry.calibration.attempts[-1])
 
     @property
     def uniform_requirements(self) -> ExecutionRequirements | None:
         """Return a source-wide shape only when every converted task passed at that shape."""
-        entries = list(self.tasks.values())
-        if not entries or self.conversion_rejections or any(not entry.passed for entry in entries):
+        if not self.tasks or self.conversion_rejections or any(not entry.passed for entry in self.tasks.values()):
             return None
+        entries = [entry for entry in self.tasks.values() if isinstance(entry, OracleTaskReceipt)]
         shape = entries[0].calibration.execution_requirements
         return shape if all(entry.calibration.execution_requirements == shape for entry in entries) else None
 
@@ -544,19 +655,19 @@ def require_oracle_filter(task: TaskSpec, receipt: OracleFilterReceipt | None, r
     """Validate task identity before returning its recorded qualification outcome.
 
     The full TaskSpec hash, oracle presence and calibrated execution requirements
-    must match the receipt. Providing ``runtime`` also checks its hash; ``None``
-    skips that comparison. Identity errors raise even for an excluded task.
+    must match the receipt. Runtime presence and its complete hash must also match.
+    Identity errors raise even for an excluded task.
 
     Returns:
-        ``OracleTaskReceipt.passed``: True when calibration and oracle or liveness
-        qualification passed, or False when the receipt explicitly excludes the task.
+        True when the original oracle or bounded model trial qualifies, or False
+        when the receipt excludes the task or network evidence is incomplete.
 
     Raises:
         ValueError: Execution requirements, the receipt or its task entry are missing,
             or a checked identity differs from the recorded measurement.
     """
-    if task.execution_requirements is None:
-        raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
     if receipt is None:
+        if task.execution_requirements is None:
+            raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         raise ValueError(f"SAMPLE/FULL admission requires a full-population Harbor oracle filter receipt: {task.id}")
     return receipt.admits(task, runtime)

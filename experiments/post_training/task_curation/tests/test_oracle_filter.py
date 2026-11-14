@@ -13,11 +13,12 @@ from uuid import uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.curation import ContentEvidenceReference
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.models import IntendedUse
-from taskcompendium.pipeline.oracle_filter import NoOracleLivenessReceipt, OracleExclusionReason, require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import ExecutabilityRunReceipt, OracleExclusionReason, require_oracle_filter
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 
@@ -125,7 +126,19 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                     else None
                 ),
             }
+            if task_id == "live":
+                result["agent_info"]["name"] = "task-spec-chat"
+                result["config"]["agent"] = {
+                    "name": "task-spec-chat",
+                    "model_name": "openai/glm-5.3",
+                    "kwargs": {"max_turns": 3, "request_parameters": {"temperature": 0.7}},
+                }
             (root / "result.json").write_text(json.dumps(result))
+            (root / "config.json").write_text(json.dumps(result["config"]))
+            artifacts = root / "artifacts"
+            artifacts.mkdir()
+            (artifacts / "result.json").write_text('{"task_output":1}\n{"task_output":2}\n')
+            (artifacts / "config.json").write_text('{"task":"source-controlled","agent":"source-controlled"}')
             verdict = (
                 {
                     "status": "infra_error",
@@ -160,18 +173,13 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     task_map = tmp_path / "task-map.json"
     task_map.write_text(json.dumps(mappings))
     live = TaskSpec.model_validate(json.loads(rows[-1]["lowered_task_spec"])["task"])
-    proof = NoOracleLivenessReceipt(
-        task_id=live.id,
-        task_sha256=canonical_sha256(live.model_dump(mode="json")),
-        runtime_sha256=canonical_sha256(json.loads(rows[-1]["lowered_task_spec"])["runtime"]),
-        submission_kind="empty",
-        outcome="negative_verdict",
-        exit_code=0,
-        reward=0,
-        tests_executed=3,
+    proof = ExecutabilityRunReceipt(
+        actor_turns=1,
+        model_evidence=(ContentEvidenceReference(uri="s3://fixtures/model-request.json", sha256="b" * 64),),
+        trial=collect_trials(tmp_path / "jobs")[(live.id, mappings[live.id]["task_checksum"])][0],
     )
-    liveness = tmp_path / "liveness.jsonl"
-    liveness.write_text(proof.model_dump_json() + "\n")
+    controls = tmp_path / "executability.jsonl"
+    controls.write_text(json.dumps({"task_id": live.id, "receipt": proof.model_dump(mode="json")}) + "\n")
     output = tmp_path / "filtered/tasks.parquet"
     conversion_manifest = tmp_path / "conversion.json"
     conversion_manifest.write_text(
@@ -185,7 +193,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         )
     )
     receipt = filter_cohort(
-        cohort, task_map, tmp_path / "jobs", output, conversion_manifest=conversion_manifest, no_oracle_liveness=liveness
+        cohort, task_map, tmp_path / "jobs", output, conversion_manifest=conversion_manifest, executability_runs=controls
     )
     assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
     assert receipt.input_rows == 11
@@ -211,7 +219,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     assert receipt.tasks["newer-env"].exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     calibration_only = receipt.tasks["calibration-only"]
     assert calibration_only.calibration.passed and not calibration_only.passed
-    assert calibration_only.exclusion_reason == "no_oracle_liveness_missing_or_failed"
+    assert calibration_only.exclusion_reason is OracleExclusionReason.EXECUTABILITY_PROOF_MISSING
     assert receipt.tasks["live"].trials == ()
     assert require_oracle_filter(live, receipt, json.loads(rows[-1]["lowered_task_spec"])["runtime"])
     assert receipt.tasks["failed-solution"].trials[0].oracle_exit_code == 7
@@ -232,6 +240,27 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     (tmp_path / "native/pass/instruction.md").write_text("Changed after the trial.")
     with pytest.raises(ValueError):
         collect_trials(tmp_path / "jobs")
+
+
+def test_missing_production_proof_filters_and_archives_the_exact_original_row(tmp_path):
+    row = prebuilt_task("unexecuted")
+    cohort = tmp_path / "cohort.parquet"
+    pq.write_table(pa.Table.from_pylist([row]), cohort)
+    mapping = tmp_path / "task-map.json"
+    mapping.write_text("{}")
+    output = tmp_path / "filtered/tasks.parquet"
+    evidence = ContentEvidenceReference(
+        uri="s3://fixtures/cohort.parquet", sha256=hashlib.sha256(cohort.read_bytes()).hexdigest()
+    )
+    receipt = filter_cohort(cohort, mapping, tmp_path / "jobs", output, input_evidence=evidence)
+    entry = receipt.tasks["unexecuted"]
+    assert entry.exclusion_reason is OracleExclusionReason.EXECUTABILITY_PROOF_MISSING
+    assert not entry.passed
+    assert pq.read_table(output).num_rows == 0
+    assert pq.read_table(output.parent / "excluded-tasks.parquet").to_pylist() == [row]
+    assert json.loads((output.parent / "oracle-filter-summary.json").read_text())["exclusions_by_reason"] == {
+        "executability_proof_missing": 1
+    }
 
 
 @pytest.mark.parametrize(
@@ -331,6 +360,7 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
             "exception_info": None,
         }
         (root / "result.json").write_text(json.dumps(result))
+        (root / "config.json").write_text(json.dumps(result["config"]))
         (root / "agent/exit-code.txt").write_text("137" if oom else "0")
         (root / "agent/resource-usage.json").write_text(json.dumps({"oom_kills": int(oom)}))
         (root / "verifier/verdict.json").write_text(json.dumps({"status": "scored", "reward": 1}))

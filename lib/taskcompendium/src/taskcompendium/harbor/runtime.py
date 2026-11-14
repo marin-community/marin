@@ -39,7 +39,11 @@ class TaskSpecRuntimeBinding(BaseModel):
 
     def network(self, role: Literal["task_machine", "verifier_machine"]) -> NetworkPolicy | None:
         machine = self.runtime.get(role)
-        if machine is None or "network" not in machine:
+        if machine is None:
+            return None
+        if not isinstance(machine, dict):
+            raise ValueError(f"Source runtime machine must be an object: {role}")
+        if "network" not in machine:
             return None
         return NetworkPolicy(machine["network"])
 
