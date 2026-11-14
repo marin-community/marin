@@ -328,6 +328,14 @@ CANDIDATE_ARGS = {
         "--compilation-config",
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [128]}),
     ),
+    "fg32cap1_95": (
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.95",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [32]}),
+    ),
     "fg128symm": (
         "--max-num-seqs",
         "128",
@@ -537,6 +545,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--waves", type=int, default=3)
     parser.add_argument("--client-processes", type=int, default=1, help="Load-generator processes")
     parser.add_argument("--long-lengths", default="4096,32768,65536")
+    parser.add_argument("--d1-peer-loads", default="1,2,8,32", help="Requests per peer engine for the d1 phase")
     parser.add_argument("--profile-per-engine", default="1,32,128", help="Sequences per engine for the profile phase")
     parser.add_argument("--vllm-arg", action="append", default=[], help="Extra vLLM flag; repeat per token")
     parser.add_argument("--drop-arg", action="append", default=[], help="Remove a baseline flag and its value")
@@ -760,6 +769,7 @@ def _variant_config(args, target: ServedTarget, name, item, geometry, iris_confi
             long_lengths=tuple(int(n) for n in args.long_lengths.split(",")),
             data_parallel_size=geometry.global_data_parallel_size,
             profile_per_engine=tuple(int(n) for n in args.profile_per_engine.split(",")),
+            d1_peer_loads=tuple(int(n) for n in args.d1_peer_loads.split(",")),
         ),
         env=env,
         leader_args=LEADER_OVERRIDES.get(label, LEADER_ARGS),
