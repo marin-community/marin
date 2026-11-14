@@ -42,15 +42,11 @@ _STOP_REASON_BY_STATE: dict[int, worker_pb2.Worker.StopReason] = {
 
 
 def _stop_reason(row: "ReconcileRow") -> worker_pb2.Worker.StopReason | None:
-    """Why the worker must stop this attempt, or ``None`` if the controller has not ended it.
-
-    Reconcile rows are worker-bound attempts with ``finished_at_ms`` NULL: the
-    worker has not confirmed that the process is gone, so the attempt still
-    holds its capacity. The decision comes from the attempt's own state, because
-    the task state can describe a newer attempt (retry) or a rollback to PENDING.
-    A 'run' would be a no-op for an attempt the worker already holds; only 'stop'
-    produces the terminal observation that finalizes the attempt.
-    """
+    """Return the reason to stop this attempt, or ``None`` to leave it running."""
+    # The attempt's own state decides: the task state can describe a newer
+    # attempt or a rollback to PENDING. A terminal attempt in a reconcile row is
+    # one the worker has not confirmed as gone, and only a 'stop' makes the
+    # worker send the terminal observation that finalizes it.
     if row.attempt_state in TERMINAL_TASK_STATES:
         return _STOP_REASON_BY_STATE.get(row.attempt_state, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED)
     if row.superseded:
