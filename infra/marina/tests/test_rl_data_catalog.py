@@ -86,6 +86,7 @@ from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
+from infra.marina.apps.rl_data_catalog.release_evidence import catalog_state, verify_preservation
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
@@ -97,6 +98,28 @@ from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_decla
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 pytestmark = pytest.mark.usefixtures("isolated_admission_census")
+
+
+def test_release_gate_preserves_archived_packets_even_during_an_explicit_catalog_refresh(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "release-catalog")
+    publish_sample(root, "before")
+    load_catalog(CurationCatalog(root), catalog_query)
+    before = catalog_state(catalog_query)
+    verify_preservation(before, catalog_state(catalog_query))
+    assert before["archives"][0]["sources"] == 1
+    assert before["archives"][0]["packets"] == 3
+    publish_sample(root, "after")
+    load_catalog(CurationCatalog(root), catalog_query)
+    after = catalog_state(catalog_query)
+    with pytest.raises(ValueError):
+        verify_preservation(before, after)
+    verify_preservation(before, after, refresh_snapshot="after")
+    with catalog_database.begin() as connection:
+        connection.execute(text("UPDATE atlas_packets SET packet=packet || ' '"))
+    with pytest.raises(ValueError):
+        verify_preservation(before, catalog_state(catalog_query), refresh_snapshot="after")
 
 
 def catalog_backend_map(catalog: CurationCatalog) -> BackendSurvey:

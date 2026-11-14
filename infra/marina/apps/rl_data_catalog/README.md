@@ -1,5 +1,8 @@
 # RL Data Atlas style
 
+Follow the canonical [release procedure](RELEASE.md) and its `release_check`
+entry point for every preview release.
+
 Enum chips carry the entire state label. Never put text below a Quality, Result,
 Contamination, Filtration or Daytona chip. Put numeric issue rates and lexical overlap counts
 in their own columns, using an em dash for missing measurements. Keep review

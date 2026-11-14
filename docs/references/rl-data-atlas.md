@@ -203,6 +203,10 @@ and body scroll together without widening the page.
 
 ## Updating Atlas
 
+Use the app's canonical [release procedure](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/RELEASE.md)
+and `release_check` entry point for preview package validation, browser gates and
+post-release preservation checks. Catalog loading remains a separate operation.
+
 Before selecting a new catalog load:
 
 1. Validate every source's typed upstream origin, build path and generated title.

@@ -9,6 +9,22 @@ import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
+from infra.marina.apps.rl_data_catalog.release_browser import check_view
+
+
+def test_release_checker_accepts_real_catalog_and_rejects_corrupted_rendered_totals(journey: Journey) -> None:
+    page = journey.page
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    sources = page.evaluate("async()=> (await (await fetch('api/sources')).json()).sources")
+    check_view(page, sources)
+    page.locator("#show-everything").click()
+    result = check_view(page, sources, include_hidden=True, expanded=True)
+    assert result["total"] == result["shown"]
+    page.locator("#metric-sources").evaluate("e=>e.textContent='0 / 0'")
+    with pytest.raises(AssertionError):
+        check_view(page, sources, include_hidden=True, expanded=True)
+
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
 def test_difficulty_model_sort_tooltips_and_source_details(journey: Journey, theme: str) -> None:
