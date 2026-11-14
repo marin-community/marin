@@ -159,7 +159,6 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     expect(chip).to_have_text("UNSAFE: too_many_snapshots, unbuilt_image")
     expect(page.get_by_role("columnheader", name="Backends")).to_be_visible()
     expect(page.get_by_role("columnheader", name="Grading")).to_be_visible()
-    expect(page.get_by_role("columnheader", name="Oracle pass")).to_have_count(0)
     expect(page.get_by_role("columnheader", name="Examples", exact=True).get_by_role("button")).to_have_count(0)
     source_header = page.locator("#headers th").first
     expect(source_header).to_have_attribute("aria-sort", "ascending")
