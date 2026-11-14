@@ -1535,6 +1535,8 @@ inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
 three infrastructure attempts applies independently to this approved phase.
+Calibration validates and deduplicates Harbor's selected-result copy and physical
+attempt result before consuming the physical verdict, oracle exit and resource receipts.
 Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
 This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
 standalone Harbor trials without it keep PHASE behavior. Safe provider retries
