@@ -99,7 +99,8 @@ function contaminationChip(status) {
 }
 
 const backendNames = {local: 'LOCAL', daytona: 'Daytona', docker: 'Docker', gvisor: 'gVisor', qemu: 'QEMU', shellsim: 'ShellSim', iris: 'Iris'};
-const supportClasses = {supported: 'good', partial: 'some_issues', unsupported: 'bad', not_applicable: 'unassessed'};
+const supportClasses = {supported: 'good', partial: 'some_issues', unsupported: 'bad', not_applicable: 'unassessed', role_absent: 'unassessed'};
+const backendStatusLabels = {not_applicable: 'N/A', role_absent: 'N/A (no role)'};
 function readableRecord(value) {
   if (value instanceof Node) return value;
   if (value === null || value === undefined) return node('span', 'Not measured', 'muted');
@@ -119,7 +120,7 @@ function backendLabels(source) {
     const reasons = [...new Set(Object.keys(fit.blockers).map(reason => reason.split(':').slice(1).join(':') || reason))];
     if (!reasons.length && Object.keys(fit.validation_errors).length) reasons.push('validation');
     const name = backendNames[key] || key;
-    const status = fit.support === 'not_applicable' ? 'N/A' : fit.support.toUpperCase();
+    const status = backendStatusLabels[fit.support] || fit.support.toUpperCase();
     return {key, fit, label: fit.support === 'supported' ? name : `${name}: ${status}${reasons.length ? ': ' + reasons.join(', ') : ''}`};
   });
 }
@@ -147,18 +148,19 @@ function gradingChips(source) {
 function backendDetails(source) {
   const wrap = node('div', undefined, 'table-wrap'); wrap.tabIndex = 0; wrap.setAttribute('aria-label', 'Backend fit by execution role');
   const table = node('table', undefined, 'backend-table'), head = node('thead'), headings = node('tr');
-  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Blockers', 'Validation errors']) headings.append(node('th', title));
+  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Not applicable', 'Blockers', 'Validation errors']) headings.append(node('th', title));
   head.append(headings); table.append(head); const body = node('tbody');
   for (const {key, fit} of backendLabels(source)) {
     const row = node('tr'); row.append(node('td', backendNames[key] || key));
-    const status = node('td'); status.append(node('span', fit.support === 'not_applicable' ? 'N/A' : fit.support.toUpperCase(), `chip quality-${supportClasses[fit.support]}`)); row.append(status);
+    const status = node('td'); status.append(node('span', backendStatusLabels[fit.support] || fit.support.toUpperCase(), `chip quality-${supportClasses[fit.support]}`)); row.append(status);
     for (const role of ['agent', 'grader']) {
       const cell = node('td');
-      const counts = Object.fromEntries(Object.entries(fit.roles[role] || {}).filter(([, count]) => count > 0).map(([state, count]) => [state === 'not_applicable' ? 'N/A' : state, count]));
+      const counts = Object.fromEntries(Object.entries(fit.roles[role] || {}).filter(([, count]) => count > 0).map(([state, count]) => [backendStatusLabels[state] || state, count]));
       cell.append(Object.keys(counts).length ? readableRecord(counts) : node('span', 'Not measured', 'muted')); row.append(cell);
     }
-    for (const counts of [fit.blockers, fit.validation_errors]) {
-      const cell = node('td'); cell.append(Object.keys(counts).length ? readableRecord(counts) : node('span', 'None measured')); row.append(cell);
+    for (const counts of [fit.not_applicable, fit.blockers, fit.validation_errors]) {
+      const cell = node('td');
+      cell.append(counts === undefined ? node('span', 'Not measured', 'muted') : Object.keys(counts).length ? readableRecord(counts) : node('span', 'None measured')); row.append(cell);
     }
     body.append(row);
   }

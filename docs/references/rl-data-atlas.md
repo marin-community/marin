@@ -132,8 +132,9 @@ not describe residual overlap in the retained release or semantic decontaminatio
 The source table legend and Getting started guide define the same five states.
 The compact **Backends ›** link opens a source's backend evidence page, with
 agent and grader fit, task counts, blockers, validation errors and survey provenance.
-Explicit `not_applicable` role counts display N/A; missing role evidence remains
-not measured. The evidence table scrolls horizontally on small screens.
+Explicit `not_applicable` counts display N/A when a backend cannot run that environment kind;
+`role_absent` displays N/A (no role). Missing role evidence remains not measured.
+The evidence table scrolls horizontally on small screens.
 Grading shows the required SHARED or SEPARATE boundary from the complete census;
 a declaration mismatch uses a warning variant and remains explicit in Evidence.
 N/A requires an applicable measured absence; missing evidence remains unmeasured.

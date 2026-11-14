@@ -177,19 +177,22 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                             "backends": {
                                 "local": {
                                     "support": "supported",
-                                    "roles": {"agent": {"not_applicable": 3}, "grader": {"supported": 3}},
+                                    "roles": {"agent": {"role_absent": 3}, "grader": {"supported": 3}},
+                                    "not_applicable": {},
                                     "blockers": {},
                                     "validation_errors": {},
                                 },
                                 "shellsim": {
                                     "support": "not_applicable",
-                                    "roles": {"agent": {"not_applicable": 3}, "grader": {"not_applicable": 3}},
+                                    "roles": {"agent": {"role_absent": 3}, "grader": {"not_applicable": 3}},
+                                    "not_applicable": {"grader:host_image": 3},
                                     "blockers": {},
                                     "validation_errors": {},
                                 },
                                 "qemu": {
-                                    "support": "partial",
-                                    "roles": {"agent": {"supported": 2, "not_applicable": 1}},
+                                    "support": "unsupported",
+                                    "roles": {"agent": {"unsupported": 2, "not_applicable": 1}},
+                                    "not_applicable": {"agent:host_image": 1},
                                     "blockers": {"agent:packages_lock": 2},
                                     "validation_errors": {"agent:packages_lock": 1},
                                 },
