@@ -20,7 +20,12 @@ def load_optimizer_checkpoint(optimizer: MegatronOptimizer, state_dict: dict) ->
     """Load optimizer state, recovering omitted CPU Adam bucket counters."""
     if not optimizer.is_stub_optimizer:
         config = optimizer.config
-        if config is not None and config.optimizer_cpu_offload and config.optimizer.lower() in ("adam", "adamw"):
+        if (
+            config is not None
+            and config.optimizer_cpu_offload
+            and config.use_distributed_optimizer
+            and config.optimizer.lower() in ("adam", "adamw")
+        ):
             _restore_omitted_adam_steps(state_dict)
     optimizer.load_state_dict(state_dict)
 

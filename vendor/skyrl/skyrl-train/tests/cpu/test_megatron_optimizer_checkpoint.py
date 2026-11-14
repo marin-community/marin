@@ -7,6 +7,7 @@ import pytest
 import torch
 from megatron.core.optimizer import ChainedOptimizer
 from megatron.core.optimizer.distrib_optimizer import DistributedOptimizer, Range
+from megatron.core.optimizer.optimizer import Float16OptimizerWithFloat16Params
 from megatron.core.optimizer.optimizer_config import OptimizerConfig
 
 from skyrl_train.distributed.megatron.checkpoint_restore import load_optimizer_checkpoint
@@ -19,7 +20,9 @@ def cpu_optimizer(parameter, optimizer_type=torch.optim.AdamW):
     # retaining its real state_dict, load_state_dict and bucket-loading methods.
     optimizer = DistributedOptimizer.__new__(DistributedOptimizer)
     optimizer.optimizer = inner
-    optimizer.config = OptimizerConfig(optimizer="adam", optimizer_cpu_offload=True, bf16=True)
+    optimizer.config = OptimizerConfig(
+        optimizer="adam", optimizer_cpu_offload=True, use_distributed_optimizer=True, bf16=True
+    )
     optimizer.ddp_config = SimpleNamespace(use_megatron_fsdp=False)
     optimizer.grad_scaler = None
     optimizer.is_stub_optimizer = False
@@ -31,6 +34,17 @@ def cpu_optimizer(parameter, optimizer_type=torch.optim.AdamW):
     ]
     optimizer.per_bucket_numel = [{(torch.bfloat16, torch.float32): [parameter.numel()]}]
     optimizer.per_bucket_numel_unpadded = optimizer.per_bucket_numel
+    return optimizer
+
+
+def unsharded_cpu_optimizer(parameter):
+    group = dict(params=[parameter], wd_mult=1.0, lr_mult=1.0, is_expert_parallel=False, is_decoupled_lr=False)
+    optimizer = Float16OptimizerWithFloat16Params.__new__(Float16OptimizerWithFloat16Params)
+    optimizer.optimizer = torch.optim.AdamW([group], lr=0.002, weight_decay=0.03, foreach=False)
+    optimizer.config = OptimizerConfig(optimizer="adam", optimizer_cpu_offload=True, bf16=True)
+    optimizer.is_stub_optimizer = False
+    optimizer.grad_scaler = None
+    optimizer.fp32_from_float16_groups = [[parameter]]
     return optimizer
 
 
@@ -149,3 +163,20 @@ def test_rank_without_trainable_parameters_can_restore_its_empty_state():
     optimizer = ChainedOptimizer([])
     load_optimizer_checkpoint(optimizer, {})
     assert optimizer.state_dict() == []
+
+
+def test_unsharded_optimizer_preserves_ordinary_checkpoint_continuation(tmp_path):
+    reference_parameter = torch.nn.Parameter(torch.tensor([0.1, -0.8, 1.3]))
+    reference = unsharded_cpu_optimizer(reference_parameter)
+    for iteration in range(1, 6):
+        advance(reference, reference_parameter, iteration)
+    path = tmp_path / "optimizer.pt"
+    torch.save(reference.state_dict(), path)
+    parameter = torch.nn.Parameter(torch.zeros_like(reference_parameter))
+    resumed = unsharded_cpu_optimizer(parameter)
+    with torch.no_grad():
+        load_optimizer_checkpoint(resumed, torch.load(path, weights_only=False))
+    assert_optimizer_matches(resumed, parameter, reference, reference_parameter)
+    advance(reference, reference_parameter, 6)
+    advance(resumed, parameter, 6)
+    assert_optimizer_matches(resumed, parameter, reference, reference_parameter)
