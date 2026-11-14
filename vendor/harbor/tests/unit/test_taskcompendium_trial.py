@@ -3,6 +3,7 @@
 
 """Original converted TaskSpecs cross the production trial and grading boundaries."""
 
+import asyncio
 import json
 import inspect
 import shutil
@@ -18,8 +19,17 @@ import pytest
 import tomlkit
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Backend, UnsupportedMachineSpec
+from shellbox.machine import Backend, ExitReason, NetworkPolicy, Result, UnsupportedMachineSpec
 from taskcompendium.harbor.adapter import write_harbor_task
+from taskcompendium.harbor.oracle import ORACLE_COMMAND_FILE, write_oracle_command
+from taskcompendium.harbor.protected_runtime import (
+    RUNTIME_OBSERVATION_SCRIPT,
+    ExpectedRuntime,
+    RuntimeFile,
+    RuntimeRole,
+    write_runtime_binding,
+)
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, write_source_runtime
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.models import (
@@ -38,8 +48,9 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
     verifyit_spec,
+    grader_workspace,
 )
-from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.models import OracleCommand, RawRow
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
@@ -145,6 +156,251 @@ def bind_factory(monkeypatch, machines, disk_root):
 
 def original_task(name):
     return TaskSpec.model_validate_json((FIXTURES / f"{name}.json").read_text())
+
+
+def declared_oracle(task):
+    return OracleCommand("bash ../solution/solve.sh", answer_file=grader_workspace(task.grader) + "/answer.txt")
+
+
+@pytest.mark.parametrize(
+    "answer,reward,exit_code,timed_out,custom_workspace,worker_input",
+    [("42", 1.0, 0, False, None, None), ("41", 0.0, 0, False, None, None),
+     ("42", 1.0, 7, False, None, None), ("42", 0.0, -1, True, None, None),
+     ("42", 1.0, 0, False, "/custom-grader", None), ("42", 1.0, 0, False, None, b"42\n")],
+)
+@pytest.mark.asyncio
+async def test_actorless_original_command_runs_in_grader_environment_and_preserves_answer(
+    tmp_path, monkeypatch, answer, reward, exit_code, timed_out, custom_workspace, worker_input
+):
+    task = exact_answer_task(
+        RawRow("original-command", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Return the answer as text.",
+        answers=("42",),
+        ignore_case=False,
+    )
+    environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="fixture-lock")
+    task = task.model_copy(
+        update={
+            "grader": task.grader.model_copy(update={"environment": environment}),
+            "resources": ResourceGroups(
+                oracle=(
+                    inline_resource(
+                        "solution/solve.sh",
+                        f"#!/bin/bash\nset -eu\nprintf '{answer}\\n' > answer.txt\nexit {exit_code}\n".encode(),
+                    ),
+                )
+            ),
+        }
+    )
+    if worker_input is not None:
+        task = task.model_copy(update={"resources": ResourceGroups(
+            worker=(inline_resource("app/input.txt", worker_input),),
+            oracle=(inline_resource("solution/solve.sh", b"cat input.txt > answer.txt\n"),),
+        )})
+    if custom_workspace is not None:
+        task = task.model_copy(update={
+            "grader": ScriptGrader(
+                argv=("python3", "/tests/check.py"), cwd=custom_workspace,
+                answer_path=custom_workspace + "/answer.txt", environment=environment,
+            ),
+            "resources": task.resources.model_copy(update={
+                "verifier": (inline_resource("check.py", b"from pathlib import Path\nprint(float(Path('answer.txt').read_text().strip() == '42'))\n"),),
+            }),
+        })
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    runtime = {"task_machine": {"network": "deny"}, "verifier_machine": {"network": "allow"}}
+    write_source_runtime(task, runtime, directory)
+    write_oracle_command(task, runtime, declared_oracle, directory, source_revision="a" * 40)
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
+    monkeypatch.setattr("taskcompendium.runtime.environment.local_runtime", lambda path: LockedRuntime(tmp_path))
+    original_run = FileMachine.run
+    command_deadlines = []
+
+    async def source_boundary(machine, command):
+        if command.argv == ("/bin/bash", "-lc", "bash ../solution/solve.sh"):
+            command_deadlines.append(command.timeout)
+            if timed_out:
+                return Result(exit_code, b"partial oracle log", b"", False, False, ExitReason.TIMED_OUT)
+        return await original_run(machine, command)
+
+    monkeypatch.setattr(FileMachine, "run", source_boundary)
+    trial = await Trial.create(
+        TrialConfig(
+            task=TaskConfig(path=directory),
+            trial_name="original-command",
+            trials_dir=tmp_path / "trials",
+            agent=AgentConfig(name="oracle"),
+            environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
+        )
+    )
+    result = await trial.run()
+    assert command_deadlines == [INITIAL_REQUIREMENTS.agent_timeout_sec]
+    assert all(spec.network is NetworkPolicy.ALLOW for spec in machines.specifications)
+    network = TaskNetworkPolicyReceipt.model_validate_json((trial.paths.trial_dir / "network-policy.json").read_text())
+    assert network.actor_effective is None
+    assert network.verifier_effective is NetworkPolicy.ALLOW
+    assert all(machine.closed for machine in machines.machines)
+    assert (trial.paths.agent_dir / "resource-usage.json").is_file()
+    if timed_out:
+        assert result.exception_info.exception_type == "AgentTimeoutError"
+        assert not (trial.paths.agent_dir / "answer.bin").exists()
+        assert (trial.paths.agent_dir / "oracle.txt").read_bytes() == b"partial oracle log"
+        return
+    assert result.exception_info is None, result.exception_info
+    assert result.verifier_result.rewards == {"reward": reward}
+    assert (trial.paths.agent_dir / "answer.bin").read_bytes() == f"{answer}\n".encode()
+    assert (trial.paths.agent_dir / "exit-code.txt").read_text() == str(exit_code)
+    assert len(machines.machines) == 2
+    assert all(requirements.packages_lock == environment.packages_lock for requirements in machines.requirements)
+    assert all(
+        (spec.cpus, spec.memory_mb, spec.storage_mb) == (1, 2048, 2048)
+        for spec in machines.specifications
+    )
+    grader = machines.machines[-1]
+    conversation = ConversationTrace.model_validate_json((trial.paths.agent_dir / "conversation.json").read_text())
+    assert conversation.events == (*task.context.events, TextMessage(role="assistant", content=f"{answer}\n"))
+    assert not grader.local("/solution/solve.sh").exists()
+
+
+@pytest.mark.parametrize("actor_required", [False, True])
+@pytest.mark.parametrize("changed_field", ["task_sha256", "runtime_sha256"])
+@pytest.mark.asyncio
+async def test_changed_original_command_binding_allocates_no_machine(tmp_path, monkeypatch, actor_required, changed_field):
+    task = exact_answer_task(
+        RawRow("bound-command", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Return 42.", answers=("42",), ignore_case=False,
+    ).model_copy(update={"resources": ResourceGroups(oracle=(inline_resource("solution/solve.sh", b"exit 0\n"),))})
+    if actor_required:
+        task = task.model_copy(
+            update={"environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="fixture-lock",
+                setup_commands=("touch setup-ran",),
+            )}
+        )
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    write_oracle_command(
+        task, {}, declared_oracle, directory, source_revision="a" * 40,
+    )
+    binding = json.loads((directory / ORACLE_COMMAND_FILE).read_text())
+    write_source_runtime(task, {}, directory)
+    binding[changed_field] = "0" * 64
+    (directory / ORACLE_COMMAND_FILE).write_text(json.dumps(binding))
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    with pytest.raises(ValueError, match="belongs to another TaskSpec|differs from the preserved source runtime"):
+        await Trial.create(
+            TrialConfig(
+                task=TaskConfig(path=directory), trial_name="changed-command", trials_dir=tmp_path / "trials",
+                agent=AgentConfig(name="oracle"),
+                environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
+            )
+        )
+    assert machines.machines == []
+    assert not list(tmp_path.rglob("setup-ran"))
+
+
+@pytest.mark.parametrize("actor_required", [False, True])
+@pytest.mark.parametrize("role", [RuntimeRole.ORACLE_CONTROL, RuntimeRole.SOURCE_GRADER])
+@pytest.mark.parametrize("failure", [None, "wrong_import", "timeout", "nonzero", "host_timeout", "transport"])
+@pytest.mark.asyncio
+async def test_protected_runtime_records_actual_role_and_stops_wrong_import_before_source(
+    tmp_path, monkeypatch, role, failure, actor_required
+):
+    task = exact_answer_task(
+        RawRow("protected-runtime", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Return 42.", answers=("42",), ignore_case=False,
+    )
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        packages_lock="fixture-lock",
+        working_directory="/app",
+        setup_commands=("touch setup-ran",),
+    )
+    task = task.model_copy(update={
+        "grader": task.grader.model_copy(update={"environment": environment}),
+        "resources": ResourceGroups(oracle=(inline_resource("solution/solve.sh", b"printf '42\\n' > answer.txt\n"),)),
+    })
+    if actor_required:
+        task = task.model_copy(update={"environment_requirements": environment})
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    write_oracle_command(
+        task, {}, declared_oracle, directory, source_revision="a" * 40,
+    )
+    expected = ExpectedRuntime(
+        python_version=(3, 12), verifyit_root="/frozen/verifyit", lock_sha256="e" * 64,
+        files={"/frozen/verifyit/grade.py": RuntimeFile(sha256="d" * 64, mode=0o644)},
+    )
+    write_runtime_binding(task, {}, {role: expected}, directory)
+    observed = {
+        "executable": "/venv/bin/python3", "version": [3, 12, 15], "prefix": "/venv",
+        "import_path": ["", "/frozen"],
+        "module_origins": {"verifyit": "/frozen/verifyit/__init__.py",
+                           "verifyit.grade": "/current/verifyit/grade.py" if failure == "wrong_import" else "/frozen/verifyit/grade.py"},
+        "files": {"/frozen/verifyit/grade.py": {"sha256": "d" * 64, "mode": 0o644}},
+        "lock_path": "/requirements.lock", "lock_sha256": "e" * 64,
+    }
+    original_run = FileMachine.run
+
+    async def runtime_boundary(machine, command):
+        if command.argv[:3] == ("python3", "-c", RUNTIME_OBSERVATION_SCRIPT):
+            assert command.cwd == "/"
+            assert 0 < command.timeout <= INITIAL_REQUIREMENTS.verifier_timeout_sec
+            if failure == "host_timeout":
+                await asyncio.Event().wait()
+            if failure == "transport":
+                raise OSError("probe transport unavailable")
+            if failure == "timeout":
+                return Result(-1, b"partial probe", b"probe timed out", False, False, ExitReason.TIMED_OUT)
+            if failure == "nonzero":
+                return Result(1, b"", b"missing runtime dependency", False, False, ExitReason.EXITED)
+            return Result(0, json.dumps(observed).encode(), b"", False, False, ExitReason.EXITED)
+        return await original_run(machine, command)
+
+    monkeypatch.setattr(FileMachine, "run", runtime_boundary)
+    if failure == "host_timeout":
+        monkeypatch.setattr(adapter, "RUNTIME_OBSERVATION_TIMEOUT", 0.01)
+    monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
+    monkeypatch.setattr("taskcompendium.runtime.environment.local_runtime", lambda path: LockedRuntime(tmp_path))
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    trial = await Trial.create(TrialConfig(
+        task=TaskConfig(path=directory), trial_name="protected-runtime", trials_dir=tmp_path / "trials",
+        agent=AgentConfig(name="oracle"), environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
+    ))
+    result = await trial.run()
+    artifacts = trial.paths.agent_dir if role is RuntimeRole.ORACLE_CONTROL else trial.paths.verifier_dir
+    if failure == "host_timeout":
+        observation = json.loads((artifacts / "protected-runtime-failure.json").read_text())
+        assert observation["role"] == role.value
+        assert observation["status"] == "infrastructure_pending"
+        assert observation["stdout"] is None
+    else:
+        observation = json.loads((artifacts / "protected-runtime.json").read_text())
+        assert observation["role"] == role.value
+        if failure == "transport":
+            assert observation["stdout"] is None
+            assert observation["exit_code"] is None
+            assert observation["exception_type"] == "OSError"
+        elif failure not in {"timeout", "nonzero"}:
+            assert json.loads(observation["stdout"]) == observed
+    assert all(machine.closed for machine in machines.machines)
+    if failure is not None:
+        assert result.exception_info.exception_type == "RuntimeServiceError"
+        assert result.verifier_result is None
+        if role is RuntimeRole.ORACLE_CONTROL:
+            assert not machines.machines[0].local("/solution/solve.sh").exists()
+            assert not machines.machines[0].local("/app/setup-ran").exists()
+        else:
+            assert not machines.machines[-1].local("/tests/task-spec.json").exists()
+            assert not machines.machines[-1].local("/app/setup-ran").exists()
+    else:
+        assert result.exception_info is None, result.exception_info
+        assert result.verifier_result.rewards == {"reward": 1.0}
 
 
 @pytest.mark.parametrize(
@@ -542,9 +798,13 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
 
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize("packaging", ["lock", "image"])
+@pytest.mark.parametrize(
+    "actor_network,verifier_network",
+    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY), (NetworkPolicy.DENY, NetworkPolicy.ALLOW)],
+)
 @pytest.mark.asyncio
 async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
-    tmp_path, monkeypatch, exit_code, packaging
+    tmp_path, monkeypatch, exit_code, packaging, actor_network, verifier_network
 ):
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
@@ -586,6 +846,8 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     )
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    runtime = {"task_machine": {"network": actor_network.value}, "verifier_machine": {"network": verifier_network.value}}
+    write_source_runtime(task, runtime, directory)
     response = tmp_path / "response.json"
     response.write_text(json.dumps([{"role": "assistant", "content": "42"}]))
     machines = Machines(tmp_path / "sandboxes")
@@ -613,4 +875,10 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     assert not actor.local("/tests/check.py").exists()
     assert verifier.local("/tests/check.py").read_bytes() == script
     assert actor.closed and verifier.closed
+    assert [spec.network for spec in machines.specifications] == [actor_network, verifier_network]
+    network = TaskNetworkPolicyReceipt.model_validate_json(
+        (Path(trial.paths.trial_dir) / "network-policy.json").read_text()
+    )
+    assert (network.actor_declared, network.actor_effective) == (actor_network, actor_network)
+    assert (network.verifier_declared, network.verifier_effective) == (verifier_network, verifier_network)
     assert all((spec.cpus, spec.memory_mb, spec.storage_mb) == (1, 2048, 2048) for spec in machines.specifications)

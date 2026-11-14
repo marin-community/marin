@@ -23,6 +23,9 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.harbor.adapter import TASK_SPEC_FILE, declared_execution_limits
 from taskcompendium.harbor.execution import native_execution_limits
+from taskcompendium.harbor.oracle import read_oracle_command
+from taskcompendium.harbor.protected_runtime import read_runtime_binding
+from taskcompendium.harbor.runtime import read_source_runtime
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
@@ -184,11 +187,16 @@ def row_task(row: dict) -> TaskSpec | None:
     return TaskSpec.model_validate_json(serialized) if serialized is not None else None
 
 
-def row_runtime_hash(row: dict) -> str | None:
+def row_runtime(row: dict) -> dict | None:
     if "lowered_task_spec" in row:
-        return canonical_sha256(json.loads(row["lowered_task_spec"])["runtime"])
+        return json.loads(row["lowered_task_spec"])["runtime"]
     runtime = row.get("runtime")
-    return canonical_sha256(json.loads(runtime)) if runtime is not None else None
+    return json.loads(runtime) if runtime is not None else None
+
+
+def row_runtime_hash(row: dict) -> str | None:
+    runtime = row_runtime(row)
+    return canonical_sha256(runtime) if runtime is not None else None
 
 
 def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
@@ -529,6 +537,17 @@ def calibrated_task(
 ) -> dict:
     """Run the production Trial path once per shape, creating a fresh task package each time."""
     original = Path(mapping["task_path"])
+    for label, read_binding in (
+        ("OracleCommand", read_oracle_command),
+        ("Protected", read_runtime_binding),
+        ("Source", read_source_runtime),
+    ):
+        binding = read_binding(original)
+        if binding is None:
+            continue
+        binding.require_task(task)
+        if binding.runtime_sha256 != mapping.get("runtime_sha256"):
+            raise ValueError(f"{label} runtime changed after Harbor export: {task.id}")
     native = harbor_inspection("tasks", [str(original)])[str(original)]
     if native["task_checksum"] != mapping["task_checksum"]:
         raise ValueError(f"Task changed after Harbor export: {task.id}")
