@@ -130,7 +130,12 @@ def solver_endpoint(solver: Solver):
 
 
 def run_trial_worker(
-    prepared_path: Path, config_path: Path, local_root: Path, output: StoragePath, api_key: str
+    prepared_path: Path,
+    config_path: Path,
+    local_root: Path,
+    output: StoragePath,
+    api_key: str,
+    recovery_arguments: list[str],
 ) -> None:
     """Launch the locked Harbor runtime with private host-side secret files."""
     secrets_dir = local_root / "framework-secrets"
@@ -163,6 +168,7 @@ def run_trial_worker(
             str(output / "trials"),
             "--local-root",
             str(local_root / "trials"),
+            *recovery_arguments,
         ],
         check=True,
         env={**os.environ, "PYTHONPATH": str(Path.cwd()), SECRETS_DIR_ENV: str(secrets_dir)},
@@ -173,6 +179,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--solver", type=Solver, choices=list(Solver), required=True)
+    parser.add_argument("--previous-campaign")
+    parser.add_argument("--previous-serving-sha256")
     parser.add_argument("--sources", required=True)
     parser.add_argument("--sources-sha256", required=True)
     parser.add_argument("--source-id", action="append")
@@ -183,6 +191,8 @@ def main() -> None:
     parser.add_argument("--task-limit", type=int)
     parser.add_argument("--registry-auth-secret")
     args = parser.parse_args()
+    if bool(args.previous_campaign) != bool(args.previous_serving_sha256):
+        raise ValueError("Continuation requires both the previous campaign and its serving receipt digest")
     configure_coreweave_s3()
     output = StoragePath(args.output_root)
     if args.local_root.exists() or output.exists():
@@ -291,7 +301,17 @@ def main() -> None:
         }
         config_path = args.local_root / "candidate.json"
         config_path.write_text(json.dumps(config) + "\n")
-        run_trial_worker(prepared_path, config_path, args.local_root, output, api_key)
+        recovery_arguments = []
+        if args.previous_campaign is not None:
+            recovery_arguments = [
+                "--previous-campaign",
+                args.previous_campaign,
+                "--previous-serving-sha256",
+                args.previous_serving_sha256,
+                "--source-queue-sha256",
+                args.sources_sha256,
+            ]
+        run_trial_worker(prepared_path, config_path, args.local_root, output, api_key, recovery_arguments)
         write_json_evidence(output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0})
 
 

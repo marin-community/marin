@@ -4,6 +4,7 @@
 """Difficulty CLI receipts retain the distinction between scores and execution blockers."""
 
 import json
+import hashlib
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -27,7 +28,8 @@ from experiments.post_training.task_curation.difficulty_prepared import Prepared
 
 
 @pytest.mark.parametrize("infrastructure_first", [False, True])
-def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, infrastructure_first):
+@pytest.mark.parametrize("graded_reward", [0.0, 1.0])
+def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, infrastructure_first, graded_reward):
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
     blocker = "missing_environment_artifact: fixture/original/requirements.lock"
@@ -54,7 +56,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     ).model_dump_json())
     config = difficulty_trials.CandidateRun(
         solver=Solver.HOSTED,
-        identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="fixture-pin",
+        identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
                                 tokenizer=SOLVER_MODELS[Solver.HOSTED], tokenizer_revision="a" * 40,
                                 chat_template_sha256="f" * 64,
                                 serving_receipt={"uri": "fixture:serving", "sha256": "0" * 64}),
@@ -69,17 +71,32 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     source_path.write_text(json.dumps([source.model_dump(mode="json")]))
     config_path = tmp_path / "config.json"
     config_path.write_text(config.model_dump_json())
-    output = tmp_path / "output"
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    output = campaign / "trials"
+    serving = {
+        "protocol": "atlas-difficulty-v3", "solver": "hosted", "model": config.identity.model,
+        "tokenizer_revision": config.identity.tokenizer_revision,
+        "chat_template_sha256": config.identity.chat_template_sha256, "sampling": config.request_parameters,
+        "tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}},
+    }
+    serving_bytes = json.dumps(serving).encode()
+    (campaign / "serving.json").write_bytes(serving_bytes)
+    (campaign / "prepared.json").write_text(json.dumps({
+        "source_queue_sha256": "1" * 64, "sources": [source.model_dump(mode="json")],
+    }))
 
     @contextmanager
     def model_service(**kwargs):
         yield "https://model.fixture"
 
     physical_attempts = []
+    continuing = False
 
     async def physical_trial(configuration, authentication):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
         failed = infrastructure_first and not physical_attempts
+        reward = 1.0 if continuing else graded_reward
         physical_attempts.append(configuration.trial_name)
         directory = configuration.trials_dir / configuration.trial_name
         agent = directory / "agent"
@@ -87,17 +104,17 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         agent.mkdir(parents=True)
         verifier.mkdir()
         if not failed:
-            (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": 1.0}))
+            (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": reward}))
         (directory / "network-policy.json").write_text(json.dumps({
             "source_runtime_sha256": runtime_sha256, "actor_declared": "allow", "verifier_declared": "allow",
             "actor_required": True, "actor_effective": "allow", "verifier_effective": None if failed else "allow",
         }))
         payload = {"exception_info": {"exception_type": "RolloutInterrupted"} if failed else None,
-                   "verifier_result": None if failed else {"rewards": {"reward": 1.0}}}
+                   "verifier_result": None if failed else {"rewards": {"reward": reward}}}
         (directory / "result.json").write_text(json.dumps(payload))
         result = SimpleNamespace(finished_at=datetime.now(UTC), completion=None if failed else "completed",
                                  exception_info=SimpleNamespace(exception_type="RolloutInterrupted") if failed else None,
-                                 verifier_result=None if failed else SimpleNamespace(rewards={"reward": 1.0}),
+                                 verifier_result=None if failed else SimpleNamespace(rewards={"reward": reward}),
                                  model_dump=lambda **kwargs: payload)
         trial = SimpleNamespace(paths=SimpleNamespace(trial_dir=directory, agent_dir=agent, verifier_dir=verifier))
         return trial, result
@@ -110,9 +127,47 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
-    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("pending", 1, 1, 1)
+    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("pending", 1, int(graded_reward), 1)
     assert measurement.reason == blocker
     assert measurement.infrastructure_attempts == int(infrastructure_first)
     attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
     assert attempts["pending_reasons"] == {"blocked": blocker}
     assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(infrastructure_first)
+    if infrastructure_first:
+        aggregate = next(output.glob("*/attempts.json"))
+        aggregate.rename(aggregate.with_name("preserved-before-interruption-attempts.json"))
+
+    # A recovered environment makes the unfinished task executable. The first valid grade
+    # must survive even though this model boundary would return a different answer now.
+    continuing = True
+    available = source.model_copy(update={"tasks": [
+        source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory)}),
+    ]})
+    source_path.write_text(json.dumps([available.model_dump(mode="json")]))
+    second = tmp_path / "continuation"
+    second.mkdir()
+    (second / "prepared.json").write_text(json.dumps({
+        "source_queue_sha256": "1" * 64, "sources": [available.model_dump(mode="json")],
+    }))
+    (second / "serving.json").write_bytes(serving_bytes)
+    monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
+                                    "--output-root", str(second / "trials"), "--local-root", str(tmp_path / "continued-local"),
+                                    "--previous-campaign", str(campaign), "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
+                                    "--source-queue-sha256", "1" * 64])
+    difficulty_trials.main()
+    rows = list(ReadView(str(second / "trials" / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
+    (continued,) = [DifficultyMeasurement.model_validate(row) for row in rows]
+    assert (continued.status, continued.n, continued.solved, continued.pending_tasks) == ("measured", 2, 1 + int(graded_reward), 0)
+    assert continued.infrastructure_attempts == int(infrastructure_first)
+    assert len(physical_attempts) == 2 + int(infrastructure_first)
+    assert len(list((second / "trials").glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1
+    assert json.loads(next(output.glob("*/measurement.json")).read_text())["n"] == 1
+
+    monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
+                                    "--output-root", str(tmp_path / "third"), "--local-root", str(tmp_path / "third-local"),
+                                    "--previous-campaign", str(second), "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
+                                    "--source-queue-sha256", "1" * 64])
+    difficulty_trials.main()
+    final = DifficultyMeasurement.model_validate(json.loads(next((tmp_path / "third").glob("*/measurement.json")).read_text()))
+    assert (final.n, final.solved, final.infrastructure_attempts) == (2, 1 + int(graded_reward), int(infrastructure_first))
+    assert len(physical_attempts) == 2 + int(infrastructure_first)

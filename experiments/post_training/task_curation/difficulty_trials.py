@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import (
     MEASUREMENTS,
     PROTOCOL_ID,
@@ -45,6 +46,7 @@ from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_poli
 
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
+from experiments.post_training.task_curation.difficulty_recovery import previous_campaign, recovered_source
 from experiments.post_training.task_curation.difficulty_relay import budget_relay
 
 LOGGER = logging.getLogger(__name__)
@@ -260,10 +262,17 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--local-root", required=True, type=Path)
+    parser.add_argument("--previous-campaign")
+    parser.add_argument("--previous-serving-sha256")
+    parser.add_argument("--source-queue-sha256")
     args = parser.parse_args()
     configure_coreweave_s3()
     config = CandidateRun.model_validate_json(Path(args.config).read_text())
     sources = [PreparedSource.model_validate(row) for row in json.loads(Path(args.sources).read_text())]
+    recovery_arguments = (args.previous_campaign, args.previous_serving_sha256, args.source_queue_sha256)
+    if any(recovery_arguments) and not all(recovery_arguments):
+        raise ValueError("Continuation requires the previous campaign, serving digest and current source queue digest")
+    previous = previous_campaign(*recovery_arguments) if all(recovery_arguments) else None
     output = StoragePath(args.output_root)
     if output.exists() or args.local_root.exists():
         raise FileExistsError("Preserve previous difficulty attempts and select a new version")
@@ -285,7 +294,17 @@ def main() -> None:
             for source in sources:
                 started = time.monotonic()
                 source_key = hashlib.sha256(source.sample.source_id.encode()).hexdigest()
-                tasks = source.tasks if config.task_limit is None else source.tasks[: config.task_limit]
+                recovered = (
+                    recovered_source(
+                        previous, source, config.solver, config.identity, config.settings, config.request_parameters
+                    )
+                    if previous is not None
+                    else None
+                )
+                old_attempts = recovered.attempts if recovered is not None else []
+                scored = {attempt.task_id for attempt in old_attempts if attempt.status == "scored"}
+                selected_tasks = source.tasks if config.task_limit is None else source.tasks[: config.task_limit]
+                tasks = [task for task in selected_tasks if task.task_id not in scored]
                 futures = [
                     executor.submit(
                         run_task,
@@ -303,13 +322,15 @@ def main() -> None:
                     for future in futures:
                         future.cancel()
                     raise
-                attempts = [attempt for outcome in outcomes for attempt in outcome.attempts]
+                attempts = old_attempts + [attempt for outcome in outcomes for attempt in outcome.attempts]
                 pending_reasons = {
                     task.task_id: outcome.pending_reason
                     for task, outcome in zip(tasks, outcomes, strict=True)
                     if outcome.pending_reason is not None
                 }
-                input_tokens = output_tokens = 0
+                previous_measurement = None if recovered is None else recovered.measurement
+                input_tokens = 0 if previous_measurement is None else previous_measurement.input_tokens
+                output_tokens = 0 if previous_measurement is None else previous_measurement.output_tokens
                 request_root = args.local_root / "model-requests"
                 archive = args.local_root / source_key / "model-requests.tar.gz"
                 archive.parent.mkdir(parents=True, exist_ok=True)
@@ -328,6 +349,9 @@ def main() -> None:
                                 input_tokens += usage.get("prompt_tokens", 0)
                                 output_tokens += usage.get("completion_tokens", 0)
                 copy(str(archive), str(output / source_key / "model-requests.tar.gz"), no_clobber=True)
+                attempt_receipts = [] if recovered is None else list(recovered.attempt_receipts)
+                for path in sorted((output / source_key / "attempts" / "*" / "*" / "attempt.json").glob(), key=str):
+                    attempt_receipts.append(ContentEvidenceReference(uri=str(path), sha256=file_sha256(path)))
                 receipt = write_json_evidence(
                     output / source_key / "attempts.json",
                     {
@@ -336,9 +360,12 @@ def main() -> None:
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
                         "gpu_hour_basis": (
-                            "allocated GPUs during this source's trial window; startup/teardown reported separately"
+                            "sum of recorded source trial windows; "
+                            "startup, teardown and interrupted source windows excluded"
                         ),
                         "model_requests": str(output / source_key / "model-requests.tar.gz"),
+                        "attempt_receipts": [ref.model_dump(mode="json") for ref in attempt_receipts],
+                        "previous_campaign": None if previous is None else str(previous.root),
                     },
                 )
                 payload = dict(
@@ -361,13 +388,16 @@ def main() -> None:
                     infrastructure_attempts=0,
                     pending_tasks=len(source.sample.tasks),
                     attempts_receipt=receipt,
-                    gpu_hours=config.gpu_count * (time.monotonic() - started) / 3600,
+                    gpu_hours=(
+                        config.gpu_count * (time.monotonic() - started) / 3600
+                        + (0 if previous_measurement is None else previous_measurement.gpu_hours)
+                    ),
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                 )
                 measurement = measurement_from_attempts(DifficultyMeasurement(**payload), attempts)
                 blocked = sorted({task.reason for task in tasks if task.reason is not None})
-                if tasks and all(task.reason is not None for task in tasks):
+                if not scored and tasks and all(task.reason is not None for task in tasks):
                     measurement = DifficultyMeasurement.model_validate(
                         {
                             **measurement.model_dump(mode="json"),
