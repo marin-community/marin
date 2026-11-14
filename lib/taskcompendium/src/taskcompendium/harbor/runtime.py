@@ -3,16 +3,22 @@
 
 """Bind original deployment choices to an unchanged Harbor TaskSpec packet."""
 
+import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shellbox.machine import NetworkPolicy
 
+from taskcompendium.harbor.adapter import declared_execution_limits, source_task_configurations
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
+from taskcompendium.runtime.resources import resource_bytes
 
 SOURCE_RUNTIME_FILE = "source-runtime.json"
+RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb")
+MachineRole = Literal["task_machine", "verifier_machine"]
+MACHINE_ROLES: tuple[MachineRole, ...] = ("task_machine", "verifier_machine")
 
 
 class TaskSpecRuntimeBinding(BaseModel):
@@ -27,17 +33,57 @@ class TaskSpecRuntimeBinding(BaseModel):
         if canonical_sha256(self.runtime) != self.runtime_sha256:
             raise ValueError("Source runtime differs from its declared hash")
         for role, machine in self.runtime.items():
-            if isinstance(machine, dict) and "network" in machine and role not in {"task_machine", "verifier_machine"}:
+            if (
+                isinstance(machine, dict)
+                and {"network", *RESOURCE_FIELDS}.intersection(machine)
+                and role not in MACHINE_ROLES
+            ):
                 raise ValueError(f"Unsupported source runtime machine role: {role}")
         self.network("task_machine")
         self.network("verifier_machine")
+        self.resource_limits("task_machine")
+        self.resource_limits("verifier_machine")
         return self
 
     def require_task(self, task: TaskSpec) -> None:
         if self.task_sha256 != canonical_sha256(task.model_dump(mode="json")):
             raise ValueError("Source runtime belongs to another TaskSpec")
+        declared = declared_execution_limits(task)
+        verifier: dict[str, int | float] = {}
+        for resource in source_task_configurations(task):
+            configuration = tomllib.loads(resource_bytes(resource).decode())
+            environment = (configuration.get("verifier") or {}).get("environment") or {}
+            for name in RESOURCE_FIELDS:
+                value = environment.get(name)
+                if value is None:
+                    continue
+                if name in verifier and verifier[name] != value:
+                    raise ValueError(f"Conflicting original verifier {name} declarations")
+                verifier[name] = value
+        for role in MACHINE_ROLES:
+            original = declared if role == "task_machine" else verifier
+            for name, value in self.resource_limits(role).items():
+                if name in original and original[name] != value:
+                    raise ValueError(f"Source runtime {role}.{name} conflicts with its original declaration")
 
-    def network(self, role: Literal["task_machine", "verifier_machine"]) -> NetworkPolicy | None:
+    def resource_limits(self, role: MachineRole) -> dict[str, int]:
+        """Return only explicitly declared allocation fields, preserving missing dimensions."""
+        machine = self.runtime.get(role)
+        if machine is None:
+            return {}
+        if not isinstance(machine, dict):
+            raise ValueError(f"Source runtime machine must be an object: {role}")
+        limits = {}
+        for name in RESOURCE_FIELDS:
+            value = machine.get(name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"Source runtime {role}.{name} must be a positive integer")
+            limits[name] = value
+        return limits
+
+    def network(self, role: MachineRole) -> NetworkPolicy | None:
         machine = self.runtime.get(role)
         if machine is None:
             return None
@@ -66,6 +112,7 @@ def write_source_runtime(task: TaskSpec, runtime: dict, directory: Path) -> None
         runtime_sha256=canonical_sha256(runtime),
         runtime=runtime,
     )
+    binding.require_task(task)
     with (directory / SOURCE_RUNTIME_FILE).open("x") as stream:
         stream.write(binding.model_dump_json(indent=2) + "\n")
 

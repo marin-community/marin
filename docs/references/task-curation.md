@@ -1807,9 +1807,13 @@ uv run python -m experiments.post_training.task_curation.task_spec_harbor \
 ~~~
 
 This writes an unchanged private `task-spec.json` payload and the task map.
-Rows with a runtime envelope also write `source-runtime.json`, preserving its
-original JSON values and binding their canonical hash before checksums
-are measured. Trial honors the declared actor and verifier network policies
+Rows with a `runtime` field also write `source-runtime.json`, preserving its
+original JSON values and recording their canonical hash in that file before
+packet checksums are measured. CPU, RAM and disk declared under `task_machine` and
+`verifier_machine` are allocated independently. Absent or null dimensions keep
+that role's current trial budgets; actor allocations do not fill missing
+verifier dimensions. Non-integer or contradictory source budgets are rejected
+before allocation. Trial honors the declared actor and verifier network policies
 independently; an actor-less oracle uses the verifier policy of its original
 grader environment. `network-policy.json` records the declared and effective
 policies with the source runtime hash. Missing roles remain undeclared. The
