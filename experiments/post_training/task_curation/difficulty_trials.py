@@ -35,6 +35,7 @@ from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfi
 from harbor.trial.trial import Trial
 from harbor.utils.artifact_writer import get_artifact_writer
 from harbor_config.errors import ErrorCategory, error_category
+from pydantic import ValidationError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
@@ -61,6 +62,7 @@ INPUT_BUDGET_REASON = (
 )
 PROVIDER_WAIT_REASON = "Awaiting shared model provider capacity; provider waits are excluded from task attempts."
 MISSING_PREPARED_IMAGE_REASON = "missing_environment_artifact:prepared_image"
+UNSUPPORTED_COMPOSE_DOCUMENT_REASON = "unsupported_compose_document"
 
 
 @dataclass(frozen=True)
@@ -236,23 +238,37 @@ def run_task(
         )
 
         # Framework exceptions propagate and stop dispatch; they are never fabricated as solver zeros.
+        construction_reason = None
         try:
             trial, result = asyncio.run(execute_trial(configuration, authentication))
         except MissingPreparedImageError as error:
-            pending_reason = MISSING_PREPARED_IMAGE_REASON
+            construction_reason = MISSING_PREPARED_IMAGE_REASON
+            exception_type = type(error).__name__
+            message = str(error)
+        except ValidationError as error:
+            # Only a task's own compose document is a task-input condition; our own
+            # configuration validation errors are code bugs and must propagate.
+            if error.title not in {"ComposeDocument", "ComposeService"}:
+                raise
+            construction_reason = UNSUPPORTED_COMPOSE_DOCUMENT_REASON
+            exception_type = type(error).__name__
+            message = (
+                f"compose document declares keys Harbor's translator does not support: {error.error_count()} errors"
+            )
+        if construction_reason is not None:
             write_json_evidence(
                 destination / f"{number:02d}" / "construction-error.json",
                 {
                     "task_id": task.task_id,
                     "runtime_sha256": task.runtime_sha256,
                     "backend": task.backend,
-                    "exception_type": type(error).__name__,
-                    "reason": pending_reason,
-                    "message": str(error),
+                    "exception_type": exception_type,
+                    "reason": construction_reason,
+                    "message": message,
                 },
             )
             attempts.append(DifficultyAttempt(task_id=task.task_id, status="pending", reward=None))
-            return TaskOutcome(attempts, pending_reason)
+            return TaskOutcome(attempts, construction_reason)
         get_artifact_writer().flush(timeout=300)
         archive = local / "trial-artifacts.tar.gz"
         with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
@@ -547,7 +563,7 @@ def main() -> None:
                 blocked_tasks.update(
                     task.task_id
                     for task, outcome in zip(tasks, outcomes, strict=True)
-                    if outcome.pending_reason == MISSING_PREPARED_IMAGE_REASON
+                    if outcome.pending_reason in {MISSING_PREPARED_IMAGE_REASON, UNSUPPORTED_COMPOSE_DOCUMENT_REASON}
                 )
                 blocked = sorted({pending_reasons[task_id] for task_id in blocked_tasks})
                 if not scored and tasks and len(blocked_tasks) == len(tasks):

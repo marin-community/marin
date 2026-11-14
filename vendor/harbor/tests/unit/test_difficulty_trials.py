@@ -6,13 +6,16 @@
 import json
 import hashlib
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import httpx
 import pytest
+import yaml
 from finestore.reader import ReadView
+from harbor.environments.docker_translate import ComposeDocument
 from harbor.llms.openai_llm import OpenAILLM
 from harbor.utils.logger import logger as harbor_logger
 from harbor.llms.vllm_tokenization import completion_budget_from_count, tokenize_url
@@ -46,10 +49,11 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
     (1.0, "input_tokenize", "native", 0, False),
     (0.0, "missing_image", "native", 0, False),
     (0.0, "missing_images", "native", 0, False),
+    (0.0, "compose_unsupported", "native", 0, False),
 ])
 def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure, graded_reward, workload, legacy_buffer, with_judge):
     infrastructure_first = upstream_failure not in {
-        None, "missing_image", "missing_images", "actor_recovered", "judge_recovered",
+        None, "missing_image", "missing_images", "compose_unsupported", "actor_recovered", "judge_recovered",
     }
     unserved = upstream_failure == "input_tokenize"
     provider_wait = upstream_failure in {"json", "html"}
@@ -85,6 +89,25 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         source = source.model_copy(update={"tasks": [
             source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory),
                                                "workload": "native" if upstream_failure == "missing_images" else "task_spec"}),
+        ]})
+    if upstream_failure == "compose_unsupported":
+        (directory / "task.toml").write_text('[environment]\ndocker_image = "example.test/native@sha256:' + "a" * 64 + '"\nworkdir = "/app"\n')
+        (directory / "instruction.md").write_text("Original native task")
+        (directory / "tests").mkdir()
+        (directory / "tests/test.sh").write_text("exit 0\n")
+        (directory / "docker-compose.yml").write_text(
+            "services:\n"
+            "  main:\n"
+            "    image: example.test/native@sha256:" + "a" * 64 + "\n"
+            "    platform: linux/amd64\n"
+            "    cpus: 0.1\n"
+            "    mem_limit: 128m\n"
+        )
+        (directory / "shellbox-images.json").write_text(json.dumps(
+            {"main": {"image": "example.test/native@sha256:" + "a" * 64, "workdir": "/app"}}))
+        source = source.model_copy(update={"tasks": [
+            source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory),
+                                                               "workload": "native"}),
         ]})
     config = CandidateRun(
         solver=Solver.HOSTED,
@@ -163,6 +186,11 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
         if upstream_failure in {"missing_image", "missing_images"} and configuration.agent.name == "terminus-2":
             return await original_execute_trial(configuration, authentication)
+        if upstream_failure == "compose_unsupported" and configuration.agent.name == "terminus-2":
+            # The local backend cannot reach compose validation off Linux; raise the
+            # genuine translator error the prepared sandbox would raise at construction.
+            compose_content = yaml.safe_load((Path(configuration.task.path) / "docker-compose.yml").read_text())
+            ComposeDocument.model_validate(compose_content)
         if configuration.agent.name == "terminus-2":
             llm = OpenAILLM(model_name="openai/fixture", api_key="fixture",
                            api_base=configuration.agent.kwargs["api_base"],
@@ -233,27 +261,38 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
-    if upstream_failure in {"missing_image", "missing_images"}:
+    if upstream_failure in {"missing_image", "missing_images", "compose_unsupported"}:
         all_missing = upstream_failure == "missing_images"
+        compose_unsupported = upstream_failure == "compose_unsupported"
         assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
-            ("not_measured", 0, 0, 2) if all_missing else ("pending", 1, 0, 1))
-        assert measurement.reason == difficulty_trials.MISSING_PREPARED_IMAGE_REASON
+            ("not_measured", 0, 0, 2) if all_missing or compose_unsupported else ("pending", 1, 0, 1))
+        expected_reason = (
+            difficulty_trials.UNSUPPORTED_COMPOSE_DOCUMENT_REASON if compose_unsupported
+            else difficulty_trials.MISSING_PREPARED_IMAGE_REASON
+        )
+        assert measurement.reason == expected_reason
         assert measurement.infrastructure_attempts == 0
         evidence = json.loads(next(output.glob("*/attempts/*/*/construction-error.json")).read_text())
         assert evidence["runtime_sha256"] == runtime_sha256
-        assert evidence["exception_type"] == "MissingPreparedImageError"
-        assert evidence["reason"] == difficulty_trials.MISSING_PREPARED_IMAGE_REASON
-        assert "@sha256" in evidence["message"]
+        assert evidence["exception_type"] == ("ValidationError" if compose_unsupported else "MissingPreparedImageError")
+        assert evidence["reason"] == expected_reason
+        if compose_unsupported:
+            assert evidence["message"].startswith("compose document declares keys")
+        else:
+            assert "@sha256" in evidence["message"]
         ledger = json.loads(next(output.glob("*/attempts.json")).read_text())
         assert [(attempt["task_id"], attempt["status"], attempt["reward"]) for attempt in ledger["attempts"]] == [
-            ("scored", "pending", None), ("blocked", "pending" if all_missing else "scored", None if all_missing else 0.0),
+            ("scored", "pending", None), ("blocked", "pending" if all_missing or compose_unsupported else "scored",
+                                          None if all_missing or compose_unsupported else 0.0),
         ]
         assert not candidate_requests
-        assert len(physical_attempts) == (0 if all_missing else 1)
-        failed_log = next((tmp_path / "local").rglob("trial.log"))
-        size = failed_log.stat().st_size
-        harbor_logger.getChild("harbor.trial.trial.candidate").warning("Later candidate log after construction failure")
-        assert failed_log.stat().st_size == size
+        assert len(physical_attempts) == (0 if all_missing or compose_unsupported else 1)
+        if not compose_unsupported:
+            # The real construction path still creates the trial log before failing.
+            failed_log = next((tmp_path / "local").rglob("trial.log"))
+            size = failed_log.stat().st_size
+            harbor_logger.getChild("harbor.trial.trial.candidate").warning("Later candidate log after construction failure")
+            assert failed_log.stat().st_size == size
         return
     assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
         "pending", 0 if unserved or provider_wait else 1, 0 if unserved or provider_wait else int(graded_reward), 2 if unserved or provider_wait else 1)
