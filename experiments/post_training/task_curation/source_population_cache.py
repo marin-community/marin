@@ -80,14 +80,20 @@ def cache_population(
     source_bucket: str,
 ) -> Path:
     """Verify input bytes before extracting complete task content into a local cache."""
+    prepared = locations.prepared.get(source_id)
     cache_key = canonical_sha256(
-        {"source": source_id, "inputs": fingerprint.inputs, "text_version": "complete-context-v1"}
+        {
+            "source": source_id,
+            "inputs": fingerprint.inputs,
+            "task_count": fingerprint.task_count,
+            "prepared_sha256": prepared.sha256 if prepared else None,
+            "text_version": "complete-context-v1",
+        }
     )
     path = cache_dir / f"{cache_key}.parquet"
     if path.exists():
         return path
     configure_coreweave_s3()
-    prepared = locations.prepared.get(source_id)
     if prepared is not None:
         if (
             prepared.inputs_sha256 != canonical_sha256(fingerprint.inputs)
@@ -99,9 +105,11 @@ def cache_population(
         payload = StoragePath(prepared.uri).read_bytes()
         if hashlib.sha256(payload).hexdigest() != prepared.sha256:
             raise ValueError(f"Prepared population digest differs: {source_id}")
-        path.write_bytes(payload)
-        if pq.ParquetFile(path).metadata.num_rows != fingerprint.task_count:
+        pending = path.with_suffix(".pending")
+        pending.write_bytes(payload)
+        if pq.ParquetFile(pending).metadata.num_rows != fingerprint.task_count:
             raise ValueError(f"Prepared population count differs: {source_id}")
+        pending.rename(path)
         return path
     schema = pa.schema(
         [

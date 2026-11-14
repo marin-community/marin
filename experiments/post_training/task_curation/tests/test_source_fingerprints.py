@@ -3,7 +3,9 @@
 
 """Source identity ignores row order and keeps overlap flags advisory."""
 
+import hashlib
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import fsspec
@@ -39,6 +41,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
 )
 from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
+    PreparedPopulation,
     cache_population,
     read_population,
 )
@@ -394,3 +397,27 @@ def test_content_matching_preserves_completion_and_tool_state(state_kind):
     )
     assert review.verdict.label is DuplicateLabel.DISTINCT
     assert review.measurement.left_to_right.fraction == 0
+
+
+def test_failed_prepared_population_is_rejected_again_on_retry(tmp_path, monkeypatch):
+    documents = [task_document(str(index), f"Compute the square of {index}.") for index in range(2)]
+    fingerprint = fingerprint_source(documents, {"opaque": "original-input-digest"})
+    prepared = tmp_path / "wrong-count.parquet"
+    pq.write_table(pa.Table.from_pylist([asdict(next(iter(content_rows(documents))))]), prepared)
+    payload = prepared.read_bytes()
+    locations = PopulationLocations(
+        prepared={
+            "fixture": PreparedPopulation(
+                uri="s3://marin-us-east-02a/fixture/prepared.parquet",
+                sha256=hashlib.sha256(payload).hexdigest(),
+                inputs_sha256=canonical_sha256(fingerprint.inputs),
+                task_count=2,
+            )
+        }
+    )
+    monkeypatch.setattr(StoragePath, "read_bytes", lambda path: payload)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    for _ in range(2):
+        with pytest.raises(ValueError, match="Prepared population count differs"):
+            cache_population("fixture", fingerprint, cache, locations, {}, source_bucket="marin-us-east-02a")
