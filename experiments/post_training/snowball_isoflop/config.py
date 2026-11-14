@@ -220,7 +220,9 @@ def tracking_name(cell_name: str) -> str:
     return f"{truncate_wandb_run_name(cell_name)}-{digest}"
 
 
-def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE) -> SFTSpec:
+def build_spec(
+    cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE, resume_checkpoint: str | None = None
+) -> SFTSpec:
     if runtime == RuntimePolicy.LOSS_CURVE:
         runtime = LOSS_CURVE_RUNTIME[cell.size]
     synchronous = runtime in (RuntimePolicy.SYNCHRONOUS, RuntimePolicy.SYNCHRONOUS_COLLECTIVES)
@@ -262,8 +264,8 @@ def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE)
         # at a time on this single-node CP mesh.
         per_device_eval_parallelism=1,
         max_eval_batches=8,
-        load_checkpoint=None,
-        load_checkpoint_path=None,
+        load_checkpoint=True if resume_checkpoint is not None else None,
+        load_checkpoint_path=[resume_checkpoint] if resume_checkpoint is not None else None,
         initialize_from=None,
         require_accelerator=True,
     )
@@ -339,9 +341,13 @@ def resources(host_memory: str = BASE_HOST_MEMORY) -> ResourceConfig:
 
 
 def build_pod(
-    cell: Cell, output_prefix: str = PREFIX, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE
+    cell: Cell,
+    output_prefix: str = PREFIX,
+    *,
+    runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE,
+    resume_checkpoint: str | None = None,
 ) -> TrainLmOnPodConfig:
-    spec = build_spec(cell, runtime=runtime)
+    spec = build_spec(cell, runtime=runtime, resume_checkpoint=resume_checkpoint)
     output = f"{output_prefix}/{VERSION}/{cell.name}"
     pod = spec.model.build_train_config(
         StepContext.for_run(output, output_prefix), spec, spec.prepared_data, resources(cell.host_memory), cell.stop_step
