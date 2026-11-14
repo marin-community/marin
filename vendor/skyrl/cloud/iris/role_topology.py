@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
-from skyrlrecipe.locality import LocalityPlan, RoleTopologyMode, plan_locality_groups
+from skyrlrecipe.locality import LocalityPlan, RoleTopologyMode, plan_nvlink_roles
 
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, SkyRLRolePlan
 
@@ -39,27 +39,31 @@ def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> Role
     if not is_rack_based(variant) or width != NVL72_GPUS_PER_NODE:
         raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
 
-    exporting = config["run"]["mode"] == "checkpoint_export"
     policy = plan.claim("policy")
     roles = ["policy"]
-    requirements = [policy.num_nodes * policy.gpus_per_node]
+    shared_reference = True
     for claim in plan.claims:
         if claim.execution is RoleExecution.REMOTE or claim.kind in (ModelRoleKind.POLICY, ModelRoleKind.ROLLOUT):
             continue
-        if claim.kind is not ModelRoleKind.REFERENCE or claim.colocation_group != policy.colocation_group:
+        if claim.kind is not ModelRoleKind.REFERENCE:
             raise ValueError("NVLink role placement supports only policy, a shared reference, and local inference engines")
-    if not exporting:
-        rollout = plan.claim("rollout")
-        if plan.colocate_all or rollout.execution is not RoleExecution.LOCAL:
+        shared_reference = claim.colocation_group == policy.colocation_group
+    rollout = next((claim for claim in plan.claims if claim.kind is ModelRoleKind.ROLLOUT), None)
+    if rollout is not None:
+        if rollout.execution is not RoleExecution.LOCAL:
             raise ValueError("NVLink role placement requires separate policy and local inference GPUs")
-        if (
-            rollout.backend != "vllm"
-            or rollout.tensor_parallel_size != 1
-            or rollout.pipeline_parallel_size != 1
-            or rollout.expert_parallel_size != rollout.data_parallel_size
-        ):
-            raise ValueError("NVLink role placement requires vLLM TP1/PP1 EP=DP inference engines")
         roles.extend(f"inference_{index}" for index in range(rollout.replicas))
-        requirements.extend([rollout.data_parallel_size] * rollout.replicas)
-    locality = plan_locality_groups(requirements, gpus_per_node=width, max_nodes_per_domain=SCHEDULABLE_RACK_NODES)
+    locality = plan_nvlink_roles(
+        policy_gpus=policy.num_nodes * policy.gpus_per_node,
+        num_inference_engines=rollout.replicas if rollout is not None else 0,
+        tensor_parallel_size=rollout.tensor_parallel_size if rollout is not None else 1,
+        pipeline_parallel_size=rollout.pipeline_parallel_size if rollout is not None else 1,
+        data_parallel_size=rollout.data_parallel_size if rollout is not None else 1,
+        expert_parallel_size=rollout.expert_parallel_size if rollout is not None else 1,
+        inference_backend=rollout.backend if rollout is not None else "",
+        colocate_all=plan.colocate_all,
+        colocate_policy_ref=shared_reference,
+        gpus_per_node=width,
+        max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
+    )
     return RoleTopology(tuple(roles), locality)

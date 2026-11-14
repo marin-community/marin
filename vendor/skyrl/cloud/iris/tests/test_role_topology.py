@@ -60,6 +60,22 @@ def test_single_domain_mode_rejects_a_trainer_that_needs_multiple_racks(tmp_path
         load_launch_config(path)
 
 
+@pytest.mark.parametrize("mode", ["preference_pair", "checkpoint_export"])
+def test_policy_only_launch_keeps_trainer_local_without_inference(tmp_path, mode):
+    path = launch_config(tmp_path, nodes=8, policy_nodes=8, engines=1)
+    raw = yaml.safe_load(path.read_text())
+    if mode == "preference_pair":
+        raw["skyrl"]["trainer"]["placement"]["ref_num_nodes"] = 8
+        raw["skyrl"]["environment"] = {"env_class": "preference_pair"}
+        raw["skyrl"]["trainer"]["evaluation_runner"] = "training"
+        raw["skyrl"]["trainer"]["algorithm"].update(policy_loss_type="dpo", loss_reduction="pair_mean")
+    else:
+        raw["run"]["mode"] = mode
+    topology = derive_launch_topology(raw).role_topology
+    assert topology.roles == ("policy",)
+    assert topology.locality.group_sizes == (8,)
+
+
 @pytest.mark.slow
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("locality,dp", [(True, 1), (False, 1), (True, 8)])

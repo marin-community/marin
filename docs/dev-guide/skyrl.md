@@ -124,15 +124,17 @@ option does not establish exact batch invariance; see the
 On NVL72, set `IrisSkyRLExecution.role_topology` to
 `RoleTopologyMode.NVLINK_DOMAIN` (from `skyrlrecipe.locality`), or use
 `iris.role_topology: nvlink.domain` in a launch document, to keep the trainer
-within one rack and each vLLM engine within one rack. A rack is one NVLink
-domain with 64 schedulable GPUs; each trainer or engine must fit. Groups may
-share a rack when capacity permits. This mode uses separate trainer and
-inference GPUs, with tensor and pipeline parallelism of one (TP=PP=1) and
-expert parallelism equal to data parallelism (EP=DP); a reference model may
-share trainer GPUs. For example, a 32-GPU trainer and a 64-GPU engine request 24 four-GPU
-hosts in groups of eight and sixteen. Iris admits the job together; Ray
-confines each role to its group. This requires an Iris controller with
-`CoschedulingConfig.group_sizes`. Explicit groups lose the default preference
+within one rack and each vLLM engine within one rack. Each group may use at
+most 16 four-GPU hosts (64 GPUs) in one rack. Each trainer or engine must fit
+within that limit. Groups may share a rack when capacity permits. This mode
+uses separate trainer and inference GPUs. Inference requires tensor and pipeline
+parallelism of one (TP=PP=1), with expert parallelism equal to data parallelism
+(EP=DP). A reference model may share trainer GPUs.
+For example, a 32-GPU trainer and a 64-GPU engine request 24 four-GPU
+hosts in groups of eight and sixteen. Marin rounds each group up to whole hosts.
+Iris admits the job together; Ray confines each role to its group. Deploy an Iris
+controller with [grouped coscheduling](https://github.com/marin-community/marin/pull/11449)
+before enabling this mode. Explicit groups lose the default preference
 for nearby racks on InfiniBand. Cross-rack transport between trainer and
 inference still needs validation. Omitting the option keeps existing placement.
 
