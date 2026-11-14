@@ -166,7 +166,13 @@ def initialize(reference_path: Path, bundle_path: Path) -> None:
             path = PurePosixPath(member.name)
             if path.is_absolute() or ".." in path.parts or member.isdev() or member.isfifo():
                 raise ValueError(f"Unsafe frozen reference member: {member.name}")
-        archive.extractall(root, filter="data")
+            if member.issym() or member.islnk():
+                target = PurePosixPath(member.linkname)
+                if target.is_absolute() or ".." in target.parts:
+                    raise ValueError(f"Unsafe frozen reference link: {member.name}")
+        # The guest control interpreter may predate tarfile extraction filters;
+        # membership is fully validated above, so plain extraction is safe.
+        archive.extractall(root)
     if json.loads((root / "contract.json").read_text()) != contract:
         raise ValueError("Installed frozen reference differs from its declared contract")
     if hashlib.sha256(Path(contract["harness"]).read_bytes()).hexdigest() != contract["harness_sha256"]:
@@ -199,3 +205,7 @@ def initialize(reference_path: Path, bundle_path: Path) -> None:
             path.chmod(0o750 if path.is_dir() or os.access(path, os.X_OK) else 0o640)
     reference_path.unlink()
     bundle_path.unlink()
+
+
+if __name__ == "__main__":
+    initialize(Path(sys.argv[1]), Path(sys.argv[2]))

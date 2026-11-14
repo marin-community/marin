@@ -198,7 +198,7 @@ def harden_shared_swe_reference(
     if any(name in files for name in (REFERENCE_INPUT, REFERENCE_BUNDLE, REFERENCE_INITIALIZER)):
         raise ValueError("Source package occupies protected reference resources")
     config = tomlkit.parse(files["task.toml"].decode())
-    environment = cast(Table, config["environment"])
+    environment = cast(Table, config.setdefault("environment", tomlkit.table()))
     if environment.get("setup") is not None:
         raise ValueError("Reference mode cannot reorder an existing source initialization command")
     source_environment = dict(environment.get("env", {}))
