@@ -15,6 +15,7 @@ from skyrl_gym.task_sessions import AnswerTaskSession
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris import training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
+from cloud.iris.role_plan import derive_num_nodes, derive_role_plan
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
     compose_skyrl_config,
@@ -58,6 +59,92 @@ def test_generation_rejects_starting_checkpoint(tmp_path: Path, entrypoint: str)
 
     with pytest.raises(ValueError, match="starting_checkpoint"):
         load_launch_config(path)
+
+
+@pytest.mark.parametrize(
+    ("trainer_gpus", "rollout_gpus", "expected_nodes"),
+    [
+        (32, 16, 12),
+        (32, 32, 16),
+        (32, 64, 24),
+        (48, 16, 16),
+        (48, 32, 20),
+        (48, 64, 28),
+        (64, 16, 20),
+        (64, 32, 24),
+        (64, 64, 32),
+        (48, 12, 15),
+        (72, 16, 22),
+    ],
+)
+def test_cross_host_ep_launch_derives_whole_node_claims(tmp_path, trainer_gpus, rollout_gpus, expected_nodes):
+    raw = raw_launch_config()
+    raw["iris"]["allocation"].update(num_nodes=expected_nodes, gpus_per_node=4)
+    raw["skyrl"]["trainer"]["placement"].update(
+        colocate_all=False,
+        policy_num_nodes=trainer_gpus // 4,
+        policy_num_gpus_per_node=4,
+    )
+    raw["skyrl"]["trainer"]["policy"] = {
+        "megatron_config": {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 4,
+            "expert_model_parallel_size": 4,
+            "expert_tensor_parallel_size": 1,
+        }
+    }
+    raw["skyrl"]["generator"].update(
+        num_inference_engines=1,
+        inference_engine_data_parallel_size=rollout_gpus,
+        inference_engine_expert_parallel_size=rollout_gpus,
+    )
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    config = load_launch_config(path)
+    plan = derive_role_plan(OmegaConf.to_container(config.skyrl, resolve=True))
+    rollout = plan.claim("rollout")
+    policy = plan.claim("policy")
+
+    assert derive_num_nodes(plan) == expected_nodes
+    assert policy.num_nodes * policy.gpus_per_node == trainer_gpus
+    assert rollout.num_nodes * rollout.gpus_per_node == rollout_gpus
+    assert {bundle.name: bundle.num_nodes for bundle in plan.bundles} == {
+        "policy": trainer_gpus // 4,
+        "rollout": rollout_gpus // 4,
+    }
+
+
+@pytest.mark.parametrize(
+    ("gpus_per_node", "engines", "dp", "rollout_nodes"),
+    [(4, 4, 3, 4), (8, 5, 3, 3), (4, 3, 10, 8), (8, 2, 12, 3)],
+)
+def test_rollout_pool_respects_host_local_engines_and_cross_host_workers(gpus_per_node, engines, dp, rollout_nodes):
+    config = raw_launch_config()["skyrl"]
+    config["trainer"]["placement"].update(colocate_all=False, policy_num_gpus_per_node=gpus_per_node)
+    config["generator"].update(
+        num_inference_engines=engines,
+        inference_engine_data_parallel_size=dp,
+        inference_engine_expert_parallel_size=dp,
+    )
+    plan = derive_role_plan(config)
+    assert plan.claim("rollout").num_nodes == rollout_nodes
+    assert derive_num_nodes(plan) == 1 + rollout_nodes
+
+
+@pytest.mark.parametrize(("tp", "pp", "dp", "ep"), [(2, 1, 4, 4), (1, 2, 4, 4), (1, 1, 8, 4)])
+def test_unsupported_cross_host_layouts_still_require_one_node(tp, pp, dp, ep):
+    config = raw_launch_config()["skyrl"]
+    config["trainer"]["placement"].update(colocate_all=False, policy_num_gpus_per_node=4)
+    config["generator"].update(
+        num_inference_engines=1,
+        inference_engine_tensor_parallel_size=tp,
+        inference_engine_pipeline_parallel_size=pp,
+        inference_engine_data_parallel_size=dp,
+        inference_engine_expert_parallel_size=ep,
+    )
+    with pytest.raises(ValueError, match="each ray-backed rollout engine requires"):
+        derive_role_plan(config)
 
 
 def test_training_channels_require_compatible_weight_transport() -> None:

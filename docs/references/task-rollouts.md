@@ -75,7 +75,8 @@ each canonical `TaskSpec` into a `TaskRolloutSpec` when it loads the data, using
 harness selection and verifier machines. A task whose context ends in an assistant
 message runs under the assistant-prefix harness. The `structure-closure` tasks of the
 curation [task-selection artifact](task-curation.md#final-task-selection) end this way.
-Other tasks run under `default_harness`, which is Shellbox.
+Other tasks use `harness_by_dataset[task.source.dataset]` when configured, or
+`default_harness`, which defaults to Shellbox.
 Image graders use the configured image verifier backend; package
 graders use the configured local verifier. The inventory artifact contains the
 task and private grader, so changing rollout resources or deadlines does not
@@ -176,6 +177,13 @@ and token limits:
 - `record(*, observations=(), data=None, metrics=None)` adds to the step of the last turn, between model
   requests: final observations that the model never receives, the harness's data, and metrics. A turn with
   recorded observations takes no `reply`.
+
+Harnesses declare `context_recovery`: `NEVER` stops or fails the attempt using the original error, `ALWAYS`
+permits recovery, and `AFTER_TURN` permits it after a completed model turn anywhere in the attempt.
+Model adapters report context refusals by raising `ContextRejected(original_error, message)`; when recovery
+is permitted, the session raises `ContextWindowExceeded` without recording the refused request, spending a
+model turn or resetting cumulative limits or attempt deadlines. SkyRL's native agent harness uses `ALWAYS`,
+and full Harbor trials use `AFTER_TURN`.
 
 The session applies these rules:
 
