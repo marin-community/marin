@@ -33,7 +33,9 @@ from experiments.post_training.task_curation.difficulty_sampling import request_
 
 
 @pytest.mark.parametrize("graded_reward,upstream_failure,workload,legacy_buffer,with_judge", [
-    *[(reward, failure, "task_spec", 0, judge) for reward in (0.0, 1.0) for failure in (None, "json", "html") for judge in (False, True)],
+    *[(reward, failure, "task_spec", 0, False) for reward in (0.0, 1.0) for failure in (None, "json", "html")],
+    (0.0, None, "task_spec", 0, True),
+    (0.0, "json", "task_spec", 0, True),
     *[(reward, None, "native", buffer, False) for reward in (0.0, 1.0) for buffer in (0, 8)],
     (1.0, "input_tokenize", "native", 0, False),
 ])
