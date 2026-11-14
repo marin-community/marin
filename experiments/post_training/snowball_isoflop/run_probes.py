@@ -22,6 +22,7 @@ from experiments.post_training.snowball_isoflop.config import (
 )
 from experiments.post_training.snowball_isoflop.measurements import read_json, training_history, warm_measurement
 from experiments.post_training.snowball_isoflop.probes import (
+    Layout,
     Probe,
     at_budget,
     batch_probes,
@@ -169,12 +170,42 @@ def saturation_search(size: int, candidates: tuple[Probe, ...]) -> dict:
     }
 
 
-def layout_throughput(size: int) -> dict:
+def layout_throughput(size: int, layout_overrides: dict[int, tuple[Layout, ...]] | None = None) -> dict:
+    """Run the layout comparison at the B-selected batch for one model size.
+
+    ``layout_overrides`` supplies the candidate layouts for sizes whose default
+    candidates cannot run: the CP4/data2 sonic baseline and every sonic layout
+    stall on d1024 under SOURCE runtime, and d512/d768 stall at CP4/data2. The
+    first candidate is the comparison baseline and must complete; a size with
+    fewer than three valid candidates produces a degenerate finalist set
+    (baseline plus the valid alternatives), recorded explicitly in the result.
+    """
     batch_report = read_json(f"{PREFIX}/{VERSION}/manager-B/completed-{size}.json")["result"]
     if batch_report["selected"] is None:
         raise ValueError(f"B did not select a safe batch for d{size}")
     batch = draccus.decode(Probe, batch_report["selected"])
-    reports = [run_probe(probe) for probe in layout_probes(batch)]
+    if layout_overrides is None:
+        layouts = layout_probes(batch)
+    else:
+        candidates = []
+        for layout in layout_overrides[size]:
+            shards = layout.batch_shards * batch.microbatch
+            if batch.batch_size % shards:
+                raise ValueError(
+                    f"The B-selected batch {batch.batch_size} does not divide layout {layout.label} at microbatch {batch.microbatch}"
+                )
+            candidates.append(
+                Probe(
+                    "C-throughput",
+                    batch.size,
+                    batch.microbatch,
+                    batch.batch_size // shards,
+                    layout=layout,
+                    host_memory=batch.host_memory,
+                )
+            )
+        layouts = tuple(candidates)
+    reports = [run_probe(probe) for probe in layouts]
     valid = [
         report
         for report in reports
@@ -194,10 +225,18 @@ def layout_throughput(size: int) -> dict:
         max(ring, key=lambda report: report["measurement"]["inclusive_positions_per_second_per_gpu"]),
     ]
     others = [report for report in valid if report not in finalists]
-    if not others:
-        raise ValueError("C requires a baseline and two valid finalists")
-    finalists.append(max(others, key=lambda report: report["measurement"]["inclusive_positions_per_second_per_gpu"]))
-    return {"size": size, "probes": reports, "finalists": [report["probe"] for report in finalists]}
+    degenerate = not others
+    if not degenerate:
+        finalists.append(max(others, key=lambda report: report["measurement"]["inclusive_positions_per_second_per_gpu"]))
+    return {
+        "size": size,
+        "probes": reports,
+        "finalists": [report["probe"] for report in finalists],
+        # Explicit when a size has fewer than three valid candidates: the loss
+        # comparison then covers the baseline plus the valid alternatives only.
+        "degenerate_finalists": degenerate,
+        "layout_override_used": layout_overrides is not None and size in layout_overrides,
+    }
 
 
 def layout_loss(size: int) -> dict:
@@ -212,19 +251,35 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=("B", "C-throughput", "C-loss"), required=True)
     parser.add_argument("--calibration-report", required=True)
+    parser.add_argument("--layout-overrides", type=str, default=None)
     parser.add_argument("--h100-hour-limit", type=float, required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     calibration = read_json(args.calibration_report)
     if calibration["version"] != VERSION or not calibration["all_six_cells_valid"]:
         raise ValueError("B/C requires valid baseline calibration")
+    overrides = None
+    if args.layout_overrides is not None:
+        if args.phase != "C-throughput":
+            parser.error("--layout-overrides applies only to C-throughput")
+        raw = json.loads(StoragePath(args.layout_overrides).read_text())
+        overrides = {
+            int(size): tuple(draccus.decode(Layout, layout) for layout in layouts) for size, layouts in raw.items()
+        }
+        missing = set(SIZES) - set(overrides)
+        if missing:
+            raise ValueError(f"Layout overrides must cover every size; missing {sorted(missing)}")
     prior = 0.0
     if args.phase == "C-loss":
         prior = read_json(f"{PREFIX}/{VERSION}/manager-C-throughput/allocation-ledger.json")["h100_hours"]
     ceiling = 144 if args.phase == "B" else 384
     if not 0 < args.h100_hour_limit <= ceiling - prior:
         raise ValueError("The requested remaining phase budget exceeds its approved ceiling")
-    operations = {"B": batch_saturation, "C-throughput": layout_throughput, "C-loss": layout_loss}
+    operations = {
+        "B": batch_saturation,
+        "C-throughput": lambda size: layout_throughput(size, overrides),
+        "C-loss": layout_loss,
+    }
     if not args.run:
         print(
             json.dumps({"phase": args.phase, "sizes": SIZES, "prior_h100_hours": prior, "limit": args.h100_hour_limit})
