@@ -67,7 +67,6 @@ from levanter.grug.sharding import (
     _drop_absent_mesh_axes,
     _mesh_axis_size,
     _mesh_has_axis,
-    _reshard_for_init,
     _reshard_for_shard_map,
     _value_spec_or_default,
 )
@@ -392,16 +391,10 @@ class MoEExpertMlp(eqx.Module):
         # `w_gate`/`w_up` contract over `hidden_dim`, so their fan-in moves when the experts run
         # in a latent space; `w_down` contracts over `intermediate_dim` and is unaffected.
         gate_up_std = initializer_std if gate_up_initializer_std is None else gate_up_initializer_std
-        w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
-        w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), gate_up_std)
-        w_down = _reshard_for_init(
-            _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
-            pspecs.w_down,
-        )
         return MoEExpertMlp(
-            w_gate=_reshard_for_init(w_gate, pspecs.w_gate_up),
-            w_up=_reshard_for_init(w_up, pspecs.w_gate_up),
-            w_down=w_down,
+            w_gate=_init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), gate_up_std, pspecs.w_gate_up),
+            w_up=_init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), gate_up_std, pspecs.w_gate_up),
+            w_down=_init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std, pspecs.w_down),
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
