@@ -85,7 +85,9 @@ routers, attention gates, scalar norm gains and ShortConv kernels. Set
 `optimizer_kwargs.adam_lr` separately. The Hero pretraining settings come from
 `experiments/grug/moe_hero_ep/heuristic.py`.
 
-Use `weight_decay: 0`, `max_grad_norm: 0`, TP=ETP=1, FP32 master parameters and
+To match Hero pretraining, set `max_grad_norm: 1.0` (the
+`HERO_MAX_GRAD_NORM` setting in `experiments/grug/moe_hero_ep/hero_recipe.py`).
+Use `weight_decay: 0`, TP=ETP=1, FP32 master parameters and
 `megatron_config.optimizer_config_kwargs.use_distributed_optimizer: false`.
 Megatron's AdamW CPU offload and precision-aware optimizer are unsupported.
 `optimizer_kwargs.offload_momentum: true` keeps Muon momentum in pinned CPU memory.
