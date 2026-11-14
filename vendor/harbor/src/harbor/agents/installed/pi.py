@@ -258,7 +258,7 @@ async function fitToolOutputs(payload, promptBudget, promptTokens) {
   return { payload: adjusted, promptTokens: adjustedTokens };
 }
 
-export default function (pi) {
+function contextBudget(pi) {
   pi.on("before_provider_request", async (event) => {
     const payload = event.payload;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -314,6 +314,7 @@ export default function (pi) {
         model_info: dict[str, Any] | None = None,
         thinking_format: str | None = None,
         mcp_excluded_tools: Sequence[str] = (),
+        parse_error_retries: int = 0,
         **kwargs,
     ) -> None:
         if api_base is not None and (not isinstance(api_base, str) or not api_base):
@@ -339,6 +340,9 @@ export default function (pi) {
                 "model request with a trial correlation ID"
             )
 
+        if parse_error_retries not in (0, 1, 2):
+            raise ValueError("parse_error_retries must be 0, 1 or 2")
+        self._parse_error_retries = parse_error_retries
         self._api_base = api_base
         self._api_key = api_key or "EMPTY"
         self._collect_rollout_details = collect_rollout_details
@@ -599,6 +603,12 @@ export default function (pi) {
             ).replace("__CONTEXT_WINDOW__", str(self._model_limits.context_window))
             + "\n"
         )
+        registrations = "contextBudget(pi);"
+        if self._parse_error_retries:
+            retry_extension = Path(__file__).with_name("pi_parse_error_retry.js").read_text()
+            extension += retry_extension.replace("__PARSE_ERROR_RETRIES__", str(self._parse_error_retries))
+            registrations += " parseErrorRetry(pi);"
+        extension += f"\nexport default function (pi) {{ {registrations} }}\n"
         with tempfile.TemporaryDirectory() as temp_dir:
             local_path = Path(temp_dir) / "harbor-pi-context-budget.js"
             local_path.write_text(extension)

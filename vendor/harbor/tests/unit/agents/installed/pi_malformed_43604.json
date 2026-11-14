@@ -1,0 +1,20 @@
+[
+  {
+    "attempt_id": "5fd5fd895c424a28ad5df1c704f6795a",
+    "message_sha256": "a4d94072f5264c8e7e53c1e464cdf09d5372915d211cf2a1d30a8a66b843a528",
+    "raw_message": "<tool_call>\n{\"name\": \"edit\", \"arguments\": {\"path\": \"/testbed/conan/cli/formatters/list/list.py\", \"edits\": [{\"oldText\": \"from conan import __version__\\n\\n\\ndef list_packages_html(result):\", \"newText\": \"from conan import __version__\\n\\n\\ndef list_packages_html(result):\"}}\n</tool_call>",
+    "json_error": "Expecting ',' delimiter: line 2 column 258 (char 258)"
+  },
+  {
+    "attempt_id": "b2710c8dd4b74b42ab054f583d24448b",
+    "message_sha256": "570cf115212ce5baf4952b9e36db53c10afca38ca9bedc919e14383f19bebbf5",
+    "raw_message": "<tool_call>\n{\"name\": \"bash\", \"command\": \"find /testbed -name \\\"*.py\\\" | head -20\"}}\n</tool_call>",
+    "json_error": "Extra data: line 2 column 71 (char 71)"
+  },
+  {
+    "attempt_id": "b900eab391c54542ad5abd9da6b1bd82",
+    "message_sha256": "9a6ab2eb08e26f20b7458d745facc7495f802047059b9fe0476a0371f72434b8",
+    "raw_message": "<tool_call>\n{\"name\": \"read\", \"arguments\": {\"path\": \"/testbed/records.py\", \"arguments\": {\"offset\": 435, \"limit\": 20}}}}\n</tool_call>",
+    "json_error": "Extra data: line 2 column 106 (char 106)"
+  }
+]

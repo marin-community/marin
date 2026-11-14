@@ -58,3 +58,13 @@ removals, and update `UPSTREAM.toml`.
 `UPSTREAM.toml` records the upstream import base; it does not select a Git runtime.
 All Harbor launches execute this checkout. Reproduce historical evaluation cohorts
 from their recorded Marin checkout.
+
+### Pi parse-error feedback
+
+Hosted Pi supports `parse_error_retries: 0`, `1`, or `2` in agent kwargs;
+zero preserves the ordinary Hermes fallback. When enabled, invalid JSON in a
+raw `<tool_call>` response receives fixed error feedback and at most that many
+continuations per trial. The original response stays in the transcript.
+Synthetic feedback exists only in model context: no malformed or repaired call
+is executed, and retry requests consume the trial's existing turn, token and
+time budgets. Valid JSON with wrong tool arguments is outside this policy.
