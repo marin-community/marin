@@ -46,6 +46,11 @@ Deploy the Loom stack before the GitHub Pulumi stack, which sets
 `LOOM_LOGBOOK_ADVISORY_PROFILE`. The workflow skips launches while that variable
 is unset.
 
+Replay an already-merged PR with one logbooks issue link using
+`gh workflow run ops-logbook-advisory.yaml --ref main -f pull_request=9350`.
+Replays accept legacy issue links in the PR body. Automatic runs require the
+standalone line above. Loom uses the same idempotency key for both routes.
+
 ## Agent prose cleanup
 
 `ops-agent-prose-cleanup.yaml` launches a Loom session for an issue or PR carrying

@@ -99,8 +99,8 @@ def main() -> None:
     issue = os.environ["LOGBOOK_ISSUE"]
     if not re.fullmatch(r"[1-9][0-9]{0,9}", issue):
         raise ValueError("Expected a positive logbooks issue number")
-    with Path(os.environ["GITHUB_EVENT_PATH"]).open(encoding="utf-8") as event_file:
-        pr = json.load(event_file)["pull_request"]
+    with Path(os.environ["CONTRIBUTION_FILE"]).open(encoding="utf-8") as contribution_file:
+        pr = json.load(contribution_file)
     if pr["merged"] is not True or pr["base"]["ref"] != "main":
         raise ValueError("Expected a pull request merged to main")
     report = evidence(pr, issue)

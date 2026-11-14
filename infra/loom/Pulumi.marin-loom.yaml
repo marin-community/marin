@@ -541,7 +541,6 @@ config:
       workflowRef: marin-community/marin/.github/workflows/ops-logbook-advisory.yaml@refs/heads/main
       profile: logbook-advisory
       serviceTag: logbook-advisory
-      event: pull_request_target
       ref: refs/heads/main
     - name: pr-review
       repositoryId: *marinRepositoryId
