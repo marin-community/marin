@@ -2000,6 +2000,11 @@ Each attempt uses a fresh container and a fresh native package directory.
 Preserve the original packages, trials and published prefixes; select a new
 output version when rerunning.
 
+Single-step native Trial results record the verifier script's return code in
+`verifier_result.exit_code`, separately from its reward. This field records the
+process outcome; it does not enforce negative-control admission. Multi-step mean
+reward aggregates have no single verifier process exit code.
+
 The collector requires every task's trial, preserves its independent
 solution exit code and structured verifier verdict, and emits oracle-filter.json
 plus oracle-filter-summary.json. It writes the final calibrated requirements
