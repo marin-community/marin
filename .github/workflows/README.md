@@ -27,6 +27,25 @@ Run one stack manually from `main` with:
 gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
 ```
 
+## Logbook advisory
+
+`ops-logbook-advisory.yaml` reviews merges to Marin `main` whose PR body contains
+one distinct issue on a standalone line in this format.
+
+```text
+Research logbook: https://github.com/marin-community/marin-logbooks/issues/123
+```
+
+The workflow reads the linked public issue, task record, and pinned notebook
+and sends bounded evidence excerpts to Loom through GitHub OIDC. Each PR gets
+a separate restricted session whose result appears in its own Loom channel.
+The session can post the recommendation there. GitHub write access and shell
+access are disabled.
+
+Deploy the Loom stack before the GitHub Pulumi stack, which sets
+`LOOM_LOGBOOK_ADVISORY_PROFILE`. The workflow skips launches while that variable
+is unset.
+
 ## Agent prose cleanup
 
 `ops-agent-prose-cleanup.yaml` launches a Loom session for an issue or PR carrying
