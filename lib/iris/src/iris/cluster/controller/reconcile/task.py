@@ -269,6 +269,31 @@ def preempt_one(
     )
 
 
+def _finalize_superseded_attempt(
+    state: Overlay,
+    snapshot: TransitionSnapshot,
+    update: TaskUpdate,
+    current_attempt_id: int,
+    now_ms: int,
+) -> None:
+    """Finalize a superseded attempt after a terminal worker observation."""
+    stale_state = state.attempt_state(update.task_id, update.attempt_id)
+    if stale_state is None:
+        return
+    if stale_state not in TERMINAL_TASK_STATES:
+        logger.error(
+            "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
+            update.task_id,
+            update.attempt_id,
+            current_attempt_id,
+            stale_state,
+        )
+        return
+    attempt = snapshot.attempts.get((update.task_id, update.attempt_id))
+    if update.new_state in TERMINAL_TASK_STATES and attempt is not None and attempt.worker_id is not None:
+        _backfill_attempt_finished_at(state, update.task_id, update.attempt_id, now_ms)
+
+
 # ─── The per-update transition core ───
 
 
@@ -300,6 +325,11 @@ def apply_one_transition(
     if task is None:
         return None
 
+    # Handle old-attempt reports before guards that apply to the current task.
+    if update.attempt_id != task.current_attempt_id:
+        _finalize_superseded_attempt(state, snapshot, update, task.current_attempt_id, now_ms)
+        return None
+
     # Overlay-aware terminal guard. An earlier item in the same batch (e.g. a
     # peer cascade that moved this task to COSCHED_FAILED, or another update for
     # the same task) may already have finalized it in the overlay even though the
@@ -320,26 +350,10 @@ def apply_one_transition(
         # worker-bound attempt and we land here with the task already finished.
         # Stamp ``finished_at_ms`` on the attempt so the scheduler releases
         # capacity.
-        if (
-            task_is_finished_row(task)
-            and update.new_state in TERMINAL_TASK_STATES
-            and update.attempt_id == task.current_attempt_id
-        ):
+        if task_is_finished_row(task) and update.new_state in TERMINAL_TASK_STATES:
             attempt = attempt_map.get((update.task_id, update.attempt_id))
             if attempt is not None and attempt.worker_id is not None:
                 _backfill_attempt_finished_at(state, update.task_id, update.attempt_id, now_ms)
-        return None
-
-    if update.attempt_id != task.current_attempt_id:
-        stale_state = state.attempt_state(update.task_id, update.attempt_id)
-        if stale_state is not None and stale_state not in TERMINAL_TASK_STATES:
-            logger.error(
-                "Stale attempt precondition violation: task=%s reported=%d current=%d stale_state=%s",
-                update.task_id,
-                update.attempt_id,
-                task.current_attempt_id,
-                stale_state,
-            )
         return None
 
     # Overlay-aware prior state: a same-batch cascade may have already moved this
