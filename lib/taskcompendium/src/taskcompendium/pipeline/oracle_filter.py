@@ -559,6 +559,8 @@ class OracleTaskReceipt(BaseModel):
     task_sha256: str
     runtime_sha256: str | None = None
     harbor_task_checksum: str
+    source_task_sha256: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    source_task_checksum: str | None = Field(default=None, exclude_if=lambda value: value is None)
     has_oracle: bool
     trials: tuple[OracleTrialReceipt, ...]
     calibration: ResourceCalibrationReceipt
@@ -593,6 +595,10 @@ class OracleTaskReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_infrastructure_retry_chain(self):
+        if (self.source_task_sha256 is None) != (self.source_task_checksum is None):
+            raise ValueError("Original source task and package anchors must be supplied together")
+        source_task_sha256 = self.source_task_sha256 or self.task_sha256
+        source_task_checksum = self.source_task_checksum or self.harbor_task_checksum
         history = self.infrastructure_retries
         if not history:
             if self.calibration.initial_requirements is not None:
@@ -606,9 +612,9 @@ class OracleTaskReceipt(BaseModel):
         backend = phases[0].attempts[0].result["config"]["environment"]
         for index, transition in enumerate(history):
             if (
-                transition.task_sha256 != history[0].task_sha256
+                transition.task_sha256 != source_task_sha256
                 or transition.runtime_sha256 != self.runtime_sha256
-                or transition.source_task_checksum != history[0].source_task_checksum
+                or transition.source_task_checksum != source_task_checksum
             ):
                 raise ValueError("Infrastructure retry changed the task or its native environment")
             if transition.parent_history_sha256 != canonical_sha256(

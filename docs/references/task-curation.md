@@ -1640,6 +1640,13 @@ uv run python -m experiments.post_training.task_curation.oracle_filter merge-ret
   --task-map ORIGINAL_FULL_CALIBRATED_MAP --retry-map NEW_PHASE/task-map.json --output NEW_FULL_MAP
 ```
 
+Each task receipt records `source_task_sha256` and `source_task_checksum` before
+calibrated requirements are projected into the admitted TaskSpec. Every retry
+transition must match these original-source anchors. Legacy receipts without
+anchors are checked against their entry task/package identity; an unanchored
+partial-source projection is rejected. Absent anchors remain omitted so archived
+history hashes are unchanged.
+
 Use a fresh phase directory under the existing calibration root so `collect` can
 inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend

@@ -24,6 +24,7 @@ from taskcompendium.pipeline.oracle_filter import (
     LocalExecutionHostTransition,
     OracleExclusionReason,
     OracleFilterReceipt,
+    load_oracle_filter,
 )
 from taskcompendium.runtime.resources import inline_resource
 
@@ -317,6 +318,15 @@ def test_retry_resumes_grown_allocation_and_preserves_partial_source_limits(tmp_
     assert entry.calibration.declared_requirements is None
     assert entry.calibration.preserved_requirements == {"agent_timeout_sec": 900, "verifier_timeout_sec": 720}
     assert entry.passed
+    archived = tmp_path / "filtered/oracle-filter.json"
+    assert load_oracle_filter(str(archived)) == receipt
+    unanchored = json.loads(archived.read_text())
+    unanchored["tasks"]["task"].pop("source_task_sha256")
+    unanchored["tasks"]["task"].pop("source_task_checksum")
+    legacy_path = tmp_path / "unanchored-partial.json"
+    legacy_path.write_text(json.dumps(unanchored))
+    with pytest.raises(ValueError, match="changed the task or its native environment"):
+        load_oracle_filter(str(legacy_path))
     assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 1
     assert case.parent_map.read_bytes() == original
     assert (case.native / "task.toml").read_bytes() == native_bytes
@@ -450,3 +460,30 @@ def test_recollection_checks_parent_artifacts_and_distinct_phase_attempts(tmp_pa
         ValueError, match=r"retry input changed|repeats a prior attempt|backend configuration|attempt context differs"
     ):
         filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+
+
+def test_public_loader_rejects_retry_history_attached_to_foreign_task_or_package(tmp_path, retry_case):
+    case = retry_case
+    frozen = tmp_path / "retry-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen)
+    destination = tmp_path / "retry-run"
+    retry_cohort(frozen / "plan.json", destination, 1)
+    combined = tmp_path / "combined-map.json"
+    merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    for anchored in (True, False):
+        document = receipt.model_dump(mode="json")
+        entry = document["tasks"]["task"]
+        if not anchored:
+            entry.pop("source_task_sha256", None)
+            entry.pop("source_task_checksum", None)
+        baseline = tmp_path / f"anchored-{anchored}.json"
+        baseline.write_text(json.dumps(document))
+        assert load_oracle_filter(str(baseline)).tasks["task"].passed
+        for field in ("task_sha256", "source_task_checksum"):
+            foreign = json.loads(json.dumps(document))
+            foreign["tasks"]["task"]["infrastructure_retries"][0][field] = "f" * 64
+            path = tmp_path / f"foreign-{anchored}-{field}.json"
+            path.write_text(json.dumps(foreign))
+            with pytest.raises(ValueError, match="changed the task or its native environment"):
+                load_oracle_filter(str(path))
