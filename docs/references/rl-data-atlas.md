@@ -882,6 +882,14 @@ SAFE tasks remain explicitly unmeasured until their Daytona factory and snapshot
 qualification are available. Missing original environment artifacts and
 unqualified judge routes also retain explicit reasons.
 
+GLM judges use the same production host service at temperature 0.7. The host
+records requested and effective parameters while preserving each source's
+TaskSpec and rubric. A blank declared judge model uses the explicitly recorded
+GLM host default; a different named model requires its own qualified route.
+Each source's attempt receipt links separate candidate and judge traffic
+archives and token counts. Final judge traffic, including replies that outlive
+an infrastructure-failed task, is sealed under `trials/judge/`.
+
 Inspect `serving.json`, `prepared.json`, `trials/*/measurement.json` and
 `completion.json` in the new run prefix. A completed coordinator can still have
 pending or unmeasured sources. Each infrastructure retry receives a fresh trial

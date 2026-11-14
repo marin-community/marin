@@ -43,8 +43,8 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
         judge = judge_spec(task.grader)
         if reason is None and source.backend == "daytona":
             reason = "daytona_snapshot_preflight_pending" if native else "faithful_daytona_task_spec_factory_pending"
-        if reason is None and judge is not None and (judge.model != "glm-5.3" or judge.temperature != 0.7):
-            reason = f"production_judge_route_or_temperature_not_qualified:{judge.model}:temperature={judge.temperature}"
+        if reason is None and judge is not None and judge.model not in {"", "glm-5.3"}:
+            reason = f"production_judge_route_not_qualified:{judge.model}"
         if reason is None:
             environments = [task.environment_requirements]
             if not isinstance(task.grader, NoGrader):

@@ -13,6 +13,7 @@ from pathlib import Path
 from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import (
     PROTOCOL_ID,
+    PROTOCOLS,
     DifficultyAttempt,
     DifficultyMeasurement,
     SamplingSettings,
@@ -64,6 +65,7 @@ def recovered_source(
     identity: SolverIdentity,
     settings: SamplingSettings,
     parameters: dict,
+    judge_identity: SolverIdentity,
 ) -> RecoveredSource:
     """Recover every completed attempt, including tasks whose source aggregate was interrupted."""
     serving = previous.serving
@@ -134,6 +136,14 @@ def recovered_source(
             raise ValueError("Previous campaign retried a task after its first scored result")
         if attempt.status == "scored":
             task = tasks[attempt.task_id]
+            if task.judge_model is not None:
+                prior_judge = serving.get("judge")
+                expected = judge_identity.model_dump(exclude={"serving_receipt"})
+                if prior_judge is None or (
+                    any(prior_judge.get(name) != value for name, value in expected.items())
+                    or prior_judge.get("effective_temperature") != PROTOCOLS[PROTOCOL_ID].temperature
+                ):
+                    raise ValueError("Continuation cannot mix judge identities or unqualified judge temperature")
             archive = StoragePath(payload["archive"])
             data = archive.read_bytes()
             if hashlib.sha256(data).hexdigest() != payload["archive_sha256"]:

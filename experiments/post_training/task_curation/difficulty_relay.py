@@ -8,6 +8,7 @@ import json
 import logging
 from collections import Counter
 from contextlib import contextmanager
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, Thread
@@ -95,6 +96,7 @@ def budget_relay(
                 if not self.path.endswith("/v1/chat/completions") or body.get("stream"):
                     self.respond(400, {"error": "non-streaming chat completions required"})
                     return
+                requested_body = deepcopy(body)
                 body.update({key: value for key, value in parameters.items() if key != "extra_body"})
                 body.update(parameters.get("extra_body", {}))
                 body["model"] = model
@@ -108,7 +110,15 @@ def budget_relay(
                 root = receipts / task / f"{number:06d}"
                 root.mkdir(parents=True, exist_ok=False)
                 (root / "request.json").write_text(
-                    json.dumps({"route": self.path, "prompt_tokens": len(tokens), "body": body}) + "\n"
+                    json.dumps(
+                        {
+                            "route": self.path,
+                            "prompt_tokens": len(tokens),
+                            "requested_body": requested_body,
+                            "body": body,
+                        }
+                    )
+                    + "\n"
                 )
                 if len(tokens) > INPUT_TOKENS:
                     payload = {
