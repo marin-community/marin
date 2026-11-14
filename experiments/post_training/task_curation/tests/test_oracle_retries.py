@@ -65,7 +65,7 @@ def retry_case(tmp_path, monkeypatch, request):
             "resources": task.resources.model_copy(
                 update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)}
             ),
-            **({"execution_requirements": None} if outcome == "grown" else {}),
+            **({"execution_requirements": None} if outcome in {"grown", "retry-grown"} else {}),
         }
     )
     envelope["task"] = task.model_dump(mode="json")
@@ -80,7 +80,7 @@ def retry_case(tmp_path, monkeypatch, request):
     (native / "solution/solve.sh").write_text("true\n")
     (native / "task.toml").write_text(
         "[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=720\n"
-        if outcome == "grown"
+        if outcome in {"grown", "retry-grown"}
         else "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
         "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
     )
@@ -103,10 +103,12 @@ def retry_case(tmp_path, monkeypatch, request):
             "environment_build": 600,
         }
         if "retry-run" in package.parts:
-            current = "pass" if outcome in {"legacy-unknown", "grown", "host"} else outcome
+            current = "pass" if outcome in {"legacy-unknown", "grown", "retry-grown", "host"} else outcome
+            if outcome == "retry-grown" and len(calls) == 5:
+                current = "oom"
         else:
             current = "unknown" if outcome == "legacy-unknown" else "infra"
-            if outcome == "grown" and len(calls) == 1:
+            if outcome in {"grown", "retry-grown"} and len(calls) == 1:
                 current = "oom"
         root = Path(config["trials_dir"]) / "oracle"
         (root / "agent").mkdir(parents=True)
@@ -290,8 +292,10 @@ def test_retry_requires_approval_for_the_actual_parent_result(tmp_path, retry_ca
     assert len(case.calls) == 3
 
 
-@pytest.mark.parametrize("retry_case", ["grown"], indirect=True)
-def test_retry_resumes_grown_allocation_and_preserves_partial_source_limits(tmp_path, retry_case):
+@pytest.mark.parametrize(
+    ("retry_case", "expected_retry_memory"), [("grown", [4096]), ("retry-grown", [4096, 8192])], indirect=["retry_case"]
+)
+def test_retry_resumes_grown_allocation_and_preserves_partial_source_limits(tmp_path, retry_case, expected_retry_memory):
     case = retry_case
     original = case.parent_map.read_bytes()
     native_bytes = (case.native / "task.toml").read_bytes()
@@ -307,12 +311,19 @@ def test_retry_resumes_grown_allocation_and_preserves_partial_source_limits(tmp_
     assert [attempt.execution_requirements.memory_mb for attempt in parent.attempts] == [2048, 4096, 4096, 4096]
     assert entry.calibration.initial_requirements == parent.execution_requirements
     assert entry.calibration.attempts[0].execution_requirements.memory_mb == 4096
+    assert [attempt.execution_requirements.memory_mb for attempt in entry.calibration.attempts] == expected_retry_memory
     assert entry.calibration.declared_requirements is None
     assert entry.calibration.preserved_requirements == {"agent_timeout_sec": 900, "verifier_timeout_sec": 720}
     assert entry.passed
     assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 1
     assert case.parent_map.read_bytes() == original
     assert (case.native / "task.toml").read_bytes() == native_bytes
+    changed = json.loads((destination / "task-map.json").read_text())
+    changed["task"]["source_task_checksum"] = "changed-source"
+    changed_path = tmp_path / "changed-source-map.json"
+    changed_path.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="source task/environment checksum"):
+        merge_retry_maps(case.parent_map, [changed_path], tmp_path / "invalid-combined.json")
 
 
 @pytest.mark.parametrize("retry_case", ["host"], indirect=True)

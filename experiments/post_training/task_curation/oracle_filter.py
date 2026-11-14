@@ -1128,9 +1128,13 @@ def merge_retry_maps(original: Path, retries: list[Path], output: Path) -> None:
             transition = InfrastructureRetryTransition.model_validate(history[-1])
             if transition.parent_mapping_sha256 != canonical_sha256(parent):
                 raise ValueError(f"Retry belongs to another parent mapping: {task_id}")
-            for name in ("task_path", "task_sha256", "runtime_sha256", "task_checksum"):
+            for name in ("task_path", "task_sha256", "runtime_sha256"):
                 if mapping.get(name) != parent.get(name):
                     raise ValueError(f"Retry changed task/environment binding {name}: {task_id}")
+            if mapping.get("source_task_checksum", mapping["task_checksum"]) != parent.get(
+                "source_task_checksum", parent["task_checksum"]
+            ):
+                raise ValueError(f"Retry changed source task/environment checksum: {task_id}")
             merged[task_id] = mapping
     output.write_text(json.dumps(merged, indent=2) + "\n")
 
