@@ -44,6 +44,7 @@ LOGGER = logging.getLogger(__name__)
 PRIORITY = job_pb2.PRIORITY_BAND_PRODUCTION
 MODEL_CACHE_ROOT = "s3://marin-rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
+NATIVE_CONTEXT_SAFETY_BUFFER = 0
 
 
 def worker_limits(root: Path) -> dict:
@@ -172,7 +173,12 @@ def run_trial_worker(
             str(local_root / "trials"),
         ],
         check=True,
-        env={**os.environ, "PYTHONPATH": str(Path.cwd()), SECRETS_DIR_ENV: str(secrets_dir)},
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path.cwd()),
+            SECRETS_DIR_ENV: str(secrets_dir),
+            "HARBOR_VLLM_CONTEXT_SAFETY_BUFFER": str(NATIVE_CONTEXT_SAFETY_BUFFER),
+        },
     )
 
 
@@ -255,6 +261,7 @@ def main() -> None:
                     "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                 },
                 "sampling": request_parameters(settings),
+                "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
                 "compilation_and_cuda_graphs_requested": True,
                 "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
                 **probe,
