@@ -18,6 +18,7 @@ API = f"https://api.github.com/repos/{LOGBOOKS}"
 WEB = f"https://github.com/{LOGBOOKS}"
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_EVIDENCE_CHARS = 4_000
+MAX_TITLE_CHARS = 500
 RECORD_NAME = re.compile(r"[1-9][0-9]{0,9}-[a-z0-9-]+\.md")
 NOTEBOOK_LINK = re.compile(
     rf"{re.escape(WEB)}/blob/([0-9a-f]{{40}})/(logbooks/[1-9][0-9]{{0,9}}-[a-z0-9-]+/notebook\.md)"
@@ -51,10 +52,14 @@ def evidence(pr: dict, issue_number: str) -> dict:
     report = {
         "contribution": {
             **excerpt(f"https://github.com/marin-community/marin/pull/{pr['number']}", pr.get("body")),
-            "title": pr["title"][:500],
+            "title": pr["title"][:MAX_TITLE_CHARS],
             "merge_commit": pr["merge_commit_sha"],
         },
-        "issue": {**excerpt(issue_url, issue.get("body")), "title": issue["title"][:500], "state": issue["state"]},
+        "issue": {
+            **excerpt(issue_url, issue.get("body")),
+            "title": issue["title"][:MAX_TITLE_CHARS],
+            "state": issue["state"],
+        },
     }
     revision = github("commits/main")["sha"]
     records = [
