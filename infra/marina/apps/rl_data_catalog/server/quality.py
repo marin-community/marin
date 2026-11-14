@@ -162,8 +162,5 @@ def issue_rate(declaration: dict[str, Any], review: dict[str, Any] | None) -> fl
 
 
 def intended_use(declaration: dict[str, Any]) -> str:
-    """Return eval for benchmark or evaluation evidence, otherwise train."""
-    receipt = (declaration.get("lexical_contamination") or {}).get("receipt")
-    if declaration["is_benchmark"] or (receipt is not None and receipt["use"] in {"eval", "benchmark"}):
-        return "eval"
-    return "train"
+    """Expose the converter's explicit policy; historical absence stays unknown."""
+    return declaration.get("intended_use") or "unknown"

@@ -28,11 +28,13 @@ from finestore.rl.curation import (
     SourceDeclaration,
     SourceOrigin,
     SourceQualityResult,
+    SourceUse,
     WithinSourceDedupEvidence,
     source_identifier,
     source_title,
 )
 from marin.execution.lazy import ArtifactStep
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.admission_binding import population_admission_blocker
 from experiments.post_training.task_curation.campaign import CampaignArtifact
@@ -73,6 +75,9 @@ class CatalogConfig(Protocol):
 
     @property
     def files(self) -> tuple[str, ...]: ...
+
+    @property
+    def intended_use(self) -> IntendedUse: ...
 
 
 class TaskFormat(StrEnum):
@@ -205,6 +210,13 @@ class RlDataSource[ConfigT: CatalogConfig]:
     info: SourceInfo
     config: ConfigT | None = None
     pipeline: "CurationPipeline[ConfigT] | None" = None
+
+    @property
+    def intended_use(self) -> SourceUse:
+        """Resolve population policy from the registered converter."""
+        if self.config is None:
+            raise ValueError(f"No registered conversion Use: {self.info.id}")
+        return SourceUse(self.config.intended_use.value)
 
     @property
     def name(self) -> str:
@@ -403,6 +415,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 "",
             ),
             is_benchmark="benchmark" in tags,
+            intended_use=self.intended_use,
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
                 (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),

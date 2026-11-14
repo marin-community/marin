@@ -38,7 +38,7 @@ def contamination_declarations() -> list[tuple[str, SourceDeclaration]]:
         ("clean-subset", "NO ISSUES", {**clean, "input_dataset_revision": "b" * 40}, False, PIN),
         ("remediated", "REMEDIATED", remediated, False, PIN),
         ("eval", "MEASURED, EVAL", flagged, True, PIN),
-        ("required", "REMEDIATION REQUIRED", flagged, False, PIN),
+        ("required", "REMEDIATION REQUIRED", flagged, True, PIN),
         ("stale-pin", "REMEDIATION REQUIRED", remediated, False, "c" * 40),
         ("eval-zero", "NO ISSUES", {**clean, "receipt": None}, True, PIN),
         (
@@ -109,6 +109,7 @@ def contamination_declarations() -> list[tuple[str, SourceDeclaration]]:
                     type="RLVR",
                     turns="Single-turn",
                     is_benchmark=benchmark,
+                    intended_use="eval" if name in {"eval", "eval-zero", "receipt-eval"} else "train",
                     kind="Dataset",
                     status="Available",
                     pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},

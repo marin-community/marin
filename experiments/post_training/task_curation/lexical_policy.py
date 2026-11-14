@@ -7,14 +7,9 @@ import argparse
 import json
 from pathlib import Path
 
-from finestore.rl.curation import DeconReceiptStatus, LexicalContaminationEvidence, LexicalReceipt, LexicalUse
+from finestore.rl.curation import DeconReceiptStatus, LexicalContaminationEvidence, LexicalReceipt, LexicalUse, SourceUse
 from pydantic import BaseModel, ConfigDict
-from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.evaluation import EvalDataset
-from experiments.post_training.task_curation.pipeline import CurationRecipe
-from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
-from experiments.post_training.task_curation.retained_release import RetainedCohort
 from experiments.post_training.task_curation.source import RlDataSource
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId, canonical_source_map
 
@@ -31,18 +26,7 @@ class LexicalInputUse(BaseModel):
 
 def source_lexical_use(source: RlDataSource) -> LexicalUse:
     """Resolve Use from the registered converter, with the explicit benchmark marker."""
-    config = source.config
-    if isinstance(config, EvalDataset):
-        intended = config.recipe.intended_use
-    elif isinstance(config, CurationRecipe):
-        intended = config.intended_use
-    elif isinstance(config, PrebuiltCohort):
-        intended = config.intended_use
-    elif isinstance(config, RetainedCohort):
-        intended = config.intended_use
-    else:
-        raise ValueError(f"No registered conversion Use: {source.info.id}")
-    if intended is IntendedUse.TRAIN:
+    if source.intended_use is SourceUse.TRAIN:
         return LexicalUse.TRAIN
     return LexicalUse.BENCHMARK if "benchmark" in source.info.tags else LexicalUse.EVAL
 

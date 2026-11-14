@@ -382,6 +382,11 @@ class ConvertedExamples(CatalogRecord):
         return self
 
 
+class SourceUse(StrEnum):
+    TRAIN = "train"
+    EVAL = "eval"
+
+
 class LexicalUse(StrEnum):
     TRAIN = "train"
     EVAL = "eval"
@@ -628,6 +633,7 @@ class SourceDeclaration(CatalogRecord):
     type: str
     turns: str
     is_benchmark: bool
+    intended_use: SourceUse | None = None
     kind: str
     status: str
     pipeline: PipelineReference | None
