@@ -73,6 +73,9 @@ def main(
             version=version,
             num_train_steps=sft_steps,
             mesh=SFT_MESH,
+            # One conversation per sequence rejects any conversation longer than the sequence;
+            # packing truncates it instead.
+            pack=True,
         ),
         replace(resources_from_accelerator(SFT_NODE_ACCELERATOR), replicas=SFT_NODES),
     )
