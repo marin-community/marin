@@ -29,6 +29,11 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 
 ## Operations and measurement
 
+For Mochi/Hero on B200s and Snowball on H100s, use the
+[AgentX/vLLM tuning guide](agentx-vllm-tuning.md) to choose experiments and
+interpret throughput, correctness and measurement limits. Use the skills below
+for execution and telemetry.
+
 | Skill | Owns | Boundary |
 |---|---|---|
 | `use-iris` | Job, task, cluster, and accelerator operations; Zephyr monitoring and infrastructure troubleshooting | Experiment recipes, production lineage, and telemetry interpretation have separate owners |
