@@ -63,6 +63,7 @@ INPUT_BUDGET_REASON = (
 PROVIDER_WAIT_REASON = "Awaiting shared model provider capacity; provider waits are excluded from task attempts."
 MISSING_PREPARED_IMAGE_REASON = "missing_environment_artifact:prepared_image"
 UNSUPPORTED_COMPOSE_DOCUMENT_REASON = "unsupported_compose_document"
+NETWORK_POLICY_REASON = "network_policy_violation"
 
 
 @dataclass(frozen=True)
@@ -347,7 +348,10 @@ def run_task(
             if binding is None or binding.runtime_sha256 != task.runtime_sha256:
                 raise ValueError("Trial network policy is not bound to the selected source runtime")
             if reward is not None and not network_policy_qualified(binding, policy):
-                raise ValueError("Trial changed an original declared network policy")
+                # The task's environment changed its declared policy at runtime: the
+                # grade is invalid but the condition belongs to the task, not the fleet.
+                reward = None
+                pending_reason = NETWORK_POLICY_REASON
         attempt = DifficultyAttempt(
             task_id=task.task_id,
             status="pending" if unserved or provider_wait else ("scored" if reward is not None else "infrastructure"),
@@ -580,7 +584,8 @@ def main() -> None:
                 blocked_tasks.update(
                     task.task_id
                     for task, outcome in zip(tasks, outcomes, strict=True)
-                    if outcome.pending_reason in {MISSING_PREPARED_IMAGE_REASON, UNSUPPORTED_COMPOSE_DOCUMENT_REASON}
+                    if outcome.pending_reason
+                    in {MISSING_PREPARED_IMAGE_REASON, UNSUPPORTED_COMPOSE_DOCUMENT_REASON, NETWORK_POLICY_REASON}
                 )
                 blocked = sorted({pending_reasons[task_id] for task_id in blocked_tasks})
                 if not scored and tasks and len(blocked_tasks) == len(tasks):

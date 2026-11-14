@@ -44,6 +44,7 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
     *[(reward, "nonretryable", "task_spec", 0, False) for reward in (0.0, 1.0)],
     *[(reward, "actor_recovered", "task_spec", 0, False) for reward in (0.0, 1.0)],
     *[(reward, "judge_recovered", "task_spec", 0, True) for reward in (0.0, 1.0)],
+    (0.0, "policy_violation", "task_spec", 0, False),
     (0.0, None, "task_spec", 0, True),
     (0.0, "json", "task_spec", 0, True),
     *[(reward, None, "native", buffer, False) for reward in (0.0, 1.0) for buffer in (0, 8)],
@@ -54,7 +55,8 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
 ])
 def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure, graded_reward, workload, legacy_buffer, with_judge):
     infrastructure_first = upstream_failure not in {
-        None, "missing_image", "missing_images", "compose_unsupported", "actor_recovered", "judge_recovered",
+        None, "missing_image", "missing_images", "compose_unsupported", "policy_violation",
+        "actor_recovered", "judge_recovered",
     }
     unserved = upstream_failure == "input_tokenize"
     provider_wait = upstream_failure in {"json", "html"}
@@ -243,7 +245,9 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
             (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": verdict_reward}))
         (directory / "network-policy.json").write_text(json.dumps({
             "source_runtime_sha256": runtime_sha256, "actor_declared": "allow", "verifier_declared": "allow",
-            "actor_required": True, "actor_effective": "allow", "verifier_effective": None if unserved else "allow",
+            "actor_required": True,
+            "actor_effective": "deny" if upstream_failure == "policy_violation" else "allow",
+            "verifier_effective": None if unserved else "allow",
         }))
         payload = {"exception_info": {"exception_type": "AgentTimeoutError"} if failed else None,
                    "verifier_result": None if unserved else {"rewards": {"reward": verdict_reward}}}
@@ -295,6 +299,11 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
             harbor_logger.getChild("harbor.trial.trial.candidate").warning("Later candidate log after construction failure")
             assert failed_log.stat().st_size == size
         return
+    if upstream_failure == "policy_violation":
+        assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("not_measured", 0, 0, 2)
+        assert difficulty_trials.NETWORK_POLICY_REASON in measurement.reason
+        assert blocker in measurement.reason
+        return
     assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
         "pending", 0 if unserved or provider_wait else 1, 0 if unserved or provider_wait else int(graded_reward), 2 if unserved or provider_wait else 1)
     assert blocker in measurement.reason
@@ -310,10 +319,12 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         pending["scored"] = difficulty_trials.INPUT_BUDGET_REASON
     elif provider_wait:
         pending["scored"] = difficulty_trials.PROVIDER_WAIT_REASON
+    elif upstream_failure == "policy_violation":
+        pending["scored"] = difficulty_trials.NETWORK_POLICY_REASON
     assert attempts["pending_reasons"] == pending
     assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(upstream_failure == "nonretryable")
     assert len(candidate_requests) == (2 if provider_wait or upstream_failure == "actor_recovered" else int(upstream_failure == "nonretryable"))
-    if unserved or provider_wait:
+    if unserved or provider_wait or upstream_failure == "policy_violation":
         return
     if infrastructure_first:
         aggregate = next(output.glob("*/attempts.json"))
