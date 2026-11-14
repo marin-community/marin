@@ -73,7 +73,7 @@ class PairShortlist(BaseModel):
 def read_pair_shortlist(
     uri: str, sha256: str, source_survey_sha256: str, survey: SourceIdentitySurvey, sample_size: int
 ) -> PairShortlist:
-    """Verify a frozen discovery result against the exact survey and input populations."""
+    """Check a shortlist's digest, source pins, and pair membership."""
     payload = StoragePath(uri).read_bytes()
     if hashlib.sha256(payload).hexdigest() != sha256:
         raise ValueError("Pair shortlist SHA-256 differs")
@@ -108,7 +108,7 @@ def write_json(uri: str, document: dict) -> str:
 
 
 def widened_pairs(survey: SourceIdentitySurvey) -> list[PairSimilarity]:
-    """Keep every prior shortlist pair and add instruction-hash evidence without top-k truncation."""
+    """Keep prior review pairs and add instruction-hash evidence without top-k truncation."""
     selected = {(row.similarity.left, row.similarity.right): row.similarity for row in survey.reviews}
     fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
     sources = sorted(fingerprints, key=original_source_id)
