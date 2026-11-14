@@ -2,18 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gzip
+import json
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 from typing import cast
 
 import pytest
 import tomlkit
 from taskcompendium.convert.answers import exact_answer_task
-from taskcompendium.harbor.shared_package import harden_shared_swe
+from taskcompendium.harbor.shared_package import BOOTSTRAP_ARCHIVE, SharedPytestFormat, harden_shared_swe
 from taskcompendium.harbor.snapshots import file_map_snapshot, task_snapshot
 from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract, shared_preamble
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ResourceGroups, Source, TaskSpec
@@ -167,6 +169,50 @@ def test_shared_ingestion_preamble_and_harness_share_the_published_contract():
     assert config["agent"]["user"] == str(contract.agent_uid)
     assert config["verifier"]["environment_mode"] == "shared"
     assert config["verifier"]["user"] == "root"
+
+
+def test_shared_compilation_preserves_pinned_single_manifest_verifier_contract():
+    original_verifier = b"Original source verifier remains a private resource.\n"
+    files = {
+        "instruction.md": b"Repair the broken function.\n",
+        "environment/Dockerfile": b"FROM source-python\n",
+        "task.toml": b"[metadata]\n[environment]\n[agent]\n[verifier]\n",
+        "tests/test.sh": b"true\n",
+        "tests/verifier.toml": original_verifier,
+        "tests/trusted.txt": b"tests/test_value.py\n",
+    }
+    contract = harden_shared_swe(
+        files,
+        spec=PytestSpec(
+            paths=("tests/test_value.py",),
+            must_pass=("tests/test_value.py::test_value",),
+            protected_paths_files=("/tests/trusted.txt",),
+            setup="restore-original-tests",
+            timeout=600.0,
+            workspace="/testbed",
+        ),
+        dependency_state=SharedDependencyState.AGENT_MUTABLE,
+        pytest_format=SharedPytestFormat.SINGLE_PROTECTED_MANIFEST,
+    )
+    payload = json.loads(zlib.decompress(files[BOOTSTRAP_ARCHIVE]))
+    assert tomlkit.parse(payload["verifier_spec"]).unwrap() == {
+        "mode": "pytest",
+        "paths": ["tests/test_value.py"],
+        "args": [],
+        "must_pass": ["tests/test_value.py::test_value"],
+        "must_not_break": [],
+        "setup": "",
+        "restore": [],
+        "protected_paths_file": "trusted.txt",
+        "python": f"{contract.protected_root}/pytest-python",
+        "timeout": 600.0,
+        "workspace": "/testbed",
+        "setup_failure_is_infra": False,
+        "batch_size": 0,
+        "id_matching": "exact",
+    }
+    assert bytes.fromhex(payload["test_files"]["verifier.toml"]) == original_verifier
+    assert payload["spec"]["setup"] == "restore-original-tests"
 
 
 @pytest.mark.skipif(

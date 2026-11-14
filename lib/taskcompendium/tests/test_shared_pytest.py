@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from verifyit.spec import PytestSpec, render_spec
 
+from taskcompendium.harbor.shared_package import SharedPytestFormat, render_shared_pytest_spec
 from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract
 from taskcompendium.runtime import shared_pytest
 
@@ -202,33 +203,62 @@ def shared_runtime(request):
             harness=str(root / "control.py"),
             pytest_config=str(root / "pytest.ini"),
             report_directory=str(reports),
-            reference_sha256=hashlib.sha256(b"{}").hexdigest(),
+            reference_sha256=hashlib.sha256(
+                json.dumps(
+                    {"trusted.txt": b"test_case.py\n".hex()} if request.param == "source-pinned-cli" else {},
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest(),
             harness_sha256=hashlib.sha256(Path(shared_pytest.__file__).read_bytes()).hexdigest(),
             protected_test_patterns=("**/test_*.py", "**/conftest.py", "extra_guard.py"),
         )
         spec = PytestSpec(
             paths=(test_path,),
-            candidate_modules=("candidate",),
+            candidate_modules=() if request.param == "source-pinned-cli" else ("candidate",),
+            protected_paths_files=("trusted.txt",) if request.param == "source-pinned-cli" else (),
             must_pass=(f"{test_path}::test_value",),
             python=str(task_python / "bin/python"),
             workspace=str(workspace),
         )
+        pinned_source = (
+            request.config.getoption("--shared-verifyit-source") if request.param == "source-pinned-cli" else None
+        )
+        protected_spec = replace(spec, python=str(root / "pytest-python"))
         payload = {
             "contract": contract.model_dump(mode="json"),
             "spec": asdict(spec),
-            "test_files": {},
-            "verifier_spec": render_spec(replace(spec, python=str(root / "pytest-python"))),
+            "test_files": {"trusted.txt": b"test_case.py\n".hex()} if request.param == "source-pinned-cli" else {},
+            "verifier_spec": (
+                render_shared_pytest_spec(protected_spec, SharedPytestFormat.SINGLE_PROTECTED_MANIFEST)
+                if pinned_source is not None
+                else render_spec(protected_spec)
+            ),
         }
         input_path = base / "input.json"
         input_path.write_text(json.dumps(payload))
         shared_pytest.bootstrap(input_path)
         verifyit = base / "verifyit"
+        verifyit_main = "from verifyit.grade import main; raise SystemExit(main())"
+        if pinned_source is not None:
+            verifyit_main = f"import sys; sys.path.insert(0, {str(pinned_source.resolve())!r}); " + verifyit_main
         verifyit.write_text(
-            f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -c "
-            "'from verifyit.grade import main; raise SystemExit(main())' \"$@\"\n"
+            f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -c " + shlex.quote(verifyit_main) + ' "$@"\n'
         )
         verifyit.chmod(0o755)
         yield SharedRuntime(contract, site, verifyit, candidate, plugin_path)
+
+
+@pytest.mark.parametrize("shared_runtime", ["source-pinned-cli"], indirect=True)
+def test_shared_grading_source_cli_rejects_broken_product_and_accepts_repair(shared_runtime):
+    runtime = shared_runtime
+    (runtime.candidate.parent / "test_case.py").write_text("def test_value(): pass\n")
+    verdict = runtime.grade()
+    assert verdict["status"] == "scored", verdict
+    assert verdict["reward"] == 0, verdict
+    runtime.candidate.write_text("VALUE = 1\n")
+    verdict = runtime.grade()
+    assert verdict["status"] == "scored", verdict
+    assert verdict["reward"] == 1, verdict
 
 
 @pytest.mark.parametrize(

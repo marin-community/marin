@@ -18,6 +18,11 @@ def pytest_addoption(parser):
         type=Path,
         help="Interpreter with installed pytest dependencies for the Linux SHARED guest fixture",
     )
+    parser.addoption(
+        "--shared-verifyit-source",
+        type=Path,
+        help="Pinned Verifyit src directory for the single-manifest Linux SHARED regression",
+    )
 
 
 class JudgeServer(ThreadingHTTPServer):

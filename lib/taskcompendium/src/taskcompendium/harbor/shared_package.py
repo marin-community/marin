@@ -8,6 +8,7 @@ import json
 import shlex
 import zlib
 from dataclasses import asdict, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
@@ -25,6 +26,24 @@ BOOTSTRAP = "/opt/taskcompendium-shared-bootstrap/control.py"
 BOOTSTRAP_INPUT = "/tmp/taskcompendium-shared-input.json"
 BOOTSTRAP_ARCHIVE = "setup_files/taskcompendium-shared-input.zlib"
 SETUP_PREFIX = "## Environment Setup (complete these steps first)\n\n```bash\n"
+
+
+class SharedPytestFormat(StrEnum):
+    CURRENT = "current"
+    SINGLE_PROTECTED_MANIFEST = "single_protected_manifest"
+
+
+def render_shared_pytest_spec(spec: PytestSpec, pytest_format: SharedPytestFormat) -> str:
+    """Render the explicitly selected source CLI's protected-manifest syntax."""
+    if pytest_format is SharedPytestFormat.CURRENT:
+        return render_spec(spec)
+    if len(spec.protected_paths_files) != 1 or spec.candidate_modules:
+        raise ValueError("Single-manifest source CLI requires one manifest and no candidate modules")
+    document = tomlkit.parse(render_spec(spec))
+    del document["protected_paths_files"]
+    del document["candidate_modules"]
+    document["protected_paths_file"] = spec.protected_paths_files[0]
+    return tomlkit.dumps(document)
 
 
 class SharedBootstrapPayload(BaseModel):
@@ -80,7 +99,11 @@ def shared_grader_script(contract: SharedIntegrityContract) -> bytes:
 
 
 def harden_shared_swe(
-    files: dict[str, bytes], *, spec: PytestSpec | ScriptSpec, dependency_state: SharedDependencyState
+    files: dict[str, bytes],
+    *,
+    spec: PytestSpec | ScriptSpec,
+    dependency_state: SharedDependencyState,
+    pytest_format: SharedPytestFormat = SharedPytestFormat.CURRENT,
 ) -> SharedIntegrityContract:
     """Rewrite one new native package with a complete, versioned SHARED contract.
 
@@ -113,7 +136,11 @@ def harden_shared_swe(
     payload = {
         "contract": contract.model_dump(mode="json"),
         "spec": {**asdict(spec), "mode": "script" if native else "pytest"},
-        "verifier_spec": render_spec(protected_spec),
+        "verifier_spec": (
+            render_shared_pytest_spec(protected_spec, pytest_format)
+            if isinstance(protected_spec, PytestSpec)
+            else render_spec(protected_spec)
+        ),
         "test_files": test_files,
     }
     if BOOTSTRAP_ARCHIVE in files:
