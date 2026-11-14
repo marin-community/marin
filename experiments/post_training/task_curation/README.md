@@ -9,7 +9,9 @@ per-outcome source counts. Its source is
 [Dataset declarations](datasets/README.md) feed TaskSpec conversion and the RL
 Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
-reviewed SAMPLE/FULL campaigns and artifact outputs.
+reviewed SAMPLE/FULL campaigns and artifact outputs. Its
+[Current admission policy](../../../docs/references/task-curation.md#current-admission-policy)
+section states the current admission rules.
 
 ## Pinned registry receipts
 
@@ -538,8 +540,9 @@ and full-population digest. It uses the GLM-5.3 v3 profile described above and
 writes each selected TaskSpec hash, deployment-runtime hash, review observation
 and batch receipt. Computed Results describe content quality; the artifacts
 record `scope=sample_content` and `qualification_status=pending`.
-[Full-population oracle filtering and empty-submission verifier liveness](../../../docs/references/task-curation.md#full-population-oracle-filter)
-remain prerequisites for execution admission.
+[Full-population oracle filtering](../../../docs/references/task-curation.md#full-population-oracle-filter),
+with nop negative controls for workspace-graded tasks, remains a prerequisite for
+admitting oracle-bearing tasks. Tasks without oracles need no executability proof.
 
 Launch the batch coordinator on `cw-us-east-08a`. Its GB200 serving children
 inherit that regional controller, with batch priority and three-day timeouts.

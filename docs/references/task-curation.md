@@ -23,10 +23,106 @@ protocol, and item builder. Evaluation owns shot selection and prompt preparatio
 shared curation code supplies acquisition and catalog publication. TaskCompendium
 owns reusable source importers and the corpus publisher.
 
+## Current admission policy
+
+These rules were synced with Atlas v9.3 preview revision 14 (2026-11-14). When a
+later section of this reference conflicts with them, this section is current.
+
+**Examples.** Atlas Examples is the admitted count after filtration. The Atlas
+has no separate oracle column. Its header shows
+`<N> admitted · <k> pending filtration · <m> excluded`. A source without a
+current-pin admission receipt shows Examples Pending.
+
+- *Sources with oracles.* Run the original oracle over the complete population
+  through the production Harbor trial path, in SAMPLE and FULL. Tasks that fail
+  are dropped before ingestion. Workspace-graded tasks also need a `nop` negative
+  control: admit a task only when its oracle passes and its nop does not pass. A
+  nop pass excludes the task as `NEGATIVE_CONTROL_PASSED`. A nop run that ends
+  with signal -9, -6 or -11, or with a producer interruption, gets exactly one
+  re-drive at the same budget. A 600-second verifier deadline or a source error
+  on the unsolved state is a non-passing annotation. Answer-graded tasks need no
+  negative control (N/A). See [workspace oracle negative controls](#workspace-oracle-negative-controls).
+- *Sources without oracles.* Examples is the retained count after strict
+  within-source deduplication and lexical decontamination, minus tasks with typed
+  static blockers such as `tool_provider_required` or `shared_executor_required`.
+  No per-task executability proof is required. This requirement is suspended and
+  can be restored later. Every other gate still applies.
+- *Use=EVAL sources* are measured. Their tasks never count as admitted TRAIN tasks.
+
+**Non-agentic tasks.** A TaskSpec with no actor role, agent harness or agent
+workspace is non-agentic: the model answers and the task's grader checks the
+answer. Decide this per TaskSpec from its contract, never from the source name.
+Non-agentic tasks are exempt from every check that exists only because an agent
+runs in an environment:
+
+- resource and timeout specs, calibration and machine-role allocation evidence
+  (`verifier_execution_requirements`);
+- package locks (`missing_packages_lock`);
+- Docker base mutability (`mutable_docker_base`), environment builds and prepared images;
+- tool providers (`tool_provider_required`) and shared executors (`shared_executor_required`);
+- Daytona and backend fit, and network policy;
+- workspace nop negative controls.
+
+None of these can exclude a non-agentic task or block its admission. These checks
+still apply: the grader must produce a verdict, oracle filtering runs wherever an
+original oracle exists, and content QA, within-source deduplication, lexical
+decontamination, cross-source overlap, the Use=EVAL rules and the SHARED/SEPARATE
+grading assessment are unchanged.
+
+**Agentic tasks.** Every rule in this reference applies:
+
+- The environment spec is data. Each task runs in exactly its own environment;
+  a shared or substitute image is never acceptable. A task may move to another
+  image only with a mechanical proof that its environment is a no-op against that
+  image, followed by a new dataset version. A source is repaired when its
+  published spec completely describes what it does.
+- Declared limits are preserved. Calibrate only missing dimensions, starting at
+  1 CPU, 2 GiB memory, 2 GiB disk, a 300-second agent timeout and a 60-second
+  verifier timeout, and double only the dimension that failed. See
+  [Full-population oracle filter](#full-population-oracle-filter).
+- The whole contract (actor, tool providers, shared executor, environment and
+  grader) must run on a production backend through the path Atlas consumers use.
+  A task that cannot is filtered with a typed reason and its evidence.
+- Each task's declared network policy (ALLOW or DENY) is honored. A backend that
+  cannot provide it records `network_policy_unsupported`; the task is filtered
+  unless another backend can run it.
+
+**Releases, images and overlap.**
+
+- Remediation publishes one new **private** `open-athena` pinned version per
+  source. Never delete or overwrite an artifact; publish a new version.
+- Prepared task images go in a new GHCR package per source, never shared across
+  sources. Packages have INTERNAL (organization-only) visibility, recorded in the
+  receipt. Never make one public.
+- Strict exact-contract deduplication applies to every source, including EVAL
+  sources and grandfathered blends.
+- Lexical 13-gram decontamination removes flagged TRAIN tasks. EVAL sources are
+  measured only.
+- Cross-source overlap matches each task to its nearest neighbor in the other
+  source (exact hash, then near-duplicate or embedding search). Task IDs never pair
+  tasks. A model may not downgrade a pair whose measured overlap clears the threshold.
+
+**Quality.** Result is GOOD when at least 90% of reviewed tasks are clean, BAD
+when at least 50% have issues, and SOME_ISSUES otherwise. QC never rejects a task
+or a source. A FULL review may be finalized under a pinned waiver when at most 1%
+of retained tasks are unreviewed. LLM judges run at temperature 0.7 through the
+production judge service.
+
+**Jobs.** Use three-day job timeouts and an explicit `--target-cluster` in the
+data's region. Infrastructure failures are re-driven and never count as task failures.
+
+**Landing changes (temporary).** While CI is suspended, Atlas workers commit
+directly to the `atlas-env-audit` branch instead of opening child PRs. Before each
+push, run `./infra/pre-commit.py --changed-files --fix` and the affected local
+tests. Pushes are serialized: push only after the merger grants a push slot, fetch
+and rebase first, and never force-push. Never push to `main`. This rule ends when
+CI resumes.
+
 ## Pipeline overview
 
 The mandatory ingest order is conversion → exact within-source deduplication → lexical
-decontamination → resource calibration and full-population oracle filtering → SAMPLE/FULL QA.
+decontamination → resource calibration (agentic tasks only) and full-population oracle
+filtering → SAMPLE/FULL QA.
 QUICK also deduplicates its complete converted population.
 
 The driver runs each dataset's conversion graph, then binds the embedding graph
@@ -262,8 +358,10 @@ conversions, duplicate mappings and conversion rejections account for its outcom
 its QA panel from the unique converted population; FULL reads the cached unique conversions.
 
 Catalog declarations require `within_source_dedup` evidence bound to the input dataset pin and
-converter version. Atlas Examples is `unique_count`; `raw_count` counts successfully converted
-TaskSpecs before deduplication, and `within_source_duplicates` counts the dropped copies.
+converter version. Evidence and curriculum coverage show `unique_count`; Atlas Examples is the
+post-filtration admitted count described in [Current admission policy](#current-admission-policy).
+`raw_count` counts successfully converted TaskSpecs before deduplication, and
+`within_source_duplicates` counts the dropped copies.
 Conversion rejections remain a separate ledger. The source fingerprint uses the same exact
 within-source contract identity to count duplicates in the successful pre-deduplication conversions.
 
@@ -613,8 +711,9 @@ separate from affected-task counts. Grader refusals never supply actor reasons.
 ### Lexical decontamination before publication
 
 Count every TaskSpec emitted by the registered converter before common QA or
-admission gates. This is the Atlas **Examples** count; the upstream row count is
-separate. Record mechanical conversion rejections, admission rejections, the input
+admission gates. Deduplication, decontamination and filtration start from this
+converted count. Atlas **Examples** is the later post-filtration admitted count; the
+upstream row count is separate. Record mechanical conversion rejections, admission rejections, the input
 pin and converter version with that count. A converter emitting zero TaskSpecs
 is an ingestion failure with its exact reason, not an empty successful source.
 
@@ -1005,7 +1104,9 @@ identity; lock-backed worker environments retain their existing identities.
 
 An agentic task's environment is part of its data. Execution uses the environment
 and resource requirements carried by that task's specification. A declaration or
-worker image cannot replace missing task requirements.
+worker image cannot replace missing task requirements. A task may move to another
+image only with a mechanical proof that its environment is a no-op against that
+image, followed by a new dataset version whose spec names the image.
 
 A native Harbor package retains its own `task.toml`, build context, files and
 permissions. A TaskCompendium task carries its declared image, build context or
@@ -1022,7 +1123,8 @@ runtime behavior. Changing a task's bytes requires a new private, pinned
 TaskCompendium release with [SAMPLE or FULL oversight](#curation-modes-and-oversight-levels).
 Conversion fidelity, executed grading controls, drop accounting and the frozen
 review evidence remain distinct. A zero reward does not establish verifier
-liveness; use the [no-oracle procedure](#sources-without-oracle-solutions).
+liveness. Sources without oracles need no per-task executability proof; see
+[Sources without oracle solutions](#sources-without-oracle-solutions).
 Every oracle-bearing task is filtered in both SAMPLE and FULL, subject only to
 an explicitly recorded [targeted requalification decision](#targeted-requalification-after-an-approved-harness-change).
 QC reports issues and never rejects tasks. Mandatory within-source deduplication
@@ -1281,10 +1383,18 @@ remote prompt plus its completion budget fits the tier's declared context.
 ## Sources without oracle solutions
 
 Some sources ship no oracle solution: every row has `has_solution` false, or its
-`solution_binary` is an empty archive. The controls above cannot run there, so
-execution is qualified by three checks that need no oracle. Apply them whenever a
-source is admitted without one, including every rebuilt cohort that inherits a
-native source's missing oracles.
+`solution_binary` is an empty archive. Admission requires no per-task
+executability proof for these tasks. This requirement is suspended and can be
+restored later. Examples is the retained count after within-source deduplication
+and lexical decontamination, minus tasks with typed static blockers such as
+`tool_provider_required` or `shared_executor_required`. Content QA, environment
+fidelity, deduplication and lexical decontamination still apply, and a missing
+receipt or an old wire version never exempts a source.
+
+The three checks below need no oracle. They remain available as diagnostics. A
+rebuilt cohort that changes a native environment uses payload preservation and
+setup execution to show that its published spec is faithful. None of these
+checks is an admission gate.
 
 **Payload preservation (offline).** For each rebuilt task, every file the native
 recipe `COPY`s into the workspace must appear in the rebuilt setup payload with
@@ -1314,7 +1424,7 @@ A sampled task passes verifier liveness only with `negative_verdict`.
 `verifier_machine.startup_timeout` bounds machine preparation, and
 `verifier_machine.cleanup_timeout` bounds teardown. Without a per-machine cleanup
 deadline, qualification uses 120 seconds. Failed or expired machine cleanup
-reports `infra_error` and cannot qualify a task.
+reports `infra_error`. Verifier liveness is diagnostic evidence only.
 
 The offline report records payload preservation and setup execution rates. Its
 verifier results are populated only from an explicit `--liveness` JSONL file. `skipped` is the default
@@ -1403,8 +1513,8 @@ Oracle filtering is never sampled, even when the other checks use SAMPLE.
    and persisted campaign evidence. This threshold is independent of sampled
    GLM quality grades.
 7. Join the full-population oracle-filter receipt by task ID and exact TaskSpec hash.
-   Exclude failed oracle tasks and unresolved infrastructure failures; a missing,
-   stale or incomplete receipt blocks admission. Admit the remaining rows and write
+   Exclude failed oracle tasks and hold unresolved infrastructure failures as
+   pending; a missing, stale or incomplete receipt blocks admission. Admit the remaining rows and write
    the outputs.
 
 ### Prepare retained contracts for a complete quality review
@@ -1456,9 +1566,11 @@ See the [campaign command](https://github.com/marin-community/marin/blob/main/ex
 Before dispatching a backfill, inspect every retained contract against its frozen
 combined duplicate/lexical drop plan. This CPU census records missing execution
 requirements, original oracle resources, grading boundaries and task-level
-static blockers. Mutable image inputs, missing package locks and fragment-only
-oracles require a separately versioned repair. A source with zero static blockers
-still requires production calibration, provider quota checks and complete receipts.
+static blockers. On agentic tasks, mutable image inputs, missing package locks
+and fragment-only oracles require a separately versioned repair. Non-agentic tasks
+are exempt from the resource, package-lock, image and tool blockers. An agentic
+source with zero static blockers still requires production calibration, provider
+quota checks and complete receipts.
 
 ```bash
 uv run --package marin-core --extra dedup python -m \
@@ -1542,10 +1654,12 @@ quality result covering the whole filtered population. Content evidence for the
 original pin remains archival. Unresolved infrastructure failures in original
 oracle trials or negative controls prevent release qualification.
 
-Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
+Every admitted agentic TaskSpec must declare `execution_requirements`: `cpus`,
 `memory_mb`, `storage_mb`, `agent_timeout_sec` and `verifier_timeout_sec`.
 Sizes use MiB and deadlines use seconds. Conversion may leave this field absent;
-SAMPLE and FULL admission require it and a population-complete resource receipt.
+SAMPLE and FULL admission of an agentic task require it and a population-complete
+resource receipt. Non-agentic TaskSpecs need no resource or timeout spec,
+calibration or role-allocation evidence.
 Harbor export writes these values into the task package. Trials must use them
 without resource overrides or timeout multipliers.
 
@@ -1841,15 +1955,14 @@ plan, its cohort and parent map, all attempts and the backend manifest in the
 release's private evidence archive. `infrastructure_pending` counts unscored
 cases separately from source oracle failures.
 
-Tasks without original solutions require a production actor run using GLM-5.3,
-temperature 0.7, and at most three turns, followed by the task's original grader.
-Preserve source-declared limits and calibrate only missing dimensions. A completed
-actor run with a valid structured verdict establishes executability; record its
-reward separately, including zero. Provider and infrastructure failures remain
-pending for recovery. Calibration-only scripts and empty-submission diagnostics
-cannot establish this qualification.
+Admission does not require an executability run for tasks without original
+solutions; see [Sources without oracle solutions](#sources-without-oracle-solutions).
+The suspended procedure is kept here so it can be restored. It ran a production
+actor (GLM-5.3, temperature 0.7, at most three turns) followed by the task's
+original grader, and treated a completed run with a valid structured verdict as a
+pass, with the reward recorded separately.
 
-Pass `collect --executability-runs RUNS.jsonl` with one
+To record such runs, pass `collect --executability-runs RUNS.jsonl` with one
 `{"task_id": "...", "receipt": {...}}` record per no-oracle task. Each
 `ExecutabilityRunReceipt` binds the final production trial, observed actor-turn
 count, model configuration, and immutable model request/response evidence
@@ -1875,19 +1988,23 @@ in `oracle-filter-summary.json`. Version 2 receipts remain readable as archives 
 cannot establish new admission.
 Use an explicit mechanical outcome for a measured contract blocker and retain its
 diagnostic evidence. Use automatic `executability_proof_missing` only when no
-production mapping or measured outcome exists. Both paths exclude the task.
+production mapping or measured outcome exists. Both paths exclude the task. While
+the no-oracle requirement is suspended, a task without an oracle is excluded only
+by a typed static blocker, never by `executability_proof_missing`.
 
 For both SAMPLE and FULL, run the production Harbor Trial with the restored
-ORACLE agent over the complete converted population. The filter retains exactly
+ORACLE agent over the complete oracle-bearing population. The filter retains exactly
 the tasks with a completed trial, solution exit zero, and structured scored
 reward one. Numeric reward files alone are insufficient. Retain failed oracles
-and unresolved infrastructure errors as exclusions with reasons and counts.
+as exclusions with reasons and counts. Unresolved infrastructure errors are not
+admitted, but they stay pending for a re-drive and never count as oracle failures.
 Native Harbor `reward.txt` and `reward.json` outputs qualify through the production
 reward parser when their exact reward dictionary matches the validated Trial's
 `VerifierResult`. The collector records `native_grade` with the raw artifact SHA-256,
 result hash and native task checksum. This path is unavailable to TaskSpec payloads
 and cannot replace a missing or infrastructure-failed structured verdict.
-Retry infrastructure failures up to two times before excluding them.
+Retry infrastructure failures up to two times; tasks still unscored remain
+`infrastructure_pending`.
 
 Keep the task's environment, network permission, setup and solution scripts.
 For converted TaskSpec packets, call `write_source_runtime(task, runtime, directory)`
@@ -2477,15 +2594,15 @@ a `QUICK` summary cannot record admitted counts (`CurationSummary` rejects it),
 and its corpus is not selectable for training.
 
 Oracle filtering covers the full population in both SAMPLE and FULL whenever
-solutions are supplied. Oversight still differs in its other quality checks,
-blinded review and negative controls. A sampled oracle run cannot qualify either
-mode.
+solutions are supplied, and so do nop negative controls for workspace-graded
+tasks. Oversight still differs in its other quality checks and blinded review. A
+sampled oracle run cannot qualify either mode.
 
 Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
 `OversightEvidence` that points at the campaign, the recipe revision and the
 verification summary behind it. `none` means converted without review: the source is listed but
 not admitted. The level is the weakest review the admission rests on, so a cohort whose
-setup fidelity ran on every task but whose verifier liveness ran on a sample is
+setup fidelity ran on every task but whose grader controls ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
 release and does not raise the level.
 
@@ -2767,7 +2884,8 @@ They remain excluded until a new immutable release carries the structured
 protocol and robust SAMPLE/FULL qualification.
 
 The images live in the non-public `marin-community/task-curation-tasktrove` GHCR
-package. Daytona needs an organization registry credential for `ghcr.io` before
+package, which predates the one-package-per-source rule. New prepared task images
+use a new INTERNAL package per source. Daytona needs an organization registry credential for `ghcr.io` before
 it can import them. Keep that credential in Daytona's registry settings, outside
 the TaskSpecs and qualification evidence. Image identity measurement alone does
 not establish pull access or grading liveness.

@@ -2,6 +2,8 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
+This reference was synced with Atlas v9.3 preview revision 14 (2026-11-14); the
+admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
 Curation owns source declarations, admission decisions, executed controls and
 sampled GLM judgments. Atlas displays those records and their task packets.
 
@@ -160,9 +162,13 @@ remediation lineage; changed task bytes require new qualification. Package-lock
 graders run on LOCAL with separate compatibility evidence. A source without a measured actor verdict cannot enter
 new ingestion. The backend map records each role's demands and blockers.
 
-Examples requires completed oracle filtration and admission evidence, after oracle
-failures, within-source duplicates and training lexical overlap have been removed.
-Without that proof, Examples remains pending. Totals show the measured sum plus
+Examples is the admitted count after filtration; there is no separate oracle
+column. For a source with oracles it requires completed full-population oracle
+filtration, plus nop negative controls on workspace-graded tasks, after
+within-source duplicates and TRAIN lexical overlap have been removed. For a
+source without oracles it is the retained count minus tasks with typed static
+blockers; no per-task executability proof is required. Use=EVAL tasks never count
+as admitted TRAIN tasks. Without a current-pin admission receipt, Examples remains pending. Totals show the measured sum plus
 Pending when any contributing source lacks proof. Evidence and
 curriculum coverage separately show the retained converted population; content QA
 Results and sampled controls do not certify execution or admission. Source details include the raw converted count,
@@ -312,12 +318,8 @@ version and retained count to match. A measured zero establishes no shipped
 oracle solutions; it does not establish calibration, execution or admission.
 Missing and stale rows leave oracle filtering pending. An exact current-pin
 full-population oracle-filter receipt is recorded separately from this census.
-Sources without that proof keep their admitted counts pending even where the
-no-oracle census is complete.
-The filtration ledger separately records tasks dropped because their whole
-contract cannot execute on a production backend, grouped by typed reason. Until
-pin-bound per-task executability receipts are attached, this step and admitted
-counts remain Pending for oracle-bearing sources without final oracle-filter evidence.
+Sources with oracles keep their admitted counts pending until that receipt exists.
+The filtration ledger records typed static blockers against the current population.
 Under the pinned no-oracle policy ruling, no-oracle Examples are the current retained
 population minus unique typed static blockers. EVAL counts are measured-only and
 excluded from admitted TRAIN totals. The Evidence page records the policy and audit
@@ -999,8 +1001,9 @@ census beside the backend capability evidence. Check that no admitted task has
 `grading_environment_mismatch`; repair and qualify a new dataset version before
 loading a source whose workspace grader requires SHARED execution.
 
-Check that every retained task declares CPU, memory, disk, agent timeout and
-verifier timeout, backed by its full-population resource-calibration receipt.
+Check that every retained agentic task declares CPU, memory, disk, agent timeout
+and verifier timeout, backed by its full-population resource-calibration receipt.
+Non-agentic tasks need no resource spec or calibration.
 Declared limits must match the production Harbor trial exactly; calibration-only
 solutions cannot serve as admission evidence. Publish the calibrated TaskSpecs
 and receipt together in a new private, pinned TaskCompendium release. A uniform
@@ -1017,7 +1020,7 @@ the raw count, duplicate count and exclusion manifest URI, with a Filer link
 beside S3 URIs.
 
 Ingest in this order: conversion → exact within-source deduplication → lexical decontamination →
-resource calibration and full-population oracle filtering → SAMPLE/FULL QA. Keep the lowest task
+resource calibration (agentic tasks only) and full-population oracle filtering → SAMPLE/FULL QA. Keep the lowest task
 ID for each exact full contract. Different graders or private references remain distinct tasks.
 Record duplicate exclusions as `DUPLICATE_WITHIN_SOURCE`, separately from QC.
 
