@@ -88,8 +88,8 @@ def read_pair_shortlist(
         raise ValueError("Pair shortlist count or uniqueness differs")
     if any(len(pair) != 2 or not pair.issubset(inputs) for pair in pairs):
         raise ValueError("Pair shortlist references unknown source populations")
-    required = {frozenset((pair.left, pair.right)) for pair in widened_pairs(survey)}
-    if not required.issubset(pairs):
+    required = {(pair.left, pair.right) for pair in widened_pairs(survey)}
+    if not required.issubset({(pair.left, pair.right) for pair in shortlist.pairs}):
         raise ValueError("Pair shortlist omits prior or deterministic pairs")
     logger.info("Reusing shortlist %s SHA256 %s: %d pairs", uri, sha256, len(pairs))
     return shortlist

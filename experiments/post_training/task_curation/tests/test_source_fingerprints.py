@@ -543,7 +543,7 @@ def test_candidate_cache_capacity_preserves_neighbors_on_revisited_questions(cac
     )
 
 
-def test_frozen_shortlist_rejects_a_changed_source_population(tmp_path):
+def test_frozen_shortlist_keeps_population_and_pair_identity(tmp_path):
     fingerprint = fingerprint_source([task_document("task", "Solve this chemistry problem.")], {"shard": "original"})
     pair = pair_similarity("left", fingerprint, "right", fingerprint)
     survey = SourceIdentitySurvey(
@@ -585,3 +585,8 @@ def test_frozen_shortlist_rejects_a_changed_source_population(tmp_path):
     )
     with pytest.raises(ValueError, match="shortlist input population differs"):
         read_pair_shortlist(str(path), digest, "frozen-survey", changed, 30)
+    flipped = shortlist.model_copy(update={"pairs": [pair.model_copy(update={"left": "right", "right": "left"})]})
+    payload = flipped.model_dump_json().encode()
+    path.write_bytes(payload)
+    with pytest.raises(ValueError, match="omits prior or deterministic pairs"):
+        read_pair_shortlist(str(path), hashlib.sha256(payload).hexdigest(), "frozen-survey", survey, 30)
