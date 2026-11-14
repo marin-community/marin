@@ -213,6 +213,7 @@ LEADER_OVERRIDES = {
     "fg32stack95lean": ("--api-server-count", "4"),
     "fg128stackmaxat": ("--api-server-count", "4"),
     "fg128stackcap1": ("--api-server-count", "4"),
+    "fg128stackmbt8k": ("--api-server-count", "4"),
     "fg128stackbi": ("--api-server-count", "4"),
 }
 
@@ -229,6 +230,10 @@ LABEL_ENV = {
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
     ),
     "fg128stacklean": (
+        ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
+        ("VLLM_USE_NCCL_SYMM_MEM", "1"),
+    ),
+    "fg128stackmbt8k": (
         ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
     ),
@@ -372,6 +377,15 @@ CANDIDATE_ARGS = {
         "128",
         "--compilation-config",
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [128]}),
+    ),
+    # The full stack with an 8,192-token prefill budget (long-prompt TTFT lever, R6).
+    "fg128stackmbt8k": (
+        "--max-num-seqs",
+        "128",
+        "--max-num-batched-tokens",
+        "8192",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
     "fg128stackbi": (
         "--max-num-seqs",
