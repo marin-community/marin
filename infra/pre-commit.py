@@ -176,17 +176,11 @@ def matches_pattern(file_path: pathlib.Path, patterns: list[str]) -> bool:
     return False
 
 
-def should_exclude(file_path: pathlib.Path) -> bool:
-    return matches_pattern(file_path, EXCLUDE_PATTERNS)
-
-
 def get_matching_files(
     patterns: list[str], all_files_list: list[pathlib.Path], exclude_patterns: list[str]
 ) -> list[pathlib.Path]:
     matched = []
     for file_path in all_files_list:
-        if should_exclude(file_path):
-            continue
         if matches_pattern(file_path, exclude_patterns):
             continue
         if matches_pattern(file_path, patterns):
@@ -879,6 +873,7 @@ class PrecommitConfig:
     patterns: list[str]
     checks: list[Callable[[list[pathlib.Path], bool], int]]
     exclude_patterns: list[str] = field(default_factory=list)
+    global_exclude_patterns: list[str] = field(default_factory=lambda: EXCLUDE_PATTERNS)
 
 
 PRECOMMIT_CONFIGS = [
@@ -972,6 +967,8 @@ PRECOMMIT_CONFIGS = [
         checks=[
             check_vendored_locks,
         ],
+        # EXCLUDE_PATTERNS drops vendor/harbor/** and vendor/skyrl/**, whose pyproject.toml files are lock inputs.
+        global_exclude_patterns=[],
     ),
 ]
 
@@ -1102,7 +1099,9 @@ def main(
     only_set = set(f"check_{o}" for o in only)
 
     for config in PRECOMMIT_CONFIGS:
-        matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
+        matched_files = get_matching_files(
+            config.patterns, all_files_list, config.global_exclude_patterns + config.exclude_patterns
+        )
         matched_files = [f for f in matched_files if f.exists()]
         if not matched_files:
             continue
