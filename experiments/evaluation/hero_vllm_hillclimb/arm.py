@@ -201,6 +201,12 @@ LEADER_ARGS = ("--api-server-count", "1")
 # Leader-only flag overrides per candidate label (API servers start only on the leader).
 LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4")}
 
+# Environment added to every vLLM process for a candidate label.
+LABEL_ENV = {
+    # NCCL symmetric-memory windows for the MoE all-gather / reduce-scatter (lower-latency kernels).
+    "fg128symm": (("VLLM_USE_NCCL_SYMM_MEM", "1"),),
+}
+
 # Local torch-profiler trace directory on every host; traces are uploaded after the server exits.
 PROFILE_DIR = "/tmp/hero-vllm-profile"
 # Bounded decode-step traces: no Python stacks or shapes, no blocking key_averages table on stop.
@@ -264,6 +270,12 @@ CANDIDATE_ARGS = {
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
     "fg128": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    "fg128symm": (
         "--max-num-seqs",
         "128",
         "--compilation-config",
@@ -630,7 +642,7 @@ def _variant_config(args, target: ServedTarget, name, item, geometry, iris_confi
     tag, _, label = item.partition(":")
     release = RELEASES[tag]
     tensor_parallel_size = args.tensor_parallel_size
-    env = tuple(tuple(entry.split("=", 1)) for entry in args.env)
+    env = (*(tuple(entry.split("=", 1)) for entry in args.env), *LABEL_ENV.get(label, ()))
     flags: tuple[str, ...] = CANDIDATE_ARGS[label] if label in CANDIDATE_ARGS else ()
     if label == "tp2":
         assert tag == "0ac9dcb", "the #119 overlay is built on 0ac9dcb"
