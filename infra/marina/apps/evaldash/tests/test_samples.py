@@ -19,7 +19,6 @@ from finestore.eval import (
     write_sample_parquet,
 )
 from fsspec.core import url_to_fs
-from marin.evaluation.harbor.trajectory import archive_trajectory
 
 
 def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
@@ -401,14 +400,12 @@ def test_fetch_artifact_keys_cache_by_run(tmp_path):
     run_b = str(tmp_path / "b" / "results")
     for root, tag in ((run_a, "a"), (run_b, "b")):
         store = EvaluationStore.open(root, writer_id="w")
-        stored = archive_trajectory(
-            store,
+        stored_uri = store.add_artifact(
+            "trial-1/trajectory.json",
             json.dumps({"run": tag}).encode(),
-            task="t",
-            doc_id="d",
-            trial_id="trial-1",
+            metadata={"task": "t", "doc_id": "d", "trial_id": "trial-1"},
         )
-        assert stored.uri == uri
+        assert stored_uri == uri
         store.seal()
         store.close()
 

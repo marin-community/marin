@@ -5,7 +5,6 @@
 
 import asyncio
 import math
-from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -15,7 +14,6 @@ from evaldash import fixtures, ingest, results_db
 from evaldash.db_migrations import apply_migrations
 from evaldash.metrics import record_headline
 from evalrecords.records import EvalRunRecord, TaskCoverage, list_records, write_record
-from marin.evaluation.model_config import ModelConfig
 from rigging.filesystem.step_status import STATUS_RUNNING, STATUS_SUCCESS, StatusFile
 from sqlalchemy.pool import StaticPool
 
@@ -251,9 +249,31 @@ def test_snapshot_reads_record_written_before_tokenizer_revision(tmp_path):
     migrate_schema(engine)
     record = _record(tmp_path)
     stored = record.model_dump(mode="json")
-    config = asdict(ModelConfig(name=record.model.name, location=record.model.location))
-    config.pop("tokenizer_revision")
-    stored["model"]["config"] = config
+    stored["model"]["config"] = {
+        "name": record.model.name,
+        "location": record.model.location,
+        "revision": None,
+        "tokenizer": None,
+        "apply_chat_template": True,
+        "resource_hint": {"hbm_gb": None, "gpu": {}, "cpu": None, "memory": None, "disk": None},
+        "serve": {
+            "backend": "vllm",
+            "tensor_parallel_size": None,
+            "data_parallel_size": None,
+            "max_model_len": None,
+            "max_num_batched_tokens": None,
+            "max_num_seqs": None,
+            "hf_overrides": None,
+            "limit_mm_per_prompt": None,
+            "tool_call_parser": None,
+            "reasoning_parser": None,
+            "vllm_extra_args": [],
+            "chat_template": None,
+            "auto_overrides": True,
+        },
+        "generation": {"max_gen_toks": None, "extra_gen_kwargs": {}},
+        "agent": {"agent_kwargs": {}},
+    }
     with engine.begin() as conn:
         conn.execute(results_db.catalog_runs.insert(), {**results_db.run_row(record), "record": stored})
 

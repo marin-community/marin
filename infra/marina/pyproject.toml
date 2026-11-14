@@ -21,6 +21,10 @@ dependencies = [
     # evaldash: the per-sample parquet reader and the finestore archive behind it, the LLM
     # sample review, and the Connect clients plus GCE lookup its live job/log panels use.
     "marin-evalrecords",
+    # The apps read evaluation records through marin-evalrecords. marin-core stays until every
+    # released app revision that imports `marin` has been replaced; then remove it here and
+    # from the Dockerfile.
+    "marin-core",
     "marin-finestore",
     "marin-taskcompendium",
     "marin-iris",

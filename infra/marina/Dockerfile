@@ -12,20 +12,31 @@ ENV PATH="/app/.venv/bin:$PATH"
 # uv needs every member's pyproject.toml to map the lock; only marina's closure is installed.
 # External dependencies first (cached across source edits), then the workspace members.
 COPY uv.lock pyproject.toml ./
+COPY lib/fray/pyproject.toml lib/fray/
+COPY lib/haliax/pyproject.toml lib/haliax/
+COPY lib/levanter/pyproject.toml lib/levanter/
+COPY lib/marin/pyproject.toml lib/marin/
+COPY lib/zephyr/pyproject.toml lib/zephyr/
 COPY lib/iris/pyproject.toml lib/iris/
 COPY lib/rigging/pyproject.toml lib/rigging/
 COPY lib/finestore/pyproject.toml lib/finestore/
 COPY lib/finelog/pyproject.toml lib/finelog/
 COPY lib/shellbox/pyproject.toml lib/shellbox/
-COPY lib/taskcompendium/pyproject.toml lib/taskcompendium/
+COPY lib/rolloutengine/pyproject.toml lib/rolloutengine/
+COPY lib/skyrlrecipe/pyproject.toml lib/skyrlrecipe/
 COPY lib/evalrecords/pyproject.toml lib/evalrecords/
+COPY lib/taskcompendium/pyproject.toml lib/taskcompendium/
 COPY lib/verifyit/pyproject.toml lib/verifyit/
 COPY infra/marina/pyproject.toml infra/marina/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --package marin-marina --no-install-workspace
-# rigging's wheel force-includes config/ and finelog's its own config/; shellbox and verifyit
-# package their README.
+# rigging's wheel force-includes config/ and finelog's its own config/; haliax reads its
+# version from src; levanter, haliax, and zephyr package their README; marin-core its LICENSE.
+COPY LICENSE ./
 COPY config config
+COPY lib/levanter/README.md lib/levanter/
+COPY lib/haliax/README.md lib/haliax/
+COPY lib/zephyr/README.md lib/zephyr/
 COPY lib/shellbox/README.md lib/shellbox/
 COPY lib/verifyit/README.md lib/verifyit/
 COPY lib/rigging/src lib/rigging/src
@@ -35,9 +46,16 @@ COPY lib/finelog/config lib/finelog/config
 COPY lib/iris/hatch_build.py lib/iris/
 COPY lib/iris/src lib/iris/src
 COPY lib/iris/config lib/iris/config
+COPY lib/fray/src lib/fray/src
+COPY lib/haliax/src lib/haliax/src
+COPY lib/levanter/src lib/levanter/src
+COPY lib/marin/src lib/marin/src
+COPY lib/zephyr/src lib/zephyr/src
 COPY lib/shellbox/src lib/shellbox/src
-COPY lib/taskcompendium/src lib/taskcompendium/src
+COPY lib/rolloutengine/src lib/rolloutengine/src
+COPY lib/skyrlrecipe/src lib/skyrlrecipe/src
 COPY lib/evalrecords/src lib/evalrecords/src
+COPY lib/taskcompendium/src lib/taskcompendium/src
 COPY lib/verifyit/src lib/verifyit/src
 COPY infra/marina/src infra/marina/src
 RUN --mount=type=cache,target=/root/.cache/uv \
