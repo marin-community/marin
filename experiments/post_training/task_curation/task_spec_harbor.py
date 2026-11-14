@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from taskcompendium.harbor.adapter import declared_execution_limits, write_harbor_task
 from taskcompendium.harbor.oracle import write_oracle_command
 from taskcompendium.harbor.protected_runtime import ExpectedRuntime, RuntimeRole, write_runtime_binding
+from taskcompendium.harbor.runtime import write_source_runtime
 from taskcompendium.models import ExecutionRequirements
 from taskcompendium.pipeline.models import Controls
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
@@ -44,9 +45,11 @@ def prepare(
                 if directory.parent != tasks:
                     raise ValueError(f"Task ID is not a package directory name: {task.id}")
                 write_harbor_task(task, directory, shape)
+                runtime = row_runtime(row)
+                if runtime is not None:
+                    write_source_runtime(task, runtime, directory)
                 if controls is None and runtime_expectations is None:
                     continue
-                runtime = row_runtime(row)
                 if runtime is None:
                     raise ValueError(f"Explicit oracle/runtime bindings require the original runtime: {task.id}")
                 if controls is not None and controls.golden is not None:

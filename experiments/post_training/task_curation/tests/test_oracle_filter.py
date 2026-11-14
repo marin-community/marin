@@ -40,7 +40,7 @@ from experiments.post_training.task_curation.task_spec_harbor import prepare
 from .prebuilt_fixtures import prebuilt_task
 
 
-@pytest.mark.parametrize("binding", ["oracle_command", "calendar_original", "protected_runtime"])
+@pytest.mark.parametrize("binding", ["oracle_command", "calendar_original", "protected_runtime", "source_runtime"])
 def test_changed_original_command_runtime_stops_before_trial(tmp_path, binding):
     envelope = json.loads(prebuilt_task("bound-original")["lowered_task_spec"])
     task = TaskSpec.model_validate(envelope["task"])
@@ -72,11 +72,11 @@ def test_changed_original_command_runtime_stops_before_trial(tmp_path, binding):
         cohort,
         output,
         source_revision="a" * 40,
-        controls=controls if binding != "protected_runtime" else None,
+        controls=controls if binding in {"oracle_command", "calendar_original"} else None,
         runtime_expectations=expectations,
     )
     directory = output / "tasks" / task.id
-    if binding != "protected_runtime":
+    if binding in {"oracle_command", "calendar_original"}:
         config = tmp_path / "accepted-trial.json"
         config.write_text(
             json.dumps(

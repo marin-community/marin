@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 from upath import UPath
 
@@ -44,6 +45,7 @@ from taskcompendium.harbor.protected_runtime import (
     RuntimeRole,
     read_runtime_binding,
 )
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, read_source_runtime
 from taskcompendium.models import (
     ExecutionRequirements,
     TaskSpec,
@@ -149,6 +151,34 @@ class _MeasuredMachine:
         await self.machine.close()
 
 
+class _NetworkFactory:
+    def __init__(
+        self, factory: MachineFactory, trial: "TaskSpecTrial", role: Literal["task_machine", "verifier_machine"]
+    ):
+        self.factory, self.trial, self.role = factory, trial, role
+
+    @property
+    def backend(self):
+        return self.factory.backend
+
+    def check_environment(self, requirements, spec):
+        self.factory.check_environment(requirements, spec)
+
+    async def create(self, spec: MachineSpec) -> Machine:
+        machine = await self.factory.create(spec)
+        try:
+            field = "actor_effective" if self.role == "task_machine" else "verifier_effective"
+            self.trial.network_policy = self.trial.network_policy.model_copy(update={field: spec.network})
+            await _persist(
+                self.trial.paths.trial_dir / "network-policy.json", self.trial.network_policy.model_dump_json()
+            )
+        except BaseException:
+            async with asyncio.timeout(self.trial.config.trial_cleanup_grace_sec):
+                await machine.close()
+            raise
+        return machine
+
+
 class _TrialMachineFactory:
     def __init__(
         self,
@@ -230,6 +260,25 @@ class TaskSpecTrial(Trial):
         self.runtime_binding = read_runtime_binding(self.task.paths.task_dir)
         if self.runtime_binding is not None:
             self.runtime_binding.require_task(self.specification)
+        self.source_runtime = read_source_runtime(self.task.paths.task_dir)
+        if self.source_runtime is not None:
+            self.source_runtime.require_task(self.specification)
+        if self.source_runtime is not None:
+            bindings = [self.runtime_binding]
+            if isinstance(self.agent, TaskSpecOracleAgent):
+                bindings.append(self.agent.command)
+            for binding in bindings:
+                if binding is not None and binding.runtime_sha256 != self.source_runtime.runtime_sha256:
+                    raise ValueError("Oracle/protected runtime differs from the preserved source runtime")
+        actor_network = self.source_runtime.network("task_machine") if self.source_runtime else None
+        verifier_network = self.source_runtime.network("verifier_machine") if self.source_runtime else None
+        self.network_policy = TaskNetworkPolicyReceipt(
+            source_runtime_sha256=self.source_runtime.runtime_sha256 if self.source_runtime else None,
+            actor_declared=actor_network,
+            verifier_declared=verifier_network,
+            actor_effective=None,
+            verifier_effective=None,
+        )
         unsupported = unsupported_harbor_contract(self.specification)
         if unsupported is not None:
             raise ValueError(unsupported)
@@ -284,7 +333,7 @@ class TaskSpecTrial(Trial):
             raise ValueError("TaskSpec trials do not accept timeout overrides or multipliers")
         self.runtime = MachineRuntimeSpec(
             backend="local",
-            network=NetworkPolicy.DENY,
+            network=actor_network if actor_network is not None else NetworkPolicy.DENY,
             cpus=self.shape.cpus,
             memory_mb=self.shape.memory_mb,
             storage_mb=self.shape.storage_mb,
@@ -292,6 +341,9 @@ class TaskSpecTrial(Trial):
             user=None,
             startup_timeout=self._environment_build_timeout_sec,
             cleanup_timeout=self.config.trial_cleanup_grace_sec,
+        )
+        self.verifier_runtime = self.runtime.model_copy(
+            update={"network": verifier_network if verifier_network is not None else NetworkPolicy.DENY}
         )
         self.limits = RolloutLimits(
             max_turns=None,
@@ -307,6 +359,7 @@ class TaskSpecTrial(Trial):
     async def _prepare(self) -> None:
         task = self.specification
         self.result.environment_setup = TimingInfo(started_at=self._now())
+        await _persist(self.paths.trial_dir / "network-policy.json", self.network_policy.model_dump_json())
         # A missing original lock is a source repair gate, before candidate generation or allocation.
         for environment in (task.environment_requirements, task.grader.environment):
             if environment is not None and environment.packages_lock is not None:
@@ -346,14 +399,14 @@ class TaskSpecTrial(Trial):
         if isinstance(self.agent, TaskSpecOracleAgent) and self.agent.command is not None:
             required_actor = oracle_actor_required(task)
         if required_actor:
-            factory = self.factory
+            factory = _NetworkFactory(self.factory, self, "task_machine")
             if (
                 isinstance(self.agent, TaskSpecOracleAgent)
                 and self.runtime_binding is not None
                 and RuntimeRole.ORACLE_CONTROL in self.runtime_binding.roles
             ):
                 factory = _TrialMachineFactory(
-                    self.factory, self, None, self._owned,
+                    factory, self, None, self._owned,
                     observation_role=RuntimeRole.ORACLE_CONTROL, usage_path=None,
                 )
             machine = await self._await_phase(
@@ -444,10 +497,10 @@ class TaskSpecTrial(Trial):
                         environment,
                         task.resources.all + task.resources.worker,
                         _TrialMachineFactory(
-                            self.factory, self, None, stack,
+                            _NetworkFactory(self.factory, self, "verifier_machine"), self, None, stack,
                             observation_role=RuntimeRole.ORACLE_CONTROL, usage_path=None,
                         ),
-                        self.runtime,
+                        self.verifier_runtime,
                         cleanup_timeout=self.config.trial_cleanup_grace_sec,
                     )
                 ),
@@ -515,18 +568,18 @@ class TaskSpecTrial(Trial):
             cpus=self.shape.cpus,
             memory_mb=self.shape.memory_mb,
             storage_mb=self.shape.storage_mb,
-            network=NetworkPolicy.DENY,
+            network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
         )
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
                     _TrialMachineFactory(
-                        self.factory, self, relay, stack,
+                        _NetworkFactory(self.factory, self, "verifier_machine"), self, relay, stack,
                         observation_role=RuntimeRole.SOURCE_GRADER,
                         usage_path=self.paths.verifier_dir / "resource-usage.json",
                     ),
-                    self.runtime,
+                    self.verifier_runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )
@@ -575,7 +628,7 @@ class TaskSpecTrial(Trial):
             cpus=self.shape.cpus,
             memory_mb=self.shape.memory_mb,
             storage_mb=self.shape.storage_mb,
-            network=NetworkPolicy.DENY,
+            network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
             env=env,
         )
@@ -583,10 +636,10 @@ class TaskSpecTrial(Trial):
             factory = await stack.enter_async_context(
                 grading_machine_factory(
                     _TrialMachineFactory(
-                        self.factory, self, relay, stack, observation_role=None,
+                        _NetworkFactory(self.factory, self, "verifier_machine"), self, relay, stack, observation_role=None,
                         usage_path=self.paths.verifier_dir / "resource-usage.json",
                     ),
-                    self.runtime,
+                    self.verifier_runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )

@@ -24,6 +24,7 @@ from taskcompendium.harbor.adapter import TASK_SPEC_FILE, declared_execution_lim
 from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.harbor.protected_runtime import read_runtime_binding
+from taskcompendium.harbor.runtime import read_source_runtime
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
@@ -534,16 +535,17 @@ def calibrated_task(
 ) -> dict:
     """Run the production Trial path once per shape, creating a fresh task package each time."""
     original = Path(mapping["task_path"])
-    oracle_command = read_oracle_command(original)
-    if oracle_command is not None:
-        oracle_command.require_task(task)
-        if oracle_command.runtime_sha256 != mapping.get("runtime_sha256"):
-            raise ValueError(f"OracleCommand runtime changed after Harbor export: {task.id}")
-    runtime_binding = read_runtime_binding(original)
-    if runtime_binding is not None:
-        runtime_binding.require_task(task)
-        if runtime_binding.runtime_sha256 != mapping.get("runtime_sha256"):
-            raise ValueError(f"Protected runtime changed after Harbor export: {task.id}")
+    for label, read_binding in (
+        ("OracleCommand", read_oracle_command),
+        ("Protected", read_runtime_binding),
+        ("Source", read_source_runtime),
+    ):
+        binding = read_binding(original)
+        if binding is None:
+            continue
+        binding.require_task(task)
+        if binding.runtime_sha256 != mapping.get("runtime_sha256"):
+            raise ValueError(f"{label} runtime changed after Harbor export: {task.id}")
     native = harbor_inspection("tasks", [str(original)])[str(original)]
     if native["task_checksum"] != mapping["task_checksum"]:
         raise ValueError(f"Task changed after Harbor export: {task.id}")

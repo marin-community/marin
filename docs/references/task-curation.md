@@ -1710,7 +1710,14 @@ uv run python -m experiments.post_training.task_curation.task_spec_harbor \
   --controls experiments.post_training.task_curation.datasets.tasktrove.math:MATH_CONTROLS
 ~~~
 
-This writes an unchanged private `task-spec.json` payload and the task map. The
+This writes an unchanged private `task-spec.json` payload and the task map.
+Rows with a runtime envelope also write `source-runtime.json`, preserving its
+complete bytes as JSON values and binding its canonical hash before checksums
+are measured. Trial honors the declared actor and verifier network policies
+independently; an actor-less oracle uses the verifier policy of its original
+grader environment. `network-policy.json` records the declared and effective
+policies with the source runtime hash. Missing roles remain undeclared.
+The
 optional `--controls module:attribute` selects the source's declared `Controls`
 object; a conversation `OracleCommand` writes its bound packet before checksums
 are measured. `--source-revision` pins that control's code. For an explicitly

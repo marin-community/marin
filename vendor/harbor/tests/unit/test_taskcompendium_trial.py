@@ -19,7 +19,7 @@ import pytest
 import tomlkit
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Backend, ExitReason, Result, UnsupportedMachineSpec
+from shellbox.machine import Backend, ExitReason, NetworkPolicy, Result, UnsupportedMachineSpec
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.harbor.oracle import ORACLE_COMMAND_FILE, write_oracle_command
 from taskcompendium.harbor.protected_runtime import (
@@ -29,6 +29,7 @@ from taskcompendium.harbor.protected_runtime import (
     RuntimeRole,
     write_runtime_binding,
 )
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, write_source_runtime
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.models import (
@@ -208,7 +209,9 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
         })
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
-    write_oracle_command(task, {}, declared_oracle, directory, source_revision="a" * 40)
+    runtime = {"task_machine": {"network": "deny"}, "verifier_machine": {"network": "allow"}}
+    write_source_runtime(task, runtime, directory)
+    write_oracle_command(task, runtime, declared_oracle, directory, source_revision="a" * 40)
     machines = Machines(tmp_path / "sandboxes")
     bind_factory(monkeypatch, machines, tmp_path / "disks")
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
@@ -235,6 +238,10 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     )
     result = await trial.run()
     assert command_deadlines == [INITIAL_REQUIREMENTS.agent_timeout_sec]
+    assert all(spec.network is NetworkPolicy.ALLOW for spec in machines.specifications)
+    network = TaskNetworkPolicyReceipt.model_validate_json((trial.paths.trial_dir / "network-policy.json").read_text())
+    assert network.actor_effective is None
+    assert network.verifier_effective is NetworkPolicy.ALLOW
     assert all(machine.closed for machine in machines.machines)
     assert (trial.paths.agent_dir / "resource-usage.json").is_file()
     if timed_out:
@@ -259,8 +266,9 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
 
 
 @pytest.mark.parametrize("actor_required", [False, True])
+@pytest.mark.parametrize("changed_field", ["task_sha256", "runtime_sha256"])
 @pytest.mark.asyncio
-async def test_changed_original_command_binding_allocates_no_machine(tmp_path, monkeypatch, actor_required):
+async def test_changed_original_command_binding_allocates_no_machine(tmp_path, monkeypatch, actor_required, changed_field):
     task = exact_answer_task(
         RawRow("bound-command", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
         prompt="Return 42.", answers=("42",), ignore_case=False,
@@ -278,11 +286,12 @@ async def test_changed_original_command_binding_allocates_no_machine(tmp_path, m
         task, {}, declared_oracle, directory, source_revision="a" * 40,
     )
     binding = json.loads((directory / ORACLE_COMMAND_FILE).read_text())
-    binding["task_sha256"] = "0" * 64
+    write_source_runtime(task, {}, directory)
+    binding[changed_field] = "0" * 64
     (directory / ORACLE_COMMAND_FILE).write_text(json.dumps(binding))
     machines = Machines(tmp_path / "sandboxes")
     bind_factory(monkeypatch, machines, tmp_path / "disks")
-    with pytest.raises(ValueError, match="OracleCommand belongs to another TaskSpec"):
+    with pytest.raises(ValueError, match="belongs to another TaskSpec|differs from the preserved source runtime"):
         await Trial.create(
             TrialConfig(
                 task=TaskConfig(path=directory), trial_name="changed-command", trials_dir=tmp_path / "trials",
@@ -789,9 +798,13 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
 
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize("packaging", ["lock", "image"])
+@pytest.mark.parametrize(
+    "actor_network,verifier_network",
+    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY), (NetworkPolicy.DENY, NetworkPolicy.ALLOW)],
+)
 @pytest.mark.asyncio
 async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
-    tmp_path, monkeypatch, exit_code, packaging
+    tmp_path, monkeypatch, exit_code, packaging, actor_network, verifier_network
 ):
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
@@ -833,6 +846,8 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     )
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    runtime = {"task_machine": {"network": actor_network.value}, "verifier_machine": {"network": verifier_network.value}}
+    write_source_runtime(task, runtime, directory)
     response = tmp_path / "response.json"
     response.write_text(json.dumps([{"role": "assistant", "content": "42"}]))
     machines = Machines(tmp_path / "sandboxes")
@@ -860,4 +875,10 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     assert not actor.local("/tests/check.py").exists()
     assert verifier.local("/tests/check.py").read_bytes() == script
     assert actor.closed and verifier.closed
+    assert [spec.network for spec in machines.specifications] == [actor_network, verifier_network]
+    network = TaskNetworkPolicyReceipt.model_validate_json(
+        (Path(trial.paths.trial_dir) / "network-policy.json").read_text()
+    )
+    assert (network.actor_declared, network.actor_effective) == (actor_network, actor_network)
+    assert (network.verifier_declared, network.verifier_effective) == (verifier_network, verifier_network)
     assert all((spec.cpus, spec.memory_mb, spec.storage_mb) == (1, 2048, 2048) for spec in machines.specifications)
