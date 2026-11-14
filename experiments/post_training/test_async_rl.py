@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 from marin.execution.lazy import StepContext
-from marin.rl.skyrl import _launcher_command as launcher_command_for_test
+from marin.rl.skyrl import skyrl_cpu_command
 
 from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl.launch import ARMS, SNOWBALL_POLICY, build_arms
@@ -30,11 +30,8 @@ print(json.dumps({
 
 
 def _compose_launch(path: Path, script: str, *, timeout: int = 180) -> subprocess.CompletedProcess[str]:
-    command = launcher_command_for_test(str(path))
-    # Exercise the production bootstrap without invoking the job-submission CLI.
-    bootstrap = command[: command.index("marinskyrl")]
     return subprocess.run(
-        [*bootstrap, "python", "-c", script, str(path)],
+        skyrl_cpu_command("python", "-c", script, str(path)),
         capture_output=True,
         text=True,
         timeout=timeout,

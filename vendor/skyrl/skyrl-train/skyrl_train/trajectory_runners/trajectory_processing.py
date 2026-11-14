@@ -17,8 +17,10 @@ from skyrl_train.trajectory_runners.types import (
 from skyrl_train.trajectory_runners.trajectory_retention import RETENTION_METRIC_PREFIX
 from skyrl_train.metric_names import (
     ENVIRONMENT_METRIC_PREFIX,
+    GENERATE_OUTCOME_METRIC_PREFIX,
     IDENTITY_AWARE_REWARD_METRIC_PREFIX,
     TASK_ROLLOUT_METRIC_PREFIX,
+    TASK_TIMING_KEYS,
     TIS_ALIGNED_TOKENS_METRIC,
     TIS_ALIGNMENT_ALERT_METRIC,
     TIS_EXACT_MATCH_FRACTION_METRIC,
@@ -441,7 +443,7 @@ def concatenate_trajectory_batches(
         result["exclude_from_baseline"] = baseline_exclusions_concat
 
     _concatenate_environment_metrics(result, trajectory_batches)
-    for key in ("verification_results", "evidence_messages"):
+    for key in ("verification_results", "evidence_messages", "task_ids"):
         if any(batch.get(key) is not None for batch in trajectory_batches):
             result[key] = [
                 value
@@ -528,7 +530,12 @@ def concatenate_trajectory_batches(
     for output in trajectory_batches:
         for name, value in (output.get("rollout_metrics") or {}).items():
             if name.startswith(
-                (RETENTION_METRIC_PREFIX, IDENTITY_AWARE_REWARD_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX)
+                (
+                    RETENTION_METRIC_PREFIX,
+                    IDENTITY_AWARE_REWARD_METRIC_PREFIX,
+                    TASK_ROLLOUT_METRIC_PREFIX,
+                    GENERATE_OUTCOME_METRIC_PREFIX,
+                )
             ):
                 rollout_metrics[name] = rollout_metrics.get(name, 0.0) + value
 
@@ -628,6 +635,24 @@ def apply_overlong_filtering(
     ]
 
 
+def task_timing_metrics(env_metrics: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Summarize each per-answer task timer over the rows that record it."""
+    metrics = {}
+    for key in TASK_TIMING_KEYS:
+        values = [row[key] for row in env_metrics if key in row]
+        if values:
+            p50, p95 = np.percentile(values, [50, 95])
+            metrics.update(
+                {
+                    f"{key}/mean": float(np.mean(values)),
+                    f"{key}/p50": float(p50),
+                    f"{key}/p95": float(p95),
+                    f"{key}/max": float(np.max(values)),
+                }
+            )
+    return metrics
+
+
 def get_rollout_metrics(
     responses: List[List[int]],
     rewards: Union[List[float], List[List[float]]],
@@ -676,9 +701,12 @@ def get_rollout_metrics(
         "generate/avg_tokens_zero_rewards": avg_tokens_zero_rewards.item(),
     }
 
+    if env_metrics is not None:
+        rollout_metrics.update(task_timing_metrics(env_metrics))
     if env_metrics is not None and env_classes is not None:
         env_to_metrics = defaultdict(list)
         for i, metrics in enumerate(env_metrics):
+            metrics = {key: value for key, value in metrics.items() if key not in TASK_TIMING_KEYS}
             # Skipped episodes (e.g. over-length prompts) never step the environment and
             # report an empty dict; per-environment aggregators only see stepped episodes.
             if metrics:

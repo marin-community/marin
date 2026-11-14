@@ -14,6 +14,7 @@ import json
 import math
 import os
 import tarfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -324,14 +325,7 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 
 
-async def _script_reward(
-    machine: Machine, grader: ScriptGrader, timeout: float, preparation_timeout: float | None
-) -> GradeResult:
-    if isinstance(grader.reward, FileReward):
-        paths = tuple(file.path for file in grader.reward.files)
-        directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
-        for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
-            await _run_checked(machine, Command(argv, timeout=preparation_timeout), "Cannot prepare reward files")
+async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float) -> GradeResult:
     result = await machine.run(
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
     )
@@ -567,6 +561,7 @@ async def _grade_staged(
             write_archive(archive_path, files, [])
             submission_archive = root / "submission.tar"
             write_archive(submission_archive, submissions, downloaded)
+            setup_started = time.monotonic()
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(
                     prepare_machine_spec,
@@ -597,8 +592,9 @@ async def _grade_staged(
                         },
                     )
                 machine = await factory.create(prepared)
+            setup_seconds = time.monotonic() - setup_started
             try:
-                return await _grade_on(
+                result = await _grade_on(
                     machine,
                     archive_path,
                     submission_archive,
@@ -610,6 +606,7 @@ async def _grade_staged(
                     preparation_timeout=machine_spec.startup_timeout,
                     user=setup_user(factory.backend),
                 )
+                return replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds)
             finally:
                 await machine.close()
     except _StepFailed as failure:
@@ -631,6 +628,7 @@ async def _grade_on(
     preparation_timeout: float | None,
     user: str | None,
 ) -> GradeResult:
+    setup_started = time.monotonic()
     await _install_grading_archive(machine, archive_path, preparation_timeout, user)
     await _run_checked(
         machine,
@@ -645,10 +643,18 @@ async def _grade_on(
         )
     # Setup provisions the declared environment; candidate files must replace its initial fixtures afterward.
     await _install_grading_archive(machine, submission_archive, preparation_timeout, user)
+    if isinstance(grader, ScriptGrader) and isinstance(grader.reward, FileReward):
+        paths = tuple(file.path for file in grader.reward.files)
+        directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
+        for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
+            await _run_checked(machine, Command(argv, timeout=preparation_timeout), "Cannot prepare reward files")
+    setup_seconds = time.monotonic() - setup_started
     if spec is not None:
-        return await _verifyit_reward(machine, spec, workspace, timeout)
-    assert isinstance(grader, ScriptGrader)
-    return await _script_reward(machine, grader, timeout, preparation_timeout)
+        result = await _verifyit_reward(machine, spec, workspace, timeout)
+    else:
+        assert isinstance(grader, ScriptGrader)
+        result = await _script_reward(machine, grader, timeout)
+    return replace(result, verifier_setup_seconds=setup_seconds)
 
 
 async def _install_grading_archive(

@@ -2160,7 +2160,8 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     model_identity = str(model.identity)
     train_data = [] if checkpoint_export else _container(config.inputs.train_data)
     validation_data = [] if checkpoint_export else _container(config.inputs.validation_data)
-    data_sources = train_data + validation_data
+    evaluation_data = {} if checkpoint_export else _container(config.inputs.get("evaluation_data", {}))
+    data_sources = train_data + validation_data + [source for sources in evaluation_data.values() for source in sources]
     generator = skyrl.get("generator", {})
     speculative = generator.get("speculative_decoding", {}) if isinstance(generator, DictConfig) else {}
     draft_mapping = speculative.get("model") if isinstance(speculative, DictConfig) and not checkpoint_export else None

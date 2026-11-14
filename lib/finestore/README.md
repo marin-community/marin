@@ -350,3 +350,13 @@ shared by MarinSkyRL producers and Marin's mismatch reports. Tokenizer identity,
 relative updates and absolute trainer steps are typed provenance fields. This
 contract sits next to `finestore.eval` so producers need only `marin-finestore`
 and CPU report readers need no trainer or inference-engine dependencies.
+
+`finestore.rl.run_records` defines numeric metrics keyed by `(attempt_id, step, name)`
+and typed attempt fields keyed by `(attempt_id, field)` in the same store under
+`<export_root>/run-records`. `update_attempt` commits a writer's supplied fields;
+omitted fields remain stored and explicit null clears a field. Native configuration,
+terminal result, startup information and checkpoint ancestry have separate fields.
+`read_attempt_metrics` joins only that attempt and its known bounded ancestors;
+joined steps expose `metric_attempt_ids` for per-metric attribution. A step reset
+starts a fresh metric history while retaining its checkpoint provenance.
+`attempt_lineage` exposes those bounded attempt receipts to history and timing readers.

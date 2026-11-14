@@ -64,7 +64,6 @@ def training_recipe(steps: int, *, reproducible_serving: bool = False) -> SkyRLR
     )
     base = training_config(preset)
     config = SkyRLRecipe(
-        entrypoint=RLEntrypoint.TASKCOMPENDIUM,
         context_budget=base.context_budget,
         trainer=base.trainer,
         generator=base.generator,
@@ -168,7 +167,7 @@ def build_run(
         MODEL_URI,
         kind=LevanterCheckpoint,
     )
-    plan = SNOWBALL_RECIPE.role_plan
+    plan = replace(SNOWBALL_RECIPE.role_plan, entrypoint=RLEntrypoint.TASKCOMPENDIUM.value)
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(ARTIFACT_NAME),

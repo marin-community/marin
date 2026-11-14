@@ -49,6 +49,14 @@ to check runtime behavior after dependency changes.
 The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
 The pinned Ray release has no Intel macOS wheel.
 
+## Run records
+
+Native receipts and numeric metrics use the [FineStore run-record contract](https://github.com/marin-community/marin/blob/main/lib/finestore/README.md#package-boundary).
+See [RL launching](../references/rl-launching.md) for checkpoint continuation and retry procedures.
+
+Generate-only launches through Marin allocate the inference engines' nodes and
+reserve no trainer or reference nodes.
+
 ## Grug activation storage
 
 With full/uniform recomputation and pipeline parallelism, Grug can store saved

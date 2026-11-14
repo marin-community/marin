@@ -40,7 +40,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
-from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe, sections
+from skyrlrecipe import ContextBudget, SkyRLRecipe, sections
 
 from experiments.post_training.curriculum_rl.pool import (
     TRAIN_FILENAME,
@@ -111,7 +111,6 @@ TRAINING = sections.SpeculatorTraining(
 
 def training_recipe(preset: _OnlineEaglePreset) -> SkyRLRecipe:
     return SkyRLRecipe(
-        entrypoint=RLEntrypoint.STANDARD,
         context_budget=ContextBudget(request_window_tokens=9856, max_new_tokens_per_turn=8192, max_turns=1),
         environment=sections.Environment(env_class="aime"),
         trainer=sections.Trainer(

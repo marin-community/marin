@@ -3,6 +3,7 @@ Main entrypoint for evaluation-only.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -11,10 +12,23 @@ from loguru import logger
 from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
 
+from skyrl_train.evaluation_profiles import (
+    named_evaluation_metrics,
+    evaluation_profile_config,
+    resolve_evaluation_profiles,
+    validate_generation_profiles,
+)
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
+from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
+from skyrl_train.inference_observability import trainer_metrics
+from skyrl_train.metric_names import (
+    PROMPTS_DROPPED_TOO_LONG_METRIC,
+)
 from skyrl_train.utils.utils import validate_generator_cfg, initialize_ray
+from skyrl_train.config.placement_geometry import num_rollout_gpus
+from skyrl_train.config.utils import normalize_logging_backends
 from skyrl_train.evaluate import evaluate
 from skyrl_train.trajectory_runners.trajectory_retention import make_trajectory_sink
 from skyrl_train.utils.trainer_utils import build_eval_dataloader
@@ -40,14 +54,27 @@ async def load_initial_policy_adapter(inference_engine_client: PolicyAdapterClie
 
 
 class EvalOnlyEntrypoint(BasePPOExp):
+    def get_colocate_pg(self, timeout: int | None = None) -> None:
+        return None
+
+    def get_policy_pg(self, timeout: int | None = None) -> None:
+        return None
+
     def get_train_dataset(self):
         """Override to avoid requiring a train dataset for eval-only runs."""
         return None
 
     def _run(self) -> dict[str, Any]:
-        return asyncio.run(self._evaluate())
+        with self.get_tracker() as tracker:
+            tracker.start(resumed_step=None)
+            results = asyncio.run(self._evaluate())
+            tracker.log(results, step=0, commit=True)
+        return results
 
     async def _evaluate(self) -> dict[str, Any]:
+        profiles = resolve_evaluation_profiles(self.cfg)
+        validate_generation_profiles(profiles)
+        datasets = self.get_named_eval_datasets()
         assert self.eval_dataset is not None, "The evaluation only entrypoint requires an eval dataset is provided"
 
         inference_engine_client = self.create_inference_engine_client(operation=EntrypointOperation.GENERATE)
@@ -65,8 +92,10 @@ class EvalOnlyEntrypoint(BasePPOExp):
 
         trajectory_sink = make_trajectory_sink(self.cfg.generator, self.tokenizer)
         trajectory_runner.set_trajectory_sink(trajectory_sink)
+        local_engines = self.cfg.generator.run_engines_locally
         try:
             await trajectory_runner.startup()
+            started = time.perf_counter()
             results: dict[str, Any] = await evaluate(
                 eval_dataloader=build_eval_dataloader(self.cfg, self.eval_dataset),
                 trajectory_runner=trajectory_runner,
@@ -75,14 +104,45 @@ class EvalOnlyEntrypoint(BasePPOExp):
                 tokenizer=self.tokenizer,
                 trajectory_sink=trajectory_sink,
             )
+            elapsed = time.perf_counter() - started
+            tokens = results["eval/all/response_tokens"]
+            results.update(
+                {
+                    "generate/wall_seconds": elapsed,
+                    "generate/response_tokens": tokens,
+                    PROMPTS_DROPPED_TOO_LONG_METRIC: self.eval_dataset.prompts_dropped_too_long,
+                }
+            )
+            if local_engines:
+                snapshot = await inference_engine_client.get_stats(read_mode=IntervalReadMode.RESET)
+                generated_tokens = sum(engine.cumulative.generation_tokens for engine in snapshot.engines)
+                results.update(
+                    {
+                        f"generate/{key}": value
+                        for key, value in trainer_metrics(snapshot).items()
+                        if key.startswith("vllm/")
+                    }
+                )
+                results["generate/vllm/generation_tokens"] = generated_tokens
+                results["generate/tokens_per_second_per_gpu"] = generated_tokens / elapsed / num_rollout_gpus(self.cfg)
+            for name, profile in profiles.items():
+                profile_cfg = evaluation_profile_config(self.cfg, profile, name)
+                dataset = datasets.get(name, self.eval_dataset)
+                profile_results = await evaluate(
+                    eval_dataloader=build_eval_dataloader(profile_cfg, dataset),
+                    trajectory_runner=trajectory_runner,
+                    cfg=profile_cfg,
+                    global_step=None,
+                    tokenizer=self.tokenizer,
+                    val_set_name=name,
+                    trajectory_sink=trajectory_sink,
+                )
+                results.update(named_evaluation_metrics(profile_results, name))
         finally:
             try:
                 await trajectory_runner.shutdown()
             finally:
                 trajectory_sink.close()
-
-        with self.get_tracker() as tracker:
-            tracker.log(results, step=0, commit=True)
 
         return results
 
@@ -94,6 +154,7 @@ def eval_entrypoint(cfg: DictConfig) -> dict:
 
 
 def run(cfg: DictConfig) -> None:
+    normalize_logging_backends(cfg)
     validate_generator_cfg(cfg)
     initialize_ray(cfg)
     metrics = ray.get(eval_entrypoint.remote(cfg))

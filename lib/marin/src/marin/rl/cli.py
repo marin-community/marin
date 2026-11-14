@@ -18,6 +18,7 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from rigging.config_discovery import find_project_root
@@ -131,12 +132,13 @@ def _coordinator_request(
     return route.cluster_config, request
 
 
-def _submit_or_run(
+def submit_or_run(
     module_name: str, handles: list[ArtifactStep], max_concurrent: int, coordinator_env: Mapping[str, str]
-) -> None:
+) -> JobName | None:
+    """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
         run(*handles, max_concurrent=max_concurrent)
-        return
+        return None
 
     workspace = find_project_root()
     cluster_config, request = _coordinator_request(
@@ -150,6 +152,7 @@ def _submit_or_run(
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
         handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)
     click.echo(f"submitted RL coordinator {handle.job_id} ({request.name}) via {cluster_config}")
+    return JobName.from_wire(handle.job_id)
 
 
 def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
@@ -158,6 +161,6 @@ def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
         # Spawn workers import the main module before registering its module spec.
         module_name = _module_name(sys.modules[fn.__module__])
-        _submit_or_run(module_name, handles, max_concurrent, os.environ)
+        submit_or_run(module_name, handles, max_concurrent, os.environ)
 
     return build_options_with_runner(fn, runner)

@@ -10,8 +10,10 @@ import tarfile
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 import pytest
+import taskcompendium.runtime.grading as grading_runtime
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
@@ -66,6 +68,7 @@ from verifyit.spec import (
     parse_spec,
 )
 
+import rolloutengine.engine as engine_runtime
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness
@@ -304,8 +307,38 @@ def shell_harnesses(**options) -> dict:
 @pytest.mark.parametrize(
     "content", ["Solve the task.", [{"type": "text", "text": "Solve "}, {"type": "text", "text": "the task."}]]
 )
-async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content):
-    factory = RecordingShellSimFactory()
+async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answer, reward, content, monkeypatch):
+    clock = [0.0]
+    for module in (engine_runtime, grading_runtime):
+        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    class TimedMachine:
+        def __init__(self, machine):
+            self.machine = machine
+
+        async def upload(self, source, target):
+            clock[0] += 3
+            await self.machine.upload(source, target)
+
+        async def download(self, source, target):
+            clock[0] += 5
+            await self.machine.download(source, target)
+
+        async def run(self, command):
+            clock[0] += 11 if command.argv == ("sh", "/tests/grade.sh") else 1
+            return await self.machine.run(command)
+
+        async def close(self):
+            clock[0] += 100
+            await self.machine.close()
+
+    class TimedFactory(RecordingShellSimFactory):
+        async def create(self, spec):
+            clock[0] += 2
+            return TimedMachine(await super().create(spec))
+
+    factory = TimedFactory()
+    observer = RecordingObserver()
     model = ReplayModel([{"role": "assistant", "content": answer}])
     released = asyncio.Event()
 
@@ -324,11 +357,16 @@ async def test_agent_harness_uses_isolated_task_grading_and_engine_cleanup(answe
         model,
         {"local": factory},
         harnesses={"agent": AgentHarness(lambda context, complete: agent(context.machine, complete))},
+        observer=observer,
     ).run_task(rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, reward)
     assert model.requests[0].messages == ({"role": "user", "content": content},)
     assert record.rollout.conversations[-1].response_token_ids == (20,)
     assert record.rollout.conversations[-1].loss_mask == (1,)
+    assert record.grade.verifier_setup_seconds == 13.0
+    assert record.rollout.metrics["timing/setup"] == 15.0
+    assert record.rollout.metrics["timing/grading"] == 20.0
+    assert [event.payload.duration for event in observer.events if isinstance(event.payload, Graded)] == [33.0]
     assert released.is_set()
     assert len(factory.machines) == 2
     for machine in factory.machines:
@@ -2506,6 +2544,9 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
         )
     if expected_status == Outcome.INFRA_ERROR:
         assert record.grade.failure == GradingFailure.INVALID_REWARD
+    assert {key for key in record.rollout.metrics if key.startswith("timing/")} == (
+        {"timing/grading", "timing/setup"} if expected_reward is not None else set()
+    )
     if answer_type == AnswerType.FILE:
         assert record.rollout.conversations[-1].loss_mask == (1, 0, 0, 1)
         assert json.loads(model.requests[1].messages[-1]["content"])["exit_code"] == 0
@@ -2591,6 +2632,7 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
             rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert interrupted.value.operation == RolloutOperation.MODEL
+    assert not any(key.startswith("timing/") for key in interrupted.value.rollout.metrics)
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
@@ -3763,7 +3805,9 @@ async def test_a_generation_limit_in_a_new_conversation_grades_the_earlier_one()
     assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == ("length", Outcome.GRADED, 1.0)
     first, unserved = record.rollout.conversations
     assert (len(first.steps), unserved.steps, unserved.prompt_token_ids) == (1, (), (70, 71))
-    assert record.rollout.metrics == {"score": 1.0}
+    assert {key: value for key, value in record.rollout.metrics.items() if not key.startswith("timing/")} == {
+        "score": 1.0
+    }
 
 
 async def test_an_unlimited_agent_can_finish_beyond_the_old_turn_limit():

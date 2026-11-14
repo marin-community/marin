@@ -702,6 +702,7 @@ class SpeculativeDecoding(Section):
 
 
 class SamplingParams(Section):
+    ignore_eos: bool = field(False)
     repetition_penalty: int | float = field(1.0)
     temperature: int | float = field(1.0)
     top_p: int | float = field(1.0)

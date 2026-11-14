@@ -47,7 +47,6 @@ from marin.rl.skyrl import (
     SkyRLRun,
     SkyRLSpec,
     SkyRLTopology,
-    _role_plan_config_values,
     skyrl_step,
 )
 from rigging.provenance import username_segment
@@ -217,7 +216,7 @@ def checkpoint_interval(max_steps: int, eval_interval: int) -> int:
 CURRICULUM_TEMPLATE = SNOWBALL_SMOKE
 
 
-ROLE_PLAN_SETTINGS = frozenset(_role_plan_config_values(SNOWBALL_RECIPE.role_plan))
+ROLE_PLAN_SETTINGS = frozenset(SNOWBALL_RECIPE.role_plan.config_values())
 FIXED_SETTINGS = ROLE_PLAN_SETTINGS | {
     "entrypoint",
     "trainer.eval_before_train",
@@ -359,7 +358,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> SkyR
         sampling_params=sections.SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
     )
     config = SkyRLRecipe(
-        entrypoint=template.entrypoint,
         context_budget=budget,
         environment=template.environment,
         data=template.data,

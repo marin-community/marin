@@ -9,10 +9,18 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import asdict, dataclass, replace
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from finestore.rl.run_records import (
+    AttemptRecord,
+    ExportedPolicy,
+    LaunchReceipt,
+    LaunchResult,
+    LaunchState,
+    read_attempt,
+    write_attempt,
+)
 from iris.client.client import JobFailedError
 from iris.cluster.client.job_info import get_job_info
 from iris.resources.state import JobState
@@ -27,17 +35,9 @@ from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
-from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import Provenance, launch_provenance
-
-
-class LaunchState(StrEnum):
-    PREPARED = "prepared"
-    SUBMITTED = "submitted"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
+from rigging.provenance import launch_provenance
 
 
 @dataclass(frozen=True)
@@ -47,29 +47,8 @@ class LaunchOutcome:
     job_id: str
     job_state: str
     exit_code: int
-
-
-@dataclass(frozen=True)
-class ExportedPolicy:
-    policy_export_uri: str
-    global_step: int
-    tokenizer_uri: str
-    tokenizer_revision: str
-    checkpoint_root: str
-    terminal_manifest_uri: str
-
-
-@dataclass(frozen=True)
-class LaunchResult:
-    run_id: str
-    attempt_id: str
-    state: LaunchState
-    iris_job_id: str | None
-    iris_job_state: str | None
-    provenance: Provenance
-    runtime_profile: str
-    model: ExportedPolicy | None
-    failure: str | None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class LaunchBackend(Protocol):
@@ -105,6 +84,10 @@ def _prepare_config(config: DictConfig) -> DictConfig:
     OmegaConf.set_struct(prepared, False)
     prepared.inputs.train_data = _prepared_sources(list(config.inputs.train_data))
     prepared.inputs.validation_data = _prepared_sources(list(config.inputs.validation_data))
+    if config.inputs.get("evaluation_data"):
+        prepared.inputs.evaluation_data = {
+            name: _prepared_sources(list(sources)) for name, sources in config.inputs.evaluation_data.items()
+        }
     OmegaConf.set_struct(prepared, True)
     return prepared
 
@@ -213,18 +196,13 @@ def _result(
         state=state,
         iris_job_id=outcome.job_id if outcome else None,
         iris_job_state=outcome.job_state if outcome else None,
-        provenance=launch_provenance(),
+        provenance=asdict(launch_provenance()),
         runtime_profile=str(config.runtime.profile),
         model=model,
         failure=failure,
+        started_at=outcome.started_at if outcome else None,
+        finished_at=outcome.finished_at if outcome else None,
     )
-
-
-def _manifest(config: DictConfig, result: LaunchResult) -> dict[str, Any]:
-    return {
-        "config": OmegaConf.to_container(config, resolve=True),
-        "result": asdict(result),
-    }
 
 
 def _record_failure(
@@ -233,17 +211,31 @@ def _record_failure(
     failure: str,
 ) -> LaunchResult:
     result = _result(config, LaunchState.FAILED, outcome=outcome, failure=failure)
-    attempt_uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
-    write_json(attempt_uri, _manifest(config, result))
+    _write_attempt_receipt(config, result)
     return result
+
+
+def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchReceipt:
+    export_root = str(config.artifacts.export_root)
+    receipt = LaunchReceipt(config=OmegaConf.to_container(config, resolve=True), result=result)
+    write_attempt(
+        export_root,
+        AttemptRecord(
+            run_id=str(config.run.id),
+            attempt_id=str(config.run.attempt_id),
+            **({"iris_job_id": result.iris_job_id} if result.iris_job_id is not None else {}),
+            result=result,
+        ),
+    )
+    return receipt
 
 
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
-    terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
-    if StoragePath(terminal_manifest_uri).exists():
-        raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")
+    terminal_receipt_uri = str(config.artifacts.terminal_manifest_uri)
+    if StoragePath(terminal_receipt_uri).exists():
+        raise ValueError(f"Terminal receipt is immutable and already exists: {terminal_receipt_uri}")
 
     if backend is None:
         # The concrete Iris backend imports the training/export stack. Keep it
@@ -261,10 +253,26 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
             return _result(config, LaunchState.PREPARED)
         _prepare_model_caches(config)
         OmegaConf.save(config, resolved_file.name, resolve=False)
+        record = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
+        if record is None or record.config is None:
+            write_attempt(
+                str(config.artifacts.export_root),
+                AttemptRecord(
+                    run_id=str(config.run.id),
+                    attempt_id=str(config.run.attempt_id),
+                    config=OmegaConf.to_container(config, resolve=True),
+                ),
+            )
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:
-            outcome = LaunchOutcome(job_id=str(error.job_id), job_state=error.status.state.value, exit_code=1)
+            outcome = LaunchOutcome(
+                job_id=str(error.job_id),
+                job_state=error.status.state.value,
+                exit_code=1,
+                started_at=error.status.started_at.as_formatted_date() if error.status.started_at else None,
+                finished_at=error.status.finished_at.as_formatted_date() if error.status.finished_at else None,
+            )
 
         if outcome.exit_code != 0:
             return _record_failure(config, outcome, f"Iris job reached {outcome.job_state}")
@@ -291,10 +299,8 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
             f"Successful Iris job did not persist resolved config: {config.artifacts.resolved_config_uri}",
         )
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
-    payload = _manifest(config, result)
-    attempt_uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
-    write_json(attempt_uri, payload)
-    write_json(terminal_manifest_uri, payload)
+    receipt = _write_attempt_receipt(config, result)
+    write_json(terminal_receipt_uri, receipt.model_dump(mode="json"))
     return result
 
 
@@ -312,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
     with contextlib.redirect_stdout(sys.stderr):
         result = execute_launch(args.config)
-    json.dump(asdict(result), sys.stdout, sort_keys=True)
+    json.dump(result.model_dump(mode="json"), sys.stdout, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if result.state in {LaunchState.PREPARED, LaunchState.SUBMITTED, LaunchState.SUCCEEDED} else 1
 

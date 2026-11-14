@@ -66,6 +66,7 @@ class LocalRLRunner:
         self.config = config
         self._train_data_sources = list(config.train_data)
         self._val_data_sources = list(config.val_data)
+        self._evaluation_data = {}
         self._processes: List[subprocess.Popen] = []
         self.rl_env_path: Path | None = None
 
@@ -144,7 +145,7 @@ class LocalRLRunner:
         with filesystem.open(path, "w") as destination:
             json.dump(record, destination, sort_keys=True)
 
-    def _resolve_data_inputs(self, data_kind: str) -> None:
+    def _resolve_data_inputs(self, data_kind: str, evaluation_data: dict | None = None) -> None:
         for role, attribute in (("train", "train_data"), ("validation", "val_data")):
             values = getattr(self.config, attribute)
             if not values:
@@ -157,6 +158,10 @@ class LocalRLRunner:
             setattr(self, f"_{attribute}_sources", sources)
             print(f"Resolved {role} data: {paths}")
 
+        for name, values in (evaluation_data or {}).items():
+            resolved = resolve_rl_train_data_with_sources(list(values), kind=data_kind)
+            self._evaluation_data[name] = tuple(resolved.paths)
+
     def run(self) -> int:
         """Execute the RL training job. Returns an exit code (0 for success)."""
         self.print_banner()
@@ -168,7 +173,7 @@ class LocalRLRunner:
         if launch_config.run.mode == RunMode.CHECKPOINT_EXPORT:
             self._write_resolved_config(launch_config)
             return self._run_skyrl(launch_config)
-        self._resolve_data_inputs(str(launch_config.inputs.data_kind))
+        self._resolve_data_inputs(str(launch_config.inputs.data_kind), launch_config.inputs.get("evaluation_data"))
         terminal_bench_data = skyrl_config.get("data", {}).get("terminal_bench_data", ())
         if terminal_bench_data:
             terminal_bench_data = tuple(
@@ -181,6 +186,7 @@ class LocalRLRunner:
                 train_data=tuple(self.config.train_data),
                 validation_data=tuple(self.config.val_data),
                 terminal_bench_data=terminal_bench_data,
+                evaluation_data=tuple(self._evaluation_data.items()),
             ),
         )
         launch_config.skyrl = skyrl_config

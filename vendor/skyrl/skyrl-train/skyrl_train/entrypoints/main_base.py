@@ -25,6 +25,9 @@ from loguru import logger
 import asyncio
 import multiprocessing as mp
 
+from skyrl_train.config.placement_geometry import num_rollout_gpus
+from skyrl_train.config.utils import normalize_logging_backends
+from skyrl_train.evaluation_profiles import resolve_evaluation_profiles
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
@@ -178,12 +181,10 @@ def create_ray_wrapped_inference_engines_from_config(
             engine_init_kwargs["weight_transfer_config"] = {"backend": "runai_streamer"}
 
     requested_logprobs = [cfg.generator.sampling_params.logprobs, cfg.generator.eval_sampling_params.logprobs]
-    for callback in cfg.trainer.get("callbacks") or []:
-        if callback.get("type") == "evaluation":
-            requested_logprobs.extend(
-                (profile.get("sampling_params") or {}).get("logprobs")
-                for profile in (callback.get("additional_evaluations") or {}).values()
-            )
+    requested_logprobs.extend(
+        profile.sampling_params.logprobs if profile.sampling_params is not None else None
+        for profile in resolve_evaluation_profiles(cfg).values()
+    )
     requested_logprobs = [
         value + 1
         for value in requested_logprobs
@@ -382,7 +383,9 @@ class BasePPOExp:
     def task_dataset(self, data_files):
         from skyrl_train.dataset.nemotron_ultra import NemotronTaskDataset  # noqa: PLC0415
         from skyrl_train.dataset.tasks import SourceTaskDataset  # noqa: PLC0415
-        from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings  # noqa: PLC0415 - optional training dependencies
+        from skyrl_train.rollouts.harbor_tasks import (
+            HarborTaskSettings,
+        )  # noqa: PLC0415 - optional training dependencies
 
         terminal_data = list(self.cfg.data.get("terminal_bench_data", []))
         dataset_type = NemotronTaskDataset if terminal_data else SourceTaskDataset
@@ -403,15 +406,31 @@ class BasePPOExp:
             **terminal_options,
         )
 
-    def get_eval_dataset(self):
-        """Load validation prompts for evaluation or new mismatch-probe generation."""
+    def get_eval_dataset(self, data_files: list[str] | None = None):
+        """Load selected evaluation prompts or new mismatch-probe prompts."""
+        data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None
-        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts) and self.cfg.data.val_data:
-            if EvaluationRunner(self.cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR:
-                return self.harbor_task_dataset(self.cfg.data.val_data)
-            return self.task_dataset(self.cfg.data.val_data)
+        needs_named_evaluation = bool(resolve_evaluation_profiles(self.cfg))
+        if (self.cfg.trainer.eval_interval > 0 or needs_probe_prompts or needs_named_evaluation) and data_files:
+            return self._build_eval_dataset(data_files)
         return None
+
+    def _build_eval_dataset(self, data_files):
+        if EvaluationRunner(self.cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR:
+            return self.harbor_task_dataset(data_files)
+        return self.task_dataset(data_files)
+
+    def get_named_eval_datasets(self):
+        """Build the datasets selected by named evaluation profiles."""
+        datasets = {}
+        for name, profile in resolve_evaluation_profiles(self.cfg).items():
+            if profile.data_files is not None:
+                dataset = self.get_eval_dataset(profile.data_files)
+                if dataset is None:
+                    raise ValueError(f"evaluation profile {name} requires a dataset")
+                datasets[name] = dataset
+        return datasets
 
     def harbor_task_dataset(self, data_files):
         from skyrl_train.dataset.harbor import HarborTaskDataset  # noqa: PLC0415
@@ -442,11 +461,7 @@ class BasePPOExp:
         timeout = int(self.cfg.trainer.distributed.placement_group_timeout_seconds) if timeout is None else timeout
         if self.cfg.trainer.placement.colocate_all and inference_engines_required(self.cfg):
             pg = placement_group(
-                [{"GPU": 1, "CPU": 1}]
-                * self.cfg.generator.num_inference_engines
-                * self.cfg.generator.inference_engine_tensor_parallel_size
-                * self.cfg.generator.inference_engine_pipeline_parallel_size
-                * self.cfg.generator.inference_engine_data_parallel_size,
+                [{"GPU": 1, "CPU": 1}] * num_rollout_gpus(self.cfg),
                 strategy="PACK",
             )
             get_ray_pg_ready_with_timeout(pg, timeout=timeout)
@@ -564,15 +579,18 @@ class BasePPOExp:
             tokenizer=tokenizer,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
+            named_eval_datasets=self.get_named_eval_datasets(),
             inference_engine_client=inference_engine_client,
             trajectory_runner=trajectory_runner,
             eval_trajectory_runner=(
                 self.get_task_runner(
                     cfg,
                     inference_engine_client,
-                    harbor_config=cfg.terminal_bench_config
-                    if EvaluationRunner(cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR
-                    else None,
+                    harbor_config=(
+                        cfg.terminal_bench_config
+                        if EvaluationRunner(cfg.trainer.evaluation_runner) is EvaluationRunner.HARBOR
+                        else None
+                    ),
                 )
                 if EvaluationRunner(cfg.trainer.evaluation_runner) is not EvaluationRunner.TRAINING
                 else trajectory_runner
@@ -725,6 +743,7 @@ def run_ray_driver(
     from skyrl_train.utils.progress import configure_progress  # noqa: PLC0415 - keep launcher imports Torch-free
     from skyrl_train.utils.utils import initialize_ray  # noqa: PLC0415
 
+    normalize_logging_backends(cfg)
     validate_rollout_launch(cfg, operation)
     if cfg.get("terminal_bench_config") is not None:
         HarborTaskSettings.from_config(cfg.terminal_bench_config)
