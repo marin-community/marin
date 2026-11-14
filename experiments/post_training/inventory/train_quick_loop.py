@@ -157,17 +157,24 @@ def build_run(
     version: str,
     *,
     selection: ArtifactStep[Artifact],
+    model: ArtifactHfModel | None = None,
     steps: int = DEFAULT_STEPS,
     export_hf: bool = False,
     reproducible_serving: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
-    """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
-    model = ArtifactStep.adopt(
-        f"models/snowball-datakit-sft-{MODEL_REVISION}",
-        MODEL_VERSION,
-        MODEL_URI,
-        kind=LevanterCheckpoint,
-    )
+    """Bind selected canonical tasks, starting weights and terminal outputs.
+
+    Args:
+        model: Weights RL starts from. Defaults to the pinned Datakit SFT checkpoint.
+    """
+    if model is None:
+        pinned = ArtifactStep.adopt(
+            f"models/snowball-datakit-sft-{MODEL_REVISION}",
+            MODEL_VERSION,
+            MODEL_URI,
+            kind=LevanterCheckpoint,
+        )
+        model = ArtifactHfModel(step=pinned, tokenizer_uri=MODEL_ID, tokenizer_revision=MODEL_REVISION, relative_path="")
     plan = SNOWBALL_RECIPE.role_plan
     return skyrl_step(
         SkyRLSpec(
@@ -177,12 +184,7 @@ def build_run(
                 training_recipe(steps, reproducible_serving=reproducible_serving).to_skyrl(),
                 sort_keys=False,
             ),
-            model=ArtifactHfModel(
-                step=model,
-                tokenizer_uri=MODEL_ID,
-                tokenizer_revision=MODEL_REVISION,
-                relative_path="",
-            ),
+            model=model,
             train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
             validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
@@ -227,7 +229,17 @@ def build_run(
 )
 @rl_build_options
 def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: bool) -> ArtifactStep[SkyRLRun]:
-    name = user_owned_name(ARTIFACT_NAME)
+    return build_run(
+        resolve_version(user_owned_name(ARTIFACT_NAME), None),
+        selection=selection_step(selection_uri),
+        steps=steps,
+        export_hf=export_hf,
+        reproducible_serving=reproducible_serving,
+    )
+
+
+def selection_step(selection_uri: str) -> ArtifactStep[Artifact]:
+    """Adopt a published task-selection artifact root given on the command line."""
     selection_uri = selection_uri.rstrip("/")
     _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
     parts = identity.split("/")
@@ -237,14 +249,7 @@ def main(selection_uri: str, steps: int, export_hf: bool, reproducible_serving: 
             param_hint="--selection-uri",
         )
     selection_name, selection_version = parts
-    selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
-    return build_run(
-        resolve_version(name, None),
-        selection=selection,
-        steps=steps,
-        export_hf=export_hf,
-        reproducible_serving=reproducible_serving,
-    )
+    return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
 
 
 if __name__ == "__main__":

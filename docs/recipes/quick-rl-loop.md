@@ -142,3 +142,22 @@ configuration, and keep trial results in the experiment issue or report.
 Default-profile runs whose recorded configuration has evaluation temperature
 0.0 evaluated greedily without a seed. Do not compare their evaluation scores
 with runs that sampled at 0.6.
+
+## Train SFT first
+
+[`train_full_quick_loop.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/inventory/train_full_quick_loop.py)
+runs a short SFT before the same RL stage. It trains `--sft-steps` updates
+(default 10) of the
+[Snowball H100 recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py)
+from the pre-trained Snowball base model on 32 H100s (four nodes), then starts RL
+from that export:
+
+```bash
+uv run python -m experiments.post_training.inventory.train_full_quick_loop \
+  --selection-uri "$SELECTION_URI" --version "$RUN_VERSION" --sft-steps 3 --steps 3
+```
+
+Add `--stage sft` to plan or run only the SFT step; a later run with the same
+version reuses it. Use a different `RUN_VERSION` from any `train_quick_loop`
+run, because both write the same RL artifact name. Run `train_quick_loop` on the
+same selection as the reference that starts from the pinned SFT model.
