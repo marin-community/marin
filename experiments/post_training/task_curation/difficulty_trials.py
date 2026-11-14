@@ -12,7 +12,7 @@ import math
 import tarfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +22,7 @@ from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import (
     MEASUREMENTS,
     PROTOCOL_ID,
+    PROTOCOLS,
     DifficultyAttempt,
     DifficultyMeasurement,
     SamplingSettings,
@@ -56,6 +57,7 @@ from experiments.post_training.task_curation.difficulty_sampling import request_
 
 LOGGER = logging.getLogger(__name__)
 ATTEMPT_TIMEOUT = 259200
+JUDGE_TEMPERATURE = PROTOCOLS[PROTOCOL_ID].temperature
 INPUT_BUDGET_REASON = (
     "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned."
 )
@@ -65,6 +67,45 @@ INPUT_BUDGET_REASON = (
 class TaskOutcome:
     attempts: list[DifficultyAttempt]
     pending_reason: str | None
+
+
+@dataclass(frozen=True)
+class ModelTraffic:
+    receipt: ContentEvidenceReference
+    input_tokens: int
+    output_tokens: int
+
+
+def archive_model_traffic(
+    requests: Path,
+    tasks: list[PreparedTask],
+    attempts_per_task: int,
+    source_key: str,
+    archive: Path,
+    destination: StoragePath,
+) -> ModelTraffic:
+    """Archive one source's known model replies and count their reported usage."""
+    input_tokens = output_tokens = 0
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
+        for task in tasks:
+            task_key = hashlib.sha256(task.task_id.encode()).hexdigest()
+            for number in range(attempts_per_task):
+                route = f"/{source_key}-{task_key}-{number}"
+                folder = requests / hashlib.sha256(route.encode()).hexdigest()
+                if not folder.exists():
+                    continue
+                stream.add(folder, arcname=folder.name)
+                for response_path in folder.glob("*/response.json"):
+                    usage = json.loads(response_path.read_text())["body"].get("usage") or {}
+                    input_tokens += usage.get("prompt_tokens", 0)
+                    output_tokens += usage.get("completion_tokens", 0)
+    copy(str(archive), str(destination), no_clobber=True)
+    return ModelTraffic(
+        ContentEvidenceReference(uri=str(destination), sha256=file_sha256(StoragePath(str(archive)))),
+        input_tokens,
+        output_tokens,
+    )
 
 
 class CandidateRun(BaseModel):
@@ -78,6 +119,8 @@ class CandidateRun(BaseModel):
     environment_options: dict
     judge_endpoint: str
     judge_api_key_secret: str
+    judge_api_model: str
+    judge_identity: SolverIdentity
     workers: int
     gpu_count: int
     attempts_per_task: int
@@ -148,7 +191,9 @@ async def execute_trial(configuration: TrialConfig, authentication: dict[str, st
     return trial, await trial.run()
 
 
-def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path, output: str) -> TaskOutcome:
+def run_task(
+    task: PreparedTask, config: CandidateRun, base_url: str, root: Path, output: str, judge_url: str | None
+) -> TaskOutcome:
     key = hashlib.sha256(task.task_id.encode()).hexdigest()
     destination = StoragePath(output) / key
     if task.reason is not None or task.path is None:
@@ -188,8 +233,11 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
         options = dict(config.environment_options)
         authentication = {endpoint: "EMPTY"}
         if task.judge_model is not None:
-            options.update(model_endpoint=config.judge_endpoint, model_name=task.judge_model)
-            authentication[config.judge_endpoint] = require_secret(config.judge_api_key_secret)
+            if judge_url is None:
+                raise ValueError("A task judge requires the protocol's host-side relay")
+            judge_endpoint = f"{judge_url}/{root.name}-{key}-{number}/v1"
+            options.update(model_endpoint=judge_endpoint, model_name=task.judge_model or config.judge_api_model)
+            authentication[judge_endpoint] = "EMPTY"
         configuration = TrialConfig(
             task=TaskConfig(path=Path(task.path)),
             trial_name="candidate",
@@ -253,6 +301,7 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
                 **attempt.model_dump(mode="json"),
                 "reason": "input_budget_unserved" if unserved else None,
                 **raw_receipt,
+                "judge_temperature": JUDGE_TEMPERATURE if task.judge_model is not None else None,
             },
         )
         attempts.append(attempt)
@@ -293,8 +342,13 @@ def main() -> None:
             ).model_dump(mode="json"),
         )
     key = "EMPTY" if config.api_key_secret is None else require_secret(config.api_key_secret)
+    has_judge = any(task.judge_model is not None for source in sources for task in source.tasks)
+    judge_root = args.local_root / "judge"
+    if has_judge:
+        judge_root.mkdir()
     with (
         preserved_model_traffic(args.local_root, output),
+        preserved_model_traffic(judge_root, output / "judge") if has_judge else nullcontext(),
         budget_relay(
             endpoint=config.endpoint,
             model=config.api_model,
@@ -307,6 +361,20 @@ def main() -> None:
             ),
             receipts=args.local_root / "model-requests",
         ) as relay,
+        (
+            budget_relay(
+                endpoint=config.judge_endpoint,
+                model=config.judge_api_model,
+                api_key=require_secret(config.judge_api_key_secret),
+                tokenizer_model=config.judge_identity.tokenizer,
+                tokenizer_revision=config.judge_identity.tokenizer_revision,
+                parameters={"temperature": JUDGE_TEMPERATURE},
+                budget=None,
+                receipts=judge_root / "model-requests",
+            )
+            if has_judge
+            else nullcontext()
+        ) as judge_relay,
     ):
         with ThreadPoolExecutor(max_workers=config.workers) as executor:
             for source in sources:
@@ -320,6 +388,7 @@ def main() -> None:
                         config.identity,
                         config.settings,
                         request_parameters(config.settings),
+                        config.judge_identity,
                     )
                     if previous is not None
                     else None
@@ -336,6 +405,7 @@ def main() -> None:
                         relay,
                         args.local_root / source_key,
                         str(output / source_key / "attempts"),
+                        judge_relay,
                     )
                     for task in tasks
                 ]
@@ -352,26 +422,33 @@ def main() -> None:
                     if outcome.pending_reason is not None
                 }
                 previous_measurement = None if recovered is None else recovered.measurement
-                input_tokens = 0 if previous_measurement is None else previous_measurement.input_tokens
-                output_tokens = 0 if previous_measurement is None else previous_measurement.output_tokens
-                request_root = args.local_root / "model-requests"
-                archive = args.local_root / source_key / "model-requests.tar.gz"
-                archive.parent.mkdir(parents=True, exist_ok=True)
-                with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
-                    for task in tasks:
-                        task_key = hashlib.sha256(task.task_id.encode()).hexdigest()
-                        for number in range(config.attempts_per_task):
-                            route = f"/{source_key}-{task_key}-{number}"
-                            folder = request_root / hashlib.sha256(route.encode()).hexdigest()
-                            if not folder.exists():
-                                continue
-                            stream.add(folder, arcname=folder.name)
-                            for response_path in folder.glob("*/response.json"):
-                                response = json.loads(response_path.read_text())
-                                usage = response["body"].get("usage") or {}
-                                input_tokens += usage.get("prompt_tokens", 0)
-                                output_tokens += usage.get("completion_tokens", 0)
-                copy(str(archive), str(output / source_key / "model-requests.tar.gz"), no_clobber=True)
+                traffic = archive_model_traffic(
+                    args.local_root / "model-requests",
+                    tasks,
+                    config.attempts_per_task,
+                    source_key,
+                    args.local_root / source_key / "model-requests.tar.gz",
+                    output / source_key / "model-requests.tar.gz",
+                )
+                source_has_judge = any(task.judge_model is not None for task in tasks)
+                judge_traffic = (
+                    archive_model_traffic(
+                        judge_root / "model-requests",
+                        tasks,
+                        config.attempts_per_task,
+                        source_key,
+                        args.local_root / source_key / "judge-requests.tar.gz",
+                        output / source_key / "judge-requests.tar.gz",
+                    )
+                    if source_has_judge
+                    else None
+                )
+                input_tokens = traffic.input_tokens + (
+                    0 if previous_measurement is None else previous_measurement.input_tokens
+                )
+                output_tokens = traffic.output_tokens + (
+                    0 if previous_measurement is None else previous_measurement.output_tokens
+                )
                 attempt_receipts = [] if recovered is None else list(recovered.attempt_receipts)
                 for path in sorted((output / source_key / "attempts" / "*" / "*" / "attempt.json").glob(), key=str):
                     attempt_receipts.append(ContentEvidenceReference(uri=str(path), sha256=file_sha256(path)))
@@ -386,7 +463,19 @@ def main() -> None:
                             "sum of recorded source trial windows; "
                             "startup, teardown and interrupted source windows excluded"
                         ),
-                        "model_requests": str(output / source_key / "model-requests.tar.gz"),
+                        "model_requests": traffic.receipt.uri,
+                        "model_requests_sha256": traffic.receipt.sha256,
+                        "judge_model_requests": (
+                            None if judge_traffic is None else judge_traffic.receipt.model_dump(mode="json")
+                        ),
+                        "judge_input_tokens": None if judge_traffic is None else judge_traffic.input_tokens,
+                        "judge_output_tokens": None if judge_traffic is None else judge_traffic.output_tokens,
+                        "judge_temperature": JUDGE_TEMPERATURE if source_has_judge else None,
+                        "judge_token_basis": (
+                            "this source window; prior campaign traffic remains in linked receipts"
+                            if source_has_judge
+                            else None
+                        ),
                         "attempt_receipts": [ref.model_dump(mode="json") for ref in attempt_receipts],
                         "previous_campaign": None if previous is None else str(previous.root),
                     },

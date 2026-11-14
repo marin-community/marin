@@ -14,6 +14,7 @@ from taskcompendium.pipeline.oracle_filter import PriorPhaseFailureReceipt, Reso
 from experiments.post_training.task_curation.archive_evidence import verified_archive_members
 
 
+
 def require_prior_phase_failure(evidence: PriorPhaseFailureReceipt, result: dict) -> None:
     """Verify the original exception, archived config, actual Trial and declared phase."""
     if evidence.result_sha256 != canonical_sha256(result):
@@ -29,6 +30,7 @@ def require_prior_phase_failure(evidence: PriorPhaseFailureReceipt, result: dict
         raise ValueError("Earlier exception archive belongs to another physical Trial")
     config_member = str(member.with_name("config.json"))
     selected = verified_archive_members(evidence.archive, {str(member), config_member})
+
     if json.loads(selected[config_member]) != result["config"]:
         raise ValueError("Earlier phase archive config differs from the actual production Trial")
     exception = selected[str(member)]

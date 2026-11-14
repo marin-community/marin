@@ -124,6 +124,7 @@ class NativeOracleSuccessPolicy(BaseModel):
         )
 
 
+
 def pre_oracle_host_unavailable(result: dict[str, Any], verdict: dict | None, oracle_exit_code: int | None) -> bool:
     """Recognize frozen host failures that occurred before the original command."""
     config = result.get("config", {})
