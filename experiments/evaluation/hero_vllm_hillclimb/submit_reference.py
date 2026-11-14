@@ -1,11 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submit one ``reference_hero`` job: four GB200 nodes, one JAX process per GPU, interactive priority.
+"""Submit one ``reference_hero`` job: GB200 nodes, one JAX process per GPU, interactive priority.
 
 The launch mirrors the native Hero sampler (``experiments/grug/moe_hero_ep/ops/vibe_check/jobs.py``).
 
     uv run python experiments/evaluation/hero_vllm_hillclimb/submit_reference.py --name ref-a1
+
+Histories past 65,536 tokens do not fit replicated on every device; score them one at a time with the
+sequence sharded over every device:
+
+    uv run python experiments/evaluation/hero_vllm_hillclimb/submit_reference.py --name ref-cp1 \
+        --nodes 8 --context-parallel 32 --long-only --long-lengths 65536,131072,262144
 """
 
 import argparse
@@ -26,7 +32,6 @@ EXPORT_REQUEST = (
     "export-request.json"
 )
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=14d/hero-vllm-hillclimb/reference"
-NODES = 4
 GPUS_PER_NODE = 4
 TIMEOUT = Duration.from_hours(3)
 
@@ -35,6 +40,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True)
     parser.add_argument("--long-lengths", default="4096,32768,65536")
+    parser.add_argument("--nodes", type=int, default=4)
+    parser.add_argument("--context-parallel", type=int, default=1)
+    parser.add_argument("--long-only", action="store_true")
     parser.add_argument(
         "--cluster",
         default="cw-us-east-08a",
@@ -48,7 +56,7 @@ def main() -> None:
         ram="890g",
         disk="1t",
         device=GpuConfig(variant="GB200", count=GPUS_PER_NODE),
-        replicas=NODES,
+        replicas=args.nodes,
         target_cluster="cw-us-east-08a" if args.cluster == "marin" else None,
     )
     output = f"{OUTPUT_ROOT}/{args.name}"
@@ -65,6 +73,9 @@ def main() -> None:
             output,
             "--long-lengths",
             args.long_lengths,
+            "--context-parallel",
+            str(args.context_parallel),
+            *(["--long-only"] if args.long_only else []),
         ]
     )
     environment = resolve_training_env(
@@ -80,7 +91,7 @@ def main() -> None:
     native = convert_resources(resources)
     print(
         f"cluster={args.cluster} target_cluster={resources.target_cluster} output={output} "
-        f"replicas={resources.replicas} coscheduling={resolve_coscheduling(resources, NODES)}"
+        f"replicas={resources.replicas} coscheduling={resolve_coscheduling(resources, args.nodes)}"
     )
     if args.dry_run:
         return

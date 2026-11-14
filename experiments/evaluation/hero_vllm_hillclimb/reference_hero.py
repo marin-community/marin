@@ -268,7 +268,7 @@ def main() -> None:
     long_lengths = tuple(int(value) for value in args.long_lengths.split(",") if value)
     gate = [] if args.long_only else gate_rows(cases)
     long = long_rows(cases, long_lengths)
-    # Long histories run at exact length, one history replicated on every row.
+    # Long histories run at exact length, one history replicated on every data row.
     batches = [(rows, max(len(row.tokens) for row in rows)) for rows in gate_batches(gate, batch_size)]
     batches = [(rows, -(-length // LENGTH_QUANTUM) * LENGTH_QUANTUM) for rows, length in batches]
     batches += [([row], len(row.tokens)) for row in long]
