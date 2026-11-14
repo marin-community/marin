@@ -430,13 +430,18 @@ def main() -> None:
                     args.local_root / source_key / "model-requests.tar.gz",
                     output / source_key / "model-requests.tar.gz",
                 )
-                judge_traffic = archive_model_traffic(
-                    judge_root / "model-requests",
-                    tasks,
-                    config.attempts_per_task,
-                    source_key,
-                    args.local_root / source_key / "judge-requests.tar.gz",
-                    output / source_key / "judge-requests.tar.gz",
+                source_has_judge = any(task.judge_model is not None for task in tasks)
+                judge_traffic = (
+                    archive_model_traffic(
+                        judge_root / "model-requests",
+                        tasks,
+                        config.attempts_per_task,
+                        source_key,
+                        args.local_root / source_key / "judge-requests.tar.gz",
+                        output / source_key / "judge-requests.tar.gz",
+                    )
+                    if source_has_judge
+                    else None
                 )
                 input_tokens = traffic.input_tokens + (
                     0 if previous_measurement is None else previous_measurement.input_tokens
@@ -460,11 +465,17 @@ def main() -> None:
                         ),
                         "model_requests": traffic.receipt.uri,
                         "model_requests_sha256": traffic.receipt.sha256,
-                        "judge_model_requests": judge_traffic.receipt.model_dump(mode="json"),
-                        "judge_input_tokens": judge_traffic.input_tokens,
-                        "judge_output_tokens": judge_traffic.output_tokens,
-                        "judge_temperature": JUDGE_TEMPERATURE,
-                        "judge_token_basis": "this source window; prior campaign traffic remains in linked receipts",
+                        "judge_model_requests": (
+                            None if judge_traffic is None else judge_traffic.receipt.model_dump(mode="json")
+                        ),
+                        "judge_input_tokens": None if judge_traffic is None else judge_traffic.input_tokens,
+                        "judge_output_tokens": None if judge_traffic is None else judge_traffic.output_tokens,
+                        "judge_temperature": JUDGE_TEMPERATURE if source_has_judge else None,
+                        "judge_token_basis": (
+                            "this source window; prior campaign traffic remains in linked receipts"
+                            if source_has_judge
+                            else None
+                        ),
                         "attempt_receipts": [ref.model_dump(mode="json") for ref in attempt_receipts],
                         "previous_campaign": None if previous is None else str(previous.root),
                     },

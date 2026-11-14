@@ -191,6 +191,11 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     assert blocker in measurement.reason
     assert measurement.infrastructure_attempts == int(infrastructure_first and not unserved)
     attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
+    if not with_judge:
+        assert all(attempts[name] is None for name in (
+            "judge_model_requests", "judge_input_tokens", "judge_output_tokens", "judge_temperature", "judge_token_basis",
+        ))
+        assert not list(output.glob("*/judge-requests.tar.gz"))
     pending = {"blocked": blocker}
     if unserved:
         pending["scored"] = difficulty_trials.INPUT_BUDGET_REASON

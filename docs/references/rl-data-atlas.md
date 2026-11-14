@@ -897,6 +897,10 @@ GLM judges use the same production host service at temperature 0.7. The host
 records requested and effective parameters while preserving each source's
 TaskSpec, rubric and grading token limits. A blank declared judge model uses the explicitly recorded
 GLM host default; a different named model requires its own qualified route.
+Only Chat Completions judge APIs are qualified; Responses judges retain an
+explicit `production_judge_api_not_qualified:responses` reason before candidate
+execution. Sources without judges omit judge-window traffic and temperature
+metadata.
 Each source's attempt receipt links separate candidate and judge traffic
 archives and token counts. Final judge traffic, including replies that outlive
 an infrastructure-failed task, is sealed under `trials/judge/`.
