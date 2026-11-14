@@ -57,6 +57,11 @@ class RuntimePolicy(StrEnum):
     LOSS_CURVE = "loss_curve"
 
 
+# Each arm reproduced the source-runtime first-update stall before approval.
+LOSS_CURVE_RECOVERY_ARMS = frozenset((size, mask) for size in (512, 768, 1024) for mask in (Mask.FULL, Mask.ASSISTANT))
+CALIBRATION_RECOVERY_SIZES = (512, 768)
+
+
 @dataclass(frozen=True)
 class Cell:
     size: int
@@ -128,7 +133,11 @@ def budget_steps(size: int, budget: float) -> int:
 
 
 def calibration_cells() -> tuple[Cell, ...]:
-    return tuple(Cell(d, mask, 0, 20, (20,), "calibration") for d in SIZES for mask in Mask)
+    return tuple(
+        Cell(d, mask, 0, 20, (20,), "calibration-recovery" if d in CALIBRATION_RECOVERY_SIZES else "calibration")
+        for d in SIZES
+        for mask in Mask
+    )
 
 
 def primary_cells() -> tuple[Cell, ...]:
@@ -184,7 +193,9 @@ def reference_data_config() -> LmDataConfig:
 
 def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE) -> SFTSpec:
     if runtime == RuntimePolicy.LOSS_CURVE:
-        runtime = RuntimePolicy.SYNCHRONOUS if cell.size == 1024 else RuntimePolicy.SOURCE
+        runtime = (
+            RuntimePolicy.SYNCHRONOUS if (cell.size, cell.mask) in LOSS_CURVE_RECOVERY_ARMS else RuntimePolicy.SOURCE
+        )
     e1 = recipe()
     receipt = model_receipt(cell.size)
     hf_config = receipt["config"]
