@@ -12,12 +12,12 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 
 Decontamination has four stages that you can run separately:
 
-- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v3.
+- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v5.
 - ``decon-drop`` builds source and global corpus DF filters.
 - ``decon-mark`` marks each selected source from completed Bloom and drop-set stages.
 - ``decon-report`` reads completed marks and writes the validation report.
 
-Run preparation first. This reuses the canonical eval v3 Bloom when it is built::
+Run preparation first. This reuses the canonical eval v5 Bloom when it is built::
 
     python -m experiments.datakit.reference_pipeline \
         --mode full --target decon-drop --sources all \
@@ -121,6 +121,7 @@ from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
     DeconAttributes,
     DropSetSource,
+    RequiredEvalSuite,
     all_source_drop_sets_step,
     build_eval_bloom_step,
     decon_step,
@@ -184,6 +185,9 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
     EVAL_CORPUS_VERSION,
     EVALS_RELATIVE,
     LMH_MANIFEST_RELATIVE,
+    REQUIRED_LMH_TASKS,
+    UNCHEATABLE_BENCHMARK_NAMES,
+    UNCHEATABLE_MANIFEST_RELATIVE,
 )
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
@@ -805,11 +809,14 @@ def decontamination_steps(
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_manifest_path=f"{eval_root}/{AA_MANIFEST_RELATIVE}",
+        required_eval_suites=(
+            RequiredEvalSuite(f"{eval_root}/{AA_MANIFEST_RELATIVE}", AA_BENCHMARK_NAMES),
+            RequiredEvalSuite(f"{eval_root}/{UNCHEATABLE_MANIFEST_RELATIVE}", UNCHEATABLE_BENCHMARK_NAMES),
+        ),
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
-        required_eval_names=AA_BENCHMARK_NAMES,
         best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
+        best_effort_required_tasks=REQUIRED_LMH_TASKS,
         worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,
