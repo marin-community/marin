@@ -20,6 +20,7 @@ from experiments.post_training.snowball_isoflop.run import run_training_pod
 class RuntimeControl(StrEnum):
     SERIAL = "serial-collectives"
     LAUNCH_BLOCKING = "launch-blocking"
+    NO_COMMAND_BUFFER = "no-command-buffer"
 
 
 def diagnostic_pod(cell: Cell) -> TrainLmOnPodConfig:
@@ -29,6 +30,8 @@ def diagnostic_pod(cell: Cell) -> TrainLmOnPodConfig:
         environment["XLA_FLAGS"] += " --xla_gpu_disable_async_collectives=ALLCOLLECTIVES"
     elif cell.phase == f"diagnostic-{RuntimeControl.LAUNCH_BLOCKING}":
         environment["CUDA_LAUNCH_BLOCKING"] = "1"
+    elif cell.phase == f"diagnostic-{RuntimeControl.NO_COMMAND_BUFFER}":
+        environment["XLA_FLAGS"] += " --xla_gpu_enable_command_buffer="
     else:
         raise ValueError(f"Unknown runtime control: {cell.phase}")
     return replace(pod, env_vars=environment)
