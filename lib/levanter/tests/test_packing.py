@@ -13,6 +13,7 @@ from levanter.data.packing import (
     GreedyPrepackedDataset,
     PromptCompletion,
     greedy_pack_prompt_completions,
+    pack_documents,
     per_segment_correct,
     per_segment_loss,
 )
@@ -717,6 +718,156 @@ def test_greedy_pack_prompt_completions_empty():
                 Pos, [PromptCompletion(ids=[], prompt_length=0)], pad_token, max_segments_per_example
             )
         )
+
+
+####################################
+# tests for lookahead packing      #
+####################################
+
+
+def test_pack_documents_lookahead_basic():
+    # docs [200, 160, 100, 150], budget 350: the sequential packer wastes the tail of the
+    # first pack (160 does not fit after 200), while a window-2 lookahead pairs 100 with 200.
+    lengths = {"store": np.array([200, 160, 100, 150])}
+    sequential = pack_documents(lengths, {"store": 350})
+    assert [list(p) for p in sequential] == [[0], [1, 2], [3]]
+
+    # window 1 is equivalent to the sequential packer
+    assert [list(p) for p in pack_documents(lengths, {"store": 350}, lookahead_window=1)] == [
+        list(p) for p in sequential
+    ]
+
+    lookahead = pack_documents(lengths, {"store": 350}, lookahead_window=2)
+    assert [list(p) for p in lookahead] == [[0, 2], [1, 3]]
+    assert len(lookahead) < len(sequential)
+
+
+def test_pack_documents_lookahead_default_is_sequential():
+    # Without a lookahead the results are contiguous ranges, identical to the packer's
+    # historical behavior.
+    lengths = {"store": np.array([100, 200, 150, 150])}
+    packs = pack_documents(lengths, {"store": 300})
+    assert packs == [range(0, 2), range(2, 4)]
+
+
+def test_pack_documents_lookahead_respects_max_segments():
+    lengths = {"store": np.ones(10, dtype=np.int64)}
+    packs = pack_documents(lengths, {"store": 100}, max_segments_per_example=2, lookahead_window=3)
+    assert all(len(p) == 2 for p in packs)
+    assert sorted(d for p in packs for d in p) == list(range(10))
+
+
+def test_pack_documents_lookahead_partitions_documents():
+    rng = np.random.default_rng(0)
+    for trial in range(50):
+        n = int(rng.integers(1, 60))
+        if trial % 3 == 0:
+            lengths = {"store": rng.integers(1, 5000, size=n).astype(np.int64)}
+        else:
+            lengths = {"store": rng.integers(1, 1000, size=n).astype(np.int64)}
+        window = int(rng.integers(1, 10))
+        lookahead = pack_documents(
+            lengths, {"store": 2000}, max_segments_per_example=64, slice_strategy="left", lookahead_window=window
+        )
+        sequential = pack_documents(lengths, {"store": 2000}, max_segments_per_example=64, slice_strategy="left")
+        # exact partition
+        assert sorted(d for p in lookahead for d in p) == list(range(n))
+        # every multi-document pack fits by raw token sum
+        for p in lookahead:
+            assert len(p) >= 1
+            if len(p) > 1:
+                assert int(lengths["store"][p].sum()) <= 2000
+        # lookahead never needs more packs than the sequential packer
+        assert len(lookahead) <= len(sequential)
+
+
+def test_pack_documents_lookahead_multi_leaf():
+    # Leaf b constrains the pack: doc 1 fits leaf a alone but not leaf b, while doc 2 fits
+    # with doc 0 in both leaves; the window-2 lookahead pairs doc 2 with doc 0.
+    lengths = {"a": np.array([100, 200, 150]), "b": np.array([100, 250, 100])}
+    sequential = pack_documents(lengths, {"a": 300, "b": 250})
+    assert [list(p) for p in sequential] == [[0], [1], [2]]
+    lookahead = pack_documents(lengths, {"a": 300, "b": 250}, lookahead_window=2)
+    assert [list(p) for p in lookahead] == [[0, 2], [1]]
+    assert len(lookahead) < len(sequential)
+    for p in lookahead:
+        for leaf, allowed in (("a", 300), ("b", 250)):
+            if len(p) > 1:
+                assert int(lengths[leaf][p].sum()) <= allowed
+    assert sorted(d for p in lookahead for d in p) == [0, 1, 2]
+
+
+def test_pack_documents_lookahead_multi_leaf_lookahead_helps():
+    lengths = {"a": np.array([100, 200, 100, 100]), "b": np.array([100, 250, 100, 100])}
+    # sequential: doc0 alone (b: 100+250>250); doc1 alone (a: 200+100>300); doc2+doc3 (200, 200)
+    sequential = pack_documents(lengths, {"a": 300, "b": 250})
+    assert [list(p) for p in sequential] == [[0], [1], [2, 3]]
+    # window 3: doc0's pack scans doc1 (no: b 350>250), doc2 (yes: a 200, b 200) -> [0, 2];
+    # then doc1 alone (a: 200+100>300) and doc3 alone (b: 250+100>250)
+    lookahead = pack_documents(lengths, {"a": 300, "b": 250}, lookahead_window=3)
+    assert [list(p) for p in lookahead] == [[0, 2], [1], [3]]
+
+
+def test_pack_documents_lookahead_drop_and_raise():
+    lengths = {"store": np.array([50, 3000, 40, 40])}
+    # drop: over-long doc 1 is skipped entirely
+    packs = pack_documents(lengths, {"store": 100}, slice_strategy="drop", lookahead_window=2)
+    assert sorted(d for p in packs for d in p) == [0, 2, 3]
+    # raise: over-long doc raises
+    with pytest.raises(ValueError, match="has length 3000 which exceeds"):
+        pack_documents(lengths, {"store": 100}, slice_strategy="raise", lookahead_window=2)
+    # left/right: over-long doc is a singleton pack
+    for strategy in ("left", "right"):
+        packs = pack_documents(lengths, {"store": 100}, slice_strategy=strategy, lookahead_window=2)
+        assert sorted(d for p in packs for d in p) == [0, 1, 2, 3]
+        assert any(list(p) == [1] for p in packs)
+
+
+def test_greedy_prepacked_dataset_lookahead():
+    # docs [200, 160, 100, 140], budget 350, window 2 -> packs [[0, 2], [1, 3]]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        offsets = np.array([0, 200, 360, 460, 600])
+        store = JaggedArrayStore.open(tmpdir, item_rank=1, dtype=jnp.int64)
+        for i in range(len(offsets) - 1):
+            store.append(np.arange(offsets[i], offsets[i + 1]))
+        dataset = {"store": store}
+        max_length = {"store": 350}
+        tester = GreedyPrepackedDataset(dataset, max_length, pad_with_zeros=False, lookahead_window=2)
+
+        batch = tester.as_sync_dataset()[0]
+        data, segment_ids = batch
+        expected_data = np.concatenate([np.arange(0, 200), np.arange(360, 460)])
+        expected_segment_ids = np.concatenate([np.full(200, 0), np.full(100, 2)])
+        assert np.array_equal(data["store"], expected_data)
+        assert np.array_equal(segment_ids["store"], expected_segment_ids)
+
+        batch = tester.as_sync_dataset()[1]
+        data, segment_ids = batch
+        expected_data = np.concatenate([np.arange(200, 360), np.arange(460, 600)])
+        expected_segment_ids = np.concatenate([np.full(160, 1), np.full(140, 3)])
+        assert np.array_equal(data["store"], expected_data)
+        assert np.array_equal(segment_ids["store"], expected_segment_ids)
+
+
+def test_greedy_prepacked_dataset_lookahead_padded_and_sliced():
+    # Over-long doc handled with slice_strategy="left" inside a lookahead pack; padding to allowed.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store = JaggedArrayStore.open(tmpdir, item_rank=1, dtype=jnp.int64)
+        store.append(np.arange(100))  # doc 0: length 100 > allowed 50 -> singleton, sliced
+        store.append(np.arange(100, 130))  # doc 1: length 30
+        dataset = {"store": store}
+        max_length = {"store": 50}
+        tester = GreedyPrepackedDataset(dataset, max_length, slice_strategy="left", lookahead_window=4)
+
+        batch = tester.as_sync_dataset()[0]
+        data, segment_ids = batch
+        assert np.array_equal(data["store"], np.arange(0, 50))
+        assert np.array_equal(segment_ids["store"], np.full(50, 0))
+
+        batch = tester.as_sync_dataset()[1]
+        data, segment_ids = batch
+        assert np.array_equal(data["store"], np.pad(np.arange(100, 130), (0, 20)))
+        assert np.array_equal(segment_ids["store"], np.pad(np.full(30, 1), (0, 20), constant_values=-1))
 
 
 if __name__ == "__main__":
