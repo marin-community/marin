@@ -11,6 +11,7 @@ from uuid import UUID
 
 import pytest
 from finestore.rl.curation import SourceDeclaration
+from finestore.rl.difficulty import Solver
 from marina.applets import applet_schema
 from marina.db import DatabaseSpec, engine_for
 from marina.journeys import Kernel, running_kernel
@@ -18,9 +19,11 @@ from marina.preview import install_preview_sources
 from marina.server import MarinaConfig
 from sqlalchemy import text
 
+from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog.server.app import migrate
 from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
+from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import pending_review_declaration, review_declarations
 
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
@@ -73,6 +76,8 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 *review_declarations(),
                 (False, pending_review_declaration()),
             ]:
+                if declaration.name in {"clean", "eval"}:
+                    declaration = with_declaration_admission_census(declaration)
                 if declaration.id == "Marin:clean":
                     declaration = SourceDeclaration.model_validate(
                         {
@@ -155,6 +160,28 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 },
             )
             connection.execute(text("UPDATE atlas_current SET load_id='lexical' WHERE name='latest'"))
+            for payload in connection.execute(
+                text(
+                    "SELECT declaration FROM atlas_sources WHERE load_id='lexical' "
+                    "AND id IN ('Marin:clean','Marin:eval')"
+                )
+            ).scalars():
+                declaration = SourceDeclaration.model_validate(payload)
+                for solver in Solver:
+                    solved = 3 if (declaration.name == "clean") == (solver == Solver.SMALL) else 1
+                    measurement = difficulty_measurement(declaration, solver, solved)
+                    connection.execute(
+                        text(
+                            "INSERT INTO atlas_difficulty VALUES (:id,:source,:protocol,:created,CAST(:value AS JSONB))"
+                        ),
+                        {
+                            "id": measurement.measurement_id,
+                            "source": declaration.id,
+                            "protocol": measurement.protocol_id,
+                            "created": measurement.created_at,
+                            "value": measurement.model_dump_json(),
+                        },
+                    )
         yield
     finally:
         engine.dispose()

@@ -35,12 +35,17 @@ class CensusConfig:
     output_path: str
 
 
-def population_documents(population: SourceTextPopulation) -> Iterable[tuple[dict, dict]]:
+def population_rows(population: SourceTextPopulation) -> Iterable[dict[str, str]]:
+    """Read original serialized contracts in the census's stable shard order."""
     for path in sorted(StoragePath(prefix_join(population.specs_output_dir, "*.parquet")).glob(), key=str):
         with path.open("rb") as stream:
             for batch in pq.ParquetFile(stream).iter_batches(batch_size=32, columns=["task_spec", "runtime"]):
-                for row in batch.to_pylist():
-                    yield json.loads(row["task_spec"]), json.loads(row["runtime"])
+                yield from batch.to_pylist()
+
+
+def population_documents(population: SourceTextPopulation) -> Iterable[tuple[dict, dict]]:
+    for row in population_rows(population):
+        yield json.loads(row["task_spec"]), json.loads(row["runtime"])
 
 
 @dataclass

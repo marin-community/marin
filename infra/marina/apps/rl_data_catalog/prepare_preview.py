@@ -22,10 +22,12 @@ PRODUCTION_APP_ID = "fb11c931-5861-4878-8bb5-a964d652b45f"
 PREVIEW_APP_ID = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
 MODEL_SOURCES = {
     "curation.py": "lib/finestore/src/finestore/rl/curation.py",
+    "difficulty.py": "lib/finestore/src/finestore/rl/difficulty.py",
     "source_fingerprints.py": "lib/taskcompendium/src/taskcompendium/source_fingerprints.py",
 }
 IMPORT_RELOCATIONS = {
     "from finestore.rl.curation import ": "from .bundled.curation import ",
+    "from finestore.rl.difficulty import ": "from .bundled.difficulty import ",
     "from taskcompendium.source_fingerprints import ": "from .bundled.source_fingerprints import ",
 }
 
@@ -97,17 +99,24 @@ def prepare_preview(checkout: Path, output: Path, oracle_inventory: Path | None 
     for name, relative in MODEL_SOURCES.items():
         raw = (checkout / relative).read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
-        (bundled / name).write_bytes(raw)
+        packaged = raw.replace(b"from finestore.rl.curation import ", b"from .curation import ")
+        (bundled / name).write_bytes(packaged)
         modules.append(
             {
                 "source": relative,
                 "source_sha256": digest,
                 "packaged": f"server/bundled/{name}",
-                "packaged_sha256": digest,
-                "transformation": "Unchanged",
+                "packaged_sha256": hashlib.sha256(packaged).hexdigest(),
+                "transformation": "Unchanged" if packaged == raw else "Relocated curation model import",
             }
         )
-    for relative in ("server/app.py", "server/curriculum.py", "server/quality.py", "server/contamination.py"):
+    for relative in (
+        "server/app.py",
+        "server/curriculum.py",
+        "server/quality.py",
+        "server/contamination.py",
+        "server/difficulty.py",
+    ):
         path = output / relative
         content = path.read_text()
         for before, after in IMPORT_RELOCATIONS.items():

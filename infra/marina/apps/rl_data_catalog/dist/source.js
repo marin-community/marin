@@ -61,6 +61,24 @@ async function render(data, sourceId) {
     node('span', data.updated_at ? `Last updated ${new Date(data.updated_at).toLocaleDateString()}` : 'Catalog load time unavailable', 'chip quality-unassessed'),
   );
   const sections = [];
+  const difficulty = card('Difficulty', [
+    ['Protocol', data.difficulty.protocol_id],
+    ...data.difficulty.models.flatMap(model => [
+      [AtlasDifficulty.titles[model.solver], model.status === 'measured' ? `${model.solved}/${model.n} solved` : model.reason],
+      [`${AtlasDifficulty.titles[model.solver]} sample`, model.sample_receipt && pointer(model.sample_receipt.uri)],
+      [`${AtlasDifficulty.titles[model.solver]} population`, model.sample && `${number.format(model.sample.population_count)} retained tasks; seed ${model.sample.seed}${model.sample.pre_oracle_filter ? '; pre-oracle-filter; resampling required after filtering' : ''}`],
+      [`${AtlasDifficulty.titles[model.solver]} model`, model.model && `${model.model.model} @ ${model.model.revision}`],
+      [`${AtlasDifficulty.titles[model.solver]} attempts`, model.attempts_receipt && pointer(model.attempts_receipt.uri)],
+      [`${AtlasDifficulty.titles[model.solver]} infrastructure`, model.infrastructure_attempts == null ? null : `${model.infrastructure_attempts} failed attempts preserved; ${model.pending_tasks} pending tasks`],
+    ]),
+    ['Historical observations', data.difficulty.historical.length ? list(data.difficulty.historical.map(model => {
+      const span = node('span'); span.append(`${AtlasDifficulty.titles[model.solver]} · ${model.protocol_id} · ${model.release.repo} @ ${model.release.revision} · ${model.status}`);
+      if (model.attempts_receipt) span.append(' ', pointer(model.attempts_receipt.uri));
+      return span;
+    })) : null],
+  ]);
+  difficulty.insertBefore(AtlasDifficulty.comparison(data.difficulty), difficulty.children[1] || null);
+  sections.push(difficulty);
   sections.push(card('Filtration ledger', filtrationRows({...d, contamination_status: data.contamination_status, oracle_inventory: data.oracle_inventory}), 'Retained converted counts do not establish admission. Oracle failures must be removed before an admitted count can be shown.'));
   sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Agent and grader support are measured separately. The Daytona safety label covers the actor only.'));
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
