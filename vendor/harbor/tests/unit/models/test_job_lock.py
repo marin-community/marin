@@ -13,6 +13,7 @@ from harbor.models.job.lock import (
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
+    RetainedAgentServiceTask,
     TaskConfig,
     TrialConfig,
     VerifierConfig,
@@ -111,6 +112,30 @@ def test_package_task_uses_resolved_ref_digest() -> None:
 
     assert lock.trials[0].task.type == "package"
     assert lock.trials[0].task.digest == task_digest
+
+
+def test_job_lock_detects_verifier_service_retention_change() -> None:
+    task = TaskConfig(name="test-org/test-task", ref=_sha("a"), source="test-org/ds")
+    job = JobConfig(agents=[AgentConfig(name="pi")], tasks=[task])
+    baseline = build_job_lock(config=job, trial_configs=[_trial(task)], invocation=["harbor", "run"])
+    retained = build_job_lock(
+        config=job,
+        trial_configs=[
+            _trial(
+                task,
+                verifier=VerifierConfig(
+                    retain_agent_services_for_tasks=[
+                        RetainedAgentServiceTask(
+                            source="test-org/ds", name="test-org/test-task", ref=_sha("a")
+                        )
+                    ]
+                ),
+            )
+        ],
+        invocation=["harbor", "run"],
+    )
+
+    assert baseline != retained
 
 
 def test_job_lock_equality_ignores_trial_order() -> None:

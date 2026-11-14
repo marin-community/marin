@@ -70,34 +70,6 @@ class ShellUpdate:
     truncated: bool = False
 
 
-class ShellSession(Protocol):
-    """One persistent shell owned by an agent trial."""
-
-    @property
-    def interactive(self) -> bool: ...
-
-    async def execute(
-        self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
-    ) -> ShellUpdate: ...
-
-    async def read(
-        self, *, wait: float = 0, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
-    ) -> ShellUpdate: ...
-
-    async def write(self, data: bytes) -> None: ...
-
-    async def interrupt(self) -> None: ...
-
-    async def close(self) -> None: ...
-
-
-@runtime_checkable
-class BashSessionProvider(Protocol):
-    """An environment that can open an agent-owned persistent Bash session."""
-
-    async def open_bash_session(self) -> ShellSession: ...
-
-
 @dataclass(frozen=True)
 class QemuBundle:
     """A staged runtime directory and its loaded registry origin, when present."""

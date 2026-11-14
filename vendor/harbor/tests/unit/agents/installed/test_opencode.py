@@ -27,14 +27,14 @@ from harbor.utils.artifact_writer import get_artifact_writer
     ],
 )
 async def test_opencode_rejects_provider_auth_in_config_before_guest_execution(
-    tmp_path, options
+    tmp_path, options, mock_environment
 ):
     agent = OpenCode(
         logs_dir=tmp_path,
         model_name="hosted_vllm/model",
         opencode_config={"provider": {"hosted_vllm": {"options": options}}},
     )
-    environment = AsyncMock()
+    environment = mock_environment
     with pytest.raises(ValueError, match="Provider credentials"):
         await agent.run("do something", environment, AgentContext())
     assert environment.exec.call_args_list == []
@@ -436,12 +436,14 @@ class TestOpenCodeConvertEvents:
 
 class TestOpenCodePopulateContextPostRun:
     @pytest.mark.asyncio
-    async def test_run_persists_instruction_as_initial_user_step(self, temp_dir):
+    async def test_run_persists_instruction_as_initial_user_step(
+        self, temp_dir, mock_environment
+    ):
         instruction = "Create a hello-world file."
         agent = OpenCode(
             logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             if "tee /logs/agent/opencode.txt" in kwargs["command"]:
@@ -584,9 +586,9 @@ class TestOpenCodePopulateContextPostRun:
 
 class TestOpenCodeInstall:
     @pytest.mark.asyncio
-    async def test_reuses_exact_pinned_version(self, temp_dir):
+    async def test_reuses_exact_pinned_version(self, temp_dir, mock_environment):
         agent = OpenCode(logs_dir=temp_dir, version="1.18.2")
-        environment = AsyncMock()
+        environment = mock_environment
         environment.default_user = "agent"
         environment.exec.return_value = SimpleNamespace(
             return_code=0,
@@ -601,9 +603,11 @@ class TestOpenCodeInstall:
         assert "user" not in environment.exec.call_args.kwargs
 
     @pytest.mark.asyncio
-    async def test_reinstalls_mismatched_pinned_version(self, temp_dir):
+    async def test_reinstalls_mismatched_pinned_version(
+        self, temp_dir, mock_environment
+    ):
         agent = OpenCode(logs_dir=temp_dir, version="1.18.2")
-        environment = AsyncMock()
+        environment = mock_environment
         environment.default_user = "agent"
         environment.exec.side_effect = [
             SimpleNamespace(return_code=0, stdout="1.18.1\n", stderr=""),
@@ -629,12 +633,14 @@ class TestOpenCodeRunCommands:
             ("google/gemini-2.5-pro", "GOOGLE_BASE_URL"),
         ],
     )
-    async def test_run_forwards_provider_base_url(self, temp_dir, model_name, variable):
+    async def test_run_forwards_provider_base_url(
+        self, temp_dir, model_name, variable, mock_environment
+    ):
         endpoint = "https://provider.example.test/v1"
         agent = OpenCode(
             logs_dir=temp_dir, model_name=model_name, extra_env={variable: endpoint}
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
 
         await agent.run("do something", mock_env, AsyncMock())
@@ -642,11 +648,11 @@ class TestOpenCodeRunCommands:
         assert mock_env.exec.call_args_list[-1].kwargs["env"][variable] == endpoint
 
     @pytest.mark.asyncio
-    async def test_run_command_structure(self, temp_dir):
+    async def test_run_command_structure(self, temp_dir, mock_environment):
         agent = OpenCode(
             logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
         exec_calls = mock_env.exec.call_args_list
@@ -656,34 +662,34 @@ class TestOpenCodeRunCommands:
         assert "tee /logs/agent/opencode.txt" in exec_calls[-1].kwargs["command"]
 
     @pytest.mark.asyncio
-    async def test_no_opencode_data_dir_in_env(self, temp_dir):
+    async def test_no_opencode_data_dir_in_env(self, temp_dir, mock_environment):
         """OPENCODE_DATA_DIR is not needed since we parse stdout."""
         agent = OpenCode(
             logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
         exec_calls = mock_env.exec.call_args_list
         assert "OPENCODE_DATA_DIR" not in exec_calls[-1].kwargs["env"]
 
     @pytest.mark.asyncio
-    async def test_fake_vcs_present(self, temp_dir):
+    async def test_fake_vcs_present(self, temp_dir, mock_environment):
         agent = OpenCode(
             logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
         exec_calls = mock_env.exec.call_args_list
         assert exec_calls[0].kwargs["env"]["OPENCODE_FAKE_VCS"] == "git"
 
     @pytest.mark.asyncio
-    async def test_file_read_feature_flag_disabled(self, temp_dir):
+    async def test_file_read_feature_flag_disabled(self, temp_dir, mock_environment):
         agent = OpenCode(
             logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
 
         await agent.run("do something", mock_env, AsyncMock())
@@ -692,34 +698,36 @@ class TestOpenCodeRunCommands:
         assert opencode_call.kwargs["env"]["OPENCODE_DISABLE_FFF"] == "1"
 
     @pytest.mark.asyncio
-    async def test_variant_flag_is_included(self, temp_dir):
+    async def test_variant_flag_is_included(self, temp_dir, mock_environment):
         agent = OpenCode(
             logs_dir=temp_dir,
             model_name="openai/gpt-5.3-codex",
             variant="xhigh",
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
         exec_calls = mock_env.exec.call_args_list
         assert "--variant xhigh" in exec_calls[-1].kwargs["command"]
 
     @pytest.mark.asyncio
-    async def test_model_flag_is_included(self, temp_dir):
+    async def test_model_flag_is_included(self, temp_dir, mock_environment):
         agent = OpenCode(
             logs_dir=temp_dir,
             model_name="my-provider/my-model",
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
         exec_calls = mock_env.exec.call_args_list
         assert "--model=my-provider/my-model" in exec_calls[-1].kwargs["command"]
 
     @pytest.mark.asyncio
-    async def test_raises_when_json_error_event_is_emitted(self, temp_dir):
+    async def test_raises_when_json_error_event_is_emitted(
+        self, temp_dir, mock_environment
+    ):
         agent = OpenCode(logs_dir=temp_dir, model_name="openai/gpt-5.3-codex")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             if "tee /logs/agent/opencode.txt" in kwargs["command"]:
@@ -788,12 +796,12 @@ class TestOpenCodeContextOverflow:
 
     @pytest.mark.asyncio
     async def test_overflow_with_nonzero_exit_raises_context_length_error(
-        self, temp_dir
+        self, temp_dir, mock_environment
     ):
         """opencode exits 1 after emitting ContextOverflowError -> the exec
         raises NonZeroAgentExitCodeError, which we reclassify."""
         agent = OpenCode(logs_dir=temp_dir, model_name="vllm/some/model")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             command = kwargs["command"]
@@ -811,12 +819,12 @@ class TestOpenCodeContextOverflow:
 
     @pytest.mark.asyncio
     async def test_overflow_uses_failed_command_stdout_before_logs_are_collected(
-        self, temp_dir
+        self, temp_dir, mock_environment
     ):
         """Remote environments return command stdout before copying agent logs
         into the local trial directory."""
         agent = OpenCode(logs_dir=temp_dir, model_name="vllm/some/model")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             if "tee /logs/agent/opencode.txt" in kwargs["command"]:
@@ -833,11 +841,13 @@ class TestOpenCodeContextOverflow:
             await agent.run("do something", mock_env, AgentContext())
 
     @pytest.mark.asyncio
-    async def test_overflow_with_zero_exit_raises_context_length_error(self, temp_dir):
+    async def test_overflow_with_zero_exit_raises_context_length_error(
+        self, temp_dir, mock_environment
+    ):
         """opencode exits 0 but emits a ContextOverflowError event -> the
         error-event path must also reclassify."""
         agent = OpenCode(logs_dir=temp_dir, model_name="vllm/some/model")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             if "tee /logs/agent/opencode.txt" in kwargs["command"]:
@@ -850,11 +860,13 @@ class TestOpenCodeContextOverflow:
             await agent.run("do something", mock_env, AgentContext())
 
     @pytest.mark.asyncio
-    async def test_non_overflow_nonzero_exit_still_raises_nonzero(self, temp_dir):
+    async def test_non_overflow_nonzero_exit_still_raises_nonzero(
+        self, temp_dir, mock_environment
+    ):
         """A genuine (non-overflow) failure is NOT swallowed: a plain non-zero
         exit still surfaces as NonZeroAgentExitCodeError."""
         agent = OpenCode(logs_dir=temp_dir, model_name="vllm/some/model")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             command = kwargs["command"]
@@ -881,12 +893,14 @@ class TestOpenCodeContextOverflow:
         assert not isinstance(exc_info.value, ContextLengthExceededError)
 
     @pytest.mark.asyncio
-    async def test_signal_kill_raises_agent_killed_by_signal(self, temp_dir):
+    async def test_signal_kill_raises_agent_killed_by_signal(
+        self, temp_dir, mock_environment
+    ):
         """A signal kill of the opencode CLI (exit 129 = 128 + SIGHUP, e.g. the
         agent's own `kill -HUP` hitting its process group) is classified as
         AgentKilledBySignalError, not a bare non-zero exit."""
         agent = OpenCode(logs_dir=temp_dir, model_name="vllm/some/model")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             if "tee /logs/agent/opencode.txt" in kwargs["command"]:
@@ -926,9 +940,11 @@ def _authentication_error_event():
 
 class TestOpenCodeAuthenticationFailure:
     @pytest.mark.asyncio
-    async def test_authentication_event_with_nonzero_exit_is_classified(self, temp_dir):
+    async def test_authentication_event_with_nonzero_exit_is_classified(
+        self, temp_dir, mock_environment
+    ):
         agent = OpenCode(logs_dir=temp_dir, model_name="vllm/some/model")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             if "tee /logs/agent/opencode.txt" in kwargs["command"]:
@@ -945,9 +961,11 @@ class TestOpenCodeAuthenticationFailure:
         assert "expired capability URL" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_authentication_event_with_zero_exit_is_classified(self, temp_dir):
+    async def test_authentication_event_with_zero_exit_is_classified(
+        self, temp_dir, mock_environment
+    ):
         agent = OpenCode(logs_dir=temp_dir, model_name="vllm/some/model")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
 
         async def exec_side_effect(**kwargs):
             if "tee /logs/agent/opencode.txt" in kwargs["command"]:
@@ -1548,11 +1566,13 @@ class TestOpenCodeAutoFlag:
     """Tests that the run command uses OpenCode's documented --auto bypass flag."""
 
     @pytest.mark.asyncio
-    async def test_run_uses_auto_not_dangerously_skip_permissions(self, temp_dir):
+    async def test_run_uses_auto_not_dangerously_skip_permissions(
+        self, temp_dir, mock_environment
+    ):
         agent = OpenCode(
             logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5-20250929"
         )
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("do something", mock_env, AsyncMock())
         command = mock_env.exec.call_args_list[-1].kwargs["command"]
@@ -1658,142 +1678,6 @@ class TestOpenCodeModelLimit:
         # deep-merge: job override wins on output, auto context preserved as sibling.
         assert limit["output"] == 2048
         assert limit["context"] == 26880
-
-
-class TestOpenCodeServerSideTimeout:
-    """F1: the hard server-side ``timeout`` wrapper that forcibly reaps a
-    runaway opencode.
-
-    opencode has no native turn cap and harbor runs its ENTIRE loop as one
-    detached sandbox command, so without this a looping opencode outlives its
-    trial deadline and orphans the sandbox (auto_stop=0). run() wraps the
-    invocation in a shell ``timeout`` keyed off the agent-phase deadline the
-    trial records on the environment (``agent_timeout_sec``).
-    """
-
-    def test_prefix_empty_when_no_deadline(self, temp_dir):
-        agent = OpenCode(logs_dir=temp_dir, model_name="hosted_vllm/Qwen3-8B")
-        assert (
-            agent._server_timeout_prefix(SimpleNamespace(agent_timeout_sec=None)) == ""
-        )
-
-    def test_prefix_empty_when_non_numeric_deadline(self, temp_dir):
-        # A test double / env without a numeric deadline must be a no-op.
-        agent = OpenCode(logs_dir=temp_dir, model_name="hosted_vllm/Qwen3-8B")
-        assert agent._server_timeout_prefix(AsyncMock()) == ""
-
-    def test_prefix_reaps_strictly_before_app_deadline(self, temp_dir):
-        agent = OpenCode(logs_dir=temp_dir, model_name="hosted_vllm/Qwen3-8B")
-        prefix = agent._server_timeout_prefix(SimpleNamespace(agent_timeout_sec=1800))
-        assert prefix == "timeout -k 5 -s TERM 1785 "
-        # TERM at deadline-15, SIGKILL 5s later — both < the app-level deadline,
-        # so opencode is reaped server-side before wait_for cancels the poll.
-        term = 1800 - OpenCode._SERVER_TIMEOUT_GRACE_SEC
-        assert term + OpenCode._SERVER_TIMEOUT_KILL_AFTER_SEC < 1800
-
-    def test_prefix_floors_at_one_for_tiny_deadline(self, temp_dir):
-        agent = OpenCode(logs_dir=temp_dir, model_name="hosted_vllm/Qwen3-8B")
-        assert (
-            agent._server_timeout_prefix(SimpleNamespace(agent_timeout_sec=3))
-            == "timeout -k 5 -s TERM 1 "
-        )
-
-    @pytest.mark.asyncio
-    async def test_run_wraps_command_with_timeout_when_deadline_set(self, temp_dir):
-        agent = OpenCode(logs_dir=temp_dir, model_name="my-provider/my-model")
-        mock_env = AsyncMock()
-        mock_env.agent_timeout_sec = 1800
-        mock_env.exec.return_value = SimpleNamespace(
-            return_code=0, stdout="", stderr=""
-        )
-        await agent.run("do something", mock_env, AgentContext())
-        command = mock_env.exec.call_args_list[-1].kwargs["command"]
-        assert (
-            "timeout -k 5 -s TERM 1785 opencode --model=my-provider/my-model" in command
-        )
-        # The `| tee` stays OUTSIDE the timeout so it flushes and exits on EOF.
-        assert command.index("timeout -k") < command.index("| stdbuf -oL tee")
-
-    @pytest.mark.asyncio
-    async def test_run_command_byte_identical_when_no_deadline(self, temp_dir):
-        agent = OpenCode(logs_dir=temp_dir, model_name="my-provider/my-model")
-        mock_env = AsyncMock()
-        mock_env.agent_timeout_sec = None
-        mock_env.exec.return_value = SimpleNamespace(
-            return_code=0, stdout="", stderr=""
-        )
-        await agent.run("do something", mock_env, AgentContext())
-        command = mock_env.exec.call_args_list[-1].kwargs["command"]
-        assert "timeout -k" not in command
-        assert "opencode --model=my-provider/my-model run" in command
-
-    @pytest.mark.asyncio
-    async def test_timeout_kill_reclassified_as_agent_timeout_error(self, temp_dir):
-        # 124 = shell `timeout` fired; surfaced as AgentTimeoutError so the trial
-        # treats it as an agent timeout (retry-excluded), not a generic crash.
-        agent = OpenCode(logs_dir=temp_dir, model_name="my-provider/my-model")
-        mock_env = AsyncMock()
-        mock_env.agent_timeout_sec = 1800
-
-        async def exec_side_effect(**kwargs):
-            code = 124 if "tee /logs/agent/opencode.txt" in kwargs["command"] else 0
-            return SimpleNamespace(return_code=code, stdout="", stderr="")
-
-        mock_env.exec.side_effect = exec_side_effect
-        with pytest.raises(AgentTimeoutError):
-            await agent.run("do something", mock_env, AgentContext())
-
-    @pytest.mark.parametrize("return_code", [137, 143])
-    @pytest.mark.asyncio
-    async def test_signal_exit_preserves_agent_killed_error(
-        self, temp_dir, return_code
-    ):
-        agent = OpenCode(logs_dir=temp_dir, model_name="my-provider/my-model")
-        mock_env = AsyncMock()
-        mock_env.agent_timeout_sec = 1800
-
-        async def exec_side_effect(**kwargs):
-            code = (
-                return_code
-                if "tee /logs/agent/opencode.txt" in kwargs["command"]
-                else 0
-            )
-            return SimpleNamespace(return_code=code, stdout="", stderr="")
-
-        mock_env.exec.side_effect = exec_side_effect
-        with pytest.raises(AgentKilledBySignalError) as exc_info:
-            await agent.run("do something", mock_env, AgentContext())
-        assert exc_info.value.signal_number == return_code - 128
-
-    @pytest.mark.asyncio
-    async def test_genuine_nonzero_exit_stays_nonzero_error(self, temp_dir):
-        # A real opencode crash (exit 1) must NOT be masked as a timeout.
-        agent = OpenCode(logs_dir=temp_dir, model_name="my-provider/my-model")
-        mock_env = AsyncMock()
-        mock_env.agent_timeout_sec = 1800
-
-        async def exec_side_effect(**kwargs):
-            code = 1 if "tee /logs/agent/opencode.txt" in kwargs["command"] else 0
-            return SimpleNamespace(return_code=code, stdout="", stderr="")
-
-        mock_env.exec.side_effect = exec_side_effect
-        with pytest.raises(NonZeroAgentExitCodeError):
-            await agent.run("do something", mock_env, AgentContext())
-
-    @pytest.mark.asyncio
-    async def test_124_not_reclassified_without_server_timeout(self, temp_dir):
-        # No deadline => no server-side timeout => a 124 is a genuine failure.
-        agent = OpenCode(logs_dir=temp_dir, model_name="my-provider/my-model")
-        mock_env = AsyncMock()
-        mock_env.agent_timeout_sec = None
-
-        async def exec_side_effect(**kwargs):
-            code = 124 if "tee /logs/agent/opencode.txt" in kwargs["command"] else 0
-            return SimpleNamespace(return_code=code, stdout="", stderr="")
-
-        mock_env.exec.side_effect = exec_side_effect
-        with pytest.raises(NonZeroAgentExitCodeError):
-            await agent.run("do something", mock_env, AgentContext())
 
 
 class TestOpenCodeMaxTurns:

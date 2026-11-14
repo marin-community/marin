@@ -2598,6 +2598,8 @@ so ask everything you need to know."""
 
         if self._session is None:
             await self.setup(environment)
+        if not await self._session.is_session_alive():
+            await self._session.start()
 
         # Get the terminal state for the initial prompt
         terminal_state = self._limit_output_length(

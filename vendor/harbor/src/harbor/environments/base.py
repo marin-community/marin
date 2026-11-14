@@ -13,8 +13,6 @@ from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel
-
 from harbor.environments.capabilities import (
     EnvironmentCapabilities,
     EnvironmentResourceCapabilities,
@@ -36,6 +34,18 @@ from harbor.models.trial.paths import TrialPaths
 from harbor.utils.env import resolve_env_vars, validate_task_environment
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
+from pydantic import BaseModel
+from shellbox.process import (
+    CLEANUP_TIMEOUT,
+    DONE_FILE,
+    FAILED_FILE,
+    PID_FILE,
+    PROCESS_SCOPE_POLL_INTERVAL,
+    PROCESS_SCOPE_START_ATTEMPTS,
+    ProcessScope,
+    private_supervisor_runtime,
+)
+from shellbox.process_session import await_cleanup, own_cleanup
 
 EnvironmentPath = str | PurePath
 EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
@@ -85,6 +95,14 @@ class SandboxDiskFullError(RuntimeError):
     """A sandbox command failed because its filesystem has no space left."""
 
 
+class AgentProcessScopeStartError(RuntimeError):
+    """The agent command scope did not start."""
+
+
+class AgentProcessCleanupError(RuntimeError):
+    """An agent command tree could not be stopped and confirmed."""
+
+
 class ExecResult(BaseModel):
     stdout: str | None = None
     stderr: str | None = None
@@ -94,12 +112,94 @@ class ExecResult(BaseModel):
 
 
 class BaseEnvironment(ABC):
-    """
-    The containerized environment the agent interacts with.
-    Consists of 1+ container(s).
+    """Task environment executed through a maintained Shellbox backend."""
 
-    Execution is supplied by a maintained Shellbox backend adapter.
-    """
+    _supervisor_python: str | None = None
+    _process_scopes: tuple[tuple[ProcessScope, str | int | None], ...] = ()
+
+    def track_process_scope(self, scope: ProcessScope, transport: asyncio.Task[ExecResult]) -> None:
+        """Retain the host-owned command outcome for cleanup confirmation."""
+        self._scope_transports[scope.directory] = transport
+
+    async def prepare_process_supervisor(self) -> str:
+        """Resolve the supervisor interpreter, uploading a private runtime if needed."""
+        if self._supervisor_python is None:
+            probe = await self.exec(
+                "command -v python3 || { "
+                "arch=$(uname -m); libc=gnu; "
+                'for loader in /lib/ld-musl-*.so.1; do [ ! -e "$loader" ] || libc=musl; done; '
+                'printf \'linux-%s-%s\' "$arch" "$libc"; }',
+                user="root",
+            )
+            if probe.return_code:
+                raise RuntimeError("Cannot identify the supervisor runtime")
+            runtime = probe.stdout.strip()
+            if not runtime.startswith("/"):
+                local = await private_supervisor_runtime(runtime)
+                prefix = f"/tmp/.shellbox-python-{uuid.uuid4().hex}"
+                await self.upload_dir(local, prefix)
+                runtime = f"{prefix}/bin/python3"
+            self._supervisor_python = runtime
+        return self._supervisor_python
+
+    async def process_scope(self, user: str | int | None = None) -> ProcessScope:
+        """Register an agent-owned process tree for phase-end cleanup."""
+        python = await self.prepare_process_supervisor()
+        scope = ProcessScope(python=python)
+        self._process_scopes = (
+            *self._process_scopes,
+            (scope, self._resolve_user(user)),
+        )
+        return scope
+
+    async def start_process_scope(
+        self, command: str, *, env: dict[str, str], user: str | int | None = None
+    ) -> ProcessScope:
+        """Keep a foreground service and all descendants owned until phase end."""
+        scope = await self.process_scope(user)
+        launch = shlex.join(scope.command(("/bin/sh", "-c", command), None))
+        directory = shlex.quote(scope.directory)
+        transport = asyncio.create_task(
+            self.exec(f"{launch} </dev/null >{directory}.log 2>&1", env=env, user=user)
+        )
+        self.track_process_scope(scope, transport)
+        result = await self.exec(
+            f"for attempt in $(seq 1 {PROCESS_SCOPE_START_ATTEMPTS}); do "
+            f"[ ! -f {directory}/{FAILED_FILE} ] || exit 1; "
+            f"[ ! -f {directory}/{DONE_FILE} ] || exit 1; "
+            f"[ ! -f {directory}/{PID_FILE} ] || exit 0; sleep {PROCESS_SCOPE_POLL_INTERVAL}; done; exit 1",
+            env=env,
+            user=user,
+        )
+        if result.return_code or transport.done():
+            raise AgentProcessScopeStartError("Cannot start the agent process scope")
+        return scope
+
+    async def kill_processes(self) -> None:
+        """Stop agent-owned trees while retaining files, sidecars and model relays."""
+        async def cancel_all() -> None:
+            failures: list[Exception] = []
+            for scope, user in self._process_scopes:
+                try:
+                    result = await self.exec(scope.cancel_command(), user=user, timeout_sec=CLEANUP_TIMEOUT)
+                    if result.return_code:
+                        raise AgentProcessCleanupError("Agent process cleanup could not be confirmed")
+                    transport = self._scope_transports.get(scope.directory)
+                    if transport is None:
+                        raise AgentProcessCleanupError("Agent process has no host-owned completion")
+                    outcome = await asyncio.wait_for(asyncio.shield(transport), CLEANUP_TIMEOUT)
+                    if outcome.return_code is None or (outcome.return_code >= 125 and outcome.return_code != 143):
+                        raise AgentProcessCleanupError("Agent process transport did not confirm clean exit")
+                except Exception as error:
+                    failures.append(error)
+            if failures:
+                raise AgentProcessCleanupError("Agent process cleanup could not be confirmed") from ExceptionGroup(
+                    "Process scopes that failed cleanup", failures
+                )
+
+        await await_cleanup(own_cleanup(cancel_all()))
+        self._process_scopes = ()
+        self._scope_transports.clear()
 
     environment_dir: Path
     environment_name: str
@@ -174,6 +274,7 @@ class BaseEnvironment(ABC):
         self.trial_paths = trial_paths
         self.default_user = None
         self.agent_timeout_sec = None
+        self._scope_transports: dict[str, asyncio.Task[ExecResult]] = {}
         self.task_env_config = task_env_config
         self.host_capabilities = host_capabilities
         self.guest_environment = dict(guest_environment)
@@ -378,6 +479,25 @@ class BaseEnvironment(ABC):
             yield
         finally:
             self.agent_timeout_sec = previous
+
+    @contextlib.asynccontextmanager
+    async def scoped_command(self, command: str) -> AsyncIterator[None]:
+        """Confirm remote teardown before releasing a command scope."""
+        try:
+            yield
+        finally:
+            try:
+                await await_cleanup(
+                    own_cleanup(asyncio.wait_for(self.reap_command(command), CLEANUP_TIMEOUT))
+                )
+            except Exception as error:
+                raise AgentProcessCleanupError("Remote command teardown could not be confirmed") from error
+
+    async def reap_command(self, command: str) -> None:
+        """Run cleanup independently of the cancelled execution transport."""
+        result = await self.exec(command, timeout_sec=CLEANUP_TIMEOUT)
+        if result.return_code != 0:
+            raise RuntimeError(f"Remote command teardown failed: {result.stderr}")
 
     def _merge_env(self, env: dict[str, str] | None) -> dict[str, str] | None:
         """Merge persistent, per-exec, and scoped environment variables."""

@@ -1,13 +1,15 @@
 """Shared pytest fixtures for harbor tests."""
 
 import asyncio
+import contextlib
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from shellbox.process import ProcessScope
 
 
 def pytest_addoption(parser):
@@ -41,6 +43,9 @@ def temp_dir():
 def mock_environment():
     """Create a mock environment for testing."""
     env = AsyncMock()
+    env.agent_timeout_sec = None
+    env.process_scope.return_value = ProcessScope()
+    env.scoped_command = MagicMock(side_effect=contextlib.nullcontext)
     env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
     env.upload_file.return_value = None
     return env

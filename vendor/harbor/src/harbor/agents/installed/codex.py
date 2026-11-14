@@ -10,8 +10,6 @@ from harbor.agents.installed.base import (
     REQUIRED_MODEL_PRICE_FIELDS,
     BaseInstalledAgent,
     CliFlag,
-    NonZeroAgentExitCodeError,
-    sandbox_deadline_command,
     with_prompt_template,
 )
 from harbor.environments.base import BaseEnvironment
@@ -801,9 +799,6 @@ class Codex(BaseInstalledAgent):
                 command=setup_command,
                 env=env,
             )
-        remaining = deadline - monotonic() if deadline is not None else None
-        if remaining is not None and remaining <= 0:
-            raise AgentTimeoutError("Codex setup exhausted its agent-phase deadline")
         command = (
             "if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; "
             "codex exec "
@@ -818,22 +813,14 @@ class Codex(BaseInstalledAgent):
             f"2>&1 </dev/null | tee {EnvironmentPaths.agent_dir / self._OUTPUT_FILENAME}"
         )
         try:
-            await self.exec_as_agent(
+            await self.run_agent_command(
                 environment,
-                command=sandbox_deadline_command(command, remaining),
+                command=command,
                 env=env,
+                deadline=deadline,
             )
-        except Exception as error:
+        except Exception:
             await self._finish_session(environment, env, remote_secrets_dir)
-            if (
-                remaining is not None
-                and isinstance(error, NonZeroAgentExitCodeError)
-                and error.result is not None
-                and error.result.return_code == 124
-            ):
-                raise AgentTimeoutError(
-                    "Codex exceeded its agent-phase deadline and was terminated server-side"
-                ) from error
             raise
         else:
             await self._finish_session(environment, env, remote_secrets_dir)

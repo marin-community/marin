@@ -4,8 +4,12 @@
 """Exercise trial deadlines and relay failures through real guest processes."""
 
 import asyncio
+import contextlib
 import json
+import logging
+from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import httpx
@@ -18,6 +22,7 @@ from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
+    RetainedAgentServiceTask,
     TaskConfig,
     TrialConfig,
     VerifierConfig,
@@ -25,8 +30,13 @@ from harbor.models.trial.config import (
 from harbor.models.trial.result import TrialResult
 from harbor.job import Job
 from harbor.trial.trial import Trial
+from harbor.trial.single_step import SingleStepTrial
+from harbor.trial.errors import AgentTimeoutError
 from shellbox.task import Task
 from tests.unit.environments.transport import ProcessMachine, available_port
+
+_QEMU_TASK_REF = "sha256:60b7050b0e0aa51641208cf65766743d340e59575db2c4d2f8628240846c2a28"
+_GIT_TASK_REF = "sha256:7759a92a373c967dd31535975bad8659410644025673fe62385444fd2605c5fa"
 
 
 class PartialAnswerAgent(BaseAgent):
@@ -101,6 +111,95 @@ class BackgroundServerAgent(PartialAnswerAgent):
 
     async def cleanup(self, environment) -> None:
         await environment.exec("kill $(cat server.pid)")
+
+
+@pytest.mark.parametrize(
+    ("task_name", "task_ref", "deferred", "ending"),
+    [
+        ("terminal-bench/qemu-alpine-ssh", _QEMU_TASK_REF, True, "complete"),
+        ("terminal-bench/git-multibranch", _GIT_TASK_REF, True, "complete"),
+        ("terminal-bench/qemu-alpine-ssh", "sha256:" + "b" * 64, False, "complete"),
+        ("terminal-bench/ordinary-task", "sha256:" + "a" * 64, False, "complete"),
+        ("terminal-bench/qemu-alpine-ssh", _QEMU_TASK_REF, True, "timeout"),
+        ("terminal-bench/git-multibranch", _GIT_TASK_REF, True, "timeout"),
+        ("terminal-bench/qemu-alpine-ssh", _QEMU_TASK_REF, False, "cancel"),
+    ],
+)
+async def test_server_dependent_tb2_tasks_keep_agent_service_until_verification(task_name, task_ref, deferred, ending):
+    class Environment:
+        requires_agent_quiescence_for_verifier = False
+
+        def __init__(self):
+            self.service_running = False
+            self.cleanup_count = 0
+
+        def with_default_user(self, user):
+            return contextlib.nullcontext()
+
+        def with_agent_timeout(self, timeout):
+            return contextlib.nullcontext()
+
+        async def kill_processes(self):
+            self.cleanup_count += 1
+            self.service_running = False
+
+    class Agent:
+        async def run(self, instruction, environment, context):
+            environment.service_running = True
+            if ending == "timeout":
+                raise AgentTimeoutError("Agent timed out")
+            if ending == "cancel":
+                raise asyncio.CancelledError
+
+        async def cleanup(self, environment):
+            environment.cleanup_count += 1
+            environment.service_running = False
+
+    trial = object.__new__(SingleStepTrial)
+    trial.config = TrialConfig(
+        task=TaskConfig(
+            name=task_name,
+            ref=task_ref,
+            source="terminal-bench/terminal-bench-2-1",
+        ),
+        agent=AgentConfig(name="terminus-2"),
+        verifier=VerifierConfig(
+            retain_agent_services_for_tasks=[
+                RetainedAgentServiceTask(
+                    source="terminal-bench/terminal-bench-2-1",
+                    name="terminal-bench/qemu-alpine-ssh",
+                    ref=_QEMU_TASK_REF,
+                ),
+                RetainedAgentServiceTask(
+                    source="terminal-bench/terminal-bench-2-1",
+                    name="terminal-bench/git-multibranch",
+                    ref=_GIT_TASK_REF,
+                ),
+            ]
+        ),
+        trial_name="server-lifetime",
+    )
+    trial.task = SimpleNamespace(name=task_name)
+    trial.agent = Agent()
+    trial.agent_environment = Environment()
+    trial._hooks = defaultdict(list)
+    trial._result = SimpleNamespace(secondary_exception_info=[])
+    trial._pending_cleanup_tasks = set()
+    trial.logger = logging.getLogger(__name__)
+    target = SimpleNamespace(agent_result=None, agent_execution=None)
+
+    if ending == "complete":
+        await trial._run_agent_phase(target=target, instruction="keep server", timeout_sec=None, user=None)
+    else:
+        failure = AgentTimeoutError if ending == "timeout" else asyncio.CancelledError
+        with pytest.raises(failure):
+            await trial._run_agent_phase(target=target, instruction="keep server", timeout_sec=None, user=None)
+    assert trial.agent_environment.service_running is deferred
+    if deferred:
+        await trial._cleanup_agents()
+        await trial.agent_environment.kill_processes()
+    assert trial.agent_environment.cleanup_count == 2
+    assert not trial.agent_environment.service_running
 
 
 @pytest.fixture(autouse=True)
@@ -199,7 +298,7 @@ async def test_agent_deadline_preserves_partial_answer_for_actual_grading_script
 
 
 @pytest.mark.parametrize("timeout", [False, True])
-async def test_actual_grader_can_probe_prior_successful_background_service(
+async def test_actual_grader_observes_agent_background_service_stopped(
     tmp_path, monkeypatch, timeout
 ):
     port = available_port()
@@ -213,8 +312,13 @@ async def test_actual_grader_can_probe_prior_successful_background_service(
     )
     (config.task.path / "tests/test.sh").write_text(
         "#!/bin/sh\nset -eu\npython3 - <<'PY'\n"
-        "import os, urllib.request\n"
-        f"assert urllib.request.urlopen('http://127.0.0.1:{port}/answer').read() == b'partial'\n"
+        "import os, urllib.error, urllib.request\n"
+        "try:\n"
+        f"    urllib.request.urlopen('http://127.0.0.1:{port}/answer', timeout=1)\n"
+        "except urllib.error.URLError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise AssertionError('Agent background service survived cleanup')\n"
         + (
             "pid = int(open('foreground.pid').read())\n"
             "try:\n    os.kill(pid, 0)\n"
@@ -235,6 +339,52 @@ async def test_actual_grader_can_probe_prior_successful_background_service(
         assert result.exception_info is None
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert factory.machine.closed
+
+
+async def test_tb2_timeout_retains_agent_service_for_actual_verifier(tmp_path, monkeypatch):
+    port = available_port()
+    factory = ProcessTaskFactory(tmp_path / "guest")
+    monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
+    config = trial_config(tmp_path, "tb2-timeout", guest_root=tmp_path / "guest")
+    config.agent = AgentConfig(
+        name="test-BackgroundServerAgent",
+        override_timeout_sec=1,
+        env={"HTTP_PORT": str(port), "WAIT_FOR_TIMEOUT": "1"},
+    )
+    (config.task.path / "tests/test.sh").write_text(
+        "#!/bin/sh\nset -eu\npython3 - <<'PY'\n"
+        "import os, urllib.request\n"
+        f"assert urllib.request.urlopen('http://127.0.0.1:{port}/answer', timeout=1).read() == b'partial'\n"
+        "pid = int(open('foreground.pid').read())\n"
+        "try:\n    os.kill(pid, 0)\n"
+        "except ProcessLookupError:\n    pass\n"
+        "else:\n    raise AssertionError('Timed-out foreground command survived')\n"
+        "open(os.environ['TEST_REWARD_PATH'], 'w').write('1')\nPY\n"
+    )
+    trial = await Trial.create(config)
+    # The local task fixture supplies processes; the pinned package identity
+    # selects the verifier's service-lifetime policy.
+    trial.config.verifier.retain_agent_services_for_tasks = [
+        RetainedAgentServiceTask(
+            source="terminal-bench/terminal-bench-2-1",
+            name="terminal-bench/git-multibranch",
+            ref=_GIT_TASK_REF,
+        )
+    ]
+    trial.config.task = TaskConfig(
+        name="terminal-bench/git-multibranch",
+        ref=_GIT_TASK_REF,
+        source="terminal-bench/terminal-bench-2-1",
+    )
+
+    result = await trial.run()
+
+    assert result.exception_info.exception_type == "AgentTimeoutError"
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert factory.machine.closed
+    async with httpx.AsyncClient(timeout=1) as client:
+        with pytest.raises(httpx.ConnectError):
+            await client.get(f"http://127.0.0.1:{port}/answer")
 
 
 async def test_verifier_judge_is_unavailable_to_candidate_but_available_to_actual_grader(

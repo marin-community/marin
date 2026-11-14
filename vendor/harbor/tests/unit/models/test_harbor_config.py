@@ -3,8 +3,6 @@ from copy import deepcopy
 
 import pytest
 import yaml
-from pydantic import ValidationError
-
 from harbor.models.job.config import JobConfig as HarborJobConfig
 from harbor.models.metric.config import MetricConfig as HarborMetricConfig
 from harbor.models.task.config import TaskConfig as HarborTaskConfig
@@ -20,16 +18,22 @@ from harbor_config import (
 from harbor_config.models.metric.config import MetricConfig
 from harbor_config.models.task.config import TaskConfig
 from harbor_config.models.trial.config import TrialConfig
+from pydantic import ValidationError
 
 
-@pytest.mark.parametrize("route", ["private-capability", "cluster=marin/private-capability"])
+@pytest.mark.parametrize(
+    "route", ["private-capability", "cluster=marin/private-capability"]
+)
 def test_persisted_configs_redact_capabilities_without_changing_live_routes(route):
     endpoint = f"https://iris.example/proxy/t/{route}/serve.model/v1"
     config = JobConfig.model_validate(
         {
             "agents": [{"name": "terminus-2", "kwargs": {"api_base": endpoint}}],
             "environment": {
-                "kwargs": {"candidate_model_endpoint": endpoint, "nested": [{"url": endpoint}]},
+                "kwargs": {
+                    "candidate_model_endpoint": endpoint,
+                    "nested": [{"url": endpoint}],
+                },
                 "env": {"OPENAI_BASE_URL": endpoint},
             },
             "verifier": {"env": {"OPENAI_BASE_URL": endpoint}},
@@ -44,7 +48,9 @@ def test_persisted_configs_redact_capabilities_without_changing_live_routes(rout
     assert persisted["environment"]["kwargs"]["nested"] == [{"url": expected}]
     assert persisted["verifier"]["env"]["OPENAI_BASE_URL"] == expected
 
-    runtime_copy = JobConfig.model_validate(config.model_dump(mode="python"))
+    runtime_copy = JobConfig.model_validate(
+        {"agents": [{"name": "pi"}], **(config.model_dump(mode="python"))}
+    )
     assert runtime_copy.agents[0].kwargs["api_base"] == endpoint
     assert runtime_copy.environment.kwargs["candidate_model_endpoint"] == endpoint
     assert runtime_copy.environment.env["OPENAI_BASE_URL"] == endpoint
@@ -63,8 +69,7 @@ def test_harbor_compatibility_imports_reexport_config_package_classes() -> None:
 
 
 def test_config_api_matches_harbor_job_config_with_legacy_migrations() -> None:
-    document = yaml.safe_load(
-        """
+    document = yaml.safe_load("""
 job_name: config-parity
 jobs_dir: gs://example-bucket/jobs
 orchestrator:
@@ -92,8 +97,7 @@ datasets:
     registry:
       url: https://example.invalid/registry.json
       path: /tmp/registry
-"""
-    )
+""")
 
     full_harbor = HarborJobConfig.model_validate(deepcopy(document))
     config_only = load_config_document(deepcopy(document))

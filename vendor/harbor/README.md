@@ -38,7 +38,10 @@ the deployed Daytona SDK version, 0.200.2.
 
 Harbor executes tasks only through Shellbox. Its environment types are `local`
 (the default), `daytona`, `qemu` and `shellsim`; other provider names and
-custom environment import paths fail validation. The adapters depend on
+custom environment import paths fail validation. The six supported agents require
+a Linux process environment. ShellSim cannot run them because it has no Linux
+process tree or tmux. QEMU agent execution has not been validated end to end.
+The adapters depend on
 Shellbox's generic machine API; Shellbox does not import Harbor. The `runtime`
 extra includes Daytona; `qemu` and `shellsim` install those optional backends.
 

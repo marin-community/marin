@@ -3,6 +3,7 @@
 import asyncio
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -17,6 +18,10 @@ from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 from shellbox.machine import MachineSpec, PackageSpec
 from tests.unit.environments.transport import ProcessMachine
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux", reason="Process scopes require Linux"
+)
 
 
 class ScriptedLLM(BaseLLM):
@@ -120,24 +125,23 @@ async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
                 "until test -s first.txt; do sleep 0.01; done", timeout_sec=5
             )
             assert ready.return_code == 0
+            first_session = agent._session
+            assert first_session is not None
             await agent.cleanup(adapter)
             assert machine.path("/workspace/first.txt").read_text() == "first"
-            assert (
-                await adapter.exec("tmux has-session -t terminus-2")
-            ).return_code != 0
+            assert not await first_session.is_session_alive()
 
             await agent.run("Copy first.txt to second.txt.", adapter, AgentContext())
             ready = await adapter.exec(
                 "until test -s second.txt; do sleep 0.01; done", timeout_sec=5
             )
             assert ready.return_code == 0
+            second_session = agent._session
+            assert second_session is not None
             await agent.cleanup(adapter)
             assert machine.path("/workspace/second.txt").read_text() == "first"
-            assert (
-                await adapter.exec("tmux has-session -t terminus-2")
-            ).return_code != 0
+            assert not await second_session.is_session_alive()
         finally:
-            await adapter.exec("tmux kill-server")
             await adapter.stop(delete=True)
 
 
@@ -227,11 +231,11 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
             assert (
                 await adapter.exec("kill -0 $(cat background.pid)")
             ).return_code == 0
-            assert (
-                await adapter.exec("tmux has-session -t terminus-2")
-            ).return_code == 0
+            session = agent._session
+            assert session is not None
+            assert await session.is_session_alive()
             assert not machine.path("/workspace/after-timeout").exists()
-            await adapter.exec(
+            await session._exec(
                 "tmux send-keys -t terminus-2 'printf recovered > resumed' Enter"
             )
             assert (
@@ -251,5 +255,4 @@ async def test_cancelled_run_stops_foreground_job_and_preserves_background_servi
                     )
             finally:
                 await agent.cleanup(adapter)
-                await adapter.exec("tmux kill-server")
                 await adapter.stop(delete=True)

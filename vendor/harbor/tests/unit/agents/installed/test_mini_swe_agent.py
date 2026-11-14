@@ -9,6 +9,7 @@ Tests cover:
 - File-based convert_and_save_trajectory
 """
 
+import contextlib
 import json
 import os
 import shlex
@@ -16,7 +17,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from harbor.agents.installed.mini_swe_agent import (
@@ -708,6 +709,22 @@ class TestPopulateContextPostRun:
 # ---------------------------------------------------------------------------
 
 
+@contextlib.asynccontextmanager
+async def _command_scope():
+    yield
+
+
+def _mock_run_environment():
+    environment = AsyncMock()
+    environment.agent_timeout_sec = None
+    scope = MagicMock()
+    scope.command.side_effect = lambda command, timeout: command
+    scope.cancel_command.return_value = "cancel"
+    environment.process_scope.return_value = scope
+    environment.scoped_command = MagicMock(return_value=_command_scope())
+    return environment
+
+
 class TestCreateRunAgentCommands:
     @pytest.mark.asyncio
     async def test_uses_mini_command(self, temp_dir):
@@ -716,7 +733,7 @@ class TestCreateRunAgentCommands:
             logs_dir=temp_dir,
             model_name="anthropic/claude-sonnet-4-5-20250929",
         )
-        mock_env = AsyncMock()
+        mock_env = _mock_run_environment()
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("Fix the bug", mock_env, AsyncMock())
 
@@ -736,7 +753,7 @@ class TestCreateRunAgentCommands:
             logs_dir=temp_dir,
             model_name="anthropic/claude-sonnet-4-5-20250929",
         )
-        mock_env = AsyncMock()
+        mock_env = _mock_run_environment()
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("task", mock_env, AsyncMock())
 
@@ -771,7 +788,7 @@ class TestCreateRunAgentCommands:
                 logs_dir=temp_dir,
                 model_name="openai/gpt-4o",
             )
-            mock_env = AsyncMock()
+            mock_env = _mock_run_environment()
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("task", mock_env, AsyncMock())
 
@@ -785,14 +802,16 @@ class TestCreateRunAgentCommands:
             assert private not in str(exec_calls)
 
     @pytest.mark.asyncio
-    async def test_hosted_vllm_runs_without_external_api_key(self, temp_dir):
+    async def test_hosted_vllm_runs_without_external_api_key(
+        self, temp_dir, mock_environment
+    ):
         with patch.dict(os.environ, {}, clear=True):
             agent = MiniSweAgent(
                 logs_dir=temp_dir,
                 model_name="hosted_vllm/served-model",
                 api_base="https://hosted-vllm.invalid/v1",
             )
-            mock_env = AsyncMock()
+            mock_env = mock_environment
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
             await agent.run("task", mock_env, AsyncMock())
 
@@ -800,9 +819,9 @@ class TestCreateRunAgentCommands:
         assert agent_env["MSWEA_API_KEY"] == "EMPTY"
 
     @pytest.mark.asyncio
-    async def test_invalid_model_raises(self, temp_dir):
+    async def test_invalid_model_raises(self, temp_dir, mock_environment):
         agent = MiniSweAgent(logs_dir=temp_dir, model_name="no-slash")
-        mock_env = AsyncMock()
+        mock_env = mock_environment
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with pytest.raises(ValueError, match="provider/model_name"):
             await agent.run("task", mock_env, AsyncMock())
@@ -814,7 +833,7 @@ class TestCreateRunAgentCommands:
             logs_dir=temp_dir,
             model_name="anthropic/claude-sonnet-4-5-20250929",
         )
-        mock_env = AsyncMock()
+        mock_env = _mock_run_environment()
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("Fix the bug; rm -rf /", mock_env, AsyncMock())
 
@@ -831,9 +850,9 @@ class TestCreateRunAgentCommands:
 
 class TestInstallMethod:
     @pytest.mark.asyncio
-    async def test_install_adds_required_mcp_runtime(self, temp_dir):
+    async def test_install_adds_required_mcp_runtime(self, temp_dir, mock_environment):
         agent = MiniSweAgent(logs_dir=temp_dir)
-        environment = AsyncMock()
+        environment = mock_environment
         environment.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
 
         await agent.install(environment)

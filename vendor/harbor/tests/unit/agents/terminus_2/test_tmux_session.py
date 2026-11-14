@@ -4,17 +4,16 @@ import subprocess
 from unittest.mock import AsyncMock
 
 import pytest
-
 from harbor.agents.base import MalformedModelResponseError
 from harbor.agents.terminus_2 import tmux_session as tmux_session_module
 from harbor.agents.terminus_2.tmux_session import (
-    _BatchMarkers,
     ModelInitiatedTmuxFailure,
     TmuxBatchProtocolError,
     TmuxCommandError,
     TmuxKeystrokeBatch,
     TmuxSession,
     TmuxSessionEndedError,
+    _BatchMarkers,
 )
 from harbor.environments.base import ExecResult
 from harbor_config import ErrorCategory, error_category
@@ -48,7 +47,7 @@ async def test_start_configures_history_without_persisting_pane(tmux_session):
 
     await tmux_session.start()
 
-    command = _extract_called_command(tmux_session.environment.exec.await_args_list[0])
+    command = _extract_called_command(tmux_session.environment.exec.await_args_list[-1])
     set_option = "set-option -g history-limit 10000000"
     assert command.index(set_option) < command.index("new-session")
     assert "pipe-pane" not in command

@@ -14,7 +14,7 @@ from harbor_config.errors import ErrorCategory, error_category
 from harbor_config.models.trial.config import TaskConfig
 
 from harbor.agents.factory import AgentFactory
-from harbor.environments.base import BaseEnvironment, SandboxDiskFullError
+from harbor.environments.base import AgentProcessCleanupError, BaseEnvironment, SandboxDiskFullError
 from harbor.environments.factory import EnvironmentFactory
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.agent.context import AgentContext
@@ -57,8 +57,8 @@ from harbor.trial.errors import (
     RuntimeLogCollectionError,
     RuntimeServiceError,
     TrialNotScoredError,
-    VerifierTimeoutError,
     VerificationNotCompletedError,
+    VerifierTimeoutError,
 )
 from harbor.trial.hooks import TrialEvent, TrialHookEvent, emit_trial_hooks
 from harbor.utils.artifact_writer import ArtifactPersistenceError, get_artifact_writer
@@ -356,6 +356,11 @@ class Trial(ABC):
             await self._record_exception(exc)
             await self._emit(TrialEvent.CANCEL)
             raise
+        except PhaseCancellationError as exc:
+            self.logger.exception(
+                "Trial %s phase ignored cancellation", self.config.trial_name
+            )
+            await self._record_exception(exc)
         except Exception as exc:
             # TaskGroup reports a lost required service here, after the active
             # phase has been cancelled and all owned services have finished.
@@ -651,32 +656,47 @@ class Trial(ABC):
         except SandboxDiskFullError as exc:
             primary = exc
             raise AgentDiskFullError(str(exc)) from exc
+        except AgentProcessCleanupError as exc:
+            primary = exc
+            raise PhaseCancellationError("Agent process cleanup could not be confirmed") from exc
         except BaseException as exc:
             primary = exc
             raise
         finally:
-            try:
-                if self.agent_environment.requires_agent_quiescence_for_verifier:
-                    await self._cleanup_agents()
-                    await self._await_phase(
-                        self.agent_environment.quiesce_agent_commands(),
-                        timeout_sec=self.config.trial_cleanup_grace_sec,
-                        timeout_error=TimeoutError(
-                            "Agent commands did not stop before verifier model access"
-                        ),
-                    )
-            except Exception as exc:
-                if isinstance(primary, asyncio.CancelledError):
-                    primary.add_note(f"Agent cleanup failed: {exc}")
-                    self.result.secondary_exception_info.append(
-                        ExceptionInfo.from_exception(exc)
-                    )
-                else:
-                    raise PhaseCancellationError(
-                        "Could not confirm agent commands stopped"
-                    ) from exc
-            finally:
+            if (primary is None or isinstance(primary, AgentTimeoutError)) and self._keep_agent_services_for_verifier():
                 target.agent_execution.finished_at = self._now()
+            else:
+                try:
+                    await self._cleanup_agents()
+                    if self.agent_environment.requires_agent_quiescence_for_verifier:
+                        await self._await_phase(
+                            self.agent_environment.quiesce_agent_commands(),
+                            timeout_sec=self.config.trial_cleanup_grace_sec,
+                            timeout_error=TimeoutError(
+                                "Agent commands did not stop before verifier model access"
+                            ),
+                        )
+                except Exception as exc:
+                    if isinstance(primary, asyncio.CancelledError):
+                        primary.add_note(f"Agent cleanup failed: {exc}")
+                        self.result.secondary_exception_info.append(ExceptionInfo.from_exception(exc))
+                    else:
+                        raise PhaseCancellationError("Could not confirm agent commands stopped") from exc
+                finally:
+                    try:
+                        try:
+                            await self.agent_environment.kill_processes()
+                        except AgentProcessCleanupError as exc:
+                            raise PhaseCancellationError("Agent process cleanup could not be confirmed") from exc
+                    finally:
+                        target.agent_execution.finished_at = self._now()
+
+    def _keep_agent_services_for_verifier(self) -> bool:
+        task = self.config.task
+        return any(
+            task.source == pinned.source and task.name == pinned.name and task.ref == pinned.ref
+            for pinned in self.config.verifier.retain_agent_services_for_tasks
+        )
 
     async def _cleanup_agents(self) -> None:
         try:
@@ -760,6 +780,7 @@ class Trial(ABC):
             raise timeout_error from None
         except ArtifactPersistenceError as error:
             self._artifact_persistence_failure = error
+        except PhaseCancellationError:
             raise
         except Exception as error:
             raise PhaseCancellationError(

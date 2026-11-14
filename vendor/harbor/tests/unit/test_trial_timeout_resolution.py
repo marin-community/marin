@@ -4,7 +4,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
@@ -71,7 +70,9 @@ async def _persisted_timeout_resolution(
     # config.json is persisted by the background artifact writer.
     get_artifact_writer().flush(timeout=30)
     persisted_config = json.loads(trial.paths.config_path.read_text())
-    reloaded_config = TrialConfig.model_validate(persisted_config)
+    reloaded_config = TrialConfig.model_validate(
+        {"agent": {"name": "pi"}, **(persisted_config)}
+    )
     assert reloaded_config.resolved_timeouts is not None
     return reloaded_config.resolved_timeouts.model_dump(mode="json")
 

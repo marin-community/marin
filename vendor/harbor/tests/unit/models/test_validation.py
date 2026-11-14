@@ -1,3 +1,5 @@
+from tests.unit.fake_agent import FakeAgent
+
 """Tests for config-aware task validation."""
 
 from pathlib import Path

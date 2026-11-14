@@ -12,17 +12,21 @@ from harbor.trial.errors import AgentTimeoutError
 
 
 @pytest.mark.asyncio
-async def test_codex_server_timeout_is_reported_as_agent_timeout(tmp_path, monkeypatch):
+async def test_codex_server_timeout_is_reported_as_agent_timeout(
+    tmp_path, monkeypatch, mock_environment
+):
     commands = []
 
     async def exec_command(*, command, **kwargs):
         commands.append(command)
         argv = shlex.split(command.removeprefix("set -o pipefail; "))
-        if argv[0] == "timeout":
-            return ExecResult(return_code=124, stdout="", stderr="")
+        if argv[0] == "python3":
+            return ExecResult(
+                return_code=124, stdout="", stderr="SHELLBOX_COMMAND_TIMEOUT"
+            )
         return ExecResult(return_code=0, stdout="", stderr="")
 
-    environment = AsyncMock(spec=BaseEnvironment)
+    environment = mock_environment
     environment.agent_timeout_sec = 1800.0
     environment.exec.side_effect = exec_command
     agent = Codex(logs_dir=tmp_path, model_name="openai/test-model")
@@ -40,7 +44,7 @@ async def test_codex_server_timeout_is_reported_as_agent_timeout(tmp_path, monke
 
 @pytest.mark.asyncio
 async def test_codex_cancellation_starts_no_new_remote_finalization(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, mock_environment
 ):
     entered = asyncio.Event()
     blocked = asyncio.Event()
@@ -49,12 +53,12 @@ async def test_codex_cancellation_starts_no_new_remote_finalization(
     async def exec_command(*, command, **kwargs):
         commands.append(command)
         argv = shlex.split(command.removeprefix("set -o pipefail; "))
-        if argv[0] == "timeout":
+        if argv[0] == "python3":
             entered.set()
             await blocked.wait()
         return ExecResult(return_code=0, stdout="", stderr="")
 
-    environment = AsyncMock(spec=BaseEnvironment)
+    environment = mock_environment
     environment.agent_timeout_sec = 1800.0
     environment.exec.side_effect = exec_command
     agent = Codex(logs_dir=tmp_path, model_name="openai/test-model")
@@ -73,17 +77,17 @@ async def test_codex_cancellation_starts_no_new_remote_finalization(
 
 @pytest.mark.asyncio
 async def test_codex_non_timeout_exit_retains_error_and_finalizes(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, mock_environment
 ):
     commands = []
 
     async def exec_command(*, command, **kwargs):
         commands.append(command)
         argv = shlex.split(command.removeprefix("set -o pipefail; "))
-        status = 1 if argv[0] == "timeout" else 0
+        status = 1 if argv[0] == "python3" else 0
         return ExecResult(return_code=status, stdout="", stderr="")
 
-    environment = AsyncMock(spec=BaseEnvironment)
+    environment = mock_environment
     environment.agent_timeout_sec = 1800.0
     environment.exec.side_effect = exec_command
     agent = Codex(logs_dir=tmp_path, model_name="openai/test-model")

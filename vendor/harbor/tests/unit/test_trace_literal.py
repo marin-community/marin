@@ -12,11 +12,9 @@ Covers three layers:
 
 import asyncio
 import json
-
-import httpx
-from starlette.testclient import TestClient
 from pathlib import Path
 
+import httpx
 from harbor.agents.base import BaseAgent
 from harbor.agents.terminus_2.terminus_2 import Terminus2
 from harbor.literal import (
@@ -28,7 +26,7 @@ from harbor.utils.traces_utils import (
     _extract_literal_turns,
     collect_conversations_from_trial,
 )
-
+from starlette.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # 1. Capability flag
@@ -601,10 +599,10 @@ def test_open_upstream_stream_injects_literal_params_and_keeps_stream(tmp_path):
 
 def test_proxy_app_streaming_request_tees_sse(tmp_path):
     """End-to-end via app(): a stream=true request gets an SSE relay + literal record."""
+    import httpx
     from fastapi import FastAPI, Request
     from fastapi.responses import StreamingResponse
     from starlette.testclient import TestClient
-    import httpx
 
     stub = FastAPI()
 
@@ -648,10 +646,10 @@ def test_proxy_app_streaming_request_tees_sse(tmp_path):
 def test_proxy_app_stamps_correlation_id_header_on_entry(tmp_path):
     """S2b: the x-ot-trial-id request header is captured onto the JSONL entry so a
     shared controller log can be split back per trial."""
+    import httpx
     from fastapi import FastAPI, Request
     from fastapi.responses import StreamingResponse
     from starlette.testclient import TestClient
-    import httpx
 
     stub = FastAPI()
 

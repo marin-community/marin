@@ -220,6 +220,13 @@ A sidecar declaring `agent_logs: "publish"` has its logs copied into the actor's
 directory after the agent phase, before verification.
 There is no shared writable volume. Actor writes do not flow back to the sidecar.
 
+Harbor stops agent command scopes before shared-sandbox verification. It confirms
+cleanup against the evaluator's command transport; guest control files alone do not
+authorize grading. The `terminal-bench/terminal-bench-2-1` ref `6` tasks
+`qemu-alpine-ssh` and `git-multibranch` need agent-started services for their verifiers.
+On successful runs of those two tasks, Harbor keeps the services through grading and
+stops them at task teardown. Timeouts and cancellation still require confirmed cleanup.
+
 ### Local factory settings
 
 The adapter accepts `bwrap`, `umoci`, `image_cache`, `cgroup_parent` and `ttl`.
@@ -296,10 +303,15 @@ Streaming chat is buffered: the guest receives SSE frames after the complete res
 arrives. Some Codex features need routes outside this contract.
 
 `judge_access: verifier` opens the judge relay only during grading. Before opening it,
-local execution stops remaining agent command groups. Ordinary grading preserves services
-from successful commands. A grader needing both a live agent service and private judge
-access needs separate isolation. Daytona cannot confirm that every detached candidate
-process has stopped before grading.
+local execution stops remaining agent command groups. A grader needing both a live agent
+service and private judge access needs separate isolation. Daytona's per-command process
+groups do not contain detached descendants; Harbor uses a phase scope for agent cleanup.
+For verifiers that depend on an agent-started service, the trusted Harbor job config can
+list the exact dataset, task name, and content digest under
+`verifier.retain_agent_services_for_tasks`. Harbor retains those services through grading
+after a completed or timed-out agent turn, then closes the task environment. Explicit
+trial cancellation still stops the environment. Do not grant service retention to a
+task whose verifier needs private judge access in the same environment.
 
 `judge_access: runtime` keeps the judge available during execution. Direct callers must
 request it. Every peer sharing the task network can

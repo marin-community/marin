@@ -8,6 +8,7 @@ from harbor_config.models.trial.config import (
 )
 from harbor_config.models.trial.config import EnvironmentConfig as EnvironmentConfig
 from harbor_config.models.trial.config import ResourceMode as ResourceMode
+from harbor_config.models.trial.config import RetainedAgentServiceTask as RetainedAgentServiceTask
 from harbor_config.models.trial.config import (
     ResolvedStepTimeouts as ResolvedStepTimeouts,
 )

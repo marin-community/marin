@@ -31,7 +31,6 @@ from shellbox.machine import (
     MachineSpec,
     NetworkPolicy,
     PackageSpec,
-    ShellSession,
 )
 
 
@@ -116,12 +115,6 @@ class ShellSimEnvironment(BaseEnvironment):
         if self.machine is not None:
             await self.machine.close()
             self.machine = None
-
-    async def open_bash_session(self) -> ShellSession:
-        """Open the agent's persistent simulated shell."""
-        if self.machine is None:
-            raise RuntimeError("ShellSim environment is not running")
-        return await self.machine.open_shell()
 
     async def exec(
         self,

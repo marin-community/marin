@@ -6,10 +6,11 @@ import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from harbor.agents.base import TurnCapExhaustedError
-from harbor.environments.base import SandboxDiskFullError
+from harbor.environments.base import AgentProcessCleanupError, BaseEnvironment, SandboxDiskFullError
 from harbor.models.job.config import RetryConfig
 from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.paths import TrialPaths
@@ -209,8 +210,8 @@ async def test_agent_disk_exhaustion_is_a_model_failure(tmp_path: Path) -> None:
     trial.agent_environment = SimpleNamespace(
         with_default_user=lambda user: contextlib.nullcontext(),
         with_agent_timeout=lambda timeout: contextlib.nullcontext(),
-        quiesce_agent_commands=cleanup,
         requires_agent_quiescence_for_verifier=False,
+        kill_processes=AsyncMock(),
     )
 
     with pytest.raises(AgentDiskFullError) as raised:
@@ -482,6 +483,7 @@ def _trial_with_agent_phase(
         with_agent_timeout=lambda _: contextlib.nullcontext(),
         requires_agent_quiescence_for_verifier=False,
         collect_runtime_logs=no_op,
+        kill_processes=no_op,
     )
     trial._init_result = no_op
     trial._prepare = no_op
@@ -1135,3 +1137,26 @@ async def test_hung_terminal_hook_is_bounded_and_quarantines_capacity(
     assert result.exception_info.exception_type == "TrialTimeoutError"
     assert next_started.is_set()
     assert following_result.exception_info is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ending", ["complete", "timeout"])
+async def test_unconfirmed_remote_teardown_is_not_a_scoreable_timeout(ending):
+    async def reap_command(command):
+        raise RuntimeError("Provider could not confirm command termination")
+
+    environment = SimpleNamespace(reap_command=reap_command)
+    trial = _phase_trial(cleanup_grace=1)
+
+    async def phase():
+        async with BaseEnvironment.scoped_command(environment, "cancel"):
+            if ending == "timeout":
+                await asyncio.Future()
+
+    failure = AgentProcessCleanupError if ending == "complete" else PhaseCancellationError
+    with pytest.raises(failure):
+        await trial._await_phase(
+            phase(),
+            timeout_sec=0.01,
+            timeout_error=AgentTimeoutError("phase expired"),
+        )

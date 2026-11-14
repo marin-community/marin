@@ -1,3 +1,4 @@
+import contextlib
 import importlib
 import json
 import shlex
@@ -14,6 +15,7 @@ from minisweagent.run.mini import app
 from openai import OpenAI
 from openai.resources.chat.completions import Completions
 from openai.types.chat import ChatCompletion
+from shellbox.process import ProcessScope
 from typer.testing import CliRunner
 
 
@@ -473,7 +475,9 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
         return httpx.Response(200, json=completion(**payload).model_dump())
 
     monkeypatch.setattr(
-        httpx.Client, "_transport_for_url", lambda self, url: httpx.MockTransport(transport)
+        httpx.Client,
+        "_transport_for_url",
+        lambda self, url: httpx.MockTransport(transport),
     )
     config = tmp_path / "custom.yaml"
     config.write_text(
@@ -482,8 +486,21 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     trajectory = tmp_path / "mini-swe-agent.trajectory.json"
 
     class HarnessEnvironment:
+        agent_timeout_sec = None
+
+        async def process_scope(self):
+            return ProcessScope()
+
+        def track_process_scope(self, scope, transport):
+            pass
+
+        def scoped_command(self, command):
+            return contextlib.nullcontext()
+
         async def exec(self, *, command, env, **kwargs):
             words = shlex.split(command)
+            if "python3" in words and "run" in words:
+                words = shlex.split(words[-1])
             if "mini-swe-agent" not in words:
                 return ExecResult(return_code=0)
             start = words.index("mini-swe-agent") + 1

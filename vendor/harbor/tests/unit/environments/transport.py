@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import socket
+import tempfile
 from pathlib import Path
 
 from shellbox.machine import Command, ExitReason, MachineSpec, Result
@@ -77,42 +78,59 @@ class ProcessMachine:
         return await acquire_owned(asyncio.create_task(acquire()))
 
     async def run(self, command: Command) -> Result:
-        process = await asyncio.create_subprocess_exec(
-            *(self.argument(value) for value in command.argv),
-            cwd=self.path(command.cwd or self.spec.workdir),
-            env={
-                key: self.argument(value) if key == "PATH" else value
-                for key, value in {
-                    "PATH": os.environ["PATH"],
-                    **self.spec.env,
-                    **command.env,
-                }.items()
-            },
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
-        self.commands.add(process)
-        try:
-            async with asyncio.timeout(command.timeout):
-                stdout, stderr = await process.communicate(command.stdin)
-        except BaseException:
+        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+            process = await asyncio.create_subprocess_exec(
+                *(self.argument(value) for value in command.argv),
+                cwd=self.path(command.cwd or self.spec.workdir),
+                env={
+                    key: self.argument(value) if key == "PATH" else value
+                    for key, value in {
+                        "PATH": os.environ["PATH"],
+                        **self.spec.env,
+                        **command.env,
+                    }.items()
+                },
+                stdin=asyncio.subprocess.PIPE,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                start_new_session=True,
+            )
+            self.commands.add(process)
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            await process.wait()
-            raise
-        return Result(
-            process.returncode, stdout, stderr, False, False, ExitReason.EXITED
-        )
+                async with asyncio.timeout(command.timeout):
+                    if command.stdin:
+                        assert process.stdin is not None
+                        process.stdin.write(command.stdin)
+                        await process.stdin.drain()
+                    if process.stdin is not None:
+                        process.stdin.close()
+                    await process.wait()
+            except BaseException:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+                self.commands.discard(process)
+                raise
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            return Result(
+                process.returncode,
+                stdout_file.read(),
+                stderr_file.read(),
+                False,
+                False,
+                ExitReason.EXITED,
+            )
 
     async def quiesce_commands(self) -> None:
         for process in self.commands:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # A completed command's group ID can be reused by an unrelated
+                # process before this test transport closes.
                 pass
             await process.wait()
 
