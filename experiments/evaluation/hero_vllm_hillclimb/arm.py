@@ -207,6 +207,7 @@ LEADER_OVERRIDES = {
     "fg128api4": ("--api-server-count", "4"),
     "fg128stack": ("--api-server-count", "4"),
     "fg192stack": ("--api-server-count", "4"),
+    "fg128stacklean": ("--api-server-count", "4"),
 }
 
 MOE_CONFIG_DIR = "experiments/evaluation/hero_vllm_hillclimb/moe_configs"
@@ -218,6 +219,10 @@ LABEL_ENV = {
     # Fused-MoE Triton configs tuned for Hero's EP16 decode shapes on GB200 (moe_tune.py).
     "fg128moe": (("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),),
     "fg128stack": (
+        ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
+        ("VLLM_USE_NCCL_SYMM_MEM", "1"),
+    ),
+    "fg128stacklean": (
         ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
     ),
@@ -309,6 +314,13 @@ CANDIDATE_ARGS = {
     ),
     # FULL graphs + tuned MoE config + NCCL symmetric memory + four API servers.
     "fg128stack": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    # Same flags as fg128stack; run on the ShortConv-lean overlay wheel (measurement only).
+    "fg128stacklean": (
         "--max-num-seqs",
         "128",
         "--compilation-config",
