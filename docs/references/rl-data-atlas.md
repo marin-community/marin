@@ -685,6 +685,13 @@ compact export. Failed loads preserve the selected release; the current and
 previous releases are retained. Run one curriculum loader per app at a time.
 APIs read Postgres without cloud scans.
 
+The loader rejects admission-retired sources before any SQL or current-release
+selection, including historical source aliases and inventory-only rows. Archived
+coverage artifacts and previously stored releases remain available as historical
+evidence. An archived all-source cut is distinct from a newer selected catalog:
+prepare a separate release and coverage pair with consistent source lineage for
+that selection instead of relabelling the archived manifests or changing their pins.
+
 A metadata-only TRAIN-to-EVAL correction requires `--role-projection RECEIPT_URI
 RECEIPT_SHA256`. Set `--release` and `--coverage` to the receipt's exact corrected
 manifest URIs. The loader verifies the receipt and referenced artifact hashes,
