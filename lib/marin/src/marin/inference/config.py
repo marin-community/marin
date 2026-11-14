@@ -492,11 +492,15 @@ class RemoteInferenceConfig:
                 raise ValueError("multi-host TPU serving requires shared weights with stream loading")
         geometry = self.iris.serving_geometry
         session_routing = isinstance(self.engine, VllmEngineConfig) and self.engine.router is not None
-        if (session_routing or geometry is not None) and (self.instances != 1 or self.broker is not None):
-            raise ValueError("native GPU serving requires one instance and no broker")
-        if geometry is not None:
+        if geometry is not None and (
+            geometry.task_count > 1 or geometry.data_parallel_size_local is not None or session_routing
+        ):
             if not isinstance(self.engine, VllmEngineConfig):
                 raise ValueError("native GPU serving requires the vLLM backend")
             if self.model.tensor_parallel_size != geometry.tensor_parallel_size:
                 raise ValueError("model tensor_parallel_size must match serving geometry")
             validate_serving_geometry_args(self.engine.extra_args)
+        elif not session_routing:
+            return
+        if self.instances != 1 or self.broker is not None:
+            raise ValueError("native GPU serving requires one instance and no broker")

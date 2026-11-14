@@ -131,6 +131,7 @@ pinned vLLM version and model architecture and must be checked on the target har
 ## Session routing for native vLLM DP
 
 `marin-serve local` and `marin-serve iris` accept `--session-router`. Direct serving is the default.
+Each native DP rank holds its own KV cache.
 The router runs released `vllm-router==0.1.16` in an isolated `uvx` environment, outside Marin's
 Python dependencies. It uses consistent hashing, stable `X-Session-ID` headers and disabled HTTP
 retries. The router request timeout defaults to 14,400 seconds. Iris also has `--proxy-timeout`,
@@ -143,7 +144,7 @@ uv run marin-serve local Qwen/Qwen3-0.6B --launcher cuda \
   --vllm-arg=--enable-prefix-caching
 ```
 
-For TP1/PP1/DP16 across four hosts, request four GPUs per task and sixteen total DP ranks:
+For TP1/PP1/DP16, request four Iris tasks with four GPUs and four local DP ranks each:
 
 ```bash
 uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
@@ -160,7 +161,8 @@ Normal serving runtime selection applies when the option is omitted.
 
 Send the same `X-Session-ID` on later turns. The router selects a DP rank through the upstream
 `X-data-parallel-rank` dispatch header; the leader's internal vLLM load balancer must reach all
-ranks. External and hybrid vLLM load balancing are unsupported. Requests without a session header
+ranks. The CLI uses this internal mode. External and hybrid vLLM load balancing are unsupported.
+Requests without a session header
 retain the [upstream key fallback order](https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#hash-key-priority),
 ending with a hash of the body. A changed body alone does not preserve conversation affinity.
 
@@ -175,7 +177,7 @@ open a per-rank circuit breaker and remap later requests. A dead worker loses it
 KV cache. A router exit fails the serving lifecycle and unregisters the endpoint. Stop the affected
 job with `iris --cluster CLUSTER job cancel JOB`, confirm its tasks and pods are gone, then submit the same
 configuration. Existing Iris whole-task retries are separate from the router's disabled HTTP
-retries.
+retries. Treat the resubmitted job as starting with an empty KV cache.
 
 For Python integrations, use `VllmEngineConfig(router=VllmRouterConfig(),
 release=promoted_release, ...)` with

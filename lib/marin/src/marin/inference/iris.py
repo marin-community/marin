@@ -527,7 +527,11 @@ def run_iris_service(service: IrisServiceConfig) -> None:
         _run_tpu_service(service)
         return
     geometry = service.iris.serving_geometry
-    if geometry is not None:
+    if geometry is not None and (
+        geometry.task_count > 1
+        or geometry.data_parallel_size_local is not None
+        or (isinstance(service.engine, VllmEngineConfig) and service.engine.router is not None)
+    ):
         _run_native_gpu_service(service)
         return
     broker = _broker_config(service.instances, service.broker)
