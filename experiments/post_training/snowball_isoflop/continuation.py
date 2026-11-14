@@ -57,10 +57,13 @@ def main():
         raise ValueError("Register the continuation root in the aggregate A guard before execution")
     if not 0 < args.h100_hour_limit <= 700 or not 1 <= args.max_concurrent <= 2:
         raise ValueError("Continuation exceeds its approved per-size tranche or concurrency")
+    manifest_phase = continuations[0].cell.phase
+    if any(continuation.cell.phase != manifest_phase for continuation in continuations):
+        raise ValueError("A continuation manifest must share one phase identity")
     for continuation in continuations:
         cell = continuation.cell
         pod = build_pod(cell, resume_checkpoint=continuation.checkpoint_path)
-        if not pod.output_path.startswith(f"{PREFIX}/{VERSION}/A-host512-r3-"):
+        if not pod.output_path.startswith(f"{PREFIX}/{VERSION}/{manifest_phase}-"):
             raise ValueError("Continuations require fresh owned artifact identities")
         if (StoragePath(pod.output_path) / "consumed-config.json").exists():
             raise ValueError("Continuation output already exists")

@@ -164,7 +164,7 @@ def primary_cells() -> tuple[Cell, ...]:
     cells = []
     for d in SIZES:
         endpoints = tuple(budget_steps(d, c) for c in BUDGETS)
-        phase = "A-host768-r2" if d == 1024 else "A"
+        phase = "A-host768-r3" if d == 1024 else "A"
         host_memory = "768GB" if d == 1024 else BASE_HOST_MEMORY
         for mask in Mask:
             cells.append(Cell(d, mask, 0, endpoints[-1], endpoints, phase, host_memory))
