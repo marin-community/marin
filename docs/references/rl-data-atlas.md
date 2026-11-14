@@ -800,17 +800,44 @@ arrow keys (Shift for larger steps), Home or End. Widths persist per viewer when
 local storage is available. **Reset column widths** restores automatic sizing.
 
 Displayed cosine scores are similarities; distance is `1 - similarity`.
-The export uses fixed maximum distances of 0.45 for subjects and 0.25 for
-capabilities. A task can have a capability match, a subject-only match, no
-match within the cutoff, insufficient context, or a skipped embedding.
-Alternative subject and capability matches remain available in sampled task details.
+New exports use maximum distances of 0.70 for both subjects and capabilities,
+giving approximate nearest-node coverage of all 4,206,876 tasks in the audited
+population. Stored primary matches and their scores remain unchanged. Historical
+exports retain their own cutoffs, including the original 0.45/0.25 distances
+(minimum similarities 0.55/0.75).
+
+`CONFIDENCE_LEVELS` in `taskcompendium.pipeline.curriculum.coverage` defines five
+display filters. The [confidence experiment](https://github.com/marin-community/marin/issues/11490)
+records the full distributions and immutable export evidence.
+
+| Level | Minimum subject similarity | Minimum capability similarity | Audited capability placement |
+| --- | ---: | ---: | ---: |
+| All (nearest), default | 0.30 | 0.30 | 100.000% |
+| Broad | 0.55 | 0.60 | 57.445% |
+| Moderate | 0.55 | 0.65 | 30.011% |
+| Strict | 0.55 | 0.70 | 7.407% |
+| Original (#10157) | 0.55 | 0.75 | 0.569% |
+
+At each level, tasks below the subject cutoff are **Unplaced**; tasks that pass
+only the subject cutoff contribute to **Other/unlisted (subject only)**. The
+1,438,600 tasks outside the original subject cutoff receive approximate labels
+under All (nearest) and remain Unplaced at the four stricter levels. Insufficient
+context and skipped embeddings retain their separate outcomes.
+
+Level names describe similarity filters, not calibrated probabilities. Direct
+public prompt text can include unrelated examples or conversation history, while
+capability anchors describe specific operations. Approximate assignment can pick
+the wrong capability. Better task descriptions and embeddings remain follow-up
+work; alternative subject and capability matches are available in task details.
 
 Counts shade each area on a logarithmic scale; zeros stay visible to expose gaps.
 Domain counts include tasks that match the subject but fall outside the
-capability cutoff. Topic and skill counts require a capability match. Each parent
-shows an **Other/unlisted** row for subject-only matches and any children hidden
-by search, so its count equals the sum of displayed children and that remainder.
-These are population counts; the ten-example area sample does not limit them. Opening an
+capability cutoff. Topic and skill counts require a capability match. Each subject
+shows an **Other/unlisted** row for subject-only matches and a separate count for
+children hidden by search, so its count equals the sum of these rows and its
+displayed children.
+These are population counts. Each node contributes up to ten sampled tasks per
+level; its example list can also include overlapping source and descendant samples. Opening an
 area loads its sampled examples below the map;
 **Read sampled examples** jumps to that list. Empty areas explain when no
 examples are available.
@@ -822,12 +849,26 @@ small statistics for dataset and train/eval filters. Overview requests do
 not scan task or match tables.
 
 Examples combine two independent deterministic samples: up to 100 tasks per
-source and 10 per curriculum node, including subjects, groups and capabilities.
+source and 10 per curriculum node at each confidence level, including subjects,
+groups and capabilities.
 The combined sample removes repeated source/task identities. The task list
 and details show this bounded review sample; their size does not change the
 full-population counts. Curriculum entries, statistics and samples form the
 compact serving dataset. The complete task and embedding outputs stay in
 object storage.
+
+Coverage manifests record their export `version`, `confidence_levels` in display order and
+`confidence_paths` pointing to Parquet rows with `source_id`, `metric`,
+`subject_id`, `node_id`, and `instances`, an integer vector whose elements follow
+`confidence_levels`.
+Missing sparse rows mean a zero vector. Samples are the deduplicated union of
+independent node samples at every level; their complete `TaskAlignment` records
+retain membership and capability scores and the original instruction preview.
+The confidence export also provides a versioned `confidence.json` sidecar bound
+to the release and coverage URIs and SHA-256 hashes, with pre-aggregated all/train/eval
+vectors and per-source vectors. Atlas can load all five counts together and
+select a vector element and filter cached scored examples in the browser.
+Changing Confidence requires no embedding, ranking, or server-side scoring.
 
 Converted populations contain successfully converted TaskSpecs before admission.
 They retain training/evaluation intent. Selecting a source shows its full

@@ -71,7 +71,6 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
-from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     actor_census_input,
@@ -1842,7 +1841,7 @@ def test_role_projection_requires_receipt_and_preserves_frozen_sample_roles(cata
         "area_sample_size",
     )
     raw_coverage["coverage_id"] = canonical_sha256(
-        {**{key: raw_coverage[key] for key in identity_keys}, "version": COVERAGE_VERSION}
+        {**{key: raw_coverage[key] for key in identity_keys}, "version": raw_coverage["version"]}
     )
     corrected_release = {
         **raw_release,
@@ -1855,7 +1854,7 @@ def test_role_projection_requires_receipt_and_preserves_frozen_sample_roles(cata
     )
     corrected_coverage = {**raw_coverage, "alignment_release_id": corrected_release["release_id"]}
     corrected_coverage["coverage_id"] = canonical_sha256(
-        {**{key: corrected_coverage[key] for key in identity_keys}, "version": COVERAGE_VERSION}
+        {**{key: corrected_coverage[key] for key in identity_keys}, "version": corrected_coverage["version"]}
     )
     documents = {}
     for name, release, coverage in (

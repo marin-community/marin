@@ -27,6 +27,7 @@ from taskcompendium.pipeline.curriculum.alignment import (
 from taskcompendium.pipeline.curriculum.coverage import (
     AREA_SAMPLE_SIZE,
     CAPABILITY_DISTANCE,
+    CONFIDENCE_LEVELS,
     SOURCE_SAMPLE_SIZE,
     SUBJECT_DISTANCE,
     build_curriculum_coverage,
@@ -40,6 +41,7 @@ from taskcompendium.pipeline.curriculum.embedding import (
 from taskcompendium.pipeline.curriculum.models import (
     AlignmentRelease,
     AlignmentSource,
+    CurriculumConfidenceLevel,
     CurriculumCoverage,
     EmbeddingSpec,
 )
@@ -73,7 +75,7 @@ EMBEDDINGS_VERSION = "2026.11.13.1"
 CURRICULUM_EMBEDDINGS_VERSION = "2026.11.13.1"
 ALIGNMENT_VERSION = "2026.10.15.2"
 PUBLICATION_VERSION = "2026.10.15.2"
-COVERAGE_VERSION = "2026.10.15.1"
+COVERAGE_VERSION = "2026.11.14.1"
 
 
 class SemanticArtifact(Artifact):
@@ -424,6 +426,7 @@ def _coverage(
             for row in release.sources
             for identifier in (row.source_id, canonical_source_id(row.source_id), original_source_id(row.source_id))
         },
+        confidence_levels=CONFIDENCE_LEVELS,
     )
     coverage = CurriculumCoverage(
         coverage_id=canonical_sha256(
@@ -434,6 +437,10 @@ def _coverage(
                 "source_sample_size": source_sample_size,
                 "area_sample_size": area_sample_size,
                 "version": COVERAGE_VERSION,
+                "confidence_levels": [
+                    {"label": label, "subject_min_similarity": subject, "capability_min_similarity": capability}
+                    for label, subject, capability in CONFIDENCE_LEVELS
+                ],
             }
         ),
         alignment_release_id=release.release_id,
@@ -446,6 +453,12 @@ def _coverage(
         sample_task_count=data.sample_task_count,
         source_sample_size=source_sample_size,
         area_sample_size=area_sample_size,
+        version=COVERAGE_VERSION,
+        confidence_levels=[
+            CurriculumConfidenceLevel(label=label, subject_min_similarity=subject, capability_min_similarity=capability)
+            for label, subject, capability in CONFIDENCE_LEVELS
+        ],
+        confidence_paths=data.confidence_paths,
     )
     (StoragePath(output_root) / "coverage.json").write_text(coverage.model_dump_json(indent=2))
     return SemanticArtifact(path=output_root, paths=data.paths)

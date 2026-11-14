@@ -421,6 +421,10 @@ def project_curriculum(
         source_sample_size=old_coverage.source_sample_size,
         area_sample_size=old_coverage.area_sample_size,
         sampling_source_ids={row.source_id: original_source_id(row.source_id) for row in selected.sources},
+        confidence_levels=tuple(
+            (level.label, level.subject_min_similarity, level.capability_min_similarity)
+            for level in old_coverage.confidence_levels
+        ),
     )
     selected_ids = {row.source_id for row in selected.sources}
     expected_statistics = {
@@ -435,6 +439,11 @@ def project_curriculum(
             for key in ("subject_distance", "capability_distance", "source_sample_size", "area_sample_size")
         },
         "version": COVERAGE_VERSION,
+        **(
+            {"confidence_levels": [level.model_dump(mode="json") for level in old_coverage.confidence_levels]}
+            if old_coverage.confidence_levels
+            else {}
+        ),
     }
     coverage = old_coverage.model_copy(
         update={
@@ -444,6 +453,8 @@ def project_curriculum(
             "paths": data.paths,
             "sample_paths": data.sample_paths,
             "sample_task_count": data.sample_task_count,
+            "confidence_paths": data.confidence_paths,
+            "version": COVERAGE_VERSION,
         }
     )
     (root / "coverage.json").write_text(coverage.model_dump_json(indent=2))

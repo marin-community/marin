@@ -5,10 +5,16 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
-from taskcompendium.pipeline.curriculum.coverage import build_curriculum_coverage
+from taskcompendium.pipeline.curriculum.coverage import (
+    CAPABILITY_DISTANCE,
+    CONFIDENCE_LEVELS,
+    SUBJECT_DISTANCE,
+    build_curriculum_coverage,
+)
 from taskcompendium.pipeline.curriculum.models import CurriculumNode
 from taskcompendium.pipeline.curriculum.task_alignment import TaskAlignment
 
@@ -138,3 +144,128 @@ def test_atlas_counts_full_instances_and_keeps_bounded_overlapping_samples(tmp_p
         sample_ids.append(sorted(row["task_id"] for part in migrated.sample_paths for row in load_parquet(part)))
     assert len(sample_ids[0]) == 7
     assert sample_ids[0] == sample_ids[1]
+
+
+@pytest.mark.parametrize(
+    "subject_distance,capability_distance,expected_outcomes,expected_placements",
+    [
+        (0.45, 0.25, {"assigned": 1, "subject_only": 1, "out_of_scope": 1}, 1),
+        (SUBJECT_DISTANCE, CAPABILITY_DISTANCE, {"assigned": 3}, 3),
+    ],
+    ids=["historical-cutoffs", "approximate-nearest-coverage"],
+)
+def test_coverage_places_lower_similarity_tasks_and_preserves_unavailable_outcomes(
+    tmp_path: Path,
+    subject_distance: float,
+    capability_distance: float,
+    expected_outcomes: dict,
+    expected_placements: int,
+):
+    nodes = [
+        CurriculumNode(
+            subject_id="earth",
+            node_id=identifier,
+            parent_id=parent,
+            kind=kind,
+            name=identifier,
+            description="",
+        )
+        for identifier, parent, kind in (
+            ("subject:earth", None, "subject"),
+            ("weather", "subject:earth", "capability"),
+        )
+    ]
+    tasks = []
+    for identifier, membership, capability in (("high", 0.9, 0.8), ("subject-only", 0.6, 0.65), ("outside", 0.42, 0.44)):
+        tasks.append(
+            TaskAlignment(
+                source_id="science",
+                source_key="science-pin",
+                task_id=identifier,
+                task_hash=identifier,
+                content_hash=identifier,
+                intended_use="eval",
+                population="converted",
+                description_status="ready",
+                reason="",
+                description="Identify the weather instrument",
+                task_preview="Identify the weather instrument",
+                instruction_characters=31,
+                preview_truncated=False,
+                matches={
+                    "subjects": [
+                        {
+                            "subject_id": "earth",
+                            "facet": "subject_domain",
+                            "membership_similarity": membership,
+                            "membership_anchor_id": "earth",
+                            "capability_id": "weather",
+                            "margin": 0.01,
+                            "candidates": [
+                                {
+                                    "subject_id": "earth",
+                                    "capability_id": "weather",
+                                    "similarity": capability,
+                                    "anchor_id": "weather",
+                                }
+                            ],
+                            "subject_candidates": [],
+                        }
+                    ],
+                    "capabilities": [],
+                },
+            ).model_dump(mode="json")
+        )
+    for status in ("insufficient_context", "skipped"):
+        tasks.append({**tasks[0], "task_id": status, "description_status": status, "description": "", "matches": None})
+    path = tmp_path / "tasks.parquet"
+    pq.write_table(pa.Table.from_pylist(tasks), path)
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+        data = build_curriculum_coverage(
+            context,
+            task_paths=[str(path)],
+            nodes=nodes,
+            output_root=str(tmp_path / "coverage"),
+            subject_distance=subject_distance,
+            capability_distance=capability_distance,
+            source_sample_size=10,
+            area_sample_size=10,
+            sampling_source_ids={"science": "science"},
+            confidence_levels=CONFIDENCE_LEVELS,
+        )
+    statistics = [row for part in data.paths for row in load_parquet(part)]
+    totals = {row["metric"]: row["instances"] for row in statistics if row["node_id"] == ""}
+    assert totals == {"denominator": 5, "insufficient_context": 1, "skipped": 1, **expected_outcomes}
+    placements = {row["node_id"]: row["instances"] for row in statistics if row["metric"] == "placement"}
+    assert placements["weather"] == expected_placements
+    confidence = {
+        (row["metric"], row["node_id"]): row["instances"] for part in data.confidence_paths for row in load_parquet(part)
+    }
+    assert confidence["denominator", ""] == [5, 5, 5, 5, 5]
+    assert confidence["assigned", ""] == [3, 2, 2, 1, 1]
+    assert confidence["subject_only", ""] == [0, 0, 0, 1, 1]
+    assert confidence["out_of_scope", ""] == [0, 1, 1, 1, 1]
+    assert confidence["placement", "weather"] == [3, 2, 2, 1, 1]
+    assert confidence["placement", "subject:earth"] == [3, 2, 2, 2, 2]
+    assert confidence["skipped", ""] == [1, 1, 1, 1, 1]
+    assert confidence["insufficient_context", ""] == [1, 1, 1, 1, 1]
+    samples = [row for part in data.sample_paths for row in load_parquet(part)]
+    assert {row["task_id"] for row in samples} == {row["task_id"] for row in tasks}
+    assert {row["task_id"]: row["matches"] for row in samples} == {row["task_id"]: row["matches"] for row in tasks}
+
+    # The nearest-level sample selects "outside"; the strict-level sample must
+    # also retain the sole high-scoring task when no source sample is requested.
+    with ZephyrContext(max_workers=2, chunk_storage_prefix=str(tmp_path / "strict-chunks")) as context:
+        stratified = build_curriculum_coverage(
+            context,
+            task_paths=[str(path)],
+            nodes=nodes,
+            output_root=str(tmp_path / "stratified"),
+            subject_distance=SUBJECT_DISTANCE,
+            capability_distance=CAPABILITY_DISTANCE,
+            source_sample_size=0,
+            area_sample_size=1,
+            sampling_source_ids={"science": "science"},
+            confidence_levels=CONFIDENCE_LEVELS,
+        )
+    assert {row["task_id"] for part in stratified.sample_paths for row in load_parquet(part)} >= {"outside", "high"}

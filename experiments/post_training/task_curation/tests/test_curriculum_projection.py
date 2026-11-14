@@ -13,6 +13,7 @@ from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.curriculum.coverage import CONFIDENCE_LEVELS
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, AlignmentSource, CurriculumCoverage
 from taskcompendium.pipeline.curriculum.task_alignment import TaskAlignment
 from taskcompendium.pipeline.semantics import TaskSemanticInput
@@ -241,9 +242,13 @@ def archived(tmp_path):
         "source_sample_size": 1,
         "area_sample_size": 1,
         "version": COVERAGE_VERSION,
+        "confidence_levels": [
+            {"label": label, "subject_min_similarity": subject, "capability_min_similarity": capability}
+            for label, subject, capability in CONFIDENCE_LEVELS
+        ],
     }
     coverage = CurriculumCoverage(
-        **{key: value for key, value in coverage_identity.items() if key != "version"},
+        **coverage_identity,
         coverage_id=canonical_sha256(coverage_identity),
         curriculum_key=release.curriculum_key,
         task_count=3,
@@ -341,6 +346,11 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
         row.id for row in current
     }
     assert coverage.sample_task_count == 2
+    confidence = [row for path in coverage.confidence_paths for row in load_parquet(path)]
+    assert {row["source_id"] for row in confidence} == {row.id for row in current}
+    assert {row["source_id"]: row["instances"] for row in confidence if row["metric"] == "assigned"} == {
+        row.id: [1] * len(CONFIDENCE_LEVELS) for row in current
+    }
     assert release.lineage["task_vectors_root"] == "unchanged-vectors"
     assert (tmp_path / "archive-assignments.parquet").read_bytes() == saved
 

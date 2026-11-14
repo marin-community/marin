@@ -12,8 +12,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.curriculum.models import LEGACY_COVERAGE_VERSION
 
-from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from infra.marina.apps.rl_data_catalog.server.quality import intended_use
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId, canonical_source_id, original_source_id
 
@@ -107,7 +107,8 @@ def manifest_documents(reference: CurriculumManifests) -> ManifestDocuments:
                         "area_sample_size",
                     )
                 },
-                "version": COVERAGE_VERSION,
+                "version": coverage.get("version", LEGACY_COVERAGE_VERSION),
+                **({"confidence_levels": coverage["confidence_levels"]} if coverage.get("confidence_levels") else {}),
             }
         )
         != reference.coverage_id
