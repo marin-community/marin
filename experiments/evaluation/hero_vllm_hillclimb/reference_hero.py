@@ -64,6 +64,7 @@ LENGTH_QUANTUM = 128
 LONG_TAIL_POSITIONS = 512
 LONG_STRIDE = 256
 _DROP_STATS = ("capacity_overflow_per_layer", "skipped_assignments_per_layer")
+PEAK_MEMORY_SOURCE = "jax Device.memory_stats() peak_bytes_in_use, max over devices and processes"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -214,10 +215,28 @@ def restore_bf16(checkpoint: str, metadata_digest: str, config: GrugModelConfig,
     return model, check
 
 
+def max_peak_gib(stats: list[dict]) -> np.float32:
+    """The largest ``peak_bytes_in_use`` among per-device ``memory_stats()`` dicts, in GiB.
+
+    Under ``XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`` the value is XLA's own counter in
+    ``GpuCudaMallocAsyncAllocator``: the high-water mark of bytes XLA has allocated from the
+    pool since the client started. It excludes pool memory reserved but not handed out, and
+    memory outside the pool (NCCL, cuBLAS workspaces, the CUDA context).
+
+    Returns float32 because the result crosses ``process_allgather``: without x64, JAX
+    narrows int64 to int32 on ``device_put``, which wrapped peaks above 2 GiB into small
+    negative values.
+    """
+    peaks = [device_stats["peak_bytes_in_use"] for device_stats in stats]
+    if min(peaks) < 0:
+        raise ValueError(f"Allocator reported a negative peak: {peaks}")
+    return np.float32(max(peaks) / 2**30)
+
+
 def peak_device_gib() -> float:
     """The largest allocator peak on any device of any process so far, in GiB."""
-    local = max(device.memory_stats()["peak_bytes_in_use"] for device in jax.local_devices())
-    return float(np.max(multihost_utils.process_allgather(np.asarray(local, dtype=np.int64)))) / 2**30
+    local = max_peak_gib([device.memory_stats() for device in jax.local_devices()])
+    return float(np.max(multihost_utils.process_allgather(local)))
 
 
 def history_sha256(tokens: tuple[int, ...], position: int) -> str:
@@ -355,6 +374,7 @@ def main() -> None:
             "batch_size": batch_size,
             "mesh": dict(mesh.shape),
             "peak_device_gib_after_batch": peak_gib,
+            "peak_device_gib_source": PEAK_MEMORY_SOURCE,
             "top_k": args.top_k,
             "checkpoint": checkpoint,
             "metadata_digest": request["metadata_digest"],
