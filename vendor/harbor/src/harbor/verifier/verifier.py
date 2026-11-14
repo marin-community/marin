@@ -312,7 +312,12 @@ class Verifier(BaseVerifier):
         stdout, stderr = await asyncio.to_thread(
             self._captured_output, test_exec_result
         )
-        return VerifierResult(rewards=rewards, stdout=stdout, stderr=stderr)
+        return VerifierResult(
+            rewards=rewards,
+            exit_code=test_exec_result.return_code,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     def _captured_output(
         self, exec_result: ExecResult
