@@ -55,11 +55,20 @@ def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
 
 
 def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
-    """Read source sizes and leading subjects from the selected compact release."""
+    """Read leading subjects only when the compact release matches the current input."""
+    current = {
+        canonical_source_id(row["id"]): row["declaration"]
+        for row in connection.execute(
+            text(
+                "SELECT s.id,s.declaration FROM atlas_sources s JOIN atlas_current c USING (load_id) "
+                "WHERE c.name='latest'"
+            )
+        ).mappings()
+    }
     rows = connection.execute(
         text(
             """
-        SELECT s.source_id, (s.alignment->>'task_count')::bigint AS example_count,
+        SELECT s.source_id, s.declaration, (s.alignment->>'task_count')::bigint AS example_count,
             s.alignment->>'intended_use' AS intended_use,
             s.alignment->>'basis' AS basis,
             area.subject_id, area.node_id, area.name, area.instances
@@ -88,6 +97,11 @@ def source_coverage(connection: Connection) -> dict[str, dict[str, Any]]:
             ),
         }
         for row in rows
+        if canonical_source_id(row["source_id"]) in current
+        and all(
+            row["declaration"].get(key) == current[canonical_source_id(row["source_id"])].get(key)
+            for key in ("dataset_id", "dataset_revision", "pipeline")
+        )
     }
 
 

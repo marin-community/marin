@@ -175,7 +175,9 @@ retains the full historical record; it does not substitute for current filtratio
 and admission evidence. Open a source for
 pipeline details and links to its original dataset, assessment and curriculum
 coverage. The leading curriculum domain links directly to that source's coverage
-within the domain. Columns size to their contents, and enum chips stay on one line
+within the domain. Current-source coverage requires the same dataset pin and pipeline
+as the selected curriculum release; older releases remain selectable as historical
+evidence after filtration changes the current input. Columns size to their contents, and enum chips stay on one line
 without subtitles.
 On small screens, scroll the table horizontally to reach every column; its header
 and body scroll together without widening the page.

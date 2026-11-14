@@ -774,6 +774,16 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
             connection.execute(text("DROP TABLE curriculum_tasks"))
         assert client.get("/curriculum").json()["totals"] == first["totals"]
         assert client.get("/sources").json()["sources"][0]["coverage"] == source["coverage"]
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE atlas_sources SET declaration = "
+                    "jsonb_set(declaration, '{dataset_revision}', '\"new-current-pin\"'::jsonb)"
+                )
+            )
+        assert client.get("/sources").json()["sources"][0]["coverage"] is None
+        assert client.get("/source", params={"source_id": "Marin:a"}).json()["coverage"] is None
+        assert client.get("/curriculum").json()["totals"] == first["totals"]
 
 
 def test_atlas_load_serves_grades_packets_and_archive_without_object_storage(
