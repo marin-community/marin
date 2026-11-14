@@ -1,0 +1,63 @@
+{
+  "batch": "shard-00002-rows-00006016-00006144",
+  "archive_sha256": "e83eca65f4371270be05af59e5158d8add215a4da62639be2f9daf27b6dc14bf",
+  "archive_bytes": 4452249,
+  "cursor": {
+    "shard": 2,
+    "row": 6016,
+    "batches": 324,
+    "artifact_bytes": 1890865087,
+    "counts": {
+      "tool_free": 26349,
+      "mapped_calls": 10156,
+      "structure_unresolved": 4855,
+      "conversion_audit_hold": 1793,
+      "conversion_converted_adapter_checked": 6517,
+      "conversion_infrastructure_deferred": 71,
+      "conversion_review_hold": 1775,
+      "uncommitted_batch_uncertainty_hold": 256
+    },
+    "catalog_sha256": "9eb57d7667061b032b28af8cd31e7e754e0cfa61f862f5e52c1d948ef9ee389d",
+    "updated_at": 1794438811.4886038,
+    "reconciliation_url": "s3://marin-us-east-02a/marin/users/benfeuer/tool-normalization/h100-eight-20261105/r8/reconciliations/shard-00000-rows-00002816-00002944-held-20261106T0627Z.json"
+  },
+  "preserved": {
+    "56fe8dfb762030bcab15cdfd614501285c6e596bb8600e89e9aac2325c401b4c": "review_hold",
+    "d75f63e4aae5dcda15cee81036dc865560046ca4d1db16ce12680887b04a3470": "infrastructure_deferred",
+    "c1461768e57bd9ad244fbd2a17844752c5c1795851b88ba814c1a6d1655cb2fd": "converted_adapter_checked",
+    "aa1a2620436aa14c226d01cc3659c81e5162ea4853077a8323ad618a959b44d4": "audit_hold",
+    "c9d77f735bfbc91fa56000cefa763c5b61792898d7615068c330d1e6770bee95": "review_hold",
+    "7d478d766841993769b9791d33c71ecd333c3e1795ffec2e803bcb2b64623280": "review_hold",
+    "7ebcfd268ce84ac494cd9dc985b097a2486e5701ed800256d5d43ad3bc1e5d1f": "audit_hold",
+    "bac01728151364c65fe0687c0ae08852d9e45d9e4d8a2eaebf844bebbf391adc": "converted_adapter_checked",
+    "0495b5725adbac1c37b0cacb04e1fb1507bcbc5cf18f586b63d90517bfa3e2c2": "converted_adapter_checked",
+    "65203b5e0657b04c65ead9147580c167ff585a505c027700caa1305bab808d16": "audit_hold",
+    "9c4b669ec2f002317983be2100726cff3b5f5b33f5a4079edd507392e8328116": "audit_hold",
+    "41d188cbdf37ced5c43fc729093ca377891c351b8d2193e7d67773c27962dff0": "audit_hold",
+    "4f9dc5e23d1b2f5c0b953ace672be635bedb41817421bba16ab44d95263bf82f": "converted_adapter_checked",
+    "2bf4b78d241958d26ab2adae506f81fc9b966419c0767c0d5683fda72854271a": "audit_hold",
+    "a87b5ec604645b22266cf080ed2f8ac8efdd8b4574cd20313adc0e55b5fd6a87": "audit_hold",
+    "c49e41483024a7e4d9972b4048810f1a81995739612c7e614dbfbb010bb8cd91": "infrastructure_deferred",
+    "96f90ad1408fbd4811759dfcc24d1d2a02ca0a5353f4ecb96e1fe96c40babeaa": "converted_adapter_checked",
+    "e596e9b606b103a69e2020e4576c56b2cc8e00f84100d2b87d6a1122e3996fb6": "infrastructure_deferred",
+    "d0a385a7af0fc228aaf50924f80d7e13cd552d270b2b6009eb856c56a671be71": "infrastructure_deferred",
+    "4866f8b62219f7b70d8f86c60548b638b2419f0eadc728895c79431f1066e6f5": "converted_adapter_checked",
+    "5dae33f88c71d6a5a78fefe6e43cb29365460b2ab9363da6808d7a97c35c228a": "audit_hold",
+    "0a8143f2c12d3e0d81c6d7f4e59aa388bd666e988baa23980b2b3778b6a2d018": "converted_adapter_checked"
+  },
+  "eligible_unsubmitted_ids": [
+    "f58ce852eca72c565e2013a4926af753f9ecc0252c8c958d814485cd437334fe",
+    "fa944ef875a35d38962d3eff10cde97e9af25252e9107c626baccceab3fe3cd8",
+    "e9574b1ecd375d8af441485b9dd4e9d3fbf1f442a175e44396b4fcdf51e62f1d",
+    "f5226c12bb4b1eaddc1bfa104ec31279616fa15816b5588f3db96713f65c4500",
+    "fbd80f52cdd4674cb5524bc18e2de2335715d441f7282355de281cb83ad83a83",
+    "ed2ca4297dad9010989761408eb6b8725a7712cccd1bc6cf741f5a7feb50bb0f"
+  ],
+  "uncertain_requests_not_replayed": [
+    "/tmp/tool-scale-r8/shard-00002-rows-00006016-00006144/run/records/d75f63e4aae5dcda15cee81036dc865560046ca4d1db16ce12680887b04a3470/review",
+    "/tmp/tool-scale-r8/shard-00002-rows-00006016-00006144/run/records/d0a385a7af0fc228aaf50924f80d7e13cd552d270b2b6009eb856c56a671be71/audit",
+    "/tmp/tool-scale-r8/shard-00002-rows-00006016-00006144/run/records/c49e41483024a7e4d9972b4048810f1a81995739612c7e614dbfbb010bb8cd91/audit",
+    "/tmp/tool-scale-r8/shard-00002-rows-00006016-00006144/run/records/e596e9b606b103a69e2020e4576c56b2cc8e00f84100d2b87d6a1122e3996fb6/review"
+  ],
+  "reason": "Failed stopped batch preserved after admission ledger uncertainty. Only pending/capacity-deferred rows with neither post-started markers nor ledger requests may enter inference; all submitted rows remain excluded."
+}

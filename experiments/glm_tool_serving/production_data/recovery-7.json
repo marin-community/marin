@@ -1,0 +1,89 @@
+{
+  "batch": "shard-00003-rows-00002304-00002432",
+  "cursor": {
+    "shard": 3,
+    "row": 2304,
+    "batches": 433,
+    "artifact_bytes": 2548794115,
+    "counts": {
+      "tool_free": 34853,
+      "structure_unresolved": 6514,
+      "mapped_calls": 13834,
+      "conversion_audit_hold": 2746,
+      "conversion_converted_adapter_checked": 8566,
+      "conversion_review_hold": 2436,
+      "conversion_infrastructure_deferred": 86,
+      "uncommitted_batch_uncertainty_hold": 128
+    },
+    "catalog_sha256": "9eb57d7667061b032b28af8cd31e7e754e0cfa61f862f5e52c1d948ef9ee389d",
+    "updated_at": 1794585510.481273,
+    "reconciliation_url": "s3://marin-us-east-02a/marin/users/benfeuer/tool-normalization/h100-eight-20261105/r7/reconciliations/shard-00000-rows-00002816-00002944-held-20261106T0627Z.json"
+  },
+  "archive_sha256": "08bb50e3175bad4c360382f6f9edbc22e9c5d6c953e9daeda51197488094fe7c",
+  "archive_bytes": 7779116,
+  "preserved": {
+    "b1e87b6b996b26e0e4c82fd389591cc2ace6a503c6b0d803102c838f4382af99": "converted_adapter_checked",
+    "77d736e23afe10e68640e170ed0ff87946c929a0932f5411aafb6fce55bf5861": "audit_hold",
+    "10397cc56f57273a1ec4b3bf3667eeffaf70e9c17f0d20a1c58108314a549062": "converted_adapter_checked",
+    "3ef97f50318876d7560f57d2c559aea276de0ec62014e1a8812ee80c63364f38": "converted_adapter_checked",
+    "5a712eafd26306a139f246bc4dd97afbbc6ad27f18e911003af790acbdf02fb3": "review_hold",
+    "894db9c57d0d9b5f58d3323550ae6f3b7084779f8448869ca3240f4818ed6b70": "converted_adapter_checked",
+    "2fec627402066244ce9b8125acf1efee40ab3c28196e475fa3dcdd1ea483184e": "converted_adapter_checked",
+    "0fd33ca1a99c3940573385f9e2a7bbdaa12543a202bdf2f86a652c151f126778": "converted_adapter_checked",
+    "78c3bce0e55aeca2f9e037a31cb5d31fcc2f67e4ad3f03b17686a554c95ac7e6": "converted_adapter_checked",
+    "317264be77251afa027d51b49b399129cecd52a83b4813e8b5bd7a18958e3c54": "converted_adapter_checked",
+    "c0bc1639031e6cfbe23f01229c79a0cd74ccc1fa40938cd4c34f746f41da7a1d": "converted_adapter_checked",
+    "8bd8eae08cef83ce161ba3dd763f30fa4298084d932a6825f6c6389213b7e812": "review_hold",
+    "bb83fadcdd4af14dc63dad95cb5031c994b18567cd752c7bdeabe37b27f1da32": "converted_adapter_checked",
+    "1a75ffe26bf377469277ca44a27f6987bd93fb28486e0d58598a31b40852b06c": "converted_adapter_checked",
+    "3150d6be9977340976d20959d3e7382bab8bb9300d9163170f3e28ca3837a895": "review_hold",
+    "5689d6806475a1945193970ecf82e3eea54f44b9e8ff7f7511e206402ae85f99": "converted_adapter_checked",
+    "45186a719c67861637182aa92cb6cfdf82a7a354c2f03dfcae99823f3d9b3251": "converted_adapter_checked",
+    "9c9a57082642d838308a7b5f9ddee69a6e44a87a609981bd0c7b76fb17f8733b": "converted_adapter_checked",
+    "9ec212bbd8f8eb7b57af9320e7b9543236ffff51eaba241a79740dbc32fbe620": "review_hold",
+    "28702350401e3b2fee02d5972330d21b94dc2c09588950edf371e898448f93e1": "converted_adapter_checked",
+    "8195852fb3d9c73096ac2433c542ad97e5505aa1a93e013622991acce53e9633": "converted_adapter_checked",
+    "9a68148d563c5ce5a8fa671cac6798020af507b297c6cba642c0d9e340087c46": "converted_adapter_checked",
+    "2a6a8d7ffd1e090b4f2a0d5a3a18702638a8cb0a225ebe80213d3e7644ed8f89": "converted_adapter_checked",
+    "34162080e5b01a3a3077cc7330041848b974b836d885179dfe312114980fad19": "converted_adapter_checked",
+    "2876460df52f11c2fd015c892df208bc18dba1f975a055846d99ae6d0ea580d3": "converted_adapter_checked",
+    "068310a00cbe668e8cefba8bc008a3cf256ef664d08745a1448297d09a09c139": "audit_hold",
+    "c32888ab58a6a776d3728944f09dbb8289f5063ac89d4d9e017984c43aa69ce9": "review_hold",
+    "4e96d7b74af514dc1283cbbcfbc4899c35f9fb4e0f5e52c401697e6a725f95f2": "review_hold",
+    "9f60a0489f1ccd8af22bef8f0551eaf9fd5294592fd730b51957faf5df2acfa8": "converted_adapter_checked"
+  },
+  "eligible_unsubmitted_ids": [
+    "ee70cb1594f4b7f7ef141fabdb5b88e0ceb5a920d25a472c7cc2d503cebd96d2",
+    "de78174fe535879da001f923c3186cd29979bf40d9e4ca8a17c790606d4f4f83",
+    "c79c044f18061058023ff4714c74aae2d674070ceb93c676fb2082b30b9f9559",
+    "bce3d70795665a325cdff74498e78a60e6ee6c6a4a5c5a575f0904b226e6a916",
+    "c880f07ec0f3a633e4244177d6384931129ea35ca222880a8266cc858dd6ed52",
+    "cb01ec56bf5fb8e86f91f4808ee1d9182d38da911321e5410cb585f6a6156f4d",
+    "e1a41c43c8754b7e10b347d788f5e53064150431146f3b97afbcc32db326ad9d",
+    "dba5940d866b2bf82166ba7e647d84ed12da8b9b2a48a85b2c610b8ab69cfaae",
+    "d799925e9f907aca5696de31cecfaf09525df759413b4b321f77ca121fc09365",
+    "faceee05db5425466a5818747fe145221b90ef86f832eef00fec5d64984f760d"
+  ],
+  "uncertain_requests": [
+    {
+      "identity": "/tmp/tool-scale-r7/shard-00003-rows-00002304-00002432/run/records/c79c044f18061058023ff4714c74aae2d674070ceb93c676fb2082b30b9f9559/review",
+      "state": "uncertain",
+      "row": "c79c044f18061058023ff4714c74aae2d674070ceb93c676fb2082b30b9f9559"
+    },
+    {
+      "identity": "/tmp/tool-scale-r7/shard-00003-rows-00002304-00002432/run/records/bce3d70795665a325cdff74498e78a60e6ee6c6a4a5c5a575f0904b226e6a916/audit",
+      "state": "uncertain",
+      "row": "bce3d70795665a325cdff74498e78a60e6ee6c6a4a5c5a575f0904b226e6a916"
+    },
+    {
+      "identity": "/tmp/tool-scale-r7/shard-00003-rows-00002304-00002432/run/records/c880f07ec0f3a633e4244177d6384931129ea35ca222880a8266cc858dd6ed52/audit",
+      "state": "uncertain",
+      "row": "c880f07ec0f3a633e4244177d6384931129ea35ca222880a8266cc858dd6ed52"
+    },
+    {
+      "identity": "/tmp/tool-scale-r7/shard-00003-rows-00002304-00002432/run/records/cb01ec56bf5fb8e86f91f4808ee1d9182d38da911321e5410cb585f6a6156f4d/review",
+      "state": "uncertain",
+      "row": "cb01ec56bf5fb8e86f91f4808ee1d9182d38da911321e5410cb585f6a6156f4d"
+    }
+  ]
+}

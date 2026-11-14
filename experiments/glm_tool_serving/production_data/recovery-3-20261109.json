@@ -1,0 +1,70 @@
+{
+  "batch": "shard-00001-rows-00011136-00011264",
+  "archive_sha256": "36eea83c8a39155113400a2e784a2707dc823e488735f6235972f3d77967c8c3",
+  "archive_bytes": 2243585,
+  "cursor": {
+    "shard": 1,
+    "row": 11136,
+    "batches": 226,
+    "artifact_bytes": 1279673938,
+    "counts": {
+      "mapped_calls": 6854,
+      "tool_free": 18181,
+      "structure_unresolved": 3510,
+      "conversion_audit_hold": 1191,
+      "conversion_converted_adapter_checked": 4444,
+      "conversion_review_hold": 1170,
+      "conversion_infrastructure_deferred": 49,
+      "uncommitted_batch_uncertainty_hold": 384,
+      "previously_processed": 260
+    },
+    "catalog_sha256": "9eb57d7667061b032b28af8cd31e7e754e0cfa61f862f5e52c1d948ef9ee389d",
+    "updated_at": 1794264233.0667837,
+    "reconciliation_url": "s3://marin-us-east-02a/marin/users/benfeuer/tool-normalization/h100-eight-20261105/r3/reconciliations/shard-00000-rows-00002560-00002688-held-20261106T0637Z.json"
+  },
+  "preserved": {
+    "15adce0c47de82619033412af5c3daac90e85e6d949d98c17cd1efe0f20db9c5": "review_hold",
+    "3ce17a62a5cd496f49094494d2ddc7fe82c270753dbc1f6e5c95940826bb5847": "infrastructure_deferred",
+    "28ad591f2ca277a4b8027fdddcc36f075aa7c661e9fb2c73f553aa4583410c8b": "converted_adapter_checked",
+    "0b45cb797a45e616e130f0bba1743e00ea30fb15e4a48ebac811eedac9db967e": "audit_hold",
+    "3b7aeb92bc55bce2902b15099d966ef1f2be6d20a91b8e1176589c2668912ed9": "infrastructure_deferred",
+    "2c24923d4f6b379aab45d31c7faaf71e862dc98060fa492bee3721a94738d22b": "converted_adapter_checked",
+    "22b87d101c99d066dbc613bd9650aa4af6635fadf7cc0c77ba4bb4f8715c7f76": "converted_adapter_checked",
+    "4426c1cbfffbfdf0e4123859a3b81072f868784cc200e1552c2295e4f8bea753": "infrastructure_deferred",
+    "2bba8cf47ea51a80ee506240f243ee3c0bfdeea00cbf7383fc14691b8ccbae61": "review_hold",
+    "4073b7e65624d6e38f5b403daed3700765bcfd67ea4cb22688a30232da8ac713": "infrastructure_deferred"
+  },
+  "eligible_unsubmitted_ids": [
+    "ea6336ccdb8e66a36deedda6b765b6b6e0a9cd0b7e1fc6735994fbb471360859",
+    "5de5c988f9c2a5575573de00cb1d8e8b71ee791fc1cdd35844403d7ec20e4b38",
+    "a55522b504ab2f20acf93eb4aa65932db6521e540e8f9ca9101c63cab104f55d",
+    "e89f254c7a8d4938bd99ba7478279d72181fe6ec6cc1e2795e22f3210084a50a",
+    "b9e5420707b11f30f38293ca622b484de16ce042569414e4569ca77f688f9a0d",
+    "6cf0202aba814e6e98fcfa2f3044a9551bcbeff76898414fe12f3fe9983063a6",
+    "a7fff4a6aa554f08ac1357d8aac2e85abf1c6a2b64d7a0dcd41701371212467d",
+    "b70b0962ff6ffaff587f4253bac326a2d0fd19e5b35a19d1c89971f3561418dd",
+    "dc066e8ad43235bedd7bb292f9898d438848e63777b717baed5caad4619d8969",
+    "776130a8355f2e79d9f3c6fd07d67e2fb264ead0b3a8065d91395fe550ed6da1",
+    "e8484034639a78aa3e6bae9cb72edccea947a39edbf5f6cec39a6b3408eb3d8e",
+    "ff770e50159d2bc07a5cd40b3c0a55501f1adc3894435b354c8af0d1cdd36c81",
+    "f4ab71bde99606897d8a31c27fa2e8aaf59b6c6f05dadd5dc9f1b9c731f20d23",
+    "c3f930bcf32a4640f14de2de3eded616e17506b651d77b232d6031b45b753db9",
+    "b19cc407938144019f4246bec63d5c4dcc2687407fcc502de61b3ae5b2fcb88b",
+    "b00c0225fd346137d93967ae10b66adf7a36b36a2622f336e0fa2b1dcd8c1f0b",
+    "d9bf7fe74df6b8b484c81979f0aa98a48807e8b319d2a96fd3c2c729588a8889",
+    "f1799c9ecc1eaf52a7900ca2e284445d3c43123eb3018a05443fc91a75c82c47",
+    "eaa69a8ccc9fee44557abc7bb4ef133520f002359255143d085077fe2a7a1a51",
+    "bf40eda7597d050b57fdc85daac03d8534c4bdd4d2dec6b1a1bc30b4cb7fdb69",
+    "a8896783f86c522d88c810affff2447f36dcfecfe6c123a2c6599d70999bb592",
+    "9bbe1b282e28359f94fab5d46706e5e77b4b9e664ed11179a8da4bd69894f88c",
+    "727e13839437f3113e3ea5edd8f96266c4b2ac16483ea94cfdae53dd10d2a31f",
+    "5ea0e4ed29f3f5ca734ce27ce3eb4c488ed5d15d310538842883a2d6c7291135",
+    "b4dba9c1108b9ab3c153d55cd33c7d5ccc0406a75c3f7b5f969b1e7560521bf4"
+  ],
+  "uncertain_requests": [
+    "/tmp/tool-scale-r3/shard-00001-rows-00011136-00011264/run/records/3b7aeb92bc55bce2902b15099d966ef1f2be6d20a91b8e1176589c2668912ed9/review",
+    "/tmp/tool-scale-r3/shard-00001-rows-00011136-00011264/run/records/3ce17a62a5cd496f49094494d2ddc7fe82c270753dbc1f6e5c95940826bb5847/review",
+    "/tmp/tool-scale-r3/shard-00001-rows-00011136-00011264/run/records/4073b7e65624d6e38f5b403daed3700765bcfd67ea4cb22688a30232da8ac713/audit",
+    "/tmp/tool-scale-r3/shard-00001-rows-00011136-00011264/run/records/4426c1cbfffbfdf0e4123859a3b81072f868784cc200e1552c2295e4f8bea753/audit"
+  ]
+}

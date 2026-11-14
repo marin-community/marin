@@ -1,0 +1,28 @@
+{
+  "version": "2026-11-05-v1",
+  "implementation_sha256": {
+    "rules.py": "ed16e0939cead008db8a807b8c678c034b10dc6103579e031c42ec610cbc5459",
+    "native_seed.py": "eb4580dbd52592b0b143ab3b6475f1e5fbaa9b3dd173ae136bac80df6b1fafb4",
+    "historical_projection.py": "0605142966f1eff459cf3bfcf49a1734e1de47be6ef041f56a7bfd5099d8e341",
+    "serialize.py": "1c32bfee8c56c0a10dd7cb18a01cfaa15fa2b393a07b7f1394edbd6aef6d5d63",
+    "candidate.py": "a6d1432eafd0cc5c0a43054a8face2501dc0df6dfea7ee3eeb760e548290a009",
+    "opencode-tools.json": "a279d7c13d77962e67807b29229630a433203e72302f9993ecf4df2202402dbf"
+  },
+  "approved_rules": [
+    "native-bash",
+    "native-edit",
+    "native-glob",
+    "native-read",
+    "native-write",
+    "read-zero-to-one-based-offset"
+  ],
+  "audit": {
+    "sample_seed": 20261105,
+    "random_sample_rows": 20,
+    "eligible_frozen_frame": 64,
+    "mapping_defects_observed": 0,
+    "scope": "Parent review of tool-level before/after changes, plus serialization/mask/pairing reconstruction; not a source-task quality verdict",
+    "sample_sha256": "7506c34d352496945c0f8b522771d38e4732ea4c872953bd60679d184044b639",
+    "limitations": "Small sample from existing benchmark frame; only the listed native families and explicitly declared zero-based read offset conversion. No general corpus error-rate guarantee."
+  }
+}

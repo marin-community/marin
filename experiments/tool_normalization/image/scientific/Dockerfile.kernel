@@ -1,0 +1,7 @@
+FROM ghcr.io/marin-community/iris-task@sha256:d5c448cc9518fa6f3f46af270d4f719bc1cc0c1049be4e97a959c6416cfb48dc
+USER root
+COPY kernel-requirements.lock /opt/tool-normalization/kernel-requirements.lock
+RUN python3 -m pip install --no-cache-dir --require-hashes -r /opt/tool-normalization/kernel-requirements.lock
+RUN python3 -c 'import importlib.metadata,json,platform; print(json.dumps({"python":platform.python_version(),"packages":{d.metadata["Name"]:d.version for d in importlib.metadata.distributions()}},sort_keys=True))' > /opt/python-packages.json
+USER actor
+WORKDIR /workspace

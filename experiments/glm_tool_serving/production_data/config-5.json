@@ -1,0 +1,83 @@
+{
+  "model": {
+    "base_url": "http://10.168.193.145:18094/v1",
+    "model": "glm-5.3",
+    "generation": "dedicated-h100-cluster-production-r1-20261103",
+    "api_key_file": "/Users/benfeuer/Documents/experiments/active/sft-new-mix-candidate/artifacts/reports/empireai-tool-normalization/implementation/dedicated-h100-20261103/local-api-key.txt",
+    "context_tokens": 262144,
+    "output_tokens": 32768,
+    "request_timeout": 1800,
+    "capacity_file": "/Users/benfeuer/Documents/experiments/active/sft-new-mix-candidate/artifacts/reports/empireai-tool-normalization/implementation/dedicated-h100-20261103/production-pool2-r1/capacity.json",
+    "ledger": "/Users/benfeuer/Documents/experiments/active/sft-new-mix-candidate/artifacts/reports/empireai-tool-normalization/implementation/dedicated-h100-20261103/production-pool2-r1/ledger.sqlite3",
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "thinking_token_budget": 8192
+  },
+  "execution": {
+    "image": "ghcr.io/marin-community/iris-task@sha256:14cf7c1e4dd086e8fa4951dda58e3dbc97e0c891306528ad1c6840d05504c432",
+    "cluster": "cw-rno2a",
+    "scheduling_timeout": 180,
+    "execution_timeout": 900,
+    "memory_mb": 4096,
+    "cpus": 2,
+    "output_limit_bytes": 2000000,
+    "workdir": "/workspace",
+    "recorder_python": "python3"
+  },
+  "workers": 4,
+  "serving_tokenizer": "serving_tokenizer",
+  "sft_tokenizer": "sft_tokenizer",
+  "artifact_budget_bytes": 8000000000,
+  "max_record_bytes": 128000000,
+  "execution_by_id": {},
+  "adapter_evidence": [
+    {
+      "path": "evidence-0.json",
+      "sha256": "f8c0ee70eaa9da3084ff434f4551439728d6d6b967f3d69661b65f3862060e59"
+    },
+    {
+      "path": "evidence-1.json",
+      "sha256": "474a120a6ca4cb8085b96e87e2d3fb1bf4f66f1a125548b6afcabdbc741d445a"
+    },
+    {
+      "path": "evidence-2.json",
+      "sha256": "d42b466f3069c47a378e7de7e23772a2387ac5809539e32bfeeef3a991bc6623"
+    },
+    {
+      "path": "evidence-3.json",
+      "sha256": "28c5227d6d926b216209a4e5328a2d069853dd0861509f288d6fc0d43e1c65ff"
+    },
+    {
+      "path": "evidence-4.json",
+      "sha256": "366d973e7a7b9c9d64943aadfd630a1e63bcea1dfc7e8b49fa1d3d3cabb04ab9"
+    },
+    {
+      "path": "evidence-5.json",
+      "sha256": "a7ec6b0e2bb76ce85020a235e00853f9fcc0eebd4a0ce49fa38515204085ed1d"
+    },
+    {
+      "path": "evidence-6.json",
+      "sha256": "b941a7a07d55077ce2f16723cef8940188c71733c4fbbd0a43c1e6e4fb03eece"
+    },
+    {
+      "path": "evidence-7.json",
+      "sha256": "5e13972d7fafce3f20eb580f3cebf93d12e76630450fb302ca681a8d84f84cda"
+    },
+    {
+      "path": "evidence-8.json",
+      "sha256": "20d267cbd39950c4bcb1bdfdaf52bdf5122705d849d9dec9bfa7d038c0ad175a"
+    },
+    {
+      "path": "evidence-9.json",
+      "sha256": "8633027a14925b3d32106af03bb680f40dea2acf86588e4c1ca3f2b6afbbbf22"
+    },
+    {
+      "path": "evidence-10.json",
+      "sha256": "303a18994301866f1494d9cde9a32fcef8f96344e62995bb947bb70ece569407"
+    }
+  ],
+  "rule_approval": {
+    "path": "rule-approval-v3.json",
+    "sha256": "98b5839fdbd6ca000eeb2845e4da033ad9e9252564aec5d8fec0b8de15b4c257"
+  }
+}

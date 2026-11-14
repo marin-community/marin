@@ -1,0 +1,16 @@
+{
+  "config": {
+    "image": "ghcr.io/marin-community/iris-task@sha256:14cf7c1e4dd086e8fa4951dda58e3dbc97e0c891306528ad1c6840d05504c432",
+    "workdir": "/workspace",
+    "recorder_python": "python3",
+    "cluster": "cw-rno2a",
+    "scheduling_timeout": 180,
+    "execution_timeout": 900,
+    "memory_mb": 4096,
+    "cpus": 2,
+    "output_limit_bytes": 2000000
+  },
+  "calls_sha256": "b5c55eb18520b5a2b50023f45295f0cb22f5a6fd39e57122b1eccbf102b3f4e3",
+  "executor_sha256": "30e104732ebbbb8de8fb999b96d429064c0cfc873883acd4cd4bc3af5703ff10",
+  "network": "deny"
+}

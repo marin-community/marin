@@ -1,0 +1,50 @@
+{
+  "batch": "shard-00001-rows-00018176-00018268",
+  "archive_sha256": "aa302a350298dfeaabcd3d67ce422ddfb4a28f3bbe2f97697fe96ca78edfe18a",
+  "archive_bytes": 4277288,
+  "cursor": {
+    "shard": 1,
+    "row": 18176,
+    "batches": 150,
+    "artifact_bytes": 875924254,
+    "counts": {
+      "structure_unresolved": 2305,
+      "tool_free": 12088,
+      "previously_processed": 29,
+      "mapped_calls": 4739,
+      "conversion_audit_hold": 794,
+      "conversion_converted_adapter_checked": 3122,
+      "conversion_infrastructure_deferred": 31,
+      "conversion_review_hold": 792,
+      "uncommitted_batch_uncertainty_hold": 384
+    },
+    "catalog_sha256": "9eb57d7667061b032b28af8cd31e7e754e0cfa61f862f5e52c1d948ef9ee389d",
+    "updated_at": 1794165700.9346607,
+    "reconciliation_url": "s3://marin-us-east-02a/marin/users/benfeuer/tool-normalization/h100-eight-20261105/r2/reconciliations/shard-00001-rows-00001792-00001920-held-20261106T0640Z.json"
+  },
+  "preserved": {
+    "f956b94971dcd9badac2a9ad6f17656f1a07b52c147eb3500ec32bde94215bd6": "infrastructure_deferred",
+    "e4b6344cae96ef468835ca2346b602e09b2caf3d417e3fce1fc038c1e65e1b6c": "converted_adapter_checked",
+    "a01a0aa2fa9ea6b3221e7953d944b2fa6c60ea0f85c81104824719d019968cad": "converted_adapter_checked",
+    "70f1faae16bbb9c23cd97655f812f17ca11385658b3435c068fdb8e7771ce3ca": "review_hold",
+    "4ddf63704658ed541583bc5829e7226abc85918f71dc83275b26966054b7ca12": "review_hold",
+    "0b790b8f96ace7fc464dc7b428824340ac79bbee7aeeab7c27f95f9942be0660": "converted_adapter_checked",
+    "786b40cd126181be017541abca1235a9b8fd349cf7654a17cfb31ed9c9d45a2e": "converted_adapter_checked",
+    "1b0ad555b53904946ed811f1112a32a64de27a3df8bfc24e2c6323d420e898d1": "review_hold",
+    "cbb4338f605c1befd098223972d4ac00072de675c640971900e6313515ab8ee2": "review_hold",
+    "5054ac4b5cb31c487cdb531b149beb3390cbe7f39143ea712d27692b4b9aafb9": "converted_adapter_checked",
+    "76b15237550b9bcb48b39fa05dd2270d29a47006d709ab1c3e30dd65bf0844d7": "audit_hold",
+    "5d0ae2db84a21b9943fffd9e905f9a04d08aea695bf57a326c93918fbf425ed1": "audit_hold",
+    "bf0fb47467ab38bb2ae3ed7fcdb28498d83ce4192c7ccb339be307a66902c0e8": "converted_adapter_checked",
+    "b98a006a79a821873b09914dc478153a03e63b42373ee61c0a871d93309bec86": "audit_hold",
+    "0030d6d03244d0640eaf4d15c90f0a3d1f306d7d9b5ddb42cc9dbf09c61bbaf9": "converted_adapter_checked",
+    "e2eaca576d9f625d355d8d12b0d275eb7c438f4c111cac699728902e4773a832": "converted_adapter_checked",
+    "84cf215cc60e10082a13c6e42037459d86e539662deadf6dd38a696400410a99": "converted_adapter_checked",
+    "9ff4c73cbd1fb8d419dd3dc131ff14f4f2f1986bf73b67b96784b9da596fd16a": "converted_adapter_checked",
+    "f27cd7497f16523c766f5e95865a7fb9e44ec2d8f7809f3aebabb8b03ba52baa": "infrastructure_deferred",
+    "a72097cba97885411a7cbd56c9059d185e37e378681f4767dfbdb09dc3b1efb9": "converted_adapter_checked"
+  },
+  "eligible_unsubmitted_ids": [],
+  "uncertain_requests_not_replayed": 2,
+  "reason": "Stopped batch with missing serving backend; retain submitted rows, never retry uncertain POSTs."
+}

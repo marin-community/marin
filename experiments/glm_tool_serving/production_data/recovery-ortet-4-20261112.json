@@ -1,0 +1,35 @@
+{
+  "batch": "shard-00014-rows-00000000-00000128",
+  "archive_sha256": "715d8fd4f4af830b5a4e8d2d739886d890f69f6ee28423896073de4a92b476f5",
+  "archive_bytes": 212534,
+  "cursor": {
+    "shard": 13,
+    "row": 25221,
+    "batches": 2099,
+    "artifact_bytes": 55880190,
+    "counts": {
+      "tool_free": 227384,
+      "structure_unresolved": 18888,
+      "mapped_calls": 262,
+      "conversion_converted_adapter_checked": 6,
+      "conversion_review_hold": 1,
+      "conversion_rule_converted_adapter_checked": 255,
+      "requires_resolved_outcome_provenance": 21279
+    },
+    "catalog_sha256": "2a7faf70ea4eafbb2a00583e92a999ab789f4fd6890abd93c9809cd72ab9696d",
+    "updated_at": 1794523439.3407834
+  },
+  "preserved": {
+    "442ed45093763cad0e1ea50a4e33f2dc39943cba1f61e2b06e34a9565be3610b": "infrastructure_deferred"
+  },
+  "eligible_unsubmitted_ids": [
+    "4d7728e5a5be389d996c1e66a211f149764d4f9420073e626e18065d21d54c53",
+    "ad50814647c6c7564bccce482402cee6c43a27dc52250361a4a1a8461e63f831",
+    "b0f44836c49b371cdadf42a5a1908433a1f16361d536fad9d93f2d8d993f5b53",
+    "d01013dc7d4e10b9719c8d02955adac1be1f6353f1394251d69b1cfe92acf273",
+    "f445ef1ba122e429e8bcd1bddace09cad3d94c933703c19b1f1b77cbcd0c4342"
+  ],
+  "uncertain_requests": [],
+  "origin": "relay bulk-pool outage 2026-11-12; admission guard held the batch; chained recovery per campaign flow; relaunch under user ruling 4f5fed91 with retry-until-success requests",
+  "reconciled_at": "2026-11-13T00:58Z"
+}

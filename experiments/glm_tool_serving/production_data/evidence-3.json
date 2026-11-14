@@ -1,0 +1,6 @@
+{
+  "workdir": true,
+  "glob": true,
+  "grep": true,
+  "ranged_read": true
+}

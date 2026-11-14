@@ -1,0 +1,50 @@
+{
+  "batch": "shard-00014-rows-00000512-00000640",
+  "archive_sha256": "68ac1d7880ad34dd7f35e83a797d336583e4337aebecb57baff0b2a18cf647d9",
+  "archive_bytes": 1820746,
+  "cursor": {
+    "shard": 14,
+    "row": 512,
+    "batches": 3447,
+    "artifact_bytes": 75404147,
+    "counts": {
+      "tool_free": 409963,
+      "structure_unresolved": 8329,
+      "mapped_calls": 65,
+      "glm_mapping_residue": 1,
+      "conversion_converted_adapter_checked": 41,
+      "conversion_rule_converted_adapter_checked": 16,
+      "requires_resolved_outcome_provenance": 22034,
+      "conversion_review_hold": 9
+    },
+    "catalog_sha256": "2a7faf70ea4eafbb2a00583e92a999ab789f4fd6890abd93c9809cd72ab9696d",
+    "updated_at": 1794527841.8610477
+  },
+  "preserved": {
+    "046e9d3990e60927a32de4e0d5c71147ca1325fb9afc783296b3469390c7ad60": "converted_adapter_checked",
+    "1d66690c3a033765b37608b304bc8508a82c7fc3bd2553e2b5b838d49de2e459": "converted_adapter_checked",
+    "5937b8242c7ac0d1773de203b16d2f76369433c0e0b9c0f167a2727f052402ec": "converted_adapter_checked",
+    "7728ab7e0c4543ffa75c604ef5ec48e48ec066e4f9e0baf2990fbf1b5a220dbe": "infrastructure_deferred",
+    "6d86d0701419c3127f61a08e6aa6bac21a06a68772782cdbc2cb9a0c602c632c": "converted_adapter_checked",
+    "18728087fdcbf707033149d9d1da8714337df5b0eac4c1a05ec5819a40809049": "converted_adapter_checked",
+    "147a376ac4f7daf5f408ef4ba8e53daf913bbdec56ff4e1d914f4545b804268a": "converted_adapter_checked",
+    "0b5eb17342abe02d40abe871e7ae8cf140d44b568595ecb622a44e5cdcb85ec3": "converted_adapter_checked",
+    "25a11c82f582d8c982ac09279dce4acc1756d9a9ee71dd1d4428c349ad358d64": "converted_adapter_checked"
+  },
+  "eligible_unsubmitted_ids": [
+    "84f64d0f8d6f43ccb026a6d7d0109901b2254a62c9b25f0aff384e8ec0e7e9a5",
+    "870cbdcb97a156808e3bb3669d7102ae5e0ac8023a837155cdb77129e17af87f",
+    "872a7fb3108c7fe3639f8eb1f3387947e331550e3457a05e5760e50c1f135c5b",
+    "87832bca570712503022051221cf40f46ef20e69a42c701878bd3569233e670e",
+    "ada2f4820d2b6fda4d06781e20abc00dbbe1c050269219e7108443908e396f81",
+    "bf4013b95bb64eb70c119ddef8cc8da462ab917924370789600dc1ecabf41903",
+    "d5b0deb016d34d56553fd7379fa91c544c67c59e64db5a0967c87178979c0096",
+    "e5781a6b8e9b80480a8e5a93d6b22601bb894f5a9a09b5cd85ee1f37eb427f74",
+    "eed21ae7a7850fc8515bab943eb7d8f785d45c92fcfdc566804535fcdb9af1eb",
+    "efcb2575fac13e7d1b95025b2b6cf46b4fcf203810e8de02a6c61a42aae8ec8e",
+    "ff81326eafcfcc600a3397a7a062835e14e60d6caad0c941f3461b3c6a19d55f"
+  ],
+  "uncertain_requests": [],
+  "origin": "relay bulk-pool outage 2026-11-12; admission guard held the batch; chained recovery per campaign flow; relaunch under user ruling 4f5fed91 with retry-until-success requests",
+  "reconciled_at": "2026-11-13T00:58Z"
+}

@@ -1,0 +1,128 @@
+{
+  "ghcr.io/marin-community/iris-task@sha256:ba67e05c032fd79776fe7eb48819868a6485df377af2201bb3cc23d00c6aa972": {
+    "python": "3.12.16",
+    "packages": {},
+    "commands": [
+      "bash",
+      "python3",
+      "git",
+      "rg",
+      "opencode"
+    ],
+    "opencode": "1.19.5",
+    "network": "deny",
+    "workdir": "/workspace",
+    "recorder_python": "python3"
+  },
+  "ghcr.io/marin-community/iris-task@sha256:14cf7c1e4dd086e8fa4951dda58e3dbc97e0c891306528ad1c6840d05504c432": {
+    "packages": {
+      "Pygments": "2.21.0",
+      "asttokens": "3.0.2",
+      "comm": "0.2.3",
+      "contourpy": "1.4.0",
+      "cycler": "0.12.1",
+      "debugpy": "1.8.22",
+      "executing": "2.3.0",
+      "fonttools": "4.68.0",
+      "ipykernel": "7.4.0",
+      "ipython": "9.18.0",
+      "ipython_pygments_lexers": "1.1.1",
+      "jedi": "0.20.1",
+      "jupyter_client": "8.10.0",
+      "jupyter_core": "5.9.1",
+      "kiwisolver": "1.5.1",
+      "matplotlib": "3.11.2",
+      "matplotlib-inline": "0.2.2",
+      "mpmath": "1.3.0",
+      "nest-asyncio2": "1.7.4",
+      "numpy": "2.5.4",
+      "packaging": "26.3",
+      "parso": "0.8.7",
+      "pexpect": "4.9.0",
+      "pillow": "13.0.0",
+      "pip": "25.0.1",
+      "platformdirs": "4.14.2",
+      "prompt_toolkit": "3.0.53",
+      "psutil": "7.2.2",
+      "ptyprocess": "0.7.0",
+      "pure_eval": "0.2.4",
+      "pyparsing": "3.3.3",
+      "python-dateutil": "3.0.0",
+      "pyzmq": "27.2.0",
+      "shapely": "2.2.0",
+      "six": "1.17.0",
+      "stack-data": "0.6.3",
+      "sympy": "1.14.0",
+      "tornado": "6.6",
+      "traitlets": "5.16.1",
+      "typing_extensions": "4.16.0",
+      "tzdata": "2026.6",
+      "wcwidth": "0.9.4"
+    },
+    "python": "3.12.16",
+    "commands": [
+      "bash",
+      "python3",
+      "git",
+      "rg",
+      "opencode"
+    ],
+    "opencode": "1.19.5",
+    "network": "deny",
+    "workdir": "/workspace",
+    "recorder_python": "python3",
+    "native_bash_state": "Fresh process per call; filesystem persists; exported variables and cd do not persist. Explicit workdir is supported."
+  },
+  "ghcr.io/marin-community/iris-task@sha256:2a3f739ba16dbd152ce1e35600090a3413533d20583eefb06b8a1d2bea454b51": {
+    "python": "3.7.17",
+    "packages": {},
+    "commands": [
+      "bash",
+      "python3",
+      "git",
+      "opencode"
+    ],
+    "opencode": "1.19.5",
+    "network": "deny",
+    "workdir": "/nox",
+    "recorder_python": "/opt/tool-runner/cpython-3.12.11-linux-x86_64-gnu/bin/python3",
+    "fixture": {
+      "source_ids": [],
+      "instance_id": "theacodes__nox-267",
+      "repo": "theacodes/nox",
+      "base_commit": "aa9290713a4b664ea4ef4da0554afb09a626d7e1",
+      "test_patch": "diff --git a/tests/test_main.py b/tests/test_main.py\nindex 715ad31..48df159 100644\n--- a/tests/test_main.py\n+++ b/tests/test_main.py\n@@ -379,7 +379,7 @@ def test_main_color_from_isatty(monkeypatch, isatty_value, expected):\n     monkeypatch.setattr(sys, \"argv\", [sys.executable])\n     with mock.patch(\"nox.workflow.execute\") as execute:\n         execute.return_value = 0\n-        with mock.patch(\"sys.stdin.isatty\") as isatty:\n+        with mock.patch(\"sys.stdout.isatty\") as isatty:\n             isatty.return_value = isatty_value\n \n             # Call the main function.\n",
+      "test_patch_sha256": "140248b528160a78e2fc677fff036603947b0857fff14f45121af2e368367f0c",
+      "test_command": "pytest --no-header -rA --tb=line --color=no -p no:cacheprovider -W ignore::DeprecationWarning tests/test_main.py",
+      "benchmark_revision": "10483de0f50fe5da545942705a76c6150171af7f",
+      "benchmark_repo": "nebius/SWE-rebench-V2"
+    }
+  },
+  "ghcr.io/marin-community/iris-task@sha256:7adae96a8267665c9904e1eb8ceb89ec445d230cb6f1930a93a7bb708788f50b": {
+    "python": "3.7.17",
+    "packages": {},
+    "commands": [
+      "bash",
+      "python3",
+      "git",
+      "opencode"
+    ],
+    "opencode": "1.19.5",
+    "network": "deny",
+    "workdir": "/testbed",
+    "recorder_python": "/opt/tool-runner/cpython-3.12.11-linux-x86_64-gnu/bin/python3",
+    "fixture": {
+      "source_ids": [
+        "55ddc3c7d0029df80d47e79f979fe4c06829cde9a1aaa6a3378aece4518cccfe"
+      ],
+      "instance_id": "theacodes__nox-267",
+      "repo": "theacodes/nox",
+      "base_commit": "aa9290713a4b664ea4ef4da0554afb09a626d7e1",
+      "test_patch": "diff --git a/tests/test_main.py b/tests/test_main.py\nindex 715ad31..48df159 100644\n--- a/tests/test_main.py\n+++ b/tests/test_main.py\n@@ -379,7 +379,7 @@ def test_main_color_from_isatty(monkeypatch, isatty_value, expected):\n     monkeypatch.setattr(sys, \"argv\", [sys.executable])\n     with mock.patch(\"nox.workflow.execute\") as execute:\n         execute.return_value = 0\n-        with mock.patch(\"sys.stdin.isatty\") as isatty:\n+        with mock.patch(\"sys.stdout.isatty\") as isatty:\n             isatty.return_value = isatty_value\n \n             # Call the main function.\n",
+      "test_patch_sha256": "140248b528160a78e2fc677fff036603947b0857fff14f45121af2e368367f0c",
+      "test_command": "PYTHONPATH=/testbed pytest --no-header -rA --tb=line --color=no -p no:cacheprovider -W ignore::DeprecationWarning tests/test_main.py",
+      "benchmark_revision": "10483de0f50fe5da545942705a76c6150171af7f",
+      "benchmark_repo": "nebius/SWE-rebench-V2"
+    }
+  }
+}
