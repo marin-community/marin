@@ -1,186 +1,203 @@
 # Tune AgentX throughput with vLLM
 
-Use this guide for Mochi (Hero) on B200-class hardware and Snowball on H100s.
-Start with a reproducible baseline. Find what limits throughput, then test the
-smallest change that could explain it. Use output tokens/s and output tokens/s
-per allocated GPU as the default objective. Before running experiments, agree
-on the task's objective, correctness requirements, latency limit, compute budget
-and when to stop.
+Use this guide for Mochi (Hero) on B200s and Snowball on H100s. For RL rollouts
+and evaluations, prioritize throughput with acceptable interactivity. Choose
+near the bend where extra concurrency buys little throughput and sharply
+worsens latency. Show nearby measured tradeoffs; ask when the choice remains
+unclear. Use output tokens/s at fixed allocation and output tokens/s per
+allocated GPU across allocations. AgentX is a proxy; confirm application gains
+on rollout/evaluation traffic.
 
-This guide has not been exercised on a live tuning task.
-Follow [use-iris](https://github.com/marin-community/marin/blob/main/.agents/skills/use-iris/SKILL.md)
-for job operations and [research engineering](research-engineering.md) for
-experiments. Work within the task's authority and coordinate costly shared
-resources. Keep compilation and CUDA graphs enabled under the
-[serving policy](https://github.com/marin-community/marin/blob/main/experiments/evaluation/serve/models/README.md#vllm-eager-execution).
+Live validation of this guide is deferred. Follow [use-iris][iris] and current
+resource-coordination rules for execution. Keep compilation and CUDA graphs
+enabled under the [serving policy][serving].
 
-## Fix the comparison
+## Read before choosing an experiment
 
-Read the target recipe and existing evidence. Agree on which settings may
-change. For each result, record:
+Search Marin evidence through [use-echo][echo], then upstream docs, recipes,
+release notes, PRs/issues and reviews. Start with [vLLM][optimization] and
+[SGLang tuning][sglang-tuning]. Check revisions, model/GPU/topology support,
+workloads, caveats and merge/release/fork-adoption status. Treat discussion and
+other-model wins as hypotheses; verify relevant code and tests.
 
-| Part | Record |
+Use existing agent workflows when they fit:
+
+| Need | Upstream guidance |
 | --- | --- |
-| Model | Checkpoint/export revision and hashes, tokenizer, chat template, weight and KV dtypes, context limit and model overrides |
-| Workload | Harness version/SHA, scenario, corpus revision/hash, prepared-data cache identity, seed, warmup, duration, delays, cache busting, routing and client settings |
-| Runtime | Marin and vLLM SHAs, wheel/image digests, Torch/CUDA/driver versions, resolved command and environment, actual backend and graph mode |
-| Allocation | Provider, GPU SKU, host count, GPU UUIDs/count, topology/NVLink domain, TP/DP/EP/PP layout, CPU allocation, job and attempt IDs |
+| AgentX phases, metrics and unproductive runs | InferenceX [AgentX diagnostics][agentx-debug] |
+| Model-forward or kernel timing | vLLM [model][model-bench] and [kernel microbenchmarks][microbench] |
+| Kernel, fusion and communication analysis | SGLang [profiler analysis][sglang-profile] |
+| Cache-state consistency | SGLang [KL checks][sglang-kl] |
+| A large parameter search | Harness [search recipes][search-recipes] and [adaptive search][search] |
 
-TP, DP, EP and PP mean tensor, data, expert and pipeline parallelism.
-`C128` means 128 concurrent replay sessions across the benchmark.
-The prepared-data cache stores traces reconstructed for a particular tokenizer
-and configuration. Record its identity separately from the server's KV cache.
+Check support and defaults: synthetic weights, disabled compilation or altered
+warmup may invalidate the comparison. Upstream launch/cleanup examples do not
+override Marin's rules or authorize changes to shared processes.
 
-Historical Hero measurements used **GB200 nodes**. Record the actual device
-and fabric before applying those results to a B200 server. Count every allocated
-GPU once, including all replicas. Check the processor's GPU count against the
-scheduler allocation.
+## Freeze the baseline and measurement
 
-Keep workload, timing and error policy fixed while comparing server changes.
-Change one setting first, such as concurrency, batch budget, parallelism,
-cache policy or backend. Treat changed precision, context overrides or corpus
-as a separate comparison with declared correctness requirements. Preserve prompt
-and output lengths, all sessions, trace delays and validity thresholds.
+Find the primary run through the task's benchmark issue or dashboard; ask for
+its location if missing. Use the latest run passing declared correctness and
+measurement criteria and the best comparable run. Pin both when they differ.
+Use their measured
+interactivity as the starting reference for acceptable tradeoffs.
+If neither is comparable, report the gap and establish a baseline within the task budget.
 
-The pinned [scenario source][scenario] requires streaming, `ignore_eos`,
-recorded replay timing, full inputs and first-turn-prefix cache busting.
-Its minimum duration is 900 seconds. The `agentx` preset defaults to 3,600
-seconds, ten warmup requests per lane and seed 42. The older
-`inferencex-agentx-mvp` preset has different defaults. Check the resolved
-configuration and environment overrides. Follow the [standalone procedure][standalone]
-for CLI usage. Start a fresh server at each concurrency point and use a fresh
-output directory. Preserve native warmup and session routing without manually
-flushing the cache between phases.
+Record model/export/tokenizer revisions, template, dtypes and context overrides;
+corpus/hash, prepared-data cache, harness/scenario, seed, warmup and duration;
+software SHAs, wheel/image digests, command/environment and actual backend/graph
+mode; GPU SKU/UUIDs, hosts/topology, CPU resources, parallelism and attempt IDs.
+Prepared data and server KV are separate caches. Verify InferenceX's GPU count
+against all allocated GPUs, including replicas.
 
-## Establish a trustworthy baseline
+Keep comparison settings fixed except the declared change; record new run and
+attempt IDs for every execution. Preserve all replay sessions, input/output lengths,
+trace delays, cache busting and error/validity rules.
+The pinned [scenario][scenario] requires streaming and `ignore_eos`, with a
+900-second minimum. The `agentx` preset defaults to a one-hour profile, ten
+warmup requests per lane and seed 42. Check resolved overrides. Use a fresh
+server and output directory per point, preserving AgentX warmup and session-routing settings;
+see the [standalone procedure][standalone]. Budget preparation, compilation,
+warmup and retention time as well as profiling.
 
-Check startup, model loading, the resolved runtime and one representative
-request. Restore prepared workload data before allocating GPUs when the runner
-supports it. Set job deadlines that allow for preparation, compilation,
-count-driven warmup, profiling and artifact retention. A one-hour profile can
-take much longer than one hour to complete.
+AgentX reports metrics and throughput/interactivity curves. The compute ladder
+below is our strategy; [search objectives are caller-chosen][search]. There is
+no universal AgentX score here. Keep output and total-token throughput separate.
+InferenceX [excludes warmup/error records][records] and [times from the first
+retained request starting to the last finishing][metrics]. Check `submission_valid`
+and its reasons, errors, context overflows, metric coverage and deadline cancellations separately.
+Keep warmup failures separate. Valid replay does not prove model correctness.
+Short windows change which requests finish and can change configuration rankings.
+Use the [versioned metric definitions][metric-definitions] for interactivity.
 
-| Run | What it can establish | Limit |
+## Form and test a bottleneck hypothesis
+
+Write: observation → suspected cause → one change → prediction → rejection
+condition. Distinguish client/router limits, CPU gaps, KV pressure/recomputation,
+compute/memory work and communication. Correlate request, queue, cache and device
+trends across workers; handle counter resets with [query-finelog][finelog].
+High GPU utilization alone does not identify the bottleneck.
+
+Use a short [vLLM trace][profiling] when metrics cannot separate causes. Inspect
+representative prefill/decode, cache reuse and all relevant ranks. Follow time
+on the execution path that determines completion; summed kernel time can count
+overlap twice. SGLang's [overlap heuristics][overlap] help rank suspects but do
+not prove that dependencies permit overlap. Use a controlled change or ablation
+to test the explanation. Measure throughput separately without profiler overhead.
+
+## Spend compute as evidence improves
+
+Rank attempts by plausible end-to-end gain, supporting evidence and total
+GPU-hours. Label estimates. A tiny or overlapped kernel offers little headroom.
+Prefer cheap checks that can reject expensive ideas early.
+
+| Stage | Spend on | Continue when |
 | --- | --- | --- |
-| Quick diagnosis | Startup, a suspected failure, a small numerical check or trace | Short runs using `--unsafe-override` keep their native invalid status |
-| Calibration | A useful load range, repeat variation and a promising candidate | A valid 900-second window cannot establish a full-hour ranking |
-| Final confirmation | The task's conclusion at the agreed duration and workload | Repeat the baseline and candidate near the chosen operating point |
+| Inspect | Existing sources, metrics and a rough gain/cost estimate | A relevant, testable explanation remains |
+| Isolate | Correctness checks, a representative trace or microbenchmark | The changed path works and the predicted effect appears |
+| Calibrate | A small load/configuration bracket and repeats | Gains exceed repeat variation with useful interactivity |
+| Confirm | Repeated baseline/candidate runs under the full target protocol | Correctness, validity and the chosen operating point hold |
 
-Check `submission_valid` and its reasons, exit status, profiling errors,
-context overflows, metric coverage and unfinished/cancelled requests. Report
-warmup failures separately. Native validity does not establish model correctness
-or an acceptable error rate. Generic errors do not directly set validity,
-though an error threshold can abort the run. Keep invalid runs for diagnosis
-and exclude them from confirmed comparisons. See the [validity FAQ][validity].
+Skip stages already supported by evidence. Use representative shapes, cache
+state, backend and topology. Before expanding, estimate cost including startup
+and warmup, and state what result would justify it. Sub-minimum runs need
+`--unsafe-override`; preserve `submission_valid: false` and exclude them from
+confirmed comparisons. A valid 900-second calibration cannot establish a
+full-hour result. Stop unproductive owned work within task authority and retain
+its evidence. Expand promising candidates, then test interactions.
 
-Keep raw exports and the unchanged processor's output. InferenceX
-[excludes warmup/error records][records] and computes throughput over the
-[time from the first retained request starting to the last finishing][metrics].
-Output tokens/s differs from total tokens/s, which includes inputs. Its
-[per-GPU result][aggregation] uses topology metadata; single-node DP replicas
-need explicit accounting. Correct mismatched GPU metadata passed to the
-processor. Native deadlines can [cancel in-flight work][phase], changing which
-requests finish at different loads and window lengths. Report cancellation
-shares alongside errors and throughput.
+## Check correctness before claiming a win
 
-## Choose the next experiment
+Separate benchmark validity, numerical/state correctness, task quality and RL
+compatibility. Declare acceptance criteria before comparing. Check changed
+operators against independent references. For cache/state changes, test
+cold/warm histories, chunk boundaries, forks, isolation and real graph/parallel
+execution. SGLang's [KL checks][sglang-kl] cover state consistency; task accuracy
+alone can miss corruption.
 
-Write one hypothesis, its predicted observation and a result that would reject
-it. Use logs and existing metrics first. For cumulative counters, preserve
-worker identity and handle resets before calculating rates; use
-[query-finelog](https://github.com/marin-community/marin/blob/main/.agents/skills/query-finelog/SKILL.md).
-A counter warning alone does not prove a restart. Check client CPU, throttling
-and network measurements before blaming a flat curve on the GPU.
+For RL, identify the actual trainer, loss and log-probability convention.
+Compare baseline and candidate rollout log-probabilities on identical generated
+tokens with the trainer at the same weight version, tokenization, masks,
+temperature and filtering. Include different batch shapes, long histories,
+cache states and MoE routing. Use [fixed-token replay][token-replay] or the
+existing [mismatch probe][mismatch-probe] when their model/backend contracts fit.
+Require finite log-probabilities at every response position included in the
+training loss. Compare generation-time rollout scores with trainer and engine rescoring.
+Report per-token error tails, probability ratios, clipping/rejection rates and
+effective sample size (the information retained after weighting);
+separate numerical error from stale-policy effects.
 
-Choose a check that fits the evidence:
+Keep a trusted numerical reference. [Batch invariance][batch-invariance] can
+help but does not guarantee trainer parity. [Importance/rejection correction][rollout-correction]
+and [quantization-aware training][qat] are options to test with the trainer,
+with their bias, variance and compute costs. Do not assume FP8 or small average
+error is RL-safe. An inference win needs a bounded learning/stability comparison
+before an RL claim; report learning progress per GPU-hour alongside throughput.
+Until then, label it inference-qualified with RL validation pending.
 
-| Observation | Useful next check |
-| --- | --- |
-| Throughput rises with load, then flattens or falls | Measure below, near and above the bend. Repeat close points; inspect queueing, cache reuse, cancellations and latency. |
-| KV pressure or preemptions rise, prefix reuse falls | Check cache capacity and reuse. Test one memory/layout or load change. Account for the cost of changing TP. |
-| Prefill and decode compete | Test a small `max_num_batched_tokens` range at fixed load. Compare throughput, time to first token (TTFT) and inter-token latency (ITL). |
-| GPU gaps or collectives dominate a trace | Check graph replay, rank skew, routing and topology. Recount allocated GPUs if parallelism changes. |
-| One kernel dominates relevant requests | Reproduce its shapes/dtypes, check correctness, then microbenchmark it. Confirm the gain in untraced AgentX. |
+Distinguish a candidate regression from an existing baseline discrepancy.
+The [Snowball checks][gqa] found FP8 matching the old implementation but failing
+BF16-reference checks. Preserve that failure; never silently widen tolerances
+or treat baseline agreement as proof of RL compatibility.
 
-The official [optimization guide][optimization] explains preemption and the
-batch-budget tradeoff. Test its suggestions against these models. Holding a
-2,048-token batch budget fixed during a TP comparison does not make it optimal.
+## Keep runnable experiments without merging
 
-Capture a short trace when metrics cannot distinguish the causes. Use
-[vLLM profiling][profiling] for Nsight Systems or PyTorch Profiler. Marin's
-`profile-training` targets JAX/Levanter. Preserve representative graph replay
-and inspect all relevant ranks. Measure throughput in a separate untraced run
-to exclude profiling overhead. For kernel work, follow the vLLM
-[microbenchmark guide][microbench] and Marin's
-[performance workflow](https://github.com/marin-community/marin/blob/main/.agents/skills/add-pallas-kernel/docs/performance-workflow.md).
-A faster kernel still needs an AgentX comparison.
+For an iterative tuning campaign, follow [research engineering](research-engineering.md).
+Commit and push experimental code, recipes, analysis and a notebook to a
+Marin-derived research branch in `marin-community/marin-logbooks`; use its
+[current archive workflow][logbooks]. No merge into Marin or logbooks `main` is
+needed to preserve the experiment. Keep large raw outputs in durable artifact
+storage with URIs/hashes. Link exact source commits, attempts and artifacts.
 
-## Protect correctness
+Record hypothesis, prediction, correctness, measurement, cost, interpretation
+and next decision, including negative results. Push supporting commits before
+milestone issue updates. Preserve the research branch; promote selected changes
+through ordinary PRs. Bounded one-off checks use the existing issue/report under
+[experiment records](experiment-records.md).
 
-Check correctness of the changed code before spending on a long run. Compare
-identical token histories against an independent reference with declared
-tolerances. For cache changes, test cached and uncached requests, chunk
-boundaries, fork reuse and session isolation. Verify actual graph replay and
-the selected backend/collective; a successful launch may use a fallback.
+## Decide and report
 
-The [native attention and cache checks][gqa] show why matching the previous
-implementation still needs an independent reference. Snowball FP8 matched the
-previous implementation but failed some BF16 Levanter reference checks.
-Snowball EAGLE3 speculative decoding passed sampled correctness checks; those
-checks do not establish an AgentX speedup. Hero's cache capacity gains
-also left long-context quality unmeasured. Read the linked numerical criteria
-and results before choosing precision, caching or speculation changes.
+Show the throughput/interactivity curve and recommend a high-throughput point
+before the latency cliff. Report repeated rates/spread, all-GPU normalization,
+latency/tails, cancellations, quality limits and remaining uncertainty.
+Stop when the choice is supported, promising alternatives are rejected, or
+further work needs a user decision about cost, quality or interactivity.
 
-## Decide and hand off
+Snowball's [ten H100 measurements](data/agentx-snowball-h100-calibration.csv)
+include three full-hour runs at 128 concurrent replay sessions averaging 134.95
+output tokens/s/GPU and three at 256 averaging 110.55. The 90th-percentile time
+to first token rose from 7.7–7.9 to 197–207 seconds.
+The [Hero handoff][hero] covers 900-second GB200 calibration, draft parallelism
+builds and an unresolved reduction failure at tensor-parallel size two.
+Its full-hour rankings and long-context quality remain unconfirmed.
+Verify actual B200/GB200 hardware, topology and current software support before
+reusing either recipe.
 
-Repeat promising points against the same baseline until the gain is useful
-relative to observed variation. Test interactions only when evidence warrants
-them. Prefer the smallest load near the repeatable throughput maximum that
-meets the task's constraints. Keep all points, including failures and slower
-results, with latency and error counts.
-
-Stop when the agreed target is supported, bounded tests reject the promising
-alternatives, or the remaining gap needs a user decision about cost or semantics.
-Report the chosen settings, gain and spread, correctness scope, limiting
-evidence and next useful experiment. Follow [experiment records](experiment-records.md)
-for commands, software/model/workload identities, raw artifacts, failed attempts
-and allocation/time costs. Separate confirmed observations, explanations still
-to test and unresolved questions.
-
-## Lessons from prior runs
-
-Snowball's [ten retained H100 measurements](data/agentx-snowball-h100-calibration.csv)
-show why a load sweep can stop. On eight H100s, three full-hour C128 runs
-averaged 134.95 output tokens/s/GPU; three C256 runs averaged 110.55. TTFT p90
-rose from 7.7–7.9 to 197–207 seconds. This supported stopping that doubling
-sweep for that recipe. The CSV preserves original values, submission links and
-raw archive URIs/hashes after Actions artifacts expire. The recipe used BF16,
-TP1/DP8/EP8/PP1, 262,144-token context, an 8,192-token batch budget, vLLM
-`01911be3`, harness `e4bb2f83` and processor `80dff120`. Its
-[runner PR #10645](https://github.com/marin-community/marin/pull/10645) was draft
-on 2026-11-13 UTC.
-
-The [Hero handoff][hero] shows the limits of short calibration. Its 900-second
-GB200 windows suggest TP/load candidates but leave full-hour rankings
-unconfirmed. At TP1/C256, peak KV use reached 97.8% and deadline cancellations
-reached 32.4%. The handoff retains exact rates, allocations, builds and recipes,
-including the NCCL fallback used after TP2 reduction failures whose cause
-remains unresolved. Both TP2 and TP6 used draft vLLM
-[#119](https://github.com/marin-community/vllm/pull/119) stacked on draft
-[#110](https://github.com/marin-community/vllm/pull/110) at authoring. Check
-current release/adoption status, or recover the measured build, before planning
-confirmation. Separate microbenchmarks timed artificial collective work;
-those results do not establish AgentX throughput.
-
-[scenario]: https://github.com/SemiAnalysisAI/agentx-harness/blob/60a094f256b42f55fde1efb3d45672e1d9a44566/src/aiperf/common/scenario/inferencex_agentx_mvp.py
-[standalone]: https://github.com/SemiAnalysisAI/InferenceX/blob/8f29d8dc12329bb30a0300cd1c31f4e4cc2a19e4/inferencex-e2e/docs/agentx-standalone.md
-[validity]: https://github.com/SemiAnalysisAI/agentx-harness/blob/60a094f256b42f55fde1efb3d45672e1d9a44566/docs/benchmark-modes/semianalysis-agentx-faq.md#7-reading-the-results-metrics-validity-and-submission-requirements
-[records]: https://github.com/SemiAnalysisAI/InferenceX/blob/8f29d8dc12329bb30a0300cd1c31f4e4cc2a19e4/inferencex-e2e/infx/results/agentic/artifacts.py
-[metrics]: https://github.com/SemiAnalysisAI/InferenceX/blob/8f29d8dc12329bb30a0300cd1c31f4e4cc2a19e4/inferencex-e2e/infx/results/agentic/request_metrics.py
-[aggregation]: https://github.com/SemiAnalysisAI/InferenceX/blob/8f29d8dc12329bb30a0300cd1c31f4e4cc2a19e4/inferencex-e2e/infx/results/agentic/__init__.py
-[phase]: https://github.com/SemiAnalysisAI/agentx-harness/blob/60a094f256b42f55fde1efb3d45672e1d9a44566/src/aiperf/timing/phase/runner.py
+[iris]: https://github.com/marin-community/marin/blob/main/.agents/skills/use-iris/SKILL.md
+[serving]: https://github.com/marin-community/marin/blob/main/experiments/evaluation/serve/models/README.md#vllm-eager-execution
 [optimization]: https://docs.vllm.ai/en/latest/configuration/optimization/
+[sglang-tuning]: https://github.com/sgl-project/sglang/blob/bd4783409967b186ecb95956a6ab11256ce6d296/docs/docs/advanced_features/hyperparameter_tuning.mdx
+[agentx-debug]: https://github.com/SemiAnalysisAI/InferenceX/blob/d40220b7bc455a6f146f202ea08b64597a9b27f4/.agents/skills/debug-agentx-runs/SKILL.md
+[model-bench]: https://github.com/vllm-project/vllm/blob/55aa0cab78dedbb018ad4f4ea649f2d3d5e1c2a8/.agents/skills/model-microbenchmark/SKILL.md
+[microbench]: https://github.com/vllm-project/vllm/blob/55aa0cab78dedbb018ad4f4ea649f2d3d5e1c2a8/.agents/skills/kernel-microbenchmark/SKILL.md
+[sglang-profile]: https://github.com/sgl-project/sglang/blob/bd4783409967b186ecb95956a6ab11256ce6d296/.agents/skills/llm-torch-profiler-analysis/SKILL.md
+[sglang-kl]: https://github.com/sgl-project/sglang/blob/bd4783409967b186ecb95956a6ab11256ce6d296/.agents/skills/kl-consistency-test/SKILL.md
+[search-recipes]: https://github.com/SemiAnalysisAI/agentx-harness/blob/18015a2d77a6077bee9750c6929a889d52c7df54/docs/sweeping/search-recipes.md
+[search]: https://github.com/SemiAnalysisAI/agentx-harness/blob/18015a2d77a6077bee9750c6929a889d52c7df54/docs/sweeping/bayesian-optimization.md
+[scenario]: https://github.com/SemiAnalysisAI/agentx-harness/blob/18015a2d77a6077bee9750c6929a889d52c7df54/src/aiperf/common/scenario/inferencex_agentx_mvp.py
+[standalone]: https://github.com/SemiAnalysisAI/InferenceX/blob/d40220b7bc455a6f146f202ea08b64597a9b27f4/inferencex-e2e/docs/agentx-standalone.md
+[records]: https://github.com/SemiAnalysisAI/InferenceX/blob/d40220b7bc455a6f146f202ea08b64597a9b27f4/inferencex-e2e/infx/results/agentic/artifacts.py
+[metrics]: https://github.com/SemiAnalysisAI/InferenceX/blob/d40220b7bc455a6f146f202ea08b64597a9b27f4/inferencex-e2e/infx/results/agentic/request_metrics.py
+[metric-definitions]: https://github.com/SemiAnalysisAI/agentx-harness/blob/18015a2d77a6077bee9750c6929a889d52c7df54/docs/metrics-reference.md#e2e-normalized-interactivity
+[finelog]: https://github.com/marin-community/marin/blob/main/.agents/skills/query-finelog/SKILL.md
 [profiling]: https://docs.vllm.ai/en/latest/contributing/profiling/
-[microbench]: https://github.com/vllm-project/vllm/blob/bbbd0a02c9d1bec965ee818af29a1319baefa69c/.agents/skills/kernel-microbenchmark/SKILL.md
+[overlap]: https://github.com/sgl-project/sglang/blob/bd4783409967b186ecb95956a6ab11256ce6d296/.agents/skills/llm-torch-profiler-analysis/references/heuristics.md
 [gqa]: https://github.com/marin-community/vllm/pull/110#issuecomment-6686676052
+[logbooks]: https://github.com/marin-community/marin-logbooks/blob/main/WORKFLOW.md
 [hero]: https://echo.oa.dev/wiki/945
+[echo]: https://github.com/marin-community/marin/blob/main/.agents/skills/use-echo/SKILL.md
+[token-replay]: https://github.com/vllm-project/vllm/blob/55aa0cab78dedbb018ad4f4ea649f2d3d5e1c2a8/docs/serving/online_serving/trace_replay.md
+[mismatch-probe]: https://github.com/marin-community/marin/blob/80004cc0654537cb39f386539f91cd28db653e4e/vendor/skyrl/skyrl-train/skyrl_train/config/mismatch_probe.py
+[batch-invariance]: https://docs.vllm.ai/en/latest/features/batch_invariance/
+[rollout-correction]: https://verl.readthedocs.io/en/latest/algo/rollout_corr.html
+[qat]: https://verl.readthedocs.io/en/latest/low_precision/qat.html
