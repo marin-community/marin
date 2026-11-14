@@ -103,7 +103,7 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.tasks import tasks_for_listing
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.workers import worker_roster
-from iris.cluster.types import USER_JOB_STATES, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import USER_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -2581,30 +2581,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
         if not addresses:
             return ReconcileInputs(job_specs={}, worker_ids=[], rows_by_worker={}), {}
         worker_ids = list(addresses)
-        target_ids = set(worker_ids)
-        raw_rows = snap.execute(
-            select(
-                task_attempts_table.c.worker_id,
-                tasks_table.c.task_id,
-                task_attempts_table.c.attempt_id,
-                tasks_table.c.state.label("task_state"),
-                task_attempts_table.c.state.label("attempt_state"),
-                tasks_table.c.job_id,
-                task_attempts_table.c.attempt_uid,
-            )
-            .select_from(
-                task_attempts_table.join(
-                    tasks_table,
-                    (tasks_table.c.task_id == task_attempts_table.c.task_id)
-                    & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
-                )
-            )
-            .where(
-                task_attempts_table.c.worker_id.is_not(None),
-                task_attempts_table.c.finished_at_ms.is_(None),
-            ),
-        ).all()
-        rows = [row for row in raw_rows if row.worker_id in target_ids]
+        rows = reads.load_reconcile_rows(snap, worker_ids)
         templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
         for row in rows:
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
@@ -2614,17 +2591,7 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
 
     rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
     for row in rows:
-        rows_by_worker[WorkerId(str(row.worker_id))].append(
-            ReconcileRow(
-                worker_id=WorkerId(str(row.worker_id)),
-                task_id=row.task_id,
-                attempt_id=int(row.attempt_id),
-                task_state=int(row.task_state),
-                attempt_state=int(row.attempt_state),
-                job_id=row.job_id,
-                attempt_uid=AttemptUid(str(row.attempt_uid)),
-            )
-        )
+        rows_by_worker[row.worker_id].append(row)
     job_specs = {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
     inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
     return inputs, addresses

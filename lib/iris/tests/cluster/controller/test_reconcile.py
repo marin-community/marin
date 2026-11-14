@@ -284,6 +284,7 @@ def _row(
     job: str = "job-a",
     attempt_uid: str = "deadbeefdeadbeef",
     attempt_state: int = job_pb2.TASK_STATE_PENDING,
+    superseded: bool = False,
 ) -> ReconcileRow:
     return ReconcileRow(
         worker_id=WorkerId(_W1),
@@ -293,6 +294,7 @@ def _row(
         attempt_state=attempt_state,
         job_id=_job_id(job),
         attempt_uid=AttemptUid(attempt_uid),
+        superseded=superseded,
     )
 
 
@@ -461,6 +463,35 @@ def test_reconcile_worker_pending_with_terminal_attempt_emits_stop():
     assert desired.HasField("stop")
     assert desired.stop == worker_pb2.Worker.STOP_REASON_PREEMPTED
     assert desired.attempt_uid == row.attempt_uid
+
+
+@pytest.mark.parametrize(
+    "attempt_state,expected_reason,holds_retry",
+    [
+        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED, True),
+        # A coscheduled-sibling requeue leaves the old attempt COSCHED_FAILED.
+        (job_pb2.TASK_STATE_COSCHED_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED, True),
+        # The controller drops reports for a nonterminal superseded attempt, so
+        # a hold on it would never release.
+        (job_pb2.TASK_STATE_RUNNING, worker_pb2.Worker.STOP_REASON_SUPERSEDED, False),
+    ],
+)
+def test_reconcile_worker_stops_superseded_attempt(attempt_state, expected_reason, holds_retry):
+    """An old attempt stays in the plan as a 'stop' whatever the retry's task
+    state is. A retry ASSIGNED to the same worker waits for a terminal one."""
+    old = _row(
+        job_pb2.TASK_STATE_ASSIGNED,
+        attempt_id=0,
+        attempt_uid="aaaaaaaaaaaaaaaa",
+        attempt_state=attempt_state,
+        superseded=True,
+    )
+    retry = _row(job_pb2.TASK_STATE_ASSIGNED, attempt_id=1, attempt_uid="bbbbbbbbbbbbbbbb")
+    plan = _plan_for([old, retry], job_specs={_job_id("job-a"): _spec()})
+
+    by_uid = {d.attempt_uid: d for d in plan.request.desired}
+    assert by_uid[old.attempt_uid].stop == expected_reason
+    assert (retry.attempt_uid not in by_uid) == holds_retry
 
 
 def test_reconcile_worker_holds_assigned_run_while_preemption_victim_occupies_worker():
