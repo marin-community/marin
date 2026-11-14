@@ -650,12 +650,18 @@ complete. Cross-source agreement cannot exclude an answer defect shared by
 both sources. Use a fresh output root; old evidence is never overwritten.
 
 During direction measurement, exact instruction hashes and disjoint conversation
-states are checked before loading text. Discovery still prepares every population
-and scans its full text on a resumed run. Remaining directions share an atomic local normalization cache per source,
-and target populations are sharded across `--workers` CPU processes. To resume a
-run in a fresh output prefix, pass `--reuse-neighbor-root <prior-output-root>`;
-complete direction receipts are reused only under their input-bound direction
-key and after checking the full neighbor digest. Old outputs remain immutable.
+states are checked before loading text. A run without a frozen shortlist scans
+full text for discovery, including on resume. Pass `--pair-shortlist URI
+--pair-shortlist-sha256 SHA` to reuse a discovery checkpoint. Its survey SHA,
+population digests, method, sample size and prior-pair coverage must match.
+Verified population-cache staging still occurs.
+
+Remaining directions share an atomic normalization cache per source and a
+512 MiB LRU payload budget for target word shingles. Eviction recomputes the
+same shingles. Target populations are sharded across `--workers` CPU processes.
+Pass `--reuse-neighbor-root <prior-output-root>` with a fresh output prefix to
+reuse complete direction receipts under their input-bound keys after checking
+the full neighbor digest. Old outputs remain immutable.
 
 The staged loader selects fingerprints, pair reviews and groups atomically with
 the catalog and backend map. Pass the scan's reviewed output to the loader's

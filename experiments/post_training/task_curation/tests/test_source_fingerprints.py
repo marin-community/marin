@@ -27,7 +27,12 @@ from taskcompendium.models import (
     TextMessage,
     ToolResult,
 )
-from taskcompendium.source_fingerprints import DuplicateLabel, SourceFingerprint
+from taskcompendium.source_fingerprints import (
+    CURRENT_OVERLAP_VERSION,
+    DuplicateLabel,
+    SourceFingerprint,
+    SourceIdentitySurvey,
+)
 
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
 from experiments.post_training.task_curation.duplicate_review import review_pairs
@@ -39,7 +44,11 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
     pair_similarity,
 )
-from experiments.post_training.task_curation.source_neighbor_survey import measure_target
+from experiments.post_training.task_curation.source_neighbor_survey import (
+    PairShortlist,
+    measure_target,
+    read_pair_shortlist,
+)
 from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     PreparedPopulation,
@@ -506,3 +515,73 @@ def test_lazy_population_direction_combines_exact_matches_and_disjoint_states(tm
     assert {row.partner_task_id for row in result.neighbors if row.method == "exact"} == {
         f"partner-{i}" for i in range(5)
     }
+
+
+@pytest.mark.parametrize("cache_bytes", [1, 30_000, 1_000_000])
+def test_candidate_cache_capacity_preserves_neighbors_on_revisited_questions(cache_bytes):
+    common = " ".join(f"molecule{word}" for word in range(80))
+    order = [*range(10), *reversed(range(10))]
+    source = PopulationIndex(
+        [
+            TaskContent(f"query-{n}", f"query-{i}", f"{common} unique{i} final.", f"ref-{i}", "test", "state")
+            for n, i in enumerate(order)
+        ],
+        {},
+    )
+    target = PopulationIndex(
+        [
+            TaskContent(f"partner-{i}", f"target-{i}", f"{common} unique{i} final!", f"ref-{i}", "test", "state")
+            for i in range(10)
+        ],
+        {},
+        shingle_cache_bytes=cache_bytes,
+    )
+    neighbors = target.neighbors(source.raw_rows, source)
+    assert [row.partner_task_id for row in neighbors] == [f"partner-{i}" for i in order]
+    assert all(
+        row.method == "lsh" and row.similarity >= 0.9 and row.reference_match and row.tests_match for row in neighbors
+    )
+
+
+def test_frozen_shortlist_rejects_a_changed_source_population(tmp_path):
+    fingerprint = fingerprint_source([task_document("task", "Solve this chemistry problem.")], {"shard": "original"})
+    pair = pair_similarity("left", fingerprint, "right", fingerprint)
+    survey = SourceIdentitySurvey(
+        catalog_root="fixture",
+        snapshot_id="frozen",
+        generated_at="2026-11-14T00:00:00Z",
+        fingerprints={"left": fingerprint, "right": fingerprint},
+        reviews=[],
+        groups=[],
+        judge=None,
+    )
+    shortlist = PairShortlist(
+        schema_version=1,
+        kind="content_nn_pair_shortlist",
+        method=CURRENT_OVERLAP_VERSION,
+        sample_size=30,
+        source_survey_uri="fixture",
+        source_survey_sha256="frozen-survey",
+        source_inputs_sha256={key: canonical_sha256(value.inputs) for key, value in survey.fingerprints.items()},
+        pairs=[pair],
+        pair_count=1,
+        base_pairs=1,
+        durable_direction_checkpoints_at_recovery=0,
+        provenance="fixture",
+    )
+    path = tmp_path / "shortlist.json"
+    payload = shortlist.model_dump_json().encode()
+    path.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    restored = read_pair_shortlist(str(path), digest, "frozen-survey", survey, 30)
+    assert restored.pairs == [pair]
+    changed = survey.model_copy(
+        update={
+            "fingerprints": {
+                "left": fingerprint.model_copy(update={"inputs": {"shard": "changed"}}),
+                "right": fingerprint,
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="shortlist input population differs"):
+        read_pair_shortlist(str(path), digest, "frozen-survey", changed, 30)

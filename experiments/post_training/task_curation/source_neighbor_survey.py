@@ -13,7 +13,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import UTC, datetime
 from multiprocessing import get_context
 from pathlib import Path
+from typing import Literal
 
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
@@ -49,6 +51,48 @@ from experiments.post_training.task_curation.task_neighbors import (
 from infra.marina.apps.rl_data_catalog.server.source_identity import original_source_id
 
 logger = logging.getLogger(__name__)
+
+
+class PairShortlist(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1]
+    kind: Literal["content_nn_pair_shortlist"]
+    method: str
+    sample_size: int
+    source_survey_uri: str
+    source_survey_sha256: str
+    source_inputs_sha256: dict[str, str]
+    pairs: list[PairSimilarity]
+    pair_count: int
+    base_pairs: int
+    durable_direction_checkpoints_at_recovery: int
+    provenance: str
+
+
+def read_pair_shortlist(
+    uri: str, sha256: str, source_survey_sha256: str, survey: SourceIdentitySurvey, sample_size: int
+) -> PairShortlist:
+    """Verify a frozen discovery result against the exact survey and input populations."""
+    payload = StoragePath(uri).read_bytes()
+    if hashlib.sha256(payload).hexdigest() != sha256:
+        raise ValueError("Pair shortlist SHA-256 differs")
+    shortlist = PairShortlist.model_validate_json(payload)
+    inputs = {key: canonical_sha256(value.inputs) for key, value in survey.fingerprints.items() if value is not None}
+    if shortlist.source_survey_sha256 != source_survey_sha256 or shortlist.source_inputs_sha256 != inputs:
+        raise ValueError("Pair shortlist input population differs")
+    if shortlist.method != CURRENT_OVERLAP_VERSION or shortlist.sample_size != sample_size:
+        raise ValueError("Pair shortlist measurement method differs")
+    pairs = {frozenset((pair.left, pair.right)) for pair in shortlist.pairs}
+    if len(pairs) != len(shortlist.pairs) or shortlist.pair_count != len(pairs):
+        raise ValueError("Pair shortlist count or uniqueness differs")
+    if any(len(pair) != 2 or not pair.issubset(inputs) for pair in pairs):
+        raise ValueError("Pair shortlist references unknown source populations")
+    required = {frozenset((pair.left, pair.right)) for pair in widened_pairs(survey)}
+    if not required.issubset(pairs):
+        raise ValueError("Pair shortlist omits prior or deterministic pairs")
+    logger.info("Reusing shortlist %s SHA256 %s: %d pairs", uri, sha256, len(pairs))
+    return shortlist
 
 
 def write_json(uri: str, document: dict) -> str:
@@ -191,11 +235,12 @@ def rerun(
     allocated_cpus: int,
     locations: PopulationLocations,
     reuse_neighbor_root: str | None = None,
+    shortlist: PairShortlist | None = None,
 ) -> dict:
     output = StoragePath(output_root)
     started = time.monotonic()
     fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
-    pairs = widened_pairs(survey)
+    pairs = list(shortlist.pairs) if shortlist is not None else widened_pairs(survey)
     if only_openqa:
         pairs = [
             pair
@@ -226,7 +271,7 @@ def rerun(
             source = pending[future]
             paths[source] = future.result()
             logger.info("Prepared %d/%d populations: %s", len(paths), len(sources), original_source_id(source))
-    if not only_openqa:
+    if not only_openqa and shortlist is None:
         pairs = discover_pairs(paths, fingerprints, pairs)
     directions: dict[tuple[str, str], DirectionalOverlap] = {}
     integrity = []
@@ -316,6 +361,7 @@ def rerun(
         "changed_pairs": sum(row["changed"] for row in diff),
         "labels": dict(Counter(row.verdict.label for row in reviews)),
         "sample_size": sample_size,
+        "discovery_reused": shortlist is not None,
         "wall_seconds": elapsed,
         "requested_cpus": allocated_cpus,
         "cpu_hours_upper_bound": allocated_cpus * elapsed / 3600,
@@ -341,6 +387,8 @@ def main() -> None:
     parser.add_argument("--allocated-cpus", type=int, required=True)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--reuse-neighbor-root")
+    parser.add_argument("--pair-shortlist")
+    parser.add_argument("--pair-shortlist-sha256")
     parser.add_argument("--sample-size", type=int, default=SAMPLE_SIZE)
     parser.add_argument("--only-openqa", action="store_true")
     args = parser.parse_args()
@@ -348,8 +396,18 @@ def main() -> None:
     payload = StoragePath(args.survey).read_bytes()
     if hashlib.sha256(payload).hexdigest() != args.survey_sha256:
         raise ValueError("Survey input SHA-256 differs")
+    survey = canonical_identity_survey(json.loads(payload))
+    shortlist = None
+    if args.pair_shortlist is not None:
+        if args.pair_shortlist_sha256 is None:
+            parser.error("--pair-shortlist requires --pair-shortlist-sha256")
+        shortlist = read_pair_shortlist(
+            args.pair_shortlist, args.pair_shortlist_sha256, args.survey_sha256, survey, args.sample_size
+        )
+    elif args.pair_shortlist_sha256 is not None:
+        parser.error("--pair-shortlist-sha256 requires --pair-shortlist")
     rerun(
-        canonical_identity_survey(json.loads(payload)),
+        survey,
         args.output_root,
         args.work_dir,
         args.workers,
@@ -358,6 +416,7 @@ def main() -> None:
         args.allocated_cpus,
         read_locator_manifest(args.population_locators),
         args.reuse_neighbor_root,
+        shortlist,
     )
 
 
