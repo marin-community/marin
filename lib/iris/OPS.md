@@ -279,6 +279,20 @@ iris task exec /user/job/0 --timeout 15 -- \
   python -m rigging.telemetry.probes.nccl_client --timeout 8
 ```
 
+Nsight CUDA tracing needs launch-time injection. For a disposable GPU diagnostic,
+wrap the command with the existing hook and bound collection explicitly:
+
+```bash
+python -m iris.hooks.nsys_main --tasks first --output-uri '<regional-report-directory>' \
+  --delay 360 --duration 300 --graph-trace node -- <diagnostic-command>
+```
+
+This waits six minutes, collects five minutes, then terminates the profiled command
+and uploads its report. Place the wrapper outside `iris.jax.multigpu_main` for one
+report covering every rank on the node. Node-level CUDA graph tracing adds overhead;
+use the trace to diagnose kernels, then measure throughput without profiling.
+An interrupted diagnostic is not a completed training calibration.
+
 ## Scheduler & Autoscaler
 
 ```bash

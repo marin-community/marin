@@ -37,12 +37,20 @@ class NsysHook:
         capture_range: Collect only between ``cuProfilerStart``/``cuProfilerStop`` —
             keeps compile out and aligns multi-unit captures on the same step; the
             application must call the API or nothing is collected.
+        delay: Seconds to wait before collecting.
+        duration: Collection seconds, then terminate the profiled command. Use for
+            bounded diagnostics rather than production training.
+        graph_trace: ``node`` exposes individual CUDA graph kernels with extra overhead;
+            ``graph`` retains Nsight's default granularity.
     """
 
     output_uri: str | None = None
     tasks: str = "first"
     trace: str = NSYS_DEFAULT_TRACE
     capture_range: bool = False
+    delay: int = 0
+    duration: int | None = None
+    graph_trace: str = "graph"
 
     def wrap(self, command: Sequence[str]) -> list[str]:
         argv = ["python", "-m", _NSYS_MAIN_MODULE, "--tasks", self.tasks, "--trace", self.trace]
@@ -51,5 +59,11 @@ class NsysHook:
             argv += ["--output-uri", self.output_uri]
         if self.capture_range:
             argv.append("--capture-range")
+        if self.delay:
+            argv += ["--delay", str(self.delay)]
+        if self.duration is not None:
+            argv += ["--duration", str(self.duration)]
+        if self.graph_trace != "graph":
+            argv += ["--graph-trace", self.graph_trace]
         argv.append("--")
         return [*argv, *command]

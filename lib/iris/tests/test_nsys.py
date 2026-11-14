@@ -6,6 +6,7 @@ scheduler knows nothing about it; the GPU image bakes `nsys` in. None of this ru
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -88,9 +89,10 @@ def test_default_output_uri_keys_on_the_job_and_cluster(monkeypatch: pytest.Monk
     """Resolved from the task's own storage backend (including under federation) and
     keyed on the job so a run's reports are findable and self-expiring."""
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
+    monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     monkeypatch.setenv("IRIS_TASK_ID", "/rav/train-42/0")
     monkeypatch.setenv("IRIS_NUM_TASKS", "1")
-    assert default_output_uri() == "s3://marin-us-east-08a/tmp/ttl=30d/iris-profiles/rav/train-42"
+    assert default_output_uri() == "s3://marin-us-east-02a/tmp/ttl=30d/iris-profiles/rav/train-42"
 
 
 def test_build_nsys_argv_matches_what_the_container_allows() -> None:
@@ -166,12 +168,14 @@ def fake_nsys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     executable.write_text(
         f"#!{sys.executable}\n"
         "import os\n"
+        "import json\n"
         "import pathlib\n"
         "import subprocess\n"
         "import sys\n"
         "if signal_number := os.environ.get('FAKE_NSYS_SIGNAL'):\n"
         "    os.kill(os.getpid(), int(signal_number))\n"
         "output_index = sys.argv.index('-o') + 1\n"
+        "pathlib.Path(sys.argv[output_index] + '.argv.json').write_text(json.dumps(sys.argv[1:]))\n"
         "command_index = output_index + 1\n"
         "while command_index < len(sys.argv) and sys.argv[command_index].startswith('--capture-range'):\n"
         "    command_index += 1\n"
@@ -200,6 +204,12 @@ def test_main_argv_runs_profiled_command(monkeypatch: pytest.MonkeyPatch, select
                 "--output-uri",
                 f"file://{destination}",
                 "--capture-range",
+                "--delay",
+                "360",
+                "--duration",
+                "300",
+                "--graph-trace",
+                "node",
                 "--",
                 *_child(marker=marker),
             ]
@@ -208,6 +218,8 @@ def test_main_argv_runs_profiled_command(monkeypatch: pytest.MonkeyPatch, select
     assert excinfo.value.code == 0
     assert marker.read_text() == "ran"
     assert len(list(destination.glob("*.nsys-rep"))) == 1
+    argv = json.loads(next((selected_task / "nsys").glob("*.argv.json")).read_text())
+    assert {"--delay=360", "--duration=300", "--kill=sigterm", "--cuda-graph-trace=node"} <= set(argv)
 
 
 def test_selected_unit_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path) -> None:

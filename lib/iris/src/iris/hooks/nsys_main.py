@@ -169,7 +169,16 @@ def resolve_nsys_bin() -> str:
     return on_path
 
 
-def build_nsys_argv(nsys_bin: str, output_path: Path, trace: str, capture_range: bool) -> list[str]:
+def build_nsys_argv(
+    nsys_bin: str,
+    output_path: Path,
+    trace: str,
+    capture_range: bool,
+    *,
+    delay: int = 0,
+    duration: int | None = None,
+    graph_trace: str = "graph",
+) -> list[str]:
     """Build the ``nsys profile`` prefix for a selected rank."""
     argv = [
         nsys_bin,
@@ -178,9 +187,16 @@ def build_nsys_argv(nsys_bin: str, output_path: Path, trace: str, capture_range:
         "--sample=none",
         "--cpuctxsw=none",
         "--force-overwrite=true",
-        "-o",
-        str(output_path),
     ]
+    if delay < 0 or (duration is not None and duration <= 0):
+        raise ValueError("Nsight delay must be nonnegative and duration positive")
+    if delay:
+        argv.append(f"--delay={delay}")
+    if duration is not None:
+        argv += [f"--duration={duration}", "--kill=sigterm"]
+    if graph_trace != "graph":
+        argv.append(f"--cuda-graph-trace={graph_trace}")
+    argv += ["-o", str(output_path)]
     if capture_range:
         argv.extend(_CAPTURE_RANGE_ARGS)
     return argv
@@ -230,7 +246,17 @@ def _supervise(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
     return 128 - returncode if returncode < 0 else returncode
 
 
-def run(tasks: str, trace: str, capture_range: bool, output_uri: str | None, argv: Sequence[str]) -> NoReturn:
+def run(
+    tasks: str,
+    trace: str,
+    capture_range: bool,
+    output_uri: str | None,
+    argv: Sequence[str],
+    *,
+    delay: int = 0,
+    duration: int | None = None,
+    graph_trace: str = "graph",
+) -> NoReturn:
     """Run *argv*, profiled by nsys when this task is selected.
 
     *argv* is the multi-process supervisor (or the command itself at
@@ -254,7 +280,9 @@ def run(tasks: str, trace: str, capture_range: bool, output_uri: str | None, arg
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = report_path(output_dir, index)
     nsys_bin = resolve_nsys_bin()
-    nsys_argv = build_nsys_argv(nsys_bin, output_path, trace, capture_range)
+    nsys_argv = build_nsys_argv(
+        nsys_bin, output_path, trace, capture_range, delay=delay, duration=duration, graph_trace=graph_trace
+    )
     # nsys stages its injection libraries in TMPDIR, and /tmp is mounted noexec.
     os.environ["TMPDIR"] = str(output_dir)
     logger.info("unit %d profiling to %s%s", index, output_path, _REPORT_SUFFIX)
@@ -286,13 +314,25 @@ def main(argv: list[str] | None = None) -> NoReturn:
     parser.add_argument("--tasks", default="first", help="'first', 'all', or a comma-separated list of indices")
     parser.add_argument("--trace", default="cuda,nvtx,cublas", help="nsys --trace value")
     parser.add_argument("--output-uri", default=None, help="report directory URI (default: the cluster temp bucket)")
+    parser.add_argument("--delay", type=int, default=0, help="seconds before trace collection begins")
+    parser.add_argument("--duration", type=int, help="collection seconds; terminate the profiled command at the end")
+    parser.add_argument("--graph-trace", choices=("graph", "node"), default="graph")
     parser.add_argument(
         "--capture-range",
         action="store_true",
         help="collect only between cuProfilerStart/Stop instead of for the whole run",
     )
     args = parser.parse_args(own_args)
-    run(args.tasks, args.trace, args.capture_range, args.output_uri, command)
+    run(
+        args.tasks,
+        args.trace,
+        args.capture_range,
+        args.output_uri,
+        command,
+        delay=args.delay,
+        duration=args.duration,
+        graph_trace=args.graph_trace,
+    )
 
 
 if __name__ == "__main__":
