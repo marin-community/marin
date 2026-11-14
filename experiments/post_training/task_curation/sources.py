@@ -50,6 +50,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import math as t
 from experiments.post_training.task_curation.datasets.tasktrove import multichallenge as tasktrove_multichallenge
 from experiments.post_training.task_curation.datasets.tasktrove import nl2bash as tasktrove_nl2bash
 from experiments.post_training.task_curation.datasets.tasktrove import puzzles as tasktrove_puzzles
+from experiments.post_training.task_curation.datasets.tasktrove import puzzles_qa as tasktrove_puzzles_qa
 from experiments.post_training.task_curation.datasets.tasktrove import python_tests as tasktrove_python_tests
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
@@ -110,6 +111,7 @@ def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
         *tasktrove_instructions.sources(),
         *tasktrove_multichallenge.sources(),
         *tasktrove_puzzles.sources(),
+        *tasktrove_puzzles_qa.sources(),
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
