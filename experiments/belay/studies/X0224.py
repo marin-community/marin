@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""X0224: stable rank, row-norm ratio and norm gains of every layer's matrices in one d512 recipe checkpoint.
+"""X0224: stable rank, row-norm ratio and norm gains of every layer's matrices over a d512 recipe run.
 
-Each statistic is compared with its value at initialization, so one checkpoint shows the drift since step 0:
+Every saved checkpoint step is measured; each statistic is compared with its value at initialization:
 
 - stable rank ``||W||_F^2 / sigma_max^2``, against a Gaussian matrix of the same shape, ``mn / (sqrt(m) + sqrt(n))^2``;
 - row-norm ratio, the largest over the median L2 norm of the matrix's rows (the stored first axis) and of its columns,
@@ -14,6 +14,7 @@ Stacked block arrays carry the layer on their first axis; expert arrays carry th
 summarized per layer by the worst expert.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,7 +34,9 @@ ROW_NORM_RATIO_CEILING = 10.0
 GAIN_BAND = (0.2, 5.0)
 GAIN_SPREAD_CEILING = 20.0
 
-FIGURE = "stable_rank.png"
+DEPTH_FIGURE = "stable_rank.png"
+TRAINING_FIGURE = "over_training.png"
+LOSS_KEY = "train/loss"
 
 
 @dataclass(frozen=True)
@@ -193,76 +196,176 @@ def depth_trends(matrices: list[MatrixStats]) -> list[str]:
     return rows
 
 
-def plot(matrices: list[MatrixStats], out: Path) -> None:
+@dataclass(frozen=True)
+class StepStats:
+    step: int
+    matrices: list[MatrixStats]
+    gains: list[GainStats]
+
+    @property
+    def flagged_matrices(self) -> list[MatrixStats]:
+        return [s for s in self.matrices if s.flags]
+
+    @property
+    def flagged_gains(self) -> list[GainStats]:
+        return [g for g in self.gains if g.flags]
+
+
+def by_layer_stack(matrices: list[MatrixStats]) -> dict[str, list[MatrixStats]]:
     by_name: dict[str, list[MatrixStats]] = {}
     for s in matrices:
         if s.layer is not None:
             by_name.setdefault(s.name, []).append(s)
+    return dict(sorted(by_name.items()))
+
+
+def plot_depth(matrices: list[MatrixStats], step: int, out: Path) -> None:
     fig = Figure(figsize=(10, 6))
     ax = fig.subplots()
-    for name, stack in sorted(by_name.items()):
+    for name, stack in by_layer_stack(matrices).items():
         ax.plot([s.layer for s in stack], [s.fraction for s in stack], marker="o", markersize=3, label=name)
     ax.axhline(STABLE_RANK_FRACTION_FLOOR, color="black", linestyle="--", linewidth=1, label="collapse threshold")
     ax.set_yscale("log")
     ax.set_xlabel("layer (within its stack)")
     ax.set_ylabel("stable rank / Gaussian reference")
-    ax.set_title("Stable rank relative to initialization, per layer")
+    ax.set_title(f"Stable rank relative to initialization, per layer, at step {step}")
     ax.legend(fontsize=6, ncol=2, loc="lower left")
     fig.tight_layout()
     fig.savefig(out, dpi=120)
 
 
-def analyze(params: dict[str, np.ndarray], out_dir: Path) -> None:
-    matrices, gains = collect(params)
-    flagged_matrices = [s for s in matrices if s.flags]
-    flagged_gains = [g for g in gains if g.flags]
-    plot(matrices, out_dir / FIGURE)
-    lowest = min(matrices, key=lambda s: s.fraction)
-    widest = max(matrices, key=lambda s: s.row_norm_ratio)
-    largest_gain = max(gains, key=lambda g: g.mean_abs)
+def plot_training(steps: list[StepStats], out: Path) -> None:
+    """Per matrix kind, its lowest stable-rank fraction and largest row-norm ratio over layers, at every step."""
+    names = sorted({s.name for stats in steps for s in stats.matrices})
+    fig = Figure(figsize=(14, 6))
+    rank_ax, ratio_ax = fig.subplots(1, 2)
+    for name in names:
+        xs, fractions, ratios = [], [], []
+        for stats in steps:
+            kind = [s for s in stats.matrices if s.name == name]
+            if kind:
+                xs.append(stats.step)
+                fractions.append(min(s.fraction for s in kind))
+                ratios.append(max(s.row_norm_ratio for s in kind))
+        rank_ax.plot(xs, fractions, marker="o", markersize=3, label=name)
+        ratio_ax.plot(xs, ratios, marker="o", markersize=3, label=name)
+    rank_ax.axhline(STABLE_RANK_FRACTION_FLOOR, color="black", linestyle="--", linewidth=1)
+    ratio_ax.axhline(ROW_NORM_RATIO_CEILING, color="black", linestyle="--", linewidth=1)
+    rank_ax.set_yscale("log")
+    ratio_ax.set_yscale("log")
+    rank_ax.set_ylabel("lowest stable rank / Gaussian reference over layers")
+    ratio_ax.set_ylabel("largest row-norm ratio over layers")
+    for ax in (rank_ax, ratio_ax):
+        ax.set_xlabel("step")
+    rank_ax.legend(fontsize=6, ncol=2, loc="lower left")
+    fig.tight_layout()
+    fig.savefig(out, dpi=120)
+
+
+def logged_loss(history: list[dict]) -> dict[int, float]:
+    return {int(row["_step"]): float(row[LOSS_KEY]) for row in history if row.get(LOSS_KEY) is not None}
+
+
+def nearest_loss(losses: dict[int, float], step: int) -> str:
+    if not losses:
+        return "-"
+    nearest = min(losses, key=lambda s: abs(s - step))
+    return f"{losses[nearest]:.3f}"
+
+
+def training_table(steps: list[StepStats], losses: dict[int, float]) -> list[str]:
+    rows = [
+        "| Step | Loss | Flagged matrices | Flagged gains | Lowest stable-rank fraction | Largest row-norm ratio "
+        "| Largest mean abs gain |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for stats in steps:
+        lowest = min(stats.matrices, key=lambda s: s.fraction)
+        widest = max(stats.matrices, key=lambda s: s.row_norm_ratio)
+        largest = max(stats.gains, key=lambda g: g.mean_abs)
+        rows.append(
+            f"| {stats.step} | {nearest_loss(losses, stats.step)} | {len(stats.flagged_matrices)} | "
+            f"{len(stats.flagged_gains)} | {lowest.fraction:.3f} (`{lowest.name}` {layer_label(lowest.layer)}) | "
+            f"{widest.row_norm_ratio:.2f} (`{widest.name}` {layer_label(widest.layer)}) | "
+            f"{largest.mean_abs:.3f} (`{largest.name}` {layer_label(largest.layer)}) |"
+        )
+    return rows
+
+
+def first_flagged(steps: list[StepStats]) -> list[str]:
+    """Every matrix or gain flagged at some step: the first step it was flagged, and its flags then."""
+    first: dict[tuple[str, int | None], tuple[int, list[str]]] = {}
+    for stats in steps:
+        for item in [*stats.flagged_matrices, *stats.flagged_gains]:
+            first.setdefault((item.name, item.layer), (stats.step, item.flags))
+    if not first:
+        return ["No matrix or gain vector flagged at any saved step."]
+    rows = ["| Array | Layer | First flagged at step | Flags then |", "|---|---|---|---|"]
+    for (name, layer), (step, flags) in sorted(first.items(), key=lambda item: (item[1][0], item[0][0])):
+        rows.append(f"| `{name}` | {layer_label(layer)} | {step} | {', '.join(flags)} |")
+    return rows
+
+
+def analyze(checkpoints: Mapping[int, dict[str, np.ndarray]], history: list[dict], out_dir: Path) -> None:
+    steps = [StepStats(step, *collect(checkpoints[step])) for step in checkpoints]
+    final = steps[-1]
+    plot_depth(final.matrices, final.step, out_dir / DEPTH_FIGURE)
+    plot_training(steps, out_dir / TRAINING_FIGURE)
+    lowest = min(final.matrices, key=lambda s: s.fraction)
+    widest = max(final.matrices, key=lambda s: s.row_norm_ratio)
+    largest_gain = max(final.gains, key=lambda g: g.mean_abs)
     lines = [
         "# X0224: training-dynamics statistics of the d512 recipe",
         "",
-        "Statistics of one checkpoint (the run's newest), each against its value at initialization: stable rank",
-        "against a Gaussian matrix of the same shape, row-norm ratio against 1, and norm gains against 1.",
+        f"Statistics of every saved checkpoint ({len(steps)} steps, {steps[0].step} to {final.step}), each against its",
+        "value at initialization: stable rank against a Gaussian matrix of the same shape, row-norm ratio against 1,",
+        "and norm gains against 1.",
         "",
         "## Answer",
         "",
-        f"- {len(matrices)} matrices and {len(gains)} gain vectors measured.",
-        f"- {len(flagged_matrices)} matrices flagged (stable rank below {STABLE_RANK_FRACTION_FLOOR:g} of the "
-        f"Gaussian reference or below {STABLE_RANK_FLOOR:g}, or row-norm ratio above {ROW_NORM_RATIO_CEILING:g}).",
-        f"- {len(flagged_gains)} gain vectors flagged (mean abs gain outside {GAIN_BAND[0]:g} to {GAIN_BAND[1]:g}, "
-        f"or one gain above {GAIN_SPREAD_CEILING:g} times the median).",
-        f"- Lowest stable-rank fraction: `{lowest.name}` layer {layer_label(lowest.layer)}, {lowest.fraction:.3f} "
-        f"({lowest.stable_rank:.2f} of {lowest.reference:.1f}).",
-        f"- Largest row-norm ratio: `{widest.name}` layer {layer_label(widest.layer)}, {widest.row_norm_ratio:.2f}.",
-        f"- Largest mean abs gain: `{largest_gain.name}` layer {layer_label(largest_gain.layer)}, "
-        f"{largest_gain.mean_abs:.3f}.",
+        f"- {len(final.matrices)} matrices and {len(final.gains)} gain vectors measured at each step.",
+        f"- At step {final.step}: {len(final.flagged_matrices)} matrices flagged (stable rank below "
+        f"{STABLE_RANK_FRACTION_FLOOR:g} of the Gaussian reference or below {STABLE_RANK_FLOOR:g}, or row-norm ratio "
+        f"above {ROW_NORM_RATIO_CEILING:g}); {len(final.flagged_gains)} gain vectors flagged (mean abs gain outside "
+        f"{GAIN_BAND[0]:g} to {GAIN_BAND[1]:g}, or one gain above {GAIN_SPREAD_CEILING:g} times the median).",
+        f"- Lowest stable-rank fraction at step {final.step}: `{lowest.name}` layer {layer_label(lowest.layer)}, "
+        f"{lowest.fraction:.3f} ({lowest.stable_rank:.2f} of {lowest.reference:.1f}).",
+        f"- Largest row-norm ratio at step {final.step}: `{widest.name}` layer {layer_label(widest.layer)}, "
+        f"{widest.row_norm_ratio:.2f}.",
+        f"- Largest mean abs gain at step {final.step}: `{largest_gain.name}` layer "
+        f"{layer_label(largest_gain.layer)}, {largest_gain.mean_abs:.3f}.",
         "",
-        "One checkpoint gives the drift from initialization to this step. The trend between intermediate steps needs",
-        "this script run on each saved `step-N` directory.",
+        "## Over training",
         "",
-        "## Stable rank across depth",
+        f"![lowest stable rank and largest row-norm ratio per matrix kind over training]({TRAINING_FIGURE})",
         "",
-        f"![stable rank]({FIGURE})",
+        *training_table(steps, logged_loss(history)),
         "",
-        *depth_trends(matrices),
+        "### First step each array was flagged",
         "",
-        "## Flagged",
+        *first_flagged(steps),
         "",
-        *(matrix_table(flagged_matrices) if flagged_matrices else ["No matrix flagged."]),
+        f"## Stable rank across depth at step {final.step}",
         "",
-        *(gain_table(flagged_gains) if flagged_gains else ["No gain vector flagged."]),
+        f"![stable rank]({DEPTH_FIGURE})",
         "",
-        "## All matrices",
+        *depth_trends(final.matrices),
+        "",
+        f"## Flagged at step {final.step}",
+        "",
+        *(matrix_table(final.flagged_matrices) if final.flagged_matrices else ["No matrix flagged."]),
+        "",
+        *(gain_table(final.flagged_gains) if final.flagged_gains else ["No gain vector flagged."]),
+        "",
+        f"## All matrices at step {final.step}",
         "",
         "Expert arrays show the worst expert of each layer.",
         "",
-        *matrix_table(matrices),
+        *matrix_table(final.matrices),
         "",
-        "## All gains",
+        f"## All gains at step {final.step}",
         "",
-        *gain_table(gains),
+        *gain_table(final.gains),
         "",
     ]
     (out_dir / "report.md").write_text("\n".join(lines))
