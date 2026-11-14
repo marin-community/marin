@@ -261,6 +261,19 @@ def test_registry_index_pin_retains_verified_platform_chain_offline(tmp_path, co
         ImageCache(cache).prepare(source)
 
 
+def test_converted_registry_image_evicted_layout_is_copied_again(tmp_path, converted_registry_image):
+    fixture = converted_registry_image
+    cache = tmp_path / "cache"
+    prepared = ImageCache(cache).prepare(fixture.source)
+    shutil.rmtree(prepared.layout)
+
+    restored = ImageCache(cache).prepare(fixture.source)
+
+    assert restored.manifest_digest == prepared.manifest_digest
+    assert restored.source == fixture.source
+    assert prepared_image_workdir(restored) == "/data"
+
+
 def test_converted_manifest_reloads_in_a_new_process_without_image_tools(tmp_path, converted_registry_image):
     fixture = converted_registry_image
     cache = tmp_path / "cache"

@@ -269,8 +269,9 @@ def prepare_image(
         if binding_path.exists():
             binding = _RegistryBinding.model_validate_json(binding_path.read_bytes())
             destination = cache / binding.prepared_manifest_digest.replace(":", "-")
-            _require_registry_binding(destination, binding, pinned_digest)
-            return PreparedImage(destination, binding.prepared_manifest_digest, source)
+            if destination.exists():
+                _require_registry_binding(destination, binding, pinned_digest)
+                return PreparedImage(destination, binding.prepared_manifest_digest, source)
     with tempfile.TemporaryDirectory(prefix="image-", dir=cache) as temporary:
         layout = Path(temporary) / "oci"
         skopeo_args = ["skopeo"]
