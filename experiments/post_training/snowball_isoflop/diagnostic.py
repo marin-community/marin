@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bound one native calibration control that serializes GPU collectives."""
+"""Bound native calibration controls for GPU collective stalls."""
 
 import argparse
 import json
 from dataclasses import replace
+from enum import StrEnum
 
 import draccus
 from marin.training.training import TrainLmOnPodConfig
@@ -16,27 +17,42 @@ from experiments.post_training.snowball_isoflop.config import PREFIX, VERSION, C
 from experiments.post_training.snowball_isoflop.run import run_training_pod
 
 
+class RuntimeControl(StrEnum):
+    SERIAL = "serial-collectives"
+    LAUNCH_BLOCKING = "launch-blocking"
+
+
 def diagnostic_pod(cell: Cell) -> TrainLmOnPodConfig:
     pod = build_pod(cell)
     environment = dict(pod.env_vars or {})
-    environment["XLA_FLAGS"] += " --xla_gpu_disable_async_collectives=ALLCOLLECTIVES"
+    if cell.phase == f"diagnostic-{RuntimeControl.SERIAL}":
+        environment["XLA_FLAGS"] += " --xla_gpu_disable_async_collectives=ALLCOLLECTIVES"
+    elif cell.phase == f"diagnostic-{RuntimeControl.LAUNCH_BLOCKING}":
+        environment["CUDA_LAUNCH_BLOCKING"] = "1"
+    else:
+        raise ValueError(f"Unknown runtime control: {cell.phase}")
     return replace(pod, env_vars=environment)
 
 
 def run_control(cell: Cell) -> str:
-    return run_training_pod(cell, diagnostic_pod(cell))
+    pod = diagnostic_pod(cell)
+    (StoragePath(pod.output_path) / "runtime-control.json").write_text(
+        json.dumps({"phase": cell.phase, "environment": pod.env_vars}, indent=2)
+    )
+    return run_training_pod(cell, pod)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--size", type=int, choices=(512, 768, 1024), required=True)
     parser.add_argument("--mask", type=Mask, choices=tuple(Mask), required=True)
+    parser.add_argument("--runtime", type=RuntimeControl, choices=tuple(RuntimeControl), default=RuntimeControl.SERIAL)
     parser.add_argument("--h100-hour-limit", type=float, default=3)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     if not 0 < args.h100_hour_limit <= 3:
         parser.error("The diagnostic control is capped at 3 H100-hours")
-    cell = Cell(args.size, args.mask, 0, 20, (20,), "diagnostic-serial-collectives")
+    cell = Cell(args.size, args.mask, 0, 20, (20,), f"diagnostic-{args.runtime}")
     pod = diagnostic_pod(cell)
     if not args.run:
         print(json.dumps(draccus.encode(pod)))
