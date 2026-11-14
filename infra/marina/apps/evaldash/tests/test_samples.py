@@ -7,6 +7,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from evaldash.samples import fetch_artifact, fetch_samples, list_sample_tasks
+from evalrecords.lm_eval_samples import export_lm_eval_samples, sample_from_lm_eval
+from evalrecords.records import MetricKind
 from finestore.eval import (
     SAMPLES_MERGE_KEY,
     Choice,
@@ -18,8 +20,6 @@ from finestore.eval import (
 )
 from fsspec.core import url_to_fs
 from marin.evaluation.harbor.trajectory import archive_trajectory
-from marin.evaluation.lm_eval_samples import export_lm_eval_samples, sample_from_lm_eval
-from marin.evaluation.records import MetricKind
 
 
 def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:

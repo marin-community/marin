@@ -22,8 +22,9 @@ from marin.execution.artifact import (
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.execution.step_status import STATUS_SUCCESS, StatusFile, worker_id
+from marin.execution.step_status import worker_id
 from pydantic import BaseModel
+from rigging.filesystem.step_status import STATUS_SUCCESS, StatusFile
 
 # ---------------------------------------------------------------------------
 # Artifact types

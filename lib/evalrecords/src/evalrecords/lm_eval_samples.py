@@ -42,22 +42,27 @@ from finestore.migrations.m0001_manifest import LEGACY_SEAL_FILE
 from finestore.reader import ReadView
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
-from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.metric_selection import (
+from evalrecords.eval_stats import SCORED_COUNT_METRIC, UNGRADED_ERROR
+from evalrecords.metric_selection import (
     REPEAT_MEAN_SUFFIX,
     base_metric,
     declared_metric,
     declared_sample_metric,
     primary_filter,
 )
-from marin.evaluation.records import (
+from evalrecords.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     BenchmarkMetadataRef,
     EvalTaskRef,
     MetricKind,
     TaskCoverage,
 )
+
+
+def eval_task_directory(name: str, num_fewshot: int | None, task_alias: str | None) -> str:
+    """Return the durable results-directory identity for an eval task."""
+    shots = "default" if num_fewshot is None else str(num_fewshot)
+    return task_alias or f"{name}_{shots}shot"
 
 
 class TaskDeclaration(Protocol):
@@ -489,7 +494,7 @@ def task_coverage(
 
     Ungraded documents and failed requests are unscored. Empty model completions remain scored and
     count as unanswered. For tasks with several extraction filters, coverage uses the filter chosen
-    by :func:`~marin.evaluation.metric_selection.primary_filter`.
+    by :func:`~evalrecords.metric_selection.primary_filter`.
 
     When the evaluator declares an aggregate-only primary metric, every enumerated document counts
     as scored even though the sample rows carry no per-item score. No per-item pass tally exists.

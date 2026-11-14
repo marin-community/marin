@@ -3,10 +3,10 @@
 
 """Turn eval run records into measurements the statistics engine can work with.
 
-This module and :mod:`marin.evaluation.metric_selection` are the only places that know the shape of
+This module and :mod:`evalrecords.metric_selection` are the only places that know the shape of
 a harness's output: how lm-eval and Evalchemy name a task's score and stderr, how a task reports its
 item count, how a group task's subtask rows roll up, how evalchemy can write the same task twice, and
-where a mechanism records the items it attempted. :mod:`marin.evaluation.eval_stats` holds the
+where a mechanism records the items it attempted. :mod:`evalrecords.eval_stats` holds the
 statistics and the selection rules and knows nothing about any of it, so a new harness is a change
 in these two modules alone.
 """
@@ -17,7 +17,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from marin.evaluation.eval_stats import (
+from evalrecords.eval_stats import (
     BINARY_METRICS,
     SAMPLE_COUNT_METRIC,
     TOTAL_METRICS,
@@ -25,9 +25,9 @@ from marin.evaluation.eval_stats import (
     Measurement,
     ResultFlag,
 )
-from marin.evaluation.evaluation_config import eval_task_directory
-from marin.evaluation.lm_eval_samples import is_scratch_artifact
-from marin.evaluation.metric_selection import (
+from evalrecords.lm_eval_samples import eval_task_directory
+from evalrecords.lm_eval_samples import is_scratch_artifact
+from evalrecords.metric_selection import (
     LM_EVAL_STDERR_SUFFIX,
     PUBLICATION_METRICS,
     REPEAT_MEAN_SUFFIX,
@@ -36,8 +36,8 @@ from marin.evaluation.metric_selection import (
     canonical_metric_name,
     declared_metric,
 )
-from marin.evaluation.records import BenchmarkMetricRef, EvalRunRecord, EvalTaskRef, MetricKind
-from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
+from evalrecords.records import BenchmarkMetricRef, EvalRunRecord, EvalTaskRef, MetricKind
+from evalrecords.records import TaskCoverage as RecordTaskCoverage
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
 _INTEGRALITY_TOLERANCE = 1e-6

@@ -11,9 +11,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from marin.evaluation.records import RECORD_FILE, EvalRunRecord
-from marin.execution.step_status import STATUS_FAILED, STATUS_RUNNING, StatusFile
+from evalrecords.records import RECORD_FILE, EvalRunRecord
 from rigging.filesystem.conditional_object import conditional_object
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_RUNNING, StatusFile
 from rigging.filesystem.storage_path import StoragePath
 
 from .curated import SUMMARY_REVISION, import_curated_record

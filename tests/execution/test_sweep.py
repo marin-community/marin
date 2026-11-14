@@ -14,13 +14,9 @@ import threading
 
 import pytest
 from marin.execution.artifact import read_record
-from marin.execution.step_status import (
-    STATUS_FAILED,
-    STATUS_SUCCESS,
-    StatusFile,
-)
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.execution.sweep_coordination import GangRole, Round, SweepLeaderActor
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
 
 
 def test_leader_actor_serves_rounds_in_order():
