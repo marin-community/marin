@@ -91,6 +91,7 @@ from experiments.belay.config import (
     Track,
 )
 from experiments.belay.page import (
+    IN_PLAY_STATES,
     SESSION_FILE,
     TERMINAL_RUN_STATES,
     Idea,
@@ -1830,7 +1831,7 @@ def carried_ideas(entries: list[dict], state: PageState) -> list[str]:
     """Registry ids whose code a new weekly branch carries: ideas in progress (approved, planned or running on the
     page, or a stage still pending) and wins not yet adopted into the live recipe. Losses, noise, declined and closed
     ideas stay on the old branch; settings-only ideas carry nothing."""
-    in_play = {i.registry_id for i in state.ideas if i.state in ("approved", "planned", "running")}
+    in_play = {i.registry_id for i in state.ideas if i.state in IN_PLAY_STATES}
     carried = []
     for entry in entries:
         if not entry.get("code_commits"):

@@ -1109,3 +1109,18 @@ def test_a_cpu_job_gets_the_storage_keys_as_secrets_not_on_its_command_line(monk
     monkeypatch.delenv("CW_KEY_SECRET")
     with pytest.raises(SystemExit, match="export CW_KEY_ID and CW_KEY_SECRET"):
         remote_job_command("belay-analyze-X0001", "cw-us-east-02a", ["experiments.belay.study_checkpoint", "run"])
+
+
+def test_an_entrys_idea_is_the_one_still_in_play() -> None:
+    speedrun = dataclasses.replace(intake_idea(None), id=10, registry_id="X0226", state="recorded")
+    ladder = dataclasses.replace(intake_idea(None), id=11, registry_id="X0226", state="approved")
+
+    def page(*ideas: Idea) -> PageState:
+        return PageState(list(ideas), [], False, 8, [], [])
+
+    assert page(speedrun, ladder).idea_for("X0226") is ladder
+    assert page(speedrun).idea_for("X0226") is speedrun
+    newer = dataclasses.replace(speedrun, id=12)
+    assert page(speedrun, newer).idea_for("X0226") is newer  # none in play: the newest
+    with pytest.raises(SystemExit, match="2 ideas in play"):
+        page(ladder, dataclasses.replace(ladder, id=13)).idea_for("X0226")
