@@ -19,7 +19,9 @@ from rigging.timing import Timestamp
 from experiments.post_training.snowball_isoflop.budget import allocated_seconds
 from experiments.post_training.snowball_isoflop.config import (
     PREFIX,
+    RUNTIME_FIELDS,
     VERSION,
+    build_pod,
     calibration_cells,
     primary_cells,
 )
@@ -62,6 +64,11 @@ def calibration_report(prior_h100_hours: float) -> dict:
             tasks = client.list_tasks(job_name)
             elapsed = sum(allocated_seconds(task, Timestamp.now()) for task in tasks)
             gate = read_json(f"{root}/initial-eval-match.json")
+            consumed = read_json(f"{root}/consumed-config.json")
+            runtime = {key: consumed["dispatch_environment"].get(key) for key in RUNTIME_FIELDS}
+            expected_environment = build_pod(cell).env_vars or {}
+            if runtime != {key: expected_environment.get(key) for key in RUNTIME_FIELDS}:
+                raise ValueError(f"Calibration runtime differs from the approved recipe: {cell.name}")
             if not gate["passed"] or not gate["raw_match"]["passed"]:
                 raise ValueError(f"Dual initialization gate did not pass for {cell.name}")
             checkpoint = read_json(f"{root}/checkpoints/step-{cell.stop_step - 1}/metadata.json")
@@ -105,6 +112,7 @@ def calibration_report(prior_h100_hours: float) -> dict:
                 "startup_and_finalization_seconds": overhead,
                 "recorded_h100_hours": elapsed * 8 / 3600,
                 "initial_eval": gate,
+                "runtime_environment": runtime,
                 "checkpoint": checkpoint,
                 "dropless_basis": "EP1 Sonic local expert execution has no bounded EP transport queues",
             }
@@ -123,6 +131,7 @@ def calibration_report(prior_h100_hours: float) -> dict:
         "version": VERSION,
         "all_six_cells_valid": True,
         "observations": observations,
+        "runtime_environment_by_cell": {key: row["runtime_environment"] for key, row in observations.items()},
         "runs": runs,
         "prior_h100_hours": prior_h100_hours,
         "calibration_h100_hours": calibration_hours,

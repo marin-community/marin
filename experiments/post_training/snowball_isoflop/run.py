@@ -15,6 +15,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.snowball_isoflop.budget import budgeted_map
 from experiments.post_training.snowball_isoflop.config import (
     PREFIX,
+    RUNTIME_FIELDS,
     VERSION,
     Cell,
     build_pod,
@@ -76,6 +77,11 @@ def main():
                 cells, key=lambda cell: report["inclusive_step_seconds"][str(cell.size)] * cell.stop_step, reverse=True
             )
         )
+        for cell in cells:
+            environment = build_pod(cell).env_vars or {}
+            expected = {key: environment.get(key) for key in RUNTIME_FIELDS}
+            if report["runtime_environment_by_cell"][f"{cell.size}-{cell.mask}"] != expected:
+                raise ValueError(f"A runtime does not match its calibrated recipe: {cell.name}")
     if args.h100_hour_limit is None or not 0 < args.h100_hour_limit <= 2200:
         parser.error("Execution requires --h100-hour-limit within the remaining approved A ceiling")
     logging.basicConfig(level=logging.INFO)
