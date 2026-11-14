@@ -17,6 +17,7 @@ from experiments.post_training import snowball_rl as snowball
 from experiments.post_training import snowball_rl_gate as gate
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_recipe as recipe
+from experiments.post_training.skyrl_test_support import native_json
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
@@ -110,6 +111,40 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         snowball.build_run(learning)
 
 
+def test_harbor_coverage_controls_best_checkpoint(selection, tmp_path):
+    step = snowball.build_run(presets.PRESETS["train-long-harbor"]).runs[0]
+    path = tmp_path / "harbor.yaml"
+    path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
+    selected = native_json()(
+        """
+import asyncio, json, sys
+from pathlib import Path
+from types import SimpleNamespace
+from cloud.iris.launch_config import load_launch_config
+from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
+from skyrl_train.callbacks.builtin import create_callbacks_from_config
+config = load_launch_config(sys.argv[1])
+selected = []
+for index, (native, cohorts) in enumerate(((99, (27, 27, 27)), (98, (30, 30, 30)), (100, (26, 30, 30)))):
+    directory = Path(sys.argv[1]).parent / f"coverage-{index}"
+    config.skyrl.trainer.ckpt_path = str(directory)
+    metrics = {"eval/all/num_attempted": 100, "eval/all/num_scored": native, "eval/all/avg_verifier_score": 0.5}
+    harbor = next(row for row in config.skyrl.trainer.callbacks if row.type == "harbor_evaluation")
+    for cohort, scored in zip(harbor.cohorts, cohorts, strict=True):
+        prefix = f"eval/harbor/{cohort.name}/"
+        metrics.update({prefix + "num_attempted": 30, prefix + "num_scored": scored, prefix + "reward_sum": scored / 2})
+    handler = CallbackHandler(create_callbacks_from_config(config.skyrl))
+    state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
+    asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
+                                       trainer=SimpleNamespace(cfg=config.skyrl)))
+    selected.append((directory / "best_checkpoint.json").exists())
+print(json.dumps(selected))
+""",
+        [str(path)],
+    )
+    assert selected == [True, False, False]
+
+
 def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatch):
     monkeypatch.delenv("WANDB_ENTITY", raising=False)
     bindings = {binding for preset in presets.PRESETS.values() for binding in (preset.tasks, preset.eval_lite)}
@@ -128,6 +163,7 @@ def test_presets_match_revisioned_native_configs(selection, tmp_path, monkeypatc
         "data-medium": {"2026.11.12.1": "45612c96"},
         "speed-long": {"2026.11.11.1": "45b7228f"},
         "train-long": {"2026.11.11.1": "81da52f9"},
+        "train-long-harbor": {"2026.11.14.1": "ae66bb64"},
     }
     paths = []
     for name in revisions:

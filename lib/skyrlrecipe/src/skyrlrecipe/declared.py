@@ -141,6 +141,7 @@ class HarborEvaluationCallback(Section):
     cohorts: tuple[OpenMap, ...]
     timeout: int | float
     minimum_coverage: int | float
+    minimum_native_coverage: int | float
     daytona_api_key_env: str
 
 

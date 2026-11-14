@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -43,6 +44,7 @@ from skyrlrecipe.declared import (
     CheckpointCallback,
     EvaluationCallback,
     EvaluationSampling,
+    HarborEvaluationCallback,
     HFModelSaveCallback,
 )
 from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
@@ -185,6 +187,7 @@ class Gap(StrEnum):
     AAII_COVERAGE = "aaii-coverage"
     NO_AGENTIC_TASKS = "no-agentic-tasks"
     NO_IMAGE_SANDBOX = "no-image-sandbox"
+    HARBOR_ON_DAYTONA = "harbor-on-daytona"
     MISMATCH_IS_AGREEMENT = "mismatch-is-agreement"
 
 
@@ -309,6 +312,13 @@ class Training:
                     **({"additional_evaluations": profiles} if profiles else {}),
                 )
             )
+        minimum_scored_tasks = math.ceil(MINIMUM_SCORED_FRACTION * expected_tasks)
+        if preset.harbor is not None:
+            callbacks.append(preset.harbor)
+            for cohort in preset.harbor.cohorts:
+                count = len(cohort["job"]["tasks"])
+                expected_tasks += count
+                minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
         if preset.checkpoint_every:
             assert initial_model_uri is not None
             callbacks.extend(
@@ -317,7 +327,7 @@ class Training:
                         type="best_checkpoint",
                         initial_model_uri=initial_model_uri,
                         expected_tasks=expected_tasks,
-                        minimum_scored_tasks=math.ceil(MINIMUM_SCORED_FRACTION * expected_tasks),
+                        minimum_scored_tasks=minimum_scored_tasks,
                     ),
                     HFModelSaveCallback(
                         type="hf_model_save",
@@ -622,6 +632,7 @@ class Preset:
     model: ArtifactHfModel = _DEFAULT_MODEL
     eval_lite: str = _DEFAULT_EVAL_LITE
     evaluations: tuple[Evaluation, ...] = ()
+    harbor: HarborEvaluationCallback | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[Gap, ...] = ()
@@ -674,6 +685,53 @@ _LEARNING_MEDIUM = Preset(
     gaps=_GAPS,
     budget="asynchronous runtime unmeasured",
 )
+
+
+def _harbor_evaluation() -> HarborEvaluationCallback:
+    """Build the pinned agentic evaluation callback."""
+    config = yaml.safe_load(Path(__file__).with_name("snowball_rl_harbor.yaml").read_text())
+    cohorts = []
+    for cohort in config["cohorts"]:
+        job = deepcopy(config["job"])
+        job["tasks"] = [
+            {
+                "git_url": cohort["git_url"],
+                "git_commit_id": cohort["git_commit_id"],
+                "path": path,
+                "source": cohort["name"],
+            }
+            for path in cohort["paths"]
+        ]
+        cohorts.append({"name": cohort["name"], "job": job, "reward_key": "reward"})
+    return HarborEvaluationCallback(
+        type="harbor_evaluation",
+        cohorts=tuple(cohorts),
+        timeout=config["timeout"],
+        minimum_coverage=config["minimum_coverage"],
+        minimum_native_coverage=MINIMUM_SCORED_FRACTION,
+        daytona_api_key_env="DAYTONA_EVAL_API_KEY",
+    )
+
+
+_TRAIN_LONG = Preset(
+    name="train-long",
+    revision="2026.11.11.1",
+    recipe=_ASYNC_P40,
+    updates=100,
+    measured=range(1, 101),
+    tasks_input="optional",
+    accepts_settings=True,
+    accepts_init=True,
+    publishes=True,
+    controls=None,
+    checkpoint_every=10,
+    owned_keys=_OWNED_KEYS,
+    data_settings=frozenset({"shuffle", "sampling"}),
+    evaluations=(replace(_TASK_SET, every=10, at_start=True),),
+    gaps=_GAPS,
+)
+
+
 PRESETS = MappingProxyType(
     {
         preset.name: preset
@@ -782,22 +840,19 @@ PRESETS = MappingProxyType(
                 controls=_LEARNING_MEDIUM.name,
                 data_settings=frozenset(),
             ),
-            Preset(
-                name="train-long",
-                revision="2026.11.11.1",
-                recipe=_ASYNC_P40,
-                updates=100,
-                measured=range(1, 101),
-                tasks_input="optional",
-                accepts_settings=True,
-                accepts_init=True,
-                publishes=True,
-                controls=None,
-                checkpoint_every=10,
-                owned_keys=_OWNED_KEYS,
-                data_settings=frozenset({"shuffle", "sampling"}),
-                evaluations=(replace(_TASK_SET, every=10, at_start=True),),
-                gaps=_GAPS,
+            _TRAIN_LONG,
+            replace(
+                _TRAIN_LONG,
+                name="train-long-harbor",
+                revision="2026.11.14.1",
+                harbor=_harbor_evaluation(),
+                gaps=(*_TRAIN_LONG.gaps, Gap.HARBOR_ON_DAYTONA),
+                recipe=replace(
+                    _TRAIN_LONG.recipe,
+                    config=_TRAIN_LONG.recipe.config.merge(
+                        RecipePatch(generator=sections.Generator(enable_http_endpoint=True))
+                    ),
+                ),
             ),
         )
     }

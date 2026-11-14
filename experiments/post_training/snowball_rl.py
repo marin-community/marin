@@ -11,6 +11,7 @@
   data-short       mixed-answer fraction on a training-task sample; 8 H100, about 15 min.
   data-medium      learning-medium on --tasks; 40 H100, runtime unmeasured.
   train-long       async training, checkpoints and HF export; 40 H100 east; no verdict.
+  train-long-harbor train-long with pinned Harbor agentic evaluations on Daytona.
 
 Guide: docs/recipes/snowball-rl.md. Without --run, print the plan and saved status.
 A gated preset without a pin at its current revision refuses every command, including the plan print,

@@ -173,6 +173,7 @@ def test_launch_preserves_harbor_dataset_relative_paths(tmp_path):
             "cohorts": [{"name": "bfcl_parity", "reward_key": "reward", "job": {"tasks": [task]}}],
             "timeout": 600,
             "minimum_coverage": 0.9,
+                        "minimum_native_coverage": 0.99,
         }
     ]
     path = tmp_path / "launch.yaml"

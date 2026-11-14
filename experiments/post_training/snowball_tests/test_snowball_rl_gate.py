@@ -61,7 +61,7 @@ def controls(write, name, **kwargs):
 def rescore(preset, *args, exit_code=None):
     result = CliRunner().invoke(gate.main, ["--preset", preset, *args])
     assert result.exception is None or isinstance(result.exception, SystemExit), (result.output, result.exception)
-    payload = json.loads(result.output.splitlines()[-1])
+    payload = json.loads(result.stdout.splitlines()[-1])
     assert result.exit_code == (exit_code if exit_code is not None else EXIT_CODES[payload["verdict"]]), (
         result.output,
         result.exception,
