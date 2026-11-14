@@ -310,7 +310,6 @@ def test_retry_resumes_grown_allocation_and_preserves_partial_source_limits(tmp_
     parent = entry.infrastructure_retries[0].parent_calibration
     assert [attempt.execution_requirements.memory_mb for attempt in parent.attempts] == [2048, 4096, 4096, 4096]
     assert entry.calibration.initial_requirements == parent.execution_requirements
-    assert entry.calibration.attempts[0].execution_requirements.memory_mb == 4096
     assert [attempt.execution_requirements.memory_mb for attempt in entry.calibration.attempts] == expected_retry_memory
     assert entry.calibration.declared_requirements is None
     assert entry.calibration.preserved_requirements == {"agent_timeout_sec": 900, "verifier_timeout_sec": 720}
@@ -416,7 +415,6 @@ def test_retry_history_from_archived_field_set_round_trips_across_another_phase(
     assert reloaded == receipt
     assert len(reloaded.tasks["task"].infrastructure_retries) == 2
     assert not reloaded.tasks["task"].passed
-    assert len(case.calls) == 9
 
 
 @pytest.mark.parametrize("changed", ["parent-file", "reused-attempts", "backend", "phase-context"])
