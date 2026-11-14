@@ -15,6 +15,7 @@ from pathlib import Path
 
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SOLVER_THINKING, Solver
 from huggingface_hub import hf_hub_download
+from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.serving_config import inference_config_for_model
@@ -42,6 +43,7 @@ from experiments.post_training.task_curation.difficulty_serving_probe import pro
 
 LOGGER = logging.getLogger(__name__)
 PRIORITY = job_pb2.PRIORITY_BAND_PRODUCTION
+TARGET_REGION = "rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
 
 
@@ -103,6 +105,9 @@ def solver_endpoint(solver: Solver):
         yield resolve_glm_base_url(GLM_RELAY_JOB), GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), []
         return
     definition = serving_model(solver)
+    parent = get_job_info()
+    if parent is None or parent.worker_region is None or parent.worker_region.lower() != TARGET_REGION:
+        raise ValueError("Difficulty serving requires a coordinator already placed in cw-rno2a/RNO2A")
     hardware = AcceleratorChoice(
         Platform.GPU, gpu_type="H100", gpu_count=PINS[solver].gpus, target_cluster=TARGET_CLUSTER
     )
@@ -117,7 +122,9 @@ def solver_endpoint(solver: Solver):
         iris=replace(
             config.iris,
             worker_timeout=JOB_TIMEOUT,
-            worker_resources=replace(config.iris.worker_resources, target_cluster=TARGET_CLUSTER),
+            # The explicitly targeted root has already federated. Its whole job tree
+            # stays on that peer; another cluster directive would request a second handoff.
+            worker_resources=replace(config.iris.worker_resources, target_cluster=None, regions=[TARGET_REGION]),
             endpoint_ready_timeout_seconds=259200,
         ),
     )
@@ -233,6 +240,11 @@ def main() -> None:
                 "chat_template_sha256": pin.template_sha256,
                 "model_definition": None if args.solver == Solver.HOSTED else asdict(serving_model(args.solver)),
                 "serving_jobs": jobs,
+                "placement": {
+                    "root_target_cluster": TARGET_CLUSTER,
+                    "child_region": TARGET_REGION,
+                    "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
+                },
                 "sampling": request_parameters(args.solver),
                 "compilation_and_cuda_graphs_requested": True,
                 "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
