@@ -60,6 +60,24 @@ finally:
     await machine.close()
 ```
 
+### Daytona snapshots
+
+One snapshot corresponds to one image source and one CPU, memory, disk and GPU
+request. Registry images are identified by reference; Docker build contexts by
+their current contents. Memory and disk round up to whole GiB. The name is
+`shellbox-` plus the first 40 hex characters of
+`sha256(image_source_key(source) + json(resources))`.
+
+`snapshot_request_for_spec` derives the snapshot identity from a `MachineSpec`,
+and `SnapshotRequest.as_dict`/`from_dict` are the JSON interchange for preflight.
+Harbor builds that machine spec from its task configuration and does not select
+sources, round resources or name snapshots itself.
+
+`shellbox-daytona-snapshots` inventories an account, compares it with a required
+set, creates missing snapshots and reclaims stale ones. See the
+[Daytona operations runbook](../../.agents/ops/daytona.md#snapshot-preflight-and-reclamation)
+for the account-wide one-hour purge policy.
+
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
 Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
 for the existing Iris command and file-transfer backend. Host-side Terminus-2
