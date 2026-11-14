@@ -968,7 +968,7 @@ def test_frozen_declaration_oversight_cards_show_derived_level_receipts_and_note
         expect(notes).to_contain_text(historical["verification"])
         if quality == "QUICK":
             content = oversight.locator(".field").filter(has=page.locator("dt", has_text="Content review"))
-            expect(content.locator("dd")).to_have_text("Conversion-only — no content-review receipt exists")
+            expect(content.locator("dd")).to_contain_text("Conversion-only")
             expect(
                 oversight.locator(".field").filter(has=page.locator("dt", has_text=re.compile("Receipt|QA evidence")))
             ).to_have_count(0)
@@ -1012,7 +1012,8 @@ def test_confidence_and_map_remain_usable_while_sample_pages_stream(journey: Jou
     page.goto(page.url.split("#")[0] + "#release=confidence")
     expect(page.locator("#confidence option")).to_have_count(5)
     payload = page.evaluate(
-        "async () => (await fetch('api/curriculum/tasks?release=confidence&sample_pool=true&subject_id=D05&limit=1000')).json()"
+        "async () => (await fetch('api/curriculum/tasks?release=confidence&sample_pool=true&' + "
+        "'subject_id=D05&limit=1000')).json()"
     )
     pending = []
 

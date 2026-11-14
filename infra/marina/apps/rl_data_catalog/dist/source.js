@@ -89,7 +89,7 @@ async function render(data, sourceId) {
   const bindingReceipt = d.full_content_result_binding?.review_receipt;
   const receiptUri = derivedReceipt ?? bindingReceipt?.uri ?? (data.quality === 'QUICK' ? null : d.independent_qc?.evidence_url);
   const receiptRow = data.quality === 'QUICK'
-    ? ['Content review', 'Conversion-only — no content-review receipt exists']
+    ? ['Content review', 'Conversion-only — no qualifying content-review receipt']
     : receiptUri
       ? [derivedReceipt || bindingReceipt ? 'Receipt' : 'QA evidence', pointer(receiptUri)]
       : null;
@@ -102,9 +102,9 @@ async function render(data, sourceId) {
   });
   sections.push(card('Oversight evidence', [
     ['Level', node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`)],
-    ['Basis', d.oversight_evidence?.verification],
+    ['Basis', data.quality === 'FULL' ? 'Whole-source QA for the current input' : data.quality === 'SAMPLE' ? 'Sampled content review for the current input' : 'Current-input conversion only'],
     ...(receiptRow ? [receiptRow] : []),
-    ['Reviewed', d.oversight_evidence?.reviewed],
+    ['Reviewed', data.quality === 'QUICK' ? null : d.quality_result?.reviewed ?? d.independent_qc?.reviewed],
     ['Sampled grader qualification', d.oracle_validation],
   ], 'The level is derived from the same QA evidence as the main-table Quality column: a current-pin FULL binding, SAMPLE receipt, or conversion-only QUICK. Catalogs frozen before the derived fields keep their receipt pointer at the FULL binding or recorded QC evidence.'));
   sections.push(card('Historical recipe QA notes', [
