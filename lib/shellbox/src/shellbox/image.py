@@ -127,7 +127,7 @@ def image_source_key(source: RegistryImage | DockerfileSource) -> str:
 
 
 class ImageCache:
-    """Reuse prepared sources within one Python process.
+    """Reuse prepared images in memory and verified pinned layouts on disk.
 
     Without a signature policy, mutable registry references are process-lifetime snapshots.
     Dockerfile contexts are fingerprinted on each call so edits cause a new build.
