@@ -152,3 +152,15 @@ def test_grandfathered_execution_exemption_does_not_bypass_grader_census(tmp_pat
     )
     assert source.is_grandfathered_blend
     assert any("census" in reason for reason in source.admission_blockers)
+
+
+@pytest.mark.data_integration
+def test_every_registered_source_declares_catalog_metadata():
+    """Regression: a registered source without a bound actor census must still declare.
+
+    Catalog consumers construct declarations for every registered source; a
+    missing safety measurement raises there instead of staying pending.
+    """
+    for source in all_sources().values():
+        declaration = source.declaration
+        assert declaration.id == source.info.id
