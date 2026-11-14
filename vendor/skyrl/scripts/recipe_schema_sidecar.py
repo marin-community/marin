@@ -7,6 +7,7 @@ from types import MappingProxyType
 from skyrl_train.config.ftpo import FTPOBoundary
 from skyrl_train.config.objective_spec import KLEstimator, LossReduction
 from skyrl_train.config.query_bias import GrugQueryBiasUpdateMode
+from skyrl_train.config.remote_read import RemoteReadMode
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyTarget
 from skyrl_train.config.weight_sync_pause import WeightSyncPauseMode
 from skyrl_train.curriculum import SamplingKind, WeightingKind
@@ -46,6 +47,8 @@ TYPES = MappingProxyType(
     {
         "terminal_bench": "OpenMap | None",
         "trainer.strategy": 'Literal["megatron"]',
+        "trainer.policy.model.remote_read_mode": _literal(RemoteReadMode),
+        "trainer.ref.model.remote_read_mode": _literal(RemoteReadMode),
         "trainer.hf_export_checkpoint": 'Literal["latest", "best"]',
         "trainer.policy.optimizer_config.lr_decay_steps": "int | None",
         "trainer.critic.optimizer_config.lr_decay_steps": "int | None",
