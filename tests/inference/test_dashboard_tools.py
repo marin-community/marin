@@ -383,6 +383,19 @@ def test_dashboard_shell_workspace_replays_git_branch_workflow(dashboard_tool_ba
     assert verified.json()["stdout"].endswith("STATUS\n")
 
 
+def test_dashboard_shell_workspace_replays_history_beyond_one_command_budget(dashboard_tool_base_url):
+    # Each command pipes about 1.4 MB, most of one command's output budget, which counts pipe traffic.
+    command = "head -c 700000 /dev/zero | tr '\\0' x | wc -c"
+    response = requests.post(
+        f"{dashboard_tool_base_url}/shell",
+        json={"files": {}, "commits": [], "history": [command] * 3, "command": command},
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
+    assert response.status_code == 200, response.text
+    assert (response.json()["exit_code"], response.json()["stdout"]) == (0, "700000\n")
+
+
 def test_dashboard_shell_workspace_rejects_parent_paths(dashboard_tool_base_url):
     response = requests.post(
         f"{dashboard_tool_base_url}/shell",
@@ -479,6 +492,42 @@ def test_dashboard_shell_workspace_recreates_imported_git_history(dashboard_tool
     assert response.status_code == 200
     assert response.json()["exit_code"] == 0
     assert response.json()["stdout"] == "add program\ninitial import\n\nOLD\nfirst revision\n"
+
+
+@pytest.mark.slow  # Downloads the ShellSim CPython port.
+def test_shell_workspace_python_sees_a_same_size_edit_after_replay():
+    shellsim_runtime.prepare_tool_runtime(shellsim.DEFAULT_PYPI_CATALOG)
+    run_test = "python test_calculator.py"
+    request = shell_workspace.ShellWorkspaceRequest.from_payload(
+        {
+            "files": {
+                "calculator.py": "def add(a, b):\n    return a - b\n",
+                "test_calculator.py": "from calculator import add\nassert add(2, 3) == 5, add(2, 3)\nprint('ok')\n",
+            },
+            "commits": [],
+            # The first run caches calculator's bytecode; the fix keeps the source size and, on ShellSim's
+            # virtual clock, its mtime.
+            "history": [run_test, "sed -i 's/a - b/a + b/' calculator.py"],
+            "command": run_test,
+        }
+    )
+
+    result = shell_workspace.shell_command_result(request)
+
+    assert (result.exit_code, result.stdout) == (0, "ok\n"), result.stderr
+
+
+@pytest.mark.slow  # Downloads the ShellSim CPython port.
+def test_shell_workspace_python_starts_after_many_replayed_python_runs():
+    shellsim_runtime.prepare_tool_runtime(shellsim.DEFAULT_PYPI_CATALOG)
+    # Twelve CPython starts cost about 4.6e9 CPU, more than one command's budget.
+    request = shell_workspace.ShellWorkspaceRequest.from_payload(
+        {"files": {}, "commits": [], "history": ["python -c pass"] * 11, "command": "python -c 'print(1)'"}
+    )
+
+    result = shell_workspace.shell_command_result(request)
+
+    assert (result.exit_code, result.stdout) == (0, "1\n"), result.stderr
 
 
 PARALLEL_RESULTS = {"search_id": "search_1", "results": [{"url": "https://example.com", "excerpts": ["Example"]}]}

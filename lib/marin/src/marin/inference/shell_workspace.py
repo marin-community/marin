@@ -27,9 +27,15 @@ MAX_WORKSPACE_HISTORY_BYTES = 128 * 1024
 MAX_IMPORTED_COMMITS = 32
 MAX_IMPORTED_HISTORY_BYTES = MAX_WORKSPACE_TOTAL_BYTES + 64 * 1024
 MAX_COMMIT_METADATA_BYTES = 4 * 1024
-_SHELLSIM_CPU_LIMIT = 4_000_000_000
-_SHELLSIM_OUTPUT_LIMIT = 2 * 1024 * 1024
+# Each request replays the whole history against cumulative CPU and output budgets (output includes pipe
+# traffic), so both grow with the command count: a command keeps the budget it had when it first ran.
+# One CPython start costs about 0.4e9 CPU.
+_SHELLSIM_CPU_PER_COMMAND = 4_000_000_000
+_SHELLSIM_OUTPUT_PER_COMMAND = 2 * 1024 * 1024
 _WORKSPACE_ROOT = "/work"
+# ShellSim's virtual clock stamps every file with the same mtime, so after a same-size edit CPython would
+# accept the stale .pyc (it checks only mtime and size). Never write bytecode in the workspace.
+_SHELL_PRELUDE = "export PYTHONDONTWRITEBYTECODE=1"
 
 
 @dataclass(frozen=True)
@@ -259,13 +265,15 @@ def _write_workspace_file(environment: shellsim.Environment, name: str, content:
 def shell_command_result(
     request: ShellWorkspaceRequest, *, catalog: str = shellsim.DEFAULT_PYPI_CATALOG
 ) -> ShellCommandResult:
+    commands = len(request.history) + 1
     environment = tool_environment(
         catalog,
-        cpu=_SHELLSIM_CPU_LIMIT,
-        output=_SHELLSIM_OUTPUT_LIMIT,
+        cpu=_SHELLSIM_CPU_PER_COMMAND * commands,
+        output=_SHELLSIM_OUTPUT_PER_COMMAND * commands,
     )
     _seed_workspace(environment, request.files, request.commits)
     shell = environment.create_shell()
+    shell.run(_SHELL_PRELUDE)
     for index, command in enumerate(request.history, start=1):
         replayed = shell.run(command)
         if environment.terminated:
