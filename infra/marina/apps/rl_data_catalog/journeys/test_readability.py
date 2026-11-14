@@ -44,3 +44,20 @@ def test_checker_measures_composited_text_and_rejects_the_instruction_regression
     )
     assert instruction["measured"] == pytest.approx(1.16816697065)
     assert not any(row["selector"] == "#solid" for row in regression["measurements"])
+
+
+def test_focus_checker_distinguishes_partial_and_complete_occlusion(journey: Journey) -> None:
+    page = journey.page
+    page.set_content(
+        """<style>
+        body {margin:0; background:white; color:black;}
+        button {position:fixed; left:20px; top:20px; width:120px; height:60px; outline:3px solid black;}
+        #overlay {position:fixed; left:0; top:45px; width:200px; height:100px; background:white; z-index:10;}
+        </style><button>Target</button><div id="overlay"></div>"""
+    )
+    page.keyboard.press("Tab")
+    partial = page.evaluate(AUDIT, {"mode": "focus"})
+    assert not any(row["rule"] == "focus-obscured" for row in partial["findings"])
+    page.locator("#overlay").evaluate("e=>{e.style.top='0';e.style.height='200px';}")
+    complete = page.evaluate(AUDIT, {"mode": "focus"})
+    assert any(row["rule"] == "focus-obscured" for row in complete["findings"])

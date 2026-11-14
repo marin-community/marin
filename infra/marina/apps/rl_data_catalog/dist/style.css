@@ -328,3 +328,4 @@ input[type="checkbox"] { width: 24px; height: 24px; flex-shrink: 0; }
 :root :is(button, select, input:not([type="checkbox"])) { min-width: var(--control-size); }
 
 body { overflow-wrap: anywhere; }
+.atlas-header a { display: inline-flex; align-items: center; min-height: var(--control-size); }

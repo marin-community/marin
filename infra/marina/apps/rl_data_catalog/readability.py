@@ -30,6 +30,7 @@ def inspect_state(page: Page, *, focus: bool = False) -> dict[str, Any]:
         visited = set()
         for _ in range(page.locator(CONTROLS).count() + 2):
             page.keyboard.press("Tab")
+            page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
             identity = page.evaluate(
                 """selector => {const e=document.activeElement;
                 return e === document.body ? null : Array.from(document.querySelectorAll(selector)).indexOf(e);}""",
@@ -157,6 +158,8 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
         expect(page.locator("dialog[open]")).to_be_visible()
         capture("source-dialog", focus=True)
         page.keyboard.press("Escape")
+    page.locator("#show-everything").click()
+    capture("all-sources", focus=True)
     for details in page.locator(".data-notes details,details.data-notes").all():
         details.evaluate("e => e.open = true")
     capture("source-notes")
@@ -207,7 +210,7 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
         page.locator("#domain").select_option(domain)
         expect(page.locator("#task-list")).not_to_have_attribute("aria-busy", "true", timeout=60000)
         page.locator("#source-breakdown").evaluate("e => e.open = true")
-        capture("area-" + domain, screenshot=not opened_task)
+        capture("area-" + domain, focus=not opened_task, screenshot=not opened_task)
         if not opened_task and page.locator(".task-row").count():
             page.locator(".task-row").first.click()
             expect(page.locator("#task-detail")).to_be_visible()
