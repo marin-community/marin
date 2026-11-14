@@ -15,7 +15,7 @@ from taskcompendium.evaluation.spec import EvaluationProtocol
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.fingerprints import callable_identity
-from taskcompendium.pipeline.models import SourceStatus
+from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.sources import source_files_identity
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
@@ -72,6 +72,10 @@ class EvalDataset:
     @property
     def files(self) -> tuple[str, ...]:
         return self.recipe.files
+
+    @property
+    def intended_use(self) -> IntendedUse:
+        return self.recipe.intended_use
 
 
 @dataclass(frozen=True)

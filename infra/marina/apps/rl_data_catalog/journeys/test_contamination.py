@@ -79,6 +79,8 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         expect(chip).to_have_text(status)
         expect(chip).to_be_visible()
     expect(page.locator('tr[data-source-id="Marin:eval"] .overlap-cell')).to_have_text("1")
+    expect(page.locator('tr[data-source-id="Marin:required"] .use-cell')).to_have_text("Training")
+    expect(page.locator('tr[data-source-id="Marin:eval"] .use-cell')).to_have_text("Evaluation")
     expect(page.locator('tr[data-source-id="Marin:eval"] .issue-rate-cell')).to_have_text("0.00%")
     expect(page.locator('tr[data-source-id="Marin:unmeasured"] .overlap-cell')).to_have_text("—")
     expect(page.locator('tr[data-source-id="Marin:stale-clean"] .overlap-cell')).to_have_text("—")

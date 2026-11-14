@@ -314,6 +314,7 @@ def publish_sample(
         type="RLVR",
         turns="Single-turn",
         is_benchmark=False,
+        intended_use="train",
         kind="Dataset",
         status="Available",
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
@@ -960,6 +961,17 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         (expected, with_declaration_admission_census(declaration))
         for expected, declaration in contamination_declarations()
     ]
+    benchmark_train = next(declaration for _, declaration in cases if declaration.id == "Marin:required")
+    historical = benchmark_train.model_dump(mode="json")
+    historical.pop("intended_use")
+    cases.append(
+        (
+            "NOT MEASURED",
+            SourceDeclaration.model_validate(
+                {**historical, "id": "Marin:historical", "upstream_dataset": "historical", "is_benchmark": True}
+            ),
+        )
+    )
     with DataStore.open(root, writer_id="lexical") as store:
         register_catalog(store)
         with store.transaction() as tx:
@@ -997,6 +1009,9 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         assert sources["Marin:unmeasured"]["lexical_contamination"] is None
         assert sources["Marin:unmeasured"]["issue_rate"] is None
         assert sources["Marin:eval"]["issue_rate"] == 0.0
+        assert sources["Marin:required"]["intended_use"] == "train"
+        assert sources["Marin:historical"]["intended_use"] == "unknown"
+        assert client.get("/source", params={"source_id": "Marin:historical"}).json()["intended_use"] == "unknown"
 
 
 def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catalog_database, catalog_query, tmp_path):
@@ -1723,7 +1738,7 @@ def test_role_projection_requires_receipt_and_preserves_frozen_sample_roles(cata
         assert client.get("/curriculum").json()["release_id"] == raw_coverage["coverage_id"]
         with catalog_database.begin() as connection:
             connection.execute(
-                text("UPDATE atlas_sources SET declaration=jsonb_set(declaration, '{is_benchmark}', 'true')")
+                text("UPDATE atlas_sources SET declaration=jsonb_set(declaration, '{intended_use}', '\"eval\"')")
             )
         changed_coverage = {**corrected_coverage, "sample_paths": ["unapproved-samples.parquet"]}
         changed_path = Path(documents["corrected"]["coverage_uri"])
