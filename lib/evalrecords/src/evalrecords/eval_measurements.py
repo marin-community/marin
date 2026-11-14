@@ -25,8 +25,7 @@ from evalrecords.eval_stats import (
     Measurement,
     ResultFlag,
 )
-from evalrecords.lm_eval_samples import eval_task_directory
-from evalrecords.lm_eval_samples import is_scratch_artifact
+from evalrecords.lm_eval_samples import eval_task_directory, is_scratch_artifact
 from evalrecords.metric_selection import (
     LM_EVAL_STDERR_SUFFIX,
     PUBLICATION_METRICS,
