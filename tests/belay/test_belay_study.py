@@ -97,24 +97,27 @@ def test_study_checkpoints_stay_under_the_study_prefix() -> None:
     assert "--save-checkpoints" in command
     assert command[command.index("--priority") + 1] == TRACKS[Track.SPEEDRUN].band
     root = checkpoint_root(study, study.runs["base"])
-    assert root == "s3://marin-us-east-02a/tmp/ttl=30d/belay/studies/X0300/belay-X0300-base/checkpoints"
+    # Where the launcher keeps the run's checkpoints: the region's temporary storage, keyed by its output path.
+    temp = "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a"
+    assert root == f"{temp}/marin/tmp/ttl=30d/belay/studies/X0300/belay-X0300-base/checkpoints"
     refuse_input("X0300", root)
     refuse_input("X0300", f"{root}/step-3030")
     for outside in (
-        "s3://marin-us-east-02a/tmp/ttl=30d/belay/runs/belay-X0300-base/checkpoints",
-        "s3://marin-us-east-02a/tmp/ttl=30d/belay/studies/X0301/belay-X0301-base/checkpoints",
-        "s3://marin-us-east-02a/tmp/ttl=30d/belay/studies/X0300/../X0301/checkpoints",
+        "s3://marin-us-east-02a/tmp/ttl=30d/belay/studies/X0300/belay-X0300-base/checkpoints",  # never written
+        f"{temp}/marin/tmp/ttl=30d/belay/runs/belay-X0300-base/checkpoints",
+        f"{temp}/marin/tmp/ttl=30d/belay/studies/X0301/belay-X0301-base/checkpoints",
+        f"{temp}/marin/tmp/ttl=30d/belay/studies/X0300/../checkpoints",
+        f"{root}/step-3030/params",
         "gs://marin-us-central2/tmp/ttl=30d/belay/studies/X0300/run",
-        "/tmp/ttl=30d/belay/studies/X0300/run",
     ):
-        with pytest.raises(SystemExit, match="is not under"):
+        with pytest.raises(SystemExit, match="is not a checkpoints directory"):
             refuse_input("X0300", outside)
 
 
 def test_a_resume_from_outside_the_prefix_is_refused() -> None:
     elsewhere = "[--resume-from, s3://marin-us-east-02a/checkpoints/hero/step-1]"
     run = {"track": "speedrun", "seed": 0, "variant": "v", "hours": 1, "flags": elsewhere}
-    with pytest.raises(SystemExit, match="is not under"):
+    with pytest.raises(SystemExit, match="is not a checkpoints directory"):
         check_study(parse_study(spec_with(**run)), Budget(nodes=64, hours=100))
 
 
@@ -148,6 +151,8 @@ def test_a_study_post_reads_as_a_study_with_no_verdict() -> None:
 def test_an_analysis_script_runs_on_a_tiny_synthetic_checkpoint(tmp_path: Path) -> None:
     assert selftest(STUDIES / "norms_study.py") == [Path("report.md"), Path("rms.png")]
     silent = tmp_path / "silent.py"
-    silent.write_text("def analyze(params, out_dir):\n    assert params\n")
+    silent.write_text(
+        "def analyze(checkpoints, history, out_dir):\n    assert sorted(checkpoints) == [100, 200] and history\n"
+    )
     with pytest.raises(SystemExit, match=r"wrote no report\.md"):
         selftest(silent)

@@ -38,6 +38,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import s3fs
+import wandb
 import yaml
 from iris.cluster.client.job_info import resolve_job_user
 
@@ -167,7 +168,7 @@ from experiments.belay.study import (
     script_path,
     study_command,
     study_post,
-    study_prefix,
+    study_root,
 )
 from experiments.belay.submit import (
     ACTIVE_JOB_STATES,
@@ -1200,6 +1201,18 @@ def cluster_of(checkpoint: str) -> str:
     return f"cw-{bucket.removeprefix('marin-')}"
 
 
+def upload_history(run: str, destination: str, *, dry_run: bool) -> None:
+    """Copy the study run's W&B history (every logged row) next to its checkpoints, for the analysis job, which holds
+    only storage keys."""
+    rows = list(wandb.Api().run(f"{CONFIG.wandb_project}/{run}").scan_history())
+    if not rows:
+        raise SystemExit(f"refusing: W&B run {run} logged no history")
+    print(f"{'would copy' if dry_run else 'copying'} {len(rows)} logged rows of {run} to {destination}")
+    if not dry_run:
+        with coreweave_fs().open(destination.removeprefix("s3://"), "w") as f:
+            json.dump(rows, f)
+
+
 def coreweave_fs() -> s3fs.S3FileSystem:
     """The study bucket, read with the session's own storage keys (only ``analyze`` reads it from the session)."""
     return s3fs.S3FileSystem(
@@ -1227,8 +1240,15 @@ def analyze(registry_id: str, script: str, checkpoint: str, *, dry_run: bool) ->
     state = page_state()
     idea, budget = study_idea(state, registry_id)
     cluster = cluster_of(checkpoint)
-    out = f"s3://marin-{cluster.removeprefix('cw-')}/{study_prefix(registry_id)}/report"
-    module = ["experiments.belay.study_checkpoint", "run", "--script", script, "--input", checkpoint, "--out", out]
+    root = study_root(cluster, registry_id)
+    out = f"{root}/report"
+    run = checkpoint.split("/checkpoints", 1)[0].rsplit("/", 1)[1]
+    history = f"{root}/history/{run}.json"
+    upload_history(run, history, dry_run=dry_run)
+    module = [
+        "experiments.belay.study_checkpoint",
+        *("run", "--script", script, "--input", checkpoint, "--history", history, "--out", out),
+    ]
     name = f"belay-analyze-{registry_id}-{datetime.datetime.now():%m%d-%H%M%S}"
     command = remote_job_command(name, cluster, module, STUDY_JOB_RESOURCES)
     shown = [arg if arg not in (os.environ.get(k) for k in CLUSTER_STORAGE_KEYS) else "<key>" for arg in command]
