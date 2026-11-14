@@ -730,11 +730,23 @@ def record_intake_comment(conn: Connection, c: IntakeComment) -> None:
 
 # Ideas with no approval: their decided_at, if any, is not an approval time.
 UNDECIDED_STATES = (IdeaState.PENDING, IdeaState.DISMISSED)
-# Ideas a maintainer may decline: not yet running and not already closed. A planned idea is the maintainer's call:
-# the admin page shows its runs.
+# Ideas a maintainer may decline: not closed. A planned idea is the maintainer's call (the admin page shows its runs);
+# a running one only once none of its runs is live (a session escalated it after its runs ended).
 DECLINABLE_STATES = (IdeaState.PENDING, IdeaState.APPROVED, IdeaState.PLANNED)
-# Ideas a maintainer may re-queue for another session.
+# Ideas a maintainer may re-queue for another session, besides a running one with no live run.
 REQUEUEABLE_STATES = (IdeaState.APPROVED, IdeaState.PLANNED, IdeaState.RECORDED)
+
+
+def _ended_run(conn: Connection, idea: dict[str, Any]) -> bool:
+    """Whether ``idea`` is running in state only: none of its runs (its ladder rungs' included) is live."""
+    if idea["state"] != IdeaState.RUNNING:
+        return False
+    live = _rows(
+        conn,
+        f"SELECT 1 FROM runs WHERE registry_id = :r AND state NOT IN ({_TERMINAL_SQL}) LIMIT 1",
+        r=idea["registry_id"],
+    )
+    return not live
 
 
 def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[str, str]:
@@ -743,9 +755,9 @@ def decline_idea(conn: Connection, idea_id: int, login: str, note: str) -> dict[
     rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
     if not rows:
         raise HTTPException(404, f"no idea {idea_id}")
-    if rows[0]["state"] not in DECLINABLE_STATES:
+    if rows[0]["state"] not in DECLINABLE_STATES and not _ended_run(conn, rows[0]):
         raise HTTPException(
-            409, f"idea {idea_id} is {rows[0]['state']}; only a pending, approved or planned idea can be declined"
+            409, f"idea {idea_id} is {rows[0]['state']}; only a waiting idea or one with no live run can be declined"
         )
     conn.execute(
         text("UPDATE ideas SET state = 'declined', note = :n, updated_at = now() WHERE id = :id"),
@@ -926,10 +938,11 @@ def requeue_idea(
     priority: PriorityBand | None = None,
 ) -> dict[str, str]:
     """Keep the maintainer's note (and any node grant) for the session and offer the idea to the next session. A
-    retried re-queue whose event is still unclaimed queues nothing more. Takes an approved, planned or recorded idea."""
+    retried re-queue whose event is still unclaimed queues nothing more. Takes an approved, planned or recorded idea,
+    or a running one none of whose runs is live."""
     rows = _rows(conn, "SELECT * FROM ideas WHERE id = :id FOR UPDATE", id=idea_id)
-    if not rows or rows[0]["state"] not in REQUEUEABLE_STATES:
-        raise HTTPException(409, f"idea {idea_id} is not approved, planned or recorded")
+    if not rows or (rows[0]["state"] not in REQUEUEABLE_STATES and not _ended_run(conn, rows[0])):
+        raise HTTPException(409, f"idea {idea_id} is not approved, planned or recorded, nor running with no live run")
     conn.execute(
         text(
             "UPDATE ideas SET state = 'approved', note = :n, "

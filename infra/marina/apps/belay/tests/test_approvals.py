@@ -177,7 +177,13 @@ def test_decline_refuses_an_unknown_or_running_idea_and_writes_nothing(conn) -> 
     before = activity_rows(conn)
     with pytest.raises(HTTPException) as unknown:
         decline_idea(conn, 999, "ClassicLarry", "no")
-    conn.execute(text("UPDATE ideas SET state = 'running'"))
+    conn.execute(text("UPDATE ideas SET state = 'running', registry_id = 'X0001'"))
+    conn.execute(
+        text(
+            "INSERT INTO runs (name, job_id, registry_id, experiment, run, state) "
+            "VALUES ('belay-X0001-seed0', 'j', 'X0001', 'X0001', 'seed0', 'running')"
+        )
+    )
     with pytest.raises(HTTPException) as running:
         decline_idea(conn, idea_id(conn), "ClassicLarry", "no")
     assert (unknown.value.status_code, running.value.status_code) == (404, 409)
@@ -266,6 +272,35 @@ def test_declining_a_planned_idea_drops_its_queued_work(conn) -> None:
     )
     assert decline_idea(conn, planned, "maintainer", "superseded")["state"] == "declined"
     assert not conn.execute(text("SELECT 1 FROM events WHERE session_id IS NULL")).all()
+
+
+def running_study(conn, run_state: str) -> int:
+    """An idea running in state, with one run in ``run_state``."""
+    record_intake_comment(conn, comment())
+    approve_idea(conn, idea_id(conn), "maintainer")
+    conn.execute(text("UPDATE ideas SET state = 'running', registry_id = 'X0224' WHERE id = :id"), {"id": idea_id(conn)})
+    conn.execute(
+        text(
+            "INSERT INTO runs (name, job_id, registry_id, experiment, run, state) "
+            "VALUES ('belay-X0224-dynamics', 'j', 'X0224', 'X0224', 'dynamics', :s)"
+        ),
+        {"s": run_state},
+    )
+    return idea_id(conn)
+
+
+def test_a_running_idea_whose_runs_ended_can_be_requeued(conn) -> None:
+    assert (
+        requeue_idea(conn, running_study(conn, "succeeded"), "maintainer", "rerun the analysis")["state"] == "approved"
+    )
+
+
+def test_a_running_idea_with_a_live_run_is_not_requeued_or_declined(conn) -> None:
+    live = running_study(conn, "running")
+    with pytest.raises(HTTPException, match="no live run"):
+        requeue_idea(conn, live, "maintainer", "again")
+    with pytest.raises(HTTPException, match="no live run"):
+        decline_idea(conn, live, "maintainer", "no")
 
 
 def test_an_approval_records_its_node_grant(conn) -> None:

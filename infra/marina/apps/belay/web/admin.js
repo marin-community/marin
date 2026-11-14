@@ -144,7 +144,10 @@ function renderPending() {
   // Pending ideas wait for a decision; approval happens only here. An escalated approved idea waits for a
   // maintainer, and a planned idea can be re-queued or declined (check its runs first).
   const escalated = (i) => ['approved', 'planned'].includes(i.state) && (i.note ?? '').startsWith('Escalated:')
-  const requeueable = (i) => escalated(i) || i.state === 'planned'
+  // A running idea none of whose runs is live (its ladder rungs' included) is running in state only.
+  const ended = (i) =>
+    i.state === 'running' && !state.runs.some((r) => r.registry_id === i.registry_id && !TERMINAL.has(r.state))
+  const requeueable = (i) => escalated(i) || i.state === 'planned' || ended(i)
   const pending = state.ideas.filter((i) => i.state === 'pending' || requeueable(i))
   document.getElementById('pending-n').textContent = String(pending.filter((i) => i.state === 'pending').length)
   if (!pending.length) {
@@ -179,7 +182,7 @@ function renderPending() {
               {},
               escalated(idea)
                 ? `needs maintainer: ${idea.note.replace('Escalated: ', '')} · `
-                : idea.state === 'planned' ? 'planned · ' : 'not approved · ',
+                : idea.state === 'planned' ? 'planned · ' : ended(idea) ? 'runs ended · ' : 'not approved · ',
               `${idea.origin === 'intake' ? '#9514' : 'proposal'} · ${idea.author} · `,
               when(idea.posted_at),
             ),
