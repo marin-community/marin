@@ -15,6 +15,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import tomlkit
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.harbor.adapter import write_harbor_task
@@ -45,6 +46,7 @@ from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import BASE_URL_ENV
 
 from harbor.agents import taskcompendium as agents
+from harbor.environments import local as local_environments
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
@@ -131,8 +133,8 @@ def bind_factory(monkeypatch, machines, disk_root):
         machines.disk_pool = pool
         return machines
 
-    monkeypatch.setattr(adapter, "verified_local_disk_pool", qualify)
-    monkeypatch.setattr(adapter, "LocalMachineFactory", factory)
+    monkeypatch.setattr(local_environments, "verified_local_disk_pool", qualify)
+    monkeypatch.setattr(local_environments, "LocalMachineFactory", factory)
 
 
 def original_task(name):
@@ -297,7 +299,7 @@ async def test_tau_missing_original_lock_stops_before_candidate_or_machine(tmp_p
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: False)
     allocations = []
-    monkeypatch.setattr(adapter, "LocalMachineFactory", lambda **kwargs: allocations.append(kwargs))
+    monkeypatch.setattr(local_environments, "LocalMachineFactory", lambda **kwargs: allocations.append(kwargs))
     trial = await Trial.create(
         TrialConfig(
             task=TaskConfig(path=directory),
@@ -310,6 +312,29 @@ async def test_tau_missing_original_lock_stops_before_candidate_or_machine(tmp_p
     assert result.exception_info.exception_type == "FileNotFoundError"
     assert task.grader.environment.packages_lock in result.exception_info.exception_message
     assert result.verifier_result is None
+    assert allocations == []
+
+
+@pytest.mark.parametrize("resources", [{"gpus": 1}, {"tpu": {"type": "v6e", "topology": "2x4"}}], ids=["gpu", "tpu"])
+@pytest.mark.asyncio
+async def test_task_spec_local_hardware_policy_rejects_before_allocation(tmp_path, monkeypatch, resources):
+    directory = tmp_path / "task"
+    write_harbor_task(original_task("language-mixing"), directory, INITIAL_REQUIREMENTS)
+    path = directory / "task.toml"
+    document = tomlkit.parse(path.read_text())
+    document["environment"].update(resources)
+    path.write_text(tomlkit.dumps(document))
+    allocations = []
+    monkeypatch.setattr(local_environments, "LocalMachineFactory", lambda **kwargs: allocations.append(kwargs))
+    with pytest.raises(ValueError, match="GPU and TPU allocations are unsupported"):
+        await Trial.create(
+            TrialConfig(
+                task=TaskConfig(path=directory),
+                trial_name="unsupported-hardware",
+                trials_dir=tmp_path / "trials",
+                agent=AgentConfig(name="nop"),
+            )
+        )
     assert allocations == []
 
 
