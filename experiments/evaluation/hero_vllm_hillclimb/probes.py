@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 
 import aiohttp
+import psutil
 
 logger = logging.getLogger(__name__)
 
@@ -296,15 +297,62 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig, on_progre
                 await _stream_request(client, body, records[index])
 
         start = time.monotonic()
+        cpu: dict = {}
+        sampler = asyncio.create_task(_sample_cpu(cpu))
         await asyncio.gather(*(worker() for _ in range(concurrency)))
+        sampler.cancel()
         firsts = sorted(r["stamps"][0][0] for r in records if r.get("stamps"))
         window = (firsts[min(concurrency, len(firsts)) - 1], last_submit[0])
         results[f"c{concurrency}"] = _summarize(records, concurrency=concurrency, window=window)
         results[f"c{concurrency}"]["makespan"] = time.monotonic() - start
+        results[f"c{concurrency}"]["cpu"] = _cpu_summary(cpu)
         if on_progress is not None:
             on_progress(results)
         logger.info("C%d: %s", concurrency, {k: v for k, v in results[f"c{concurrency}"].items() if k != "requests"})
     return results
+
+
+def _api_server_processes() -> list[psutil.Process]:
+    """vLLM API server processes on this host (vLLM sets their titles to APIServer / ApiServer_N)."""
+    found = []
+    for process in psutil.process_iter(["name", "cmdline"]):
+        title = " ".join([process.info.get("name") or "", *(process.info.get("cmdline") or [])[:1]])
+        if "APIServer" in title or "ApiServer" in title:
+            found.append(process)
+    return found
+
+
+async def _sample_cpu(samples: dict, period: float = 5.0) -> None:
+    """Record CPU percent (100 = one core) for this client process and the API server processes."""
+    me = psutil.Process()
+    me.cpu_percent()
+    servers = _api_server_processes()
+    for server in servers:
+        server.cpu_percent()
+    while True:
+        await asyncio.sleep(period)
+        samples.setdefault("client", []).append(me.cpu_percent())
+        total = 0.0
+        peak = 0.0
+        for server in servers:
+            try:
+                value = server.cpu_percent()
+            except psutil.Error:
+                continue
+            total += value
+            peak = max(peak, value)
+        samples.setdefault("api_server_total", []).append(total)
+        samples.setdefault("api_server_max_process", []).append(peak)
+        samples["api_server_processes"] = len(servers)
+
+
+def _cpu_summary(samples: dict) -> dict:
+    out = {"api_server_processes": samples.get("api_server_processes")}
+    for key in ("client", "api_server_total", "api_server_max_process"):
+        values = samples.get(key) or [0.0]
+        out[f"{key}_cpu_mean"] = sum(values) / len(values)
+        out[f"{key}_cpu_max"] = max(values)
+    return out
 
 
 def _quantile(values: list[float], q: float) -> float | None:

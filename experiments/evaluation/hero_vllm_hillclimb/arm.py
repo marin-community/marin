@@ -150,6 +150,9 @@ BASELINE_ARGS = (
 # leader starts API servers; headless followers reject the flag.
 LEADER_ARGS = ("--api-server-count", "1")
 
+# Leader-only flag overrides per candidate label (API servers start only on the leader).
+LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4")}
+
 # Candidate flag sets, selected with --sequence items of the form <release>:<label>. A flag here
 # replaces the same baseline flag (and its value) rather than being appended twice.
 CANDIDATE_ARGS = {
@@ -161,6 +164,19 @@ CANDIDATE_ARGS = {
         json.dumps(BASE_COMPILATION | {"cudagraph_capture_sizes": BASELINE_CAPTURE_SIZES}),
     ),
     "mns128": ("--max-num-seqs", "128"),
+    "mns256": ("--max-num-seqs", "256"),
+    "mns128api4": ("--max-num-seqs", "128"),
+    # Inductor still fuses combo kernels but picks them without timing benchmarks (compile determinism test).
+    "bckoff": (
+        "--compilation-config",
+        json.dumps(
+            BASE_COMPILATION
+            | {
+                "inductor_compile_config": BASE_COMPILATION["inductor_compile_config"]
+                | {"benchmark_combo_kernel": False}
+            }
+        ),
+    ),
     "mbt8192": ("--max-num-batched-tokens", "8192"),
     "a2a-nvl1": ("--all2all-backend", "flashinfer_nvlink_one_sided"),
     "a2a-nvl2": ("--all2all-backend", "flashinfer_nvlink_two_sided"),
@@ -532,6 +548,7 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
             data_parallel_size=geometry.global_data_parallel_size,
         ),
         env=env,
+        leader_args=LEADER_OVERRIDES.get(label, LEADER_ARGS),
     )
 
 
