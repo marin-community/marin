@@ -849,15 +849,20 @@ def _adam_checkpoint_snapshot(worker):
     children = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
     states = []
     for child in children:
-        for group in child.optimizer.param_groups:
-            for parameter in group["params"]:
-                state = child.optimizer.state[parameter]
-                states.append(
-                    {
-                        "param": parameter.detach().cpu().clone(),
-                        **{name: state[name].detach().cpu().clone() for name in ("step", "exp_avg", "exp_avg_sq")},
-                    }
-                )
+        inner = child.optimizer
+        for sub_optimizer in inner.sub_optimizers:
+            for group in sub_optimizer.param_groups:
+                for parameter in group["params"]:
+                    state = sub_optimizer.state[parameter]
+                    # FusedAdam advances a group counter; Torch AdamW advances each parameter's counter.
+                    step = group["step"] if sub_optimizer is inner.gpu_optimizer else state["step"]
+                    states.append(
+                        {
+                            "param": parameter.detach().cpu().clone(),
+                            "step": torch.as_tensor(step).detach().cpu().clone(),
+                            **{name: state[name].detach().cpu().clone() for name in ("exp_avg", "exp_avg_sq")},
+                        }
+                    )
     assert states
     return states
 
@@ -869,14 +874,15 @@ def _assert_adam_checkpoint_matches(actual, expected):
                 torch.testing.assert_close(actual_parameter[name], expected_parameter[name], rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("world_size", [1, 2])
-def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path, world_size):
+@pytest.mark.parametrize("offload_fraction", [0.5, 1.0])
+def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path, offload_fraction):
     """A checkpoint saved with CPU optimizer offload loads, restores the weights, and continues.
 
     Training from the checkpoint again must repeat the step taken right after saving it, which
     holds only if the CPU-offloaded masters and moments were restored too. The load must also
     return the pinned host copies it replaced instead of leaving them cached.
     """
+    world_size = 2
     require_hoppers(world_size)
     model_path = tmp_path / "model"
     model_path.mkdir()
@@ -885,7 +891,7 @@ def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path, worl
     megatron = cfg.trainer.policy.megatron_config
     megatron.optimizer_checkpoint_sharding_type = "dp_reshardable"
     megatron.optimizer_config_kwargs.optimizer_cpu_offload = True
-    megatron.optimizer_config_kwargs.optimizer_offload_fraction = 1.0
+    megatron.optimizer_config_kwargs.optimizer_offload_fraction = offload_fraction
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     batch = _padded_batch(tokenizer.pad_token_id)
     # Megatron restore reads only CoreWeave S3 checkpoints.
