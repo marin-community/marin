@@ -38,7 +38,8 @@ trials:
   step_time_change: +1%
 potential:
   score: 7
-  rationale: −0.0112 at equal time (step time within 1%, equal data = equal time); ladder and MFU not run → 7
+  rationale: −0.0112 at equal time (step time within 1%, equal data = equal time); ladder escalated, not run; MFU not run
+    → 7
   model: claude-opus-5-5
   date: '2026-11-14'
   inputs_digest: 0c4512380242
