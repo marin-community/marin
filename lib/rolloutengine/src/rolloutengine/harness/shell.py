@@ -41,6 +41,7 @@ from taskcompendium.submission import (
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
+    ContextRecovery,
     EventSink,
     ModelTurn,
     Prompt,
@@ -174,6 +175,8 @@ def _provider_tools(
 @dataclass(frozen=True, kw_only=True)
 class ShellHarness:
     """Serve a shell tool on the task machine and host tools from registered providers, and end on a final response."""
+
+    context_recovery = ContextRecovery.NEVER
 
     command_timeout: float | None
     """The limit of each shell command. A timed-out command returns an observation, and the model can continue."""
