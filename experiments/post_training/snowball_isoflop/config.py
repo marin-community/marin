@@ -59,11 +59,11 @@ class RuntimePolicy(StrEnum):
     LOSS_CURVE = "loss_curve"
 
 
-# d1024 keeps the joint setting until its requested uniform-runtime pilot passes.
+# A expansion still requires a matched, successful six-cell calibration report.
 LOSS_CURVE_RUNTIME = {
     512: RuntimePolicy.SYNCHRONOUS_COLLECTIVES,
     768: RuntimePolicy.SYNCHRONOUS_COLLECTIVES,
-    1024: RuntimePolicy.SYNCHRONOUS,
+    1024: RuntimePolicy.SYNCHRONOUS_COLLECTIVES,
 }
 WANDB_NAME_LIMIT = 128
 RUNTIME_FIELDS = ("XLA_FLAGS", "CUDA_LAUNCH_BLOCKING")
@@ -140,22 +140,7 @@ def budget_steps(size: int, budget: float) -> int:
 
 
 def calibration_cells() -> tuple[Cell, ...]:
-    return tuple(
-        Cell(
-            d,
-            mask,
-            0,
-            20,
-            (20,),
-            (
-                "calibration-serial-collectives"
-                if d in (512, 768)
-                else ("calibration-recovery" if mask == Mask.FULL else "calibration")
-            ),
-        )
-        for d in SIZES
-        for mask in Mask
-    )
+    return tuple(Cell(d, mask, 0, 20, (20,), "calibration-serial-collectives") for d in SIZES for mask in Mask)
 
 
 def primary_cells() -> tuple[Cell, ...]:
