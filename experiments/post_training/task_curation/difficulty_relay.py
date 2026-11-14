@@ -21,6 +21,11 @@ from transformers import AutoTokenizer
 CONTEXT_TOKENS, INPUT_TOKENS, OUTPUT_TOKENS = (int(value) for value in PROTOCOLS[PROTOCOL_ID].sampling[:3])
 
 LOGGER = logging.getLogger(__name__)
+REQUEST_TIMEOUT = 300
+
+
+class ReceiptHTTPServer(ThreadingHTTPServer):
+    daemon_threads = False
 
 
 @contextmanager
@@ -42,9 +47,13 @@ def budget_relay(
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model, revision=tokenizer_revision)
     numbers = Counter()
     lock = Lock()
-    with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=300) as upstream:
+    with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=REQUEST_TIMEOUT) as upstream:
 
         class Handler(BaseHTTPRequestHandler):
+            def setup(self):
+                super().setup()
+                self.connection.settimeout(REQUEST_TIMEOUT)
+
             def log_message(self, message_format, *args):
                 pass
 
@@ -113,6 +122,8 @@ def budget_relay(
                 else:
                     try:
                         response = upstream.post(endpoint.rstrip("/") + "/chat/completions", json=body)
+                        (root / "upstream-response.body").write_bytes(response.content)
+                        (root / "upstream-response-status.json").write_text(json.dumps({"status": response.status_code}))
                         status, payload = response.status_code, response.json()
                         if not response.is_success:
                             safe = _upstream_error(status, response.content)
@@ -138,7 +149,7 @@ def budget_relay(
                     }
                 self.respond(status, payload)
 
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server = ReceiptHTTPServer(("127.0.0.1", 0), Handler)
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:

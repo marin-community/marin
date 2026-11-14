@@ -12,6 +12,7 @@ import math
 import tarfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,6 +84,39 @@ def write_json(path: StoragePath, payload: dict) -> ContentEvidenceReference:
     data = (json.dumps(payload, indent=2) + "\n").encode()
     path.write_bytes(data)
     return ContentEvidenceReference(uri=str(path), sha256=hashlib.sha256(data).hexdigest())
+
+
+@contextmanager
+def preserved_model_traffic(root: Path, output: StoragePath):
+    """Archive final model traffic after the relay drains, including exceptional exits."""
+    try:
+        yield
+    finally:
+        requests = root / "model-requests"
+        archive = root / "model-requests-final.tar.gz"
+        with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
+            if requests.exists():
+                stream.add(requests, arcname="model-requests")
+        destination = output / "model-requests-final.tar.gz"
+        copy(str(archive), str(destination), no_clobber=True)
+        input_tokens = output_tokens = responses_with_usage = 0
+        for path in requests.glob("*/*/response.json"):
+            usage = json.loads(path.read_text())["body"].get("usage") or {}
+            responses_with_usage += bool(usage)
+            input_tokens += usage.get("prompt_tokens", 0)
+            output_tokens += usage.get("completion_tokens", 0)
+        write_json(
+            output / "model-requests-final.json",
+            {
+                "archive": str(destination),
+                "archive_sha256": file_sha256(StoragePath(str(archive))),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "received_responses": len(list(requests.glob("*/*/upstream-response.body"))),
+                "responses_with_usage": responses_with_usage,
+                "basis": "sum of reported usage after relay shutdown; raw replies without usage remain archived",
+            },
+        )
 
 
 def scored_reward(result, trial: Trial) -> float | None:
@@ -243,15 +277,18 @@ def main() -> None:
         raise FileExistsError("Preserve previous difficulty attempts and select a new version")
     args.local_root.mkdir(parents=True)
     key = "EMPTY" if config.api_key_secret is None else require_secret(config.api_key_secret)
-    with budget_relay(
-        endpoint=config.endpoint,
-        model=config.api_model,
-        api_key=key,
-        tokenizer_model=config.identity.tokenizer,
-        tokenizer_revision=config.identity.tokenizer_revision,
-        parameters=config.request_parameters,
-        receipts=args.local_root / "model-requests",
-    ) as relay:
+    with (
+        preserved_model_traffic(args.local_root, output),
+        budget_relay(
+            endpoint=config.endpoint,
+            model=config.api_model,
+            api_key=key,
+            tokenizer_model=config.identity.tokenizer,
+            tokenizer_revision=config.identity.tokenizer_revision,
+            parameters=config.request_parameters,
+            receipts=args.local_root / "model-requests",
+        ) as relay,
+    ):
         with ThreadPoolExecutor(max_workers=config.workers) as executor:
             for source in sources:
                 started = time.monotonic()
