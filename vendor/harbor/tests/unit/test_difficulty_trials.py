@@ -5,6 +5,7 @@
 
 import json
 import hashlib
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -542,3 +543,164 @@ def test_recovered_transport_retry_preserves_the_valid_grade(tmp_path, monkeypat
     ]
     assert attempts["pending_reasons"] == {}
     assert len(candidate_requests) == 3
+
+
+def _sealed_resume_setup(tmp_path, monkeypatch, physical_attempts):
+    """One clean scored task behind the real relay; returns the pieces both seal tests share."""
+    runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
+    runtime_sha256 = canonical_sha256(runtime)
+    sample = DifficultySample(
+        source_id="fixture:sealed-resume", release={"repo": "fixture", "revision": "pin", "url": "https://fixture.invalid/pin"},
+        converter_version="fixture", converter_revision="a" * 40, population_count=1,
+        task_specs_sha256="b" * 64, drop_manifest={"uri": "fixture:drop", "sha256": "c" * 64},
+        seed=0, pre_oracle_filter=False, resample_after_oracle_filter=False,
+        tasks=[{"task_id": "scored", "task_sha256": "d" * 64}],
+    )
+    source = PreparedSource(
+        sample=sample, sample_receipt={"uri": "fixture:sample", "sha256": "e" * 64},
+        tasks=[PreparedTask(task_id="scored", runtime_sha256=runtime_sha256, path=str(tmp_path / "source-task"),
+                            workload="task_spec", backend="local", reason=None, judge_model=None)],
+    )
+    directory = tmp_path / "source-task"
+    directory.mkdir()
+    (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
+        task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
+    ).model_dump_json())
+    config = CandidateRun(
+        solver=Solver.HOSTED,
+        identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
+                                tokenizer=SOLVER_MODELS[Solver.HOSTED], tokenizer_revision="a" * 40,
+                                chat_template_sha256="f" * 64,
+                                serving_receipt={"uri": "fixture:serving", "sha256": "0" * 64}),
+        settings=SamplingSettings(context_tokens=65536, input_tokens=49152, output_tokens=16384,
+                                  temperature=0.7, top_p=0.95, top_k=20, min_p=0, repetition_penalty=1,
+                                  presence_penalty=0, frequency_penalty=0, thinking="low", deviations=[]),
+        endpoint="https://model.fixture/v1", api_model="glm-5.3", api_key_secret=None,
+        provider_limits=ProviderLimits(max_in_flight=2, attempts=2),
+        environment_options={}, workers=2, gpu_count=0, attempts_per_task=2, task_limit=None,
+        judge=None,
+    )
+    source_path = tmp_path / "sources.json"
+    source_path.write_text(json.dumps([source.model_dump(mode="json")]))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(config.model_dump_json())
+    serving = {
+        "protocol": "atlas-difficulty-v3", "solver": "hosted", "model": config.identity.model,
+        "native_client_context_safety_buffer_tokens": 0,
+        "tokenizer_revision": config.identity.tokenizer_revision,
+        "chat_template_sha256": config.identity.chat_template_sha256, "sampling": request_parameters(config.settings),
+        "tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}},
+        "judge": None,
+    }
+    serving_bytes = json.dumps(serving).encode()
+    (tmp_path / "serving.json").write_bytes(serving_bytes)
+
+    candidate_requests = []
+    real_client = httpx.Client
+
+    def model_response(request):
+        candidate_requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"usage": {"prompt_tokens": 100, "completion_tokens": 200}})
+
+    class Tokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            return [1]
+
+    monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
+    monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(model_response)))
+    monkeypatch.setattr(difficulty_trials, "require_secret", lambda name: "fixture-host-key")
+
+    async def physical_trial(configuration, authentication):
+        # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
+        physical_attempts.append(configuration.trial_name)
+        trial_directory = configuration.trials_dir / configuration.trial_name
+        agent = trial_directory / "agent"
+        verifier = trial_directory / "verifier"
+        agent.mkdir(parents=True)
+        verifier.mkdir()
+        (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": 1.0}))
+        (trial_directory / "network-policy.json").write_text(json.dumps({
+            "source_runtime_sha256": runtime_sha256, "actor_declared": "allow", "verifier_declared": "allow",
+            "actor_required": True, "actor_effective": "allow", "verifier_effective": "allow",
+        }))
+        payload = {"exception_info": None, "verifier_result": {"rewards": {"reward": 1.0}}}
+        (trial_directory / "result.json").write_text(json.dumps(payload))
+        result = SimpleNamespace(finished_at=datetime.now(UTC), completion="completed", exception_info=None,
+                                 verifier_result=SimpleNamespace(rewards={"reward": 1.0}),
+                                 model_dump=lambda **kwargs: payload)
+        trial = SimpleNamespace(paths=SimpleNamespace(trial_dir=trial_directory, agent_dir=agent, verifier_dir=verifier))
+        return trial, result
+
+    monkeypatch.setattr(difficulty_trials, "execute_trial", physical_trial)
+    return source, config, source_path, config_path, serving_bytes, physical_attempts
+
+
+def _run_trials(tmp_path, output, *, previous=None, serving_sha=None):
+    argv = ["difficulty_trials", "--sources", str(tmp_path / "sources.json"),
+            "--config", str(tmp_path / "config.json"), "--output-root", str(output),
+            "--local-root", str(output.parent / "local")]
+    if previous is not None:
+        argv += ["--previous-campaign", str(previous), "--previous-serving-sha256", serving_sha,
+                 "--source-queue-sha256", "1" * 64]
+    monkeypatch_argv = pytest.MonkeyPatch()
+    monkeypatch_argv.setattr("sys.argv", argv)
+    try:
+        difficulty_trials.main()
+    finally:
+        monkeypatch_argv.undo()
+
+
+@pytest.mark.parametrize("seal_during_run", [True, False])
+def test_killed_worker_resume_recovers_completed_trials_without_rerunning(tmp_path, monkeypatch, seal_during_run):
+    physical_attempts = []
+    source, config, source_path, config_path, serving_bytes, physical_attempts = _sealed_resume_setup(
+        tmp_path, monkeypatch, physical_attempts
+    )
+    killed = tmp_path / "killed"
+    killed.mkdir()
+    output = killed / "trials"
+
+    @contextmanager
+    def no_exit_seal(root, out):
+        # The worker dies before its exit-time seal; nothing writes a final archive at exit.
+        yield
+
+    monkeypatch.setattr(difficulty_trials, "preserved_model_traffic", no_exit_seal)
+    if not seal_during_run:
+        # The worker is killed before even the first incremental seal fires.
+        monkeypatch.setattr(difficulty_trials, "seal_model_traffic", lambda root, out: None)
+    _run_trials(tmp_path, output)
+
+    seal_path = output / "model-requests-final.json"
+    assert seal_path.exists() is seal_during_run
+    ledger = json.loads(next(output.glob("*/attempts.json")).read_text())
+    assert [(attempt["task_id"], attempt["status"], attempt["reward"]) for attempt in ledger["attempts"]] == [
+        ("scored", "scored", 1.0),
+    ]
+    assert len(physical_attempts) == 1
+    # The killed root still needs its parent binding evidence for the continuation.
+    (killed / "serving.json").write_bytes(serving_bytes)
+    (killed / "prepared.json").write_text(json.dumps({
+        "source_queue_sha256": "1" * 64, "sources": [source.model_dump(mode="json")],
+    }))
+    serving_sha = hashlib.sha256(serving_bytes).hexdigest()
+
+    resumed = tmp_path / "resumed"
+    resumed.mkdir()
+    _run_trials(tmp_path, resumed / "trials", previous=killed, serving_sha=serving_sha)
+
+    rows = list(ReadView(str(resumed / "trials" / "catalog")).iter_rows(
+        MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
+    (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
+    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("measured", 1, 1, 0)
+    # The completed trial was recovered from the killed root, never re-executed.
+    assert len(physical_attempts) == 1
+    if not seal_during_run:
+        manifest = json.loads(seal_path.read_text())
+        assert manifest["reconstructed"] is True
+        assert len(manifest["sources"]) == 1
+        receipt = manifest["sources"][0]["model_requests"]
+        from rigging.filesystem.storage_path import StoragePath as _StoragePath
+        from taskcompendium.evaluation.corpus import file_sha256 as _file_sha256
+        assert _file_sha256(_StoragePath(receipt["uri"])) == receipt["sha256"]

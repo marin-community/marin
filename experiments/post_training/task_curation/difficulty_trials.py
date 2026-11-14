@@ -111,38 +111,50 @@ def archive_model_traffic(
     )
 
 
+def seal_model_traffic(root: Path, output: StoragePath) -> None:
+    """Archive the drained traffic and its usage totals; safe to call repeatedly."""
+    requests = root / "model-requests"
+    archive = root / "model-requests-final.tar.gz"
+    with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
+        if requests.exists():
+            stream.add(requests, arcname="model-requests")
+    destination = output / "model-requests-final.tar.gz"
+    copy(str(archive), str(destination))
+    input_tokens = output_tokens = responses_with_usage = 0
+    for path in requests.glob("*/*/response.json"):
+        response = json.loads(path.read_text())
+        usage = response.get("upstream_usage") or response["body"].get("usage") or {}
+        responses_with_usage += bool(usage)
+        input_tokens += usage.get("prompt_tokens", 0)
+        output_tokens += usage.get("completion_tokens", 0)
+    write_replaced_json_evidence(
+        output / "model-requests-final.json",
+        {
+            "archive": str(destination),
+            "archive_sha256": file_sha256(StoragePath(str(archive))),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "received_responses": len(list(requests.glob("*/*/upstream-response.body"))),
+            "responses_with_usage": responses_with_usage,
+            "basis": "sum of reported usage after relay shutdown; raw replies without usage remain archived",
+        },
+    )
+
+
 @contextmanager
 def preserved_model_traffic(root: Path, output: StoragePath):
     """Archive final model traffic after the relay drains, including exceptional exits."""
     try:
         yield
     finally:
-        requests = root / "model-requests"
-        archive = root / "model-requests-final.tar.gz"
-        with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
-            if requests.exists():
-                stream.add(requests, arcname="model-requests")
-        destination = output / "model-requests-final.tar.gz"
-        copy(str(archive), str(destination), no_clobber=True)
-        input_tokens = output_tokens = responses_with_usage = 0
-        for path in requests.glob("*/*/response.json"):
-            response = json.loads(path.read_text())
-            usage = response.get("upstream_usage") or response["body"].get("usage") or {}
-            responses_with_usage += bool(usage)
-            input_tokens += usage.get("prompt_tokens", 0)
-            output_tokens += usage.get("completion_tokens", 0)
-        write_json_evidence(
-            output / "model-requests-final.json",
-            {
-                "archive": str(destination),
-                "archive_sha256": file_sha256(StoragePath(str(archive))),
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "received_responses": len(list(requests.glob("*/*/upstream-response.body"))),
-                "responses_with_usage": responses_with_usage,
-                "basis": "sum of reported usage after relay shutdown; raw replies without usage remain archived",
-            },
-        )
+        seal_model_traffic(root, output)
+
+
+def write_replaced_json_evidence(path: StoragePath, value: dict) -> None:
+    """Replace this campaign's own rolling seal; the newest seal is authoritative."""
+    if path.exists():
+        path.rm()
+    write_json_evidence(path, value)
 
 
 def scored_reward(result, trial: Trial) -> float | None:
@@ -531,6 +543,11 @@ def main() -> None:
                         "previous_campaign": None if previous is None else str(previous.root),
                     },
                 )
+                # Durably seal the traffic drained so far after each source, so a
+                # killed worker loses at most its in-flight source's traffic.
+                seal_model_traffic(args.local_root, output)
+                if has_judge:
+                    seal_model_traffic(judge_root, output / "judge")
                 payload = dict(
                     measurement_id=uuid4().hex,
                     protocol_id=PROTOCOL_ID,

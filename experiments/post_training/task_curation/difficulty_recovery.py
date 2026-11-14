@@ -50,6 +50,59 @@ class CampaignParent(BaseModel):
     source_queue_sha256: str
 
 
+def reconstruct_sealed_traffic(root: StoragePath, prepared: dict) -> None:
+    """Rebuild a killed worker's traffic seal from its durable per-source receipts.
+
+    The worker died before sealing, but every completed source's traffic archive
+    is durably written and digest-bound. The manifest assembles exactly those
+    receipts — no traffic is fabricated; the in-flight source's ungraded
+    requests stay absent.
+    """
+    sources = []
+    input_tokens = output_tokens = 0
+    for row in prepared["sources"]:
+        source_key = hashlib.sha256(row["sample"]["source_id"].encode()).hexdigest()
+        aggregate = root / "trials" / source_key / "attempts.json"
+        if not aggregate.exists():
+            continue
+        ledger = json.loads(aggregate.read_text())
+        model = ContentEvidenceReference.model_validate(
+            {"uri": ledger["model_requests"], "sha256": ledger["model_requests_sha256"]}
+        )
+        if file_sha256(StoragePath(model.uri)) != model.sha256:
+            raise ValueError("Previous per-source traffic archive changed after publication")
+        judge = ledger.get("judge_model_requests")
+        if judge is not None:
+            judge_ref = ContentEvidenceReference.model_validate(judge)
+            if file_sha256(StoragePath(judge_ref.uri)) != judge_ref.sha256:
+                raise ValueError("Previous per-source judge traffic archive changed after publication")
+        input_tokens += ledger["input_tokens"]
+        output_tokens += ledger["output_tokens"]
+        sources.append(
+            {
+                "source_id": row["sample"]["source_id"],
+                "model_requests": {"uri": ledger["model_requests"], "sha256": ledger["model_requests_sha256"]},
+                "judge_model_requests": judge,
+                "input_tokens": ledger["input_tokens"],
+                "output_tokens": ledger["output_tokens"],
+            }
+        )
+    if not sources:
+        raise ValueError("Previous worker has not drained and sealed its final model traffic")
+    manifest = {
+        "reconstructed": True,
+        "basis": (
+            "assembled from the durable per-source traffic receipts of a worker that died before sealing; "
+            "the in-flight source's ungraded traffic is absent"
+        ),
+        "sources": sources,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+    }
+    data = (json.dumps(manifest, indent=2) + "\n").encode()
+    (root / "trials" / "model-requests-final.json").write_bytes(data)
+
+
 def previous_campaign(root: str, serving_sha256: str, source_queue_sha256: str) -> PreviousCampaign:
     """Bind a continuation to an explicitly selected prior serving and source queue."""
     chain = []
@@ -60,7 +113,12 @@ def previous_campaign(root: str, serving_sha256: str, source_queue_sha256: str) 
             raise ValueError("Campaign ancestry contains a cycle")
         seen.add(str(path))
         if not (path / "trials" / "model-requests-final.json").exists():
-            raise ValueError("Previous worker has not drained and sealed its final model traffic")
+            prepared_path = path / "prepared.json"
+            if not prepared_path.exists():
+                raise ValueError("Previous worker has not drained and sealed its final model traffic")
+            reconstruct_sealed_traffic(path, json.loads(prepared_path.read_text()))
+            if not (path / "trials" / "model-requests-final.json").exists():
+                raise ValueError("Previous worker has not drained and sealed its final model traffic")
         serving_path = path / "serving.json"
         if file_sha256(serving_path) != serving_sha256:
             raise ValueError("Previous serving receipt differs from its requested digest")
