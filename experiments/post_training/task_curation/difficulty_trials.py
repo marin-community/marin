@@ -1,0 +1,348 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Execute prepared difficulty tasks in Harbor's locked production runtime."""
+
+import argparse
+import asyncio
+import hashlib
+import json
+import logging
+import math
+import tarfile
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
+
+from finestore.rl.curation import ContentEvidenceReference
+from finestore.rl.difficulty import (
+    MEASUREMENTS,
+    PROTOCOL_ID,
+    DifficultyAttempt,
+    DifficultyMeasurement,
+    SamplingSettings,
+    Solver,
+    SolverIdentity,
+    measurement_from_attempts,
+    register_difficulty,
+)
+from finestore.store import DataStore
+from harbor.host_capabilities import host_capabilities_from_environment
+from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
+from harbor.trial.trial import Trial
+from harbor.utils.artifact_writer import get_artifact_writer
+from harbor_config.errors import ErrorCategory, error_category
+from pydantic import BaseModel, ConfigDict
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.transfer import copy
+from rigging.secrets import require_secret
+from taskcompendium.evaluation.corpus import file_sha256
+
+from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
+from experiments.post_training.task_curation.difficulty_relay import budget_relay
+
+LOGGER = logging.getLogger(__name__)
+ATTEMPT_TIMEOUT = 259200
+
+
+class CandidateRun(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    solver: Solver
+    identity: SolverIdentity
+    settings: SamplingSettings
+    endpoint: str
+    api_model: str
+    api_key_secret: str | None
+    request_parameters: dict
+    environment_options: dict
+    judge_endpoint: str
+    judge_api_key_secret: str
+    workers: int
+    gpu_count: int
+    attempts_per_task: int
+    task_limit: int | None
+
+
+def write_json(path: StoragePath, payload: dict) -> ContentEvidenceReference:
+    if path.exists():
+        raise FileExistsError(path)
+    data = (json.dumps(payload, indent=2) + "\n").encode()
+    path.write_bytes(data)
+    return ContentEvidenceReference(uri=str(path), sha256=hashlib.sha256(data).hexdigest())
+
+
+def scored_reward(result, trial: Trial) -> float | None:
+    """Accept a completed source grade only when no infrastructure failure invalidates it."""
+    if result.finished_at is None or result.completion is None or result.verifier_result is None:
+        return None
+    if result.exception_info is not None and error_category(result.exception_info.exception_type) not in {
+        ErrorCategory.AGENT,
+        ErrorCategory.PASSTHROUGH,
+    }:
+        return None
+    reward = (result.verifier_result.rewards or {}).get("reward")
+    if type(reward) not in {int, float} or not math.isfinite(reward):
+        return None
+    verdict_path = trial.paths.verifier_dir / "verdict.json"
+    if verdict_path.exists():
+        verdict = json.loads(verdict_path.read_text())
+        if verdict.get("status") != "scored" or verdict.get("reward") != reward:
+            return None
+    return float(reward)
+
+
+async def execute_trial(configuration: TrialConfig, authentication: dict[str, str]):
+    trial = await Trial.create(
+        configuration,
+        host_capabilities=host_capabilities_from_environment(
+            {},
+            model_authentication=authentication,
+        ),
+    )
+    return trial, await trial.run()
+
+
+def run_task(
+    task: PreparedTask, config: CandidateRun, base_url: str, root: Path, output: str
+) -> list[DifficultyAttempt]:
+    key = hashlib.sha256(task.task_id.encode()).hexdigest()
+    destination = StoragePath(output) / key
+    if task.reason is not None or task.path is None:
+        write_json(destination / "pending.json", {"task_id": task.task_id, "reason": task.reason})
+        return [DifficultyAttempt(task_id=task.task_id, status="pending", reward=None)]
+    attempts = []
+    for number in range(config.attempts_per_task):
+        local = root / key / f"{number:02d}"
+        local.mkdir(parents=True, exist_ok=False)
+        endpoint = f"{base_url}/{root.name}-{key}-{number}/v1"
+        parameters = config.request_parameters
+        common = {"api_base": endpoint}
+        if task.workload == "task_spec":
+            kwargs = {
+                **common,
+                "max_turns": 50,
+                "max_tokens": config.settings.output_tokens,
+                "context_window": config.settings.context_tokens,
+                "max_input_tokens": config.settings.input_tokens,
+                "request_parameters": parameters,
+                "tokenizer_model": config.identity.tokenizer,
+                "tokenizer_revision": config.identity.tokenizer_revision,
+            }
+            agent_name = "task-spec-chat"
+        else:
+            kwargs = {
+                **common,
+                "max_turns": 50,
+                "temperature": config.settings.temperature,
+                "model_info": {
+                    "max_input_tokens": config.settings.input_tokens,
+                    "max_output_tokens": config.settings.output_tokens,
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "llm_call_kwargs": parameters,
+            }
+            agent_name = "terminus-2"
+
+        options = dict(config.environment_options)
+        authentication = {endpoint: "EMPTY"}
+        if task.judge_model is not None:
+            options.update(model_endpoint=config.judge_endpoint, model_name=task.judge_model)
+            authentication[config.judge_endpoint] = require_secret(config.judge_api_key_secret)
+        configuration = TrialConfig(
+            task=TaskConfig(path=Path(task.path)),
+            trial_name="candidate",
+            trials_dir=local,
+            trial_attempt_timeout_sec=ATTEMPT_TIMEOUT,
+            agent=AgentConfig(
+                name=agent_name,
+                model_name=f"openai/{config.identity.model}@{config.identity.revision}",
+                model_alias=f"openai/{config.api_model}",
+                kwargs=kwargs,
+            ),
+            environment=EnvironmentConfig(type=task.backend, kwargs=options),
+        )
+
+        # Framework exceptions propagate and stop dispatch; they are never fabricated as solver zeros.
+        trial, result = asyncio.run(execute_trial(configuration, authentication))
+        reward = scored_reward(result, trial)
+        unserved = (trial.paths.agent_dir / "candidate-budget-rejection.json").exists()
+        route = f"/{root.name}-{key}-{number}"
+        requests = root.parent / "model-requests" / hashlib.sha256(route.encode()).hexdigest()
+        for response_path in requests.glob("*/response.json"):
+            response = json.loads(response_path.read_text())
+            if response["body"].get("error", {}).get("code") == "input_budget_unserved":
+                unserved = True
+        if unserved:
+            reward = None
+        get_artifact_writer().flush(timeout=300)
+        archive = local / "trial-artifacts.tar.gz"
+        with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
+            stream.add(local / "candidate", arcname="trial")
+        archive_target = destination / f"{number:02d}" / "trial-artifacts.tar.gz"
+        if archive_target.exists():
+            raise FileExistsError(archive_target)
+        copy(str(archive), str(archive_target), no_clobber=True)
+        attempt = DifficultyAttempt(
+            task_id=task.task_id,
+            status="pending" if unserved else ("scored" if reward is not None else "infrastructure"),
+            reward=reward,
+        )
+        write_json(
+            destination / f"{number:02d}" / "attempt.json",
+            {
+                **attempt.model_dump(mode="json"),
+                "reason": "input_budget_unserved" if unserved else None,
+                "result": result.model_dump(mode="json"),
+                "archive": str(archive_target),
+                "archive_sha256": file_sha256(StoragePath(str(archive))),
+            },
+        )
+        attempts.append(attempt)
+        if reward is not None or unserved:
+            break
+    return attempts
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sources", required=True)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--output-root", required=True)
+    parser.add_argument("--local-root", required=True, type=Path)
+    args = parser.parse_args()
+    configure_coreweave_s3()
+    config = CandidateRun.model_validate_json(Path(args.config).read_text())
+    sources = [PreparedSource.model_validate(row) for row in json.loads(Path(args.sources).read_text())]
+    output = StoragePath(args.output_root)
+    if output.exists() or args.local_root.exists():
+        raise FileExistsError("Preserve previous difficulty attempts and select a new version")
+    args.local_root.mkdir(parents=True)
+    key = "EMPTY" if config.api_key_secret is None else require_secret(config.api_key_secret)
+    with budget_relay(
+        endpoint=config.endpoint,
+        model=config.api_model,
+        api_key=key,
+        tokenizer_model=config.identity.tokenizer,
+        tokenizer_revision=config.identity.tokenizer_revision,
+        parameters=config.request_parameters,
+        receipts=args.local_root / "model-requests",
+    ) as relay:
+        with ThreadPoolExecutor(max_workers=config.workers) as executor:
+            for source in sources:
+                started = time.monotonic()
+                source_key = hashlib.sha256(source.sample.source_id.encode()).hexdigest()
+                tasks = source.tasks if config.task_limit is None else source.tasks[: config.task_limit]
+                futures = [
+                    executor.submit(
+                        run_task,
+                        task,
+                        config,
+                        relay,
+                        args.local_root / source_key,
+                        str(output / source_key / "attempts"),
+                    )
+                    for task in tasks
+                ]
+                try:
+                    attempts = [attempt for future in futures for attempt in future.result()]
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
+                input_tokens = output_tokens = 0
+                request_root = args.local_root / "model-requests"
+                archive = args.local_root / source_key / "model-requests.tar.gz"
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
+                    for task in tasks:
+                        task_key = hashlib.sha256(task.task_id.encode()).hexdigest()
+                        for number in range(config.attempts_per_task):
+                            route = f"/{source_key}-{task_key}-{number}"
+                            folder = request_root / hashlib.sha256(route.encode()).hexdigest()
+                            if not folder.exists():
+                                continue
+                            stream.add(folder, arcname=folder.name)
+                            for response_path in folder.glob("*/response.json"):
+                                response = json.loads(response_path.read_text())
+                                usage = response["body"].get("usage") or {}
+                                input_tokens += usage.get("prompt_tokens", 0)
+                                output_tokens += usage.get("completion_tokens", 0)
+                copy(str(archive), str(output / source_key / "model-requests.tar.gz"), no_clobber=True)
+                receipt = write_json(
+                    output / source_key / "attempts.json",
+                    {
+                        "attempts": [item.model_dump(mode="json") for item in attempts],
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "gpu_hour_basis": (
+                            "allocated GPUs during this source's trial window; startup/teardown reported separately"
+                        ),
+                        "model_requests": str(output / source_key / "model-requests.tar.gz"),
+                    },
+                )
+                payload = dict(
+                    measurement_id=uuid4().hex,
+                    protocol_id=PROTOCOL_ID,
+                    created_at=datetime.now(UTC).isoformat(),
+                    source_id=source.sample.source_id,
+                    release=source.sample.release,
+                    converter_version=source.sample.converter_version,
+                    solver=config.solver,
+                    status="pending",
+                    reason="Awaiting scored coverage",
+                    sample=source.sample,
+                    sample_receipt=source.sample_receipt,
+                    model=config.identity,
+                    settings=config.settings,
+                    n=0,
+                    solved=0,
+                    wilson_95=None,
+                    infrastructure_attempts=0,
+                    pending_tasks=len(source.sample.tasks),
+                    attempts_receipt=receipt,
+                    gpu_hours=config.gpu_count * (time.monotonic() - started) / 3600,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
+                measurement = measurement_from_attempts(DifficultyMeasurement(**payload), attempts)
+                blocked = sorted({task.reason for task in tasks if task.reason is not None})
+                if tasks and all(task.reason is not None for task in tasks):
+                    measurement = DifficultyMeasurement.model_validate(
+                        {
+                            **measurement.model_dump(mode="json"),
+                            "status": "not_measured",
+                            "reason": "; ".join(blocked),
+                        }
+                    )
+                elif any(attempt.status == "pending" for attempt in attempts):
+                    measurement = measurement.model_copy(
+                        update={
+                            "reason": (
+                                "A candidate prompt exceeded the protocol input budget before dispatch. "
+                                "No solver score was assigned."
+                            )
+                        }
+                    )
+                with DataStore.open(str(output / "catalog")) as store:
+                    register_difficulty(store)
+                    with store.transaction() as transaction:
+                        transaction.table(MEASUREMENTS).add(measurement.model_dump(mode="json"))
+                write_json(output / source_key / "measurement.json", measurement.model_dump(mode="json"))
+                LOGGER.info(
+                    "%s %s: %s, scored=%d, solved=%d, pending=%d",
+                    config.solver,
+                    source.sample.source_id,
+                    measurement.status,
+                    measurement.n,
+                    measurement.solved,
+                    measurement.pending_tasks,
+                )
+
+
+if __name__ == "__main__":
+    main()

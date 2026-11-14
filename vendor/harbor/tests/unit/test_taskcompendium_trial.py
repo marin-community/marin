@@ -215,6 +215,11 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
         (directory / "solution/response.json").write_text(json.dumps([candidate]))
 
     real_client = agents.AsyncOpenAI
+    class Tokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            return list(range(10))
+
+    monkeypatch.setattr(agents.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
     monkeypatch.setattr(
         agents,
         "AsyncOpenAI",
@@ -249,6 +254,10 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
                             "api_base": "https://candidate.fixture/v1",
                             "max_turns": 1,
                             "max_tokens": 128,
+                            "context_window": 65536,
+                            "max_input_tokens": 49152,
+                            "request_parameters": {"temperature": 0.7, "top_p": 0.95, "extra_body": {"top_k": 20}},
+                            "tokenizer_model": "fixture/candidate", "tokenizer_revision": "f" * 40,
                         }
                         if agent_name == "task-spec-chat"
                         else {}
@@ -273,6 +282,9 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
             assert conversation.events[-1].content == ""
     if agent_name == "task-spec-chat":
         assert candidate_requests[0]["messages"] == conversation_messages(task.context.events)
+        assert {key: candidate_requests[0][key] for key in ("temperature", "top_p", "top_k", "max_tokens")} == {
+            "temperature": 0.7, "top_p": 0.95, "top_k": 20, "max_tokens": 128,
+        }
     else:
         assert candidate_requests == []
     if agent_name == "task-spec-chat":
@@ -296,6 +308,31 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
         resource.path not in {str(path.relative_to(machine.root)) for path in machine.root.rglob("*")}
         for resource in task.resources.oracle
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override", [
+    {"tools": []}, {"tool_choice": "none"}, {"parallel_tool_calls": False},
+    {"extra_body": {"tools": []}}, {"extra_body": {"chat_template_kwargs": {"tools": []}}},
+])
+async def test_candidate_sampling_cannot_replace_original_task_tools(tmp_path, monkeypatch, override):
+    task = original_task("tau")
+    original = task.model_dump_json()
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    calls = []
+    monkeypatch.setattr(agents, "AsyncOpenAI", lambda **kwargs: calls.append(kwargs))
+    with pytest.raises(ValueError, match="sampling and template|task interface"):
+        await Trial.create(TrialConfig(
+            task=TaskConfig(path=directory), trial_name="tool-replacement", trials_dir=tmp_path / "trials",
+            agent=AgentConfig(name="task-spec-chat", model_name="openai/candidate", kwargs={
+                "api_base": "https://candidate.fixture/v1", "max_turns": 1, "max_tokens": 128,
+                "context_window": 65536, "max_input_tokens": 49152, "request_parameters": override,
+                "tokenizer_model": "fixture/candidate", "tokenizer_revision": "f" * 40,
+            }),
+        ))
+    assert calls == []
+    assert TaskSpec.model_validate_json((directory / "task-spec.json").read_text()).model_dump_json() == original
 
 
 @pytest.mark.asyncio
@@ -440,7 +477,8 @@ async def test_judge_model_selection_respects_source_delegation(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_provider_outage_after_shell_turn_retains_history_without_scoring(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["provider_outage", "input_budget"])
+async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_path, monkeypatch, failure):
     task = exact_answer_task(
         RawRow("outage", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
         prompt="Use the shell, then answer 42.",
@@ -500,6 +538,11 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
         )
 
     real_client = agents.AsyncOpenAI
+    class Tokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            return list(range(49153 if failure == "input_budget" else 10))
+
+    monkeypatch.setattr(agents.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
     monkeypatch.setattr(
         agents,
         "AsyncOpenAI",
@@ -520,13 +563,16 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
                     "api_base": "https://candidate.fixture/v1",
                     "max_turns": 3,
                     "max_tokens": 128,
+                    "context_window": 65536, "max_input_tokens": 49152,
+                    "request_parameters": {}, "tokenizer_model": "fixture/candidate",
+                    "tokenizer_revision": ("0" if failure == "input_budget" else "f") * 40,
                 },
             ),
             environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
         )
     )
     result = await trial.run()
-    assert len(requests) == 2
+    assert len(requests) == (0 if failure == "input_budget" else 2)
     assert result.exception_info.exception_type == "RolloutInterrupted"
     assert result.verifier_result is None
     assert not (trial.paths.verifier_dir / "verdict.json").exists()
@@ -535,7 +581,7 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
     assert any(
         message["role"] == "tool" and json.loads(message["content"])["stdout"] == "partial observation\n"
         for message in messages
-    )
+    ) == (failure == "provider_outage")
     assert len(machines.machines) == 1
     assert machines.machines[0].closed
 

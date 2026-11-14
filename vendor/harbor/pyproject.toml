@@ -39,7 +39,7 @@ hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
 runtime = ["harbor[archive,telemetry,daytona,sotopia,iris,taskcompendium]", "marin-shellbox", "gcsfs", "s3fs", "pydantic-settings"]
-taskcompendium = ["marin-taskcompendium", "marin-rolloutengine"]
+taskcompendium = ["marin-taskcompendium", "marin-rolloutengine", "transformers>=5.0"]
 iris = ["marin-shellbox[iris]"]
 qemu = ["marin-shellbox[qemu]"]
 shellsim = ["marin-shellbox[shellsim]"]
