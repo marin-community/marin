@@ -191,7 +191,11 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     final_event = task.context.events[-1]
     # Only the assistant-prefix harness keeps an unfinished assistant message last.
     continues_assistant = isinstance(final_event, TextMessage) and final_event.role == "assistant"
-    harness = ASSISTANT_PREFIX_HARNESS if continues_assistant else config["default_harness"]
+    harness = (
+        ASSISTANT_PREFIX_HARNESS
+        if continues_assistant
+        else config["harness_by_dataset"].get(task.source.dataset, config["default_harness"])
+    )
     session = {**config["session"], "task_session": harness}
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
@@ -208,7 +212,9 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
         and grader.environment is not None
         and not grades_with_judge(grader)
     ):
-        machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+        machine = (
+            config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
+        )
         verifier = MachineRuntimeSpec.model_validate(machine)
     lowered = rollout_spec(task, session, task_machine=task_machine, verifier_machine=verifier)
     return _stored_prompt(lowered)
@@ -256,7 +262,10 @@ class SourceTaskDataset(TaskDataset):
     ):
         self.environment_configs = environment_configs
         super().__init__(
-            list(datasets), tokenizer, max_prompt_length, num_workers=num_workers,
+            list(datasets),
+            tokenizer,
+            max_prompt_length,
+            num_workers=num_workers,
             chat_template_kwargs=chat_template_kwargs,
         )
 

@@ -75,6 +75,25 @@ def test_a_dataset_machine_attaches_only_to_rows_that_need_one(tmp_path: Path):
         validate_spec(spec, {"shellsim": ShellSimMachineFactory()})
 
 
+def test_dataset_harness_override_routes_native_trials_and_keeps_assistant_prefixes(tmp_path: Path):
+    trial = text_task("trial", source="swe")
+    reply = text_task("reply", source="other")
+    prefix = text_task("prefix", source="swe").model_copy(
+        update={
+            "context": ConversationInput(
+                events=(TextMessage(role="user", content="Complete"), TextMessage(role="assistant", content='{"a":['))
+            )
+        }
+    )
+
+    loaded = _load(tmp_path, (trial, reply, prefix), harness_by_dataset={"swe": "harbor_trial"})
+
+    assert loaded[0].harness == "harbor_trial"
+    assert loaded[0].task_machine is None
+    assert is_shell_harness(loaded[1].harness)
+    assert loaded[2].harness == ASSISTANT_PREFIX_HARNESS
+
+
 def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_path: Path):
     image = text_task("image-task").model_copy(
         update={
