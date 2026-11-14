@@ -28,7 +28,6 @@ from taskcompendium.models import (
     ToolResult,
 )
 from taskcompendium.source_fingerprints import (
-    CURRENT_OVERLAP_VERSION,
     DuplicateLabel,
     SourceFingerprint,
     SourceIdentitySurvey,
@@ -45,9 +44,11 @@ from experiments.post_training.task_curation.source_fingerprints import (
     pair_similarity,
 )
 from experiments.post_training.task_curation.source_neighbor_survey import (
-    PairShortlist,
+    SourcePair,
     measure_target,
     read_pair_shortlist,
+    shortlist_pairs,
+    write_pair_shortlist,
 )
 from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
@@ -555,26 +556,11 @@ def test_frozen_shortlist_keeps_population_and_pair_identity(tmp_path):
         groups=[],
         judge=None,
     )
-    shortlist = PairShortlist(
-        schema_version=1,
-        kind="content_nn_pair_shortlist",
-        method=CURRENT_OVERLAP_VERSION,
-        sample_size=30,
-        source_survey_uri="fixture",
-        source_survey_sha256="frozen-survey",
-        source_inputs_sha256={key: canonical_sha256(value.inputs) for key, value in survey.fingerprints.items()},
-        pairs=[pair],
-        pair_count=1,
-        base_pairs=1,
-        durable_direction_checkpoints_at_recovery=0,
-        provenance="fixture",
-    )
     path = tmp_path / "shortlist.json"
-    payload = shortlist.model_dump_json().encode()
-    path.write_bytes(payload)
-    digest = hashlib.sha256(payload).hexdigest()
-    restored = read_pair_shortlist(str(path), digest, "frozen-survey", survey, 30)
-    assert restored.pairs == [pair]
+    digest = write_pair_shortlist(str(path), survey, "fixture", "frozen-survey", [pair])
+    restored = read_pair_shortlist(str(path), digest, "frozen-survey", survey)
+    assert shortlist_pairs(survey, restored) == [pair]
+    assert json.loads(path.read_bytes())["pairs"] == [{"left": "left", "right": "right"}]
     changed = survey.model_copy(
         update={
             "fingerprints": {
@@ -584,9 +570,9 @@ def test_frozen_shortlist_keeps_population_and_pair_identity(tmp_path):
         }
     )
     with pytest.raises(ValueError, match="shortlist input population differs"):
-        read_pair_shortlist(str(path), digest, "frozen-survey", changed, 30)
-    flipped = shortlist.model_copy(update={"pairs": [pair.model_copy(update={"left": "right", "right": "left"})]})
+        read_pair_shortlist(str(path), digest, "frozen-survey", changed)
+    flipped = restored.model_copy(update={"pairs": [SourcePair(left="right", right="left")]})
     payload = flipped.model_dump_json().encode()
     path.write_bytes(payload)
-    with pytest.raises(ValueError, match="omits prior or deterministic pairs"):
-        read_pair_shortlist(str(path), hashlib.sha256(payload).hexdigest(), "frozen-survey", survey, 30)
+    replayed = read_pair_shortlist(str(path), hashlib.sha256(payload).hexdigest(), "frozen-survey", survey)
+    assert shortlist_pairs(survey, replayed) == [pair]

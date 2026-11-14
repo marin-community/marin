@@ -24,6 +24,7 @@ from taskcompendium.source_fingerprints import CURRENT_OVERLAP_VERSION, SourceFi
 
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.task_neighbors import (
+    SHINGLE_CACHE_BYTES,
     PopulationIndex,
     TaskContent,
     content_rows,
@@ -168,10 +169,12 @@ def read_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
     return PopulationIndex([TaskContent(**row) for row in pq.read_table(path).to_pylist()], inputs)
 
 
-def read_hash_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
+def read_hash_population(
+    path: Path, inputs: dict[str, str], *, shingle_cache_bytes: int = SHINGLE_CACHE_BYTES
+) -> PopulationIndex:
     """Read hash gates now; load normalized conversation text only when matching needs it."""
     rows = [TaskContent(text="", **row) for row in pq.read_table(path, columns=HASH_COLUMNS).to_pylist()]
-    return PopulationIndex(rows, inputs, partial(read_normalized_rows, path))
+    return PopulationIndex(rows, inputs, partial(read_normalized_rows, path), shingle_cache_bytes=shingle_cache_bytes)
 
 
 def read_normalized_rows(path: Path) -> list[TaskContent]:

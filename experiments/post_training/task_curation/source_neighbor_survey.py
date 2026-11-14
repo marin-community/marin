@@ -39,6 +39,7 @@ from experiments.post_training.task_curation.source_population_cache import (
 )
 from experiments.post_training.task_curation.task_neighbors import (
     SAMPLE_SIZE,
+    SHINGLE_CACHE_BYTES,
     SIMILARITY_THRESHOLD,
     directional_overlap,
     exact_reference_integrity,
@@ -53,27 +54,27 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import original_so
 logger = logging.getLogger(__name__)
 
 
+class SourcePair(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    left: str
+    right: str
+
+
 class PairShortlist(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     kind: Literal["content_nn_pair_shortlist"]
     method: str
-    sample_size: int
     source_survey_uri: str
     source_survey_sha256: str
     source_inputs_sha256: dict[str, str]
-    pairs: list[PairSimilarity]
-    pair_count: int
-    base_pairs: int
-    durable_direction_checkpoints_at_recovery: int
-    provenance: str
+    pairs: list[SourcePair]
 
 
-def read_pair_shortlist(
-    uri: str, sha256: str, source_survey_sha256: str, survey: SourceIdentitySurvey, sample_size: int
-) -> PairShortlist:
-    """Check a shortlist's digest, source pins, and pair membership."""
+def read_pair_shortlist(uri: str, sha256: str, source_survey_sha256: str, survey: SourceIdentitySurvey) -> PairShortlist:
+    """Read a SHA-bound shortlist for these input populations."""
     payload = StoragePath(uri).read_bytes()
     if hashlib.sha256(payload).hexdigest() != sha256:
         raise ValueError("Pair shortlist SHA-256 differs")
@@ -81,18 +82,56 @@ def read_pair_shortlist(
     inputs = {key: canonical_sha256(value.inputs) for key, value in survey.fingerprints.items() if value is not None}
     if shortlist.source_survey_sha256 != source_survey_sha256 or shortlist.source_inputs_sha256 != inputs:
         raise ValueError("Pair shortlist input population differs")
-    if shortlist.method != CURRENT_OVERLAP_VERSION or shortlist.sample_size != sample_size:
-        raise ValueError("Pair shortlist measurement method differs")
-    pairs = {frozenset((pair.left, pair.right)) for pair in shortlist.pairs}
-    if len(pairs) != len(shortlist.pairs) or shortlist.pair_count != len(pairs):
-        raise ValueError("Pair shortlist count or uniqueness differs")
-    if any(len(pair) != 2 or not pair.issubset(inputs) for pair in pairs):
-        raise ValueError("Pair shortlist references unknown source populations")
-    required = {(pair.left, pair.right) for pair in widened_pairs(survey)}
-    if not required.issubset({(pair.left, pair.right) for pair in shortlist.pairs}):
-        raise ValueError("Pair shortlist omits prior or deterministic pairs")
-    logger.info("Reusing shortlist %s SHA256 %s: %d pairs", uri, sha256, len(pairs))
+    if shortlist.method != CURRENT_OVERLAP_VERSION:
+        raise ValueError("Pair shortlist discovery method differs")
+    logger.info("Reusing shortlist %s SHA256 %s: %d pairs", uri, sha256, len(shortlist.pairs))
     return shortlist
+
+
+def shortlist_pairs(survey: SourceIdentitySurvey, shortlist: PairShortlist) -> list[PairSimilarity]:
+    """Rebuild pair records, preserving prior scores, orientation and history links."""
+    fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
+    keys = {frozenset((pair.left, pair.right)) for pair in shortlist.pairs}
+    if len(keys) != len(shortlist.pairs):
+        raise ValueError("Duplicate pairs in shortlist")
+    if any(len(key) != 2 or not key.issubset(fingerprints) for key in keys):
+        raise ValueError("Pair shortlist references unknown source populations")
+    baseline = {frozenset((pair.left, pair.right)): pair for pair in widened_pairs(survey)}
+    if not baseline.keys() <= keys:
+        raise ValueError("Pair shortlist omits prior or deterministic pairs")
+    result = []
+    for key in shortlist.pairs:
+        pair = baseline.get(frozenset((key.left, key.right)))
+        if pair is None:
+            left, right = sorted((key.left, key.right), key=original_source_id)
+            pair = pair_similarity(left, fingerprints[left], right, fingerprints[right])
+        result.append(pair)
+    return result
+
+
+def write_pair_shortlist(
+    uri: str,
+    survey: SourceIdentitySurvey,
+    source_survey_uri: str,
+    source_survey_sha256: str,
+    pairs: list[PairSimilarity],
+) -> str:
+    """Write reusable discovery keys bound to the exact survey inputs."""
+    shortlist = PairShortlist(
+        schema_version=2,
+        kind="content_nn_pair_shortlist",
+        method=CURRENT_OVERLAP_VERSION,
+        source_survey_uri=source_survey_uri,
+        source_survey_sha256=source_survey_sha256,
+        source_inputs_sha256={
+            key: canonical_sha256(value.inputs) for key, value in survey.fingerprints.items() if value is not None
+        },
+        pairs=[
+            SourcePair(left=pair.left, right=pair.right)
+            for pair in sorted(pairs, key=lambda pair: (original_source_id(pair.left), original_source_id(pair.right)))
+        ],
+    )
+    return write_json(uri, shortlist.model_dump(mode="json"))
 
 
 def write_json(uri: str, document: dict) -> str:
@@ -164,12 +203,13 @@ def measure_target(
     sample_size: int,
     output_root: str,
     reuse_neighbor_root: str | None,
+    shingle_cache_bytes: int = SHINGLE_CACHE_BYTES,
 ) -> tuple[dict[tuple[str, str], DirectionalOverlap], list[dict]]:
     """Measure one target shard, reusing its index and immutable prior receipts."""
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     output = StoragePath(output_root)
-    target = read_hash_population(paths[target_id], inputs[target_id])
+    target = read_hash_population(paths[target_id], inputs[target_id], shingle_cache_bytes=shingle_cache_bytes)
     directions = {}
     integrity = []
     for source_id in partners:
@@ -236,11 +276,15 @@ def rerun(
     locations: PopulationLocations,
     reuse_neighbor_root: str | None = None,
     shortlist: PairShortlist | None = None,
+    *,
+    source_survey_uri: str,
+    source_survey_sha256: str,
+    shingle_cache_bytes: int = SHINGLE_CACHE_BYTES,
 ) -> dict:
     output = StoragePath(output_root)
     started = time.monotonic()
     fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
-    pairs = list(shortlist.pairs) if shortlist is not None else widened_pairs(survey)
+    pairs = shortlist_pairs(survey, shortlist) if shortlist is not None else widened_pairs(survey)
     if only_openqa:
         pairs = [
             pair
@@ -273,6 +317,10 @@ def rerun(
             logger.info("Prepared %d/%d populations: %s", len(paths), len(sources), original_source_id(source))
     if not only_openqa and shortlist is None:
         pairs = discover_pairs(paths, fingerprints, pairs)
+    shortlist_uri, shortlist_sha256 = None, None
+    if not only_openqa:
+        shortlist_uri = str(output / "pair-shortlist.json")
+        shortlist_sha256 = write_pair_shortlist(shortlist_uri, survey, source_survey_uri, source_survey_sha256, pairs)
     directions: dict[tuple[str, str], DirectionalOverlap] = {}
     integrity = []
     inputs = {source: fingerprint.inputs for source, fingerprint in fingerprints.items()}
@@ -289,7 +337,15 @@ def rerun(
             )
             if partners:
                 future = executor.submit(
-                    measure_target, target_id, partners, paths, inputs, sample_size, output_root, reuse_neighbor_root
+                    measure_target,
+                    target_id,
+                    partners,
+                    paths,
+                    inputs,
+                    sample_size,
+                    output_root,
+                    reuse_neighbor_root,
+                    shingle_cache_bytes,
                 )
                 pending[future] = target_id
         for future in as_completed(pending):
@@ -362,6 +418,11 @@ def rerun(
         "labels": dict(Counter(row.verdict.label for row in reviews)),
         "sample_size": sample_size,
         "discovery_reused": shortlist is not None,
+        "pair_shortlist_uri": shortlist_uri,
+        "pair_shortlist_sha256": shortlist_sha256,
+        "input_survey_uri": source_survey_uri,
+        "input_survey_sha256": source_survey_sha256,
+        "shingle_cache_bytes": shingle_cache_bytes,
         "wall_seconds": elapsed,
         "requested_cpus": allocated_cpus,
         "cpu_hours_upper_bound": allocated_cpus * elapsed / 3600,
@@ -389,6 +450,7 @@ def main() -> None:
     parser.add_argument("--reuse-neighbor-root")
     parser.add_argument("--pair-shortlist")
     parser.add_argument("--pair-shortlist-sha256")
+    parser.add_argument("--shingle-cache-bytes", type=int, default=SHINGLE_CACHE_BYTES)
     parser.add_argument("--sample-size", type=int, default=SAMPLE_SIZE)
     parser.add_argument("--only-openqa", action="store_true")
     args = parser.parse_args()
@@ -401,9 +463,7 @@ def main() -> None:
     if args.pair_shortlist is not None:
         if args.pair_shortlist_sha256 is None:
             parser.error("--pair-shortlist requires --pair-shortlist-sha256")
-        shortlist = read_pair_shortlist(
-            args.pair_shortlist, args.pair_shortlist_sha256, args.survey_sha256, survey, args.sample_size
-        )
+        shortlist = read_pair_shortlist(args.pair_shortlist, args.pair_shortlist_sha256, args.survey_sha256, survey)
     elif args.pair_shortlist_sha256 is not None:
         parser.error("--pair-shortlist-sha256 requires --pair-shortlist")
     rerun(
@@ -417,6 +477,9 @@ def main() -> None:
         read_locator_manifest(args.population_locators),
         args.reuse_neighbor_root,
         shortlist,
+        source_survey_uri=args.survey,
+        source_survey_sha256=args.survey_sha256,
+        shingle_cache_bytes=args.shingle_cache_bytes,
     )
 
 
