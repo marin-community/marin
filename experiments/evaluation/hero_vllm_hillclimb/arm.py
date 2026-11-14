@@ -210,6 +210,7 @@ LEADER_OVERRIDES = {
     "fg128stacklean": ("--api-server-count", "4"),
     "fg32stack95": ("--api-server-count", "4"),
     "fg32stack95lean": ("--api-server-count", "4"),
+    "fg128stackmaxat": ("--api-server-count", "4"),
 }
 
 MOE_CONFIG_DIR = "experiments/evaluation/hero_vllm_hillclimb/moe_configs"
@@ -225,6 +226,10 @@ LABEL_ENV = {
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
     ),
     "fg128stacklean": (
+        ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
+        ("VLLM_USE_NCCL_SYMM_MEM", "1"),
+    ),
+    "fg128stackmaxat": (
         ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
     ),
@@ -347,6 +352,21 @@ CANDIDATE_ARGS = {
         "0.95",
         "--compilation-config",
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    # The full stack with Inductor GEMM autotuning (Triton templates benchmarked against cuBLAS).
+    "fg128stackmaxat": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(
+            BASE_COMPILATION
+            | {
+                "cudagraph_mode": "FULL_AND_PIECEWISE",
+                "inductor_compile_config": (
+                    BASE_COMPILATION["inductor_compile_config"] | {"max_autotune": True, "max_autotune_gemm": True}
+                ),
+            }
+        ),
     ),
     # The full stack at 192 sequences per engine (KV holds about 220 sequences of 1.1K tokens).
     "fg192stack": (
