@@ -415,7 +415,7 @@ def prebuilt_artifact(
                 ),
             ):
                 raise ValueError(
-                    "Published cohort includes a failed oracle task or lacks no-oracle liveness qualification: "
+                    "Published cohort includes a failed oracle task or lacks no-oracle executability qualification: "
                     f"{task.id}"
                 )
             tasks.append(

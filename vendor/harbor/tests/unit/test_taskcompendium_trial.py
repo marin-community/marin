@@ -302,6 +302,7 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     assert all(spec.network is NetworkPolicy.ALLOW for spec in machines.specifications)
     network = TaskNetworkPolicyReceipt.model_validate_json((trial.paths.trial_dir / "network-policy.json").read_text())
     assert network.actor_effective is None
+    assert not network.actor_required
     assert network.verifier_effective is NetworkPolicy.ALLOW
     assert all(machine.closed for machine in machines.machines)
     assert (trial.paths.agent_dir / "resource-usage.json").is_file()

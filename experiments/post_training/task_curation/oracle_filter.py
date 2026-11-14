@@ -16,6 +16,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
+from finestore.rl.curation import ContentEvidenceReference
 from iris.cluster.client.bundle import collect_workspace_files
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -24,16 +25,17 @@ from taskcompendium.harbor.adapter import TASK_SPEC_FILE, declared_execution_lim
 from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.harbor.protected_runtime import read_runtime_binding
-from taskcompendium.harbor.runtime import read_source_runtime
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, read_source_runtime
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
     BackendFixIdentity,
+    ExecutabilityRunReceipt,
     InfrastructureRetryApproval,
     InfrastructureRetryContext,
     InfrastructureRetryPlan,
     InfrastructureRetryTransition,
-    NoOracleLivenessReceipt,
+    MechanicalOracleTaskReceipt,
     OracleExclusionReason,
     OracleFilterReceipt,
     OracleTaskReceipt,
@@ -44,6 +46,7 @@ from taskcompendium.pipeline.oracle_filter import (
     next_trial_requirements,
     require_infrastructure_retry_parent,
     source_environment_incompatibility,
+    trial_network_qualified,
 )
 from taskcompendium.pipeline.resource_calibration import (
     INITIAL_REQUIREMENTS,
@@ -136,6 +139,7 @@ def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> Orac
     usage_path = path.parent / "agent/resource-usage.json"
     verifier_usage_path = path.parent / "verifier/resource-usage.json"
     source_environment_path = path.parent / "verifier/source-environment.json"
+    network_path = path.parent / "network-policy.json"
     logs = []
     for name in ("agent/oracle.txt", "verifier/test-stdout.txt", "verifier/test-stderr.txt"):
         log = path.parent / name
@@ -163,6 +167,9 @@ def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> Orac
             SourcePytestEnvironment.model_validate_json(source_environment_path.read_text())
             if source_environment_path.exists()
             else None
+        ),
+        network_policy=(
+            TaskNetworkPolicyReceipt.model_validate_json(network_path.read_text()) if network_path.exists() else None
         ),
     )
 
@@ -198,10 +205,34 @@ def row_runtime_hash(row: dict) -> str | None:
     return canonical_sha256(runtime) if runtime is not None else None
 
 
+def cohort_sha256(cohort: Path) -> str:
+    paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
+    return (
+        file_sha256(StoragePath(str(paths[0])))
+        if len(paths) == 1
+        else canonical_sha256({path.name: file_sha256(StoragePath(str(path))) for path in paths})
+    )
+
+
+def trial_result_paths(jobs: Path) -> list[Path]:
+    """Find persisted trials without descending into task-controlled outputs."""
+    results = []
+    for directory, subdirectories, files in jobs.walk():
+        if "config.json" not in files:
+            continue
+        config = decode_json_value((directory / "config.json").read_text())
+        if "task" not in config or "agent" not in config:
+            continue
+        subdirectories[:] = [name for name in subdirectories if name == "attempts"]
+        if "result.json" in files:
+            results.append(directory / "result.json")
+    return sorted(results)
+
+
 def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
     trials: dict[tuple[str, str], list[OracleTrialReceipt]] = {}
     seen = {}
-    paths = sorted(jobs.rglob("result.json"))
+    paths = trial_result_paths(jobs)
     validated = harbor_inspection("results", [str(path) for path in paths])
     documents = {}
     for path in paths:
@@ -214,7 +245,7 @@ def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]
                 raise ValueError(f"Conflicting copies of oracle trial {document["id"]}")
             continue
         seen[document["id"]] = digest
-        if document["config"]["agent"]["name"] != "oracle":
+        if document["config"]["agent"]["name"] not in {"oracle", "task-spec-chat", "terminus-2"}:
             raise ValueError(f"Non-oracle trial in filter job: {path}")
         documents[path] = document
     native_paths = sorted({document["config"]["task"]["path"] for document in documents.values()})
@@ -278,29 +309,53 @@ def filter_cohort(
     jobs: Path,
     output: Path,
     conversion_manifest: Path | None = None,
-    no_oracle_liveness: Path | None = None,
+    executability_runs: Path | None = None,
+    mechanical_outcomes: Path | None = None,
+    input_evidence: ContentEvidenceReference | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
-    for path in (output, output.parent / "oracle-filter.json", output.parent / "oracle-filter-summary.json"):
+    for path in (
+        output,
+        output.parent / "oracle-filter.json",
+        output.parent / "oracle-filter-summary.json",
+        output.parent / "excluded-tasks.parquet",
+    ):
         if path.exists():
             raise FileExistsError(f"Preserve existing oracle artifacts; select a new output version: {path}")
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
     trials = collect_trials(jobs)
-    liveness = {}
-    if no_oracle_liveness is not None:
-        for line in no_oracle_liveness.read_text().splitlines():
+    controls = {}
+    if executability_runs is not None:
+        for line in executability_runs.read_text().splitlines():
             if not line.strip():
                 continue
-            proof = NoOracleLivenessReceipt.model_validate_json(line)
-            if proof.task_id in liveness:
-                raise ValueError(f"Duplicate no-oracle liveness task: {proof.task_id}")
-            liveness[proof.task_id] = proof
-    original_packages = harbor_inspection("tasks", [mapping["task_path"] for mapping in mappings.values()])
+            record = json.loads(line)
+            task_id = record["task_id"]
+            if task_id in controls:
+                raise ValueError(f"Duplicate executability control task: {task_id}")
+            controls[task_id] = ExecutabilityRunReceipt.model_validate(record["receipt"])
+    mechanical = {}
+    if mechanical_outcomes is not None:
+        for line in mechanical_outcomes.read_text().splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            task_id = record["task_id"]
+            if task_id in mechanical or task_id in mappings:
+                raise ValueError(f"Duplicate mechanical/trial outcome: {task_id}")
+            mechanical[task_id] = MechanicalOracleTaskReceipt.model_validate(record["receipt"])
+    original_packages = (
+        harbor_inspection("tasks", [mapping["task_path"] for mapping in mappings.values()]) if mappings else {}
+    )
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
+    cohort_hash = cohort_sha256(cohort)
+    if input_evidence is not None and input_evidence.sha256 != cohort_hash:
+        raise ValueError("Input evidence differs from the frozen cohort")
     kept = []
-    entries = {}
+    excluded = []
+    entries: dict[str, OracleTaskReceipt | MechanicalOracleTaskReceipt] = {}
     parent_maps = {}
     retry_plans = {}
     matched = set()
@@ -317,6 +372,33 @@ def filter_cohort(
                 if task.id in entries:
                     raise ValueError(f"Duplicate task ID: {task.id}")
                 oracle = has_oracle_solution(task)
+                if task.id in mechanical or task.id not in mappings:
+                    entry = mechanical.get(task.id)
+                    if entry is None:
+                        if input_evidence is None:
+                            raise ValueError(
+                                f"No resource calibration mapping or immutable input evidence for {task.id}"
+                            )
+                        entry = MechanicalOracleTaskReceipt(
+                            task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                            runtime_sha256=row_runtime_hash(row),
+                            has_oracle=oracle,
+                            exclusion_reason=OracleExclusionReason.EXECUTABILITY_PROOF_MISSING,
+                            evidence=(input_evidence,),
+                        )
+                    proof = OracleFilterReceipt(
+                        recipe_identity=None,
+                        input_cohort_sha256=cohort_hash,
+                        input_rows=1,
+                        conversion_rejections=0,
+                        tasks={task.id: entry},
+                    )
+                    runtime = row_runtime(row)
+                    assert not proof.admits(task, runtime)
+                    entries[task.id] = entry
+                    excluded.append(row)
+                    continue
+                original_row = row
                 task_trials = []
                 checksum = ""
                 if task.id in mappings:
@@ -400,7 +482,10 @@ def filter_cohort(
                 if history and not calibration.passed:
                     incompatibility = None
                 final = calibration.attempts[-1]
-                if calibration.passed:
+                control = controls.get(task.id)
+                if calibration.passed or (
+                    not oracle and control is not None and control.passed and control.trial == final
+                ):
                     reason = None
                 elif history:
                     reason = OracleExclusionReason.INFRASTRUCTURE
@@ -412,6 +497,8 @@ def filter_cohort(
                     reason = OracleExclusionReason.INFRASTRUCTURE
                 else:
                     reason = OracleExclusionReason.ORACLE_FAILED
+                if reason is None and not trial_network_qualified(task, row_runtime(row), final):
+                    reason = OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED
                 entry = OracleTaskReceipt(
                     task_sha256=canonical_sha256(task.model_dump(mode="json")),
                     runtime_sha256=row_runtime_hash(row),
@@ -419,22 +506,35 @@ def filter_cohort(
                     has_oracle=oracle,
                     trials=(calibration.attempts[-1],) if oracle else (),
                     calibration=calibration,
-                    no_oracle_liveness=liveness.get(task.id),
+                    executability_run=control,
                     exclusion_reason=reason,
                     source_environment_incompatibility=incompatibility,
                     infrastructure_retries=history,
                 )
-                if not oracle and calibration.passed and not entry.passed:
-                    entry = entry.model_copy(update={"exclusion_reason": OracleExclusionReason.NO_ORACLE_LIVENESS})
+                if not oracle and not entry.passed and reason is not OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED:
+                    reason = (
+                        OracleExclusionReason.INFRASTRUCTURE
+                        if final.failure_signal is FailureSignal.INFRASTRUCTURE
+                        else (
+                            OracleExclusionReason.EXECUTABILITY_PROOF_MISSING
+                            if control is None
+                            else OracleExclusionReason.EXECUTABILITY_RUN_FAILED
+                        )
+                    )
+                    entry = entry.model_copy(update={"exclusion_reason": reason})
                 entries[task.id] = entry
                 if entry.passed:
                     kept.append(row)
+                else:
+                    excluded.append(original_row)
     extra = set(mappings) - set(entries)
     if extra:
         raise ValueError(f"Task map contains unknown TaskSpecs: {sorted(extra)[:5]}")
-    extra_liveness = set(liveness) - {task_id for task_id, entry in entries.items() if not entry.has_oracle}
-    if extra_liveness:
-        raise ValueError(f"Liveness receipts do not belong to no-oracle tasks: {sorted(extra_liveness)[:5]}")
+    extra_controls = set(controls) - {task_id for task_id, entry in entries.items() if not entry.has_oracle}
+    if extra_controls:
+        raise ValueError(f"Executability controls do not belong to no-oracle tasks: {sorted(extra_controls)[:5]}")
+    if set(mechanical) - entries.keys():
+        raise ValueError("Mechanical outcomes contain tasks outside the frozen cohort")
     manifest = json.loads(conversion_manifest.read_text()) if conversion_manifest is not None else None
     if manifest is not None and manifest["converted_rows"] != len(entries):
         raise ValueError("Converted cohort does not match the full conversion manifest")
@@ -442,11 +542,6 @@ def filter_cohort(
         manifest["input_rows"] - manifest["within_source_dedup"]["within_source_duplicates"]
         if manifest
         else len(entries)
-    )
-    cohort_hash = (
-        file_sha256(StoragePath(str(paths[0])))
-        if len(paths) == 1
-        else canonical_sha256({path.name: file_sha256(StoragePath(str(path))) for path in paths})
     )
     receipt = OracleFilterReceipt(
         recipe_identity=manifest["oracle_recipe_identity"] if manifest else None,
@@ -456,6 +551,8 @@ def filter_cohort(
         tasks=entries,
     )
     pq.write_table(pa.Table.from_pylist(kept, schema=schema), output)
+    excluded_path = output.parent / "excluded-tasks.parquet"
+    pq.write_table(pa.Table.from_pylist(excluded, schema=schema), excluded_path)
     receipt_path = output.parent / "oracle-filter.json"
     receipt_path.write_text(receipt.model_dump_json(indent=2) + "\n")
     summary = {
@@ -471,6 +568,8 @@ def filter_cohort(
         "output_rows": len(kept),
         "receipt": str(receipt_path),
         "output_sha256": file_sha256(StoragePath(str(output))),
+        "excluded_archive": str(excluded_path),
+        "excluded_archive_sha256": file_sha256(StoragePath(str(excluded_path))),
         "uniform_execution_requirements": (
             receipt.uniform_requirements.model_dump(mode="json") if receipt.uniform_requirements else None
         ),
@@ -913,7 +1012,9 @@ def main() -> None:
     collect.add_argument("--jobs-dir", type=Path, required=True)
     collect.add_argument("--output", type=Path, required=True)
     collect.add_argument("--conversion-manifest", type=Path)
-    collect.add_argument("--no-oracle-liveness", type=Path, help="separate empty-submission liveness JSONL receipts")
+    collect.add_argument("--executability-runs", type=Path, help="strong-model production-control JSONL receipts")
+    collect.add_argument("--mechanical-outcomes", type=Path, help="typed per-task mechanical outcome JSONL")
+    collect.add_argument("--input-evidence-uri", help="immutable cohort URI for tasks with no execution proof")
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
@@ -967,7 +1068,18 @@ def main() -> None:
         )
         return
     filter_cohort(
-        args.cohort, args.task_map, args.jobs_dir, args.output, args.conversion_manifest, args.no_oracle_liveness
+        args.cohort,
+        args.task_map,
+        args.jobs_dir,
+        args.output,
+        args.conversion_manifest,
+        args.executability_runs,
+        args.mechanical_outcomes,
+        (
+            ContentEvidenceReference(uri=args.input_evidence_uri, sha256=cohort_sha256(args.cohort))
+            if args.input_evidence_uri
+            else None
+        ),
     )
 
 
