@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from harbor.environments.base import ExecResult
-from harbor.environments.execution import execute_shellbox_command
+from harbor.environments.execution import execute_shellbox_command, root_command_user
 from harbor.models.task.config import TaskOS
 from shellbox.machine import Machine
 
@@ -40,7 +40,7 @@ class MachineResourceCounters:
 
     async def exec_control(self, command: str, *, timeout_sec: int, user: str) -> ExecResult:
         return await execute_shellbox_command(
-            self.machine, command, cwd=None, env={}, timeout_sec=timeout_sec, user=user
+            self.machine, command, cwd=None, env={}, timeout_sec=timeout_sec, user=root_command_user(user)
         )
 
 

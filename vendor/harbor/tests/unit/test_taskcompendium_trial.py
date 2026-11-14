@@ -17,7 +17,8 @@ import httpx
 import pytest
 import tomlkit
 from shellbox.backends.local.machine import LocalMachineFactory
-from shellbox.machine import Backend
+from shellbox.image import RegistryImage
+from shellbox.machine import Backend, UnsupportedMachineSpec
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.importers.evalchemy.financebench import convert_finance
@@ -76,11 +77,15 @@ class LockedRuntime:
 
 
 class FileMachine(LocalGradingMachine):
+    prepared_image = False
+
     async def upload(self, source, target):
         await super().upload(source, target)
         shutil.copystat(source, self.local(target))
 
     async def run(self, command):
+        if self.prepared_image and command.user not in (None, "0", "0:0"):
+            raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
         result = await super().run(command)
         if command.argv[:2] == ("tar", "-xf"):
             # Emulate the Linux guest's exact PAX metadata on the fake host filesystem.
@@ -112,6 +117,7 @@ class Machines:
         root = self.root / f"machine-{len(self.machines)}"
         (root / spec.workdir.lstrip("/")).mkdir(parents=True)
         machine = FileMachine(root=root, workdir=spec.workdir, env=dict(spec.env))
+        machine.prepared_image = isinstance(spec.source, RegistryImage)
         self.machines.append(machine)
         self.specifications.append(spec)
         return machine
@@ -535,10 +541,19 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
 
 
 @pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize("packaging", ["lock", "image"])
 @pytest.mark.asyncio
-async def test_actor_files_and_private_grader_remain_in_their_declared_roles(tmp_path, monkeypatch, exit_code):
+async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
+    tmp_path, monkeypatch, exit_code, packaging
+):
     environment = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="fixture-lock", working_directory="/app"
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        working_directory="/app",
+        **(
+            {"docker_image": "offline.test/task@sha256:" + "a" * 64}
+            if packaging == "image"
+            else {"packages_lock": "fixture-lock"}
+        ),
     )
     script = (
         b"import json,pathlib,stat,sys\np=pathlib.Path(sys.argv[1])\n"
