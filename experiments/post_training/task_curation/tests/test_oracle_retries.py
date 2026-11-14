@@ -44,7 +44,6 @@ from experiments.post_training.task_curation.oracle_filter import (
     calibrate_cohort,
     collect_trials,
     declared_native_requirements,
-    filter_cohort,
     harbor_inspection,
     merge_retry_maps,
     native_requirements,
@@ -58,6 +57,7 @@ from experiments.post_training.task_curation.oracle_filter import (
 )
 from experiments.post_training.task_curation.prior_phase_failures import bind_prior_phase_failures
 
+from .negative_control_fixtures import filter_with_negative_controls as filter_cohort
 from .prebuilt_fixtures import prebuilt_task
 from .prior_phase_fixtures import preserved_phase_failure
 
@@ -516,6 +516,9 @@ def test_retry_resumes_grown_allocation_and_preserves_partial_source_limits(tmp_
     archived = tmp_path / "filtered/oracle-filter.json"
     assert load_oracle_filter(str(archived)) == receipt
     unanchored = json.loads(archived.read_text())
+    unanchored["version"] = 3
+    unanchored["tasks"]["task"].pop("negative_control")
+    unanchored["tasks"]["task"].pop("negative_control_applicability")
     unanchored["tasks"]["task"].pop("source_task_sha256")
     unanchored["tasks"]["task"].pop("source_task_checksum")
     legacy_path = tmp_path / "unanchored-partial.json"
@@ -772,6 +775,9 @@ def test_public_loader_rejects_retry_history_attached_to_foreign_task_or_package
         document = receipt.model_dump(mode="json")
         entry = document["tasks"]["task"]
         if not anchored:
+            document["version"] = 3
+            entry.pop("negative_control", None)
+            entry.pop("negative_control_applicability", None)
             entry.pop("source_task_sha256", None)
             entry.pop("source_task_checksum", None)
         baseline = tmp_path / f"anchored-{anchored}.json"
@@ -784,6 +790,45 @@ def test_public_loader_rejects_retry_history_attached_to_foreign_task_or_package
             path.write_text(json.dumps(foreign))
             with pytest.raises(ValueError, match="changed the task or its native environment"):
                 load_oracle_filter(str(path))
+
+
+def test_collect_cli_retains_explicit_standing_policy_and_source_trials(tmp_path, retry_case, monkeypatch):
+    case = retry_case
+    plan = tmp_path / "plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, plan)
+    run = tmp_path / "retry-run"
+    retry_cohort(plan / "plan.json", run, 1)
+    combined = tmp_path / "combined.json"
+    merge_retry_maps(case.parent_map, [run / "task-map.json"], combined)
+    first = tmp_path / "first/tasks.parquet"
+    receipt = filter_cohort(case.cohort, combined, tmp_path, first)
+    policy = tmp_path / "policy.json"
+    policy.write_text(receipt.negative_control_policy.model_dump_json())
+    output = tmp_path / "cli/tasks.parquet"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "oracle_filter",
+            "collect",
+            "--cohort",
+            str(case.cohort),
+            "--task-map",
+            str(combined),
+            "--jobs-dir",
+            str(tmp_path),
+            "--output",
+            str(output),
+            "--negative-controls",
+            str(first.parent / "nop-fixture-input/controls.jsonl"),
+            "--negative-control-policy",
+            str(policy),
+        ],
+    )
+    oracle_filter.main()
+    observed = load_oracle_filter(str(output.parent / "oracle-filter.json"))
+    assert observed.negative_control_policy == receipt.negative_control_policy
+    assert observed.tasks["task"].trials == receipt.tasks["task"].trials
+    assert observed.tasks["task"].passed
 
 
 @pytest.mark.parametrize(

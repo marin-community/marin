@@ -13,10 +13,11 @@ from finestore.rl.curation import ContentEvidenceReference
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
-from taskcompendium.grading_environment import GradingEnvironmentMode
+from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment
+from taskcompendium.harbor.adapter import actor_machine_required
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
+from taskcompendium.models import ExecutionRequirements, ScriptGrader, TaskSpec, VerifyitGrader, decode_json_value
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
 from taskcompendium.pipeline.models import SourceRecipe
 from taskcompendium.pipeline.resource_calibration import (
@@ -81,6 +82,47 @@ class PriorPhaseFailureReceipt(BaseModel):
     exception: ContentEvidenceReference
     archive_member: str
     archive_root: str
+
+
+class NativeOracleSuccessPolicy(BaseModel):
+    """Source-approved interpretation of unchanged production native reward maps."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+    kind: Literal["all_named_maximum"] = "all_named_maximum"
+    maximum: float
+    required_reward_keys: tuple[str, ...]
+    source_task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_sha256: str | None
+    source_task_checksum: str
+    input_cohort_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    consumer: ContentEvidenceReference
+    source_census: ContentEvidenceReference
+    decision: ContentEvidenceReference
+
+    def passes(self, trial: "OracleTrialReceipt", task_checksum: str) -> bool:
+        return (
+            trial.scored
+            and trial.oracle_exit_code == 0
+            and trial.result.get("task_checksum") == task_checksum
+            and self.rewards_pass(trial)
+        )
+
+    def rewards_pass(self, trial: "OracleTrialReceipt") -> bool:
+        rewards = (trial.result.get("verifier_result") or {}).get("rewards") or {}
+        return (
+            trial.verdict is None
+            and trial.native_grade is not None
+            and trial.graded
+            and bool(rewards)
+            and set(self.required_reward_keys) <= rewards.keys()
+            and all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                and value == self.maximum
+                for value in rewards.values()
+            )
+        )
 
 
 def pre_oracle_host_unavailable(result: dict[str, Any], verdict: dict | None, oracle_exit_code: int | None) -> bool:
@@ -659,6 +701,8 @@ class InfrastructureRetryTransition(BaseModel):
 
 
 class OracleExclusionReason(StrEnum):
+    NEGATIVE_CONTROL_PASSED = "negative_control_passed"
+    NEGATIVE_CONTROL_PENDING = "negative_control_pending"
     ORACLE_FAILED = "oracle_failed"
     OOM = "resource_calibration:oom"
     DISK_FULL = "resource_calibration:disk_full"
@@ -785,6 +829,241 @@ def oracle_failure_reason(
     return OracleExclusionReason.ORACLE_FAILED
 
 
+class NegativeControlApplicability(StrEnum):
+    WORKSPACE = "workspace"
+    ANSWER_GRADED_NOT_APPLICABLE = "answer_graded_not_applicable"
+
+
+ANSWER_GRADED_MODES = frozenset(
+    {
+        "unsolvable",
+        "reasoning_markup",
+        "predicted_action",
+        "structured_exact",
+        "mcq",
+        "math",
+        "numeric",
+        "exact",
+        "structure_closure",
+        "json_schema",
+        "xml_elements",
+        "csv_columns",
+        "ifeval",
+        "reasoning_gym",
+        "judge",
+    }
+)
+
+
+def negative_control_applicability(task: TaskSpec) -> NegativeControlApplicability:
+    """Derive control scope from the state the source grading contract reads."""
+    if assess_grading_environment(task).required is GradingEnvironmentMode.SHARED:
+        return NegativeControlApplicability.WORKSPACE
+    if (
+        isinstance(task.grader, ScriptGrader)
+        and task.grader.answer_path is not None
+        and not task.output_paths
+        and not actor_machine_required(task)
+    ):
+        return NegativeControlApplicability.ANSWER_GRADED_NOT_APPLICABLE
+    if isinstance(task.grader, VerifyitGrader) and task.grader.mode in ANSWER_GRADED_MODES:
+        return NegativeControlApplicability.ANSWER_GRADED_NOT_APPLICABLE
+    return NegativeControlApplicability.WORKSPACE
+
+
+class OracleNegativeControlReceipt(BaseModel):
+    """One unchanged physical nop Trial, anchored to source and consumed identities."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+    source_task_sha256: str
+    source_task_checksum: str
+    runtime_sha256: str | None
+    consumed_task_sha256: str
+    consumed_task_checksum: str
+    archive: ContentEvidenceReference
+    control: ContentEvidenceReference
+    result_artifact: ContentEvidenceReference
+    setup_artifact: ContentEvidenceReference
+    verdict_artifact: ContentEvidenceReference | None
+    trial: OracleTrialReceipt
+    score: float | None
+    verifier_exit_code: int | None
+    setup_exit_code: int | None
+    original_public_setup: bool
+    annotation: Literal["negative_control_verifier_error", "negative_control_verifier_timeout"] | None = None
+    redrive_parent: "OracleNegativeControlReceipt | None" = Field(default=None, exclude_if=lambda value: value is None)
+    redrive_decision: ContentEvidenceReference | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    @model_validator(mode="after")
+    def validate_physical_control(self):
+        result = self.trial.result
+        agent = result.get("config", {}).get("agent", {})
+        if (result.get("agent_info") or {}).get("name") != "nop" or agent.get("name") != "nop":
+            raise ValueError("Negative control requires an actual production nop agent")
+        if any(agent.get(name) for name in ("model_name", "model_alias", "kwargs", "env", "skills", "mcp_servers")):
+            raise ValueError("Negative control cannot carry an actor, model or source-command override")
+        if result.get("task_checksum") != self.consumed_task_checksum:
+            raise ValueError("Negative control belongs to another consumed native package")
+        if self.score != (self.trial.verdict or {}).get("reward"):
+            raise ValueError("Negative-control score differs from its physical verdict")
+        verifier = result.get("verifier_result")
+        if verifier is not None and verifier.get("exit_code") != self.verifier_exit_code:
+            raise ValueError("Negative-control verifier exit differs from its production result")
+        parent = self.redrive_parent
+        if (parent is None) != (self.redrive_decision is None):
+            raise ValueError("Negative-control re-drive requires its physical parent and approved decision")
+        if parent is not None:
+            if (
+                parent.redrive_parent is not None
+                or (parent.signal_exit_code is None and not parent.source_producer_interrupted)
+                or parent.annotation is not None
+            ):
+                raise ValueError("Only one approved re-drive of an inconclusive native signal is permitted")
+            anchors = (
+                "source_task_sha256",
+                "source_task_checksum",
+                "runtime_sha256",
+                "consumed_task_sha256",
+                "consumed_task_checksum",
+            )
+            if any(getattr(self, name) != getattr(parent, name) for name in anchors) or (
+                self.trial.execution_requirements != parent.trial.execution_requirements
+                or result["config"]["agent"] != parent.trial.result["config"]["agent"]
+                or result["config"].get("task", {}).get("verifier_execution_requirements")
+                != parent.trial.result["config"].get("task", {}).get("verifier_execution_requirements")
+                or result.get("id") == parent.trial.result.get("id")
+                or result.get("trial_uri") == parent.trial.result.get("trial_uri")
+                or self.trial.path == parent.trial.path
+            ):
+                raise ValueError("Negative-control re-drive changed its contract or reused the physical Trial")
+        if self.annotation == "negative_control_verifier_error" and not self.accepted_source_error:
+            raise ValueError("Negative-control annotation does not prove the approved source verifier error")
+        if self.annotation == "negative_control_verifier_timeout" and not self.accepted_source_deadline:
+            raise ValueError("Negative-control annotation does not prove its original verifier deadline")
+        return self
+
+    @property
+    def completed_public_setup(self) -> bool:
+        return (
+            self.setup_exit_code == 0
+            and self.original_public_setup
+            and self.trial.result.get("finished_at") is not None
+            and self.trial.result.get("completion") is not None
+            and not self.trial.result.get("secondary_exception_info")
+            and not self.trial.resource_usage.oom_kills
+            and not self.trial.verifier_resource_usage.oom_kills
+        )
+
+    @property
+    def accepted_source_deadline(self) -> bool:
+        exception = self.trial.result.get("exception_info") or {}
+        timeout = self.trial.execution_requirements.verifier_timeout_sec
+        return (
+            self.completed_public_setup
+            and exception.get("exception_type") == "VerifierTimeoutError"
+            and exception.get("exception_message") == f"Verifier execution timed out after {float(timeout)} seconds"
+            and self.trial.result["config"]["resolved_timeouts"]["verifier"] == timeout
+            and self.trial.verdict is None
+            and self.score is None
+        )
+
+    @property
+    def signal_exit_code(self) -> int | None:
+        error = (self.trial.verdict or {}).get("detail", {}).get("error", "")
+        if not self.completed_public_setup or (
+            (self.trial.result.get("exception_info") or {}).get("exception_type") != "VerifierRuntimeError"
+            or (self.trial.verdict or {}).get("status") != "infra_error"
+        ):
+            return None
+        return next(
+            (
+                code
+                for code in (-9, -6, -11)
+                if f"pytest producer failed before a usable json report (exit {code}):" in error
+            ),
+            None,
+        )
+
+    @property
+    def source_producer_interrupted(self) -> bool:
+        return (
+            self.completed_public_setup
+            and (self.trial.result.get("exception_info") or {}).get("exception_type") == "VerifierRuntimeError"
+            and (self.trial.verdict or {}).get("status") == "infra_error"
+            and (self.trial.verdict or {}).get("detail", {}).get("error")
+            == "RuntimeError: pytest producer was interrupted"
+        )
+
+    @property
+    def accepted_source_error(self) -> bool:
+        error = (self.trial.verdict or {}).get("detail", {}).get("error", "")
+        signatures = (
+            (
+                "exit 4",
+                "src/sqlfluff/core/plugin/host.py:61: in _load_plugin",
+                "UnboundLocalError: local variable 'plugin' referenced before assignment",
+            ),
+            (
+                "exit 4",
+                "src/sqlfluff/core/plugin/host.py:88: in get_plugin_manager",
+                "UnboundLocalError: local variable 'plugin_manager' referenced before assignment",
+            ),
+            (
+                "exit 4",
+                "src/sqlfluff/core/plugin/host.py:80: in get_plugin_manager",
+                "UnboundLocalError: local variable 'plugin_manager' referenced before assignment",
+            ),
+            ("exit 4", "src/sqlfluff/cli/helpers.py:92: in _sequence", "TypeError: 'list' object is not callable"),
+            ("exit 3", '/testbed/patsy/eval.py", line 56, in __getitem__', "INTERNALERROR> KeyError: 0"),
+        )
+        return (
+            self.completed_public_setup
+            and (self.trial.result.get("exception_info") or {}).get("exception_type") == "VerifierRuntimeError"
+            and (self.trial.verdict or {}).get("status") == "infra_error"
+            and (
+                (
+                    "pytest producer failed before a usable json report" in error
+                    and any(all(fragment in error for fragment in signature) for signature in signatures)
+                )
+                or error == "RuntimeError: pytest report contains unsupported test outcomes"
+                or (
+                    self.redrive_parent is not None
+                    and (
+                        (
+                            self.signal_exit_code is not None
+                            and self.signal_exit_code == self.redrive_parent.signal_exit_code
+                        )
+                        or (self.source_producer_interrupted and self.redrive_parent.source_producer_interrupted)
+                    )
+                )
+            )
+        )
+
+    @property
+    def conclusive(self) -> bool:
+        return (
+            self.setup_exit_code == 0
+            and self.original_public_setup
+            and self.trial.result.get("exception_info") is None
+            and self.trial.result.get("finished_at") is not None
+            and self.trial.result.get("completion") is not None
+            and self.verifier_exit_code in {None, 0}
+            and (self.trial.verdict or {}).get("detail", {}).get("reason") != "setup_failed"
+            and (
+                "total" not in (self.trial.verdict or {}).get("detail", {})
+                or (self.trial.verdict or {})["detail"]["total"] > 0
+            )
+            and self.trial.graded
+        )
+
+    def passed(self, policy: NativeOracleSuccessPolicy | None) -> bool:
+        if not self.conclusive:
+            return False
+        if policy is not None:
+            return policy.rewards_pass(self.trial)
+        return ((self.trial.result.get("verifier_result") or {}).get("rewards") or {}).get("reward") == 1
+
+
 class OracleTaskReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     outcome: Literal["trial"] = "trial"
@@ -793,6 +1072,11 @@ class OracleTaskReceipt(BaseModel):
     harbor_task_checksum: str
     source_task_sha256: str | None = Field(default=None, exclude_if=lambda value: value is None)
     source_task_checksum: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    native_success_policy: NativeOracleSuccessPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
+    negative_control: OracleNegativeControlReceipt | None = Field(default=None, exclude_if=lambda value: value is None)
+    negative_control_applicability: NegativeControlApplicability | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     has_oracle: bool
     trials: tuple[OracleTrialReceipt, ...]
     calibration: ResourceCalibrationReceipt
@@ -801,6 +1085,42 @@ class OracleTaskReceipt(BaseModel):
     exclusion_reason: OracleExclusionReason | None = None
     source_environment_incompatibility: SourceEnvironmentIncompatibility | None = None
     infrastructure_retries: tuple[InfrastructureRetryTransition, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_negative_control(self):
+        control = self.negative_control
+        if control is None:
+            return self
+        if self.negative_control_applicability is not NegativeControlApplicability.WORKSPACE or (
+            control.source_task_sha256 != self.source_task_sha256
+            or control.source_task_checksum != self.source_task_checksum
+            or control.runtime_sha256 != self.runtime_sha256
+            or control.consumed_task_sha256 != self.task_sha256
+            or control.consumed_task_checksum != self.harbor_task_checksum
+            or control.trial.execution_requirements != self.calibration.execution_requirements
+        ):
+            raise ValueError("Negative control differs from the source or consumed task contract")
+        source = self.calibration.attempts[-1]
+        if control.trial.verifier_execution_requirements != source.verifier_execution_requirements:
+            raise ValueError("Negative control differs from the original verifier allocation")
+        if control.conclusive and (source.verdict is None) != (control.trial.verdict is None):
+            raise ValueError("Negative control uses a different production grading contract")
+        return self
+
+    @model_validator(mode="after")
+    def validate_native_success_policy(self):
+        policy = self.native_success_policy
+        if policy is None:
+            return self
+        if (
+            policy.source_task_sha256 != self.source_task_sha256
+            or policy.source_task_checksum != self.source_task_checksum
+            or policy.runtime_sha256 != self.runtime_sha256
+            or not self.has_oracle
+            or any(trial.verdict is not None for trial in self.trials)
+        ):
+            raise ValueError("Native success policy differs from the original source contract")
+        return self
 
     @model_validator(mode="after")
     def validate_source_environment_exclusion(self):
@@ -939,6 +1259,16 @@ class OracleTaskReceipt(BaseModel):
         if self.exclusion_reason is not None:
             return False
         if self.has_oracle:
+            if self.negative_control_applicability is NegativeControlApplicability.WORKSPACE:
+                control = self.negative_control
+                if control is None or control.passed(self.native_success_policy):
+                    return False
+                if not control.conclusive and control.annotation is None:
+                    return False
+            if self.native_success_policy is not None:
+                return self.calibration.oracle_kind == "original" and self.native_success_policy.passes(
+                    self.calibration.attempts[-1], self.harbor_task_checksum
+                )
             return (
                 self.calibration.passed
                 and self.calibration.oracle_kind == "original"
@@ -954,9 +1284,23 @@ class OracleTaskReceipt(BaseModel):
         )
 
 
+class NegativeControlPolicy(BaseModel):
+    """Versioned standing rules for every eligible workspace-graded source."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    version: Literal[1]
+    scope: Literal["global_workspace"]
+    max_identical_budget_repeats: Literal[1]
+    answer_graded: Literal["not_applicable"]
+    source_deadline: Literal["non_passing_annotation"]
+    source_error: Literal["non_passing_annotation"]
+    decision: ContentEvidenceReference
+
+
 class OracleFilterReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    version: Literal[2, 3] = 3
+    version: Literal[2, 3, 4] = 4
+    negative_control_policy: NegativeControlPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
     recipe_identity: str | None
     input_cohort_sha256: str
     input_rows: int = Field(ge=0)
@@ -965,13 +1309,21 @@ class OracleFilterReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_population(self):
+        if self.version == 4 and self.negative_control_policy is None:
+            raise ValueError("Oracle filter wire version 4 requires an explicit global negative-control policy")
         if len(self.tasks) + self.conversion_rejections != self.input_rows:
             raise ValueError("Oracle filter receipt does not cover the full input population")
         for task_id, entry in self.tasks.items():
             if isinstance(entry, MechanicalOracleTaskReceipt):
-                if self.version != 3:
-                    raise ValueError("Mechanical outcomes require oracle filter wire version 3")
+                if self.version not in {3, 4}:
+                    raise ValueError("Mechanical outcomes require oracle filter wire version 3 or 4")
                 continue
+            if entry.native_success_policy is not None and (
+                entry.native_success_policy.input_cohort_sha256 != self.input_cohort_sha256
+            ):
+                raise ValueError(f"Native success policy belongs to another frozen cohort: {task_id}")
+            if self.version == 4 and entry.has_oracle and entry.negative_control_applicability is None:
+                raise ValueError(f"New oracle admission requires source-bound negative-control applicability: {task_id}")
             if self.version == 2:
                 continue
             if entry.no_oracle_liveness is not None and entry.no_oracle_liveness.task_id != task_id:
@@ -987,8 +1339,8 @@ class OracleFilterReceipt(BaseModel):
         return self
 
     def admits(self, task: TaskSpec, runtime: dict | None = None) -> bool:
-        if self.version != 3:
-            raise ValueError("New admission requires oracle filter wire version 3; version 2 is archival evidence")
+        if self.version != 4:
+            raise ValueError("New admission requires oracle filter wire version 4; versions 2/3 are archival evidence")
         if task.id not in self.tasks:
             raise ValueError(f"Oracle filter receipt omits task {task.id}")
         entry = self.tasks[task.id]
@@ -1000,6 +1352,8 @@ class OracleFilterReceipt(BaseModel):
             raise ValueError(f"Oracle presence changed after filtering: {task.id}")
         if isinstance(entry, MechanicalOracleTaskReceipt):
             return False
+        if entry.has_oracle and entry.negative_control_applicability != negative_control_applicability(task):
+            raise ValueError(f"Negative-control applicability differs from the source grading contract: {task.id}")
         if task.execution_requirements is None:
             raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         if task.execution_requirements != entry.calibration.execution_requirements:

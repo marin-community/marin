@@ -17,6 +17,8 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.oracle_filter import (
     MechanicalOracleTaskReceipt,
+    NativeOracleSuccessPolicy,
+    NativeVerifierGrade,
     OracleExclusionReason,
     OracleFilterReceipt,
     OracleTrialReceipt,
@@ -29,7 +31,7 @@ from taskcompendium.pipeline.oracle_filter import (
 from taskcompendium.pipeline.resource_calibration import FailureSignal, ResourceDimension, ResourceUsage
 from taskcompendium.runtime.resources import inline_resource
 
-from .oracle_filter_fixtures import oracle_receipt
+from .oracle_filter_fixtures import negative_control_policy, oracle_receipt
 from .pipeline_stages import SOURCE_FILES
 from .test_source_processing import apple_rows, convert_script_graded
 
@@ -162,7 +164,7 @@ def test_historical_v2_receipt_is_readable_but_cannot_establish_new_admission(or
         entry.pop("outcome")
         entry.pop("executability_run")
     receipt = OracleFilterReceipt.model_validate(document)
-    with pytest.raises(ValueError, match=r"version 3.*archival"):
+    with pytest.raises(ValueError, match=r"version 4.*archival"):
         require_oracle_filter(current, receipt)
 
 
@@ -176,6 +178,7 @@ def test_declared_network_permission_requires_matching_production_observation(mi
     document = oracle_receipt([current]).model_dump(mode="json")
     entry = document["tasks"][current.id]
     entry["runtime_sha256"] = canonical_sha256(runtime)
+    entry["negative_control"]["runtime_sha256"] = canonical_sha256(runtime)
     packet = {
         "source_runtime_sha256": canonical_sha256(runtime),
         "actor_required": True,
@@ -211,6 +214,7 @@ def test_mechanical_exclusion_keeps_uncalibrated_task_and_checks_both_input_iden
         evidence=(ContentEvidenceReference(uri="s3://fixtures/capability-proof.json", sha256="c" * 64),),
     )
     receipt = OracleFilterReceipt(
+        negative_control_policy=negative_control_policy(),
         recipe_identity=None,
         input_cohort_sha256="a" * 64,
         input_rows=1,
@@ -296,6 +300,83 @@ def test_pre_oracle_host_failures_retry_without_reclassifying_source_failures(fa
             attempts=(trial,),
         )
         assert not ResourceCalibrationReceipt.model_validate_json(historical.model_dump_json()).passed
+
+
+@pytest.mark.parametrize(
+    ("rewards", "expected"),
+    [
+        ({"correctness": 1, "coverage": 1}, True),
+        ({"correctness": 1}, False),
+        ({"correctness": 1, "coverage": 0.5}, False),
+        ({"reward": 1}, False),
+    ],
+)
+def test_native_named_policy_preserves_raw_rewards_and_requires_all_source_keys(tmp_path, rewards, expected):
+    current = task()
+    proof = oracle_receipt([current]).model_dump(mode="json")
+    entry = proof["tasks"][current.id]
+    trial = entry["trials"][0]
+    trial["verdict"] = None
+    trial["result"]["verifier_result"]["rewards"] = rewards
+    trial["result_sha256"] = canonical_sha256(trial["result"])
+    trial["native_grade"] = NativeVerifierGrade(
+        rewards=rewards,
+        artifact_path="verifier/reward.json",
+        artifact_sha256="b" * 64,
+        result_sha256=trial["result_sha256"],
+        task_checksum=entry["harbor_task_checksum"],
+    ).model_dump(mode="json")
+    entry["calibration"]["attempts"] = [trial]
+    entry["source_task_sha256"] = entry["task_sha256"]
+    entry["source_task_checksum"] = entry["harbor_task_checksum"]
+    evidence = ContentEvidenceReference(uri="s3://fixtures/source-decision.json", sha256="c" * 64)
+    entry["native_success_policy"] = NativeOracleSuccessPolicy(
+        maximum=1,
+        required_reward_keys=("correctness", "coverage"),
+        source_task_sha256=entry["task_sha256"],
+        runtime_sha256=entry["runtime_sha256"],
+        source_task_checksum=entry["harbor_task_checksum"],
+        input_cohort_sha256=proof["input_cohort_sha256"],
+        consumer=evidence,
+        source_census=evidence,
+        decision=evidence,
+    ).model_dump(mode="json")
+    entry["exclusion_reason"] = None if expected else OracleExclusionReason.ORACLE_FAILED.value
+    raw_before = canonical_sha256(trial["result"])
+    receipt = OracleFilterReceipt.model_validate(proof)
+    path = tmp_path / "receipt.json"
+    path.write_text(receipt.model_dump_json())
+    reloaded = load_oracle_filter(str(path))
+    assert require_oracle_filter(current, reloaded) is expected
+    assert reloaded.tasks[current.id].calibration.attempts[-1].result_sha256 == raw_before
+    assert reloaded.tasks[current.id].trials[0].native_grade.rewards == rewards
+    foreign = reloaded.model_dump(mode="json")
+    foreign["tasks"][current.id]["native_success_policy"]["source_task_checksum"] = "foreign"
+    with pytest.raises(ValueError, match="original source contract"):
+        OracleFilterReceipt.model_validate(foreign)
+    foreign = reloaded.model_dump(mode="json")
+    foreign["input_cohort_sha256"] = "d" * 64
+    with pytest.raises(ValueError, match="another frozen cohort"):
+        OracleFilterReceipt.model_validate(foreign)
+
+
+def test_wire4_requires_standing_policy_while_old_receipts_remain_archival(tmp_path):
+    current = task()
+    document = oracle_receipt([current]).model_dump(mode="json")
+    document.pop("negative_control_policy")
+    path = tmp_path / "unsealed-wire4.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="explicit global negative-control policy"):
+        load_oracle_filter(str(path))
+    document["version"] = 3
+    entry = document["tasks"][current.id]
+    entry.pop("negative_control", None)
+    entry.pop("negative_control_applicability", None)
+    path.write_text(json.dumps(document))
+    archived = load_oracle_filter(str(path))
+    assert archived.model_dump(mode="json") == document
+    with pytest.raises(ValueError, match="wire version 4"):
+        require_oracle_filter(current, archived)
 
 
 def test_public_filter_load_rejects_omitted_measured_verifier_allocation(tmp_path):

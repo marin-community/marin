@@ -1,0 +1,26 @@
+{
+  "negative": {
+    "task_id": "campaign-release-smartie-swesmith-admitted-dcb8751339df9189bb6dfd05d561797448266d209223500e8219af3f23dc1c64",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-invariant-qa/2026.11.14.3/negative-trials/0161c39cd7aa6da4079999f7eb105a3e9abb27d1972971999ad05a7db5713cdf.tar.zst",
+    "archive_sha256": "287f2b96d06b2ada25d988115405149c09de9def327cc7c9dfe89e02e83e323d",
+    "actual_task_sha256": "de8069ac87b31defad92ff37e4334371c60aaa08af3e89b8ae0be87155811c2b",
+    "actual_native_checksum": "d5002a85cc233f59631427a9c2cac02a73303e1924ec890bf50a68b4603fb205",
+    "control_member": "0161c39cd7aa6da4079999f7eb105a3e9abb27d1972971999ad05a7db5713cdf/negative-control.json"
+  },
+  "sqlfluff": {
+    "task_id": "campaign-release-smartie-swesmith-admitted-7148fe6089bf040d3de522a0d125d9d490b1ef7e1b20aefc9000644108355bbd",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-invariant-qa/2026.11.14.3/negative-trials/0cd031f3d6c3cebeeb38bc44327c6905c6e34be42e582cff7a58e4578ab5d832.tar.zst",
+    "archive_sha256": "27fd9b49c930552eb3a08cf9978d767c57f62b2f9e522499369b16534d413267",
+    "actual_task_sha256": "1f218f11da348018c31a59b8f74c65b13df2205103868b3b32fd2035d500b041",
+    "actual_native_checksum": "50ea8a8cdf94cdfec8a56a7e435d1e0229acae452909ebb5b83c43960f6e73bb",
+    "control_member": "0cd031f3d6c3cebeeb38bc44327c6905c6e34be42e582cff7a58e4578ab5d832/negative-control.json"
+  },
+  "patsy": {
+    "task_id": "campaign-release-smartie-swesmith-admitted-7bb0cea35b956195ffd5dcd094734fe5a31c4bda47cc9903db0625f5db23a53c",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-invariant-qa/2026.11.14.3/negative-trials/2596d0909213a88b800438a4a44f66f2eeeb648c9e735c36faa9403b3cdb7a80.tar.zst",
+    "archive_sha256": "8d8c35b33c63ce8c5bd0c6b01af4ad3bca7928a93e505f3b271d540a7ab36e54",
+    "actual_task_sha256": "1d2ca6d048766f1f04bd771e56ae6d4e659ecd542cf3f4194962c40fc2e60700",
+    "actual_native_checksum": "20911932a23968ae0a01fd97a0b1ce4a343579b4adf4d5ac5e3a484ef2c8acf9",
+    "control_member": "2596d0909213a88b800438a4a44f66f2eeeb648c9e735c36faa9403b3cdb7a80/negative-control.json"
+  }
+}

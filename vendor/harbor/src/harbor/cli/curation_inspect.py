@@ -18,7 +18,7 @@ from harbor.verifier.verifier import resolve_verifier_rewards
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("results", "tasks", "native-grades"))
+    parser.add_argument("kind", choices=("results", "tasks", "native-grades", "native-rewards"))
     args = parser.parse_args()
     paths = json.load(sys.stdin)
     inspected = {}
@@ -28,6 +28,14 @@ def main() -> None:
             if Task.is_valid_dir(path):
                 task = Task(path)
                 inspected[name] = {"task_name": task.name, "task_checksum": task.checksum}
+            continue
+        if args.kind == "native-rewards":
+            grade = resolve_verifier_rewards(TrialPaths(path), [])
+            inspected[name] = {
+                "rewards": VerifierResult(rewards=grade.rewards).rewards,
+                "artifact_name": grade.artifact.name,
+                "artifact_sha256": hashlib.sha256(grade.artifact.read_bytes()).hexdigest(),
+            }
             continue
         document = json.loads(path.read_text())
         if isinstance(document, dict) and "trial_name" in document:

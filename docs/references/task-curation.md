@@ -2722,3 +2722,51 @@ package. Daytona needs an organization registry credential for `ghcr.io` before
 it can import them. Keep that credential in Daytona's registry settings, outside
 the TaskSpecs and qualification evidence. Image identity measurement alone does
 not establish pull access or grading liveness.
+
+### Workspace oracle negative controls
+
+New oracle admissions use oracle-filter wire version 4. Workspace-graded tasks
+require an unchanged-package production `nop` Trial after the original public
+setup. Answer-graded tasks record `answer_graded_not_applicable`; admission
+recomputes this classification from the TaskSpec. Versions 2 and 3 remain
+readable as historical evidence.
+
+Collect physical nop archives with
+`negative_control_from_archive(archive, control_member, source_task_sha256=...,
+source_task_checksum=..., execution_requirements=...)`. Pass JSONL records of
+`{"task_id": ..., "receipt": ...}` to `collect --negative-controls controls.jsonl`.
+The collector verifies the archive, setup script, physical result and verdict
+bytes before binding the control to the exact original and consumed contracts.
+Original oracle trials and reward maps remain unchanged.
+
+A passing nop excludes the task as `negative_control_passed`. Missing controls,
+setup failures, zero-test reports and unresolved infrastructure outcomes remain
+`negative_control_pending`. A completed source verifier deadline keeps its absent
+score and records `negative_control_verifier_timeout`; recognized source-local
+verifier failures record `negative_control_verifier_error`. These annotations
+are non-passing controls and preserve the original oracle pass.
+
+A native producer signal (-9, -6 or -11), or the exact source error
+`pytest producer was interrupted`, permits one approved identical-budget nop
+re-drive. Bind its physical `redrive_parent` and immutable `redrive_decision`;
+the parent cannot itself have a parent. Both archives are verified, physical
+Trial identities must differ, and source/runtime/package, public setup, agent
+configuration and role allocations must match. A reproduced signal becomes a
+source-error annotation. An unresolved re-drive stays pending. No original
+oracle command is repeated.
+
+Native named rewards require an explicit `NativeOracleSuccessPolicy` bound to
+the source TaskSpec, native checksum, runtime and input cohort, with immutable
+consumer, source-census and decision evidence. Both oracle and nop grades use
+that policy: every required reward key must exist, and every observed finite
+reward must equal the declared maximum. The raw production reward map is kept.
+
+Wire version 4 also requires an explicit `negative_control_policy`:
+`NegativeControlPolicy(version=1, scope="global_workspace",
+max_identical_budget_repeats=1, answer_graded="not_applicable",
+source_deadline="non_passing_annotation", source_error="non_passing_annotation",
+decision=ContentEvidenceReference(...))`. Its decision reference identifies the
+immutable standing ruling for all eligible workspace-graded sources. Pass its
+JSON file as `collect --negative-control-policy global-policy.json`. Source IDs
+are not policy selectors. Unsealed version-4 metadata must be recollected to a
+new output version; raw Trial artifacts remain unchanged.

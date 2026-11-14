@@ -114,6 +114,7 @@ def test_physical_oracle_publication_requires_exact_original_tasks(tmp_path, zer
     pq.write_table(table, original)
     pq.write_table(table.slice(0, 0), output)
     oracle = OracleFilterReceipt(
+        version=3,
         recipe_identity=None,
         input_cohort_sha256=hashlib.sha256(original.read_bytes()).hexdigest(),
         input_rows=1,

@@ -43,9 +43,13 @@ from taskcompendium.pipeline.oracle_filter import (
     InfrastructureRetryTransition,
     LocalExecutionHostTransition,
     MechanicalOracleTaskReceipt,
+    NativeOracleSuccessPolicy,
     NativeVerifierGrade,
+    NegativeControlApplicability,
+    NegativeControlPolicy,
     OracleExclusionReason,
     OracleFilterReceipt,
+    OracleNegativeControlReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
     PriorPhaseFailureReceipt,
@@ -53,6 +57,7 @@ from taskcompendium.pipeline.oracle_filter import (
     SourcePytestEnvironment,
     VerifierResourceProfile,
     initial_verifier_requirements,
+    negative_control_applicability,
     next_trial_allocations,
     oracle_failure_reason,
     pre_oracle_host_unavailable,
@@ -69,7 +74,9 @@ from taskcompendium.pipeline.resource_calibration import (
 )
 from taskcompendium.runtime.resources import has_oracle_solution, inline_resource
 
+from experiments.post_training.task_curation.harbor_inspection import harbor_inspection
 from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
+from experiments.post_training.task_curation.negative_controls import require_negative_control
 from experiments.post_training.task_curation.prior_phase_failures import (
     bind_prior_phase_failures,
     require_prior_phase_failure,
@@ -92,6 +99,9 @@ BACKEND_CODE_FILES = {
     "experiments/post_training/task_curation/oracle_filter.py",
     "experiments/post_training/task_curation/local_host_admission.py",
     "experiments/post_training/task_curation/prior_phase_failures.py",
+    "experiments/post_training/task_curation/archive_evidence.py",
+    "experiments/post_training/task_curation/negative_controls.py",
+    "experiments/post_training/task_curation/harbor_inspection.py",
 }
 FAILURE_LOG_BYTES = 64 * 1024
 CALIBRATION_ATTEMPT_TIMEOUT = 72 * 60 * 60
@@ -250,30 +260,6 @@ def receipt_from_trial(
     )
 
 
-def harbor_inspection(kind: str, paths: list[str]) -> dict:
-    """Validate in Harbor's locked runtime without importing it into the curation environment."""
-    result = subprocess.run(
-        [
-            "uv",
-            "run",
-            "--project",
-            str(HARBOR_PROJECT),
-            "--frozen",
-            "--extra",
-            "taskcompendium",
-            "python",
-            "-m",
-            "harbor.cli.curation_inspect",
-            kind,
-        ],
-        input=json.dumps(paths),
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    return json.loads(result.stdout)
-
-
 def row_task(row: dict) -> TaskSpec | None:
     if "lowered_task_spec" in row:
         return TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
@@ -420,6 +406,9 @@ def filter_cohort(
     executability_runs: Path | None = None,
     mechanical_outcomes: Path | None = None,
     input_evidence: ContentEvidenceReference | None = None,
+    native_success_policies: Path | None = None,
+    negative_controls: Path | None = None,
+    negative_control_policy: NegativeControlPolicy | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -430,9 +419,33 @@ def filter_cohort(
     ):
         if path.exists():
             raise FileExistsError(f"Preserve existing oracle artifacts; select a new output version: {path}")
+    if negative_control_policy is None:
+        raise ValueError("Oracle filter wire version 4 requires an explicit global negative-control policy")
+    decision = negative_control_policy.decision
+    if file_sha256(StoragePath(decision.uri)) != decision.sha256:
+        raise ValueError("Standing negative-control policy decision bytes changed")
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
+    policies = {}
+    checked_evidence = set()
+    if native_success_policies is not None:
+        for line in native_success_policies.read_text().splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            task_id = record["task_id"]
+            if task_id in policies or task_id not in mappings:
+                raise ValueError(f"Duplicate or unknown native success policy: {task_id}")
+            policy = NativeOracleSuccessPolicy.model_validate(record["policy"])
+            for evidence in (policy.consumer, policy.source_census, policy.decision):
+                key = (evidence.uri, evidence.sha256)
+                if key in checked_evidence:
+                    continue
+                if hashlib.sha256(StoragePath(evidence.uri).read_bytes()).hexdigest() != evidence.sha256:
+                    raise ValueError("Native success policy evidence bytes changed")
+                checked_evidence.add(key)
+            policies[task_id] = policy
     trials = collect_trials(jobs)
     controls = {}
     if executability_runs is not None:
@@ -444,6 +457,18 @@ def filter_cohort(
             if task_id in controls:
                 raise ValueError(f"Duplicate executability control task: {task_id}")
             controls[task_id] = ExecutabilityRunReceipt.model_validate(record["receipt"])
+    negative = {}
+    if negative_controls is not None:
+        for line in negative_controls.read_text().splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            task_id = record["task_id"]
+            if task_id in negative or task_id not in mappings:
+                raise ValueError(f"Duplicate or unknown physical negative control: {task_id}")
+            control = OracleNegativeControlReceipt.model_validate(record["receipt"])
+            require_negative_control(control)
+            negative[task_id] = control
     mechanical = {}
     if mechanical_outcomes is not None:
         for line in mechanical_outcomes.read_text().splitlines():
@@ -495,6 +520,7 @@ def filter_cohort(
                             evidence=(input_evidence,),
                         )
                     proof = OracleFilterReceipt(
+                        negative_control_policy=negative_control_policy,
                         recipe_identity=None,
                         input_cohort_sha256=cohort_hash,
                         input_rows=1,
@@ -607,9 +633,16 @@ def filter_cohort(
                 incompatibility = source_environment_incompatibility(calibration.attempts[-1], source_setup)
                 final = calibration.attempts[-1]
                 control = controls.get(task.id)
-                if calibration.passed or (
-                    not oracle and control is not None and control.passed and control.trial == final
+                policy = policies.get(task.id)
+                if policy is not None and (
+                    policy.source_task_sha256 != mapping["task_sha256"]
+                    or policy.source_task_checksum != mapping.get("source_task_checksum", checksum)
+                    or policy.runtime_sha256 != row_runtime_hash(original_row)
+                    or policy.input_cohort_sha256 != cohort_hash
                 ):
+                    raise ValueError(f"Native success policy differs from the frozen source contract: {task.id}")
+                oracle_passed = policy.passes(final, checksum) if policy is not None else calibration.passed
+                if oracle_passed or (not oracle and control is not None and control.passed and control.trial == final):
                     reason = None
                 else:
                     reason = oracle_failure_reason(final, incompatibility)
@@ -625,12 +658,24 @@ def filter_cohort(
                         if control is None
                         else OracleExclusionReason.EXECUTABILITY_RUN_FAILED
                     )
+                applicability = negative_control_applicability(task) if oracle else None
+                negative_control = negative.get(task.id)
+                if reason is None and applicability is NegativeControlApplicability.WORKSPACE:
+                    if negative_control is None or (
+                        not negative_control.conclusive and negative_control.annotation is None
+                    ):
+                        reason = OracleExclusionReason.NEGATIVE_CONTROL_PENDING
+                    elif negative_control.passed(policy):
+                        reason = OracleExclusionReason.NEGATIVE_CONTROL_PASSED
                 entry = OracleTaskReceipt(
                     task_sha256=canonical_sha256(task.model_dump(mode="json")),
                     runtime_sha256=row_runtime_hash(row),
                     harbor_task_checksum=checksum,
                     source_task_sha256=mapping["task_sha256"],
                     source_task_checksum=mapping.get("source_task_checksum", checksum),
+                    native_success_policy=policy,
+                    negative_control=negative_control,
+                    negative_control_applicability=applicability,
                     has_oracle=oracle,
                     trials=(calibration.attempts[-1],) if oracle else (),
                     calibration=calibration,
@@ -661,6 +706,7 @@ def filter_cohort(
         else len(entries)
     )
     receipt = OracleFilterReceipt(
+        negative_control_policy=negative_control_policy,
         recipe_identity=manifest["oracle_recipe_identity"] if manifest else None,
         input_cohort_sha256=cohort_hash,
         input_rows=input_rows,
@@ -1326,6 +1372,9 @@ def main() -> None:
     collect.add_argument("--executability-runs", type=Path, help="strong-model production-control JSONL receipts")
     collect.add_argument("--mechanical-outcomes", type=Path, help="typed per-task mechanical outcome JSONL")
     collect.add_argument("--input-evidence-uri", help="immutable cohort URI for tasks with no execution proof")
+    collect.add_argument("--native-success-policies", type=Path)
+    collect.add_argument("--negative-control-policy", type=Path, required=True, help="global standing policy JSON")
+    collect.add_argument("--negative-controls", type=Path)
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
@@ -1435,6 +1484,9 @@ def main() -> None:
             if args.input_evidence_uri
             else None
         ),
+        args.native_success_policies,
+        args.negative_controls,
+        NegativeControlPolicy.model_validate_json(args.negative_control_policy.read_text()),
     )
 
 

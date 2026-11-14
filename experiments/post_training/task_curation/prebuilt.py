@@ -411,7 +411,7 @@ def prebuilt_artifact(
                 (
                     json.loads(row["lowered_task_spec"])["runtime"]
                     if invocation.encoding is PrebuiltEncoding.LOWERED
-                    else None
+                    else (json.loads(row["runtime"]) if row.get("runtime") is not None else None)
                 ),
             ):
                 raise ValueError(

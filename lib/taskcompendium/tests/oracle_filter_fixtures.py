@@ -3,6 +3,8 @@
 
 """External Harbor receipt fixtures for curation admission tests."""
 
+from copy import deepcopy
+
 from finestore.rl.curation import ContentEvidenceReference
 
 from taskcompendium.grading_environment import GradingEnvironmentMode
@@ -10,14 +12,30 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
     ExecutabilityRunReceipt,
+    NegativeControlApplicability,
+    NegativeControlPolicy,
     OracleExclusionReason,
     OracleFilterReceipt,
+    OracleNegativeControlReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
     VerifierResourceProfile,
+    negative_control_applicability,
 )
 from taskcompendium.runtime.resources import has_oracle_solution
+
+
+def negative_control_policy() -> NegativeControlPolicy:
+    return NegativeControlPolicy(
+        version=1,
+        scope="global_workspace",
+        max_identical_budget_repeats=1,
+        answer_graded="not_applicable",
+        source_deadline="non_passing_annotation",
+        source_error="non_passing_annotation",
+        decision=ContentEvidenceReference(uri="s3://fixtures/global-nop-policy.json", sha256="e" * 64),
+    )
 
 
 def oracle_receipt(
@@ -66,9 +84,46 @@ def oracle_receipt(
             result_sha256=canonical_sha256(result),
             execution_requirements=task.execution_requirements,
         )
+        applicability = negative_control_applicability(task) if oracle else None
+        negative = None
+        if applicability is NegativeControlApplicability.WORKSPACE:
+            nop = deepcopy(result)
+            nop["agent_info"] = {"name": "nop"}
+            nop["config"]["agent"] = {"name": "nop"}
+            nop["exception_info"] = None
+            nop["verifier_result"] = {"rewards": {"reward": 0}, "exit_code": 0}
+            evidence = ContentEvidenceReference(uri="s3://fixtures/nop.tar.zst", sha256="e" * 64)
+            negative = OracleNegativeControlReceipt(
+                source_task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                source_task_checksum=checksum,
+                runtime_sha256=None,
+                consumed_task_sha256=canonical_sha256(task.model_dump(mode="json")),
+                consumed_task_checksum=checksum,
+                archive=evidence,
+                control=evidence,
+                result_artifact=evidence,
+                setup_artifact=evidence,
+                verdict_artifact=evidence,
+                trial=OracleTrialReceipt(
+                    path=f"nop/{task.id}/result.json",
+                    result=nop,
+                    verdict={"status": "scored", "reward": 0},
+                    oracle_exit_code=None,
+                    result_sha256=canonical_sha256(nop),
+                    execution_requirements=task.execution_requirements,
+                ),
+                score=0,
+                verifier_exit_code=0,
+                setup_exit_code=0,
+                original_public_setup=True,
+            )
         entries[task.id] = OracleTaskReceipt(
             task_sha256=canonical_sha256(task.model_dump(mode="json")),
             harbor_task_checksum=checksum,
+            source_task_sha256=canonical_sha256(task.model_dump(mode="json")),
+            source_task_checksum=checksum,
+            negative_control_applicability=applicability,
+            negative_control=negative,
             has_oracle=has_oracle_solution(task),
             trials=(trial,) if has_oracle_solution(task) else (),
             calibration=ResourceCalibrationReceipt(
@@ -93,6 +148,7 @@ def oracle_receipt(
             ),
         )
     return OracleFilterReceipt(
+        negative_control_policy=negative_control_policy(),
         recipe_identity=recipe_identity,
         input_cohort_sha256="a" * 64,
         input_rows=len(tasks),
