@@ -21,6 +21,7 @@ async function loadCoverage() {
   params.set('subject_id', state.subject);
   $('message').textContent = 'Loading curriculum…';
   $('curriculum-map').setAttribute('aria-busy', 'true'); $('curriculum-map').inert = true; $('outcomes').inert = true;
+  let selectedArea = null;
   try {
     const data = await json(`api/curriculum?${params}`);
     if (request !== state.request) return;
@@ -58,10 +59,10 @@ async function loadCoverage() {
       link.href = `https://filer.marina.oa.dev/#${encodeURIComponent(data.role_projection.uri)}`;
       $('role-note').replaceChildren('Source Use includes an approved metadata correction. Sampled evidence preserves its historical role. ', link);
     }
-    const area = state.nodes.get(`${state.subject}/${state.parent}`);
-    if (area) await showTasks(area);
+    selectedArea = state.nodes.get(`${state.subject}/${state.parent}`);
   } catch (error) { if (request === state.request) $('message').textContent = `Coverage could not be loaded. ${error.message}`; }
   finally { if (request === state.request) { $('curriculum-map').removeAttribute('aria-busy'); $('curriculum-map').inert = false; $('outcomes').inert = false; } }
+  if (request === state.request && selectedArea) await showTasks(selectedArea);
 }
 
 function applyConfidence() {
@@ -269,7 +270,7 @@ async function showTasks(area, outcome = 'all', sourceId = '') {
   if (sourceId) state.taskQuery.set('source_id', sourceId);
   state.taskQuery.set('outcome', outcome);
   const request = ++state.taskRequest;
-  state.next = ''; $('area-sources').replaceChildren(); $('area-summary').textContent = ''; $('task-list').replaceChildren(); $('task-panel').hidden = false;
+  state.next = ''; $('task-list').setAttribute('aria-busy', 'true'); $('area-sources').replaceChildren(); $('area-summary').textContent = ''; $('task-list').replaceChildren(); $('task-panel').hidden = false;
   $('task-heading').textContent = area?.name || (outcome === 'all' ? 'Sampled examples' : outcomes[outcome]);
   $('task-scope').textContent = `${sourceId || $('source').selectedOptions[0].textContent} · sampled examples`;
   if (area) {
@@ -330,23 +331,39 @@ async function loadPool() {
   if (area) params.set('subject_id', area.subject_id);
   if (sourceId) params.set('source_id', sourceId);
   const key = params.toString();
-  if (!state.pools.has(key)) state.pools.set(key, (async () => {
-    const tasks = []; let cursor = '';
-    do {
-      if (cursor) params.set('cursor', cursor);
-      const data = await json(`api/curriculum/tasks?${params}`);
-      tasks.push(...data.tasks); cursor = data.next_cursor;
-    } while (cursor);
-    return tasks;
-  })().catch(error => { state.pools.delete(key); throw error; }));
-  $('task-message').textContent = 'Loading sampled examples…'; $('more-tasks').hidden = true;
-  try {
-    const pool = await state.pools.get(key);
+  if (!state.pools.has(key)) {
+    const entry = {tasks: [], complete: false, onProgress: null, promise: null};
+    state.pools.set(key, entry);
+    entry.promise = (async () => {
+      let cursor = '';
+      do {
+        if (cursor) params.set('cursor', cursor);
+        const data = await json(`api/curriculum/tasks?${params}`);
+        entry.tasks.push(...data.tasks); cursor = data.next_cursor;
+        entry.onProgress?.();
+      } while (cursor);
+      entry.complete = true;
+      entry.onProgress?.();
+    })().catch(error => { state.pools.delete(key); throw error; });
+  }
+  const entry = state.pools.get(key);
+  let rendered = 0;
+  entry.onProgress = () => {
     if (request !== state.taskRequest) return;
-    $('task-list').replaceChildren();
-    for (const task of pool) { const selected = selectedSample(task); if (selected) appendTask(selected); }
-    $('task-message').textContent = $('task-list').children.length ? `${number.format($('task-list').children.length)} sampled examples · all stored samples in this selection` : 'No stored sample examples match this confidence level.';
-  } catch (error) { if (request === state.taskRequest) $('task-message').textContent = `Tasks could not be loaded. ${error.message}`; }
+    for (const task of entry.tasks.slice(rendered)) { const selected = selectedSample(task); if (selected) appendTask(selected); }
+    rendered = entry.tasks.length;
+    const count = $('task-list').children.length;
+    $('task-list').setAttribute('aria-busy', String(!entry.complete));
+    $('task-message').textContent = entry.complete ?
+      (count ? `${number.format(count)} sampled examples · all stored samples in this selection` : 'No stored sample examples match this confidence level.') :
+      `${number.format(count)} sampled examples · loading more stored samples…`;
+  };
+  $('more-tasks').hidden = true;
+  entry.onProgress();
+  try { await entry.promise; }
+  catch (error) {
+    if (request === state.taskRequest) { $('task-list').setAttribute('aria-busy', 'false'); $('task-message').textContent = `Tasks could not be loaded. ${error.message}`; }
+  }
 }
 async function loadTasks() {
   const request = ++state.taskRequest;
@@ -359,6 +376,7 @@ async function loadTasks() {
     state.next = data.next_cursor; $('more-tasks').hidden = !state.next;
     $('task-message').textContent = $('task-list').children.length ? `${number.format($('task-list').children.length)} sampled examples${state.next ? ' · more available' : ''}` : 'No task examples are available in this area at the release cutoffs.';
   } catch (error) { if (request === state.taskRequest) $('task-message').textContent = `Tasks could not be loaded. ${error.message}`; }
+  finally { if (request === state.taskRequest) $('task-list').setAttribute('aria-busy', 'false'); }
 }
 async function openDetail(task) {
   const params = new URLSearchParams({source_id: task.source_id, task_id: task.task_id, release: state.data.release_id});

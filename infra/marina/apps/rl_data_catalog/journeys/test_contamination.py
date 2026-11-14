@@ -1003,3 +1003,40 @@ def test_default_source_column_bounds_long_names_and_viewer_can_expand(journey: 
     handle.press("Shift+ArrowRight")
     assert header.evaluate("element => element.getBoundingClientRect().width") >= before + 78
     assert page.locator(".source-table").evaluate(TABLE_BOUNDS) == []
+
+
+def test_confidence_and_map_remain_usable_while_sample_pages_stream(journey: Journey) -> None:
+    page = journey.page
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.get_by_role("link", name="By curriculum", exact=True).click()
+    page.goto(page.url.split("#")[0] + "#release=confidence")
+    expect(page.locator("#confidence option")).to_have_count(5)
+    payload = page.evaluate(
+        "async () => (await fetch('api/curriculum/tasks?release=confidence&sample_pool=true&subject_id=D05&limit=1000')).json()"
+    )
+    pending = []
+
+    def sample_page(route) -> None:
+        if "cursor=held" in route.request.url:
+            pending.append(route)
+        else:
+            route.fulfill(json={**payload, "tasks": payload["tasks"][:2], "next_cursor": "held"})
+
+    page.route("**/api/curriculum/tasks?**", sample_page)
+    page.locator("#domain").select_option("D05")
+    expect(page.locator("#task-list .task-row")).to_have_count(2)
+    expect(page.locator("#task-list")).to_have_attribute("aria-busy", "true")
+    expect(page.locator("#curriculum-map")).not_to_have_attribute("aria-busy", "true")
+    page.get_by_role("button", name="Climate models", exact=True).click()
+    expect(page.locator("#task-list .task-row")).to_have_count(2)
+    requests = []
+    page.on("request", lambda request: requests.append(request.url) if "/api/" in request.url else None)
+    page.locator("#confidence").select_option("4")
+    expect(page.locator("#task-list .task-row")).to_have_count(1)
+    assert len(pending) == 1
+    pending[0].fulfill(json={**payload, "tasks": payload["tasks"][2:], "next_cursor": ""})
+    expect(page.locator("#task-list")).to_have_attribute("aria-busy", "false")
+    expect(page.locator("#task-list .task-row")).to_have_count(1)
+    page.locator("#confidence").select_option("0")
+    expect(page.locator("#task-list .task-row")).to_have_count(3)
+    assert requests == []

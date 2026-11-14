@@ -225,7 +225,13 @@ TASKS_SQL = (
     + """
                 , eligible AS (
                 SELECT t.source_id,t.task_id,t.content_hash,LEFT(d.detail->>'task_preview',600) AS task_preview,
-                    d.detail->'matches'->'subjects' AS matches,t.description_status,
+                    (SELECT jsonb_agg(jsonb_build_object(
+                        'subject_id',m->>'subject_id','membership_similarity',m->'membership_similarity',
+                        'candidates',jsonb_build_array(jsonb_build_object(
+                            'capability_id',m->'candidates'->0->>'capability_id',
+                            'similarity',m->'candidates'->0->'similarity'))))
+                        FROM jsonb_array_elements(d.detail->'matches'->'subjects') m) AS matches,
+                    t.description_status,
                     CASE WHEN :scope='unlisted' THEN 'subject_only' ELSE s.outcome END AS outcome,
                     ROW_NUMBER() OVER (PARTITION BY t.source_id ORDER BY t.task_id) AS sample_rank
                 FROM selected_tasks t JOIN states s USING (source_id,task_id,content_hash)

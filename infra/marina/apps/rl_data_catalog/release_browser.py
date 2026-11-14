@@ -368,6 +368,7 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
             breakdown = page.locator("#area-sources b").all_inner_texts()
             assert sum(integers(value)[0] for value in breakdown) == count
             page.locator("#source-breakdown summary").click()
+            expect(page.locator("#task-list")).not_to_have_attribute("aria-busy", "true", timeout=60000)
             expect(page.locator("#task-message")).to_contain_text(
                 re.compile("sampled examples|No task examples|No stored sample examples")
             )

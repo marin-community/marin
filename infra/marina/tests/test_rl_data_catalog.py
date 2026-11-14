@@ -2220,3 +2220,19 @@ def test_overlap_refresh_binds_frozen_inputs_and_preserves_legacy_reviews(catalo
         assert rows["AI-MO:numina_math"]["duplicate_group"] is None
         assert rows["EleutherAI:hendrycks_math"]["duplicate_group"]["canonical_source_id"] == "agentica-org:deepscaler"
         assert client.get("/source-duplicates").json()["survey_id"] == reference.sha256
+
+
+def test_sample_list_carries_filter_scores_while_detail_retains_alternatives(catalog_database, catalog_query, tmp_path):
+    path = curriculum_release(tmp_path)
+    samples = tmp_path / "tasks.parquet"
+    rows = pq.read_table(samples).to_pylist()
+    alternative = {"subject_id": "D01", "capability_id": "add", "similarity": 0.4, "anchor_id": "alternative"}
+    rows[0]["matches"]["subjects"][0]["candidates"].append(alternative)
+    pq.write_table(pa.Table.from_pylist(rows), samples)
+    load_curriculum(str(path), str(tmp_path / "coverage.json"), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        listed = client.get("/curriculum/tasks").json()["tasks"]
+        first = next(row for row in listed if row["source_id"] == "Marin:a" and row["task_id"] == "one")
+        assert first["matches"][0]["candidates"] == [{"capability_id": "add", "similarity": 0.9}]
+        detail = client.get("/curriculum/task", params={"source_id": "Marin:a", "task_id": "one"}).json()["task"]
+        assert detail["matches"]["subjects"][0]["candidates"][1] == alternative
