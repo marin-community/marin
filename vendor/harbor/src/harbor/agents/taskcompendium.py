@@ -92,7 +92,9 @@ class TaskSpecChatAgent(TaskSpecAgent):
     def name() -> str:
         return "task-spec-chat"
 
-    def __init__(self, *args, api_base: str, max_turns: int, max_tokens: int, request_parameters: dict[str, Any], **kwargs):
+    def __init__(
+        self, *args, api_base: str, max_turns: int, max_tokens: int, request_parameters: dict[str, Any], **kwargs
+    ):
         sampling = {"temperature", "top_p", "presence_penalty", "frequency_penalty", "reasoning_effort", "extra_body"}
         extra = request_parameters.get("extra_body", {})
         if request_parameters.keys() - sampling or extra.keys() - {"top_k", "min_p", "repetition_penalty", "chat_template_kwargs"}:
@@ -114,15 +116,19 @@ class TaskSpecChatAgent(TaskSpecAgent):
         ) as client:
             if self.model_alias is None:
                 raise ValueError("TaskSpecChatAgent requires a model identity")
-            model = ChatModel(client, split_provider_model_name(self.model_alias)[1], self.max_tokens)
+            model = ChatModel(
+                client, split_provider_model_name(self.model_alias)[1], self.max_tokens,
+            )
 
             async def record(request: ModelRequest) -> ModelTurn:
                 self.model_input = chat_input(list(request.messages))
-                request = replace(request, options={
-                    **request.options,
-                    **self.request_parameters,
-                    "extra_body": {**request.options.get("extra_body", {}), **self.request_parameters.get("extra_body", {})},
-                })
+                parameters = {**request.options, **self.request_parameters}
+                extra_body = {
+                    **request.options.get("extra_body", {}),
+                    **self.request_parameters.get("extra_body", {}),
+                }
+                parameters["extra_body"] = extra_body
+                request = replace(request, options=parameters)
                 turn = await model(request)
                 self.attempt = GradingAttempt(
                     chat_conversation([*request.messages, turn.message]),

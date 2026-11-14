@@ -1804,7 +1804,9 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
 ~~~
 
 For candidate trials, select `task-spec-chat` with explicit `api_base`,
-`max_turns` and `max_tokens` agent kwargs. It consumes the original conversation
+`max_turns`, `max_tokens` and `request_parameters` agent kwargs. Atlas routes
+its candidate endpoint through the protocol relay, which owns tokenization,
+request budgets and traffic receipts. The agent consumes the original conversation
 and final-submission tools; shell tools require the declared actor machine.
 External tool-provider implementations are unsupported. Actor files and setup commands run only in the declared actor
 environment. Script graders and non-judge Verifyit graders retain their declared

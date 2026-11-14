@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.grading_environment import GradingEnvironmentMode
-from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
@@ -192,18 +192,7 @@ def trial_network_qualified(task: TaskSpec, runtime: dict | None, trial: OracleT
         if runtime is not None
         else None
     )
-    actor = binding.network("task_machine") if binding else None
-    verifier = binding.network("verifier_machine") if binding else None
-    observed = trial.network_policy
-    if observed is None:
-        return actor is None and verifier is None
-    return (
-        observed.source_runtime_sha256 == (binding.runtime_sha256 if binding else None)
-        and observed.actor_declared == actor
-        and observed.verifier_declared == verifier
-        and (actor is None or not observed.actor_required or observed.actor_effective == actor)
-        and (verifier is None or observed.verifier_effective == verifier)
-    )
+    return network_policy_qualified(binding, trial.network_policy)
 
 
 class VerifierResourceProfile(BaseModel):

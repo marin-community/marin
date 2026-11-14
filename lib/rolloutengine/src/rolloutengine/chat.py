@@ -3,7 +3,9 @@
 
 """A rollout model over an OpenAI-compatible chat endpoint, such as a vLLM, SGLang, or GLM server."""
 
-from collections.abc import Mapping
+import json
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -14,6 +16,17 @@ from rolloutengine.models import ModelRequest, ModelResponseError, ModelTurn, To
 
 RESERVED_OPTIONS = frozenset({"model", "messages", "stream", "n"})
 """Request fields that the adapter sets itself. A prompt option or ``extra_body`` key with one of these names fails."""
+
+
+def chat_template_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Decode tool-call arguments for rendering without changing OpenAI wire history."""
+    rendered = deepcopy([dict(message) for message in messages])
+    for message in rendered:
+        for call in message.get("tool_calls") or []:
+            function = call["function"]
+            if isinstance(function["arguments"], str):
+                function["arguments"] = json.loads(function["arguments"])
+    return rendered
 
 
 @dataclass(frozen=True)
