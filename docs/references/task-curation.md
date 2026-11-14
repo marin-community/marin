@@ -1510,6 +1510,8 @@ assistant text with the original conversation preserved, using the canonical
 UTF-8 replacement policy. Trial artifacts retain the untouched `answer.bin`
 bytes, actual source exit and resource usage. This control
 adds no candidate actor. Changed task, resource or runtime bindings fail closed.
+Oracle resource uploads use the shared PAX archive path to preserve original
+file bytes, modes and nanosecond timestamps before the command executes.
 
 An explicitly repaired managed environment can also supply `expected-runtime.json`,
 bound to its TaskSpec and runtime. Selected source-grader and oracle-control

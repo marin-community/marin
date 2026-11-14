@@ -161,9 +161,6 @@ async def upload_resources(
     if not resources:
         return
     with TemporaryDirectory() as directory:
-        for resource in resources:
-            if resource.mtime_ns is not None:
-                raise ValueError("Shell factory cannot mount resource timestamps")
         archive = Path(directory) / "resources.tar"
         target = f"/tmp/taskcompendium-resources-{uuid.uuid4().hex}.tar"
         # Batch resources into one upload to avoid a machine RPC for every file.
