@@ -33,6 +33,7 @@ from rigging.filesystem.storage_path import StoragePath
 TRIAL_ROOT = "s3://marin-us-east-08a/tmp/ttl=3d/romain/mochi-three-rack/2026.11.13.01a1c926.a1"
 INPUT_VERSION = "2026.11.13.9400"
 CONTEXT_CAP = 262144
+DEFAULT_MAX_NEW_TOKENS = 8192
 RUN_NAME = user_owned_name("checkpoints/mochi-three-rack")
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
@@ -63,7 +64,7 @@ def build_run(
     data_root: str,
     data_sha256: str,
     updates: int = 3,
-    max_new_tokens: int = 1024,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     resume_version: str | None = None,
     resume_step: int = 0,
 ) -> ArtifactStep[SkyRLRun]:
@@ -211,7 +212,13 @@ def build_run(
     "--data-sha256", required=True, help="SHA-256 of train.parquet; checked before launch and in its artifact name."
 )
 @click.option("--updates", type=click.IntRange(min=1), default=3)
-@click.option("--max-new-tokens", type=click.IntRange(min=1, max=CONTEXT_CAP - 1), default=1024)
+@click.option(
+    "--max-new-tokens",
+    type=click.IntRange(min=1, max=CONTEXT_CAP - 1),
+    default=DEFAULT_MAX_NEW_TOKENS,
+    show_default=True,
+    help="Response tokens per turn within the 262,144-token context window; use 1024 for short smoke runs.",
+)
 @click.option("--resume-version", default=None, help="Completed three-rack run artifact; starts fresh when omitted.")
 @click.option("--resume-step", type=click.IntRange(min=1), default=None)
 @rl_build_options
