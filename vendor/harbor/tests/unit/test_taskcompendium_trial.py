@@ -897,9 +897,11 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
 @pytest.mark.parametrize("packaging", ["lock", "image"])
 @pytest.mark.parametrize(
     "actor_network,verifier_network,cleanup_failure",
-    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY, False),
-     (NetworkPolicy.DENY, NetworkPolicy.ALLOW, False),
-     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, True)],
+    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY, None),
+     (NetworkPolicy.DENY, NetworkPolicy.ALLOW, None),
+     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "verifier"),
+     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "startup"),
+     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, "factory")],
 )
 @pytest.mark.asyncio
 async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
@@ -953,7 +955,17 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     bind_factory(monkeypatch, machines, tmp_path / "disks")
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
     monkeypatch.setattr("taskcompendium.runtime.environment.local_runtime", lambda path: LockedRuntime(tmp_path))
-    if cleanup_failure:
+    if cleanup_failure == "startup":
+        async def qualify_failure(root):
+            raise RuntimeError("Disk probe allocation retained for startup recovery")
+
+        monkeypatch.setattr(local_environments, "verified_local_disk_pool", qualify_failure)
+    if cleanup_failure == "factory":
+        async def create_failure(factory, spec):
+            raise RuntimeError("Machine allocation retained for startup recovery")
+
+        monkeypatch.setattr(Machines, "create", create_failure)
+    if cleanup_failure == "verifier":
         close = FileMachine.close
 
         async def provider_close(machine):
@@ -976,8 +988,11 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
         assert result.completion is None
         persisted = json.loads(trial.paths.result_path.read_text())
         assert persisted["completion"] is None
-        assert machines.machines[0].closed
-        assert not machines.machines[1].closed
+        if cleanup_failure == "verifier":
+            assert machines.machines[0].closed
+            assert not machines.machines[1].closed
+        else:
+            assert not machines.machines
         return
     assert result.completion is not None
     if exit_code:

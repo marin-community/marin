@@ -358,6 +358,11 @@ def test_retry_holds_shared_host_slot_until_production_cleanup_is_confirmed(tmp_
     if cleanup == "killed":
         with pytest.raises(subprocess.CalledProcessError):
             retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+    elif cleanup == "missing":
+        with pytest.raises(RuntimeError, match="cleanup is unconfirmed"):
+            retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+        raw = next(destination.rglob("jobs/oracle/result.json"))
+        assert json.loads(raw.read_text())["verifier_result"]["rewards"] == {"reward": 1}
     else:
         retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
         mapping = json.loads((destination / "task-map.json").read_text())["task"]

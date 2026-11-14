@@ -320,6 +320,7 @@ class TaskSpecTrial(Trial):
             raise ValueError("Use a harbor.agents.taskcompendium agent for a TaskSpec payload")
         self._owned = AsyncExitStack()
         self._open_machines: set[_CleanupTrackedMachine] = set()
+        self._local_resources_qualified = False
         self.machine: _MeasuredMachine | None = None
         self.verdicts: list[bytes] = []
         self.attempt = empty_attempt(self.specification)
@@ -427,6 +428,7 @@ class TaskSpecTrial(Trial):
             timeout_sec=self._environment_build_timeout_sec,
             timeout_error=EnvironmentStartTimeoutError("TaskSpec disk qualification timed out"),
         )
+        self._local_resources_qualified = True
         self.factory = local_machine_factory(**kwargs)
         if self.factory.cgroup_parent is None:
             raise ValueError("Declared TaskSpec CPU and memory require cgroup enforcement")
@@ -723,6 +725,6 @@ class TaskSpecTrial(Trial):
 
     async def _stop_agent_environment(self) -> None:
         await self._owned.aclose()
-        if self._open_machines:
+        if self._open_machines or not self._local_resources_qualified:
             raise RuntimeServiceError("TaskSpec machine cleanup is unconfirmed")
         self._is_agent_environment_stopped = True

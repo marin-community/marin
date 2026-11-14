@@ -6,7 +6,6 @@
 import argparse
 import hashlib
 import json
-import logging
 import shutil
 import subprocess
 import time
@@ -70,8 +69,6 @@ from taskcompendium.runtime.resources import has_oracle_solution, inline_resourc
 from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-logger = logging.getLogger(__name__)
-
 HARBOR_PROJECT = PROJECT_ROOT / "vendor/harbor"
 BACKEND_CODE_ROOTS = (
     "lib/shellbox/",
@@ -808,14 +805,13 @@ def calibrated_task(
             if len(trials) != 1:
                 raise ValueError(f"Expected exactly one persisted production trial for {task.id}")
             trial = trials[0]
-            if slot is not None and trial.result.get("completion") is not None:
+            if slot is not None:
+                if trial.result.get("completion") is None:
+                    raise RuntimeError(f"LOCAL resource cleanup is unconfirmed; host claim retained: {task.id}")
                 slot.release()
         if retry_context is not None:
             trial = trial.model_copy(update={"infrastructure_retry": retry_context})
         attempts.append(trial)
-        if slot is not None and trial.result.get("completion") is None:
-            logger.error("LOCAL resource cleanup is unconfirmed; host claim retained: %s", task.id)
-            break
         if trial.failure_signal is FailureSignal.INFRASTRUCTURE:
             infrastructure_attempts += 1
             if infrastructure_attempts < 3:
