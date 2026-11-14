@@ -1706,6 +1706,9 @@ retain `source_archive/task.toml` among oracle resources. The archived limits ar
 read only with the accompanying `taskcompendium/crosscode-remediation.json` record,
 whose version must match the TaskSpec's remediation label and which records the
 original task hash. Conflicting declarations reject preparation.
+The actor census uses the same provenance-bound archive reader. Repaired native
+tasks retain their archived allocation settings while snapshot identities use
+their current declared actor and grader images.
 Run `calibrate` against the emitted `task-map.json` with `--environment local`
 and the worker's delegated cgroup-v2 directory (`cgroup_parent`) and writable
 loop-device backing directory (`disk_root`) in `--environment-kwargs`. The

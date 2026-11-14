@@ -10,7 +10,7 @@ import tarfile
 
 import pytest
 
-pytest.importorskip("harbor")  # the counter runs the production Harbor spec mapping
+pytest.importorskip("harbor_config")  # the counter runs the production Harbor spec mapping
 
 from daytona import Resources
 from shellbox.backends.daytona.snapshot import snapshot_name

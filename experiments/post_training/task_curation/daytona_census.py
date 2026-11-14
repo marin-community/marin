@@ -225,6 +225,7 @@ def measure_envelopes(documents: Iterable[tuple[dict, dict]]) -> EnvelopeCensus:
         native = "harbor" in task.get("tags", ())
         if native:
             shapes = native_shapes(native_task_toml(task))
+            native = any(row["path"] == "task.toml" for row in task["resources"]["verifier"])
         runtime = {}
         for role, slot, declared, network in (
             ("agent", "task_machine", task["environment_requirements"], "allow"),
