@@ -67,6 +67,7 @@ def main():
         if (
             report["version"] != VERSION
             or not report["all_six_cells_valid"]
+            or not report["expansion_gate_passed"]
             or report["projected_primary_gpu_hours"] > 2200
         ):
             raise ValueError("Calibration did not pass the approved primary-grid gate")

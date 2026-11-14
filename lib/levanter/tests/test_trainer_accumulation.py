@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -13,6 +15,7 @@ from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils.mesh import MeshConfig
+from levanter.metrics import Metric, ReductionType
 
 
 def test_fp32_master_parameters_accumulate_updates_below_bfloat16_resolution():
@@ -44,7 +47,10 @@ def test_token_weighted_microbatches_match_full_weighted_update(tmp_path):
 
     def loss(model, batch, *, key=None):
         del key
-        return hax.sum((model - batch.values) ** 2 * batch.weights).scalar()
+        return hax.sum((model - batch.values) ** 2 * batch.weights).scalar(), {
+            "loss_weight_sum": Metric.from_value(hax.sum(batch.weights).scalar(), ReductionType.SUM),
+            "positions": Metric.from_value(jnp.asarray(batch.values.size), ReductionType.SUM),
+        }
 
     def weight(batch, *, key=None):
         del key
@@ -69,3 +75,7 @@ def test_token_weighted_microbatches_match_full_weighted_update(tmp_path):
         actual = trainer.train_step(state, batch)
     np.testing.assert_allclose(actual.loss, reference_loss, rtol=1e-6)
     np.testing.assert_allclose(actual.state.model, reference_update, rtol=1e-6)
+    trainer.tracker.finish()
+    recorded = json.loads((tmp_path / "eval_results.json").read_text())
+    assert recorded["train/loss_weight_sum"] == 11
+    assert recorded["train/positions"] == 4

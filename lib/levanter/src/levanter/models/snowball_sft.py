@@ -15,6 +15,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.models.lm_model import LmExample
 from levanter.models.loss import maybe_fused_next_token_loss
+from levanter.layers.attention import AttentionMask
 from levanter.metrics import Metric, ReductionType
 from levanter.sharding import partition_spec_of
 from levanter.utils.jax_utils import leaf_key_paths
@@ -33,6 +34,20 @@ class SnowballSftConfig:
             raise ValueError("Every reseeded token requires one anchor")
         if self.special_token_lr_multiplier <= 0:
             raise ValueError("Special-token update multiplier must be positive")
+
+
+def snowball_batch_metrics(example: LmExample) -> dict[str, Metric]:
+    """Count scheduled positions, supervised targets and structured-mask padding."""
+    metrics = {
+        "positions": Metric.from_value(jnp.asarray(example.tokens.size), ReductionType.SUM),
+        "scored_tokens": Metric.from_value(hax.sum(example.loss_weight > 0).scalar(), ReductionType.SUM),
+        "loss_weight_sum": Metric.from_value(hax.sum(example.loss_weight).scalar(), ReductionType.SUM),
+    }
+    if isinstance(example.attn_mask, AttentionMask):
+        segments = example.attn_mask.segment_ids
+        padding = jnp.asarray(0) if segments is None else hax.sum(segments[0] < 0).scalar()
+        metrics["padding_positions"] = Metric.from_value(padding, ReductionType.SUM)
+    return metrics
 
 
 def reseed_snowball_head(model: SnowballLMHeadModel, config: SnowballSftConfig) -> SnowballLMHeadModel:

@@ -101,7 +101,13 @@ def batch_saturation(size: int) -> dict:
     reason = "search_limit_before_bracketed_saturation"
     pending = list(candidates[1:])
     accumulating = False
-    while pending and len(reports) < 5:
+    while len(reports) < 7:
+        if not pending:
+            if accumulating or not valid:
+                break
+            accumulating = True
+            safe = draccus.decode(Probe, valid[-1]["probe"])
+            pending = [replace(safe, accumulation=safe.accumulation * 2**i) for i in range(1, 8 - len(reports))]
         probe = pending.pop(0)
         report = run_probe(probe)
         reports.append(report)
@@ -119,7 +125,7 @@ def batch_saturation(size: int) -> dict:
             # increasing per-microbatch activation memory.
             accumulating = True
             safe = draccus.decode(Probe, valid[-1]["probe"])
-            pending = [replace(safe, accumulation=safe.accumulation * 2**i) for i in range(1, 6 - len(reports))]
+            pending = [replace(safe, accumulation=safe.accumulation * 2**i) for i in range(1, 8 - len(reports))]
             continue
         valid.append(report)
         selected = report["probe"]

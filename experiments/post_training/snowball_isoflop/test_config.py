@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 
 import draccus
@@ -13,7 +14,12 @@ import pytest
 from levanter.main.train_lm import TrainLmConfig, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmExample
 from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig, SnowballLMHeadModel
-from levanter.models.snowball_sft import SnowballSftConfig, snowball_loss_with_dispatch_counts, snowball_update_transform
+from levanter.models.snowball_sft import (
+    SnowballSftConfig,
+    snowball_batch_metrics,
+    snowball_loss_with_dispatch_counts,
+    snowball_update_transform,
+)
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
@@ -73,7 +79,9 @@ def test_native_muonh_update_changes_weights_and_keeps_router_bias(tmp_path):
     )
 
     def loss(model, example, *, key=None):
-        return snowball_loss_with_dispatch_counts(model, example, z_loss_weight=1e-4, reduction=hax.mean)
+        value, metrics = snowball_loss_with_dispatch_counts(model, example, z_loss_weight=1e-4, reduction=hax.mean)
+        metrics.update(snowball_batch_metrics(example))
+        return value, metrics
 
     with Trainer(trainer_config, optimizer, loss, add_default_hooks=False) as trainer:
         model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), config, key=jax.random.key(0))
@@ -86,6 +94,10 @@ def test_native_muonh_update_changes_weights_and_keeps_router_bias(tmp_path):
         state = TrainerState.init(optimizer, model, key=jax.random.key(1), mp=trainer_config.mp)
         info = trainer.train_step(state, example)
     assert math.isfinite(info.loss)
+    trainer.tracker.finish()
+    recorded = json.loads((tmp_path / "eval_results.json").read_text())
+    assert recorded["train/positions"] == 8
+    assert recorded["train/scored_tokens"] == 7
     after = info.state.model.to_state_dict()
     assert not np.array_equal(before["lm_head.weight"], after["lm_head.weight"])
     np.testing.assert_array_equal(before["model.layers.0.mlp.router.bias"], after["model.layers.0.mlp.router.bias"])

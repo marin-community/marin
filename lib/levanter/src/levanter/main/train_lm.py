@@ -52,6 +52,7 @@ from levanter.models.snowball_sft import (
     reseed_snowball_head,
     snowball_update_transform,
     snowball_loss_with_dispatch_counts,
+    snowball_batch_metrics,
 )
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -334,12 +335,18 @@ def main(config: TrainLmConfig):
         if config.snowball_sft is not None and config.snowball_sft.record_dispatch_counts:
             if not isinstance(model, SnowballLMHeadModel):
                 raise ValueError("Dispatch counts require a Snowball model")
-            return snowball_loss_with_dispatch_counts(
+            loss, metrics = snowball_loss_with_dispatch_counts(
                 model, example, z_loss_weight=config.z_loss_weight, reduction=reduction
             )
-        return model.compute_next_token_loss(
-            example, key=key, logsumexp_weight=config.z_loss_weight, reduction=reduction
-        )
+        else:
+            loss = model.compute_next_token_loss(
+                example, key=key, logsumexp_weight=config.z_loss_weight, reduction=reduction
+            )
+            metrics = {}
+        if config.snowball_sft is None:
+            return loss
+        metrics.update(snowball_batch_metrics(example))
+        return loss, metrics
 
     def loss_weight(example: LmExample, *, key=None):
         del key
