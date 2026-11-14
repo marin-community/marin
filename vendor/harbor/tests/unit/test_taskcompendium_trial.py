@@ -18,8 +18,9 @@ import pytest
 import tomlkit
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import Backend, UnsupportedMachineSpec
+from shellbox.machine import Backend, NetworkPolicy, UnsupportedMachineSpec
 from taskcompendium.harbor.adapter import write_harbor_task
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, write_source_runtime
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.models import (
@@ -542,9 +543,13 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
 
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize("packaging", ["lock", "image"])
+@pytest.mark.parametrize(
+    "actor_network,verifier_network",
+    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY), (NetworkPolicy.DENY, NetworkPolicy.ALLOW)],
+)
 @pytest.mark.asyncio
 async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
-    tmp_path, monkeypatch, exit_code, packaging
+    tmp_path, monkeypatch, exit_code, packaging, actor_network, verifier_network
 ):
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
@@ -586,6 +591,8 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     )
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    runtime = {"task_machine": {"network": actor_network.value}, "verifier_machine": {"network": verifier_network.value}}
+    write_source_runtime(task, runtime, directory)
     response = tmp_path / "response.json"
     response.write_text(json.dumps([{"role": "assistant", "content": "42"}]))
     machines = Machines(tmp_path / "sandboxes")
@@ -613,4 +620,10 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     assert not actor.local("/tests/check.py").exists()
     assert verifier.local("/tests/check.py").read_bytes() == script
     assert actor.closed and verifier.closed
+    assert [spec.network for spec in machines.specifications] == [actor_network, verifier_network]
+    network = TaskNetworkPolicyReceipt.model_validate_json(
+        (Path(trial.paths.trial_dir) / "network-policy.json").read_text()
+    )
+    assert (network.actor_declared, network.actor_effective) == (actor_network, actor_network)
+    assert (network.verifier_declared, network.verifier_effective) == (verifier_network, verifier_network)
     assert all((spec.cpus, spec.memory_mb, spec.storage_mb) == (1, 2048, 2048) for spec in machines.specifications)

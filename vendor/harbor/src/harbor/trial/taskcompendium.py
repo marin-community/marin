@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from contextlib import AsyncExitStack
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.machines import grading_machine_factory, task_machine
@@ -36,6 +37,7 @@ from taskcompendium.harbor.adapter import (
     require_trial_budget,
     unsupported_harbor_contract,
 )
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, read_source_runtime
 from taskcompendium.models import (
     ExecutionRequirements,
     TaskSpec,
@@ -138,6 +140,34 @@ class _MeasuredMachine:
         await self.machine.close()
 
 
+class _NetworkFactory:
+    def __init__(
+        self, factory: MachineFactory, trial: "TaskSpecTrial", role: Literal["task_machine", "verifier_machine"]
+    ):
+        self.factory, self.trial, self.role = factory, trial, role
+
+    @property
+    def backend(self):
+        return self.factory.backend
+
+    def check_environment(self, requirements, spec):
+        self.factory.check_environment(requirements, spec)
+
+    async def create(self, spec: MachineSpec) -> Machine:
+        machine = await self.factory.create(spec)
+        try:
+            field = "actor_effective" if self.role == "task_machine" else "verifier_effective"
+            self.trial.network_policy = self.trial.network_policy.model_copy(update={field: spec.network})
+            await _persist(
+                self.trial.paths.trial_dir / "network-policy.json", self.trial.network_policy.model_dump_json()
+            )
+        except BaseException:
+            async with asyncio.timeout(self.trial.config.trial_cleanup_grace_sec):
+                await machine.close()
+            raise
+        return machine
+
+
 class _VerifierFactory:
     def __init__(
         self,
@@ -206,6 +236,18 @@ class TaskSpecTrial(Trial):
 
     def _init_agent_environment(self) -> None:
         self.specification = TaskSpec.model_validate_json((self.task.paths.task_dir / TASK_SPEC_FILE).read_text())
+        self.source_runtime = read_source_runtime(self.task.paths.task_dir)
+        if self.source_runtime is not None:
+            self.source_runtime.require_task(self.specification)
+        actor_network = self.source_runtime.network("task_machine") if self.source_runtime else None
+        verifier_network = self.source_runtime.network("verifier_machine") if self.source_runtime else None
+        self.network_policy = TaskNetworkPolicyReceipt(
+            source_runtime_sha256=self.source_runtime.runtime_sha256 if self.source_runtime else None,
+            actor_declared=actor_network,
+            verifier_declared=verifier_network,
+            actor_effective=None,
+            verifier_effective=None,
+        )
         unsupported = unsupported_harbor_contract(self.specification)
         if unsupported is not None:
             raise ValueError(unsupported)
@@ -260,7 +302,7 @@ class TaskSpecTrial(Trial):
             raise ValueError("TaskSpec trials do not accept timeout overrides or multipliers")
         self.runtime = MachineRuntimeSpec(
             backend="local",
-            network=NetworkPolicy.DENY,
+            network=actor_network if actor_network is not None else NetworkPolicy.DENY,
             cpus=self.shape.cpus,
             memory_mb=self.shape.memory_mb,
             storage_mb=self.shape.storage_mb,
@@ -268,6 +310,9 @@ class TaskSpecTrial(Trial):
             user=None,
             startup_timeout=self._environment_build_timeout_sec,
             cleanup_timeout=self.config.trial_cleanup_grace_sec,
+        )
+        self.verifier_runtime = self.runtime.model_copy(
+            update={"network": verifier_network if verifier_network is not None else NetworkPolicy.DENY}
         )
         self.limits = RolloutLimits(
             max_turns=None,
@@ -283,6 +328,7 @@ class TaskSpecTrial(Trial):
     async def _prepare(self) -> None:
         task = self.specification
         self.result.environment_setup = TimingInfo(started_at=self._now())
+        await _persist(self.paths.trial_dir / "network-policy.json", self.network_policy.model_dump_json())
         # A missing original lock is a source repair gate, before candidate generation or allocation.
         for environment in (task.environment_requirements, task.grader.environment):
             if environment is not None and environment.packages_lock is not None:
@@ -323,7 +369,7 @@ class TaskSpecTrial(Trial):
                 self._owned.enter_async_context(
                     task_machine(
                         task,
-                        self.factory,
+                        _NetworkFactory(self.factory, self, "task_machine"),
                         self.runtime,
                         cleanup_timeout=self.config.trial_cleanup_grace_sec,
                     )
@@ -417,14 +463,14 @@ class TaskSpecTrial(Trial):
             cpus=self.shape.cpus,
             memory_mb=self.shape.memory_mb,
             storage_mb=self.shape.storage_mb,
-            network=NetworkPolicy.DENY,
+            network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
         )
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
-                    _VerifierFactory(self.factory, self, relay, stack),
-                    self.runtime,
+                    _VerifierFactory(_NetworkFactory(self.factory, self, "verifier_machine"), self, relay, stack),
+                    self.verifier_runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )
@@ -473,15 +519,15 @@ class TaskSpecTrial(Trial):
             cpus=self.shape.cpus,
             memory_mb=self.shape.memory_mb,
             storage_mb=self.shape.storage_mb,
-            network=NetworkPolicy.DENY,
+            network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
             env=env,
         )
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
-                    _VerifierFactory(self.factory, self, relay, stack),
-                    self.runtime,
+                    _VerifierFactory(_NetworkFactory(self.factory, self, "verifier_machine"), self, relay, stack),
+                    self.verifier_runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
             )
