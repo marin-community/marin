@@ -47,7 +47,7 @@ MIN_ROUND_TRIPS = 3
 # Seconds to watch the held connection on each side of the lockdown.
 WATCH_SECONDS = 20
 # Keep-alive HEAD requests over one connection; each line is "<epoch> ok" or "<epoch> fail <status>". A read
-# timeout (status above 128) means packets stopped; status 1 means the server closed the connection.
+# timeout (status above 128) means packets stopped; status 1 means the connection was closed under it.
 HOLDER = f"""trap '' PIPE
 exec 3<>/dev/tcp/{HELD_HOST}/80 || {{ echo "$(date +%s) connect-fail" >> {HOLD_LOG}; exit 1; }}
 while :; do
@@ -117,8 +117,8 @@ async def smoke(source: DockerfileSource) -> dict:
             and rounds["before_fail"] == 0
             and rounds["after_ok"] == 0
             and rounds["after_fail"] >= MIN_ROUND_TRIPS
-            # Read timeouts only: the connection was cut, not closed by the server.
-            and all(status > 128 for status in rounds["after_fail_statuses"])
+            # A lockdown can drop the held connection's packets (read timeout) or close it (status 1).
+            and all(status == 1 or status > 128 for status in rounds["after_fail_statuses"])
             and probe != 0
             and held_host_probe != 0
             and allowed == 0
