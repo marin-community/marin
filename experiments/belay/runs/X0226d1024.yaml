@@ -1,0 +1,14 @@
+experiment: X0226d1024
+track: competitive-d1024
+runs:
+  seed0:
+    seed: 0
+    variant: spelling-normalised byte embeddings, 4-rung ladder
+    flags:
+    - --model-set
+    - spelling_byte_embeds=true
+  control:
+    seed: 0
+    variant: competitive-d1024 control
+    control: true
+    shared: s7n-d1024
