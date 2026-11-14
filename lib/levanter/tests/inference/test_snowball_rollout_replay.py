@@ -21,16 +21,16 @@ from levanter.inference.snowball_rollout_replay import generate_with_route_captu
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 _BENCHMARK = Path(__file__).parents[2] / "benchmarks" / "snowball_rollout_replay.py"
-_BASE = "077b269560e5545c559c67fa921ac897c5efdbc9"
+_BASE = "1b3d5e5cb02c9306657f8aae17b76979c7b4bbec"
 
 
-def _config():
+def _config(architecture):
     return SnowballConfig(
         vocab_size=23,
         hidden_dim=16,
         intermediate_dim=16,
         shared_expert_intermediate_dim=16,
-        num_layers=2,
+        num_layers=2 if architecture == "mixed" else 1,
         num_experts=4,
         num_experts_per_token=2,
         num_heads=2,
@@ -44,9 +44,10 @@ def _config():
     )
 
 
+@pytest.mark.parametrize("architecture", ["nope", "mixed"])
 @pytest.mark.timeout(180)
-def test_generated_routes_preserve_public_decode_sampling_alignment_and_batch_major_order():
-    config = _config()
+def test_generated_routes_preserve_public_decode_sampling_alignment_and_batch_major_order(architecture):
+    config = _config(architecture)
     sampling_key = jax.random.key(154)
     page_map = np.asarray([[6, 1], [7, 0], [4, 3], [5, 2]], dtype=np.int32)
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)), jax.default_matmul_precision("highest"):
@@ -107,7 +108,7 @@ def test_generated_routes_preserve_public_decode_sampling_alignment_and_batch_ma
                 assert int(original.batch_info.slot_ids.array[batch]) == batch
                 destination = page_map[batch, position // 4] * 4 + position % 4
                 assert original.batch_info.new_token_dests.array[serving_row] == destination
-                for layer in range(2):
+                for layer in range(config.num_layers):
                     actual = generated.teacher_capture.route_captures[layer]
                     source = original.route_captures[layer]
                     for field in ("selected_experts", "token_valid", "qb_alpha"):
@@ -123,15 +124,36 @@ def test_generated_routes_preserve_public_decode_sampling_alignment_and_batch_ma
         # changes public training logits. The payload cannot be ignored or
         # replaced by teacher-side routing and still satisfy this assertion.
         routes = generated.teacher_capture.route_captures
-        changed = routes[0]._replace(selected_experts=(routes[0].selected_experts + 1) % config.num_experts)
-        changed_capture = generated.teacher_capture._replace(route_captures=(changed, *routes[1:]))
-        changed_generated = dataclasses.replace(generated, teacher_capture=changed_capture)
-        changed_teacher = replay_generated_routes(model, changed_generated)
-        assert np.max(np.abs(changed_teacher - teacher)) > 0.0
+        for layer, route in enumerate(routes):
+            changed = route._replace(selected_experts=(route.selected_experts + 1) % config.num_experts)
+            changed_routes = (*routes[:layer], changed, *routes[layer + 1 :])
+            changed_capture = generated.teacher_capture._replace(route_captures=changed_routes)
+            changed_generated = dataclasses.replace(generated, teacher_capture=changed_capture)
+            changed_teacher = replay_generated_routes(model, changed_generated)
+            assert np.max(np.abs(changed_teacher - teacher)) > 0.0
+
+        if architecture == "mixed":
+            # Same initialized parameter bytes, same actual generated inputs and
+            # routes: removing the short layer's window must change outputs only
+            # after position 3. This crosses a real window boundary, not just a
+            # traced short-layer branch whose window exceeds the sequence.
+            full_window = SnowballLMHeadModel.init(
+                hax.Axis("vocab", 23), dataclasses.replace(config, sliding_window=8), key=jax.random.key(41)
+            )
+            for original, alternate in zip(
+                jax.tree_util.tree_leaves(eqx.filter(model, eqx.is_array)),
+                jax.tree_util.tree_leaves(eqx.filter(full_window, eqx.is_array)),
+                strict=True,
+            ):
+                np.testing.assert_array_equal(np.asarray(original), np.asarray(alternate))
+            without_window = replay_generated_routes(full_window, generated)
+            np.testing.assert_array_equal(teacher[:, :4].view(np.uint32), without_window[:, :4].view(np.uint32))
+            assert np.max(np.abs(teacher[:, 4:] - without_window[:, 4:])) > 0.0
 
 
+@pytest.mark.parametrize("architecture", ["nope", "mixed"])
 @pytest.mark.timeout(180)
-def test_rollout_replay_cli_runs_on_four_explicit_cpu_devices_and_retains_failure(tmp_path):
+def test_rollout_replay_cli_runs_on_four_explicit_cpu_devices_and_retains_failure(tmp_path, architecture):
     output = tmp_path / "four-device-generated-replay.json"
     # Keep the lexical venv interpreter path. Resolving its symlink can select
     # bare system Python, which does not contain the installed JAX dependencies.
@@ -141,6 +163,7 @@ def test_rollout_replay_cli_runs_on_four_explicit_cpu_devices_and_retains_failur
         "JAX_PLATFORMS": "cpu",
         "JAX_NUM_CPU_DEVICES": "4",
         "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONOPTIMIZE": "0",
         "PYTHONPATH": os.pathsep.join(
             (
                 str(_BENCHMARK.parents[1] / "src"),
@@ -148,8 +171,21 @@ def test_rollout_replay_cli_runs_on_four_explicit_cpu_devices_and_retains_failur
             )
         ),
     }
+    # Omitting the selection retains the existing NoPE control command.
+    architecture_args = ["--architecture", architecture] if architecture == "mixed" else []
     completed = subprocess.run(
-        [interpreter, "-B", str(_BENCHMARK), "--backend", "cpu", "--source-sha", _BASE, "--output", str(output)],
+        [
+            interpreter,
+            "-B",
+            str(_BENCHMARK),
+            "--backend",
+            "cpu",
+            *architecture_args,
+            "--source-sha",
+            _BASE,
+            "--output",
+            str(output),
+        ],
         cwd=tmp_path,
         env=environment,
         capture_output=True,
@@ -159,6 +195,17 @@ def test_rollout_replay_cli_runs_on_four_explicit_cpu_devices_and_retains_failur
     assert completed.returncode == 0, completed.stderr
     report = json.loads(output.read_text())
     assert report["status"] == "success"
+    assert report["metadata"]["architecture"] == architecture
+    schedule = report["metadata"]["layer_schedule"]
+    if architecture == "mixed":
+        assert [(layer["attention"], layer["window"], layer["rotary_dim"]) for layer in schedule] == [
+            ("half_rope_windowed_causal", 4, 4),
+            ("nope_full_causal", None, 0),
+        ]
+    else:
+        assert [(layer["attention"], layer["window"], layer["rotary_dim"]) for layer in schedule] == [
+            ("nope_full_causal", None, 0)
+        ]
     assert report["metadata"]["local_device_count"] == 4
     assert report["metadata"]["mesh"]["data"] == 4
     assert all("Explicit" in axis for axis in report["metadata"]["mesh_axis_types"])
@@ -171,11 +218,17 @@ def test_rollout_replay_cli_runs_on_four_explicit_cpu_devices_and_retains_failur
         assert row["extra_unsampled_next_row"]["shape"] == [4, 23]
         assert row["capture_provenance"]["serving_calls"] == 6
         assert row["capture_provenance"]["captured_token_rows_per_layer"] == 32
+        assert len(row["capture_provenance"]["per_layer_route_sha256"]) == len(schedule)
+        assert row["parameter_sha256"] == report["parameter_sha256_before"]
+        assert row["parameter_sha256_after_replay"] == report["parameter_sha256_before"]
         assert row["predictions"]["finite"]
         assert row["predictions"]["sampled_token_log_probs_fp32"]["finite"]
         assert row["predictions"]["max_abs_error"] < 1e-4
         mismatches = row["predictions"]["bit_mismatch_count"]
         assert row["predictions"]["bitwise_fp32"] == (mismatches == 0)
+    assert report["prediction_parity"] == (
+        "exact" if all(row["predictions"]["bitwise_fp32"] for row in report["runs"]) else "different"
+    )
     assert report["cross_page_maps"]["sampled_ids_equal"]
     assert report["cross_page_maps"]["routes_equal"]
     assert report["cross_page_maps"]["serving_logits"]["bitwise_fp32"]
