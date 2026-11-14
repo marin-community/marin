@@ -17,11 +17,14 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
 from taskcompendium.pipeline.oracle_filter import (
     MechanicalOracleTaskReceipt,
+    NativeOracleSuccessPolicy,
+    NativeVerifierGrade,
     OracleExclusionReason,
     OracleFilterReceipt,
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
     VerifierResourceProfile,
+    load_oracle_filter,
     next_trial_requirements,
     require_oracle_filter,
 )
@@ -295,3 +298,61 @@ def test_pre_oracle_host_failures_retry_without_reclassifying_source_failures(fa
             attempts=(trial,),
         )
         assert not ResourceCalibrationReceipt.model_validate_json(historical.model_dump_json()).passed
+
+
+@pytest.mark.parametrize(
+    ("rewards", "expected"),
+    [
+        ({"correctness": 1, "coverage": 1}, True),
+        ({"correctness": 1}, False),
+        ({"correctness": 1, "coverage": 0.5}, False),
+        ({"reward": 1}, False),
+    ],
+)
+def test_native_named_policy_preserves_raw_rewards_and_requires_all_source_keys(tmp_path, rewards, expected):
+    current = task()
+    proof = oracle_receipt([current]).model_dump(mode="json")
+    entry = proof["tasks"][current.id]
+    trial = entry["trials"][0]
+    trial["verdict"] = None
+    trial["result"]["verifier_result"]["rewards"] = rewards
+    trial["result_sha256"] = canonical_sha256(trial["result"])
+    trial["native_grade"] = NativeVerifierGrade(
+        rewards=rewards,
+        artifact_path="verifier/reward.json",
+        artifact_sha256="b" * 64,
+        result_sha256=trial["result_sha256"],
+        task_checksum=entry["harbor_task_checksum"],
+    ).model_dump(mode="json")
+    entry["calibration"]["attempts"] = [trial]
+    entry["source_task_sha256"] = entry["task_sha256"]
+    entry["source_task_checksum"] = entry["harbor_task_checksum"]
+    evidence = ContentEvidenceReference(uri="s3://fixtures/source-decision.json", sha256="c" * 64)
+    entry["native_success_policy"] = NativeOracleSuccessPolicy(
+        maximum=1,
+        required_reward_keys=("correctness", "coverage"),
+        source_task_sha256=entry["task_sha256"],
+        runtime_sha256=entry["runtime_sha256"],
+        source_task_checksum=entry["harbor_task_checksum"],
+        input_cohort_sha256=proof["input_cohort_sha256"],
+        consumer=evidence,
+        source_census=evidence,
+        decision=evidence,
+    ).model_dump(mode="json")
+    entry["exclusion_reason"] = None if expected else OracleExclusionReason.ORACLE_FAILED.value
+    raw_before = canonical_sha256(trial["result"])
+    receipt = OracleFilterReceipt.model_validate(proof)
+    path = tmp_path / "receipt.json"
+    path.write_text(receipt.model_dump_json())
+    reloaded = load_oracle_filter(str(path))
+    assert require_oracle_filter(current, reloaded) is expected
+    assert reloaded.tasks[current.id].calibration.attempts[-1].result_sha256 == raw_before
+    assert reloaded.tasks[current.id].trials[0].native_grade.rewards == rewards
+    foreign = reloaded.model_dump(mode="json")
+    foreign["tasks"][current.id]["native_success_policy"]["source_task_checksum"] = "foreign"
+    with pytest.raises(ValueError, match="original source contract"):
+        OracleFilterReceipt.model_validate(foreign)
+    foreign = reloaded.model_dump(mode="json")
+    foreign["input_cohort_sha256"] = "d" * 64
+    with pytest.raises(ValueError, match="another frozen cohort"):
+        OracleFilterReceipt.model_validate(foreign)

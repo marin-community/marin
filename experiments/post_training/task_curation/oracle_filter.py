@@ -43,6 +43,7 @@ from taskcompendium.pipeline.oracle_filter import (
     InfrastructureRetryTransition,
     LocalExecutionHostTransition,
     MechanicalOracleTaskReceipt,
+    NativeOracleSuccessPolicy,
     NativeVerifierGrade,
     OracleExclusionReason,
     OracleFilterReceipt,
@@ -382,6 +383,7 @@ def filter_cohort(
     executability_runs: Path | None = None,
     mechanical_outcomes: Path | None = None,
     input_evidence: ContentEvidenceReference | None = None,
+    native_success_policies: Path | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -395,6 +397,25 @@ def filter_cohort(
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
+    policies = {}
+    checked_evidence = set()
+    if native_success_policies is not None:
+        for line in native_success_policies.read_text().splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            task_id = record["task_id"]
+            if task_id in policies or task_id not in mappings:
+                raise ValueError(f"Duplicate or unknown native success policy: {task_id}")
+            policy = NativeOracleSuccessPolicy.model_validate(record["policy"])
+            for evidence in (policy.consumer, policy.source_census, policy.decision):
+                key = (evidence.uri, evidence.sha256)
+                if key in checked_evidence:
+                    continue
+                if hashlib.sha256(StoragePath(evidence.uri).read_bytes()).hexdigest() != evidence.sha256:
+                    raise ValueError("Native success policy evidence bytes changed")
+                checked_evidence.add(key)
+            policies[task_id] = policy
     prior_failures = {}
     for mapping in mappings.values():
         phases = [
@@ -566,9 +587,16 @@ def filter_cohort(
                 incompatibility = source_environment_incompatibility(calibration.attempts[-1], source_setup)
                 final = calibration.attempts[-1]
                 control = controls.get(task.id)
-                if calibration.passed or (
-                    not oracle and control is not None and control.passed and control.trial == final
+                policy = policies.get(task.id)
+                if policy is not None and (
+                    policy.source_task_sha256 != mapping["task_sha256"]
+                    or policy.source_task_checksum != mapping.get("source_task_checksum", checksum)
+                    or policy.runtime_sha256 != row_runtime_hash(original_row)
+                    or policy.input_cohort_sha256 != cohort_hash
                 ):
+                    raise ValueError(f"Native success policy differs from the frozen source contract: {task.id}")
+                oracle_passed = policy.passes(final, checksum) if policy is not None else calibration.passed
+                if oracle_passed or (not oracle and control is not None and control.passed and control.trial == final):
                     reason = None
                 else:
                     reason = oracle_failure_reason(final, incompatibility)
@@ -590,6 +618,7 @@ def filter_cohort(
                     harbor_task_checksum=checksum,
                     source_task_sha256=mapping["task_sha256"],
                     source_task_checksum=mapping.get("source_task_checksum", checksum),
+                    native_success_policy=policy,
                     has_oracle=oracle,
                     trials=(calibration.attempts[-1],) if oracle else (),
                     calibration=calibration,
@@ -1221,6 +1250,7 @@ def main() -> None:
     collect.add_argument("--executability-runs", type=Path, help="strong-model production-control JSONL receipts")
     collect.add_argument("--mechanical-outcomes", type=Path, help="typed per-task mechanical outcome JSONL")
     collect.add_argument("--input-evidence-uri", help="immutable cohort URI for tasks with no execution proof")
+    collect.add_argument("--native-success-policies", type=Path)
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
@@ -1313,6 +1343,7 @@ def main() -> None:
             if args.input_evidence_uri
             else None
         ),
+        args.native_success_policies,
     )
 
 

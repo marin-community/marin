@@ -82,6 +82,41 @@ class PriorPhaseFailureReceipt(BaseModel):
     archive_root: str
 
 
+class NativeOracleSuccessPolicy(BaseModel):
+    """Source-approved interpretation of unchanged production native reward maps."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+    kind: Literal["all_named_maximum"] = "all_named_maximum"
+    maximum: float
+    required_reward_keys: tuple[str, ...]
+    source_task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime_sha256: str | None
+    source_task_checksum: str
+    input_cohort_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    consumer: ContentEvidenceReference
+    source_census: ContentEvidenceReference
+    decision: ContentEvidenceReference
+
+    def passes(self, trial: "OracleTrialReceipt", task_checksum: str) -> bool:
+        rewards = (trial.result.get("verifier_result") or {}).get("rewards") or {}
+        return (
+            trial.verdict is None
+            and trial.native_grade is not None
+            and trial.scored
+            and trial.oracle_exit_code == 0
+            and trial.result.get("task_checksum") == task_checksum
+            and bool(rewards)
+            and set(self.required_reward_keys) <= rewards.keys()
+            and all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(value)
+                and value == self.maximum
+                for value in rewards.values()
+            )
+        )
+
+
 def pre_oracle_host_unavailable(result: dict[str, Any], verdict: dict | None, oracle_exit_code: int | None) -> bool:
     """Recognize frozen host failures that occurred before the original command."""
     config = result.get("config", {})
@@ -634,6 +669,7 @@ class OracleTaskReceipt(BaseModel):
     harbor_task_checksum: str
     source_task_sha256: str | None = Field(default=None, exclude_if=lambda value: value is None)
     source_task_checksum: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    native_success_policy: NativeOracleSuccessPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
     has_oracle: bool
     trials: tuple[OracleTrialReceipt, ...]
     calibration: ResourceCalibrationReceipt
@@ -642,6 +678,21 @@ class OracleTaskReceipt(BaseModel):
     exclusion_reason: OracleExclusionReason | None = None
     source_environment_incompatibility: SourceEnvironmentIncompatibility | None = None
     infrastructure_retries: tuple[InfrastructureRetryTransition, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_native_success_policy(self):
+        policy = self.native_success_policy
+        if policy is None:
+            return self
+        if (
+            policy.source_task_sha256 != self.source_task_sha256
+            or policy.source_task_checksum != self.source_task_checksum
+            or policy.runtime_sha256 != self.runtime_sha256
+            or not self.has_oracle
+            or any(trial.verdict is not None for trial in self.trials)
+        ):
+            raise ValueError("Native success policy differs from the original source contract")
+        return self
 
     @model_validator(mode="after")
     def validate_source_environment_exclusion(self):
@@ -767,6 +818,10 @@ class OracleTaskReceipt(BaseModel):
         if self.exclusion_reason is not None:
             return False
         if self.has_oracle:
+            if self.native_success_policy is not None:
+                return self.calibration.oracle_kind == "original" and self.native_success_policy.passes(
+                    self.calibration.attempts[-1], self.harbor_task_checksum
+                )
             return (
                 self.calibration.passed
                 and self.calibration.oracle_kind == "original"
@@ -800,6 +855,10 @@ class OracleFilterReceipt(BaseModel):
                 if self.version != 3:
                     raise ValueError("Mechanical outcomes require oracle filter wire version 3")
                 continue
+            if entry.native_success_policy is not None and (
+                entry.native_success_policy.input_cohort_sha256 != self.input_cohort_sha256
+            ):
+                raise ValueError(f"Native success policy belongs to another frozen cohort: {task_id}")
             if self.version == 2:
                 continue
             if entry.no_oracle_liveness is not None and entry.no_oracle_liveness.task_id != task_id:
