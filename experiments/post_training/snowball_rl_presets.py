@@ -642,6 +642,13 @@ class Preset:
     def gated(self) -> bool:
         return self.controls is not None
 
+    def with_updates(self, updates: int) -> Preset:
+        return replace(
+            self,
+            updates=updates,
+            measured=self.measured if self.gated else tuple(self.recipe.layout.workload.planned_steps(updates)),
+        )
+
     @property
     def held_out(self) -> Evaluation | None:
         return next((evaluation for evaluation in self.evaluations if evaluation.held_out), None)

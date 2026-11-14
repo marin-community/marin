@@ -75,7 +75,7 @@ from marin.rl.skyrl_records import (
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
-from experiments.post_training import snowball_rl_gate
+from experiments.post_training import snowball_rl_gate, snowball_rl_publication
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_recipe as recipe
 from experiments.post_training.snowball_rl_command import EXIT_CODES, SnowballCommand
@@ -243,8 +243,14 @@ def _completed_update(path: str, workload: presets.Training | presets.Generation
     return None
 
 
-def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = False) -> dict:
-    run = replace(run, gate=snowball_rl_gate.completed_gate(run.gate))
+def _status(
+    run: SnowballRun,
+    preset: presets.Preset,
+    *,
+    stored_only: bool = False,
+    issue: int | None = None,
+    publication_urls: dict[str, str] | None = None,
+) -> dict:
     rows = []
     planned = []
     for step in run.runs:
@@ -295,6 +301,8 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
                     "disk": execution.disk,
                 },
                 "output": path,
+                "issue": issue,
+                "rl_progress_url": (publication_urls or {}).get(path),
             }
         )
     verdict = {}
@@ -315,6 +323,7 @@ def _status(run: SnowballRun, preset: presets.Preset, *, stored_only: bool = Fal
                 "reason": f"native job {crashed['iris_job_id']} is {crashed['state']}",
                 "iris_job_id": crashed["iris_job_id"],
             }
+    preset = preset.with_updates(planned[0]["skyrl"]["trainer"]["max_steps"])
     return {
         "preset": preset.name,
         "code": asdict(Provenance.capture(presets.REPO_ROOT)),
@@ -360,17 +369,57 @@ def _iris_client() -> Iterator[IrisClient]:
             yield client
 
 
-def _wait_for_run(job: JobName, handles: list[ArtifactStep], preset: presets.Preset) -> None:
+def _publish_records(
+    run: SnowballRun, preset: presets.Preset, *, issue: int | None = None, service_url: str | None = None
+) -> snowball_rl_publication.PublicationOutcome | None:
+    if not preset.publishes:
+        return None
+    prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
+    gate_path = run.gate.path(prefix) if run.gate is not None else None
+    outputs = [training.path(prefix) for training in run.runs]
+    return snowball_rl_publication.publish_runs(
+        outputs, preset, gate_path=gate_path, issue=issue, service_url=service_url
+    )
+
+
+def _wait_for_run(
+    job: JobName,
+    handles: list[ArtifactStep],
+    preset: presets.Preset,
+    *,
+    issue: int | None = None,
+    service_url: str | None = None,
+) -> None:
     with _iris_client() as client:
         parent = client.job(job).wait(recipe.RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
+    coordinator_error = (
+        f"coordinator {job} is {parent.state}; required verdict unavailable"
+        if parent.state != JobState.SUCCEEDED
+        else None
+    )
     run = _from_handles(handles)
-    snapshot = _status(run, preset)
-    if "verdict" not in snapshot and (parent.state != JobState.SUCCEEDED or run.gate is not None):
-        snapshot["reason"] = f"coordinator {job} is {parent.state}; verdict unavailable"
+    run = replace(run, gate=snowball_rl_gate.completed_gate(run.gate))
+    try:
+        publication = _publish_records(run, preset, issue=issue, service_url=service_url)
+    except Exception as error:
+        publication = snowball_rl_publication.PublicationOutcome(
+            errors=[str(error)], retry="Repeat the original command with --wait."
+        )
+    snapshot = _status(
+        run,
+        preset,
+        issue=issue,
+        stored_only=True,
+        publication_urls=publication.urls if publication is not None else None,
+    )
+    if publication is not None:
+        snapshot["publication"] = publication.to_dict()
+    if "verdict" not in snapshot and (coordinator_error is not None or run.gate is not None):
+        snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
     verdict = snapshot.get("verdict")
-    if verdict is None and run.gate is None and parent.state == JobState.SUCCEEDED:
-        verdict = Verdict.PASS.value
+    if verdict is None and run.gate is None and coordinator_error is None:
+        verdict = Verdict.PASS
     raise click.exceptions.Exit(EXIT_CODES[verdict])
 
 
@@ -394,16 +443,19 @@ def _run_command(function: Callable) -> click.Command:
                 build_artifacts(gate, max_concurrent=max_concurrent)
             job = None
         if options["wait"] and job is not None:
-            _wait_for_run(job, handles, preset)
+            _wait_for_run(job, handles, preset, issue=options["issue"], service_url=options["url"])
 
     return click.command(cls=SnowballCommand, help=__doc__)(build_options_with_runner(checked, runner))
 
 
 @_run_command
+@click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for launcher publication.")
+@click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
 @click.option(
     "--wait",
     is_flag=True,
-    help="Wait after --run; exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a required verdict.",
+    help="Wait after --run and publish training attempts using the caller Marina login; "
+    "exit 0 for PASS, 1 for FAIL, 2 for INVALID, 3 without a required verdict.",
 )
 @click.option(
     "--preset",
@@ -472,6 +524,8 @@ def main(
     replicates: int,
     control: bool,
     requirements: tuple[str, ...],
+    issue: int | None,
+    url: str | None,
 ) -> tuple[ArtifactStep, ...]:
     preset = presets.PRESETS[preset_name]
     run = build_run(
@@ -491,7 +545,9 @@ def main(
             run.inputs,
             control=control,
         )
-    snapshot = _status(run, preset, stored_only=do_run)
+    snapshot = _status(
+        replace(run, gate=snowball_rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue
+    )
     _print_status(snapshot)
     if not do_run and "verdict" in snapshot:
         raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])

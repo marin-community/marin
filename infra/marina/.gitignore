@@ -5,6 +5,8 @@ dist/
 !examples/problem-set-app/dist/**
 !apps/rl_data_catalog/dist/
 !apps/rl_data_catalog/dist/**
+!apps/rl_progress/dist/
+!apps/rl_progress/dist/**
 node_modules/
 .data/
 journeys-out/

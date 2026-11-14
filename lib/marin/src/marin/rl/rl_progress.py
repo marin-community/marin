@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed comparisons and invariants for RL progress reports."""
+"""Validate gate results and retained progress records."""
 
+from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, field_validator, model_validator
 
 
 class Verdict(StrEnum):
@@ -66,3 +67,62 @@ class Comparison(BaseModel):
     tasks: int | None = None
     control_min: float | None = None
     control_max: float | None = None
+
+
+Count = Annotated[StrictInt, Field(ge=0)]
+Identity = Annotated[str, Field(min_length=1)]
+
+
+class GateResult(BaseModel):
+    model_config = ConfigDict(strict=True)
+    comparisons: list[Comparison]
+    invariants: list[Invariant]
+    verdict: Verdict
+    label: Label | None
+    reason: str | None
+    attempt_ids: list[Identity]
+    replicates: Annotated[StrictInt, Field(gt=0)]
+
+
+class RunSummary(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    run_id: Identity
+    attempt_id: Identity
+    label: Identity
+    series: str | None = None
+    issue: StrictInt | None = None
+    iris_job_id: str | None = None
+    wandb_url: str | None = None
+    engine: dict[str, Any] | None = None
+    gate_result: GateResult | None = None
+    gate: str | None = None
+    failed_facts: list[str] = Field(default_factory=list)
+    run_date: str | None
+    started_at: str | None
+    completed_at: str | None
+    elapsed_seconds: Annotated[FiniteFloat, Field(ge=0)] | None
+    timing_scope: Identity
+    status: Literal["succeeded", "failed"]
+    optimizer_steps: Count | None
+    planned_updates: Count | None = None
+    measured_updates: list[Count] | None = None
+    source_revision: Identity
+    data_identity: Identity
+    initializer_identity: Identity
+    artifact_uri: str | None
+    evidence: list[str]
+
+    @field_validator("run_date", "started_at", "completed_at")
+    @classmethod
+    def utc_timestamp(cls, value):
+        if value is not None:
+            parsed = datetime.fromisoformat(value)
+            if parsed.utcoffset() != timedelta(0):
+                raise ValueError("Run timestamps must explicitly use UTC")
+        return value
+
+    @model_validator(mode="after")
+    def valid_outcome(self):
+        if self.elapsed_seconds is not None and self.completed_at is None:
+            raise ValueError("Terminal attempts require a completion timestamp")
+        return self

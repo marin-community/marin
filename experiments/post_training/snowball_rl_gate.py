@@ -596,6 +596,10 @@ def _write_gate(
     invariants, comparisons = [], []
     verdict, label, reason = Verdict.INVALID, None, None
     try:
+        receipts = [read_stored_skyrl_attempt(path) for path in run_paths]
+        metadata = metadata.model_copy(
+            update={"attempt_ids": tuple(receipt.attempt_id for receipt in receipts if receipt)}
+        )
         runs = [
             with_requirements(with_objectives(load_run(path, preset, inputs), preset), inputs.requirements)
             for path in run_paths

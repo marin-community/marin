@@ -3,6 +3,7 @@
 
 import json
 import shutil
+from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
@@ -42,6 +43,7 @@ from experiments.post_training import snowball_rl_recipe as recipe
 from experiments.post_training.skyrl_test_support import current_control_pins, selection_summary
 from experiments.post_training.snowball_rl_scoring import GATE_INPUTS_FILENAME, GateInputs
 
+SELECTION_IDENTITY = "fixture-selection@2026.11.10"
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
 
 
@@ -75,6 +77,15 @@ def write_receipt(root: Path, receipt: dict) -> None:
         )
 
 
+def metric_rows(metrics: dict[int, dict]) -> Iterator[dict]:
+    return (
+        MetricRow(attempt_id=values["attempt_id"], step=step, name=name, value=value).model_dump()
+        for step, values in metrics.items()
+        for name, value in values.items()
+        if name not in METRIC_METADATA_KEYS
+    )
+
+
 def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
     export_root = str(root / "exports")
     records = read_attempts(export_root)
@@ -83,12 +94,12 @@ def write_metrics(root: Path, metrics: dict[int, dict]) -> None:
         tables = register_run_tables(store)
         for record in records.values():
             update_attempt(store, record)
-        tables.metrics.extend(
-            MetricRow(attempt_id=values["attempt_id"], step=step, name=name, value=value).model_dump()
-            for step, values in metrics.items()
-            for name, value in values.items()
-            if name not in METRIC_METADATA_KEYS
-        )
+        tables.metrics.extend(metric_rows(metrics))
+
+
+def append_metrics(root: Path, metrics: dict[int, dict]) -> None:
+    with DataStore.open(run_records_root(str(root / "exports"))) as store:
+        register_run_tables(store).metrics.extend(metric_rows(metrics))
 
 
 def selection(tmp_path, monkeypatch):
@@ -101,7 +112,7 @@ def selection(tmp_path, monkeypatch):
     summary = selection_summary(910)
     for binding in training:
         write_json(Path(presets.selection_artifact(binding).path()) / "summary.json", summary)
-    candidate = presets.selection_artifact("fixture-selection@2026.11.10")
+    candidate = presets.selection_artifact(SELECTION_IDENTITY)
     candidate_summary = deepcopy(summary)
     candidate_summary["recipe"]["exclusions"] = [
         {"uri": str(Path(task_set.path()) / presets.FULL_VALIDATION_FILENAME), "version": task_set.version}
@@ -206,6 +217,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         inputs=None,
         fingerprint="",
         missing_steps=(),
+        attempt_id="recorded-attempt",
     ):
         preset = presets.PRESETS[preset_name]
         root = tmp_path / name / preset.revision
@@ -213,7 +225,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         inputs = inputs or GateInputs(preset_name=preset.name)
         source_root, config = composed(preset, inputs)
         old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
-        attempt = "recorded-attempt"
+        attempt = attempt_id
         run_id = f"{name}-{preset.revision}"
 
         def relocate(value):
@@ -227,6 +239,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
 
         native = {"config": relocate(config), "result": deepcopy(NATIVE_RECORD["receipt"]["result"])}
         launch, result = native["config"], native["result"]
+        max_steps = launch["skyrl"]["trainer"]["max_steps"]
+        generating = isinstance(preset.recipe.layout.workload, presets.Generation)
         pin = gate.control_pin(preset) if preset.gated else None
         result.update(
             iris_job_id="/tests/native-run",
@@ -249,7 +263,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 result=SkyRLRun(
                     path=str(root),
                     hf_model_uri=None,
-                    global_step=preset.updates,
+                    global_step=0 if generating else max_steps,
                     tokenizer_uri="tests/tokenizer",
                     tokenizer_revision="test-revision",
                     checkpoint_root=str(root / "checkpoints"),
@@ -260,9 +274,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             ).model_dump(mode="json"),
         )
         (root / ".executor_status").write_text("SUCCESS")
-        generating = isinstance(preset.recipe.layout.workload, presets.Generation)
         stored_metrics = {}
-        for step in (0,) if generating else range(1, preset.updates + 1):
+        for step in (0,) if generating else range(1, max_steps + 1):
             row = deepcopy(NATIVE_RECORD["metrics"])
             row = {key: value for key, value in row.items() if not key.startswith("timing/step_wall/")}
             row.update(
@@ -319,7 +332,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     pa.table({"task_spec": [task.model_copy(update={"id": item}).model_dump_json() for item in ids]}),
                     path,
                 )
-            sessions = [(-1 if generating else preset.updates, score)]
+            sessions = [(-1 if generating else max_steps, score)]
             if evaluation.at_start:
                 sessions.insert(0, (0, initial_score))
             for step, average in sessions:

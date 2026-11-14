@@ -31,9 +31,13 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
    experiment issue or prepare one through `file-issue`. Submit train-long or multiple 40-H100
    replicates only when the person asked. Set `WANDB_API_KEY`; `WANDB_ENTITY` chooses the team,
    defaulting to `marin-community`.
-5. Add `--run` to submit. Add `--wait` for the final report; use a background process for these
-   multi-minute jobs. Record the original process and job ID so a yielded tool call does not
+5. Pass the experiment's issue as `--issue ISSUE_NUMBER`. Add `--run` to submit and `--wait`
+   for the final report; use a background process for these multi-minute jobs. Record the original process and job ID so a yielded tool call does not
    cause a second submission.
+   Record the finishing status's `rl_progress_url` with the verdict; the launcher publishes using
+   the caller's Marina login. Follow the recipe's [publication procedure](../../../docs/recipes/snowball-rl.md#dashboard-publication)
+   for retries and pinned controls.
+   Use `--url ORIGIN` when publication targets a local Marina stack.
 
 Follow the recipe's [input and flag contracts](../../../docs/recipes/snowball-rl.md#change-one-input),
 [comparison rules](../../../docs/recipes/snowball-rl.md#compare-with-controls) and

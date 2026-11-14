@@ -25,7 +25,8 @@ Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measureme
    at an immutable version with the required evaluation exclusions.
 3. [Run a preset](#which-experiment-to-run): use `data-short` then `data-medium` with
    `--tasks NAME@VERSION`, or choose the preset for the change.
-4. Read the [verdict](#compare-with-controls) for a gated run.
+4. Read the [verdict](#compare-with-controls) for a gated run. For `learning-medium`,
+   `data-medium` and `train-long`, open the dashboard row in `rl_progress_url`.
 
 ## Run a preset
 
@@ -54,6 +55,30 @@ East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine
 128 prompts × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
 All training presets use staleness 2 and TIS. Speed-long has no evaluation,
 checkpoints or export; learner and engine token rates are descriptive telemetry.
+
+## Dashboard publication
+
+After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
+data-medium and train-long attempts using the caller's Marina login. Pass `--issue ISSUE_NUMBER`
+and record the finishing status's `rl_progress_url` with the verdict.
+Use `--url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
+
+Repeat the original command with `--wait` from the same source and inputs. The executor reuses
+successful steps and runs failed work, then the launcher retries publication from stored outputs.
+Errors identify the affected native attempt; missing credentials suggest `iris login`.
+Publication errors preserve the experiment verdict and exit code. A current successful gated attempt
+requires a report for exactly the current native attempts.
+
+Publish a preset's controls from their stored paths with one command:
+
+```bash
+python -m experiments.post_training.snowball_rl_publication --preset learning-medium
+```
+
+The pins in `snowball_rl_gate.CONTROLS` must match the preset's current revision; unavailable pins
+produce a usage error. Speed presets and data-short publish nothing. See the
+[dashboard and record contract](https://github.com/marin-community/marin/blob/2a13c0c0627c2a6b2dd6b44d898edd530b4e1b6d/infra/marina/apps/rl_progress/README.md) for native identity,
+recorded measurements and stored gate facts.
 
 ## Change one input
 

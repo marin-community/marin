@@ -130,11 +130,7 @@ def run_spec(
     _refuse_judged(presets.selection_summary(selection), "train")
     chosen = preset.evaluations
     workload = preset.recipe.layout.workload
-    preset = replace(
-        preset,
-        updates=config.trainer.max_steps,
-        measured=preset.measured if preset.gated else tuple(workload.planned_steps(config.trainer.max_steps)),
-    )
+    preset = preset.with_updates(config.trainer.max_steps)
     model, initial_model_uri = _model_input(preset, init)
     validation_data = ()
     evaluation_data = []
