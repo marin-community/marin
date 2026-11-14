@@ -540,6 +540,14 @@ jobs:
             skyrl-train/tests/cpu/test_cat_count_gpu_opd.py \
             skyrl-train/tests/cpu/test_grug_log_scaling.py \
             skyrl-train/tests/cpu/test_reference_likelihood.py
+      - name: Exercise the pinned Megatron optimizer loader on CPU
+        working-directory: vendor/skyrl
+        run: |
+          uv run --isolated --frozen --extra cpu --group harbor-test --no-group dev \
+            --with pytest==8.4.2 --with pytest-asyncio==1.4.0 \
+            --with megatron-core==0.18.0 --with triton==3.8.0 --with 'torch==2.11.0+cpu' \
+            --index https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match \
+            pytest -q skyrl-train/tests/cpu/test_megatron_optimizer_checkpoint.py
 
   unit_tests:
     name: unit-tests

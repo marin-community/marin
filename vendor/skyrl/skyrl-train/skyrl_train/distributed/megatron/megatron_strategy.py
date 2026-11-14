@@ -35,6 +35,7 @@ from skyrl_train.distributed.megatron.direct_checkpoint import (
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
 from skyrl_train.distributed.megatron.checkpoint_restore import (
     defer_model_weights_to_optimizer,
+    load_optimizer_checkpoint,
     restore_model_weights_from_optimizer,
 )
 from marinskyrl.remote_io import abort_multipart_uploads
@@ -491,7 +492,7 @@ class MegatronStrategy(DistributedStrategy):
             )
             if muonh:
                 _muonh_fp32_groups_as_lists(state_dict["optimizer"])
-            optimizer.load_state_dict(state_dict.pop("optimizer"))
+            load_optimizer_checkpoint(optimizer, state_dict.pop("optimizer"))
             if muonh:
                 _restore_muonh_adamh_step(optimizer, common_state["optimizer_recipe_step"])
             restore_offloaded_optimizer_state(optimizer)

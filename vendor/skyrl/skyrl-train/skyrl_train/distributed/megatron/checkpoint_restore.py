@@ -1,4 +1,4 @@
-"""Restore BF16 model weights from optimizer masters without reading them twice."""
+"""Restore Megatron optimizer state and BF16 model weights."""
 
 from megatron.core.dist_checkpointing.dict_utils import dict_list_map_inplace, nested_values
 from megatron.core.dist_checkpointing.mapping import (
@@ -14,6 +14,40 @@ import torch
 from torch import nn
 
 from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
+
+
+def load_optimizer_checkpoint(optimizer: MegatronOptimizer, state_dict: dict) -> None:
+    """Load optimizer state, recovering omitted CPU Adam bucket counters."""
+    config = optimizer.config
+    if config is not None and config.optimizer_cpu_offload and config.optimizer.lower() in ("adam", "adamw"):
+        _restore_omitted_adam_steps(state_dict)
+    optimizer.load_state_dict(state_dict)
+
+
+def _restore_omitted_adam_steps(state: dict) -> None:
+    children = [state] if "param_state_sharding_type" in state else state.values()
+    for child in children:
+        if child["param_state_sharding_type"] != "dp_reshardable":
+            continue
+        missing = [
+            parameter_state
+            for buffer_index, buffer_state in child["param_state"].items()
+            if isinstance(buffer_index, int)
+            for buckets in buffer_state.values()
+            for bucket in buckets
+            for parameter_state in bucket
+            if not parameter_state["padding"] and "step" not in parameter_state
+        ]
+        if not missing:
+            continue
+        steps = {group.get("step") for group in child["optimizer"]["param_groups"]}
+        if len(steps) != 1 or None in steps:
+            raise ValueError("CPU-offloaded Adam bucket restore requires one saved step shared by all parameter groups")
+        step = steps.pop()
+        for parameter_state in missing:
+            # MCore 0.18 omits this scalar from reshardable buckets, but its
+            # Torch Adam loader copies it with the moments. Group metadata is saved.
+            parameter_state["step"] = torch.tensor(step, dtype=torch.float32)
 
 
 def defer_model_weights_to_optimizer(model_state: ShardedStateDict, optimizer_state: ShardedStateDict) -> bool:

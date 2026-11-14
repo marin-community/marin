@@ -99,6 +99,15 @@ Extracted from [the Mochi experiment](https://github.com/marin-community/marin/p
 using [Hero EP at 4af96607](https://github.com/marin-community/marin/tree/4af966070e5d0252e87d404196400c35bd04883b/experiments/grug/moe_hero_ep)
 as the numerical reference.
 
+## Restore CPU-offloaded Adam checkpoints
+
+Megatron 0.18 `dp_reshardable` checkpoints save scalar Adam/AdamW step counters
+in optimizer-group metadata. When a loaded bucket has no counter, SkyRL recovers
+it from that saved metadata before loading the optimizer. Existing bucket
+counters are kept. Bucket entries have no saved parameter-group identifier, so
+recovery requires a step shared by all saved groups. Missing or conflicting
+metadata fails when recovery is needed; the trainer's iteration is never used.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
