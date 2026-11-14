@@ -15,15 +15,20 @@ import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ContentEvidenceReference
 from taskcompendium.harbor.adapter import write_harbor_task
+from taskcompendium.harbor.protected_runtime import ExpectedRuntime, RuntimeRole
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
-from taskcompendium.pipeline.models import IntendedUse
+from taskcompendium.pipeline.models import Controls, IntendedUse
 from taskcompendium.pipeline.oracle_filter import ExecutabilityRunReceipt, OracleExclusionReason, require_oracle_filter
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation.datasets.tasktrove.calendar import calendar_golden
+from experiments.post_training.task_curation.datasets.tasktrove.math import MATH_CONTROLS
 from experiments.post_training.task_curation.oracle_filter import (
+    HARBOR_PROJECT,
     calibrate_cohort,
+    calibrated_task,
     collect_trials,
     filter_cohort,
     harbor_inspection,
@@ -31,8 +36,88 @@ from experiments.post_training.task_curation.oracle_filter import (
     write_task_map,
 )
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_cohort
+from experiments.post_training.task_curation.task_spec_harbor import prepare
 
 from .prebuilt_fixtures import prebuilt_task
+
+
+@pytest.mark.parametrize("binding", ["oracle_command", "calendar_original", "protected_runtime", "source_runtime"])
+def test_changed_original_command_runtime_stops_before_trial(tmp_path, binding):
+    envelope = json.loads(prebuilt_task("bound-original")["lowered_task_spec"])
+    task = TaskSpec.model_validate(envelope["task"])
+    task = task.model_copy(
+        update={
+            "resources": task.resources.model_copy(
+                update={"oracle": (inline_resource("solution/solve.sh", b"exit 0\n"),)}
+            )
+        }
+    )
+    envelope["task"] = task.model_dump(mode="json")
+    cohort = tmp_path / "cohort.parquet"
+    pq.write_table(pa.Table.from_pylist([{"lowered_task_spec": json.dumps(envelope)}]), cohort)
+    output = tmp_path / "exported"
+    expectations = (
+        {
+            RuntimeRole.SOURCE_GRADER: ExpectedRuntime(
+                python_version=(3, 12),
+                verifyit_root="/frozen/verifyit",
+                files={},
+                lock_sha256="c" * 64,
+            )
+        }
+        if binding == "protected_runtime"
+        else None
+    )
+    controls = MATH_CONTROLS if binding == "oracle_command" else Controls(golden=calendar_golden)
+    prepare(
+        cohort,
+        output,
+        source_revision="a" * 40,
+        controls=controls if binding in {"oracle_command", "calendar_original"} else None,
+        runtime_expectations=expectations,
+    )
+    directory = output / "tasks" / task.id
+    if binding in {"oracle_command", "calendar_original"}:
+        config = tmp_path / "accepted-trial.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "task": {"path": str(directory)},
+                    "agent": {"name": "oracle"},
+                    "trials_dir": str(tmp_path / "accepted"),
+                    "trial_name": "exported-math",
+                    "environment": {"type": "local", "kwargs": {"disk_root": str(tmp_path / "disks")}},
+                }
+            )
+        )
+        subprocess.run(
+            [
+                "uv",
+                "run",
+                "--isolated",
+                "--project",
+                str(HARBOR_PROJECT),
+                "--frozen",
+                "--extra",
+                "runtime",
+                "python",
+                "-c",
+                "import asyncio,sys; from pathlib import Path; from harbor.models.trial.config import TrialConfig; "
+                "from harbor.trial.trial import Trial; "
+                "trial=asyncio.run(Trial.create(TrialConfig.model_validate_json(Path(sys.argv[1]).read_text()))); "
+                "assert trial.agent.command is not None; trial.agent.command.require_task(trial.specification)",
+                str(config),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    destination = tmp_path / "trials"
+    with pytest.raises(ValueError, match="runtime changed"):
+        calibrated_task(
+            task, {"task_path": str(directory), "runtime_sha256": canonical_sha256({})}, destination, "local", {}, None
+        )
+    assert not destination.exists()
 
 
 def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_path):

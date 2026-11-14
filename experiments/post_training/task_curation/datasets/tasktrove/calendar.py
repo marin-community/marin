@@ -8,7 +8,8 @@ meets the final event constraints. It needs only the Python standard library (th
 ``python:3.11-slim``), so it runs as archived with the grader packages (``GRADER_PACKAGES``). The
 archive asks for the calendar in ``/app/answer.txt``; the task asks for it in the reply, which the
 runtime writes to that file for the verifier. A source witness (``solution/answer.json``) is the
-golden control; an archive whose witness is not a nonempty JSON list of events is a source defect.
+golden control, run through the archive's original solution when it ships one. An archive whose
+witness is not a nonempty JSON list of events is a source defect.
 """
 
 import json
@@ -29,11 +30,12 @@ from taskcompendium.pipeline.controls import answer_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import (
     Controls,
+    ControlSubmission,
     ImportRejection,
     IntendedUse,
     NormalizedTask,
+    OracleCommand,
     RawRow,
-    Reply,
 )
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import DEFAULT_OUTPUT
@@ -153,8 +155,10 @@ def witness_text(task: TaskSpec) -> str | None:
     return None if witness is None else resource_bytes(witness).decode(errors="replace")
 
 
-def calendar_golden(task: TaskSpec) -> Reply | None:
-    """The source witness schedule, when the archive ships one."""
+def calendar_golden(task: TaskSpec) -> ControlSubmission | None:
+    """Run the original solution when present, otherwise submit its witness schedule."""
+    if any(resource.path == "solution/solve.sh" for resource in task.resources.oracle):
+        return OracleCommand("bash /solution/solve.sh", answer_file=DEFAULT_OUTPUT)
     witness = witness_text(task)
     return None if witness is None else answer_reply(task, witness)
 

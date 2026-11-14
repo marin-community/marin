@@ -18,8 +18,9 @@ from rolloutengine.models import (
     TraceMode,
 )
 from rolloutengine.recorder import harness_rollout
-from shellbox.machine import Command, ExitReason, Machine
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Command, ExitReason, Machine
 from taskcompendium.chat import assistant_message, chat_conversation, chat_input
+from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -30,6 +31,12 @@ from taskcompendium.models import (
 )
 from taskcompendium.submission import conversation_messages
 from taskcompendium.runtime.resources import has_oracle_solution
+from taskcompendium.runtime.oracle import (
+    OracleAnswerTimeout,
+    oracle_answer_attempt,
+    read_oracle_answer,
+    run_oracle_command,
+)
 from taskcompendium.runtime.shell import upload_resources
 
 from harbor.agents.base import BaseAgent
@@ -167,8 +174,35 @@ class TaskSpecOracleAgent(TaskSpecAgent):
         self.task_dir = task_dir
         self.exit_code: int | None = None
         self.output = b""
+        self.answer: bytes | None = None
+        self.command = read_oracle_command(task_dir)
 
     async def run_task(self, task: TaskSpec, machine: Machine | None, limits: RolloutLimits) -> GradingAttempt:
+        if self.command is not None:
+            self.command.require_task(task)
+            if machine is None:
+                raise ValueError("The declared OracleCommand requires its original execution environment")
+            self.attempt = empty_attempt(task)
+            await upload_resources(machine, task.resources.oracle, limits.total_turn_timeout, user=None)
+            result = await run_oracle_command(
+                machine, self.command.submission, cwd=None, timeout=limits.total_turn_timeout,
+                output_limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+            )
+            self.exit_code = result.exit_code
+            self.output = result.stdout + result.stderr
+            if result.reason == ExitReason.TIMED_OUT:
+                raise AgentTimeoutError("TaskSpec oracle command timed out")
+            answer_file = self.command.submission.answer_file
+            assert answer_file is not None
+            try:
+                self.answer = await read_oracle_answer(
+                    machine, answer_file, cwd=None, timeout=limits.total_turn_timeout,
+                    output_limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
+                )
+            except OracleAnswerTimeout as error:
+                raise AgentTimeoutError(str(error)) from error
+            self.attempt = oracle_answer_attempt(task, self.answer)
+            return self.attempt
         if not has_oracle_solution(task):
             response = json.loads((self.task_dir / "solution/response.json").read_text())
             self.attempt = control_attempt(task, response)
