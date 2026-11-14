@@ -31,7 +31,7 @@ function card(title, rows, intro) {
   for (const [label, item] of present) {
     const field = node('dl', undefined, 'field'), value = node('dd');
     if (item instanceof Node) value.append(item);
-    else if (typeof item === 'object') value.append(node('code', JSON.stringify(item)));
+    else if (typeof item === 'object') value.append(readableRecord(item));
     else value.append(linkedText(item));
     field.append(node('dt', label), value); section.append(field);
   }
@@ -61,22 +61,25 @@ async function render(data, sourceId) {
     node('span', data.updated_at ? `Last updated ${new Date(data.updated_at).toLocaleDateString()}` : 'Catalog load time unavailable', 'chip quality-unassessed'),
   );
   const sections = [];
+  sections.push(card('Filtration ledger', filtrationRows({...d, contamination_status: data.contamination_status, oracle_inventory: data.oracle_inventory}), 'Retained converted counts do not establish admission. Oracle failures must be removed before an admitted count can be shown.'));
+  sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Agent and grader support are measured separately. The Daytona safety label covers the actor only.'));
+  sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
   sections.push(card('Oversight evidence', [
     ['Declared level', d.oversight], ['Campaign', d.oversight_evidence?.campaign], ['Recipe revision', d.oversight_evidence?.recipe_revision],
-    ['Verification', d.oversight_evidence?.verification], ['Reviewed', d.oversight_evidence?.reviewed], ['Admitted', d.oversight_evidence?.admitted],
-    ['Oracle validation', d.oracle_validation],
-  ], 'The review the admission rests on, as the declaration records it.'));
-  sections.push(card('Grader controls and admission', [
+    ['Verification', d.oversight_evidence?.verification], ['Reviewed', d.oversight_evidence?.reviewed],
+    ['Sampled grader qualification', d.oracle_validation],
+  ], 'Recorded execution qualification. This historical record does not establish current post-filtration admission.'));
+  sections.push(card('Recorded grader controls', [
     ['Last curation', curation && `${curation.mode} pass, ${curation.status}`], ['Control status', controls?.status],
     ['Control sample', controls && controls.sample_count != null ? `${number.format(controls.sample_count)} of ${number.format(controls.eligible_count)} eligible tasks` : null],
-    ['Control counts', controls?.counts], ['Admission counts', curation?.admission_counts],
+    ['Control counts', controls?.counts],
     ['Source revision', curation?.source_revision], ['Recipe revision', curation?.recipe_revision],
     ['Latest attempt', data.latest_attempt.key && `${data.latest_attempt.status}: ${data.latest_attempt.key}`], ['Attempt note', data.latest_attempt.reason],
   ], 'Golden answers must score 1 and empty or wrong answers 0 before tasks are admitted.'));
   const admitted = data.cohorts.admitted, excluded = data.cohorts.excluded;
   sections.push(card('Sampled LLM-judge review', assessment ? [
     ['Review page', link(`Open the ${number.format(assessment.sample_items)} frozen sample items and their packets →`, `assessment.html?source=${encodeURIComponent(sourceId)}`)],
-    ['Admitted cohort', admitted && `${admitted.grade}: ${admitted.grade_reason} (${number.format(admitted.reviewed)} reviewed of ${number.format(admitted.population)})`],
+    ['Retained cohort', admitted && `${admitted.grade}: ${admitted.grade_reason} (${number.format(admitted.reviewed)} reviewed of ${number.format(admitted.population)})`],
     ['Excluded cohort', excluded && `${excluded.grade}: ${excluded.grade_reason}`],
     ['Judge model', `${assessment.model.model} @ ${assessment.model.revision}`], ['Scope', assessment.scope],
     ['Judge traces', assessment.traces.length ? list(assessment.traces.map(trace => { const span = node('span'); span.append(`${trace.name}: `, pointer(trace.uri)); return span; })) : null],
@@ -85,7 +88,7 @@ async function render(data, sourceId) {
   ] : [], 'A GLM judge grades a seeded sample of admitted and excluded tasks; it does not change admission.'));
   sections.push(card('Independent QC', d.independent_qc ? [
     ['Verdict', d.independent_qc.verdict], ['Method', d.independent_qc.method], ['Reviewed', d.independent_qc.reviewed],
-    ['Admitted', d.independent_qc.admitted], ['Evidence', d.independent_qc.evidence_url && pointer(d.independent_qc.evidence_url, 'Release manifest ↗')],
+    ['Evidence', d.independent_qc.evidence_url && pointer(d.independent_qc.evidence_url, 'Release manifest ↗')],
   ] : [], 'Quality control recorded by the pinned release. Complete content-review coverage is shown separately from execution qualification. QC never rejects a source.'));
   sections.push(card('Converted examples', d.converted_examples ? [
     ['TaskSpecs', number.format(d.converted_examples.count)], ['Input revision', d.converted_examples.source_revision],
@@ -97,7 +100,7 @@ async function render(data, sourceId) {
     ['Datasets', datasetLinks(d)], ['Input revision', d.dataset_revision],
     ['Current release pin', current && `${current.repo} @ ${current.revision}`],
     ['Pipeline', d.pipeline && `${d.pipeline.name} @ ${d.pipeline.version}`],
-    ['Unique examples', d.within_source_dedup?.unique_count], ['Use', data.intended_use],
+    ['Retained converted population', d.within_source_dedup?.unique_count], ['Use', data.intended_use],
     ['Top curriculum area', data.coverage?.top_area && `${data.coverage.top_area.name} (${number.format(data.coverage.top_area.instances)} placed tasks)`],
     ['Coverage basis', data.coverage?.basis], ['Coverage gap', data.coverage?.unavailable_reason],
     ['Daytona', daytonaLabel(data.daytona) + (data.daytona.state === 'safe' ? `: ${number.format(data.daytona.snapshots)} snapshots` : '')],
@@ -117,6 +120,8 @@ async function render(data, sourceId) {
   const lexical = d.lexical_contamination;
   sections.push(card('Lexical contamination', lexical ? [
     ['Contamination', contaminationChip(data.contamination_status)],
+    ['Measurement method', `${lexical.ngram_length}-gram lexical overlap`],
+    ['Remediated private release', remediatedReleaseLink({...d, contamination_status: data.contamination_status})],
     ['Measured tasks', lexical.measured_tasks], ['Flagged tasks', lexical.contaminated_tasks],
     ['Flagged rate', `${(100 * lexical.contaminated_fraction).toFixed(2)}%`],
     ['Matched evaluations', lexical.matched_evals], ['Maximum overlap', lexical.max_overlap],
@@ -159,7 +164,7 @@ async function render(data, sourceId) {
     ['Measurement basis', capabilities?.basis], ['Measured tasks', capabilities?.basis === 'converted_spec_census' ? capabilities.task_count : null],
     ['Unassessed reason', capabilities?.basis === 'unassessed' ? capabilities.reason : null],
     ['Role assignments', capabilities?.role_backend_assignments], ['Declared requirements', capabilities?.demands],
-    ['Backend fit and blockers', capabilities?.backends], ['Duplicate group', data.duplicate_group],
+    ['Duplicate group', data.duplicate_group],
     ['Full backend matrix', link('Open the backend survey', 'api/backends')],
     ['Overlap reviews', link('Open recorded duplicate opinions', 'api/source-duplicates')],
   ]));
@@ -198,7 +203,7 @@ async function render(data, sourceId) {
 }
 const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
 if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';
-else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json')])
-  .then(([data, progress]) => render({...data, content_progress: boundProgress(data.declaration, progress)}, sourceId)).catch(error => {
+else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json'), json('measurements/oracle-inventory.json')])
+  .then(([data, progress, inventory]) => render({...data, content_progress: boundProgress(data.declaration, progress), oracle_inventory: boundOracleInventory(data.declaration, inventory)}, sourceId)).catch(error => {
   $('title').textContent = 'Source evidence'; $('message').textContent = error.message; $('message').classList.add('error');
 });

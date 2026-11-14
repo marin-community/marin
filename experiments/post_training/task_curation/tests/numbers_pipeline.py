@@ -11,7 +11,7 @@ from pathlib import Path
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.pipeline.models import SourceStatus
+from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
@@ -34,6 +34,7 @@ class NumbersConfig:
     version: str = "1"
     dataset: SourceReference = NUMBERS_DATASET
     files: tuple[str, ...] = ()
+    intended_use: IntendedUse = IntendedUse.TRAIN
 
 
 @dataclass(frozen=True)

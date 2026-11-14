@@ -97,3 +97,99 @@ function contaminationChip(status) {
   chip.dataset.contamination = status;
   return chip;
 }
+
+const backendNames = {local: 'LOCAL', daytona: 'Daytona', docker: 'Docker', gvisor: 'gVisor', qemu: 'QEMU', shellsim: 'ShellSim', iris: 'Iris'};
+const supportClasses = {supported: 'good', partial: 'some_issues', unsupported: 'bad'};
+function readableRecord(value) {
+  if (value instanceof Node) return value;
+  if (value === null || value === undefined) return node('span', 'Not measured', 'muted');
+  if (typeof value !== 'object') return node('span', typeof value === 'number' ? new Intl.NumberFormat('en-US').format(value) : String(value));
+  const list = node('ul', undefined, 'record-list');
+  for (const [key, item] of Object.entries(value)) {
+    const entry = node('li');
+    if (!Array.isArray(value)) entry.append(node('strong', key.replaceAll('_', ' ') + ': '));
+    entry.append(readableRecord(item)); list.append(entry);
+  }
+  return list;
+}
+function backendLabels(source) {
+  const capabilities = source.backend_capabilities;
+  if (!capabilities || capabilities.basis === 'unassessed') return [];
+  return Object.entries(capabilities.backends).map(([key, fit]) => {
+    const reasons = [...new Set(Object.keys(fit.blockers).map(reason => reason.split(':').slice(1).join(':') || reason))];
+    if (!reasons.length && Object.keys(fit.validation_errors).length) reasons.push('validation');
+    const name = backendNames[key] || key;
+    return {key, fit, label: fit.support === 'supported' ? name : `${name}: ${fit.support.toUpperCase()}${reasons.length ? ': ' + reasons.join(', ') : ''}`};
+  });
+}
+function backendChips(source) {
+  const group = node('span', undefined, 'enum-chips backend-chips');
+  const labels = backendLabels(source);
+  for (const {fit, label} of labels) group.append(node('span', label, `chip quality-${supportClasses[fit.support]}`));
+  if (!labels.length) group.append(node('span', 'NOT MEASURED', 'chip quality-unassessed'));
+  return group;
+}
+function gradingChips(source) {
+  const group = node('span', undefined, 'enum-chips grading-chips'), census = source.grading_environment;
+  if (!census) { group.append(node('span', 'NOT MEASURED', 'chip quality-unassessed')); return group; }
+  const problems = Object.entries(census.status_counts).filter(([status, count]) => status !== 'matched' && count > 0).map(([status]) => status.toUpperCase());
+  const mismatch = problems.length > 0;
+  for (const [boundary, count] of Object.entries(census.required_counts)) {
+    if (!count) continue;
+    const label = boundary === 'none' ? 'N/A' : boundary.toUpperCase();
+    const chip = node('span', label + (mismatch ? ': ' + problems.join(', ') : ''), `chip quality-${mismatch ? 'some_issues' : 'good'}`);
+    chip.title = `${count.toLocaleString('en-US')} tasks require this grading boundary${mismatch ? '; declaration mismatches are recorded in Evidence' : ''}`;
+    group.append(chip);
+  }
+  if (!group.children.length) group.append(node('span', 'NOT MEASURED', 'chip quality-unassessed'));
+  return group;
+}
+function backendDetails(source) {
+  const wrap = node('div', undefined, 'table-wrap'); wrap.tabIndex = 0; wrap.setAttribute('aria-label', 'Backend fit by execution role');
+  const table = node('table', undefined, 'backend-table'), head = node('thead'), headings = node('tr');
+  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Blockers']) headings.append(node('th', title));
+  head.append(headings); table.append(head); const body = node('tbody');
+  for (const {key, fit} of backendLabels(source)) {
+    const row = node('tr'); row.append(node('td', backendNames[key] || key));
+    const status = node('td'); status.append(node('span', fit.support.toUpperCase(), `chip quality-${supportClasses[fit.support]}`)); row.append(status);
+    for (const role of ['agent', 'grader']) { const cell = node('td'); cell.append(fit.roles[role] ? readableRecord(fit.roles[role]) : node('span', 'N/A')); row.append(cell); }
+    const blockers = node('td');
+    blockers.append(Object.keys(fit.blockers).length || Object.keys(fit.validation_errors).length ? readableRecord({...fit.blockers, ...fit.validation_errors}) : node('span', 'None measured'));
+    row.append(blockers); body.append(row);
+  }
+  if (!body.children.length) return node('p', source.backend_capabilities?.reason || 'Backend requirements have not been measured.', 'muted');
+  table.append(body); wrap.append(table); return wrap;
+}
+function filtrationRows(source) {
+  const lexical = source.lexical_contamination, dedup = source.within_source_dedup, oracle = source.oracle_inventory;
+  const measured = ['NO ISSUES', 'REMEDIATED', 'MEASURED, EVAL'].includes(source.contamination_status);
+  const receipt = measured ? lexical?.receipt : null;
+  const pendingRemediation = source.contamination_status === 'REMEDIATION REQUIRED';
+  const zeroDrops = (source.contamination_status === 'NO ISSUES' && lexical?.contaminated_tasks === 0) || source.contamination_status === 'MEASURED, EVAL';
+  return [
+    ['Raw converted input measured for retention', measured ? lexical?.measured_tasks : dedup?.raw_count],
+    ['Original oracle-bearing tasks', oracle?.oracle_tasks ?? 'Not measured'],
+    ['Oracle-failing tasks removed', oracle?.oracle_tasks === 0 ? 'N/A: complete census found no shipped oracle solutions' : 'Pending: no complete population-wide oracle-filter receipt is recorded'],
+    ['Within-source duplicates removed', receipt?.duplicate_dropped_tasks ?? dedup?.within_source_duplicates],
+    ['Lexically contaminated tasks removed', pendingRemediation ? `Pending: remediation for ${lexical.contaminated_tasks} measured overlapping input tasks is not verified at the current pin` : receipt?.dropped_tasks ?? (zeroDrops ? 0 : 'Not measured')],
+    ['Retained converted population', dedup?.unique_count],
+    ['Unexecutable on production backend dropped (by typed reason)', 'Pending: no pin-bound per-task production-executability receipt is recorded'],
+    ['Admitted after all filtration', 'Pending: full-population filtration and production executability are not established'],
+  ];
+}
+
+function boundOracleInventory(source, measurement) {
+  const record = measurement.sources.find(item => item.source_id === source.id);
+  const input = source.actor_census_input;
+  if (!record || !input || record.input.measured_tasks !== source.within_source_dedup.unique_count ||
+      Object.keys(record.input).length !== Object.keys(input).length || !Object.entries(record.input).every(([key, value]) => input[key] === value)) return null;
+  return record;
+}
+function receiptLink(uri, label) {
+  const anchor = node('a', label); anchor.href = /^(s3|gs):/.test(uri) ? `https://filer.marina.oa.dev/#${encodeURIComponent(uri)}` : uri;
+  anchor.target = '_blank'; anchor.rel = 'noopener'; anchor.title = uri; return anchor;
+}
+function remediatedReleaseLink(source) {
+  if (source.contamination_status !== 'REMEDIATED' || !source.lexical_contamination?.receipt?.release?.private) return null;
+  return receiptLink(source.current_release.url, 'Remediated PRIVATE version ↗');
+}
