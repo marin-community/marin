@@ -18,9 +18,9 @@ from rigging.timing import Timestamp
 logger = logging.getLogger(__name__)
 
 
-def allocated_seconds(task: TaskStatus, now: Timestamp) -> float:
-    """Include setup and all attempts, conservatively charging any retry gaps."""
-    starts = [task.started_at]
+def allocated_seconds(task: TaskStatus, now: Timestamp, job_started_at: Timestamp | None) -> float:
+    """Include job setup when worker build timestamps are missing, plus all attempts."""
+    starts = [job_started_at, task.started_at]
     if task.build_metrics is not None:
         starts.append(task.build_metrics.started_at)
     starts.extend(attempt.started_at for attempt in task.attempts)
@@ -53,7 +53,7 @@ def allocation_ledger(client: IrisClient, root: JobName) -> dict:
                 {
                     "task": task.task_id.to_wire(),
                     "state": task.state.value,
-                    "h100_hours": device.count * allocated_seconds(task, now) / 3600,
+                    "h100_hours": device.count * allocated_seconds(task, now, job.started_at) / 3600,
                 }
             )
     return {

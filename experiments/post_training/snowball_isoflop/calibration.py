@@ -62,7 +62,7 @@ def calibration_report(prior_h100_hours: float) -> dict:
             if status.state != JobState.SUCCEEDED:
                 raise ValueError(f"Calibration has not succeeded: {cell.name}: {status.state}")
             tasks = client.list_tasks(job_name)
-            elapsed = sum(allocated_seconds(task, Timestamp.now()) for task in tasks)
+            elapsed = sum(allocated_seconds(task, Timestamp.now(), status.started_at) for task in tasks)
             gate = read_json(f"{root}/initial-eval-match.json")
             consumed = read_json(f"{root}/consumed-config.json")
             runtime = {key: consumed["dispatch_environment"].get(key) for key in RUNTIME_FIELDS}
