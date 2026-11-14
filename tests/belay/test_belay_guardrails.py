@@ -30,6 +30,7 @@ from experiments.belay.__main__ import (
     launch,
     names_entry,
     prior_trials_hold,
+    remote_job_command,
     reproduce,
     score_value,
     submit_job,
@@ -1098,3 +1099,13 @@ def test_a_failed_job_submit_shows_irises_output_without_the_storage_keys(monkey
     message = str(failure.value)
     assert "exited 2" in message and "bad flag --disk" in message
     assert "s3cr3t-value-123" not in message and "key-id-456" not in message
+
+
+def test_a_cpu_job_gets_the_storage_keys_as_secrets_not_on_its_command_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CW_KEY_ID", "key-id-456")
+    monkeypatch.setenv("CW_KEY_SECRET", "s3cr3t-value-123")
+    command = remote_job_command("belay-analyze-X0001", "cw-us-east-02a", ["experiments.belay.study_checkpoint", "run"])
+    assert "s3cr3t-value-123" not in command and "key-id-456" not in command and "-e" not in command
+    monkeypatch.delenv("CW_KEY_SECRET")
+    with pytest.raises(SystemExit, match="export CW_KEY_ID and CW_KEY_SECRET"):
+        remote_job_command("belay-analyze-X0001", "cw-us-east-02a", ["experiments.belay.study_checkpoint", "run"])

@@ -33,6 +33,13 @@ def test_load_env_vars_single_key():
     assert result["KEY_ONLY"] == ""
 
 
+def test_load_env_vars_keeps_ambient_credentials_out_of_submission(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HF_TOKEN", "sentinel-hf-secret")
+    monkeypatch.setenv("WANDB_API_KEY", "sentinel-wandb-secret")
+    assert load_env_vars([["FLAG", "value"]]) == {"FLAG": "value"}
+
+
 def test_load_env_vars_invalid_key():
     """Test error on key with = sign."""
     with pytest.raises(ValueError, match="cannot contain '='"):

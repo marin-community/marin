@@ -5,6 +5,8 @@
 
 from copy import deepcopy
 
+from rigging.timing import Duration
+
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.controller.backend import BackendDescriptor, BackendKind
 from iris.cluster.controller.reads import ControlSnapshot
@@ -13,7 +15,9 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.runtime.sandbox import SANDBOX_IMAGE_WORKDIR_CAPABILITY
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
 
 KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
@@ -29,6 +33,7 @@ def k8s_backend_descriptor(*, advertised_attributes: dict[str, set[str]] | None 
         display_name="kubernetes",
         kind=BackendKind.KUBERNETES,
         advertised_attributes=advertised_attributes or {},
+        task_capabilities=frozenset({SANDBOX_IMAGE_WORKDIR_CAPABILITY}),
     )
 
 
@@ -52,6 +57,7 @@ def make_run_req(
     attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
+    req.termination_grace.milliseconds = DEFAULT_TERMINATION_GRACE.to_ms()
     req.task_id = task_id
     req.attempt_id = attempt_id
     req.attempt_uid = attempt_uid
@@ -282,8 +288,10 @@ def common_env_from_req(
         num_tasks=req.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
+        task_token=req.task_token or None,
         environment=req.environment,
         constraints=req.constraints,
         ports=req.ports,
         resources=req.resources if req.HasField("resources") else None,
+        termination_grace=Duration.from_ms(req.termination_grace.milliseconds),
     )

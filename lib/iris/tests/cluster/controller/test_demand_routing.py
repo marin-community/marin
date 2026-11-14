@@ -230,24 +230,6 @@ class TestWaterfallRouting:
         assert len(result.routed_entries.get("high-priority", [])) == 3
         assert result.routed_entries.get("low-priority") is None
 
-    def test_cpu_demand_routes_by_priority(self):
-        """CPU demand matches all groups and routes by priority."""
-        config_high = make_scale_group_config(name="high-priority", max_slices=5, priority=10)
-        config_low = make_scale_group_config(
-            name="low-priority",
-            max_slices=5,
-            priority=20,
-        )
-
-        group_high = ScalingGroup(config_high, make_mock_platform())
-        group_low = ScalingGroup(config_low, make_mock_platform())
-
-        demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
-        result = route_demand([group_high, group_low], demand)
-
-        assert len(result.routed_entries.get("high-priority", [])) == 2
-        assert result.routed_entries.get("low-priority") is None
-
     def test_demand_overflows_to_lower_priority_when_at_max_slices(self):
         """When high-priority group is at max_slices, demand falls through to lower priority."""
         config_high = make_scale_group_config(name="high-priority", max_slices=2, priority=10)
@@ -756,6 +738,34 @@ class TestZoneRouting:
 
 class TestCommittedBudgetRouting:
     """Tests for two-phase routing with committed budgets."""
+
+    @pytest.mark.parametrize(
+        ("preferred_region", "expected_group"),
+        [("europe-west4", "preferred"), ("asia-east1", "primary")],
+    )
+    def test_soft_region_constraint_prefers_match_or_falls_back(self, preferred_region: str, expected_group: str):
+        primary = ScalingGroup(
+            make_scale_group_config(name="primary", max_slices=5, priority=10, zones=["us-central1-a"]),
+            make_mock_platform(),
+        )
+        preferred = ScalingGroup(
+            make_scale_group_config(name="preferred", max_slices=5, priority=20, zones=["europe-west4-a"]),
+            make_mock_platform(),
+        )
+        demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
+        demand[0].constraints.append(
+            Constraint.create(
+                key=WellKnownAttribute.REGION,
+                op=ConstraintOp.EQ,
+                value=preferred_region,
+                mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+            )
+        )
+
+        result = route_demand([primary, preferred], demand)
+
+        assert result.routed_entries == {expected_group: demand}
+        assert result.unmet_entries == []
 
     def test_committed_budget_retains_demand_for_requesting_group(self):
         """Demand sticks to a group with requesting slices even when a fresh group is available."""

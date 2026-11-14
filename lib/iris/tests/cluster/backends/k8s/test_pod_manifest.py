@@ -14,9 +14,11 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.config import EgressAllowlistConfig, TaskOutputPolicy
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.egress import parse_egress_rules
+from iris.cluster.platforms.k8s.constants import EGRESS_LABEL, RDMA_RESOURCE
 from iris.cluster.platforms.k8s.coreweave_topology import (
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
@@ -81,7 +83,13 @@ def _dispatch(
         updates = provider.sync(make_batch(tasks_to_run=[request]))
         resources = {
             resource: deepcopy(k8s.list_json(resource))
-            for resource in (K8sResource.PODS, K8sResource.CONFIGMAPS, K8sResource.PDBS)
+            for resource in (
+                K8sResource.PODS,
+                K8sResource.CONFIGMAPS,
+                K8sResource.PDBS,
+                K8sResource.CILIUM_NETWORK_POLICIES,
+                K8sResource.SECRETS,
+            )
         }
     finally:
         provider.close()
@@ -192,18 +200,29 @@ def _build_task_script(request: job_pb2.RunTaskRequest) -> str:
 
 
 def test_task_output_policy_adds_uploader_and_dedicated_volume() -> None:
+    request = make_run_req("/user/job/0", attempt_uid="0123456789abcdef")
+    request.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
     manifest = _build_pod_manifest(
-        make_run_req("/user/job/0", attempt_uid="0123456789abcdef"),
-        pod_config(logship_image="iris-controller", task_outputs=TaskOutputPolicy()),
+        request,
+        pod_config(logship_image="iris-controller", task_outputs=TaskOutputPolicy(), require_coreweave_credentials=True),
     )
 
     uploader = next(container for container in manifest["spec"]["containers"] if container["name"] == "output-uploader")
     mounts = {mount["name"]: mount["mountPath"] for mount in uploader["volumeMounts"]}
     env = {entry["name"]: entry["value"] for entry in uploader["env"]}
-    assert mounts == {"task-outputs": "/iris/outputs", "output-control": "/iris/output-control"}
+    assert mounts == {
+        "task-outputs": "/iris/outputs",
+        "output-control": "/iris/output-control",
+        "job-storage-secrets": "/run/rigging/storage-secrets",
+    }
     assert env["IRIS_ATTEMPT_UID"] == "0123456789abcdef"
     assert env["IRIS_TASK_OUTPUT_TTL_DAYS"] == "7"
     assert output_policy_from_environment(env) == TaskOutputPolicy()
+    task = next(container for container in manifest["spec"]["containers"] if container["name"] == "task")
+    task_env = {entry["name"]: entry.get("value") for entry in task["env"]}
+    for container_env in (env, task_env):
+        assert container_env["AWS_SHARED_CREDENTIALS_FILE"].endswith("/.aws-credentials")
+        assert not {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CW_KEY_ID", "CW_KEY_SECRET"} & container_env.keys()
 
 
 def test_succeeded_pod_reports_uploader_archive() -> None:
@@ -403,11 +422,27 @@ def test_build_pod_manifest_env_vars():
     assert "IRIS_ADVERTISE_HOST" in env_names
 
 
-def test_build_pod_manifest_env_secret_adds_envfrom():
+def test_pod_termination_grace_uses_typed_budget_and_overrides_user_env():
     req = make_run_req("/test-job/0")
-    manifest = _build_pod_manifest(req, pod_config(env_secret_name="iris-task-env"))
+    req.termination_grace.milliseconds = 60001
+    req.environment.env_vars["IRIS_TERMINATION_GRACE_MS"] = "999999"
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["terminationGracePeriodSeconds"] == 66
+    env = {entry["name"]: entry.get("value") for entry in manifest["spec"]["containers"][0]["env"]}
+    assert env["IRIS_TERMINATION_GRACE_MS"] == "60001"
+    assert "IRIS_TERMINATION_GRACE_MS" not in json.loads(env["IRIS_JOB_ENV"])
+
+
+def test_build_pod_manifest_secret_is_required_and_read_only():
+    req = make_run_req("/test-job/0")
+    req.environment.secrets["custom"] = "secret-value"
+    manifest = _build_pod_manifest(req, pod_config())
     container = manifest["spec"]["containers"][0]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+    assert "envFrom" not in container
+    assert {"name": "job-secrets", "mountPath": "/run/rigging/secrets", "readOnly": True} in container["volumeMounts"]
+    volume = next(v for v in manifest["spec"]["volumes"] if v["name"] == "job-secrets")
+    assert volume["secret"]["secretName"].endswith("-secrets")
+    assert volume["secret"]["defaultMode"] == 0o440
 
 
 def test_build_pod_manifest_no_env_secret_omits_envfrom():
@@ -1021,22 +1056,212 @@ def test_privileged_profile_applied_to_pod_manifest():
     assert manifest["spec"]["containers"][0]["securityContext"]["privileged"] is True
 
 
-def test_docker_access_pod_manifest_raises():
+def test_legacy_gvisor_pod_preserves_runtime_and_cluster_resources():
     req = make_run_req("/my-job/task-0")
-    req.container_profile = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
-    update = _rejected_dispatch(req, pod_config())
-    assert "DOCKER_ACCESS is not supported" in update.error
+    req.container_profile = 5
+    req.environment.env_vars["TASK_VAR"] = "1"
+    req.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    config = pod_config(
+        controller_address="http://ctrl:8080",
+        task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
+        task_outputs=TaskOutputPolicy(),
+        service_account="iris-task",
+        host_network=True,
+    )
+    manifest = _build_pod_manifest(req, config)
+    spec = manifest["spec"]
+    task = spec["containers"][0]
+    env = {e["name"]: e.get("value") for e in task["env"]}
+
+    assert spec["runtimeClassName"] == "gvisor"
+    assert "privileged" not in task["securityContext"]
+    assert env["TASK_VAR"] == "1"
+    assert env["MARIN_PREFIX"] == "s3://bucket/prefix"
+    assert env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
+    assert any(m["name"] == "job-secrets" and m["readOnly"] for m in task["volumeMounts"])
+    uploader = next(c for c in spec["containers"] if c["name"] == "output-uploader")
+    assert any(m["name"] == "job-storage-secrets" and m["readOnly"] for m in uploader["volumeMounts"])
+    assert spec["serviceAccountName"] == "iris-task"
+    assert "hostNetwork" not in spec
+    assert "dnsPolicy" not in spec
+    cache_mount = next(m for m in task["volumeMounts"] if m["mountPath"] == env["UV_CACHE_DIR"])
+    assert any(v["name"] == cache_mount["name"] and "hostPath" in v for v in spec["volumes"])
+    assert {c["name"] for c in spec["containers"]} == {"task", "output-uploader"}
+    assert any(c["name"] == "log-shipper" for c in spec["initContainers"])
 
 
-def test_gvisor_profile_sets_runtime_class_and_benign_context():
-    """GVISOR sets the pod runtimeClassName and a non-privileged securityContext."""
+@pytest.mark.parametrize(
+    "egress, label",
+    [(job_pb2.EGRESS_POLICY_INTERNET, "internet"), (job_pb2.EGRESS_POLICY_NONE, "none")],
+)
+def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
+    """SANDBOX keeps the job's env and drops every cluster-held input.
+
+    The pod carries the label the sandbox NetworkPolicy selects and has no
+    sidecar, since a sidecar's network route would be the task's too.
+    """
     req = make_run_req("/my-job/task-0")
-    req.container_profile = job_pb2.CONTAINER_PROFILE_GVISOR
-    manifest = _build_pod_manifest(req, pod_config())
-    assert manifest["spec"]["runtimeClassName"] == "gvisor"
-    ctx = manifest["spec"]["containers"][0]["securityContext"]
-    assert "privileged" not in ctx
-    assert ctx["capabilities"]["add"] == ["SYS_PTRACE"]
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.egress_policy = egress
+    req.environment.env_vars["TASK_VAR"] = "1"
+    config = pod_config(
+        controller_address="http://ctrl:8080",
+        task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
+        task_outputs=TaskOutputPolicy(),
+        require_coreweave_credentials=True,
+        service_account="iris-task",
+        host_network=True,
+    )
+    manifest = _build_pod_manifest(req, config)
+    spec = manifest["spec"]
+    task = spec["containers"][0]
+    env = {e["name"]: e.get("value") for e in task["env"]}
+
+    assert spec["runtimeClassName"] == "gvisor"
+    assert "privileged" not in task["securityContext"]
+    assert env["TASK_VAR"] == "1"
+    assert "MARIN_PREFIX" not in env
+    assert "IRIS_CONTROLLER_ADDRESS" not in env
+    assert "envFrom" not in task
+    assert not any("secret" in volume for volume in spec["volumes"])
+    assert "serviceAccountName" not in spec
+    assert spec["automountServiceAccountToken"] is False
+    assert spec["enableServiceLinks"] is False
+    assert "hostNetwork" not in spec
+    assert not [v for v in spec["volumes"] if "hostPath" in v and v["name"] in {m.name for m in STANDARD_MOUNTS}]
+    assert [c["name"] for c in spec["containers"]] == ["task"]
+    assert spec["initContainers"] == []
+    assert manifest["metadata"]["labels"][EGRESS_LABEL] == label
+
+
+def _allowlist_request(
+    num_tasks: int = 1, gpus: int = 0, rules: Sequence[str] = (), attempt_uid: str = "0123456789abcdef"
+) -> job_pb2.RunTaskRequest:
+    req = make_run_req("/my-job/task-0", num_tasks=num_tasks, attempt_uid=attempt_uid)
+    req.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
+    req.egress_allow.extend(parse_egress_rules(rules))
+    if gpus:
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=gpus))
+    return req
+
+
+def _allowlist_config() -> PodConfig:
+    return pod_config(controller_address="http://ctrl:8080", host_network=True, egress_allowlist=EgressAllowlistConfig())
+
+
+@pytest.mark.parametrize(("num_tasks", "gpus"), [pytest.param(1, 0, id="cpu"), pytest.param(1, 8, id="gpu")])
+def test_allowlist_pod_leaves_the_host_network(num_tasks, gpus):
+    """Pod policy cannot see a host-network pod."""
+    updates, resources = _dispatch(_allowlist_request(num_tasks, gpus, rules=["api.openai.com"]), _allowlist_config())
+    assert updates == []
+    [manifest] = resources[K8sResource.PODS]
+    spec = manifest["spec"]
+    task = spec["containers"][0]
+    env = {e["name"]: e.get("value") for e in task["env"]}
+
+    assert not spec.get("hostNetwork", False)
+    assert RDMA_RESOURCE not in task["resources"].get("limits", {})
+    assert manifest["metadata"]["labels"][EGRESS_LABEL] == "allowlist"
+    assert len(resources[K8sResource.CILIUM_NETWORK_POLICIES]) == 1
+    # Unlike a sandbox, an allowlisted task stays a cluster citizen.
+    assert env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
+    assert any(c["name"] == "log-shipper" for c in spec["initContainers"])
+
+
+def test_allowlist_pod_runs_on_the_cluster_network_without_cilium():
+    """Removing Cilium from the config rolls back the allowlist for every pod started afterwards."""
+    config = pod_config(controller_address="http://ctrl:8080", host_network=True)
+    _, resources = _dispatch(_allowlist_request(rules=["api.openai.com"]), config)
+    [manifest] = resources[K8sResource.PODS]
+
+    assert manifest["spec"]["hostNetwork"]
+    assert EGRESS_LABEL not in manifest["metadata"]["labels"]
+    assert resources[K8sResource.CILIUM_NETWORK_POLICIES] == []
+
+
+def test_allowlist_job_rules_reach_only_their_own_attempt():
+    updates, resources = _dispatch(
+        _allowlist_request(rules=["api.openai.com:443", "*.example.com", "203.0.113.0/24"]), _allowlist_config()
+    )
+    # A resubmitted job reuses the task ID and attempt number while the earlier policy may still exist.
+    _, resubmitted = _dispatch(_allowlist_request(attempt_uid="fedcba9876543210"), _allowlist_config())
+    assert updates == []
+    [pod] = resources[K8sResource.PODS]
+    [other_pod] = resubmitted[K8sResource.PODS]
+    [policy] = resources[K8sResource.CILIUM_NETWORK_POLICIES]
+    [secret] = resources[K8sResource.SECRETS]
+    spec = policy["spec"]
+    selector = spec["endpointSelector"]["matchLabels"]
+    by_destination = {
+        next(iter(entry.values())): section.get("toPorts")
+        for section in spec["egress"]
+        for entry in [*section.get("toFQDNs", []), *section.get("toCIDRSet", [])]
+    }
+    dns_names = [
+        next(iter(name.values()))
+        for section in spec["egress"]
+        for port in section.get("toPorts", [])
+        for name in port.get("rules", {}).get("dns", [])
+    ]
+
+    # The policy selects this attempt's pod and no other, and is deleted with it.
+    assert selector.items() <= pod["metadata"]["labels"].items()
+    assert not selector.items() <= other_pod["metadata"]["labels"].items()
+    [owner] = policy["metadata"]["ownerReferences"]
+    assert (owner["kind"], owner["uid"]) == ("Pod", pod["metadata"]["uid"])
+    # The job has no secrets, but the pod still mounts its Secret: the provider
+    # writes it after the policy, so the containers start only once the policy exists.
+    secret_volumes = {v["secret"]["secretName"] for v in pod["spec"]["volumes"] if "secret" in v}
+    assert secret["metadata"]["name"] in secret_volumes
+    assert secret["metadata"]["ownerReferences"] == policy["metadata"]["ownerReferences"]
+    assert by_destination == {
+        "api.openai.com": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
+        "*.example.com": None,
+        "203.0.113.0/24": None,
+    }
+    # Cilium's DNS proxy refuses any name no policy lists, even one toFQDNs admits.
+    assert set(dns_names) == {"api.openai.com", "*.example.com"}
+
+
+def test_default_profile_off_the_cluster_network_keeps_cluster_env_but_no_cluster_route():
+    """The egress policy sets the network for any profile; the profile alone decides the cluster env."""
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_DEFAULT
+    req.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
+    config = pod_config(
+        controller_address="http://ctrl:8080",
+        task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
+        task_outputs=TaskOutputPolicy(),
+        host_network=True,
+    )
+    manifest = _build_pod_manifest(req, config)
+    spec = manifest["spec"]
+    env = {e["name"]: e.get("value") for e in spec["containers"][0]["env"]}
+
+    assert env["MARIN_PREFIX"] == "s3://bucket/prefix"
+    assert "runtimeClassName" not in spec
+    assert "hostNetwork" not in spec
+    assert [c["name"] for c in spec["containers"]] == ["task"]
+    assert spec["initContainers"] == []
+    assert manifest["metadata"]["labels"][EGRESS_LABEL] == "internet"
+
+
+@pytest.mark.parametrize(
+    "profile, egress, expected_token",
+    [
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, "task-token"),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, None),
+    ],
+)
+def test_task_token_reaches_every_pod_but_a_sandbox(profile, egress, expected_token):
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = profile
+    req.egress_policy = egress
+    req.task_token = "task-token"
+
+    task = _build_pod_manifest(req, pod_config())["spec"]["containers"][0]
+
+    assert {e["name"]: e.get("value") for e in task["env"]}.get("IRIS_TASK_TOKEN") == expected_token
 
 
 # ---------------------------------------------------------------------------
@@ -1741,3 +1966,147 @@ def test_pod_manifest_floors_an_unset_band_at_interactive():
     req = make_run_req("/test-job/0", priority=job_pb2.PRIORITY_BAND_INHERIT)
     manifest = _build_pod_manifest(req, pod_config())
     assert manifest["spec"]["priorityClassName"] == "iris-interactive"
+
+
+def test_coreweave_retry_without_stored_keys_is_rejected() -> None:
+    request = make_run_req("/user/queued-before-upgrade/0", attempt_id=1)
+    update = _rejected_dispatch(request, pod_config(require_coreweave_credentials=True))
+    assert "https://console.coreweave.com/object-storage/access-keys" in update.error
+
+
+@pytest.mark.parametrize("disk_bytes", [512 * 1024**2, 2305 * 1024**2])
+def test_sandbox_pod_enforces_exact_declared_disk_and_cpu(disk_bytes: int) -> None:
+    req = make_run_req("/storage/0", cpu_mc=1500)
+    req.resources.disk_bytes = disk_bytes
+    req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    _, objects = _dispatch(req, pod_config())
+    pod = objects[K8sResource.PODS][0]
+    resources = pod["spec"]["containers"][0]["resources"]
+    assert parse_k8s_quantity(resources["limits"]["ephemeral-storage"]) == disk_bytes
+    assert parse_k8s_quantity(resources["requests"]["ephemeral-storage"]) == disk_bytes
+    assert resources["limits"]["cpu"] == "1500m"
+    assert not any("hostPath" in volume for volume in pod["spec"].get("volumes", []))
+
+
+@pytest.mark.parametrize(
+    "message,expected_state,exit_code,disrupted,sandbox",
+    [
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_FAILED,
+            137,
+            True,
+            True,
+        ),
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_FAILED,
+            0,
+            False,
+            True,
+        ),
+        ('Container task exceeded its local ephemeral storage limit "2Gi".', job_pb2.TASK_STATE_FAILED, 137, True, True),
+        (
+            "The node was low on resource: ephemeral-storage. Threshold quantity: 100Gi, available: 5Gi.",
+            job_pb2.TASK_STATE_PREEMPTED,
+            137,
+            True,
+            True,
+        ),
+        (
+            "Pod ephemeral local storage usage exceeds the total limit of containers 2Gi.",
+            job_pb2.TASK_STATE_PREEMPTED,
+            137,
+            True,
+            False,
+        ),
+    ],
+)
+def test_storage_eviction_classifies_task_limit_separately_from_node_pressure(
+    message: str, expected_state: int, exit_code: int, disrupted: bool, sandbox: bool
+) -> None:
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0
+    )
+    req = make_run_req("/storage/0", attempt_uid="disk-limit-test")
+    if sandbox:
+        req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    req.resources.disk_bytes = 2 * 1024**3
+    try:
+        provider.sync(make_batch(tasks_to_run=[req]))
+        pod = deepcopy(k8s.list_json(K8sResource.PODS)[0])
+        pod["status"] = {
+            "phase": "Failed",
+            "reason": "Evicted",
+            "message": message,
+            "conditions": (
+                [{"type": "DisruptionTarget", "status": "True", "reason": "TerminationByKubelet"}] if disrupted else []
+            ),
+            "containerStatuses": [{"name": "task", "state": {"terminated": {"exitCode": exit_code, "reason": "Error"}}}],
+        }
+        k8s.seed_resource(K8sResource.PODS, pod["metadata"]["name"], pod)
+        updates = provider.sync(
+            make_batch(
+                running_tasks=[
+                    RunningTaskEntry(
+                        task_id=JobName.from_wire("/storage/0"), attempt_id=0, attempt_uid="disk-limit-test"
+                    )
+                ]
+            )
+        )
+        assert len(updates) == 1
+        update = updates[0]
+        assert update.new_state == expected_state
+        if expected_state == job_pb2.TASK_STATE_FAILED:
+            assert update.error is not None
+            assert update.error.startswith("RESOURCE_LIMIT_DISK:")
+            assert update.terminal_reason == update.error
+        else:
+            assert update.terminal_reason is not None
+            assert not update.terminal_reason.startswith("RESOURCE_LIMIT_DISK:")
+    finally:
+        provider.close()
+
+
+@pytest.mark.parametrize("sandbox", [False, True])
+def test_pod_without_declared_disk_has_no_storage_limit(sandbox: bool) -> None:
+    req = make_run_req("/storage/0")
+    if sandbox:
+        req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    manifest = _build_pod_manifest(req, pod_config())
+    resources = manifest["spec"]["containers"][0]["resources"]
+    assert "ephemeral-storage" not in resources.get("requests", {})
+    assert "ephemeral-storage" not in resources.get("limits", {})
+
+
+@pytest.mark.parametrize("disk_bytes,expected_quantity", [(512 * 1024**2, "1Gi"), (2305 * 1024**2, "2Gi")])
+def test_ordinary_pod_preserves_legacy_storage_quantity(disk_bytes: int, expected_quantity: str) -> None:
+    req = make_run_req("/storage/0")
+    req.resources.disk_bytes = disk_bytes
+    manifest = _build_pod_manifest(req, pod_config())
+    resources = manifest["spec"]["containers"][0]["resources"]
+    assert resources["requests"]["ephemeral-storage"] == expected_quantity
+    assert resources["limits"]["ephemeral-storage"] == expected_quantity
+    assert "cpu" not in resources.get("limits", {})
+
+
+@pytest.mark.parametrize("sandbox", [False, True])
+@pytest.mark.parametrize("staged_workdir", ["none", "files", "refs", "bundle"])
+def test_pod_workdir_mount_preserves_prepared_sandbox_image(sandbox: bool, staged_workdir: str) -> None:
+    req = make_run_req("/prepared-image/0")
+    if sandbox:
+        req.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    if staged_workdir == "files":
+        req.entrypoint.workdir_files["input.txt"] = b"explicit input"
+    elif staged_workdir == "refs":
+        req.entrypoint.workdir_file_refs["input.txt"] = "abcd1234" * 8
+    elif staged_workdir == "bundle":
+        req.bundle_id = "bundle-abc"
+    manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
+    mounts = manifest["spec"]["containers"][0]["volumeMounts"]
+    expects_workdir = not sandbox or staged_workdir != "none"
+    assert any(mount["mountPath"] == "/app" for mount in mounts) is expects_workdir
+    volumes = manifest["spec"]["volumes"]
+    assert any(volume["name"] == "workdir" for volume in volumes) is expects_workdir

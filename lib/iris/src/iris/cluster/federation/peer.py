@@ -31,6 +31,9 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
+# Sync and cancel must return so the peer loop can deliver later handoffs.
+_PEER_RPC_TIMEOUT_MS = 60_000
+
 # A handoff carries a full request and a peer's cold boot can outrun the default
 # RPC deadline, so deliver LaunchJob with this floor to avoid spurious failures.
 _LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
@@ -50,6 +53,7 @@ _DEFAULT_EXEC_TIMEOUT = 60
 # forward caps at ~10s, a kubectl-exec /proc read is quick), so give the parent->peer
 # hop that budget plus margin to outlast the peer rather than time out first.
 _PROCESS_STATUS_PROXY_TIMEOUT_MS = 30_000
+_KICK_PROXY_TIMEOUT_MS = 30_000
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +72,10 @@ class PeerConnection(Protocol):
     def launch_job(
         self, request: controller_pb2.Controller.LaunchJobRequest
     ) -> controller_pb2.Controller.LaunchJobResponse: ...
+
+    def kick_tasks(
+        self, request: controller_pb2.Controller.KickTasksRequest
+    ) -> controller_pb2.Controller.KickTasksResponse: ...
 
     def terminate_job(self, job_id: JobName) -> None: ...
 
@@ -126,7 +134,9 @@ class _PeerRpcConnection:
     """
 
     def __init__(self, controller_address: str, interceptors: Iterable[InterceptorSync]):
-        self._client = ControllerServiceClientSync(address=controller_address, interceptors=interceptors)
+        self._client = ControllerServiceClientSync(
+            address=controller_address, interceptors=interceptors, timeout_ms=_PEER_RPC_TIMEOUT_MS
+        )
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         response = self._client.list_backends(
@@ -138,6 +148,11 @@ class _PeerRpcConnection:
         self, request: controller_pb2.Controller.LaunchJobRequest
     ) -> controller_pb2.Controller.LaunchJobResponse:
         return self._client.launch_job(request, timeout_ms=_LAUNCH_JOB_TIMEOUT_FLOOR_MS)
+
+    def kick_tasks(
+        self, request: controller_pb2.Controller.KickTasksRequest
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        return self._client.kick_tasks(request, timeout_ms=_KICK_PROXY_TIMEOUT_MS)
 
     def terminate_job(self, job_id: JobName) -> None:
         self._client.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()))
@@ -227,6 +242,12 @@ class FederationPeer:
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Deliver a handed-off job to the peer (reuses its ``LaunchJob``)."""
         return self._connection.launch_job(request)
+
+    def kick_tasks(
+        self, request: controller_pb2.Controller.KickTasksRequest
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        """Route task overrides to the controller executing the targets."""
+        return self._connection.kick_tasks(request)
 
     def terminate_job(self, job_id: JobName) -> None:
         """Route a cancel to the peer (reuses its ``TerminateJob``).
