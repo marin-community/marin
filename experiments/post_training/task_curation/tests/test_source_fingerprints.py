@@ -3,7 +3,6 @@
 
 """Source identity ignores row order and keeps overlap flags advisory."""
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -15,32 +14,41 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     AnswerType,
+    AssistantToolCalls,
     ConversationInput,
+    ConversationToolCall,
     EnvironmentRequirements,
     NoGrader,
     PlainText,
     Source,
     TaskSpec,
     TextMessage,
+    ToolResult,
 )
 from taskcompendium.source_fingerprints import DuplicateLabel, SourceFingerprint
 
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
 from experiments.post_training.task_curation.duplicate_review import review_pairs
 from experiments.post_training.task_curation.source_duplicate_ci import changed_source_declarations
+from experiments.post_training.task_curation.source_duplicates import fingerprint_manifest
 from experiments.post_training.task_curation.source_fingerprints import (
     candidate_pairs,
     duplicate_groups,
     fingerprint_source,
     pair_similarity,
 )
-from experiments.post_training.task_curation.source_neighbor_survey import cache_population, read_population
+from experiments.post_training.task_curation.source_neighbor_survey import (
+    PopulationLocations,
+    cache_population,
+    read_population,
+)
 from experiments.post_training.task_curation.task_neighbors import (
     PopulationIndex,
     TaskContent,
     compare_populations,
     content_rows,
     exact_reference_integrity,
+    measured_review,
 )
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
@@ -171,7 +179,29 @@ def test_frozen_survey_digest_survives_canonical_source_projection():
         "snapshot_id": "frozen",
         "generated_at": "2026-11-12T00:00:00Z",
         "fingerprints": {"MarinSkyRL:aime24": None, "MarinSkyRL:svamp": None},
-        "reviews": [],
+        "reviews": [
+            {
+                "similarity": {
+                    "left": "MarinSkyRL:aime24",
+                    "right": "MarinSkyRL:svamp",
+                    "rank_score": 0.0,
+                    "instruction_similarity": 0.0,
+                    "instruction_overlap": 0.0,
+                    "reference_overlap": 0.0,
+                    "test_overlap": 0.0,
+                    "task_id_overlap": 0.0,
+                    "url_overlap": 0.0,
+                    "shared_lineage": False,
+                },
+                "verdict": {"label": "distinct", "overlap_fraction": 0.0, "reason": "Archived opinion"},
+                "prompt_sha256": "receipt",
+                "model": "archived",
+                "completion_id": "old",
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "acknowledgement": None,
+            }
+        ],
         "groups": [],
         "judge": None,
     }
@@ -211,15 +241,18 @@ def test_content_neighbors_ignore_permuted_ids_and_measure_both_populations(coho
 
 
 def test_neighbor_integrity_reports_answer_swap_even_with_identical_id_sets():
-    rows = [TaskContent(str(index), str(index), f"Question {index}", f"answer-{index}", "test") for index in range(10)]
+    rows = [
+        TaskContent(str(index), str(index), f"Question {index}", f"answer-{index}", "test", "state")
+        for index in range(10)
+    ]
     permuted = [
-        TaskContent(str(9 - index), row.instruction_hash, row.text, row.reference_hash, row.tests_hash)
+        TaskContent(str(9 - index), row.instruction_hash, row.text, row.reference_hash, row.tests_hash, "state")
         for index, row in enumerate(rows)
     ]
     original, copy = PopulationIndex(rows, {}), PopulationIndex(permuted, {})
     assert exact_reference_integrity(original, copy)["mismatched"] == 0
     swapped = [
-        TaskContent(row.task_id, row.instruction_hash, row.text, f"answer-{9 - index}", row.tests_hash)
+        TaskContent(row.task_id, row.instruction_hash, row.text, f"answer-{9 - index}", row.tests_hash, "state")
         for index, row in enumerate(permuted)
     ]
     result = exact_reference_integrity(original, PopulationIndex(swapped, {}))
@@ -240,13 +273,15 @@ def test_lsh_matches_full_population_after_shared_wrapper_is_stripped():
             f"{wrapper}\nDescribe the unrelated chemical element with atomic number {index}",
             None,
             "test",
+            "state",
         )
         for index in range(20)
     ]
     target = PopulationIndex(
-        [*distractors, TaskContent("hidden-partner", "other", f"{wrapper}\n{question}", "reference", "test")], {}
+        [*distractors, TaskContent("hidden-partner", "other", f"{wrapper}\n{question}", "reference", "test", "state")],
+        {},
     )
-    query = TaskContent("query", "new", question.replace("substance50", "modified50"), "reference", "test")
+    query = TaskContent("query", "new", question.replace("substance50", "modified50"), "reference", "test", "state")
     neighbor = target.neighbors([query])[0]
     assert neighbor.partner_task_id == "hidden-partner"
     assert neighbor.method == "lsh" and neighbor.similarity >= 0.9
@@ -257,19 +292,105 @@ def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_conten
     documents = [task_document(str(index), f"Compute the square of {index}.") for index in range(30)]
     shard = tmp_path / "population.parquet"
     pq.write_table(pa.Table.from_pylist([{"task_spec": json.dumps(row)} for row in documents]), shard)
-    fingerprint = fingerprint_source(
-        documents, {"s3://marin-us-east-02a/fixture/specs.parquet": hashlib.sha256(shard.read_bytes()).hexdigest()}
+    survey = fingerprint_manifest(
+        {
+            "catalog_root": "fixture",
+            "snapshot_id": "frozen",
+            "source_ids": ["fixture"],
+            "inputs": [
+                {
+                    "source_id": "fixture",
+                    "paths": [str(shard)],
+                    "input_uris": ["s3://marin-us-east-02a/fixture/specs.parquet"],
+                    "column": "task_spec",
+                    "expected_tasks": 30,
+                }
+            ],
+        }
     )
+    fingerprint = survey.fingerprints["fixture"]
+    assert fingerprint is not None
+    assert list(fingerprint.inputs) == ["s3://marin-us-east-02a/fixture/specs.parquet"]
+    digest = next(iter(fingerprint.inputs.values()))
+    fingerprint = fingerprint.model_copy(update={"inputs": {"0:tasks.parquet": digest}})
+    locations = PopulationLocations(files={digest: "s3://marin-us-east-02a/fixture/specs.parquet"})
     monkeypatch.setattr(
         "experiments.post_training.task_curation.source_neighbor_survey.filesystem_for",
         lambda uri: (fsspec.filesystem("file"), str(shard)),
     )
     cache = tmp_path / "cache"
     cache.mkdir()
-    population = read_population(cache_population("fixture", fingerprint, cache), fingerprint.inputs)
+    population = read_population(
+        cache_population("fixture", fingerprint, cache, locations, {}, source_bucket="marin-us-east-02a"),
+        fingerprint.inputs,
+    )
     assert len(population.rows) == 30
     assert {row.task_id for row in population.rows} == {str(index) for index in range(30)}
     assert population.neighbors([population.rows[-1]])[0].partner_task_id == "29"
-    changed = fingerprint.model_copy(update={"inputs": {"s3://marin-us-east-02a/fixture/specs.parquet": "0" * 64}})
+    assert fingerprint.inputs == {"0:tasks.parquet": digest}
+    changed = fingerprint.model_copy(update={"inputs": {"0:tasks.parquet": "0" * 64}})
     with pytest.raises(ValueError, match="Input digest differs"):
-        cache_population("fixture", changed, cache)
+        cache_population(
+            "fixture",
+            changed,
+            cache,
+            PopulationLocations(files={"0" * 64: "s3://marin-us-east-02a/fixture/specs.parquet"}),
+            {},
+            source_bucket="marin-us-east-02a",
+        )
+
+
+def test_published_measurement_digest_survives_truncation_and_output_location():
+    documents = [task_document(str(index), f"Compute the square of {index}.") for index in range(30)]
+    fingerprint = fingerprint_source(documents, {})
+    pair = pair_similarity("left", fingerprint, "right", fingerprint)
+    index = PopulationIndex(list(content_rows(documents)), {"shard": "digest"})
+    full = compare_populations(pair, index, index)
+    measurement = full.measurement
+    assert measurement is not None
+    left = measurement.left_to_right.model_copy(
+        update={
+            "neighbors": measurement.left_to_right.neighbors[:2],
+            "neighbor_receipts_uri": "s3://elsewhere/evidence.json",
+        }
+    )
+    right = measurement.right_to_left.model_copy(
+        update={
+            "neighbors": measurement.right_to_left.neighbors[:2],
+            "neighbor_receipts_uri": "s3://another/evidence.json",
+        }
+    )
+    published = measured_review(
+        pair.model_copy(update={"rank_score": 0}),
+        left,
+        right,
+        measurement.sample_size,
+        index.inputs_sha256,
+        index.inputs_sha256,
+    )
+    assert published.prompt_sha256 == full.prompt_sha256
+
+
+@pytest.mark.parametrize("state_kind", ["assistant", "tool"])
+def test_content_matching_preserves_completion_and_tool_state(state_kind):
+    left, right = [], []
+    for index in range(10):
+        for rows, content in [(left, "("), (right, "{")]:
+            document = task_document(str(index), "Complete the unfinished structure.")
+            task = TaskSpec.model_validate(document)
+            if state_kind == "assistant":
+                extra = (TextMessage(role="assistant", content=content),)
+            else:
+                extra = (
+                    AssistantToolCalls(calls=(ConversationToolCall(call_id="state", name="observe", arguments={}),)),
+                    ToolResult(call_id="state", content=content),
+                )
+            task = task.model_copy(update={"context": ConversationInput(events=(*task.context.events, *extra))})
+            rows.append(task.model_dump(mode="json"))
+    fingerprints = [fingerprint_source(rows, {}) for rows in (left, right)]
+    pair = pair_similarity("left", fingerprints[0], "right", fingerprints[1])
+    review = compare_populations(
+        pair, PopulationIndex(list(content_rows(left)), {}), PopulationIndex(list(content_rows(right)), {})
+    )
+    assert review.verdict.label is DuplicateLabel.DISTINCT
+    assert review.measurement.left_to_right.fraction == 0

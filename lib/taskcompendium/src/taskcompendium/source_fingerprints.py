@@ -114,12 +114,16 @@ class DirectionalOverlap(BaseModel):
     exact_fraction: float
     neighbors: list[TaskNeighbor]
     neighbor_receipts_uri: str | None = None
+    neighbors_sha256: str | None = None
+
+
+CURRENT_OVERLAP_VERSION: Literal["content-nn-v3"] = "content-nn-v3"
 
 
 class MeasuredOverlap(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    version: Literal["content-nn-v2"] = "content-nn-v2"
+    version: Literal["content-nn-v2", "content-nn-v3"] = CURRENT_OVERLAP_VERSION
     seed: int
     sample_size: int
     left_inputs_sha256: str | None = None

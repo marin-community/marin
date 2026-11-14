@@ -7,12 +7,11 @@ import argparse
 import hashlib
 import json
 import logging
-from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.source_fingerprints import DuplicateLabel, SourceFingerprint, SourceIdentitySurvey
+from taskcompendium.source_fingerprints import DuplicateLabel, PairSimilarity, SourceFingerprint, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.backend_capabilities import converted_specs
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey
@@ -23,8 +22,13 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
     pair_similarity,
 )
-from experiments.post_training.task_curation.source_neighbor_survey import cache_population, read_population
-from experiments.post_training.task_curation.task_neighbors import SAMPLE_SIZE, PopulationIndex, content_rows
+from experiments.post_training.task_curation.source_neighbor_survey import (
+    PopulationLocations,
+    cache_population,
+    read_locator_manifest,
+    read_population,
+)
+from experiments.post_training.task_curation.task_neighbors import SAMPLE_SIZE
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 logger = logging.getLogger(__name__)
@@ -38,9 +42,11 @@ def fingerprint_manifest(manifest: dict) -> SourceIdentitySurvey:
             raise ValueError(f"Unknown or duplicate fingerprint input: {source_id}")
         paths = [Path(path) for path in entry["paths"]]
         inputs = {}
-        for path in paths:
+        for path, uri in zip(paths, entry["input_uris"], strict=True):
+            if not uri.startswith("s3://"):
+                raise ValueError(f"Fingerprint input needs a durable storage URI: {uri}")
             with path.open("rb") as stream:
-                inputs[str(path.resolve())] = hashlib.file_digest(stream, "sha256").hexdigest()
+                inputs[uri] = hashlib.file_digest(stream, "sha256").hexdigest()
         fingerprint = fingerprint_source(converted_specs(paths, entry["column"]), inputs)
         if fingerprint.task_count != entry["expected_tasks"]:
             raise ValueError(f"Fingerprint does not cover the converted population: {source_id}")
@@ -57,41 +63,46 @@ def fingerprint_manifest(manifest: dict) -> SourceIdentitySurvey:
     )
 
 
+def scan_pairs(survey: SourceIdentitySurvey, changed: set[str], top_k: int, labels: list[dict]) -> list[PairSimilarity]:
+    fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
+    pairs = candidate_pairs(fingerprints, changed, top_k)
+    labelled = [
+        pair_similarity(row["left"], fingerprints[row["left"]], row["right"], fingerprints[row["right"]])
+        for row in labels
+    ]
+    return list({(pair.left, pair.right): pair for pair in [*labelled, *pairs]}.values())
+
+
 def scan(
     survey: SourceIdentitySurvey,
     changed: set[str],
     top_k: int,
-    populations: dict[str, PopulationIndex],
+    population_paths: dict[str, Path],
     acknowledgements: dict[str, str],
     labels: list[dict],
     receipts: Path,
     sample_size: int = SAMPLE_SIZE,
 ) -> SourceIdentitySurvey:
     fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
-    for source_id, population in populations.items():
-        fingerprint = fingerprints.get(source_id)
-        if fingerprint is None or len(population.rows) != fingerprint.task_count:
-            raise ValueError(f"Full matching population differs from fingerprint: {source_id}")
-    pairs = candidate_pairs(fingerprints, changed, top_k)
-    labelled = [
-        pair_similarity(row["left"], fingerprints[row["left"]], row["right"], fingerprints[row["right"]])
-        for row in labels
-    ]
-    selected = {(pair.left, pair.right): pair for pair in [*labelled, *pairs]}
-    ordered = list(selected.values())
+    ordered = scan_pairs(survey, changed, top_k, labels)
     expected = {(row["left"], row["right"]): DuplicateLabel(row["expected"]) for row in labels}
     reviews = []
     responses = StoragePath(str(receipts.with_suffix(".neighbors")))
     with receipts.open("w") as output:
-        for review in review_pairs(ordered, populations, acknowledgements, responses, sample_size):
-            reviews.append(review)
-            output.write(review.model_dump_json() + "\n")
-            output.flush()
-            pair = review.similarity
-            logger.info("Pair %s / %s: %s", pair.left, pair.right, review.verdict.label)
-            label = expected.get((pair.left, pair.right))
-            if label is not None and label != review.verdict.label:
-                raise ValueError(f"Labelled duplicate control disagrees: {pair.left} / {pair.right}")
+        for pair in ordered:
+            populations = {
+                source_id: read_population(population_paths[source_id], fingerprints[source_id].inputs)
+                for source_id in (pair.left, pair.right)
+            }
+            for review in review_pairs([pair], populations, acknowledgements, responses, sample_size):
+                reviews.append(review)
+                output.write(review.model_dump_json() + "\n")
+                output.flush()
+                logger.info("Pair %s / %s: %s", pair.left, pair.right, review.verdict.label)
+                label = expected.get((pair.left, pair.right))
+                if label is not None and label != review.verdict.label:
+                    raise ValueError(f"Labelled duplicate control disagrees: {pair.left} / {pair.right}")
+            del populations
 
     return survey.model_copy(
         update={
@@ -120,6 +131,11 @@ def main() -> None:
         "--manifest", type=Path, help="Local complete-population inputs; otherwise use pinned S3 fingerprint inputs"
     )
     review.add_argument("--cache-dir", type=Path, default=Path("/tmp/source-overlap-populations"))
+    review.add_argument(
+        "--population-locators",
+        type=Path,
+        default=Path("experiments/post_training/task_curation/source_population_locators.json"),
+    )
     review.add_argument("--sample-size", type=int, default=SAMPLE_SIZE)
     review.add_argument("--labels", type=Path)
     review.add_argument("--acknowledgements", type=Path)
@@ -131,41 +147,34 @@ def main() -> None:
         if args.top_k <= 0:
             raise ValueError("Candidate count must be positive")
         source = canonical_identity_survey(json.loads(args.fingerprints.read_text()))
-        populations = {}
-        if args.manifest:
-            manifest = json.loads(args.manifest.read_text())
-            for entry in manifest["inputs"]:
-                source_id = canonical_source_id(entry["source_id"])
-                fingerprint = source.fingerprints[source_id]
-                if fingerprint is None:
-                    raise ValueError(f"Population has no fingerprint: {source_id}")
-                digests = []
-                for path in entry["paths"]:
-                    with Path(path).open("rb") as stream:
-                        digests.append(hashlib.file_digest(stream, "sha256").hexdigest())
-                if Counter(digests) != Counter(fingerprint.inputs.values()):
-                    raise ValueError(f"Population input digests differ: {source_id}")
-                populations[source_id] = PopulationIndex(
-                    list(content_rows(converted_specs([Path(path) for path in entry["paths"]], entry["column"]))),
-                    fingerprint.inputs,
-                )
-        else:
-            args.cache_dir.mkdir(parents=True, exist_ok=True)
-            for source_id, fingerprint in source.fingerprints.items():
-                if fingerprint is not None:
-                    populations[source_id] = read_population(
-                        cache_population(source_id, fingerprint, args.cache_dir), fingerprint.inputs
-                    )
         acknowledgements = json.loads(args.acknowledgements.read_text()) if args.acknowledgements else {}
         labels = json.loads(args.labels.read_text()) if args.labels else []
         changed = set(args.changed_source)
         if args.changed_sources:
             changed.update(json.loads(args.changed_sources.read_text()))
+        needed = {key for pair in scan_pairs(source, changed, args.top_k, labels) for key in (pair.left, pair.right)}
+        local_paths = {}
+        if args.manifest:
+            manifest = json.loads(args.manifest.read_text())
+            for entry in manifest["inputs"]:
+                local_paths.update(dict(zip(entry["input_uris"], entry["paths"], strict=True)))
+        locations = (
+            read_locator_manifest(args.population_locators) if args.population_locators else PopulationLocations()
+        )
+        args.cache_dir.mkdir(parents=True, exist_ok=True)
+        population_paths = {}
+        for source_id in needed:
+            fingerprint = source.fingerprints[source_id]
+            if fingerprint is None:
+                raise ValueError(f"Population has no fingerprint: {source_id}")
+            population_paths[source_id] = cache_population(
+                source_id, fingerprint, args.cache_dir, locations, local_paths, source_bucket="marin-us-east-02a"
+            )
         result = scan(
             source,
             changed,
             args.top_k,
-            populations,
+            population_paths,
             acknowledgements,
             labels,
             args.output.with_suffix(".receipts.jsonl"),

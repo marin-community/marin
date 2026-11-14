@@ -15,9 +15,10 @@ import dupekit
 import pyarrow as pa
 from marin.evaluation.eval_stats import wilson_interval
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import TaskSpec, TextMessage, format_conversation
 from taskcompendium.pipeline.sampling import seeded_order
 from taskcompendium.source_fingerprints import (
+    CURRENT_OVERLAP_VERSION,
     DirectionalOverlap,
     DuplicateLabel,
     DuplicateReview,
@@ -50,19 +51,23 @@ class TaskContent:
     text: str
     reference_hash: str | None
     tests_hash: str
+    state_hash: str
 
 
 def content_rows(documents: Iterable[Mapping]) -> Iterable[TaskContent]:
     """Keep complete instruction text and content hashes, without task-ID joins."""
     for document in documents:
         task = TaskSpec.model_validate(document.get("task", document))
-        # System messages describe the interface, while user turns carry the task.
-        messages = [
-            event.content for event in task.context.events if isinstance(event, TextMessage) and event.role == "user"
+        text = format_conversation(task.context.events)
+        state = [
+            event.model_dump(mode="json")
+            for event in task.context.events
+            if not isinstance(event, TextMessage) or event.role == "assistant"
         ]
-        text = "\n".join(messages) if messages else normalized_instruction(task)
         reference, tests = reference_test_hashes(task)
-        yield TaskContent(task.id, canonical_sha256(normalized_instruction(task)), text, reference, tests)
+        yield TaskContent(
+            task.id, canonical_sha256(normalized_instruction(task)), text, reference, tests, canonical_sha256(state)
+        )
 
 
 def strip_boilerplate(rows: list[TaskContent]) -> list[TaskContent]:
@@ -95,7 +100,9 @@ def strip_boilerplate(rows: list[TaskContent]) -> list[TaskContent]:
         # Empty text must never make unrelated wrapper-only tasks exact matches.
         text = text or row.text
         text = " ".join(unicodedata.normalize("NFKC", text).casefold().split())
-        result.append(TaskContent(row.task_id, row.instruction_hash, text, row.reference_hash, row.tests_hash))
+        result.append(
+            TaskContent(row.task_id, row.instruction_hash, text, row.reference_hash, row.tests_hash, row.state_hash)
+        )
     return result
 
 
@@ -126,7 +133,7 @@ class PopulationIndex:
         self.stripped: dict[str, list[int]] = defaultdict(list)
         for index, row in enumerate(self.rows):
             self.exact[row.instruction_hash].append(index)
-            self.stripped[canonical_sha256(row.text)].append(index)
+            self.stripped[canonical_sha256((row.text, row.state_hash))].append(index)
         self.buckets: dict[tuple[int, tuple[int, ...]], list[int]] | None = None
 
     def sample(self, size: int) -> list[TaskContent]:
@@ -141,7 +148,9 @@ class PopulationIndex:
         result: list[TaskNeighbor | None] = [None] * len(queries)
         missing = []
         for index, row in enumerate(queries):
-            candidates = self.exact.get(row.instruction_hash) or self.stripped.get(canonical_sha256(row.text))
+            candidates = self.exact.get(row.instruction_hash) or self.stripped.get(
+                canonical_sha256((row.text, row.state_hash))
+            )
             if candidates:
                 # References break content-identical ties only, never select a question.
                 partner = min(
@@ -170,6 +179,8 @@ class PopulationIndex:
                 best, score = None, 0.0
                 for candidate in sorted(candidates):
                     partner = self.rows[candidate]
+                    if partner.state_hash != query.state_hash:
+                        continue
                     other = shingles(partner.text)
                     union = query_shingles | other
                     similarity = len(query_shingles & other) / len(union) if union else 0.0
@@ -216,6 +227,7 @@ def directional_overlap(source: PopulationIndex, target: PopulationIndex, sample
         exact_matched=exact,
         exact_fraction=exact / len(source.rows),
         neighbors=neighbors,
+        neighbors_sha256=canonical_sha256([row.model_dump(mode="json") for row in neighbors]),
     )
 
 
@@ -257,15 +269,27 @@ def measured_review(
     return DuplicateReview(
         similarity=pair,
         verdict=PairVerdict(label=label, overlap_fraction=fraction, reason=reason),
-        prompt_sha256=canonical_sha256(
-            {"pair": pair.model_dump(mode="json"), "measurement": measurement.model_dump(mode="json")}
-        ),
-        model="deterministic:content-nn-v2",
-        completion_id="content-nn-v2",
+        prompt_sha256=measurement_digest(pair, measurement),
+        model=f"deterministic:{CURRENT_OVERLAP_VERSION}",
+        completion_id=CURRENT_OVERLAP_VERSION,
         prompt_tokens=0,
         completion_tokens=0,
         measurement=measurement,
     )
+
+
+def measurement_digest(pair: PairSimilarity, measurement: MeasuredOverlap) -> str:
+    """Bind complete sample evidence independently of shortlist scores or presentation."""
+    if measurement.left_to_right.neighbors_sha256 is None or measurement.right_to_left.neighbors_sha256 is None:
+        raise ValueError("Measured overlap requires complete neighbor digests")
+    evidence = measurement.model_dump(
+        mode="json",
+        exclude={
+            "left_to_right": {"neighbors", "neighbor_receipts_uri"},
+            "right_to_left": {"neighbors", "neighbor_receipts_uri"},
+        },
+    )
+    return canonical_sha256({"left": pair.left, "right": pair.right, "measurement": evidence})
 
 
 def compare_populations(

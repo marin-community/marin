@@ -526,7 +526,10 @@ with Ctrl-C when finished; its database is disposable.
 ### Source identity and overlap review
 
 `source_duplicates fingerprint` reads complete converted TaskSpec populations
-before admission using the [backend survey's manifest shape](#backend-survey).
+before admission using the [backend survey's manifest shape](#backend-survey),
+plus an `input_uris` list aligned with each entry's local `paths`. Upload those
+complete TaskSpec files first; fingerprints retain their durable S3 URIs and
+verified local-file digests.
 It records seed-0 samples of at most
 20 normalized tasks, instruction MinHash sketches, reference/test hashes,
 upstream dataset revisions, identifier/URL hashes and within-source duplicate
@@ -553,7 +556,8 @@ occurrences with seed 0, looks up their complete normalized instruction hashes
 in the other source's full population, then searches remaining queries with
 128-permutation character-5-gram MinHash and 32 LSH bands. Long whole wrapper
 lines shared by at least 90% of a source panel are removed before near matching.
-Retrieved candidates are scored with word-trigram Jaccard; a score of at least
+Complete conversation context is retained. Assistant prefills and tool state
+must agree before near matching can count a pair. Retrieved candidates are scored with word-trigram Jaccard; a score of at least
 0.90 counts as a near duplicate. The partner ID, score, reference-hash agreement
 and test-hash agreement are retained as evidence. Reference-only matches, such
 as the same A–D answer letters in different MMLU subjects, do not count.
@@ -580,11 +584,17 @@ uv run --all-packages python -m experiments.post_training.task_curation.source_d
 ```
 
 Omit `--manifest` when fingerprints pin complete durable S3 TaskSpec inputs.
+The pinned `source_population_locators.json` registry resolves historical opaque
+input names by file SHA-256 without changing their fingerprint or acknowledgement
+identities. It also selects SHA-verified regional content caches prepared next to
+their raw data. Unknown or out-of-region inputs fail preflight. CI selects pairs
+first, caches only those sources, and loads two populations at a time.
 The scan verifies each input SHA-256 and population count before matching.
 CI uses `cw-us-east-02a`, 16 CPUs, 64 GB RAM and a three-day job timeout.
 Measured receipts are written to `.receipts.jsonl` and `.receipts.neighbors/`.
 Non-distinct flags require resolution or an acknowledgement keyed by the exact
-measurement digest in `source_duplicate_acknowledgements.json`. Old approvals
+measurement digest in `source_duplicate_acknowledgements.json`. The digest includes a hash of every sampled neighbor and excludes output URIs,
+example truncation and shortlist scores, so CI and survey reruns agree. Old approvals
 remain attached to their old request; new content measurements need new approvals.
 Groups choose a stable canonical member for default collapsing; every source
 and assessment remains available. The flags are advisory.
@@ -593,7 +603,7 @@ For a versioned survey rerun, use `source_neighbor_survey --survey URI
 --survey-sha256 SHA --output-root NEW_URI --allocated-cpus 16`. It retains every old pair, widens
 with full fingerprint hash evidence and a 256-task-per-source LSH discovery
 panel, then measures each selected pair against complete populations. It writes
-`source-identities-content-nn-v2.json`, `label-diff.json`, `openqa-integrity.json`
+`source-identities-content-nn-v3.json`, `label-diff.json`, `openqa-integrity.json`
 and `result.json`. Complete per-sample neighbors live under `neighbors/`; the
 survey includes bounded examples and their receipt URIs. The diff preserves
 old labels, request digests and acknowledgements. Full exact-question reference

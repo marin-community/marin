@@ -10,19 +10,22 @@ import logging
 import tempfile
 import time
 from collections import Counter, defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import UTC, datetime
 from multiprocessing import get_context
 from pathlib import Path
+from typing import Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import (
+    CURRENT_OVERLAP_VERSION,
     DirectionalOverlap,
     PairSimilarity,
     SourceFingerprint,
@@ -30,6 +33,7 @@ from taskcompendium.source_fingerprints import (
 )
 
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey, identity_survey_payload
+from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source_fingerprints import duplicate_groups, pair_similarity
 from experiments.post_training.task_curation.task_neighbors import (
     BAND_ROWS,
@@ -62,12 +66,82 @@ def write_json(uri: str, document: dict) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def cache_population(source_id: str, fingerprint: SourceFingerprint, cache_dir: Path) -> Path:
+class PreparedPopulation(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    uri: str
+    sha256: str
+    inputs_sha256: str
+    task_count: int
+    text_version: Literal["complete-context-v1"] = "complete-context-v1"
+
+
+class PopulationLocations(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    files: dict[str, str] = Field(default_factory=dict)
+    prepared: dict[str, PreparedPopulation] = Field(default_factory=dict)
+
+
+def read_locator_manifest(path: Path) -> PopulationLocations:
+    return PopulationLocations.model_validate(read_registry_json(path))
+
+
+def population_preflight(survey: SourceIdentitySurvey, locations: PopulationLocations, source_bucket: str) -> dict:
+    """Reject missing or out-of-region population locators before scheduling reads."""
+    prepared_count = 0
+    located_files = 0
+    for source_id, fingerprint in survey.fingerprints.items():
+        if fingerprint is None:
+            continue
+        prepared = locations.prepared.get(source_id)
+        if prepared is not None:
+            if prepared.inputs_sha256 != canonical_sha256(fingerprint.inputs):
+                raise ValueError(f"Prepared inputs differ: {source_id}")
+            if prepared.task_count != fingerprint.task_count:
+                raise ValueError(f"Prepared count differs: {source_id}")
+            uris = [prepared.uri]
+            prepared_count += 1
+        else:
+            uris = [locations.files.get(digest, key) for key, digest in fingerprint.inputs.items()]
+            located_files += sum(digest in locations.files for digest in fingerprint.inputs.values())
+        for uri in uris:
+            if not uri.startswith(f"s3://{source_bucket}/"):
+                raise ValueError(f"Missing co-located population locator for {source_id}: {uri}")
+    return {"prepared_sources": prepared_count, "located_files": located_files, "source_bucket": source_bucket}
+
+
+def cache_population(
+    source_id: str,
+    fingerprint: SourceFingerprint,
+    cache_dir: Path,
+    locations: PopulationLocations,
+    local_paths: dict[str, str],
+    *,
+    source_bucket: str,
+) -> Path:
     """Verify input bytes before extracting complete task content into a local cache."""
-    path = cache_dir / f"{canonical_sha256({'source': source_id, 'inputs': fingerprint.inputs})}.parquet"
+    cache_key = canonical_sha256(
+        {"source": source_id, "inputs": fingerprint.inputs, "text_version": "complete-context-v1"}
+    )
+    path = cache_dir / f"{cache_key}.parquet"
     if path.exists():
         return path
     configure_coreweave_s3()
+    prepared = locations.prepared.get(source_id)
+    if prepared is not None:
+        if (
+            prepared.inputs_sha256 != canonical_sha256(fingerprint.inputs)
+            or prepared.task_count != fingerprint.task_count
+        ):
+            raise ValueError(f"Prepared population differs from pinned inputs: {source_id}")
+        if not prepared.uri.startswith(f"s3://{source_bucket}/"):
+            raise ValueError(f"Prepared population is outside the job region: {prepared.uri}")
+        payload = StoragePath(prepared.uri).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != prepared.sha256:
+            raise ValueError(f"Prepared population digest differs: {source_id}")
+        path.write_bytes(payload)
+        if pq.ParquetFile(path).metadata.num_rows != fingerprint.task_count:
+            raise ValueError(f"Prepared population count differs: {source_id}")
+        return path
     schema = pa.schema(
         [
             ("task_id", pa.string()),
@@ -75,14 +149,16 @@ def cache_population(source_id: str, fingerprint: SourceFingerprint, cache_dir: 
             ("text", pa.large_string()),
             ("reference_hash", pa.string()),
             ("tests_hash", pa.string()),
+            ("state_hash", pa.string()),
         ]
     )
     count = 0
     with pq.ParquetWriter(path.with_suffix(".pending"), schema, compression="zstd") as writer:
-        for uri, digest in sorted(fingerprint.inputs.items()):
-            if not uri.startswith("s3://marin-us-east-02a/"):
-                raise ValueError(f"Rerun requires co-located us-east-02a input: {uri}")
-            fs, remote_path = filesystem_for(uri)
+        for key, digest in sorted(fingerprint.inputs.items()):
+            uri = locations.files.get(digest, key)
+            if not uri.startswith(f"s3://{source_bucket}/"):
+                raise ValueError(f"Rerun requires co-located input: {uri}")
+            fs, remote_path = filesystem_for(local_paths.get(uri, uri))
             with tempfile.TemporaryFile() as local:
                 with fs.open(remote_path, "rb") as remote:
                     sha = hashlib.sha256()
@@ -169,6 +245,7 @@ def rerun(
     sample_size: int,
     only_openqa: bool,
     allocated_cpus: int,
+    locations: PopulationLocations,
 ) -> dict:
     output = StoragePath(output_root)
     started = time.monotonic()
@@ -185,11 +262,25 @@ def rerun(
     work_dir.mkdir(parents=True, exist_ok=True)
     # Cache the integrity-critical populations first; no population content leaves the region.
     sources = sorted(needed, key=lambda key: ("openq" not in original_source_id(key), original_source_id(key)))
+    population_preflight(survey, locations, "marin-us-east-02a")
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as executor:
         pending = {
-            source: executor.submit(cache_population, source, fingerprints[source], work_dir) for source in sources
+            executor.submit(
+                cache_population,
+                source,
+                fingerprints[source],
+                work_dir,
+                locations,
+                {},
+                source_bucket="marin-us-east-02a",
+            ): source
+            for source in sources
         }
-        paths = {source: future.result() for source, future in pending.items()}
+        paths = {}
+        for future in as_completed(pending):
+            source = pending[future]
+            paths[source] = future.result()
+            logger.info("Prepared %d/%d populations: %s", len(paths), len(sources), original_source_id(source))
     if not only_openqa:
         pairs = discover_pairs(paths, fingerprints, pairs)
     directions: dict[tuple[str, str], DirectionalOverlap] = {}
@@ -213,7 +304,7 @@ def rerun(
                     "sample_size": sample_size,
                     "source_inputs": fingerprints[source_id].inputs,
                     "target_inputs": fingerprints[target_id].inputs,
-                    "method": "content-nn-v2",
+                    "method": CURRENT_OVERLAP_VERSION,
                 }
             )
             receipt_uri = str(output / "neighbors" / f"{direction_key}.json")
@@ -279,7 +370,7 @@ def rerun(
             "judge": None,
         }
     )
-    uri = str(output / "source-identities-content-nn-v2.json")
+    uri = str(output / f"source-identities-{CURRENT_OVERLAP_VERSION}.json")
     sha = write_json(uri, identity_survey_payload(result))
     diff_sha = write_json(str(output / "label-diff.json"), {"pairs": diff})
     integrity_sha = write_json(
@@ -322,6 +413,11 @@ def main() -> None:
     parser.add_argument("--survey", required=True)
     parser.add_argument("--survey-sha256", required=True)
     parser.add_argument("--output-root", required=True)
+    parser.add_argument(
+        "--population-locators",
+        type=Path,
+        default=Path("experiments/post_training/task_curation/source_population_locators.json"),
+    )
     parser.add_argument("--work-dir", type=Path, default=Path("/tmp/content-nn-v2"))
     parser.add_argument("--allocated-cpus", type=int, required=True)
     parser.add_argument("--workers", type=int, default=8)
@@ -340,6 +436,7 @@ def main() -> None:
         args.sample_size,
         args.only_openqa,
         args.allocated_cpus,
+        read_locator_manifest(args.population_locators),
     )
 
 
