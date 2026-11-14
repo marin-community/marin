@@ -201,7 +201,11 @@ TARGETS = {
 LEADER_ARGS = ("--api-server-count", "1")
 
 # Leader-only flag overrides per candidate label (API servers start only on the leader).
-LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4"), "fg128api4": ("--api-server-count", "4")}
+LEADER_OVERRIDES = {
+    "mns128api4": ("--api-server-count", "4"),
+    "fg128api4": ("--api-server-count", "4"),
+    "fg128stack": ("--api-server-count", "4"),
+}
 
 MOE_CONFIG_DIR = "experiments/evaluation/hero_vllm_hillclimb/moe_configs"
 
@@ -211,6 +215,10 @@ LABEL_ENV = {
     "fg128symm": (("VLLM_USE_NCCL_SYMM_MEM", "1"),),
     # Fused-MoE Triton configs tuned for Hero's EP16 decode shapes on GB200 (moe_tune.py).
     "fg128moe": (("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),),
+    "fg128stack": (
+        ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
+        ("VLLM_USE_NCCL_SYMM_MEM", "1"),
+    ),
 }
 
 # Local torch-profiler trace directory on every host; traces are uploaded after the server exits.
@@ -288,6 +296,13 @@ CANDIDATE_ARGS = {
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
     "fg128api4": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    # FULL graphs + tuned MoE config + NCCL symmetric memory + four API servers.
+    "fg128stack": (
         "--max-num-seqs",
         "128",
         "--compilation-config",
