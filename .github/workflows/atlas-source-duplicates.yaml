@@ -61,8 +61,9 @@ jobs:
       - name: Measure shortlisted pairs against complete source populations
         if: steps.prepare.outputs.changed == 'true'
         run: |
+          # github-iris is admitted by auth.allowed_submitters in lib/iris/config/cw-us-east-08a.yaml.
           uv run --no-sync iris --config lib/iris/config/marin.yaml job run \
-            --target-cluster cw-us-east-02a --job-name atlas-overlap-${{ github.run_id }}-${{ github.run_attempt }} \
+            --target-cluster cw-us-east-08a --job-name atlas-overlap-${{ github.run_id }}-${{ github.run_attempt }} \
             --cpu 16 --memory 64G --disk 64G --enable-extra-resources --extra cpu \
             --timeout 259200 --no-cancel-on-exit --max-retries 0 --priority production \
             --exclude '^atlas-overlap-inputs/.*[.]json$' --include 'atlas-overlap-inputs/sha256.txt' \
