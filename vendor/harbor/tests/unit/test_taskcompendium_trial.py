@@ -287,11 +287,12 @@ async def test_changed_original_command_binding_allocates_no_machine(tmp_path, m
     assert not list(tmp_path.rglob("setup-ran"))
 
 
+@pytest.mark.parametrize("actor_required", [False, True])
 @pytest.mark.parametrize("role", [RuntimeRole.ORACLE_CONTROL, RuntimeRole.SOURCE_GRADER])
 @pytest.mark.parametrize("failure", [None, "wrong_import", "timeout", "nonzero", "host_timeout", "transport"])
 @pytest.mark.asyncio
 async def test_protected_runtime_records_actual_role_and_stops_wrong_import_before_source(
-    tmp_path, monkeypatch, role, failure
+    tmp_path, monkeypatch, role, failure, actor_required
 ):
     task = exact_answer_task(
         RawRow("protected-runtime", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
@@ -300,12 +301,15 @@ async def test_protected_runtime_records_actual_role_and_stops_wrong_import_befo
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
         packages_lock="fixture-lock",
+        working_directory="/app",
         setup_commands=("touch setup-ran",),
     )
     task = task.model_copy(update={
         "grader": task.grader.model_copy(update={"environment": environment}),
         "resources": ResourceGroups(oracle=(inline_resource("solution/solve.sh", b"printf '42\\n' > answer.txt\n"),)),
     })
+    if actor_required:
+        task = task.model_copy(update={"environment_requirements": environment})
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
     write_oracle_command(

@@ -338,11 +338,18 @@ class TaskSpecTrial(Trial):
         if self.factory.cgroup_parent is None:
             raise ValueError("Declared TaskSpec CPU and memory require cgroup enforcement")
         if actor_machine_required(task):
+            factory = self.factory
+            if (
+                isinstance(self.agent, TaskSpecOracleAgent)
+                and self.runtime_binding is not None
+                and RuntimeRole.ORACLE_CONTROL in self.runtime_binding.roles
+            ):
+                factory = _TrialMachineFactory(self.factory, self, None, self._owned, RuntimeRole.ORACLE_CONTROL)
             machine = await self._await_phase(
                 self._owned.enter_async_context(
                     task_machine(
                         task,
-                        self.factory,
+                        factory,
                         self.runtime,
                         cleanup_timeout=self.config.trial_cleanup_grace_sec,
                     )
