@@ -601,7 +601,10 @@ def test_capacity_only_environment_tables_preserve_original_package_identity(tmp
     for package in (original, staged):
         package.mkdir()
         (package / "instruction.md").write_text("Run the original source task.")
-        (package / "task.toml").write_text('[metadata]\nsource="smartie"\n')
+        (package / "task.toml").write_text(
+            '[metadata]\nsource="smartie"\n'
+            + ('[verifier]\nenvironment_mode="separate"\n' if role == "verifier" else "")
+        )
     expected = calibration_package_identity(original, "original")
     section = "environment" if role == "actor" else "verifier.environment"
     with (staged / "task.toml").open("a") as output:
@@ -610,3 +613,14 @@ def test_capacity_only_environment_tables_preserve_original_package_identity(tmp
     with (staged / "task.toml").open("a") as output:
         output.write('docker_image="changed-source-image"\n')
     assert calibration_package_identity(staged, "original") != expected
+
+
+def test_capacity_only_verifier_table_cannot_hide_a_shared_to_separate_grader_change(tmp_path):
+    original = tmp_path / "original"
+    staged = tmp_path / "staged"
+    for package in (original, staged):
+        package.mkdir()
+        (package / "task.toml").write_text('[metadata]\nsource="smartie"\n')
+    with (staged / "task.toml").open("a") as output:
+        output.write("[verifier.environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n")
+    assert calibration_package_identity(original, "original") != calibration_package_identity(staged, "original")
