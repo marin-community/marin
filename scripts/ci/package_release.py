@@ -121,6 +121,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 Path("lib/verifyit/pyproject.toml"),
                 Path("lib/taskcompendium/pyproject.toml"),
                 Path("lib/rolloutengine/pyproject.toml"),
+                Path("lib/evalrecords/pyproject.toml"),
             ),
             artifacts=MappingProxyType(
                 {
@@ -138,6 +139,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                         "marin-verifyit",
                         "marin-taskcompendium",
                         "marin-rolloutengine",
+                        "marin-evalrecords",
                     )
                 }
             ),
@@ -156,6 +158,8 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 "lib/taskcompendium/pyproject.toml",
                 "lib/rolloutengine/src/**",
                 "lib/rolloutengine/pyproject.toml",
+                "lib/evalrecords/src/**",
+                "lib/evalrecords/pyproject.toml",
             ),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),

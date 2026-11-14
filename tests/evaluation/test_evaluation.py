@@ -17,17 +17,7 @@ import pytest
 from click.testing import CliRunner
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
-from iris.resources.state import JobState, TaskState
-from iris.rpc import job_pb2
-from marin.evaluation.harbor.driver_config import (
-    HarborDatasetKind,
-    HarborErrorTaxonomy,
-    ValidatedHarborConfig,
-)
-from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.records import (
+from evalrecords.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -39,6 +29,16 @@ from marin.evaluation.records import (
     read_record,
     record_path,
 )
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.resources.state import JobState, TaskState
+from iris.rpc import job_pb2
+from marin.evaluation.harbor.driver_config import (
+    HarborDatasetKind,
+    HarborErrorTaxonomy,
+    ValidatedHarborConfig,
+)
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.runner import (
     EndpointRoute,
     Evaluation,
@@ -52,7 +52,6 @@ from marin.evaluation.runner import (
     run_with_inference_recovery,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
 from marin.inference.config import (
     EffectiveServing,
     ResolvedModelLocator,
@@ -63,6 +62,7 @@ from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupE
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
 from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 

@@ -7,8 +7,7 @@ import json
 import math
 from collections import defaultdict
 
-from finestore.reader import ReadView
-from marin.evaluation.records import (
+from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     EvalRunRecord,
@@ -17,8 +16,9 @@ from marin.evaluation.records import (
     PromptFormat,
     ResolvedEvaluationSelection,
 )
-from marin.rollouts.evaluation import RUN_OBJECT
-from marin.rollouts.evaluation_results import SCORED_OUTCOMES, evaluation_coverage, logical_samples, terminal_attempts
+from evalrecords.rollout_attempts import RUN_OBJECT
+from evalrecords.rollout_results import SCORED_OUTCOMES, evaluation_coverage, logical_samples, terminal_attempts
+from finestore.reader import ReadView
 from taskcompendium.evaluation.spec import EvaluationProtocol, SummaryKind
 from taskcompendium.identity import canonical_sha256
 

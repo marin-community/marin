@@ -9,7 +9,7 @@ from subprocess import run
 from tempfile import TemporaryDirectory
 
 import yaml
-from marin.evaluation.eval_policy import (
+from evalrecords.eval_policy import (
     POLICIES,
     RUNTIME_COMMITS,
     SEPTEMBER_16_VERSION,

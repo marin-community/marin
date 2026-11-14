@@ -55,6 +55,7 @@ ROLLOUTS = (
         source_roots=(
             *CLOUD_RUN_SOURCE_ROOTS,
             "config",
+            "lib/evalrecords",
             "lib/finelog",
             "lib/finestore",
             "lib/iris",

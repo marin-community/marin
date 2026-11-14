@@ -74,11 +74,12 @@ from fray.types import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
+from marin.execution.step_status import StepAlreadyDone, step_lock
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.step_status import STATUS_SUCCESS, StatusFile
 from rigging.log_setup import configure_logging
 from zephyr import counters
 from zephyr.context import ZephyrContext

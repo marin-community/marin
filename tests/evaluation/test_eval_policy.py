@@ -5,15 +5,15 @@
 
 from dataclasses import asdict
 
-from marin.evaluation.eval_policy import (
+from evalrecords.eval_policy import (
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
     policy_violations,
 )
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.model_identity import comparison_model_name, model_config_digest
+from evalrecords.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.model_identity import comparison_model_name, model_config_digest
-from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
 
 
 def _model(generation_kwargs: dict[str, bool | None] | None = None) -> ModelRef:

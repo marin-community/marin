@@ -41,17 +41,15 @@ from enum import StrEnum
 from typing import Protocol
 
 import google.auth
-from fastapi import APIRouter, FastAPI
-from google.auth.transport.requests import AuthorizedSession
-from marin.evaluation.eval_policy import record_policy_violations
-from marin.evaluation.eval_stats import (
+from evalrecords.eval_policy import record_policy_violations
+from evalrecords.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
     MissingPolicy,
     SelectionRequest,
     declared_protocols,
 )
-from marin.evaluation.records import (
+from evalrecords.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
     RecordParseFailure,
@@ -59,7 +57,9 @@ from marin.evaluation.records import (
     list_record_paths,
     scan_records,
 )
-from marin.evaluation.repeat_aggregates import normalize_repeat_record
+from evalrecords.repeat_aggregates import normalize_repeat_record
+from fastapi import APIRouter, FastAPI
+from google.auth.transport.requests import AuthorizedSession
 from marina.apps import RegisteredApi, Services, registered_api
 from marina.mcp import OperationRisk, operation_extension
 from pydantic import BaseModel, ConfigDict

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
+from evalrecords.records import BenchmarkMetadataRef, EvalTaskRef, ModelConfigRef, RunStatus, TaskCoverage
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -28,7 +29,6 @@ from marin.evaluation.harbor.driver_config import (
     harbor_runtime_descriptor,
     run_harbor_driver,
 )
-from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, ModelConfigRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceUnavailable
 from marin.inference.iris import RemoteInferenceSession

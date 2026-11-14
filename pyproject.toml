@@ -269,6 +269,7 @@ members = [
     "lib/dupekit",
     "lib/ducky",
     "lib/skyrlrecipe",
+    "lib/evalrecords",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
@@ -303,6 +304,7 @@ marin-deploy = { workspace = true }
 marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
 marin-skyrlrecipe = { workspace = true }
+marin-evalrecords = { workspace = true }
 marin-marina = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
@@ -450,6 +452,7 @@ project-includes = [
     "lib/iris/scripts/**/*.py",
     "lib/ducky/src/**/*.py",
     "lib/skyrlrecipe/src/**/*.py",
+    "lib/evalrecords/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "lib/verifyit/src/**/*.py",
@@ -477,6 +480,7 @@ search-path = [
     "lib/iris/src",
     "lib/ducky/src",
     "lib/skyrlrecipe/src",
+    "lib/evalrecords/src",
     "infra/deploy/src",
     "infra/marina/src",
     "infra/marina/apps",

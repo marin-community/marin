@@ -10,7 +10,8 @@ import marin.execution.step_status as step_status
 import pytest
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
-from marin.execution.step_status import STATUS_RUNNING, STATUS_SUCCESS, StatusFile, should_run, worker_id
+from marin.execution.step_status import should_run, worker_id
+from rigging.filesystem.step_status import STATUS_RUNNING, STATUS_SUCCESS, StatusFile
 from s3fs import S3FileSystem
 
 

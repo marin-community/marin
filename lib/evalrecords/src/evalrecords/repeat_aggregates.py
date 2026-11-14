@@ -6,8 +6,8 @@
 import logging
 import math
 
-from marin.evaluation.lm_eval_samples import is_scratch_artifact
-from marin.evaluation.records import EvalRunRecord, RepeatAggregate, RepeatCoverageBasis, TaskCoverage
+from evalrecords.lm_eval_samples import is_scratch_artifact
+from evalrecords.records import EvalRunRecord, RepeatAggregate, RepeatCoverageBasis, TaskCoverage
 
 ITEM_BERNOULLI_STDERR = "item_bernoulli_n_minus_1"
 logger = logging.getLogger(__name__)

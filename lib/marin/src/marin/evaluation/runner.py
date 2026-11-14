@@ -13,20 +13,9 @@ from typing import NoReturn, Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from fray.client import JobHandle
-from iris.client.client import Job, iris_ctx
-from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
-from rigging.secrets import SecretSpec
-from rigging.timing import retry_with_backoff
-
-from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, EVALUATION_REQUEST_TIMEOUT_SECONDS, env_vars_from_keys
-from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
-from marin.evaluation.hardware import AcceleratorChoice
-from marin.evaluation.inference_metrics import InferenceMetricWindow
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.model_identity import model_config_digest
-from marin.evaluation.records import (
+from evalrecords.eval_stats import DEFAULT_MIN_COVERAGE
+from evalrecords.model_identity import model_config_digest
+from evalrecords.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
     EvalRef,
     EvalRunRecord,
@@ -44,6 +33,17 @@ from marin.evaluation.records import (
     record_path,
     write_record,
 )
+from fray.client import JobHandle
+from iris.client.client import Job, iris_ctx
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
+from rigging.secrets import SecretSpec
+from rigging.timing import retry_with_backoff
+
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, EVALUATION_REQUEST_TIMEOUT_SECONDS, env_vars_from_keys
+from marin.evaluation.hardware import AcceleratorChoice
+from marin.evaluation.inference_metrics import InferenceMetricWindow
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_runner import StepRunner, check_cache
 from marin.execution.step_spec import StepSpec
