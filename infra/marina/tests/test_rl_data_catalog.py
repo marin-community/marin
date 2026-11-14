@@ -63,6 +63,7 @@ from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentity
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     actor_census_input,
     grading_evidence,
@@ -1418,6 +1419,67 @@ def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_p
     survey = canonical_backend_survey(raw)
     assert survey.sources[0].source_id == "HuggingFaceH4:aime24"
     assert canonical_sha256(backend_survey_payload(survey)) == canonical_sha256(raw)
+
+
+@pytest.mark.parametrize("stale_input", [False, True])
+def test_preview_packages_producer_oracle_inventory_and_rejects_mixed_pins(tmp_path, stale_input):
+    binding = actor_census_input("openai/gsm8k", "a" * 40, "1", 3)
+    inventory = SampleInventory(
+        source_id="MarinSkyRL:gsm8k",
+        dataset_id=binding.dataset_id,
+        dataset_revision=binding.dataset_revision,
+        converter_version=binding.converter_version,
+        input_artifact="s3://fixture/population",
+        task_specs_sha256=binding.task_specs_sha256,
+        scanned_task_specs_sha256="f" * 64,
+        retained_tasks=3,
+        sample_seed=0,
+        sample_size=3,
+        panel_path="s3://fixture/panel.parquet",
+        panel_sha256="b" * 64,
+        evidence_url="s3://fixture/inventory.json",
+        oracle_tasks=0,
+        execution_qualification="not_assessed",
+    )
+    actor = binding.model_dump(mode="json")
+    if stale_input:
+        actor["dataset_revision"] = "b" * 40
+    ledger = {
+        "schema_version": 2,
+        "kind": "full_population_oracle_inventory",
+        "sources": 1,
+        "retained_tasks": 3,
+        "rows": [
+            {
+                "source_id": "OpenAI:gsm8k",
+                "current_input": actor,
+                "inventory": inventory.model_dump(mode="json"),
+                "inventory_manifest_uri": "s3://fixture/inventory-manifest.json",
+                "inventory_manifest_sha256": "c" * 64,
+            }
+        ],
+    }
+    source = tmp_path / "oracle-ledger.json"
+    source.write_text(json.dumps(ledger))
+    checkout = Path(__file__).resolve().parents[3]
+    output = tmp_path / "preview"
+    if stale_input:
+        with pytest.raises(ValueError, match="Oracle inventory differs from its actor input"):
+            prepare_preview(checkout, output, source)
+        assert not output.exists()
+        return
+    prepare_preview(checkout, output, source)
+    observations = json.loads((output / "dist/measurements/oracle-inventory.json").read_text())
+    assert observations["sources"][0]["source_id"] == "OpenAI:gsm8k"
+    assert observations["sources"][0]["input"] == binding.model_dump(mode="json")
+    assert observations["sources"][0]["oracle_tasks"] == 0
+    assert observations["sources"][0]["execution_qualification"] == "not_assessed"
+    provenance = json.loads((output / "dist/bundled-model-provenance.json").read_text())["oracle_inventory"]
+    assert provenance["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert (
+        provenance["packaged_sha256"]
+        == hashlib.sha256((output / "dist/measurements/oracle-inventory.json").read_bytes()).hexdigest()
+    )
 
 
 @pytest.mark.parametrize("preview", [False, True])
