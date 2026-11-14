@@ -26,14 +26,29 @@ class LegacyRoleAllocation(BaseModel):
 class LegacyAllocationContract(Protocol):
     """Frozen packet and role observations shared by the producer-specific receipts."""
 
-    source_task_sha256: str
-    source_task_checksum: str
-    consumed_task_sha256: str
-    consumed_task_checksum: str
-    source_runtime: TaskSpecRuntimeBinding
-    actor: LegacyRoleAllocation | None
-    oracle_helper: LegacyRoleAllocation | None
-    verifier: LegacyRoleAllocation
+    @property
+    def source_task_sha256(self) -> str: ...
+
+    @property
+    def source_task_checksum(self) -> str: ...
+
+    @property
+    def consumed_task_sha256(self) -> str: ...
+
+    @property
+    def consumed_task_checksum(self) -> str: ...
+
+    @property
+    def source_runtime(self) -> TaskSpecRuntimeBinding: ...
+
+    @property
+    def actor(self) -> LegacyRoleAllocation | None: ...
+
+    @property
+    def oracle_helper(self) -> LegacyRoleAllocation | None: ...
+
+    @property
+    def verifier(self) -> LegacyRoleAllocation: ...
 
 
 def require_legacy_allocation_contract(qualification: LegacyAllocationContract) -> None:
