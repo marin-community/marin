@@ -3,8 +3,12 @@
 
 """Immutable Atlas difficulty measurements and their retained-population receipts."""
 
+import math
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from types import MappingProxyType
 
 from pydantic import Field, field_validator, model_validator
 
@@ -24,14 +28,6 @@ class Solver(StrEnum):
     SNOWBALL = "snowball"
 
 
-SOLVER_MODELS = {
-    Solver.SMALL: "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-    Solver.LARGE: "Qwen/Qwen3.5-122B-A10B",
-    Solver.HOSTED: "zai-org/GLM-5.3",
-    Solver.SNOWBALL: "open-athena/Marin-Snowball-67B-A2B-v0.1",
-}
-
-
 class ThinkingPolicy(StrEnum):
     OFF = "off"
     ON = "on"
@@ -39,12 +35,41 @@ class ThinkingPolicy(StrEnum):
     CHECKPOINT = "checkpoint"
 
 
-SOLVER_THINKING = {
-    Solver.SMALL: ThinkingPolicy.OFF,
-    Solver.LARGE: ThinkingPolicy.ON,
-    Solver.HOSTED: ThinkingPolicy.LOW,
-    Solver.SNOWBALL: ThinkingPolicy.CHECKPOINT,
-}
+@dataclass(frozen=True)
+class DifficultyProtocol:
+    models: Mapping[Solver, str]
+    thinking: Mapping[Solver, ThinkingPolicy]
+    temperature: float
+    sampling: tuple[int | float, ...]
+
+
+# Add a new entry for a new protocol; keep existing contracts readable indefinitely.
+PROTOCOLS = MappingProxyType(
+    {
+        "atlas-difficulty-v3": DifficultyProtocol(
+            MappingProxyType(
+                {
+                    Solver.SMALL: "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+                    Solver.LARGE: "Qwen/Qwen3.5-122B-A10B",
+                    Solver.HOSTED: "zai-org/GLM-5.3",
+                    Solver.SNOWBALL: "open-athena/Marin-Snowball-67B-A2B-v0.1",
+                }
+            ),
+            MappingProxyType(
+                {
+                    Solver.SMALL: ThinkingPolicy.OFF,
+                    Solver.LARGE: ThinkingPolicy.ON,
+                    Solver.HOSTED: ThinkingPolicy.LOW,
+                    Solver.SNOWBALL: ThinkingPolicy.CHECKPOINT,
+                }
+            ),
+            0.7,
+            (65536, 49152, 16384, 0.95, 20, 0.0, 1.0, 0.0, 0.0),
+        )
+    }
+)
+SOLVER_MODELS = PROTOCOLS[PROTOCOL_ID].models
+SOLVER_THINKING = PROTOCOLS[PROTOCOL_ID].thinking
 
 
 class MeasurementStatus(StrEnum):
@@ -58,8 +83,8 @@ class SampleTask(CatalogRecord):
     task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class DifficultySample(CatalogRecord):
-    """Seeded selection from one frozen retained population, shared by every solver."""
+class DifficultyPopulation(CatalogRecord):
+    """Population and filter evidence used in compact catalog projections."""
 
     source_id: str
     release: DatasetRelease
@@ -69,10 +94,23 @@ class DifficultySample(CatalogRecord):
     task_specs_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     drop_manifest: ContentEvidenceReference
     seed: int
-    tasks: list[SampleTask]
     pre_oracle_filter: bool
     resample_after_oracle_filter: bool
     oracle_filter_receipt: ContentEvidenceReference | None = None
+
+    @model_validator(mode="after")
+    def _filter_state(self) -> "DifficultyPopulation":
+        if self.pre_oracle_filter != self.resample_after_oracle_filter:
+            raise ValueError("A pre-oracle-filter sample must be scheduled for resampling")
+        if self.pre_oracle_filter and self.oracle_filter_receipt is not None:
+            raise ValueError("A pre-oracle-filter sample cannot certify a completed oracle filter")
+        return self
+
+
+class DifficultySample(DifficultyPopulation):
+    """Seeded selection from one frozen retained population, shared by every solver."""
+
+    tasks: list[SampleTask]
 
     @model_validator(mode="after")
     def _selection(self) -> "DifficultySample":
@@ -80,10 +118,6 @@ class DifficultySample(CatalogRecord):
             raise ValueError("Difficulty requires min(100, retained population) selected tasks")
         if len({task.task_id for task in self.tasks}) != len(self.tasks):
             raise ValueError("Difficulty sample contains duplicate task IDs")
-        if self.pre_oracle_filter != self.resample_after_oracle_filter:
-            raise ValueError("A pre-oracle-filter sample must be scheduled for resampling")
-        if self.pre_oracle_filter and self.oracle_filter_receipt is not None:
-            raise ValueError("A pre-oracle-filter sample cannot certify a completed oracle filter")
         return self
 
 
@@ -117,12 +151,12 @@ class SamplingSettings(CatalogRecord):
 
     @model_validator(mode="after")
     def _protocol(self) -> "SamplingSettings":
-        if self.temperature != 0.7:
-            raise ValueError("Atlas difficulty v3 requires temperature 0.7")
         if self.input_tokens + self.output_tokens > self.context_tokens:
             raise ValueError("Input and output budgets exceed the served context")
-        expected = (65536, 49152, 16384, 0.95, 20, 0.0, 1.0, 0.0, 0.0)
-        actual = (
+        return self
+
+    def sampling_values(self) -> tuple[int | float | None, ...]:
+        return (
             self.context_tokens,
             self.input_tokens,
             self.output_tokens,
@@ -133,13 +167,10 @@ class SamplingSettings(CatalogRecord):
             self.presence_penalty,
             self.frequency_penalty,
         )
-        if actual != expected and not self.deviations:
-            raise ValueError("Record every deviation from the v2 token and sampling settings")
-        return self
 
 
-class DifficultyMeasurement(CatalogRecord):
-    """A source and solver observation with scored coverage or a missing reason."""
+class DifficultyObservation(CatalogRecord):
+    """A compact source and solver observation without the selected task list."""
 
     measurement_id: str
     protocol_id: str
@@ -150,7 +181,7 @@ class DifficultyMeasurement(CatalogRecord):
     solver: Solver
     status: MeasurementStatus
     reason: str | None
-    sample: DifficultySample | None
+    sample: DifficultyPopulation | None
     sample_receipt: ContentEvidenceReference | None
     model: SolverIdentity | None
     settings: SamplingSettings | None
@@ -173,7 +204,7 @@ class DifficultyMeasurement(CatalogRecord):
         return instant.astimezone(UTC).isoformat()
 
     @model_validator(mode="after")
-    def _coverage(self) -> "DifficultyMeasurement":
+    def _coverage(self) -> "DifficultyObservation":
         if self.solved > self.n:
             raise ValueError("Solved count exceeds scored tasks")
         if self.status == MeasurementStatus.NOT_MEASURED:
@@ -182,17 +213,24 @@ class DifficultyMeasurement(CatalogRecord):
             return self
         if self.sample is None or self.sample_receipt is None or self.model is None or self.settings is None:
             raise ValueError("Pending and measured results require pinned sample, model and settings")
-        if self.protocol_id == PROTOCOL_ID and self.model.model != SOLVER_MODELS[self.solver]:
-            raise ValueError("The solver checkpoint does not match the difficulty v3 roster")
-        if self.protocol_id == PROTOCOL_ID and self.settings.thinking != SOLVER_THINKING[self.solver]:
-            raise ValueError("The solver thinking policy does not match the difficulty v3 roster")
+        protocol = PROTOCOLS.get(self.protocol_id)
+        if protocol is not None:
+            if (
+                self.model.model != protocol.models[self.solver]
+                or self.settings.thinking != protocol.thinking[self.solver]
+            ):
+                raise ValueError("Solver model or thinking policy differs from its protocol")
+            if self.settings.temperature != protocol.temperature:
+                raise ValueError("Solver temperature differs from its protocol")
+            if self.settings.sampling_values() != protocol.sampling and not self.settings.deviations:
+                raise ValueError("Record every deviation from the protocol token and sampling settings")
         if (self.source_id, self.release, self.converter_version) != (
             self.sample.source_id,
             self.sample.release,
             self.sample.converter_version,
         ):
             raise ValueError("Measurement and sample identify different source contracts")
-        if self.n + self.pending_tasks != len(self.sample.tasks):
+        if self.n + self.pending_tasks != min(100, self.sample.population_count):
             raise ValueError("Every selected task must be scored or pending")
         if self.status == MeasurementStatus.MEASURED and (
             self.pending_tasks or self.n == 0 or self.attempts_receipt is None or self.wilson_95 is None
@@ -203,6 +241,77 @@ class DifficultyMeasurement(CatalogRecord):
             if not self.n or not 0 <= low <= self.solved / self.n <= high <= 1:
                 raise ValueError("Confidence interval does not contain the measured solve rate")
         return self
+
+
+class DifficultyMeasurement(DifficultyObservation):
+    """A complete observation retaining every selected task identity for immutable storage."""
+
+    sample: DifficultySample | None
+
+
+class AttemptStatus(StrEnum):
+    SCORED = "scored"
+    INFRASTRUCTURE = "infrastructure"
+    PENDING = "pending"
+
+
+class DifficultyAttempt(CatalogRecord):
+    """A classified Harbor attempt; infrastructure failure never supplies a reward."""
+
+    task_id: str
+    status: AttemptStatus
+    reward: float | None = Field(strict=True)
+
+    @model_validator(mode="after")
+    def _reward(self) -> "DifficultyAttempt":
+        if self.status == AttemptStatus.SCORED:
+            if self.reward is None or not math.isfinite(self.reward):
+                raise ValueError("Scored attempts require a finite grader reward")
+        elif self.reward is not None:
+            raise ValueError("Unscored attempts cannot carry a solver reward")
+        return self
+
+
+def measurement_from_attempts(
+    measurement: DifficultyMeasurement, attempts: Sequence[DifficultyAttempt]
+) -> DifficultyMeasurement:
+    """Count each scored task once, exclude infrastructure attempts, and retain partial credit in n."""
+    if measurement.sample is None or measurement.attempts_receipt is None:
+        raise ValueError("Counting requires the selected population and immutable attempt evidence")
+    selected = {task.task_id for task in measurement.sample.tasks}
+    scored = {}
+    infrastructure = 0
+    for attempt in attempts:
+        if attempt.task_id not in selected:
+            raise ValueError(f"Attempt is outside the selected sample: {attempt.task_id}")
+        if attempt.status == AttemptStatus.INFRASTRUCTURE:
+            infrastructure += 1
+        if attempt.status == AttemptStatus.SCORED:
+            if attempt.task_id in scored:
+                raise ValueError(f"Multiple scored attempts would count a task twice: {attempt.task_id}")
+            scored[attempt.task_id] = attempt.reward
+    n = len(scored)
+    solved = sum(reward == 1.0 for reward in scored.values())
+    interval = None
+    if n:
+        z = 1.959963984540054
+        rate = solved / n
+        denominator = 1 + z * z / n
+        center = (rate + z * z / (2 * n)) / denominator
+        margin = z * math.sqrt(rate * (1 - rate) / n + z * z / (4 * n * n)) / denominator
+        interval = {"low": max(0.0, center - margin), "high": min(1.0, center + margin)}
+    return DifficultyMeasurement.model_validate(
+        {
+            **measurement.model_dump(mode="json"),
+            "status": MeasurementStatus.MEASURED if n == len(selected) and n else MeasurementStatus.PENDING,
+            "reason": None if n == len(selected) else "Selected tasks still lack scored solver attempts.",
+            "n": n,
+            "solved": solved,
+            "pending_tasks": len(selected) - n,
+            "infrastructure_attempts": infrastructure,
+            "wilson_95": interval,
+        }
+    )
 
 
 def register_difficulty(store: DataStore) -> None:
