@@ -1283,7 +1283,7 @@ def analyze(registry_id: str, script: str, checkpoint: str, *, dry_run: bool) ->
     if dry_run:
         print(f"would copy {out}/report.md and its figures to {target} and commit them to {CONFIG.registry_branch}")
     else:
-        subprocess.run(command, check=True, capture_output=True)
+        submit_job(command)
         job = f"/{resolve_job_user()}/{name}"
         print(f"waiting for {job} ...")
         job_state = wait_for_job(job)
@@ -1574,6 +1574,26 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
 PROFILE_JOB_RESOURCES = ("--cpu", "4", "--memory", "32GB", "--disk", "20GB", "--enable-extra-resources")
 PROFILE_JOB_TIMEOUT = 1800
 CLUSTER_STORAGE_KEYS = ("CW_KEY_ID", "CW_KEY_SECRET")
+
+
+def redacted(text: str) -> str:
+    """``text`` with every storage key value in this process's environment replaced by ``<key>``."""
+    for key in CLUSTER_STORAGE_KEYS:
+        value = os.environ.get(key)
+        if value:
+            text = text.replace(value, "<key>")
+    return text
+
+
+def submit_job(command: list[str]) -> None:
+    """Submit an Iris job whose command line carries storage keys: a failure shows Iris's own output with the keys
+    redacted, never the command (a CalledProcessError would print it, keys included)."""
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        output = redacted(f"{result.stdout}\n{result.stderr}").strip()
+        raise SystemExit(f"iris job run exited {result.returncode}:\n{output}")
+
+
 # Iris job setup lines (dependency installs) that the summary leaves out.
 _JOB_SETUP_LINE = re.compile(
     r"^(\+ |Installed |Resolved |Prepared |Download|Building |Built |Audited |Uninstalled |installing |"
@@ -1642,7 +1662,7 @@ def analyze_profile(run: str, compare: str | None, cluster: str, *, dry_run: boo
     print(f"{'would run' if dry_run else 'running'}: {shlex.join(shown)}")
     if dry_run:
         return
-    subprocess.run(command, check=True, capture_output=True)
+    submit_job(command)
     job = f"/{resolve_job_user()}/{name}"
     print(f"waiting for {job} ...")
     state = wait_for_job(job)
