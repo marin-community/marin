@@ -1937,7 +1937,9 @@ def test_frozen_catalog_projects_measured_math_folds_and_directional_notes(catal
     root = str(tmp_path / "catalog")
     publish_sample(root, "frozen")
     load_catalog(CurationCatalog(root), catalog_query)
-    fixture = Path("experiments/post_training/task_curation/tests/fixtures/math_overlap_reviews.json")
+    fixture = Path(__file__).resolve().parents[3] / (
+        "experiments/post_training/task_curation/tests/fixtures/math_overlap_reviews.json"
+    )
     evidence = json.loads(fixture.read_text())
     stored = {
         "group_id": "old-partial-chain",
