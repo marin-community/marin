@@ -14,10 +14,28 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.machine import Backend, ExitReason, Result
 from taskcompendium.grading_result import Outcome
 from taskcompendium.importers.swe import SWEInstance, swe_task
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec, TextMessage
+from taskcompendium.models import (
+    CommandSemantics,
+    EnvironmentRequirements,
+    ProviderRequirement,
+    Source,
+    TaskSpec,
+    TextMessage,
+)
+from taskcompendium.repository_shell import SHELL_ACTION_INTERFACE
 
-from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION
-from rolloutengine.test_support import ReplayModel, engine, machine_runtime, rollout_spec
+from rolloutengine.harness.repository_shell import RepositoryShellProvider
+from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness
+from rolloutengine.test_support import (
+    SHELL,
+    ReplayModel,
+    arithmetic_task,
+    engine,
+    machine_runtime,
+    rollout_spec,
+    shell_call,
+    tool_observations,
+)
 
 
 class LocalGitMachine:
@@ -75,6 +93,59 @@ def git_image(tmp_path):
     ):
         subprocess.run(command, cwd=repository, check=True, capture_output=True)
     return repository
+
+
+async def test_repository_shell_keeps_source_checkout_and_edits_in_declared_workspace(tmp_path, git_image):
+    source_ref = subprocess.run(
+        ("git", "rev-parse", "HEAD"), cwd=git_image, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    task = arithmetic_task(
+        environment_requirements=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_image="fixture@sha256:" + "0" * 64,
+            capabilities=("shell", "filesystem", "git_repository"),
+            tool_providers={
+                "shell": ProviderRequirement(
+                    action_interface=SHELL_ACTION_INTERFACE,
+                    initial_state={"repository": "fixture/product", "source_ref": source_ref, "workspace": "/product"},
+                )
+            },
+        )
+    )
+    original = task.model_dump_json()
+    roots = []
+
+    class Factory(DockerMachineFactory):
+        async def create(self, spec):
+            root = tmp_path / f"actor-{len(roots)}"
+            shutil.copytree(git_image, root / "product")
+            roots.append(root)
+            return LocalGitMachine(root, spec)
+
+    model = ReplayModel(
+        [
+            shell_call("git rev-parse HEAD; cat value.txt; printf fixed > value.txt", call_id="repair"),
+            shell_call("cat value.txt; git status --porcelain", call_id="inspect"),
+            {"role": "assistant", "content": "12"},
+        ]
+    )
+    record = await engine(
+        model,
+        {"local": Factory()},
+        harnesses={
+            SHELL: ShellHarness(
+                command_timeout=None, tools={SHELL_ACTION_INTERFACE: RepositoryShellProvider(command_timeout=None)}
+            )
+        },
+    ).run_task(rollout_spec(task, machine=machine_runtime()))
+
+    first, second = tool_observations(record)
+    assert (first["exit_code"], first["stdout"]) == (0, source_ref + "\nbroken\n")
+    assert (second["exit_code"], second["stdout"]) == (0, "fixed M value.txt\n")
+    assert (roots[0] / "product/value.txt").read_text() == "fixed"
+    assert [tool["function"]["name"] for tool in model.requests[0].options["tools"]] == ["shell"]
+    assert record.grade.reward == 1.0
+    assert task.model_dump_json() == original
 
 
 @pytest.mark.parametrize(

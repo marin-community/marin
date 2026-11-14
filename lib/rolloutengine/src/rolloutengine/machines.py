@@ -32,6 +32,7 @@ from taskcompendium.models import (
     TaskSpec,
     require_resolved_environment,
 )
+from taskcompendium.repository_shell import repository_shell_environment
 from taskcompendium.runtime.environment import prepare_machine_spec
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -73,6 +74,7 @@ async def _install_resources(machine: Machine, resources: tuple[TaskResource, ..
 
 def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntimeSpec) -> MachineSpec:
     require_resolved_environment(requirements)
+    repository = repository_shell_environment(requirements)
     if requirements.docker_image is not None:
         source = RegistryImage(requirements.docker_image)
     elif requirements.packages_lock is not None:
@@ -83,13 +85,12 @@ def _machine_spec(requirements: EnvironmentRequirements, runtime: MachineRuntime
         source = PackageSpec()
     else:
         raise UnsupportedMachineSpec("Machine execution requires explicit semantics and native dependencies")
+    workdir = requirements.working_directory
+    if workdir is None:
+        workdir = repository.workspace if repository is not None else "" if requirements.docker_image else "/workspace"
     return MachineSpec(
         source=source,
-        workdir=(
-            requirements.working_directory
-            if requirements.working_directory is not None
-            else "" if requirements.docker_image else "/workspace"
-        ),
+        workdir=workdir,
         network=runtime.network,
         memory_mb=runtime.memory_mb,
         cpus=runtime.cpus,

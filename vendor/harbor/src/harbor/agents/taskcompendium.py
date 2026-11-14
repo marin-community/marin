@@ -12,6 +12,7 @@ from typing import Any
 from openai import AsyncOpenAI
 from rolloutengine.chat import ChatModel
 from rolloutengine.harness.shell import ShellHarness, task_prompt
+from rolloutengine.harness.repository_shell import RepositoryShellProvider
 from rolloutengine.models import (
     ModelRequest,
     ModelTurn,
@@ -39,6 +40,7 @@ from taskcompendium.runtime.oracle import (
     run_oracle_command,
 )
 from taskcompendium.runtime.shell import upload_resources
+from taskcompendium.repository_shell import SHELL_ACTION_INTERFACE
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
@@ -137,7 +139,11 @@ class TaskSpecChatAgent(TaskSpecAgent):
                 return turn
 
             rollout = await harness_rollout(
-                ShellHarness(command_timeout=None, prompt=original_prompt),
+                ShellHarness(
+                    command_timeout=None,
+                    prompt=original_prompt,
+                    tools={SHELL_ACTION_INTERFACE: RepositoryShellProvider(command_timeout=None)},
+                ),
                 task,
                 record,
                 limits=limits.model_copy(update={"max_turns": self.max_turns}),

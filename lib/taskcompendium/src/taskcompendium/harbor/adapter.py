@@ -20,6 +20,7 @@ from taskcompendium.models import (
     TaskResource,
     TaskSpec,
 )
+from taskcompendium.repository_shell import SHELL_ACTION_INTERFACE, SHELL_TOOL, repository_shell_environment
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import conversation_messages
 
@@ -69,8 +70,20 @@ def unsupported_harbor_contract(task: TaskSpec) -> str | None:
         return "no_executable_task_spec_grader"
     if task.answer_type == AnswerType.STATE:
         return "task_spec_state_capture_required"
-    if task.environment_requirements.tool_providers:
-        return "task_spec_tool_provider_required"
+    for requirement in task.environment_requirements.tool_providers.values():
+        if requirement.action_interface != SHELL_ACTION_INTERFACE:
+            return "task_spec_tool_provider_required"
+    try:
+        state = repository_shell_environment(task.environment_requirements)
+    except ValueError:
+        return "task_spec_provider_contract_invalid"
+    if state is not None:
+        if (
+            task.tool_bindings
+            or any(tool != SHELL_TOOL for tool in task.interaction_tools)
+            or any(tool.name == SHELL_TOOL.name for tool in task.final_tools)
+        ):
+            return "task_spec_provider_contract_invalid"
     if task.integrity_contract is not None or assess_grading_environment(task).required == GradingEnvironmentMode.SHARED:
         return "task_spec_shared_executor_required"
     environments = [task.environment_requirements]
