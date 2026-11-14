@@ -256,6 +256,27 @@ a.secondary:hover { text-decoration: none; }
 
 .result-provisional { border: 1px dashed currentColor; }
 
+.difficulty-comparison { display: grid; gap: 5px; width: 100%; min-width: 180px; max-width: 310px; }
+.difficulty-model { display: grid; grid-template-columns: 80px minmax(35px, 1fr) 34px; align-items: center; gap: 6px; line-height: 1.3; font-size: 11px; white-space: nowrap; }
+.difficulty-model-label { overflow: hidden; text-overflow: ellipsis; }
+.difficulty-track { display: block; height: 7px; overflow: hidden; border-radius: 4px; background: #e8eeeb; }
+.difficulty-fill { display: block; height: 100%; background: #297c5b; border-radius: inherit; }
+.difficulty-large .difficulty-fill { background: #426fa3; }
+.difficulty-hosted .difficulty-fill { background: #9d6940; }
+.difficulty-snowball .difficulty-fill { background: #9064a9; }
+.difficulty-unmeasured { border: 1px dashed #91a197; background: transparent; }
+.difficulty-score { text-align: right; font-variant-numeric: tabular-nums; }
+.difficulty-cell { padding: 14px 12px; }
+#detail-difficulty { margin: 20px 0; }
+.assessment-card > .difficulty-comparison { margin: 16px 0; }
+@media (prefers-color-scheme: dark) {
+  .difficulty-track { background: #33483d; }
+  .difficulty-fill { background: #6bb58d; }
+  .difficulty-large .difficulty-fill { background: #7da4d4; }
+  .difficulty-hosted .difficulty-fill { background: #d2a372; }
+  .difficulty-snowball .difficulty-fill { background: #bd95d4; }
+  .difficulty-unmeasured { background: transparent; }
+}
 .enum-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
 .record-list { margin: 0; padding-left: 18px; }
 .record-list li { margin: 3px 0; }
