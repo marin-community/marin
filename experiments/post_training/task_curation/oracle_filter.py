@@ -68,7 +68,10 @@ from taskcompendium.pipeline.resource_calibration import (
 from taskcompendium.runtime.resources import has_oracle_solution, inline_resource
 
 from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
-from experiments.post_training.task_curation.prior_phase_failures import require_prior_phase_failure
+from experiments.post_training.task_curation.prior_phase_failures import (
+    bind_prior_phase_failures,
+    require_prior_phase_failure,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HARBOR_PROJECT = PROJECT_ROOT / "vendor/harbor"
@@ -158,7 +161,6 @@ def receipt_from_trial(
     document: dict,
     native_checksum: str,
     native_grade: NativeVerifierGrade | None = None,
-    prior_phase_failure: PriorPhaseFailureReceipt | None = None,
 ) -> OracleTrialReceipt:
     """Read a trial's evidence against its measured native checksum."""
     native = Path(document["config"]["task"]["path"])
@@ -186,7 +188,6 @@ def receipt_from_trial(
         result_sha256=canonical_sha256(document),
         execution_requirements=native_requirements(native),
         native_grade=native_grade,
-        prior_phase_failure=prior_phase_failure,
         resource_usage=(
             ResourceUsage.model_validate_json(usage_path.read_text()) if usage_path.exists() else ResourceUsage()
         ),
@@ -279,9 +280,7 @@ def trial_result_paths(jobs: Path) -> list[Path]:
     return sorted(results)
 
 
-def collect_trials(
-    jobs: Path, prior_phase_failures: dict[str, PriorPhaseFailureReceipt] | None = None
-) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
+def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]]:
     trials: dict[tuple[str, str], list[OracleTrialReceipt]] = {}
     seen = {}
     paths = trial_result_paths(jobs)
@@ -306,15 +305,11 @@ def collect_trials(
     for path, document in documents.items():
         native = document["config"]["task"]["path"]
         grade = native_grades.get(str(path))
-        prior_failure = (prior_phase_failures or {}).get(canonical_sha256(document))
-        if prior_failure is not None:
-            require_prior_phase_failure(prior_failure, document)
         receipt = receipt_from_trial(
             path,
             document,
             packages[native]["task_checksum"],
             NativeVerifierGrade.model_validate(grade) if grade is not None else None,
-            prior_failure,
         )
         trials.setdefault((document["task_name"], document["task_checksum"]), []).append(receipt)
     return trials
@@ -395,22 +390,7 @@ def filter_cohort(
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
-    prior_failures = {}
-    for mapping in mappings.values():
-        phases = [
-            mapping.get("calibration", {}),
-            *(item["parent_calibration"] for item in mapping.get("infrastructure_retries", [])),
-        ]
-        for phase in phases:
-            for attempt in phase.get("attempts", []):
-                if attempt.get("prior_phase_failure") is None:
-                    continue
-                evidence = PriorPhaseFailureReceipt.model_validate(attempt["prior_phase_failure"])
-                key = evidence.result_sha256
-                if key in prior_failures and prior_failures[key] != evidence:
-                    raise ValueError("Conflicting earlier phase evidence for the same production Trial")
-                prior_failures[key] = evidence
-    trials = collect_trials(jobs, prior_failures)
+    trials = collect_trials(jobs)
     controls = {}
     if executability_runs is not None:
         for line in executability_runs.read_text().splitlines():
@@ -529,7 +509,12 @@ def filter_cohort(
                 phases = [*(transition.parent_calibration for transition in history), calibration]
                 for attempt in (attempt for phase in phases for attempt in phase.attempts):
                     key = (attempt.result["task_name"], attempt.result["task_checksum"])
-                    if attempt.model_copy(update={"infrastructure_retry": None}) not in trials.get(key, []):
+                    if attempt.prior_phase_failure is not None:
+                        require_prior_phase_failure(attempt.prior_phase_failure, attempt.result)
+                    collected_attempt = attempt.model_copy(
+                        update={"infrastructure_retry": None, "prior_phase_failure": None}
+                    )
+                    if collected_attempt not in trials.get(key, []):
                         raise ValueError(f"Calibration trial missing from production jobs: {task.id}")
                     package = Path(attempt.result["config"]["task"]["path"])
                     if calibration_package_identity(package, calibration.oracle_kind) != package_identity:
@@ -1257,6 +1242,10 @@ def main() -> None:
     merge.add_argument("--task-map", type=Path, required=True)
     merge.add_argument("--retry-map", type=Path, action="append", required=True)
     merge.add_argument("--output", type=Path, required=True)
+    bind = commands.add_parser("bind-phase-failures")
+    bind.add_argument("--task-map", type=Path, required=True)
+    bind.add_argument("--evidence", type=Path, required=True, help="JSON list of PriorPhaseFailureReceipt objects")
+    bind.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     host_admission = None
     if args.command in {"calibrate", "retry"}:
@@ -1270,6 +1259,13 @@ def main() -> None:
                 args.host_node_id,
                 args.host_worker_id,
             )
+    if args.command == "bind-phase-failures":
+        evidence = [PriorPhaseFailureReceipt.model_validate(item) for item in json.loads(args.evidence.read_text())]
+        failures = {item.result_sha256: item for item in evidence}
+        if len(failures) != len(evidence):
+            raise ValueError("Duplicate phase-failure evidence for the same production Trial")
+        bind_prior_phase_failures(args.task_map, failures, args.output)
+        return
     if args.command == "backend-fix":
         write_backend_fix(args.revision, args.output)
         return

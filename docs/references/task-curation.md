@@ -1714,8 +1714,15 @@ references, and the exact `archive_member` and `archive_root`. The exception URI
 `archive.uri#archive_member`; its digest hashes the member bytes. The collector
 checks archive and member hashes, the physical Trial URI, exact archived config,
 the Harbor timeout traceback and the original source-declared phase budget.
-`bind_prior_phase_failures(original_map, proofs_by_result_hash, new_map)` writes a
-new map; production result JSON and old map bytes remain unchanged. Such a trial
+Write the evidence as a JSON list of `PriorPhaseFailureReceipt` objects, then bind
+it to a new map:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter bind-phase-failures \
+  --task-map original-map.json --evidence phase-failures.json --output bound-map.json
+```
+
+Production result JSON and old map bytes remain unchanged. Such a trial
 remains a source-deadline exclusion and cannot receive an infrastructure replay.
 Absent evidence is omitted from serialization so historical retry hashes remain
 unchanged. A persisted `lifecycle-result.json` is collected only when that Trial

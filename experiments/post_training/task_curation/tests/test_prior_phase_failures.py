@@ -19,7 +19,7 @@ from taskcompendium.pipeline.oracle_filter import (
 )
 from taskcompendium.pipeline.resource_calibration import FailureSignal
 
-from experiments.post_training.task_curation.oracle_filter import trial_result_paths
+from experiments.post_training.task_curation.oracle_filter import main, trial_result_paths
 from experiments.post_training.task_curation.prior_phase_failures import bind_prior_phase_failures
 
 from .prior_phase_fixtures import preserved_phase_failure
@@ -50,14 +50,29 @@ def phase_case(tmp_path):
     return original, task_map, trial
 
 
-def test_observed_original_deadline_survives_cleanup_and_cannot_be_replayed(tmp_path, phase_case):
+def test_observed_original_deadline_survives_cleanup_and_cannot_be_replayed(tmp_path, phase_case, monkeypatch):
     original, task_map, trial = phase_case
     old_bytes = task_map.read_bytes()
     evidence = preserved_phase_failure(
         tmp_path, original, trial, archive_root="/tmp/atlas-smartie-oracles-v3/calibrated"
     )
     output = tmp_path / "bound-map.json"
-    bind_prior_phase_failures(task_map, {trial.result_sha256: evidence}, output)
+    evidence_path = tmp_path / "phase-failures.json"
+    evidence_path.write_text(json.dumps([evidence.model_dump(mode="json")]))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "oracle_filter",
+            "bind-phase-failures",
+            "--task-map",
+            str(task_map),
+            "--evidence",
+            str(evidence_path),
+            "--output",
+            str(output),
+        ],
+    )
+    main()
     calibration = ResourceCalibrationReceipt.model_validate(json.loads(output.read_text())["smartie"]["calibration"])
     actual = calibration.attempts[0]
     assert actual.result == trial.result
@@ -74,18 +89,29 @@ def test_observed_original_deadline_survives_cleanup_and_cannot_be_replayed(tmp_
         require_infrastructure_retry_parent(calibration, approval)
 
 
-@pytest.mark.parametrize("changed", ["another_trial", "provider_failure", "source_budget"])
-def test_unbound_archive_or_budget_cannot_convert_cleanup_into_source_failure(tmp_path, phase_case, changed):
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [
+        ("another_trial", "archive config differs from the actual production Trial"),
+        ("provider_failure", "does not prove the reported original phase deadline"),
+        ("source_budget", "original source-declared deadline"),
+        ("calibrator_budget", "original source-declared deadline"),
+    ],
+)
+def test_unbound_archive_or_budget_cannot_convert_cleanup_into_source_failure(tmp_path, phase_case, changed, message):
     original, task_map, trial = phase_case
     evidence = preserved_phase_failure(
         tmp_path, original, trial, archive_root="/tmp/atlas-smartie-oracles-v3/calibrated", changed=changed
     )
-    if changed == "source_budget":
+    if changed in {"source_budget", "calibrator_budget"}:
         document = json.loads(task_map.read_text())
-        document["smartie"]["calibration"]["preserved_requirements"]["agent_timeout_sec"] = 300
+        if changed == "source_budget":
+            document["smartie"]["calibration"]["preserved_requirements"]["agent_timeout_sec"] = 300
+        else:
+            del document["smartie"]["calibration"]["preserved_requirements"]["agent_timeout_sec"]
         task_map.write_text(json.dumps(document))
     output = tmp_path / "bound-map.json"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         bind_prior_phase_failures(task_map, {trial.result_sha256: evidence}, output)
     assert not output.exists()
 
