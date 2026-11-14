@@ -1711,6 +1711,11 @@ ORACLE agent over the complete converted population. The filter retains exactly
 the tasks with a completed trial, solution exit zero, and structured scored
 reward one. Numeric reward files alone are insufficient. Retain failed oracles
 and unresolved infrastructure errors as exclusions with reasons and counts.
+Native Harbor `reward.txt` and `reward.json` outputs qualify through the production
+reward parser when their exact reward dictionary matches the validated Trial's
+`VerifierResult`. The collector records `native_grade` with the raw artifact SHA-256,
+result hash and native task checksum. This path is unavailable to TaskSpec payloads
+and cannot replace a missing or infrastructure-failed structured verdict.
 Retry infrastructure failures up to two times before excluding them.
 
 Keep the task's environment, network permission, setup and solution scripts.
