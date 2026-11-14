@@ -3,10 +3,19 @@
 
 """Select and describe verified vLLM GPU release wheels."""
 
+import json
 import platform
 from dataclasses import dataclass
+from pathlib import Path
+
+import draccus
 
 from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel
+
+
+def load_vllm_gpu_release(path: Path | None) -> VllmGpuRelease | None:
+    """Read a per-deployment promoted-release pin without changing shared defaults."""
+    return draccus.decode(VllmGpuRelease, json.loads(path.read_text())) if path is not None else None
 
 
 @dataclass(frozen=True)

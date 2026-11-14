@@ -22,6 +22,8 @@ from iris.rpc.errors import is_retryable_error
 from rigging.network import interface_for_ipv4
 from rigging.timing import Duration, ExponentialBackoff
 
+from marin.inference.config import ServingGeometry
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT_SECONDS = 30 * 60.0
@@ -104,20 +106,13 @@ class IrisVllmLaunch:
 
 
 @contextlib.contextmanager
-def iris_vllm_launch(
-    *,
-    pipeline_parallel_size: int,
-    tensor_parallel_size: int,
-    data_parallel_size: int,
-) -> Iterator[IrisVllmLaunch]:
-    """Bootstrap a stage-striped native-vLLM task from Iris metadata."""
+def iris_vllm_launch(geometry: ServingGeometry) -> Iterator[IrisVllmLaunch]:
+    """Bootstrap native vLLM pipeline stages or a distributed data-parallel group."""
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("Iris vLLM launch must run inside an Iris job")
-    if job_info.num_tasks != pipeline_parallel_size:
-        raise ValueError(
-            f"vLLM PP={pipeline_parallel_size} requires {pipeline_parallel_size} Iris tasks, got {job_info.num_tasks}"
-        )
+    if job_info.num_tasks != geometry.task_count:
+        raise ValueError(f"vLLM geometry requires {geometry.task_count} Iris tasks, got {job_info.num_tasks}")
 
     endpoint_namespace = str(job_info.job_id).strip("/").replace("/", "-")
     coordinator_name = f"{endpoint_namespace}-vllm-coordinator"
@@ -125,9 +120,7 @@ def iris_vllm_launch(
     with iris_gang_coordinator(identity, job_info.advertise_host, job_info.advertise_host) as master_addr:
         yield _build_task_launch(
             job_info,
-            pipeline_parallel_size=pipeline_parallel_size,
-            tensor_parallel_size=tensor_parallel_size,
-            data_parallel_size=data_parallel_size,
+            geometry=geometry,
             master_addr=master_addr,
             coordinator_name=coordinator_name,
         )
@@ -203,7 +196,10 @@ def notify_iris_vllm_stopped(launch: IrisGangIdentity) -> None:
 
 @contextlib.contextmanager
 def iris_vllm_followers(launch: IrisGangIdentity) -> Iterator[None]:
-    """Request follower shutdown when the leader's workload is finished."""
+    """Stop followers after the leader workload returns successfully.
+
+    On failure, leave healthy followers running for Iris to retry the leader.
+    """
     if launch.task_index != 0:
         raise RuntimeError("Only the vLLM leader may coordinate followers")
     if launch.num_tasks == 1:
@@ -231,23 +227,22 @@ def iris_vllm_followers(launch: IrisGangIdentity) -> Iterator[None]:
 def _build_task_launch(
     job_info: JobInfo,
     *,
-    pipeline_parallel_size: int,
-    tensor_parallel_size: int,
-    data_parallel_size: int,
+    geometry: ServingGeometry,
     master_addr: str,
     coordinator_name: str,
 ) -> IrisVllmLaunch:
+    local_dp = geometry.local_data_parallel_size
     args = (
         "--tensor-parallel-size",
-        str(tensor_parallel_size),
+        str(geometry.tensor_parallel_size),
         "--pipeline-parallel-size",
-        str(pipeline_parallel_size),
+        str(geometry.pipeline_parallel_size),
         "--data-parallel-size",
-        str(data_parallel_size),
+        str(geometry.data_parallel_size),
         "--data-parallel-size-local",
-        str(data_parallel_size),
+        str(local_dp),
         "--nnodes",
-        str(pipeline_parallel_size),
+        str(job_info.num_tasks),
         "--node-rank",
         str(job_info.task_index),
         "--master-addr",
@@ -255,9 +250,21 @@ def _build_task_launch(
         "--master-port",
         str(_MASTER_PORT),
         "--device-ids",
-        ",".join(str(index) for index in range(tensor_parallel_size * data_parallel_size)),
+        ",".join(str(index) for index in range(geometry.gpus_per_task)),
     )
-    if data_parallel_size > 1:
+    if local_dp != geometry.data_parallel_size:
+        # Native --nnodes/--node-rank infer each host's DP rank. Leaving the
+        # start-rank unset keeps rank zero's internal load balancer global.
+        args = (
+            *args,
+            "--data-parallel-address",
+            master_addr,
+            "--data-parallel-rpc-port",
+            str(_MASTER_PORT + 1),
+            "--data-parallel-backend",
+            "mp",
+        )
+    elif geometry.data_parallel_size > 1:
         args = (*args, "--data-parallel-start-rank", "0")
     if job_info.task_index != 0:
         args = (*args, "--headless")
@@ -269,8 +276,8 @@ def _build_task_launch(
         host_ip=host_ip,
         gloo_interface=gloo_interface,
         coordinator_name=coordinator_name,
-        tensor_parallel_size=tensor_parallel_size,
-        data_parallel_size=data_parallel_size,
+        tensor_parallel_size=geometry.tensor_parallel_size,
+        data_parallel_size=geometry.data_parallel_size,
     )
 
 

@@ -5,12 +5,11 @@
 
 import contextlib
 import os
-import socket
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -20,6 +19,7 @@ from marin.inference.config import (
     VllmSource,
 )
 from marin.inference.model_preparation import read_tool_chat_template
+from marin.inference.vllm_router import available_port
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -46,7 +46,12 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     version = config.version if source is VllmType.UPSTREAM else None
     if source is VllmType.UPSTREAM and version is None:
         version = DEFAULT_CUDA_VLLM_VERSION
-    return IsolatedCudaVllm(source=source, version=version, extra_requirements=config.extra_requirements)
+    return IsolatedCudaVllm(
+        source=source,
+        version=version,
+        extra_requirements=config.extra_requirements,
+        release=config.release or VLLM_GPU_RELEASE,
+    )
 
 
 def _with_subprocess_env(
@@ -58,12 +63,6 @@ def _with_subprocess_env(
     if subprocess_env:
         environment.update(subprocess_env)
     return VllmLauncherWithEnvironment(launcher, environment)
-
-
-def _reserve_localhost_port(host: str) -> int:
-    with socket.socket() as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
 
 
 @contextlib.contextmanager
@@ -93,6 +92,10 @@ class VllmServedModel:
     model_id: str
     chat_template_content: str | None
     environment: VllmEnvironment
+
+    @property
+    def metrics_url(self) -> str:
+        return self.environment.metrics_url
 
     def check_alive(self) -> None:
         self.environment.check_alive()
@@ -126,9 +129,12 @@ class VllmBackend:
         extra_args: Sequence[str] = (),
         subprocess_env: Mapping[str, str] | None = None,
     ) -> Iterator[VllmEnvironment]:
-        """Start vLLM without imposing HTTP readiness on the caller."""
+        """Start native vLLM and yield its environment before HTTP readiness.
+
+        The environment owns the optional router configured by this backend.
+        """
         chat_template_content = _resolved_chat_template(spec)
-        resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
+        resolved_port = available_port(self.host) if self.port is None or self.config.router is not None else self.port
         model = self._model_config(spec)
         launcher = _with_subprocess_env(
             vllm_launcher(self.config),
@@ -145,6 +151,8 @@ class VllmBackend:
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
                 extra_metric_families=self.config.extra_metric_families,
+                router=self.config.router,
+                router_port=self.port,
                 wait_for_ready=False,
             ) as environment:
                 yield environment

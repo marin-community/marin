@@ -3,7 +3,7 @@
 
 """Iris subcommand for ``marin-serve``.
 
-Submits a single Iris job that boots a serving backend on a TPU slice or single-host GPU allocation and
+Submits a single Iris job that boots a serving backend on a TPU slice or GPU allocation and
 registers a browser dashboard + OpenAI-compatible endpoint through the controller proxy. The job
 stops itself after ``--timeout-hours`` so a forgotten server frees its slice.
 
@@ -35,6 +35,7 @@ endpoint is ready, the command always mints and prints an endpoint-scoped capabi
 import contextlib
 import importlib.metadata
 import logging
+import math
 import re
 import shlex
 import time
@@ -70,14 +71,17 @@ from marin.inference.config import (
     IrisConfig,
     LevanterEngineConfig,
     ServedModelConfig,
+    ServingGeometry,
     VllmEngineConfig,
     VllmLauncherType,
+    VllmRouterConfig,
     VllmSource,
     load_vllm_metric_family_additions,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from marin.inference.iris_tpu_vllm import RAY_PORTS
 from marin.inference.model_cache import ModelPreparationError, prepare_hf_models
+from marin.inference.vllm_release import load_vllm_gpu_release
 
 # The GPU serve worker only runs the dashboard/registry glue plus a `vllm serve`
 # subprocess; CUDA vLLM is provisioned in an isolated uv-tool env (not the workspace
@@ -97,6 +101,10 @@ _BROKER_LEASE_TIMEOUT_FRACTION = 0.95
 _VLLM_ONLY_OPTIONS = {
     "vllm_version": "--vllm-version",
     "vllm_source": "--vllm-source",
+    "vllm_release": "--vllm-release",
+    "session_router": "--session-router",
+    "data_parallel_size": "--data-parallel-size",
+    "data_parallel_size_local": "--data-parallel-size-local",
     "vllm_args": "--vllm-arg",
     "vllm_metrics_config": "--vllm-metrics-config",
     "max_num_batched_tokens": "--max-num-batched-tokens",
@@ -150,6 +158,8 @@ def _resolve_serving_plan(
     """
     if vllm_source is VllmSource.MARIN_FORK and (gpu is None or backend != "vllm"):
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
+    if vllm.router is not None and (gpu is None or backend != "vllm"):
+        raise click.ClickException("--session-router requires --gpu with the vLLM backend")
     if gpu is not None:
         if not in_checkout:
             raise click.ClickException(
@@ -407,6 +417,10 @@ def _wait_and_report_endpoint(
     help="Levanter backend: fraction of device HBM the KV cache may claim.",
 )
 @click.option("--tensor-parallel-size", type=int, default=None, help="TP size (default: auto from heads + chips).")
+@click.option("--data-parallel-size", type=click.IntRange(min=1), default=None, help="Total native GPU DP ranks.")
+@click.option("--data-parallel-size-local", type=click.IntRange(min=1), default=None, help="DP ranks per host.")
+@click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
+@click.option("--vllm-release", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
 @click.option("--dtype", default="bfloat16", help="Weight/compute dtype.")
 @click.option("--cache-ttl-days", type=int, default=14, help="Mirror HF models to a TTL'd GCS cache (0 disables).")
 @click.option(
@@ -505,6 +519,10 @@ def main(
     page_size: int,
     hbm_utilization: float,
     tensor_parallel_size: int | None,
+    data_parallel_size: int | None,
+    data_parallel_size_local: int | None,
+    session_router: bool,
+    vllm_release: Path | None,
     dtype: str,
     cache_ttl_days: int,
     no_cache: bool,
@@ -571,10 +589,38 @@ def main(
             startup_timeout_seconds=int(wait_timeout),
             extra_args=tuple(vllm_args),
             extra_metric_families=extra_metric_families,
+            router=(
+                VllmRouterConfig(
+                    request_timeout_seconds=max(VllmRouterConfig.request_timeout_seconds, math.ceil(proxy_timeout))
+                )
+                if session_router
+                else None
+            ),
         ),
         levanter=LevanterEngineConfig(max_seqs=max_seqs, page_size=page_size, hbm_utilization=hbm_utilization),
         extras=extras,
     )
+    if vllm_release is not None:
+        if task_image is not None or vllm_source_enum is not VllmSource.MARIN_FORK:
+            raise click.ClickException("--vllm-release requires --vllm-source marin-fork and no --task-image")
+        assert isinstance(plan.engine, VllmEngineConfig)
+        plan = replace(plan, engine=replace(plan.engine, release=load_vllm_gpu_release(vllm_release)))
+
+    geometry = None
+    if data_parallel_size is not None or data_parallel_size_local is not None:
+        if plan.gpu_count is None or backend != "vllm" or tensor_parallel_size is None:
+            raise click.ClickException("native DP geometry requires --gpu, --backend vllm and --tensor-parallel-size")
+        if data_parallel_size is None:
+            raise click.ClickException("--data-parallel-size-local requires --data-parallel-size")
+        if tensor_parallel_size < 1:
+            raise click.ClickException("--tensor-parallel-size must be positive")
+        geometry = ServingGeometry(
+            tensor_parallel_size=tensor_parallel_size,
+            data_parallel_size=data_parallel_size,
+            pipeline_parallel_size=1,
+            gpus_per_task=plan.gpu_count,
+            data_parallel_size_local=data_parallel_size_local or plan.gpu_count // tensor_parallel_size,
+        )
 
     brokered = broker or instances > 1
     if brokered and any(get_tpu_topology(tpu_type).vm_count > 1 for tpu_type in plan.tpu_types):
@@ -604,6 +650,7 @@ def main(
             disk=disk,
             image=task_image,
             regions=worker_regions,
+            replicas=geometry.task_count if geometry is not None else 1,
         )
     else:
         worker_resources = ResourceConfig.with_tpu(
@@ -636,6 +683,7 @@ def main(
         cache_ttl_days=0 if no_cache else cache_ttl_days,
         endpoint_ready_timeout_seconds=wait_timeout,
         max_retries_preemption=max_retries_preemption,
+        serving_geometry=geometry,
     )
     service = IrisServiceConfig(
         model=model_config,
@@ -681,7 +729,7 @@ def main(
     constraints = convert_constraints(submission_resources)
     replicas = submission_resources.replicas
     coscheduling = resolve_coscheduling(submission_resources, replicas)
-    ports = ["http", *RAY_PORTS] if not brokered and replicas > 1 else ["http"]
+    ports = ["http", *RAY_PORTS] if plan.tpu_types and not brokered and replicas > 1 else ["http"]
     if dry_run:
         click.echo(f"resources: {submission_resources}")
         click.echo(f"replicas: {replicas}; coscheduling: {coscheduling}")
