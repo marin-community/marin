@@ -84,10 +84,10 @@ def main() -> None:
         "tokenizer": {"name": TOKENIZER, "revision": TOKENIZER_REVISION},
         "sources": {"gsm8k": "openai/gsm8k main/test", "pg19": "emozilla/pg19 data/test"},
         "seed": SEED,
-        "gate": [
-            {"case_id": f"chat{i:02d}", "tokens": tokens, "sha": _sha(tokens)} for i, tokens in enumerate(gate_chat)
-        ]
-        + [{"case_id": f"book{i:02d}", "tokens": tokens, "sha": _sha(tokens)} for i, tokens in enumerate(gate_book)],
+        "gate": (
+            [{"case_id": f"chat{i:02d}", "tokens": tokens, "sha": _sha(tokens)} for i, tokens in enumerate(gate_chat)]
+            + [{"case_id": f"book{i:02d}", "tokens": tokens, "sha": _sha(tokens)} for i, tokens in enumerate(gate_book)]
+        ),
         "long": [{"case_id": f"long{n}", "tokens": longest[:n], "sha": _sha(longest[:n])} for n in LONG_LENGTHS],
         "load": [{"case_id": f"load{i:04d}", "tokens": tokens} for i, tokens in enumerate(load)],
     }

@@ -16,6 +16,7 @@ from typing import Any
 
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
 from rigging.filesystem.storage_path import StoragePath
+
 from marin.external_dependencies import VllmGpuRelease
 
 # Worker and isolated vLLM environments use one Python version so cloudpickle

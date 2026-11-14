@@ -172,8 +172,9 @@ CANDIDATE_ARGS = {
         json.dumps(
             BASE_COMPILATION
             | {
-                "inductor_compile_config": BASE_COMPILATION["inductor_compile_config"]
-                | {"benchmark_combo_kernel": False}
+                "inductor_compile_config": (
+                    BASE_COMPILATION["inductor_compile_config"] | {"benchmark_combo_kernel": False}
+                )
             }
         ),
     ),
@@ -347,6 +348,7 @@ def _parse_args() -> argparse.Namespace:
         "--overlay-wheel",
         help="FILE:SHA256 - replace the release's aarch64 wheel with the URL stored in FILE (Python overlay)",
     )
+    parser.add_argument("--tp2-overlay", help="FILE:SHA256 of the #119 overlay wheel URL for tp2 variants")
     parser.add_argument("--env", action="append", default=[], help="KEY=VALUE for every vLLM process")
     parser.add_argument(
         "--direct",
@@ -458,10 +460,8 @@ def _with_flags(base: tuple[str, ...], flags: tuple[str, ...]) -> tuple[str, ...
 
 # TP2 needs #119 (merged onto 0ac9dcb with schema-3 fixes, shipped as an aarch64 overlay wheel) and its
 # qualified NCCL recipe: native NCCL all-reduce only, no fused all-reduce passes.
-TP2_OVERLAY = (
-    "/tmp/claude-1003/-home-marin-projects-marin-mcwitt-vllm-hillclimb/733e1485-ce36-453f-89af-6cfa733976dc/"
-    "scratchpad/wheel/tp119.url:920f91b3f8cbfe14ba7c1502be4bc1ed97e305f6b90a3e5bbf8079b184d52b90"
-)
+# TP2 overlay wheel: --tp2-overlay FILE:SHA256, where FILE holds the wheel URL (the URL may be presigned,
+# so it is read at submission time and never committed).
 TP2_ENV = (
     ("VLLM_ALLREDUCE_USE_FLASHINFER", "0"),
     ("VLLM_ALLREDUCE_USE_FLASHINFER_PCIE_IPC", "0"),
@@ -498,7 +498,8 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
     flags: tuple[str, ...] = CANDIDATE_ARGS[label] if label in CANDIDATE_ARGS else ()
     if label == "tp2":
         assert tag == "0ac9dcb", "the #119 overlay is built on 0ac9dcb"
-        release = _overlay(release, TP2_OVERLAY)
+        assert args.tp2_overlay, "tp2 needs --tp2-overlay FILE:SHA256 (the #119 overlay wheel)"
+        release = _overlay(release, args.tp2_overlay)
         tensor_parallel_size = 2
         geometry = replace(geometry, tensor_parallel_size=2, data_parallel_size=GPUS_PER_HOST // 2)
         env = (*env, *TP2_ENV)

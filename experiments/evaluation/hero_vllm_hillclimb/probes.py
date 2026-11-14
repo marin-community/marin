@@ -280,7 +280,7 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig, on_progre
         records: list[dict] = [dict() for _ in range(total)]
         last_submit = [0.0]
 
-        async def worker() -> None:
+        async def worker(queue=queue, records=records, last_submit=last_submit) -> None:
             while True:
                 try:
                     index = queue.get_nowait()
