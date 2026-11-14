@@ -1420,7 +1420,9 @@ def _pod_failure_state(pod: dict) -> int:
     return job_pb2.TASK_STATE_FAILED
 
 
-def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
+def _task_update_from_pod(
+    entry: RunningTaskEntry, pod: dict, workload: dict | None = None, node: dict | None = None
+) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
     A control-plane disruption (Kueue preemption, node drain, API eviction) is
@@ -1442,8 +1444,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     # still leaves the identity persisted.
     metadata = pod.get("metadata", {})
     spec = pod.get("spec", {})
-    # TAS writes its assigned topology levels into the Pod's node selector.
-    # Publish only topology keys requested by this Pod, plus its assigned host.
+    # TAS can pin only the hostname. Read domain values from the assigned Node.
     annotations = metadata.get("annotations", {})
     topology_keys = {
         annotations.get(_KUEUE_REQUIRED_TOPOLOGY),
@@ -1451,7 +1452,8 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         annotations.get(_KUEUE_PREFERRED_TOPOLOGY),
         _KUEUE_SINGLE_POD_TOPOLOGY,
     }
-    topology = {key: value for key, value in spec.get("nodeSelector", {}).items() if key in topology_keys}
+    node_labels = node.get("metadata", {}).get("labels", {}) if node is not None else {}
+    topology = {key: value for key, value in node_labels.items() if key in topology_keys}
     identity = {
         "pod_name": metadata.get("name") or None,
         "pod_uid": metadata.get("uid") or None,
@@ -3472,7 +3474,9 @@ class K8sTaskProvider:
                 continue
 
             self._pod_unresolved_counts.pop(entry, None)
-            update = _task_update_from_pod(entry, pod, workload)
+            update = _task_update_from_pod(
+                entry, pod, workload, node=nodes_by_name.get(pod.get("spec", {}).get("nodeName", ""))
+            )
             updates.append(update)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":

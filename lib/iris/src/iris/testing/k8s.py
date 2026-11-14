@@ -96,7 +96,7 @@ def make_batch(
     )
 
 
-def observe_pod_update(pod: dict, workload: dict | None = None) -> TaskUpdate:
+def observe_pod_update(pod: dict, workload: dict | None = None, *, node: dict | None = None) -> TaskUpdate:
     """Reconcile a seeded pod through the public Kubernetes provider boundary."""
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(
@@ -118,6 +118,8 @@ def observe_pod_update(pod: dict, workload: dict | None = None) -> TaskUpdate:
             **observed_metadata.get("labels", {}),
         }
         k8s.seed_resource(K8sResource.PODS, observed_metadata["name"], observed)
+        if node is not None:
+            k8s.seed_resource(K8sResource.NODES, node["metadata"]["name"], deepcopy(node))
         if workload is not None:
             workload_name = workload.get("metadata", {}).get("name", "workload")
             k8s.seed_resource(K8sResource.WORKLOADS, workload_name, deepcopy(workload))

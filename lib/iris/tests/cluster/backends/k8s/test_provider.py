@@ -67,13 +67,22 @@ def test_kueue_assigned_topology_is_exposed_without_unrelated_selectors():
             "spec": {
                 "nodeName": "host-8",
                 "nodeSelector": {
-                    "ds.coreweave.com/nvlink.domain": "rack-b",
                     "kubernetes.io/hostname": "host-8",
                     "node.kubernetes.io/instance-type": "gb200-4x",
                 },
             },
             "status": {"phase": "Running"},
-        }
+        },
+        node={
+            "metadata": {
+                "name": "host-8",
+                "labels": {
+                    "ds.coreweave.com/nvlink.domain": "rack-b",
+                    "kubernetes.io/hostname": "host-8",
+                    "node.kubernetes.io/instance-type": "gb200-4x",
+                },
+            },
+        },
     )
     assert update.topology == {"ds.coreweave.com/nvlink.domain": "rack-b", "kubernetes.io/hostname": "host-8"}
     assert update.node_name == "host-8"
