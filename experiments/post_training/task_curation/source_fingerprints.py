@@ -80,7 +80,7 @@ def reference_test_hashes(task: TaskSpec) -> tuple[str | None, str]:
 def benchmark_kind(task: TaskSpec) -> Literal["math", "choice"] | None:
     """Limit prompt normalization to the supported benchmark grading contracts."""
     if isinstance(task.grader, VerifyitGrader):
-        if task.grader.mode == "numeric":
+        if task.grader.mode in {"numeric", "math"}:
             return "math"
         if task.grader.mode == "mcq":
             return "choice"

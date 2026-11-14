@@ -8,7 +8,6 @@ import json
 from dataclasses import asdict, replace
 from pathlib import Path
 
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -313,7 +312,7 @@ def benchmark_fixture_documents(filename: str) -> dict[str, list[dict]]:
                     verifier=(inline_resource("config.json", json.dumps({"expected": row["expected"]}).encode()),)
                 ).model_dump(mode="json")
             else:
-                parameters = {"expected": row["expected"]}
+                parameters = row.get("parameters", {"expected": row["expected"]})
                 if row.get("grader") == "numeric":
                     parameters.update(tolerance_abs=0.0, tolerance_rel=0.0)
                 elif row.get("grader") == "mcq":
@@ -368,6 +367,15 @@ def test_real_gpqa_wrappers_and_shuffled_choices_preserve_questions_and_answer_c
     assert review.verdict.label is DuplicateLabel.DUPLICATE
     assert review.measurement.left_to_right.matched == review.measurement.right_to_left.matched == 8
     assert all(row.reference_match for row in review.measurement.left_to_right.neighbors)
+
+
+def test_real_math500_math_and_boxed_math_contracts_match_across_wrappers():
+    documents = benchmark_fixture_documents("math500_overlap.json")
+    populations = [PopulationIndex(list(content_rows(rows)), {}) for rows in documents.values()]
+    pair = pair_similarity("eval", fingerprint_source([], {}), "marin", fingerprint_source([], {}))
+    review = compare_populations(pair, *populations)
+    assert review.verdict.label is DuplicateLabel.DUPLICATE
+    assert review.measurement.left_to_right.matched == review.measurement.right_to_left.matched == 6
 
 
 def test_nonbenchmark_literal_syntax_is_preserved_during_matching():
@@ -427,7 +435,7 @@ def test_lsh_matches_full_population_after_shared_wrapper_is_stripped():
     assert neighbor.reference_match and neighbor.tests_match
 
 
-def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_content(tmp_path, monkeypatch):
+def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_content(tmp_path):
     documents = [task_document(str(index), f"Compute the square of {index}.") for index in range(30)]
     shard = tmp_path / "population.parquet"
     pq.write_table(pa.Table.from_pylist([{"task_spec": json.dumps(row)} for row in documents]), shard)
@@ -453,14 +461,11 @@ def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_conten
     digest = next(iter(fingerprint.inputs.values()))
     fingerprint = fingerprint.model_copy(update={"inputs": {"0:tasks.parquet": digest}})
     locations = PopulationLocations(files={digest: "s3://marin-us-east-02a/fixture/specs.parquet"})
-    monkeypatch.setattr(
-        "experiments.post_training.task_curation.source_population_cache.filesystem_for",
-        lambda uri: (fsspec.filesystem("file"), str(shard)),
-    )
+    local_paths = {"s3://marin-us-east-02a/fixture/specs.parquet": str(shard)}
     cache = tmp_path / "cache"
     cache.mkdir()
     population = read_population(
-        cache_population("fixture", fingerprint, cache, locations, {}, source_bucket="marin-us-east-02a"),
+        cache_population("fixture", fingerprint, cache, locations, local_paths, source_bucket="marin-us-east-02a"),
         fingerprint.inputs,
     )
     assert len(population.rows) == 30
@@ -474,7 +479,7 @@ def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_conten
             changed,
             cache,
             PopulationLocations(files={"0" * 64: "s3://marin-us-east-02a/fixture/specs.parquet"}),
-            {},
+            local_paths,
             source_bucket="marin-us-east-02a",
         )
 

@@ -652,14 +652,14 @@ occurrences with seed 0, looks up their complete normalized instruction hashes
 in the other source's full population, then searches remaining queries with
 128-permutation character-5-gram MinHash and 32 LSH bands. Long whole wrapper
 lines shared by at least 90% of a source panel are removed before near matching.
-For numeric, boxed-math and GPQA/MCQ grading contracts, the v4 matcher also removes
+For numeric, math, boxed-math and GPQA/MCQ grading contracts, the v4 matcher also removes
 the anchored AIME/GPQA prompt templates and normalizes math delimiters and token
 spacing. Literal syntax in other tasks is preserved. GPQA matching compares the full question and
 all four choice texts independently of their letter order; reference agreement
 compares the selected choice text. Different MMLU subjects cannot match through
 shared answer letters. When exactly one copy omits an Asymptote diagram, a
 `statement` receipt requires identical remaining problem text (at least 80
-characters), matching integer reference answers and matching assistant-prefill
+characters), matching reference-answer hashes and matching assistant-prefill
 and tool-state hashes.
 Two supplied diagrams cannot match through this statement-only path. Integer
 answers compare across numeric and boxed-math graders, including leading zeros.

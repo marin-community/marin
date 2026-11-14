@@ -1,0 +1,131 @@
+{
+  "provenance": {
+    "survey_sha256": "bb490e2dc0bd361f6a697878702c6b227acc2aebeadc3826a39bd13821b96dc4"
+  },
+  "sources": {
+    "eval": [
+      {
+        "task_id": "evalchemy-math500-85234208e43de9118cb186d8a7da66b3b7e22d248e9a1e1de9a000f9c48ec3ad",
+        "text": "Problem: The complex numbers $\\alpha_1, \\alpha_2, \\alpha_3$, and $\\alpha_4$ are the four distinct roots of the equation $x^4+2x^3+2=0$. Determine the unordered set \\[\n\\{\\alpha_1\\alpha_2 + \\alpha_3\\alpha_4, \\alpha_1\\alpha_3 + \\alpha_2\\alpha_4, \\alpha_1\\alpha_4 + \\alpha_2\\alpha_3\\}.\n\\]\nMark your solution with \\boxed\nAnswer:",
+        "expected": "\\{1\\pm\\sqrt{5},-2\\}",
+        "grader": "boxed_math"
+      },
+      {
+        "task_id": "evalchemy-math500-cb410312ca3745bf327f0626e0a89d364fcbe98bc6f218400fb62f79682bfd4f",
+        "text": "Problem: Let $p(x)$ be a quadratic polynomial with integer coefficients which has $4-\\sqrt{11}$ as a root. Compute $\\frac{p(3)}{p(4)}.$\nMark your solution with \\boxed\nAnswer:",
+        "expected": "\\frac{10}{11}",
+        "grader": "boxed_math"
+      },
+      {
+        "task_id": "evalchemy-math500-c7f5efcd989113dfb2902bd3b1963965c31351f11af730b015e79756fdc8a283",
+        "text": "Problem: Let $F_1$ and $F_2$ be the foci of the ellipse $kx^2 + y^2 = 1,$ where $k > 1$ is a constant. Suppose that there is a circle which passes through $F_1$ and $F_2$ and which lies tangent to the ellipse at two points on the $x$-axis. Compute $k.$\nMark your solution with \\boxed\nAnswer:",
+        "expected": "2",
+        "grader": "boxed_math"
+      },
+      {
+        "task_id": "evalchemy-math500-f72ff6a4512cd944e96692b8fec22416640b7a1762a9a7f0c322035685587122",
+        "text": "Problem: Let $f$ be defined by  \\[f(x) = \\left\\{\n\\begin{array}{cl}\n3-x & \\text{ if } x \\leq 3, \\\\\n-x^3+2x^2+3x & \\text{ if } x>3.\n\\end{array}\n\\right.\\]Calculate $f^{-1}(0)+f^{-1}(6)$.\nMark your solution with \\boxed\nAnswer:",
+        "expected": "0",
+        "grader": "boxed_math"
+      },
+      {
+        "task_id": "evalchemy-math500-5bc6c3ff2c4d7df8fb8b907ac3cf84655ec24b2f801a15a91133f5df01804eaf",
+        "text": "Problem: For what values of $x$ is it true that $x^2 - 5x - 4 \\le 10$? Express your answer in interval notation.\nMark your solution with \\boxed\nAnswer:",
+        "expected": "x \\in [-2,7]",
+        "grader": "boxed_math"
+      },
+      {
+        "task_id": "evalchemy-math500-ab350f4422073102462a60dbeccc7e17e39168bc1f0ce5c567c457d7e3fe619c",
+        "text": "Problem: If $t(x) = 3-g(x)$ and $g(x) = \\sqrt{x}$, then what is $t(g(16))$?\nMark your solution with \\boxed\nAnswer:",
+        "expected": "1",
+        "grader": "boxed_math"
+      }
+    ],
+    "marin": [
+      {
+        "task_id": "math500-005042d8e711610471d4ee3ad7e26f48c5ae9572ab40f16a38f108a1ec6e2251",
+        "text": "The complex numbers $\\alpha_1, \\alpha_2, \\alpha_3$, and $\\alpha_4$ are the four distinct roots of the equation $x^4+2x^3+2=0$. Determine the unordered set \\[\n\\{\\alpha_1\\alpha_2 + \\alpha_3\\alpha_4, \\alpha_1\\alpha_3 + \\alpha_2\\alpha_4, \\alpha_1\\alpha_4 + \\alpha_2\\alpha_3\\}.\n\\]",
+        "expected": "\\{1\\pm\\sqrt{5},-2\\}",
+        "grader": "math",
+        "parameters": {
+          "expected": "\\{1\\pm\\sqrt{5},-2\\}",
+          "math_type": "set",
+          "output": "/app/answer.txt",
+          "empty_output": "zero",
+          "profile": "anchored",
+          "allow_additive_constant": false
+        }
+      },
+      {
+        "task_id": "math500-02034b74509696cdef01512c69cc7e77463882dfd34668aaa117a2c10d580562",
+        "text": "Let $p(x)$ be a quadratic polynomial with integer coefficients which has $4-\\sqrt{11}$ as a root. Compute $\\frac{p(3)}{p(4)}.$",
+        "expected": "\\frac{10}{11}",
+        "grader": "math",
+        "parameters": {
+          "expected": "\\frac{10}{11}",
+          "math_type": "scalar",
+          "output": "/app/answer.txt",
+          "empty_output": "zero",
+          "profile": "anchored",
+          "allow_additive_constant": false
+        }
+      },
+      {
+        "task_id": "math500-02a4e21194123e252e78f827200e0a322e17fe0a7dd2f0b41161ccea9529a0c2",
+        "text": "Let $F_1$ and $F_2$ be the foci of the ellipse $kx^2 + y^2 = 1,$ where $k > 1$ is a constant. Suppose that there is a circle which passes through $F_1$ and $F_2$ and which lies tangent to the ellipse at two points on the $x$-axis. Compute $k.$",
+        "expected": "2",
+        "grader": "math",
+        "parameters": {
+          "expected": "2",
+          "math_type": "scalar",
+          "output": "/app/answer.txt",
+          "empty_output": "zero",
+          "profile": "anchored",
+          "allow_additive_constant": false
+        }
+      },
+      {
+        "task_id": "math500-03d19ab851b1adc7c4776a808b631bbef568490f28611f58d6735e73c5425f4e",
+        "text": "Let $f$ be defined by  \\[f(x) = \\left\\{\n\\begin{array}{cl}\n3-x & \\text{ if } x \\leq 3, \\\\\n-x^3+2x^2+3x & \\text{ if } x>3.\n\\end{array}\n\\right.\\]Calculate $f^{-1}(0)+f^{-1}(6)$.",
+        "expected": "0",
+        "grader": "math",
+        "parameters": {
+          "expected": "0",
+          "math_type": "scalar",
+          "output": "/app/answer.txt",
+          "empty_output": "zero",
+          "profile": "anchored",
+          "allow_additive_constant": false
+        }
+      },
+      {
+        "task_id": "math500-0439ee2e43cc77a747b9f9d0c9fe9b7f98992f7feaf0d2950fde3355332fb16b",
+        "text": "For what values of $x$ is it true that $x^2 - 5x - 4 \\le 10$? Express your answer in interval notation.",
+        "expected": "x \\in [-2,7]",
+        "grader": "math",
+        "parameters": {
+          "expected": "x \\in [-2,7]",
+          "math_type": "scalar",
+          "output": "/app/answer.txt",
+          "empty_output": "zero",
+          "profile": "anchored",
+          "allow_additive_constant": false
+        }
+      },
+      {
+        "task_id": "math500-045b01b619068f8ef6574ab5e0441418bd776876fd9a41badd71385e0ebd618a",
+        "text": "If $t(x) = 3-g(x)$ and $g(x) = \\sqrt{x}$, then what is $t(g(16))$?",
+        "expected": "1",
+        "grader": "math",
+        "parameters": {
+          "expected": "1",
+          "math_type": "scalar",
+          "output": "/app/answer.txt",
+          "empty_output": "zero",
+          "profile": "anchored",
+          "allow_additive_constant": false
+        }
+      }
+    ]
+  }
+}

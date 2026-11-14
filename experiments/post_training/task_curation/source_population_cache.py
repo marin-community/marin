@@ -16,7 +16,6 @@ from typing import Final, Literal
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
@@ -145,9 +144,8 @@ def cache_population(
             uri = locations.files.get(digest, key)
             if not uri.startswith(f"s3://{source_bucket}/"):
                 raise ValueError(f"Rerun requires co-located input: {uri}")
-            fs, remote_path = filesystem_for(local_paths.get(uri, uri))
             with tempfile.TemporaryFile() as local:
-                with fs.open(remote_path, "rb") as remote:
+                with StoragePath(local_paths.get(uri, uri)).open("rb") as remote:
                     sha = hashlib.sha256()
                     while chunk := remote.read(8 * 1024 * 1024):
                         sha.update(chunk)
