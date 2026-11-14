@@ -1519,6 +1519,14 @@ integrity-contract census. `TaskFormat.HARBOR` selects
 the actor census's recorded `converter_version` so its measurements cover that
 pipeline. Qualification of the original, unfiltered population remains archived.
 
+`filtration.original_release` identifies the configured source before repair.
+`filtration.original_cohort` identifies the exact executed cohort, which may be
+a separately versioned repair. Set `execution_release` to its exact Hugging Face
+cohort pin, or explicitly `null` for an input published only as a versioned
+S3 cohort. The command rechecks a supplied execution pin against the cohort hash;
+`repair_evidence` preserves the baseline-to-execution lineage. These fields do not
+assert that repaired bytes are identical to the baseline.
+
 Generate registry receipt shards from the complete input cohort, canonical
 filter, output Parquet and hashed qualification metadata for the new revision:
 

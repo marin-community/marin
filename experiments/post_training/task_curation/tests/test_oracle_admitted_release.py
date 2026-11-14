@@ -118,6 +118,7 @@ def admitted_release(tmp_path):
         original_pipeline=source.pipeline_reference,
         original_info=source.info,
         filtration=filtration,
+        execution_release=None,
         output_dedup=source.info.within_source_dedup.model_copy(
             update={
                 "source_dataset_id": release.repo,

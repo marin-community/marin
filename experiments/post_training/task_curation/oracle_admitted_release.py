@@ -12,6 +12,7 @@ from typing import Literal
 import pyarrow.parquet as pq
 from finestore.rl.curation import (
     ContentEvidenceReference,
+    DatasetRelease,
     LexicalContaminationEvidence,
     OracleFiltrationEvidence,
     OracleValidation,
@@ -20,6 +21,7 @@ from finestore.rl.curation import (
     PipelineReference,
     WithinSourceDedupEvidence,
 )
+from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
@@ -57,6 +59,7 @@ class OracleAdmittedReleaseReceipt(BaseModel):
     original_pipeline: PipelineReference
     original_info: SourceInfo
     filtration: OracleFiltrationEvidence
+    execution_release: DatasetRelease | None
     output_dedup: WithinSourceDedupEvidence
     actor: ActorCensusReceipt
     grading: RetainedGradingReceipt
@@ -268,6 +271,7 @@ class OracleAdmittedReleaseInput(BaseModel):
     source_id: str
     task_format: Literal[TaskFormat.HARBOR, TaskFormat.TASKCOMPENDIUM]
     filtration: OracleFiltrationEvidence
+    execution_release: DatasetRelease | None
     qualification: ContentEvidenceReference
     repair_evidence: tuple[ContentEvidenceReference, ...] = Field(min_length=1)
     original_cohort: Path
@@ -288,6 +292,14 @@ def main() -> None:
 
     item = OracleAdmittedReleaseInput.model_validate_json(args.manifest.read_bytes())
     source = sources_before_oracle_filtration()[item.source_id]
+    release = item.filtration.filtered_release
+    if not HfApi().repo_info(release.repo, repo_type="dataset", revision=release.revision).private:
+        raise ValueError("Filtered publication must remain private")
+    if item.execution_release is not None:
+        executed = item.execution_release
+        input_path = hf_hub_download(executed.repo, "tasks.parquet", repo_type="dataset", revision=executed.revision)
+        if file_sha256(StoragePath(input_path)) != item.filtration.original_cohort.sha256:
+            raise ValueError("Execution-input pin differs from the canonical pre-filtration cohort")
     qualified = StoragePath(item.qualification.uri)
     if file_sha256(qualified) != item.qualification.sha256:
         raise ValueError("Fresh qualification metadata bytes changed")
@@ -308,6 +320,7 @@ def main() -> None:
         original_pipeline=source.pipeline_reference,
         original_info=source.info,
         filtration=item.filtration,
+        execution_release=item.execution_release,
         output_dedup=WithinSourceDedupEvidence.model_validate(metadata["dedup"]),
         actor=ActorCensusReceipt.model_validate(metadata["actor"]),
         grading=RetainedGradingReceipt.model_validate(metadata["grading"]),
