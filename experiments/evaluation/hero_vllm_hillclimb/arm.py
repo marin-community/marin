@@ -208,6 +208,8 @@ LEADER_OVERRIDES = {
     "fg128stack": ("--api-server-count", "4"),
     "fg192stack": ("--api-server-count", "4"),
     "fg128stacklean": ("--api-server-count", "4"),
+    "fg32stack95": ("--api-server-count", "4"),
+    "fg32stack95lean": ("--api-server-count", "4"),
 }
 
 MOE_CONFIG_DIR = "experiments/evaluation/hero_vllm_hillclimb/moe_configs"
@@ -226,6 +228,8 @@ LABEL_ENV = {
         ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
     ),
+    "fg32stack95": (("VLLM_USE_NCCL_SYMM_MEM", "1"),),
+    "fg32stack95lean": (("VLLM_USE_NCCL_SYMM_MEM", "1"),),
     "fg192stack": (
         ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
@@ -323,6 +327,24 @@ CANDIDATE_ARGS = {
     "fg128stacklean": (
         "--max-num-seqs",
         "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    # Two-host (EP8) stack: full graphs, NCCL symmetric memory, four API servers; the lean variant
+    # runs on the ShortConv-lean overlay (measurement only).
+    "fg32stack95": (
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.95",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    "fg32stack95lean": (
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.95",
         "--compilation-config",
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
