@@ -139,6 +139,9 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           PYTHONPATH: lib/zephyr/tests:lib/levanter/tests
+        # Taskforge's tests import helpers as `tests.*`, which only resolves under its own
+        # pytest config (taskforge-unit); from the repo root `tests` is Marin's suite. It
+        # has no slow tests, so skipping it here loses no coverage.
         run: |
           status=0
           uv run \
@@ -150,6 +153,7 @@ jobs:
             --group test \
             pytest --durations=20 -n auto --dist=worksteal --tb=short \
             -m "slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not torch" \
+            --ignore=lib/taskforge/tests \
             tests experiments lib/*/tests || status=$?
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
