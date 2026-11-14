@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
 
+import httpx
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SamplingSettings, Solver
 from huggingface_hub import hf_hub_download
 from iris.rpc.proto_display import priority_band_value
@@ -279,17 +280,27 @@ def main() -> None:
         judge_endpoint = None
         if has_judge:
             judge_endpoint = resolve_glm_base_url(GLM_RELAY_JOB)
-            judge_probe = (
-                probe
-                if args.solver == Solver.HOSTED
-                else probe_endpoint(
-                    Solver.HOSTED,
-                    judge_endpoint,
-                    GLM_MODEL,
-                    require_secret(GLM_BULK_TOKEN_ENV),
-                    sampling_settings(Solver.HOSTED, []),
-                )
-            )
+            if args.solver == Solver.HOSTED:
+                judge_probe = probe
+            else:
+                # The shared GLM relay may queue the probe behind hosted traffic; a
+                # retry succeeds once the relay drains instead of killing the campaign.
+                for attempt_number in range(1, 4):
+                    try:
+                        judge_probe = probe_endpoint(
+                            Solver.HOSTED,
+                            judge_endpoint,
+                            GLM_MODEL,
+                            require_secret(GLM_BULK_TOKEN_ENV),
+                            sampling_settings(Solver.HOSTED, []),
+                        )
+                        break
+                    except httpx.TimeoutException as error:
+                        if attempt_number == 3:
+                            raise
+                        LOGGER.warning(
+                            "Judge probe attempt %d timed out against the shared relay: %s", attempt_number, error
+                        )
             judge_metadata = {
                 "model": SOLVER_MODELS[Solver.HOSTED],
                 "api_model": GLM_MODEL,
