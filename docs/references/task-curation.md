@@ -116,12 +116,20 @@ production judge service.
 **Jobs.** Use three-day job timeouts and an explicit `--target-cluster` in the
 data's region. Infrastructure failures are re-driven and never count as task failures.
 
-**Landing changes (temporary).** While CI is suspended, Atlas workers commit
-directly to the `atlas-env-audit` branch instead of opening child PRs. Before each
-push, run `./infra/pre-commit.py --changed-files --fix` and the affected local
-tests. Pushes are serialized: push only after the merger grants a push slot, fetch
-and rebase first, and never force-push. Never push to `main`. This rule ends when
-CI resumes.
+**Landing changes (temporary).** While CI is suspended, Atlas workers land their
+own committed changes on `atlas-env-audit` instead of opening child PRs. Run from
+your dedicated worktree on a named branch other than `main`:
+
+```bash
+atlas-push --test "<affected test command>" --who "<session id>" --what "<change summary>"
+```
+
+The script takes a machine-wide lock, fetches and rebases onto
+`origin/atlas-env-audit`, runs lint and your affected tests on the rebased head,
+pushes without force and verifies the remote. A failure stops the push; resolve
+rebase conflicts and rerun. Advisory review remains required for non-trivial
+changes. Report the landed SHA to the coordinator. Never force-push or push to
+`main`. This rule ends when CI resumes.
 
 ## Pipeline overview
 
