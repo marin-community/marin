@@ -253,6 +253,15 @@ A `ScriptGrader` declares:
 
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
 
+Sandbox Verifyit grading stages the producer's framework source under
+`/tests/.taskcompendium-runtime`. The declared image's `python3` verifies its
+manifest and imports that source in an isolated wrapper. The manifest digest
+appears as `verifyit_runtime_sha256` in grading diagnostics. Source scripts keep
+their declared environment, interpreter lookup, setup commands, and verdict
+contract; wrapper imports do not change their `PATH` or `PYTHONPATH`. The image
+must provide Verifyit's dependencies, including `tomli-w`; the harness installs
+no packages. Resources colliding with the private runtime directory are rejected.
+
 `RewardFileFormat.VERDICT_JSON` reads Verifyit's structured `reward`, `status`
 and `detail` fields. It preserves unscored infrastructure failures and invalid
 tasks, including their diagnostic details. The command must exit successfully.

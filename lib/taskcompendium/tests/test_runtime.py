@@ -7,11 +7,15 @@ import asyncio
 import io
 import json
 import os
+import shutil
+import subprocess
 import tarfile
+import venv
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
+import tomli_w
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
@@ -82,8 +86,9 @@ from taskcompendium.runtime.shell import (
     upload_resources,
 )
 from taskcompendium.runtime.task_grading import grade_task
+from taskcompendium.runtime.verifyit_runtime import ENTRY_PATH, RUNTIME_ROOT
 
-from .grading_machines import EXITED, LocalGradingMachines
+from .grading_machines import EXITED, LocalGradingMachine, LocalGradingMachines
 
 GRADER_IMAGE = "fixture@sha256:" + "a" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=GRADER_IMAGE)
@@ -264,6 +269,93 @@ def trusted_bootstrap_task(shell_task):
         }
     )
     return TaskSpec.model_validate_json(task.model_dump_json())
+
+
+@pytest.fixture
+def bare_grader_python(tmp_path):
+    environment = tmp_path / "image-python"
+    venv.EnvBuilder(with_pip=False).create(environment)
+    python = environment / "bin/python3"
+    site_packages = subprocess.check_output(
+        [str(python), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True
+    ).strip()
+    shutil.copytree(Path(tomli_w.__file__).parent, Path(site_packages) / "tomli_w")
+    probe = subprocess.run([str(python), "-I", "-c", "import verifyit"], capture_output=True)
+    assert probe.returncode != 0 and b"ModuleNotFoundError" in probe.stderr
+    return python
+
+
+@pytest.mark.parametrize("candidate,expected", [(b"42", 1.0), (b"41", 0.0)])
+@pytest.mark.asyncio
+async def test_sandbox_provisions_verifyit_without_changing_source_child_environment(
+    tmp_path, shell_task, bare_grader_python, candidate, expected
+):
+    script = (
+        b"import importlib.util, json, os\nfrom pathlib import Path\n"
+        b"assert importlib.util.find_spec('verifyit') is None\n"
+        b"assert os.environ['SOURCE_SENTINEL'] == 'original'\n"
+        b"assert os.environ['PYTHONPATH'] == 'source-pythonpath'\n"
+        b"assert os.environ['PATH'] == os.environ['SOURCE_PATH']\n"
+        b"reward = float((Path(os.environ['VERIFYIT_WORKSPACE']) / 'answer.txt').read_text() == '42')\n"
+        b"(Path(os.environ['VERIFYIT_LOGS_DIR']) / 'source-verdict.json').write_text(\n"
+        b"json.dumps({'status':'scored','reward':reward,'detail':{'source':'unchanged'}}))\n"
+    )
+    path = f"{bare_grader_python.parent}:{os.environ['PATH']}"
+    environment = GRADER_ENVIRONMENT.model_copy(
+        update={
+            "environment_variables": {
+                "PATH": path,
+                "SOURCE_PATH": path,
+                "SOURCE_SENTINEL": "original",
+                "PYTHONPATH": "source-pythonpath",
+            }
+        }
+    )
+    package = verifyit_package(
+        ScriptSpec(path="source.py", verdict_file="source-verdict.json", timeout=60),
+        (inline_resource("source.py", script),),
+        environment=environment,
+    )
+    task = shell_task.model_copy(
+        update={
+            "output_paths": ("/app/answer.txt",),
+            "grader": package.grader,
+            "resources": ResourceGroups(verifier=package.resources),
+        }
+    )
+    original = task.model_dump_json()
+    result = await grade_in_sandbox(
+        task,
+        GradingAttempt(finished(task), {"/app/answer.txt": candidate}),
+        LocalGradingMachines(tmp_path / "sandbox", python=str(bare_grader_python)),
+        GRADER_MACHINE,
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, expected), result
+    assert result.detail["source"] == "unchanged"
+    assert task.model_dump_json() == original
+
+
+@pytest.mark.asyncio
+async def test_sandbox_corrupted_verifyit_runtime_remains_unscored(tmp_path, trusted_bootstrap_task, bare_grader_python):
+    class CorruptMachine(LocalGradingMachine):
+        async def run(self, command):
+            if ENTRY_PATH in command.argv:
+                self.local(f"{RUNTIME_ROOT}/verifyit/grade.py").write_text("raise RuntimeError('corrupted')")
+            return await super().run(command)
+
+    class CorruptFactory(DockerMachineFactory):
+        async def create(self, spec):
+            return CorruptMachine(
+                root=tmp_path / "sandbox", workdir=spec.workdir, env=dict(spec.env), python=str(bare_grader_python)
+            )
+
+    task = trusted_bootstrap_task
+    result = await grade_in_sandbox(
+        task, GradingAttempt(finished(task), {"/app/numbers.py": b"print(42)"}), CorruptFactory(), GRADER_MACHINE
+    )
+    assert result.status == Outcome.INFRA_ERROR
+    assert result.failure == GradingFailure.EXECUTION
+    assert not (tmp_path / "sandbox/logs/verifier/verdict.json").exists()
 
 
 @pytest.mark.parametrize("content", ["", " \n"])

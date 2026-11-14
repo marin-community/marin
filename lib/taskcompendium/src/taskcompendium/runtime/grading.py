@@ -59,6 +59,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.environment import prepare_machine_spec, resolve_env_vars, setup_user, validate_machine_spec
 from taskcompendium.runtime.output_capture import selected_output_files
 from taskcompendium.runtime.staging import StagedFile, resource_files, write_archive
+from taskcompendium.runtime.verifyit_runtime import ENTRY_PATH, RUNTIME_ROOT, verifyit_runtime_files
 from taskcompendium.submission import conversation_messages, native_action_text, require_submission_compatibility
 
 GRADING_TIMEOUT = 600.0
@@ -364,13 +365,16 @@ async def _script_reward(
     return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics)
 
 
-async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout: float) -> GradeResult:
+async def _verifyit_reward(
+    machine: Machine, spec: Spec, workspace: str, timeout: float, runtime_sha256: str
+) -> GradeResult:
     result = await machine.run(
         Command(
             (
                 "python3",
-                "-c",
-                "from verifyit.grade import main; raise SystemExit(main())",
+                "-I",
+                ENTRY_PATH,
+                runtime_sha256,
                 SPEC_PATH,
                 "--workspace",
                 workspace,
@@ -382,6 +386,7 @@ async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout
         )
     )
     diagnostics = _diagnostics(result)
+    diagnostics["verifyit_runtime_sha256"] = runtime_sha256
     if result.reason == ExitReason.TIMED_OUT:
         return _infra_error("Verifier command timed out", GradingFailure.TIMEOUT, diagnostics)
     if result.exit_code != 0:
@@ -393,7 +398,8 @@ async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout
     with TemporaryDirectory(prefix="taskcompendium-verdict-") as directory:
         verdict = Path(directory) / "verdict.json"
         await machine.download(VERDICT_PATH, verdict)
-        return parse_grade_result(spec, verdict.read_bytes())
+        grade = parse_grade_result(spec, verdict.read_bytes())
+        return replace(grade, diagnostics={**grade.diagnostics, "verifyit_runtime_sha256": runtime_sha256})
 
 
 @dataclass(frozen=True)
@@ -542,6 +548,14 @@ async def _grade_staged(
 ) -> GradeResult:
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
     files = _grading_files(task, attempt, grading)
+    runtime_sha256 = None
+    if grading.spec is not None:
+        for file in files:
+            path = PurePosixPath(file.path)
+            if path == PurePosixPath(RUNTIME_ROOT) or PurePosixPath(RUNTIME_ROOT) in path.parents or ".." in path.parts:
+                raise ValueError(f"Task resource collides with the private Verifyit runtime: {file.path}")
+        runtime_files, runtime_sha256 = verifyit_runtime_files()
+        files.extend(runtime_files)
     try:
         for command in grading.collect:
             assert task_machine is not None
@@ -609,6 +623,7 @@ async def _grade_staged(
                     grading.spec,
                     grading.grader,
                     grading.limit,
+                    runtime_sha256=runtime_sha256,
                     preparation_timeout=machine_spec.startup_timeout,
                     user=setup_user(factory.backend),
                 )
@@ -630,6 +645,7 @@ async def _grade_on(
     grader: VerifyitGrader | ScriptGrader,
     timeout: float,
     *,
+    runtime_sha256: str | None,
     preparation_timeout: float | None,
     user: str | None,
 ) -> GradeResult:
@@ -648,7 +664,8 @@ async def _grade_on(
     # Setup provisions the declared environment; candidate files must replace its initial fixtures afterward.
     await _install_grading_archive(machine, submission_archive, preparation_timeout, user)
     if spec is not None:
-        return await _verifyit_reward(machine, spec, workspace, timeout)
+        assert runtime_sha256 is not None
+        return await _verifyit_reward(machine, spec, workspace, timeout, runtime_sha256)
     assert isinstance(grader, ScriptGrader)
     return await _script_reward(machine, grader, timeout, preparation_timeout)
 

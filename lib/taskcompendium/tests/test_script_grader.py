@@ -60,13 +60,14 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.grading import grade_in_sandbox
 from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.verifyit_runtime import ENTRY_PATH
 
 FIXTURE_IMAGE = "fixture@sha256:" + "0" * 64
 GRADER_ENVIRONMENT = EnvironmentRequirements(
     docker_image=FIXTURE_IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS
 )
 GRADER_MACHINE = MachineSpec(RegistryImage(FIXTURE_IMAGE))
-VERIFYIT_ENTRYPOINT = ("python3", "-c", "from verifyit.grade import main; raise SystemExit(main())")
+VERIFYIT_ENTRYPOINT = ("python3", "-I", ENTRY_PATH)
 REWARD_TXT = "/logs/verifier/reward.txt"
 REWARD_JSON = "/logs/verifier/reward.json"
 
@@ -84,7 +85,7 @@ class VerifyitImageMachine:
     async def run(self, command: Command) -> Result:
         if command.argv[:3] != VERIFYIT_ENTRYPOINT:
             return await self.machine.run(command)
-        spec_path, workspace_flag, workspace = command.argv[3:]
+        spec_path, workspace_flag, workspace = command.argv[4:]
         assert workspace_flag == "--workspace"
         spec = PurePosixPath(spec_path)
         with TemporaryDirectory() as directory:

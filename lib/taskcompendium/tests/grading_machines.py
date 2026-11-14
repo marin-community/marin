@@ -29,6 +29,7 @@ class LocalGradingMachine:
     env: dict[str, str] = field(default_factory=dict)
     remove_exit_code: int = 0
     closed: bool = False
+    python: str | None = None
 
     def local(self, path: str) -> Path:
         return self.root / path.lstrip("/")
@@ -72,8 +73,9 @@ class LocalGradingMachine:
         argv = self.local_arguments(command.argv)
         env = {**os.environ, **self.env, **command.env}
         if program == "python3":
-            argv[0] = sys.executable
-            env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
+            argv[0] = self.python or sys.executable
+            if self.python is None:
+                env["PYTHONPATH"] = os.pathsep.join(path for path in sys.path if path)
             if SPEC_PATH in command.argv:
                 spec_path = self.local(SPEC_PATH)
                 spec = spec_from_table(tomllib.loads(spec_path.read_text()))
@@ -99,12 +101,17 @@ class LocalGradingMachines(DockerMachineFactory):
     root: Path
     remove_exit_code: int = 0
     machines: list[LocalGradingMachine] = field(default_factory=list)
+    python: str | None = None
     backend = Backend.DOCKER
 
     async def create(self, spec):
         (self.root / spec.workdir.lstrip("/")).mkdir(parents=True, exist_ok=True)
         machine = LocalGradingMachine(
-            root=self.root, workdir=spec.workdir, env=dict(spec.env), remove_exit_code=self.remove_exit_code
+            root=self.root,
+            workdir=spec.workdir,
+            env=dict(spec.env),
+            remove_exit_code=self.remove_exit_code,
+            python=self.python,
         )
         self.machines.append(machine)
         return machine
