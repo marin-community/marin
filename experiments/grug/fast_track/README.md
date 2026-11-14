@@ -128,6 +128,11 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
 | `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |
 | `--target-cluster` | Select a specific Iris cluster for submission. Omit to let Iris select an H100 cluster. |
+| `--seed N` | seed of the model init and the data order (default 0) |
+| `--output-path P` | write the run under `P` (relative to the cluster prefix) instead of `grug/<run-id>/<version>` |
+| `--mix-cache C --mix-share S` | train on a second flat cache `C` for share `S` of the tokens |
+| `--eval-policy-answer-bpb` | also log answer BPB on the Eval Policy tasks |
+| `--priority` | Iris priority band of the submitted job (default `interactive`) |
 
 Results land in W&B `marin-community/marin_moe`; eval bpb keys are `eval/paloma/macro_bpb`,
 `eval/uncheatable_eval/macro_bpb` (MoE dropless eval logs under the normal `eval/` prefix).

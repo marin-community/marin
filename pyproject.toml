@@ -55,6 +55,8 @@ dependencies = [
 [project.scripts]
 # Friendly entry point for the grug fast_track scaling ladder: `uv run fast-track ...`.
 fast-track = "experiments.grug.fast_track.launch:main"
+# Data Belay, which tests a Hugging Face dataset on the fast_track dense model: `uv run data-belay ...`.
+data-belay = "experiments.data_belay.__main__:cli"
 
 [project.optional-dependencies]
 # Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires
