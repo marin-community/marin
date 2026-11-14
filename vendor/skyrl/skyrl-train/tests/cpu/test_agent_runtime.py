@@ -4,8 +4,11 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from daytona import CreateSandboxFromImageParams, CreateSandboxFromSnapshotParams, DaytonaNotFoundError
+from daytona_api_client_async import SnapshotState
 from harbor.host_capabilities import HostCapabilities, task_model_environment
 from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
@@ -42,7 +45,7 @@ class UnusedDecoder:
 @pytest.mark.parametrize("phase", ["train", "eval"])
 @pytest.mark.parametrize("with_judge", [False, True])
 @pytest.mark.parametrize("declares_judge", [False, True])
-@pytest.mark.parametrize("provider_failure", ["unavailable", "stalled"])
+@pytest.mark.parametrize("provider_failure", ["unavailable", "stalled", "creation"])
 async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
     tmp_path, monkeypatch, phase, with_judge, declares_judge, provider_failure
 ):
@@ -86,26 +89,46 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         daytona_connection=connections["train"],
         eval_daytona_connection=connections["eval"],
     )
-    harness = runtime.original_harness(lowered, "session", HarborTaskSettings.from_config(OmegaConf.create({})), phase)
+    harbor = HarborTaskSettings.from_config(
+        OmegaConf.create({"harbor": {"daytona_provisioning": "snapshot", "eval_daytona_provisioning": "declarative"}})
+    )
+    harness = runtime.original_harness(lowered, "session", harbor, phase)
     monkeypatch.setenv("DAYTONA_API_KEY", "ambient-key")
     monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
     monkeypatch.setenv("DAYTONA_TARGET", "ambient-target")
     # Replace only SDK allocation and external endpoint registration. Harbor still
     # constructs the real agent, environment and trial, and owns failure cleanup.
     attempted = []
+    creations = []
+    snapshot_reads = []
+
+    async def snapshot_metadata(name):
+        snapshot_reads.append(name)
+        return SimpleNamespace(state=SnapshotState.ACTIVE)
 
     class UnavailableDaytona:
         def __init__(self, config):
             self.config = config
+            if phase == "train":
+                self.snapshot = SimpleNamespace(get=snapshot_metadata)
 
         async def __aenter__(self):
             attempted.append(self.config)
             if provider_failure == "stalled":
                 await asyncio.Event().wait()
+            if provider_failure == "creation":
+                return self
             raise ProviderUnavailable("fixture provider unavailable")
 
         async def __aexit__(self, *args):
             pass
+
+        async def create(self, params, *, timeout):
+            creations.append(params)
+            raise ProviderUnavailable("fixture provider unavailable")
+
+        async def get(self, name):
+            raise DaytonaNotFoundError("No sandbox was allocated")
 
     class LocalEndpoint:
         async def api_base(self, *, required_lifetime):
@@ -128,6 +151,15 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     if provider_failure == "unavailable":
         assert result.exception_info.exception_message == "fixture provider unavailable"
     assert len(attempted) == 1
+    if provider_failure == "creation":
+        assert len(creations) == 1
+        if phase == "eval":
+            assert isinstance(creations[0], CreateSandboxFromImageParams)
+            assert creations[0].image == "fixture/image:latest"
+            assert snapshot_reads == []
+        else:
+            assert isinstance(creations[0], CreateSandboxFromSnapshotParams)
+            assert snapshot_reads == [creations[0].snapshot]
     selected = connections[phase]
     assert (attempted[0].api_key, attempted[0].api_url, attempted[0].target) == (
         selected.api_key,
@@ -230,5 +262,6 @@ async def test_verifier_guest_relay_binding_keeps_real_credentials_on_host(tmp_p
         return resolved
 
     monkeypatch.setattr(runtime, "run_original_trial", check_binding)
-    harness = runtime.original_harness(lowered, "fixture", HarborTaskSettings.from_config(OmegaConf.create({})), "eval")
+    harbor = HarborTaskSettings.from_config(OmegaConf.create({"harbor": {"eval_daytona_provisioning": "declarative"}}))
+    harness = runtime.original_harness(lowered, "fixture", harbor, "eval")
     await harness.run_trial(unexpected_model_request)

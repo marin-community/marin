@@ -273,6 +273,12 @@ artifact graph, emits its launch YAML, runs the production SkyRL composition, an
 compares every supplied setting with the compiled configuration, excluding artifact
 bindings such as model and data paths.
 
+The RL document explicitly selects `daytona_provisioning: snapshot` for training
+and `eval_daytona_provisioning: declarative` for inline validation. Declarative
+validation creates sandboxes directly from each task's image or build context
+with the eval credential, without creating or leasing named snapshots. Final
+evaluation also selects declarative provisioning in its evaluation document.
+
 The [next-run spec](specs/round1.yaml) explicitly uses temperature 0.7 for training,
 held-out validation and final evaluation, and 16,384 output tokens per turn. In the
 stopped `/benfeuer/long-loop-full-2026.11.11.2`, training temperature is 1.0,

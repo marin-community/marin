@@ -6,7 +6,13 @@ import os
 
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
-from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
+from shellbox.backends.daytona.machine import (
+    DaytonaDeclarativeMachineFactory,
+    DaytonaMachineFactory,
+    DaytonaNetworkMode,
+    DaytonaNetworkPolicy,
+)
+from shellbox.backends.daytona.provisioning import DaytonaProvisioning
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
 from rolloutengine.models import MachineRuntimeSpec, RolloutFailure, TaskRolloutSpec
@@ -97,8 +103,20 @@ class HarborTaskSettings:
     def grader_override(self) -> NoGrader | None:
         return NoGrader(reason="Harbor verification is disabled") if self.verifier.disable else None
 
+    def phase_environment(self, phase: str) -> EnvironmentConfig:
+        """Resolve explicit evaluation provisioning without changing training settings."""
+        environment = self.environment
+        if phase != "eval" or environment.type is not EnvironmentType.DAYTONA:
+            return environment
+        if environment.eval_provisioning is None:
+            raise ValueError("Daytona evaluation requires explicit eval_daytona_provisioning")
+        return environment.model_copy(
+            update={"kwargs": {**environment.kwargs, "provisioning": environment.eval_provisioning.value}}
+        )
+
     def machine_factory(self, *, phase: str = "train") -> MachineFactory:
-        match self.environment.type:
+        environment = self.phase_environment(phase)
+        match environment.type:
             case EnvironmentType.DAYTONA:
                 policy = self.environment.kwargs.get("network_policy")
                 key_env = self.environment.kwargs.get("eval_api_key_env" if phase == "eval" else "api_key_env")
@@ -108,7 +126,11 @@ class HarborTaskSettings:
                     if not api_key:
                         raise ValueError(f"Missing Daytona credential environment variable: {key_env}")
                     client_factory = partial(AsyncDaytona, DaytonaConfig(api_key=api_key))
-                return DaytonaMachineFactory(
+                factory_type = {
+                    DaytonaProvisioning.SNAPSHOT: DaytonaMachineFactory,
+                    DaytonaProvisioning.DECLARATIVE: DaytonaDeclarativeMachineFactory,
+                }[DaytonaProvisioning(environment.kwargs.get("provisioning", DaytonaProvisioning.SNAPSHOT))]
+                return factory_type(
                     client_factory=client_factory,
                     ttl_minutes=self.environment.kwargs.get("ttl_minutes", 360),
                     network_policy=None
@@ -202,7 +224,9 @@ def harbor_grading_failure(rollout: TrainingRollout) -> TrainingRollout:
         if not model_ended:
             return replace(
                 rollout,
-                failure=RolloutFailure(exception_type, diagnostics={"timed_out": exception_type == "AgentTimeoutError"}),
+                failure=RolloutFailure(
+                    exception_type, diagnostics={"timed_out": exception_type == "AgentTimeoutError"}
+                ),
             )
     if rollout.grade.status != Outcome.INFRA_ERROR:
         return rollout

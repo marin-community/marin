@@ -6,11 +6,10 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
-from enum import StrEnum
 from pathlib import Path
 
 from daytona import AsyncDaytona
-
+from harbor.environments.artifacts import download_artifact
 from harbor.environments.base import (
     BASE_ENVIRONMENT_ARGUMENTS,
     BaseEnvironment,
@@ -21,9 +20,7 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.docker_translate import COMPOSE_FILENAMES
-from harbor.environments.artifacts import download_artifact
 from harbor.environments.execution import execute_shellbox_command
-from harbor.host_capabilities import HostCapabilities
 from harbor.environments.model_relay import (
     JudgeAccess,
     ModelRelay,
@@ -31,6 +28,7 @@ from harbor.environments.model_relay import (
     task_model_relays,
     verifier_model_access,
 )
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
@@ -40,6 +38,7 @@ from shellbox.backends.daytona.machine import (
     DaytonaMachineFactory,
     DaytonaNetworkPolicy,
 )
+from shellbox.backends.daytona.provisioning import DaytonaProvisioning
 from shellbox.backends.daytona.snapshot import (
     SnapshotRequest,
     snapshot_request_for_spec,
@@ -53,11 +52,6 @@ from shellbox.process_session import (
     finish_owned,
     own_cleanup,
 )
-
-
-class DaytonaProvisioning(StrEnum):
-    SNAPSHOT = "snapshot"
-    DECLARATIVE = "declarative"
 
 
 def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
