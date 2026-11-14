@@ -283,6 +283,47 @@
       "sha256": "fee1d43e1f605272566dae046eb482bbd0fdc43a24966733e065756e64749c0e"
     }
   },
+  "TaskTrove:laion__nemotron-gym-identity-following-v4": {
+    "source_id": "TaskTrove:laion__nemotron-gym-identity-following-v4",
+    "input": {
+      "dataset_id": "open-athena/task-trove-laion-nemotron-gym-identity-following-v4-d2250e1e-taskcompendium-20261112",
+      "dataset_revision": "5192cf64e1469dd8db94fbfef7c99958a86e18e8",
+      "converter_version": "2026.11.12.1",
+      "converter_revision": "55d2c11536b6caf2e693540dbbf55e80d39bd241940f88c4a1ccb449cdd97551",
+      "measured_tasks": 21660,
+      "task_specs_sha256": "78c825b855418acefeaad225f0298503a6faf955c3be65409ff09da7b6624fa2",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/900eff4ca3c487a869c1/2026.11.12.4/.artifact.json"
+    },
+    "contract_index": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/900eff4ca3c487a869c1/2026.11.12.2/attempts/2304aab894e444338baef076162fe353/contracts.parquet",
+      "sha256": "61727f05df98062bf9bce81289d0127d7f411915b7d767ff26ffb97fa2b0d2a6"
+    },
+    "review_receipt": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/900eff4ca3c487a869c1/attempts/dbf57e7cac42498faf05801295ed6e77/.artifact.json",
+      "sha256": "c5aed5a295d3fa730d2ecf505ba35deebcde5d85da44a77c61d40f976507b4c4"
+    },
+    "records": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/900eff4ca3c487a869c1/attempts/dbf57e7cac42498faf05801295ed6e77/reviews.parquet",
+      "sha256": "6c31d02c2c79f206d017734589160d7a6e59c5dd90f6ea98fa142791b9c68c30"
+    },
+    "result": {
+      "reviewed": 21657,
+      "issue_count": 16,
+      "issues": [],
+      "repair_recommendation": "Inspect all task-level issue evidence and qualify repairs with renewed QA. Resolve unavailable and uncertain observations before source-wide conclusions.",
+      "unavailable_count": 3,
+      "uncertain_count": 0,
+      "sample_count": 21660,
+      "issue_rate": 0.0007387911529759431,
+      "verdict": "good"
+    },
+    "coverage_complete": false,
+    "finalization": "accepted_incomplete",
+    "waiver": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/identity-following.json",
+      "sha256": "8da84b0b7a200d840ac09fcc310af3d10723e9c77f64ec8551b3383440ae5545"
+    }
+  },
   "TaskTrove:GAIR__OpenSWE__openswe_oss": {
     "source_id": "TaskTrove:GAIR__OpenSWE__openswe_oss",
     "input": {

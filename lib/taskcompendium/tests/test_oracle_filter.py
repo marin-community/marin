@@ -3,6 +3,9 @@
 
 """Oracle admission rejects missing execution evidence and stale converted states."""
 
+import json
+from pathlib import Path
+
 import pytest
 from finestore.rl.curation import ContentEvidenceReference
 from pydantic import ValidationError
@@ -265,3 +268,30 @@ def test_structured_infrastructure_verdict_preserves_measured_resource_failures(
         }
     )
     assert trial.failure_signal is expected
+
+
+@pytest.mark.parametrize("failure", ["daytona_pre_oracle_counters", "local_disk_probe_loop"])
+@pytest.mark.parametrize("stage", ["host", "source_command", "after_source"])
+def test_pre_oracle_host_failures_retry_without_reclassifying_source_failures(failure, stage):
+    frozen = json.loads((Path(__file__).parent / "fixtures/host_pre_oracle_failures.json").read_text())[failure]
+    current = task()
+    document = oracle_receipt([current]).tasks[current.id].calibration.attempts[0].model_dump(mode="json")
+    result = document["result"]
+    result["config"]["environment"]["type"] = frozen["backend"]
+    result["exception_info"] = frozen["exception_info"]
+    result["verifier_result"] = None
+    document["verdict"] = None
+    document["oracle_exit_code"] = 0 if stage == "after_source" else None
+    if stage == "source_command":
+        result["exception_info"]["exception_traceback"] = "Traceback: source command raised this message"
+    document["result_sha256"] = canonical_sha256(result)
+    trial = OracleTrialReceipt.model_validate(document)
+    assert trial.failure_signal is (FailureSignal.INFRASTRUCTURE if stage == "host" else FailureSignal.NON_RESOURCE)
+    if stage == "host":
+        historical = ResourceCalibrationReceipt(
+            declared_requirements=current.execution_requirements,
+            oracle_kind="original",
+            verifier=VerifierResourceProfile(mode=GradingEnvironmentMode.SHARED),
+            attempts=(trial,),
+        )
+        assert not ResourceCalibrationReceipt.model_validate_json(historical.model_dump_json()).passed

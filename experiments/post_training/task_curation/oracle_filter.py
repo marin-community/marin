@@ -8,10 +8,12 @@ import hashlib
 import json
 import shutil
 import subprocess
+import time
 import tomllib
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 
 import pyarrow as pa
@@ -20,6 +22,7 @@ import tomlkit
 from finestore.rl.curation import ContentEvidenceReference
 from iris.cluster.client.bundle import collect_workspace_files
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import ExponentialBackoff
 from shellbox.backends.local.cgroup import check_cgroup_parent, delegated_cgroup_parent
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import GradingEnvironmentMode
@@ -50,6 +53,7 @@ from taskcompendium.pipeline.oracle_filter import (
     VerifierResourceProfile,
     next_trial_requirements,
     oracle_failure_reason,
+    pre_oracle_host_unavailable,
     require_infrastructure_retry_parent,
     source_environment_incompatibility,
     trial_network_qualified,
@@ -62,6 +66,8 @@ from taskcompendium.pipeline.resource_calibration import (
 )
 from taskcompendium.runtime.resources import has_oracle_solution, inline_resource
 
+from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HARBOR_PROJECT = PROJECT_ROOT / "vendor/harbor"
 BACKEND_CODE_ROOTS = (
@@ -73,7 +79,12 @@ BACKEND_CODE_ROOTS = (
     "lib/finestore/",
     "vendor/harbor/",
 )
-BACKEND_CODE_FILES = {"uv.lock", "pyproject.toml", "experiments/post_training/task_curation/oracle_filter.py"}
+BACKEND_CODE_FILES = {
+    "uv.lock",
+    "pyproject.toml",
+    "experiments/post_training/task_curation/oracle_filter.py",
+    "experiments/post_training/task_curation/local_host_admission.py",
+}
 FAILURE_LOG_BYTES = 64 * 1024
 CALIBRATION_ATTEMPT_TIMEOUT = 72 * 60 * 60
 
@@ -668,9 +679,12 @@ def calibrated_task(
     prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
     initial_requirements: ExecutionRequirements | None = None,
     source_runtime: dict | None = None,
+    host_admission: LocalHostAdmission | None = None,
 ) -> dict:
     """Run the production Trial path once per shape, creating a fresh task package each time."""
     original = Path(mapping["task_path"])
+    if host_admission is not None and environment != "local":
+        raise ValueError("Physical-host admission applies only to LOCAL trials")
     configured_runtime = None
     if source_runtime is not None and (original / TASK_SPEC_FILE).is_file():
         configured_runtime = TaskSpecRuntimeBinding(
@@ -707,6 +721,7 @@ def calibrated_task(
         raise ValueError(f"Harbor package differs from declared execution requirements: {task.id}")
     attempts = []
     infrastructure_attempts = 0
+    host_backoff = ExponentialBackoff(initial=1, maximum=120, factor=2, jitter=0.5)
     while True:
         attempt = destination / canonical_sha256(task.id) / f"attempt-{len(attempts):02d}"
         attempt.mkdir(parents=True, exist_ok=False)
@@ -746,7 +761,26 @@ def calibrated_task(
         }
         config_path = attempt / "trial.json"
         config_path.write_text(json.dumps(config))
-        with (attempt / "harbor.log").open("w") as log:
+        admission = (
+            host_admission.claim(task.id, deadline=time.monotonic() + CALIBRATION_ATTEMPT_TIMEOUT)
+            if host_admission is not None
+            else nullcontext()
+        )
+        with admission as slot, (attempt / "harbor.log").open("w") as log:
+            if slot is not None:
+                assert host_admission is not None
+                (attempt / "host-admission.json").write_text(
+                    json.dumps(
+                        {
+                            "boot_id": str(host_admission.boot_id),
+                            "node_id": host_admission.node_id,
+                            "control": slot.control.path,
+                            "max_trials_per_host": host_admission.config.max_trials_per_host,
+                            "claim": slot.record.model_dump(mode="json"),
+                        }
+                    )
+                    + "\n"
+                )
             subprocess.run(
                 [
                     "uv",
@@ -767,16 +801,22 @@ def calibrated_task(
                 stderr=subprocess.STDOUT,
                 check=True,
             )
-        trials = [trial for group in collect_trials(attempt / "jobs").values() for trial in group]
-        if len(trials) != 1:
-            raise ValueError(f"Expected exactly one persisted production trial for {task.id}")
-        trial = trials[0]
+            trials = [trial for group in collect_trials(attempt / "jobs").values() for trial in group]
+            if len(trials) != 1:
+                raise ValueError(f"Expected exactly one persisted production trial for {task.id}")
+            trial = trials[0]
+            if slot is not None:
+                if trial.result.get("completion") is None:
+                    raise RuntimeError(f"LOCAL resource cleanup is unconfirmed; host claim retained: {task.id}")
+                slot.release()
         if retry_context is not None:
             trial = trial.model_copy(update={"infrastructure_retry": retry_context})
         attempts.append(trial)
         if trial.failure_signal is FailureSignal.INFRASTRUCTURE:
             infrastructure_attempts += 1
             if infrastructure_attempts < 3:
+                if pre_oracle_host_unavailable(trial.result, trial.verdict, trial.oracle_exit_code):
+                    time.sleep(host_backoff.next_interval())
                 continue
             break
         infrastructure_attempts = 0
@@ -817,6 +857,7 @@ def calibrate_cohort(
     retry_contexts: dict[str, InfrastructureRetryContext] | None = None,
     prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
     initial_requirements: dict[str, ExecutionRequirements] | None = None,
+    host_admission: LocalHostAdmission | None = None,
 ) -> None:
     """Fold calibration into full-population oracle filtering; collect the same trials afterward."""
     mappings = json.loads(task_map.read_text())
@@ -857,6 +898,7 @@ def calibrate_cohort(
                 prepare_attempt,
                 initial_requirements=None if initial_requirements is None else initial_requirements[task.id],
                 source_runtime=runtimes[task.id],
+                host_admission=host_admission,
             )
             for task in tasks
         }
@@ -1034,6 +1076,7 @@ def retry_cohort(
     destination: Path,
     concurrency: int,
     prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
+    host_admission: LocalHostAdmission | None = None,
 ) -> None:
     """Run one approved fixed-backend phase using the normal three-attempt infrastructure budget."""
     if destination.exists():
@@ -1092,6 +1135,7 @@ def retry_cohort(
         concurrency,
         retry_contexts=contexts,
         prepare_attempt=prepare_attempt,
+        host_admission=host_admission,
         initial_requirements={
             task_id: ResourceCalibrationReceipt.model_validate(parent["calibration"]).execution_requirements
             for task_id, parent in parents.items()
@@ -1158,6 +1202,9 @@ def main() -> None:
     calibrate.add_argument("--environment-kwargs", type=json.loads, default={})
     calibrate.add_argument("--concurrency", type=int, required=True)
     calibrate.add_argument("--calibration-solutions", type=Path)
+    calibrate.add_argument("--host-admission", type=Path)
+    calibrate.add_argument("--host-worker-id")
+    calibrate.add_argument("--host-node-id")
     backend = commands.add_parser("backend-fix")
     backend.add_argument("--revision", required=True)
     backend.add_argument("--output", type=Path, required=True)
@@ -1172,11 +1219,26 @@ def main() -> None:
     retry.add_argument("--plan", type=Path, required=True)
     retry.add_argument("--output-dir", type=Path, required=True)
     retry.add_argument("--concurrency", type=int, required=True)
+    retry.add_argument("--host-admission", type=Path)
+    retry.add_argument("--host-worker-id")
+    retry.add_argument("--host-node-id")
     merge = commands.add_parser("merge-retries")
     merge.add_argument("--task-map", type=Path, required=True)
     merge.add_argument("--retry-map", type=Path, action="append", required=True)
     merge.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    host_admission = None
+    if args.command in {"calibrate", "retry"}:
+        if args.host_admission is None and (args.host_worker_id is not None or args.host_node_id is not None):
+            parser.error("Host identities require --host-admission")
+        if args.host_admission is not None:
+            if args.host_worker_id is None or args.host_node_id is None:
+                parser.error("Host admission requires --host-worker-id and --host-node-id")
+            host_admission = LocalHostAdmission.current(
+                LocalHostAdmissionConfig.model_validate_json(args.host_admission.read_text()),
+                args.host_node_id,
+                args.host_worker_id,
+            )
     if args.command == "backend-fix":
         write_backend_fix(args.revision, args.output)
         return
@@ -1191,7 +1253,7 @@ def main() -> None:
         )
         return
     if args.command == "retry":
-        retry_cohort(args.plan, args.output_dir, args.concurrency)
+        retry_cohort(args.plan, args.output_dir, args.concurrency, host_admission=host_admission)
         return
     if args.command == "merge-retries":
         merge_retry_maps(args.task_map, args.retry_map, args.output)
@@ -1208,6 +1270,7 @@ def main() -> None:
             args.environment_kwargs,
             args.concurrency,
             args.calibration_solutions,
+            host_admission=host_admission,
         )
         return
     filter_cohort(

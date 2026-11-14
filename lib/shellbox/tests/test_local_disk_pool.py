@@ -4,6 +4,7 @@
 """Pool verification must not stall concurrent trials or repeat the host probe."""
 
 import asyncio
+import fcntl
 import threading
 from types import SimpleNamespace
 
@@ -45,3 +46,22 @@ async def test_pool_verification_keeps_loop_responsive_and_reuses_concurrent_res
     first_pool, second_pool = await asyncio.gather(first, second)
     assert first_pool is second_pool
     assert await disk.verified_local_disk_pool(tmp_path / ".") is first_pool
+
+
+def test_reclaim_does_not_resurrect_a_live_guardians_unlinked_lease(tmp_path):
+    live = tmp_path / "sandbox-live"
+    stale = tmp_path / "sandbox-stale"
+    live.mkdir()
+    stale.mkdir()
+    (stale / "lease").touch()
+    marker = live / "lower"
+    marker.mkdir()
+    (marker / "source-file").write_text("guardian is still removing this allocation")
+    with (live / "lease").open("x+") as guardian:
+        fcntl.flock(guardian, fcntl.LOCK_EX)
+        # rmtree can unlink the name while the guardian still holds the inode lock.
+        (live / "lease").unlink()
+        disk.reclaim_inactive_disks(tmp_path)
+        assert (marker / "source-file").read_text() == "guardian is still removing this allocation"
+        assert not (live / "lease").exists()
+        assert not stale.exists()
