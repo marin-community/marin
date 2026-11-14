@@ -22,6 +22,7 @@ from levanter.eval_audit import InitialEvalMatchConfig
 from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig
 from levanter.models.snowball_sft import SnowballSftConfig
 from levanter.optim.config import OptimizerConfig
+from levanter.tracker.wandb import truncate_wandb_run_name
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.mesh import MeshConfig
@@ -60,6 +61,7 @@ class RuntimePolicy(StrEnum):
 # Each arm reproduced the source-runtime first-update stall before approval.
 LOSS_CURVE_RECOVERY_ARMS = frozenset((size, mask) for size in (512, 768, 1024) for mask in (Mask.FULL, Mask.ASSISTANT))
 CALIBRATION_RECOVERY_ARMS = LOSS_CURVE_RECOVERY_ARMS - {(1024, Mask.ASSISTANT)}
+WANDB_NAME_LIMIT = 128
 
 
 @dataclass(frozen=True)
@@ -191,6 +193,13 @@ def reference_data_config() -> LmDataConfig:
     )
 
 
+def tracking_name(cell_name: str) -> str:
+    if len(f"{VERSION}-{cell_name}") <= WANDB_NAME_LIMIT:
+        return cell_name
+    digest = hashlib.sha256(cell_name.encode()).hexdigest()[:12]
+    return f"{truncate_wandb_run_name(cell_name)}-{digest}"
+
+
 def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE) -> SFTSpec:
     if runtime == RuntimePolicy.LOSS_CURVE:
         runtime = (
@@ -217,7 +226,8 @@ def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE)
     raw_trainer = e1["trainer"]["trainer"]
     raw_trainer["id"] = cell.name
     raw_trainer["seed"] = cell.seed
-    raw_trainer["tracker"].update(project="snowball-isoflop", id=f"{VERSION}-{cell.name}", name=cell.name, group=VERSION)
+    name = tracking_name(cell.name)
+    raw_trainer["tracker"].update(project="snowball-isoflop", id=f"{VERSION}-{name}", name=name, group=VERSION)
     trainer = draccus.decode(TrainerConfig, raw_trainer)
     trainer = replace(
         trainer,

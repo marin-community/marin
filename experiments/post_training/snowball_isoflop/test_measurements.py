@@ -3,14 +3,27 @@
 
 import pytest
 
+from experiments.post_training.snowball_isoflop.config import VERSION, Cell, Mask, build_pod
 from experiments.post_training.snowball_isoflop.measurements import training_history, warm_measurement
+from experiments.post_training.snowball_isoflop.probes import Layout, Probe
 
 
-def test_history_reader_uses_mounted_credentials_without_environment(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "cell",
+    [
+        Cell(512, Mask.ASSISTANT, 0, 20, (20,), "calibration"),
+        Probe("C-diagnostic-ring", 1024, 1, 4, Layout(dispatch="ring_gather_combine"), steps=20).cell,
+    ],
+)
+def test_history_reader_uses_mounted_credentials_and_submitted_run_identity(tmp_path, monkeypatch, cell):
     monkeypatch.delenv("WANDB_API_KEY", raising=False)
     monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
     (tmp_path / "WANDB_API_KEY").write_text("test-only-mounted-credential")
     rows = [{"global_step": 0, "train/loss": 2.0}]
+    tracker = build_pod(cell).train_config.trainer.tracker
+    assert len(tracker.name) <= 128 and len(tracker.id) <= 128
+    if cell.phase == "calibration":
+        assert tracker.id == f"{VERSION}-{cell.name}"
 
     class Run:
         state = "finished"
@@ -26,11 +39,11 @@ def test_history_reader_uses_mounted_credentials_without_environment(tmp_path, m
                 raise RuntimeError("W&B authentication requires the mounted credential")
 
         def run(self, path):
-            assert path.endswith("-calibration-d512-assistant-seed0-n20")
+            assert path == f"nyu-dice-lab/snowball-isoflop/{tracker.id}"
             return Run()
 
     monkeypatch.setattr("experiments.post_training.snowball_isoflop.measurements.wandb.Api", Api)
-    assert training_history("calibration-d512-assistant-seed0-n20", 20) == ("finished", rows)
+    assert training_history(cell.name, 20) == ("finished", rows)
 
 
 def test_warm_rates_exclude_compile_include_overheads_and_keep_early_drops():
