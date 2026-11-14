@@ -7,26 +7,19 @@ and after training.
 The current entry points are the
 [Snowball selection recipe](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-100k.json)
 and
-[`train_quick_loop.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/inventory/train_quick_loop.py).
-The selection defines the 100k training allocation. The launcher defaults to
-25 synchronous RLOO-N updates on 40 H100s, starting from Datakit SFT revision
+[`snowball_rl.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/snowball_rl.py).
+The selection defines the 100k training allocation. The `learning-medium` preset
+runs 25 asynchronous RLOO-N updates on 40 H100s, with rollouts up to two updates
+old and truncated importance sampling. It starts from Datakit SFT revision
 `fe666478454e79fe6027a0bab0388d9abd68f51a` and its matching tokenizer. It uses
 128 prompt groups per update, four samples per group, a 24,576-token context
 and an 8,192-token response limit.
 
 ## Serving profile
 
-Evaluation samples at temperature 0.6 and top-p 0.95 with seed 20261020.
-Training rollouts sample at temperature 1.0 and top-p 1.0. The seed alone does
-not make batched serving repeat exactly.
-
-Add `--reproducible-serving` to use batch-invariant arithmetic, TRITON_ATTN,
-prefix caching and greedy evaluation. This profile limits each serving
-rank to one sequence and admits eight concurrent tasks in training and
-evaluation. Exact evaluation repeats are qualified only for this profile.
-Training throughput for this profile is unmeasured. Use a fresh
-run version when switching profiles, and do not compare evaluation scores
-across profiles. See the
+Evaluation requests one greedy answer per task, with replies up to 8,192
+tokens. Training rollouts sample at temperature 1.0 and top-p 1.0. Greedy
+decoding alone does not make batched serving repeat exactly; see the
 [serving reproducibility record](https://github.com/marin-community/marin/issues/11007).
 
 ## Make or update tasks
@@ -78,8 +71,8 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
   --selection experiments/post_training/task_curation/recipes/snowball-100k.json
 ```
 
-Add `--run` to publish. The printed `task_selection` path is the artifact root
-to pass to training. Its `summary.json` records the recipe, source artifacts,
+Add `--run` to publish. The printed `task_selection` path is the artifact root.
+To train on it, pass its `NAME@VERSION` as `--tasks`. Its `summary.json` records the recipe, source artifacts,
 selected counts and evaluation IDs. Check the source and family quotas there
 before launching. A source shortfall fails instead of borrowing from another
 source. Source or selection changes require a new recipe version; preserve
@@ -97,48 +90,50 @@ for deduplication and task serialization.
 
 Load the storage, tracking, image-grader and judge credentials required by the
 [RL launcher](../references/rl-launching.md#experiment-entry-point) into the
-submission environment. Use the published selection path and a fresh run version
-to print a three-update plan:
+submission environment. Use a fresh run version to print the plan:
 
 ```bash
-uv run python -m experiments.post_training.inventory.train_quick_loop \
-  --selection-uri "$SELECTION_URI" --version "$RUN_VERSION" --steps 3
+uv run python -m experiments.post_training.snowball_rl \
+  --preset learning-medium --version "$RUN_VERSION"
 ```
 
-Set `SELECTION_URI` to the printed artifact root, including its selection name
-and version. Add `--run` to submit the graph through the maintained artifact
-entry point. After the short run succeeds, use a fresh `RUN_VERSION` and
-`--steps 25` for the normal iteration. Each run starts from the pinned SFT model.
-The selected data stays cached; training does not curate or resample it.
+Add `--run` to submit the graph through the maintained artifact entry point.
+The preset pins its task selection, `snowball-100k@2026.11.04.1`, and its
+evaluation tasks, `eval-lite@2026.11.11.1`. Pass `--tasks NAME@VERSION` to
+train on another published selection; evaluation stays on EvalLite, and the
+launcher does not check that the selection excludes the EvalLite tasks. Each run starts from the pinned SFT
+model; pass `--init NAME@VERSION` to start from another published model
+artifact with an HF export. The selected data stays cached; training does not
+curate or resample it.
 
-The launcher binds `train.parquet` and `validation.parquet` from that artifact.
-Evaluation attempts the fixed panel before training and after the last update,
+The launcher binds `train.parquet` from the selection and
+`full_validation.parquet` from EvalLite.
+Evaluation attempts the EvalLite tasks before training and after the last update,
 and saves task-level verifier outcomes. Under the run artifact's `exports/`,
 `dumped_evals/global_step_0_evals/` holds the baseline and
 `dumped_evals/global_step_<steps>_evals/` holds the final evaluation. Each contains
 per-dataset JSONL responses and `aggregated_results.jsonl`; compare its
-`avg_score` and `pass_at_1` metrics alongside verifier coverage. The final update saves a checkpoint;
-HF export is opt-in with `--export-hf` and adds a separate export job after training.
-Local graders require the privileged container profile; image graders and host judges use their configured backends.
+`avg_score` and `pass_at_1` metrics alongside verifier coverage. The final update saves a checkpoint,
+and a separate export job writes the HF model after training.
+Local graders require the privileged container profile.
 
 ## Compare the iteration
 
 Require `SUCCESS` from the Iris coordinator submitted by `--run` and its training
-child, plus successful completion of the Marin training artifact. With `--export-hf`,
-also require the export child to succeed. Its `terminal.json` records the run result;
-the returned `SkyRLRun` supplies `iris_job_id` and `checkpoint_root` for follow-up inspection.
-`hf_model_uri` is populated only when export is requested. Check
+child, plus successful completion of the Marin training artifact and its export
+child. Its `terminal.json` records the run result; the returned `SkyRLRun` supplies
+`iris_job_id`, `checkpoint_root` and `hf_model_uri` for follow-up inspection. Check
 optimizer-update counts, finite metrics, initial/final attempted and scored
-counts and native checkpoint metadata; check the completed HF export only when requested.
+counts, native checkpoint metadata and the completed HF export.
 A missing verifier result is an evaluation error, not a wrong answer; report coverage with scores.
 
 Record the source revision, selection identity, initializer, run version and
-elapsed submission-to-completion time with each comparison. Hold the validation
-panel fixed and change one recipe choice at a time. Reuse the published data for
+elapsed submission-to-completion time with each comparison. Hold the evaluation
+tasks fixed and change one recipe choice at a time. Reuse the published data for
 training-only changes; produce a new selection version when changing tasks or
-sampling. Update this page and the checked-in recipe when adopting a better
+sampling. Update this page and the preset when adopting a better
 configuration, and keep trial results in the experiment issue or report.
 
-Default-profile runs whose recorded configuration has evaluation temperature
-0.0 evaluated greedily without a seed. Do not compare their evaluation scores
-with runs that sampled at 0.6.
+Runs of the earlier `train_quick_loop` launcher evaluated the selection's
+20-task-per-family validation panel, most of them sampling at temperature 0.6.
+Do not compare their evaluation scores with `snowball_rl` runs.
