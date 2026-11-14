@@ -92,6 +92,7 @@ from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
+from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import filtered_declaration
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -156,6 +157,50 @@ def catalog_identity_map(catalog: CurationCatalog) -> SourceIdentitySurvey:
         groups=[],
         judge=None,
     )
+
+
+def test_filtered_zero_is_visible_without_admission_and_positive_output_still_needs_census(
+    catalog_database, catalog_query, tmp_path
+):
+    root = str(tmp_path / "filtered")
+    for retained in (0, 1):
+        declaration = filtered_declaration(retained)
+        snapshot_id = f"filtered-{retained}"
+        source = SnapshotSource(
+            snapshot_id=snapshot_id,
+            id=declaration.id,
+            declaration=declaration,
+            assessment_key=None,
+            latest_attempt_key=None,
+            latest_attempt_status="skipped",
+            reason="Current private filtration output",
+        )
+        with DataStore.open(root, writer_id=snapshot_id) as store:
+            register_catalog(store)
+            with store.transaction() as tx:
+                tx.table(INVENTORY).add(source.model_dump(mode="json"))
+                tx.table(SNAPSHOTS).add(
+                    CatalogSnapshot(
+                        snapshot_id=snapshot_id, created_at="2026-11-14T00:00:00Z", source_count=1
+                    ).model_dump()
+                )
+                tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id=snapshot_id).model_dump())
+        catalog = CurationCatalog(root)
+        if retained:
+            with pytest.raises(ValueError, match="Admission census belongs to another current population"):
+                load_catalog(catalog, catalog_query)
+            continue
+        load_catalog(catalog, catalog_query)
+        with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+            row = client.get("/sources").json()["sources"][0]
+            assert row["filtration"]["state"] == "excluded"
+            assert row["filtration"]["admitted_count"] == 0
+            assert row["status"] == "Excluded"
+            detail = client.get("/source", params={"source_id": declaration.id}).json()
+            assert detail["filtration"] == row["filtration"]
+            assert detail["declaration"]["oracle_filtration"] == declaration.oracle_filtration.model_dump(mode="json")
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        assert client.get("/sources").json()["snapshot_id"] == "filtered-0"
 
 
 def test_backend_survey_refresh_and_failed_staging_preserve_selected_map(catalog_database, catalog_query, tmp_path):

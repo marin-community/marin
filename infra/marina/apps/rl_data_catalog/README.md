@@ -1,7 +1,7 @@
 # RL Data Atlas style
 
 Enum chips carry the entire state label. Never put text below a Quality, Result,
-Contamination or Daytona chip. Put numeric issue rates and lexical overlap counts
+Contamination, Filtration or Daytona chip. Put numeric issue rates and lexical overlap counts
 in their own columns, using an em dash for missing measurements. Keep review
 progress, reviewed/retained counts and lower bounds on the source Evidence page.
 
@@ -40,3 +40,10 @@ uv run pytest infra/marina/apps/rl_data_catalog/journeys --journeys -n 0
 The journeys install only this app into disposable local Postgres. See the
 [Atlas reference](../../../../docs/references/rl-data-atlas.md) for packaging,
 loading and preview release procedures.
+
+Filtration displays EXCLUDED and Examples 0 only for complete, typed private
+filtration evidence at the exact current pin with zero retained tasks and explicit
+Excluded status. This path preserves excluded sources in the catalog; it never
+admits them. All positive-output admission checks remain in force. Sources without
+qualified current admission proof show IN PROGRESS and Examples Pending, with
+pre-filtration counts and receipt hashes in Evidence.

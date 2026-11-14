@@ -79,7 +79,7 @@ async function render(data, sourceId) {
   ]);
   difficulty.insertBefore(AtlasDifficulty.comparison(data.difficulty), difficulty.children[1] || null);
   sections.push(difficulty);
-  sections.push(card('Filtration ledger', filtrationRows({...d, contamination_status: data.contamination_status, oracle_inventory: data.oracle_inventory}), 'Retained converted counts do not establish admission. Oracle failures must be removed before an admitted count can be shown.'));
+  sections.push(card('Filtration ledger', filtrationRows({...d, filtration: data.filtration, contamination_status: data.contamination_status, oracle_inventory: data.oracle_inventory}), 'Examples requires complete current-pin filtration and admission proof. A source filtered to zero is excluded. Pre-filtration retained counts are shown separately.'));
   sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Agent and grader support are measured separately. The Daytona safety label covers the actor only.'));
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
   sections.push(card('Oversight evidence', [

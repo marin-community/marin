@@ -39,6 +39,7 @@ from experiments.post_training.task_curation.catalog_identity import (
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
+from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
 
 MAX_BATCH_BYTES = 1_000_000
@@ -188,7 +189,8 @@ def load_catalog(
     if retired := {source.id for source in sources} & retired_admission_source_ids():
         raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
     for source in sources:
-        require_declaration_admission(source.declaration)
+        if filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded":
+            require_declaration_admission(source.declaration)
     if len(sources) != snapshot.source_count:
         raise ValueError("Catalog inventory does not cover its declared source count")
     if {source.id for source in sources} != {source.source_id for source in backend_map.sources}:

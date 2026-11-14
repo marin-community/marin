@@ -60,7 +60,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(23)
+    expect(page.locator("#rows tr")).to_have_count(25)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -136,7 +136,7 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     expect(content_only.locator(".result-provisional")).to_have_count(0)
     expect(complete.locator(".level")).to_have_text("SAMPLE")
     expect(complete.locator(".result-provisional")).to_have_count(0)
-    expect(complete.locator("td").nth(4)).to_have_text("Good")
+    expect(complete.locator("td").nth(5)).to_have_text("Good")
     for name in ("sample-uncertain", "full-inflight", "full-uncertain", "full-false-complete", "sample-false-waiver"):
         expect(page.locator(f'tr[data-source-id="Marin:{name}"] .result-provisional')).to_have_text("Good · provisional")
     for name in ("full-false-complete", "sample-false-waiver"):
@@ -163,7 +163,7 @@ def test_pending_review_is_quick_without_a_result(journey: Journey, theme: str) 
     page.locator("#show-all").check()
     expect(pending.locator(".level")).to_have_text("QUICK")
     expect(pending.locator(".level")).to_have_attribute("title", "SAMPLE review in progress")
-    expect(pending.locator("td").nth(4)).to_have_text("Not assessed")
+    expect(pending.locator("td").nth(5)).to_have_text("Not assessed")
     expect(pending.locator(".issue-rate-cell")).to_have_text("—")
     for width in (1440, 390):
         page.set_viewport_size({"width": width, "height": 844})
@@ -211,8 +211,8 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(23)
-    chip = page.locator('tr[data-source-id="Marin:clean"] td:nth-child(9) .chip')
+    expect(page.locator("#rows tr")).to_have_count(25)
+    chip = page.locator('tr[data-source-id="Marin:clean"] td:nth-child(10) .chip')
     expect(chip).to_have_text("UNSAFE: too_many_snapshots, unbuilt_image")
     expect(page.get_by_role("columnheader", name="Backends")).to_be_visible()
     expect(page.get_by_role("columnheader", name="Grading")).to_be_visible()
@@ -232,6 +232,12 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     assert clean.locator(".backends-cell").evaluate("cell => cell.getBoundingClientRect().width < 150")
     expect(clean.locator(".grading-chips .chip")).to_have_text("SEPARATE")
     expect(clean.locator("td").nth(1)).to_have_text("Pending")
+    zero = page.locator('tr[data-source-id="Marin:filtered-zero"]')
+    expect(zero.locator("td").nth(1)).to_have_text("0")
+    expect(zero.locator(".filtration-cell .chip")).to_have_text("EXCLUDED")
+    pending = page.locator('tr[data-source-id="Marin:filtered-pending"]')
+    expect(pending.locator("td").nth(1)).to_have_text("Pending")
+    expect(pending.locator(".filtration-cell .chip")).to_have_text("IN PROGRESS")
     assert page.locator(".enum-chips").evaluate_all(
         "groups => groups.every(g => [...g.children].every(c => c.classList.contains('chip')) && "
         "g.textContent === [...g.children].map(c => c.textContent).join(''))"
@@ -329,6 +335,23 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
         .locator("dd")
     )
     expect(original_oracles).to_have_text("Not measured")
+    page.get_by_role("link", name="By source", exact=True).click()
+    page.locator("#show-all").check()
+    page.locator('tr[data-source-id="Marin:filtered-zero"] .source-name').click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    zero_ledger = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
+    expect(zero_ledger.get_by_text("EXCLUDED", exact=True)).to_be_visible()
+    expect(
+        zero_ledger.locator(".field")
+        .filter(has=page.get_by_text("Admitted after all filtration", exact=True))
+        .locator("dd")
+    ).to_have_text("0")
+    expect(zero_ledger).to_contain_text("unpinned environment: 3")
+    expect(zero_ledger.get_by_role("link", name="Canonical oracle filter receipt \u2197")).to_have_attribute(
+        "href", "https://filer.marina.oa.dev/#s3%3A%2F%2Ftest%2Foracle-filter.json"
+    )
+    expect(zero_ledger).to_contain_text("b" * 64)
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])

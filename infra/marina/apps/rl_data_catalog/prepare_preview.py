@@ -116,6 +116,7 @@ def prepare_preview(checkout: Path, output: Path, oracle_inventory: Path | None 
         "server/quality.py",
         "server/contamination.py",
         "server/difficulty.py",
+        "server/filtration.py",
     ):
         path = output / relative
         content = path.read_text()

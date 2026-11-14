@@ -25,6 +25,7 @@ from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.backend_fixtures import backend_source_maps
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
+from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import filtered_declaration
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import pending_review_declaration, review_declarations
 
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
@@ -76,6 +77,8 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 *contamination_declarations(),
                 *review_declarations(),
                 (False, pending_review_declaration()),
+                (False, filtered_declaration(0)),
+                (False, filtered_declaration(1)),
             ]:
                 if declaration.id == "Marin:unmeasured":
                     declaration = declaration.model_copy(update={"pipeline": None})

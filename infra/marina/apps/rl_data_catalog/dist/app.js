@@ -5,7 +5,7 @@ const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', UNK
 const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
-  ['display_name', 'Source'], ['examples', 'Examples'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
+  ['display_name', 'Source'], ['examples', 'Examples'], ['filtration', 'Filtration'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
   ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['daytona', 'Daytona'], ['backends', 'Backends'], ['grading', 'Grading'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'], ['difficulty', 'Difficulty'],
 ];
 const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
@@ -16,7 +16,8 @@ const originLabels = {tasktrove: 'TaskTrove', evalchemy: 'Evalchemy', harbor_hub
 function originOf(row) { return originLabels[row.origin] || row.origin; }
 function resultKey(row) { return row.result || 'none'; }
 function value(row, key) {
-  if (key === 'examples') return null; // A retained conversion count is not post-oracle admission evidence.
+  if (key === 'examples') return row.filtration.admitted_count;
+  if (key === 'filtration') return row.filtration.state;
   if (key === 'use') return row.intended_use || 'unknown';
   if (key === 'quality') return qualityOrder[row.quality];
   if (key === 'result') return resultKey(row);
@@ -160,8 +161,9 @@ function sourceRow(row, others, canonical) {
       toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); render(); });
       name.prepend(toggle);
     }
-    const examples = node('td', 'Pending', 'num');
-    examples.title = 'Post-oracle admitted count is not measured. Open Evidence for the retained converted population and pending filtration steps.';
+    const examples = node('td', row.filtration.admitted_count == null ? 'Pending' : number.format(row.filtration.admitted_count), 'num');
+    examples.title = row.filtration.reason;
+    const filtration = node('td', undefined, 'filtration-cell'); filtration.append(filtrationChip(row.filtration));
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
     const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
     if (row.quality_review_status) quality.firstElementChild.title = row.quality_review_status;
@@ -188,7 +190,7 @@ function sourceRow(row, others, canonical) {
     const difficulty = node('td', undefined, 'difficulty-cell'); difficulty.append(AtlasDifficulty.comparison(row.difficulty));
     const backends = node('td', undefined, 'backends-cell'); backends.append(backendLink(row.id));
     const grading = node('td'); grading.append(gradingChips(row));
-    tr.append(name, examples, use, quality, result, issueRate, contamination, overlap, daytonaCell(row), backends, grading, area, updated, evidence, difficulty); return tr;
+    tr.append(name, examples, filtration, use, quality, result, issueRate, contamination, overlap, daytonaCell(row), backends, grading, area, updated, evidence, difficulty); return tr;
 }
 function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
@@ -236,7 +238,11 @@ function details(row) {
 }
 function metrics(displayed) {
   const total = collapsed(state.sources).map(entry => entry.row);
-  const samples = rows => rows.length ? 'Pending' : '0';
+  const samples = rows => {
+    const measured = rows.filter(row => row.filtration.admitted_count != null);
+    const count = number.format(measured.reduce((sum, row) => sum + row.filtration.admitted_count, 0));
+    return measured.length === rows.length ? count : measured.length ? `${count} + Pending` : 'Pending';
+  };
   $('metric-sources').textContent = `${number.format(total.length)} / ${number.format(displayed.length)}`;
   $('metric-examples').textContent = `${samples(total)} / ${samples(displayed)}`;
   $('metric-quality').textContent = ['QUICK', 'SAMPLE', 'FULL'].map(level => number.format(displayed.filter(row => row.quality === level).length)).join(' / ');

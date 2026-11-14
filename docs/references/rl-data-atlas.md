@@ -83,7 +83,14 @@ not declared*. Edit the rules in the reference first, then the page text in
 
 ## Browsing sources
 
-**By source** currently shows Pending for post-filtration admitted Examples, and lists training/evaluation use,
+**By source** shows post-filtration Examples only where current-pin evidence establishes
+the count. A complete private output with zero retained tasks and explicit Excluded
+status displays **EXCLUDED** and Examples **0**; it does not claim admission.
+Other sources display **IN PROGRESS**, retain their current admission status in the
+tooltip and Evidence, and leave Examples Pending. A pre-filtration converted count,
+content review or backend fit never supplies an admitted count. The Filtration
+ledger links the canonical filter, private output and validation receipts with
+their SHA-256 hashes and records exclusions by typed reason. The table also lists training/evaluation use,
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
 curriculum area. The levels define required content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
@@ -153,7 +160,8 @@ new ingestion. The backend map records each role's demands and blockers.
 
 Examples requires completed oracle filtration and admission evidence, after oracle
 failures, within-source duplicates and training lexical overlap have been removed.
-Without that proof, Examples and admitted totals remain pending. Evidence and
+Without that proof, Examples remains pending. Totals show the measured sum plus
+Pending when any contributing source lacks proof. Evidence and
 curriculum coverage separately show the retained converted population; content QA
 Results and sampled controls do not certify execution or admission. Source details include the raw converted count,
 duplicates dropped, and the exclusion manifest.
@@ -298,9 +306,10 @@ object as `input`, `oracle_tasks`, `execution_qualification` and `evidence_url`.
 The renderer requires the entire actor input, current dataset pin, converter
 version and retained count to match. A measured zero establishes no shipped
 oracle solutions; it does not establish calibration, execution or admission.
-Missing and stale rows leave oracle filtering pending. No full-population
-oracle-filter receipt is currently attached to the catalog, so admitted counts
-remain pending even where the no-oracle census is complete.
+Missing and stale rows leave oracle filtering pending. An exact current-pin
+full-population oracle-filter receipt is recorded separately from this census.
+Sources without that proof keep their admitted counts pending even where the
+no-oracle census is complete.
 The filtration ledger separately records tasks dropped because their whole
 contract cannot execute on a production backend, grouped by typed reason. Until
 pin-bound per-task executability receipts are attached, this step and admitted
