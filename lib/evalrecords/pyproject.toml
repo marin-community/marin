@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "marin-evalrecords"
 version = "0.1.0"
 description = "Evaluation run records, result readers, and the statistics computed from them."
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "marin-finestore",
     "marin-rigging",
@@ -15,5 +15,11 @@ dependencies = [
     "pyyaml>=6",
 ]
 
+[dependency-groups]
+test = ["pytest>=8.4", "pytest-timeout", "pytest-xdist"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/evalrecords"]
+
+[tool.pytest.ini_options]
+timeout = 60
