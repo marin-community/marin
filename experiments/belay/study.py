@@ -213,6 +213,14 @@ def checkpoint_root(study: Study, run: StudyRun) -> str:
     return temporary_checkpoint_base_path(output)
 
 
+def checkpoint_run(path: str) -> str:
+    """The run whose checkpoints ``path`` is (its checkpoints directory, or a ``step-N`` in it)."""
+    match = re.search(r"/([^/]+)/checkpoints(?:/step-\d+)?/?$", path)
+    if match is None:
+        raise SystemExit(f"refusing: {path!r} is not a run's checkpoints directory")
+    return match.group(1)
+
+
 def refuse_input(experiment: str, path: str) -> None:
     """Refuse a path that is not the checkpoints directory of one of the study's runs (``checkpoint_root``), or a
     ``step-N`` in it."""

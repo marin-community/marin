@@ -161,6 +161,7 @@ from experiments.belay.study import (
     StudyStatus,
     check_study,
     checkpoint_root,
+    checkpoint_run,
     is_study,
     parse_study,
     refuse_input,
@@ -258,12 +259,16 @@ def read_events(path: Path) -> list[Event]:
 
 
 def idea_step(idea: Idea) -> str:
-    """What section 1 needs for ``idea``: a ``skip:`` line or its first command."""
+    """What section 1 needs for ``idea``: a ``skip:`` line or its first command, with the maintainer's note when
+    there is one (a note that names another command, for runs that already finished, replaces new-idea)."""
     if (idea.note or "").startswith(ESCALATED):
         return f"skip: idea #{idea.id} is escalated and waits for a maintainer"
     if idea.state != "approved":
         return f"skip: idea #{idea.id} is {idea.state}"
-    return f"section 1: {BELAY} new-idea --idea-id {idea.id}"
+    step = f"section 1: {BELAY} new-idea --idea-id {idea.id}"
+    if (idea.note or "").startswith(MAINTAINER_NOTE):
+        step += f"\n     MAINTAINER NOTE (follow it; a command it names replaces new-idea): {idea.note}"
+    return step
 
 
 def finished_run_step(experiment: str, runs: list[PageRun]) -> str:
@@ -661,13 +666,19 @@ def new_idea(
 
 
 def named(idea: Idea, entry: str | None) -> str | None:
-    """``entry`` when the approved text (the comment or the approver's instructions) names it and it exists."""
+    """``entry`` when the approved text (the comment or the approver's instructions) names it, by its id or its
+    registry name, and it exists."""
     if entry is None:
         return None
-    if entry not in f"{idea.body}\n{idea.note or ''}":
-        raise SystemExit(f"refusing: --registry-id {entry} is not named in idea #{idea.id}'s approved text")
     entry_path(entry)  # refuses an id with no entry
+    if not names_entry(f"{idea.body}\n{idea.note or ''}", entry, load_entry(entry)["name"]):
+        raise SystemExit(f"refusing: --registry-id {entry} is not named in idea #{idea.id}'s approved text")
     return entry
+
+
+def names_entry(text: str, registry_id: str, name: str) -> bool:
+    """Whether ``text`` names the entry: its id (``X0226``) or its registry name, ignoring case."""
+    return registry_id in text or name.casefold() in text.casefold()
 
 
 @dataclass(frozen=True)
@@ -1256,7 +1267,7 @@ def analyze(registry_id: str, script: str, checkpoint: str, *, dry_run: bool) ->
     cluster = cluster_of(checkpoint)
     root = study_root(cluster, registry_id)
     out = f"{root}/report"
-    run = checkpoint.split("/checkpoints", 1)[0].rsplit("/", 1)[1]
+    run = checkpoint_run(checkpoint)
     history = f"{root}/history/{run}.json"
     upload_history(run, history, dry_run=dry_run)
     module = [

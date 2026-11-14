@@ -15,6 +15,7 @@ from experiments.belay.study import (
     StudyStatus,
     check_study,
     checkpoint_root,
+    checkpoint_run,
     parse_study,
     refuse_input,
     script_path,
@@ -102,6 +103,8 @@ def test_study_checkpoints_stay_under_the_study_prefix() -> None:
     assert root == f"{temp}/marin/tmp/ttl=30d/belay/studies/X0300/belay-X0300-base/checkpoints"
     refuse_input("X0300", root)
     refuse_input("X0300", f"{root}/step-3030")
+    # The temporary path contains /checkpoints-temp/ too; the run is the directory above the last /checkpoints.
+    assert checkpoint_run(root) == checkpoint_run(f"{root}/step-3030") == "belay-X0300-base"
     for outside in (
         "s3://marin-us-east-02a/tmp/ttl=30d/belay/studies/X0300/belay-X0300-base/checkpoints",  # never written
         f"{temp}/marin/tmp/ttl=30d/belay/runs/belay-X0300-base/checkpoints",
