@@ -2739,6 +2739,45 @@ it can import them. Keep that credential in Daytona's registry settings, outside
 the TaskSpecs and qualification evidence. Image identity measurement alone does
 not establish pull access or grading liveness.
 
+### Completed legacy role qualification
+
+Completed converted trials from producer `2c5eea40f264158596f62e593dd21ecaeaa4dc52`
+may retain an unknown verifier allocation in their original receipts. A scoped
+adoption decision can qualify a frozen set of completed original-oracle passes
+using an offline capture of that producer's actual MachineSpec constructors.
+The audit must verify original task, runtime, package and final result hashes,
+each declared limit, and actual actor presence. It creates no provider and runs
+no source command. Other legacy outcomes require a separate decision.
+
+Pass `collect --legacy-role-qualification-evidence evidence.json` with this JSON
+object, using the actual evidence URIs and SHA-256 digests:
+
+```json
+{
+  "input_partition": {"uri": "...", "sha256": "..."},
+  "audit": {"uri": "...", "sha256": "..."},
+  "decision": {"uri": "...", "sha256": "..."}
+}
+```
+
+The partition enumerates the frozen task identities and original receipt/archive
+hashes, plus the producer's file manifest and artifact closure. The audit binds
+each original final result to its constructor capture under that producer. The
+decision authorizes adoption of that exact partition. The collector verifies
+these bytes and each requested member independently; tasks outside the partition
+receive no legacy qualification.
+
+The new `oracle-filter.json` records `OracleTaskReceipt.legacy_role_qualification`.
+It binds the evidence to the filtered output's TaskSpec projection and supplies
+that TaskSpec's qualified verifier allocation.
+Original trial JSON, calibration history and unknown allocation fields remain
+unchanged. Actorless trials retain an absent actor and their observed oracle
+helper allocation.
+
+Qualification does not supply a workspace negative control or content review.
+Qualified tasks still use the full-population collector and its grading/network
+checks. Workspace tasks also require the [negative controls below](#workspace-oracle-negative-controls).
+
 ### Workspace oracle negative controls
 
 New oracle admissions use oracle-filter wire version 4. Workspace-graded tasks

@@ -1,0 +1,8 @@
+{
+  "backend_revision": "2c5eea40f264158596f62e593dd21ecaeaa4dc52",
+  "readiness_ref": "https://github.com/marin-community/marin/pull/11465",
+  "backend_identity_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.50-fresh-packets-production/backend/backend-identity.json",
+  "backend_identity_sha256": "ae8670d4f39aa58642fa02b1bdcb34ece05ba32a516d8722dcce960150486929",
+  "producer_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.50-fresh-packets-production/backend/producer-manifest.json",
+  "producer_manifest_sha256": "81d4f08f84c5339fde36bbb6b5a07aae8a5fde0c5605a944dbc23f3da31beb05"
+}

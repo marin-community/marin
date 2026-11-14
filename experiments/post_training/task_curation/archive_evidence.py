@@ -6,11 +6,14 @@
 import hashlib
 import io
 import tarfile
+from contextlib import ExitStack
 from pathlib import PurePosixPath
 
 import zstandard
 from finestore.rl.curation import ContentEvidenceReference
 from rigging.filesystem.storage_path import StoragePath
+
+ZSTANDARD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 
 def verified_archive_members(
@@ -26,8 +29,11 @@ def verified_archive_members(
     if hashlib.sha256(payload).hexdigest() != archive.sha256:
         raise ValueError("Production evidence archive bytes changed")
     selected = {}
-    with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as raw:
-        with tarfile.open(fileobj=raw, mode="r|") as source:
+    with ExitStack() as stack:
+        raw = stack.enter_context(io.BytesIO(payload))
+        if payload.startswith(ZSTANDARD_MAGIC):
+            raw = stack.enter_context(zstandard.ZstdDecompressor().stream_reader(raw))
+        with tarfile.open(fileobj=raw, mode="r|*") as source:
             for item in source:
                 if item.name not in requested:
                     continue

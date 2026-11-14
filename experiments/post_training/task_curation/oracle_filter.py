@@ -72,9 +72,14 @@ from taskcompendium.pipeline.resource_calibration import (
     ResourceDimension,
     ResourceUsage,
 )
-from taskcompendium.runtime.resources import has_oracle_solution, inline_resource
+from taskcompendium.runtime.resources import has_oracle_solution
 
+from experiments.post_training.task_curation.calibration_projection import calibrated_task_spec
 from experiments.post_training.task_curation.harbor_inspection import harbor_inspection
+from experiments.post_training.task_curation.legacy_role_qualification import (
+    LegacyRoleQualificationEvidence,
+    legacy_role_qualifications,
+)
 from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
 from experiments.post_training.task_curation.negative_controls import require_negative_control
 from experiments.post_training.task_curation.prior_phase_failures import (
@@ -102,6 +107,8 @@ BACKEND_CODE_FILES = {
     "experiments/post_training/task_curation/archive_evidence.py",
     "experiments/post_training/task_curation/negative_controls.py",
     "experiments/post_training/task_curation/harbor_inspection.py",
+    "experiments/post_training/task_curation/calibration_projection.py",
+    "experiments/post_training/task_curation/legacy_role_qualification.py",
 }
 FAILURE_LOG_BYTES = 64 * 1024
 CALIBRATION_ATTEMPT_TIMEOUT = 72 * 60 * 60
@@ -409,6 +416,7 @@ def filter_cohort(
     native_success_policies: Path | None = None,
     negative_controls: Path | None = None,
     negative_control_policy: NegativeControlPolicy | None = None,
+    legacy_role_qualification_evidence: LegacyRoleQualificationEvidence | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -427,6 +435,11 @@ def filter_cohort(
     mappings = decode_json_value(task_map.read_text())
     if not isinstance(mappings, dict):
         raise ValueError("Task map must map TaskSpec IDs to Harbor task_name and task_checksum")
+    legacy = (
+        legacy_role_qualifications(legacy_role_qualification_evidence, frozenset(mappings))
+        if legacy_role_qualification_evidence is not None
+        else {}
+    )
     policies = {}
     checked_evidence = set()
     if native_success_policies is not None:
@@ -568,8 +581,16 @@ def filter_cohort(
                     raise ValueError(f"Source package changed after Harbor export: {task.id}")
                 if calibration.preserved_requirements != declared_native_requirements(original, source_binding):
                     raise ValueError(f"Calibration changed source-declared limits: {task.id}")
-                if calibration.verifier != native_verifier_profile(original, source_binding):
-                    raise ValueError(f"Calibration changed the declared verifier resource profile: {task.id}")
+                qualification = legacy.get(task.id)
+                verifier_profile = native_verifier_profile(original, source_binding)
+                if qualification is None:
+                    if calibration.verifier != verifier_profile:
+                        raise ValueError(f"Calibration changed the declared verifier resource profile: {task.id}")
+                elif calibration.verifier.mode != verifier_profile.mode or any(
+                    getattr(qualification.verifier.execution_requirements, name) != value
+                    for name, value in verifier_profile.fixed.items()
+                ):
+                    raise ValueError(f"Qualified legacy allocation changed the original verifier contract: {task.id}")
                 package_identity = calibration_package_identity(original, calibration.oracle_kind)
                 history = tuple(
                     InfrastructureRetryTransition.model_validate(value)
@@ -592,36 +613,16 @@ def filter_cohort(
                 requirements = calibration.execution_requirements
                 if task.execution_requirements is not None and task.execution_requirements != requirements:
                     raise ValueError(f"Calibration overrides task specification: {task.id}")
-                verifier_requirements = calibration.attempts[-1].verifier_execution_requirements
+                verifier_requirements = (
+                    qualification.verifier.execution_requirements
+                    if qualification is not None
+                    else calibration.attempts[-1].verifier_execution_requirements
+                )
                 if (original / TASK_SPEC_FILE).is_file() and verifier_requirements is None:
                     raise ValueError(f"Separate-role allocation is unqualified without verifier evidence: {task.id}")
-                task = task.model_copy(
-                    update={
-                        "execution_requirements": requirements,
-                        **(
-                            {"verifier_execution_requirements": verifier_requirements}
-                            if verifier_requirements is not None
-                            else {}
-                        ),
-                    }
-                )
                 final_package = Path(calibration.attempts[-1].result["config"]["task"]["path"])
-                native_config = inline_resource("task.toml", (final_package / "task.toml").read_bytes())
-                task = task.model_copy(
-                    update={
-                        "resources": task.resources.model_copy(
-                            update={
-                                "verifier": tuple(
-                                    (
-                                        resource.model_copy(update={"source": native_config.source})
-                                        if resource.path == "task.toml"
-                                        else resource
-                                    )
-                                    for resource in task.resources.verifier
-                                )
-                            }
-                        )
-                    }
+                task = calibrated_task_spec(
+                    task, requirements, verifier_requirements, (final_package / "task.toml").read_bytes()
                 )
                 row = row_with_task(row, task)
                 source_setup = (
@@ -674,6 +675,7 @@ def filter_cohort(
                     source_task_sha256=mapping["task_sha256"],
                     source_task_checksum=mapping.get("source_task_checksum", checksum),
                     native_success_policy=policy,
+                    legacy_role_qualification=qualification,
                     negative_control=negative_control,
                     negative_control_applicability=applicability,
                     has_oracle=oracle,
@@ -1375,6 +1377,7 @@ def main() -> None:
     collect.add_argument("--native-success-policies", type=Path)
     collect.add_argument("--negative-control-policy", type=Path, required=True, help="global standing policy JSON")
     collect.add_argument("--negative-controls", type=Path)
+    collect.add_argument("--legacy-role-qualification-evidence", type=Path)
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
@@ -1487,6 +1490,11 @@ def main() -> None:
         args.native_success_policies,
         args.negative_controls,
         NegativeControlPolicy.model_validate_json(args.negative_control_policy.read_text()),
+        (
+            LegacyRoleQualificationEvidence.model_validate_json(args.legacy_role_qualification_evidence.read_text())
+            if args.legacy_role_qualification_evidence is not None
+            else None
+        ),
     )
 
 

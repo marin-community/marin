@@ -19,6 +19,7 @@ from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRunt
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, ScriptGrader, TaskSpec, VerifyitGrader, decode_json_value
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
+from taskcompendium.pipeline.legacy_roles import LegacyRoleQualificationReceipt
 from taskcompendium.pipeline.models import SourceRecipe
 from taskcompendium.pipeline.resource_calibration import (
     INITIAL_REQUIREMENTS,
@@ -29,6 +30,7 @@ from taskcompendium.pipeline.resource_calibration import (
     next_requirements,
 )
 from taskcompendium.pipeline.sources import source_files_identity
+from taskcompendium.runtime.oracle import oracle_actor_required
 from taskcompendium.runtime.resources import has_oracle_solution
 
 
@@ -1072,6 +1074,9 @@ class OracleTaskReceipt(BaseModel):
     harbor_task_checksum: str
     source_task_sha256: str | None = Field(default=None, exclude_if=lambda value: value is None)
     source_task_checksum: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    legacy_role_qualification: LegacyRoleQualificationReceipt | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     native_success_policy: NativeOracleSuccessPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
     negative_control: OracleNegativeControlReceipt | None = Field(default=None, exclude_if=lambda value: value is None)
     negative_control_applicability: NegativeControlApplicability | None = Field(
@@ -1101,11 +1106,47 @@ class OracleTaskReceipt(BaseModel):
         ):
             raise ValueError("Negative control differs from the source or consumed task contract")
         source = self.calibration.attempts[-1]
-        if control.trial.verifier_execution_requirements != source.verifier_execution_requirements:
+        if control.trial.verifier_execution_requirements != self.verifier_execution_requirements:
             raise ValueError("Negative control differs from the original verifier allocation")
         if control.conclusive and (source.verdict is None) != (control.trial.verdict is None):
             raise ValueError("Negative control uses a different production grading contract")
         return self
+
+    @model_validator(mode="after")
+    def validate_legacy_role_qualification(self):
+        qualification = self.legacy_role_qualification
+        if qualification is None:
+            return self
+        final = self.calibration.attempts[-1]
+        if (
+            not self.has_oracle
+            or self.calibration.oracle_kind != "original"
+            or not self.calibration.passed
+            or len(self.calibration.attempts) != 1
+            or self.infrastructure_retries
+            or final.verifier_execution_requirements is not None
+            or qualification.source_task_sha256 != self.source_task_sha256
+            or qualification.source_task_checksum != self.source_task_checksum
+            or qualification.consumed_task_checksum != self.harbor_task_checksum
+            or qualification.published_task_sha256 != self.task_sha256
+            or qualification.source_runtime.runtime_sha256 != self.runtime_sha256
+            or qualification.source_runtime.model_dump(mode="json")
+            != final.result["config"]["task"].get("source_runtime")
+            or qualification.result_sha256 != final.result_sha256
+            or qualification.calibration_sha256 != canonical_sha256(self.calibration.model_dump(mode="json"))
+        ):
+            raise ValueError("Legacy role qualification differs from its unchanged completed source pass")
+        for allocation in (qualification.actor, qualification.oracle_helper, qualification.verifier):
+            if allocation is not None and allocation.execution_requirements != final.execution_requirements:
+                raise ValueError("Legacy allocation differs from the frozen producer's actual final budget")
+        return self
+
+    @property
+    def verifier_execution_requirements(self) -> ExecutionRequirements | None:
+        """Return measured allocation or the separately qualified frozen allocation."""
+        if self.legacy_role_qualification is not None:
+            return self.legacy_role_qualification.verifier.execution_requirements
+        return self.calibration.attempts[-1].verifier_execution_requirements
 
     @model_validator(mode="after")
     def validate_native_success_policy(self):
@@ -1322,6 +1363,10 @@ class OracleFilterReceipt(BaseModel):
                 entry.native_success_policy.input_cohort_sha256 != self.input_cohort_sha256
             ):
                 raise ValueError(f"Native success policy belongs to another frozen cohort: {task_id}")
+            if entry.legacy_role_qualification is not None and (
+                entry.legacy_role_qualification.input_cohort_sha256 != self.input_cohort_sha256
+            ):
+                raise ValueError(f"Legacy role qualification belongs to another frozen cohort: {task_id}")
             if self.version == 4 and entry.has_oracle and entry.negative_control_applicability is None:
                 raise ValueError(f"New oracle admission requires source-bound negative-control applicability: {task_id}")
             if self.version == 2:
@@ -1358,8 +1403,16 @@ class OracleFilterReceipt(BaseModel):
             raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         if task.execution_requirements != entry.calibration.execution_requirements:
             raise ValueError(f"Task execution requirements differ from calibration: {task.id}")
-        if task.verifier_execution_requirements != entry.calibration.attempts[-1].verifier_execution_requirements:
+        if (
+            entry.calibration.attempts[-1].result["config"].get("task", {}).get("source_runtime") is not None
+            and entry.verifier_execution_requirements is None
+        ):
+            raise ValueError(f"Converted trial requires measured or qualified verifier allocation: {task.id}")
+        if task.verifier_execution_requirements != entry.verifier_execution_requirements:
             raise ValueError(f"Task verifier execution requirements differ from calibration: {task.id}")
+        qualification = entry.legacy_role_qualification
+        if qualification is not None and oracle_actor_required(task) != (qualification.actor is not None):
+            raise ValueError(f"Legacy qualification changed the original actor plan: {task.id}")
         return entry.passed and trial_network_qualified(task, runtime, entry.calibration.attempts[-1])
 
     @property
