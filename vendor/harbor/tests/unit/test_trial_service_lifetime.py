@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -25,8 +26,33 @@ from harbor.models.trial.config import (
 from harbor.models.trial.result import TrialResult
 from harbor.job import Job
 from harbor.trial.trial import Trial
+from shellbox.machine import Command, MachineSpec, PackageSpec
 from shellbox.task import Task
 from tests.unit.environments.transport import ProcessMachine, available_port
+
+
+@pytest.mark.parametrize("background", [False, True])
+async def test_process_teardown_confirms_group_disappearance_after_permission_error(
+    tmp_path, monkeypatch, background
+):
+    machine = ProcessMachine(tmp_path, MachineSpec(PackageSpec(), workdir="/workspace"))
+    command = "sleep 3600 >/dev/null 2>&1 &" if background else "true"
+    await machine.run(Command(("/bin/sh", "-c", command)))
+
+    def denied(group, sig):
+        raise PermissionError("Cannot signal process group")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "killpg", denied)
+            if background:
+                with pytest.raises(PermissionError):
+                    await machine.close()
+            else:
+                await machine.close()
+                assert machine.closed
+    finally:
+        await machine.close()
 
 
 class PartialAnswerAgent(BaseAgent):
