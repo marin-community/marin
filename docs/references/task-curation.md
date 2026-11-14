@@ -2689,8 +2689,9 @@ score and records `negative_control_verifier_timeout`; recognized source-local
 verifier failures record `negative_control_verifier_error`. These annotations
 are non-passing controls and preserve the original oracle pass.
 
-A native producer signal (-9, -6 or -11) permits one approved identical-budget
-nop re-drive. Bind its physical `redrive_parent` and immutable `redrive_decision`;
+A native producer signal (-9, -6 or -11), or the exact source error
+`pytest producer was interrupted`, permits one approved identical-budget nop
+re-drive. Bind its physical `redrive_parent` and immutable `redrive_decision`;
 the parent cannot itself have a parent. Both archives are verified, physical
 Trial identities must differ, and source/runtime/package, public setup, agent
 configuration and role allocations must match. A reproduced signal becomes a

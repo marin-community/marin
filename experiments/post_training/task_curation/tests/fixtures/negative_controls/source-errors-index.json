@@ -1,0 +1,35 @@
+[
+  {
+    "label": "interrupted-parent",
+    "task_id": "campaign-release-smartie-swesmith-admitted-a6af2c7e16a29133b4e3ea50eb786b057a92d14b50c0630b674359e61a0a3981",
+    "archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-15/attempt-007/trials/f5b0887f6acaa03bc29a9a4dd2d904e7460d35f6c1cfde47465dccfba254cbb4.tar.zst",
+      "sha256": "1d4d18e2864ada751732b277fc6b70c088d6e2afb2a8bc49b42fe5ac82a6cc27"
+    },
+    "control_member": "f5b0887f6acaa03bc29a9a4dd2d904e7460d35f6c1cfde47465dccfba254cbb4/negative-control.json",
+    "source_task_sha256": "5adfb0e2938dd41a048544a91c42cc6d0defb47c279949efa37ace0d20812ffd",
+    "source_task_checksum": "e077b247d35b0939da0b4d40ba1501939873f384062d65bff48a4aa9d6f8a4cf"
+  },
+  {
+    "label": "interrupted-repeat",
+    "task_id": "campaign-release-smartie-swesmith-admitted-a6af2c7e16a29133b4e3ea50eb786b057a92d14b50c0630b674359e61a0a3981",
+    "archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-negative-pending-redrives/2026.11.14.1/trials/f5b0887f6acaa03bc29a9a4dd2d904e7460d35f6c1cfde47465dccfba254cbb4.tar.zst",
+      "sha256": "79576fb73323c8b49a0e096b53ff9a9386894bfe0fb846644e694a05e114e3f5"
+    },
+    "control_member": "f5b0887f6acaa03bc29a9a4dd2d904e7460d35f6c1cfde47465dccfba254cbb4/negative-control.json",
+    "source_task_sha256": "5adfb0e2938dd41a048544a91c42cc6d0defb47c279949efa37ace0d20812ffd",
+    "source_task_checksum": "e077b247d35b0939da0b4d40ba1501939873f384062d65bff48a4aa9d6f8a4cf"
+  },
+  {
+    "label": "unsupported-outcomes",
+    "task_id": "campaign-release-smartie-swesmith-admitted-eac41e7f75b959f96591855de71b1619b5a5f2e117424fd895ee6a4dd7d5932d",
+    "archive": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-09/attempt-006/trials/42f5579922ed245e34a814f15e8d9bdaa71557318982b6bced8c5362bc9dd14d.tar.zst",
+      "sha256": "8ac8ba1c3dd56e8dcf78ca821f93b9ab4c1ecb427e5863745dc819922bbe2563"
+    },
+    "control_member": "42f5579922ed245e34a814f15e8d9bdaa71557318982b6bced8c5362bc9dd14d/negative-control.json",
+    "source_task_sha256": "2439aec5eade9eb6b9f37ff75c7aade114f8bbd3950ac6d096ce5918f37f2c28",
+    "source_task_checksum": "628cbfb719cb21ee455ec337e8c8227fb9fa3d5e1ed56f1fef29a1f4af974be1"
+  }
+]

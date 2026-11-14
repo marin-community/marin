@@ -754,7 +754,11 @@ class OracleNegativeControlReceipt(BaseModel):
         if (parent is None) != (self.redrive_decision is None):
             raise ValueError("Negative-control re-drive requires its physical parent and approved decision")
         if parent is not None:
-            if parent.redrive_parent is not None or parent.signal_exit_code is None or parent.annotation is not None:
+            if (
+                parent.redrive_parent is not None
+                or (parent.signal_exit_code is None and not parent.source_producer_interrupted)
+                or parent.annotation is not None
+            ):
                 raise ValueError("Only one approved re-drive of an inconclusive native signal is permitted")
             anchors = (
                 "source_task_sha256",
@@ -822,6 +826,16 @@ class OracleNegativeControlReceipt(BaseModel):
         )
 
     @property
+    def source_producer_interrupted(self) -> bool:
+        return (
+            self.completed_public_setup
+            and (self.trial.result.get("exception_info") or {}).get("exception_type") == "VerifierRuntimeError"
+            and (self.trial.verdict or {}).get("status") == "infra_error"
+            and (self.trial.verdict or {}).get("detail", {}).get("error")
+            == "RuntimeError: pytest producer was interrupted"
+        )
+
+    @property
     def accepted_source_error(self) -> bool:
         error = (self.trial.verdict or {}).get("detail", {}).get("error", "")
         signatures = (
@@ -842,13 +856,21 @@ class OracleNegativeControlReceipt(BaseModel):
             self.completed_public_setup
             and (self.trial.result.get("exception_info") or {}).get("exception_type") == "VerifierRuntimeError"
             and (self.trial.verdict or {}).get("status") == "infra_error"
-            and "pytest producer failed before a usable json report" in error
             and (
-                any(all(fragment in error for fragment in signature) for signature in signatures)
+                (
+                    "pytest producer failed before a usable json report" in error
+                    and any(all(fragment in error for fragment in signature) for signature in signatures)
+                )
+                or error == "RuntimeError: pytest report contains unsupported test outcomes"
                 or (
                     self.redrive_parent is not None
-                    and self.signal_exit_code is not None
-                    and self.signal_exit_code == self.redrive_parent.signal_exit_code
+                    and (
+                        (
+                            self.signal_exit_code is not None
+                            and self.signal_exit_code == self.redrive_parent.signal_exit_code
+                        )
+                        or (self.source_producer_interrupted and self.redrive_parent.source_producer_interrupted)
+                    )
                 )
             )
         )

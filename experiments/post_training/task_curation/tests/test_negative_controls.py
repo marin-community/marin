@@ -207,3 +207,38 @@ def test_actual_zero_test_setup_failure_remains_pending_despite_zero_shell_exit(
     assert receipt.setup_exit_code == 0
     assert receipt.trial.verdict["detail"]["reason"] == "setup_failed"
     assert receipt.annotation is None and not receipt.conclusive and not receipt.passed(None)
+
+
+def test_actual_source_interruption_needs_one_identical_repeat_and_unsupported_outcomes_remain_nonpassing(tmp_path):
+    index = {item["label"]: item for item in json.loads((FIXTURES / "source-errors-index.json").read_text())}
+    shape = ExecutionRequirements(
+        cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=900, verifier_timeout_sec=600
+    )
+
+    def collect(label, **kwargs):
+        item = index[label]
+        return negative_control_from_archive(
+            ContentEvidenceReference(uri=str(retained_archive(tmp_path, label)), sha256=item["archive"]["sha256"]),
+            item["control_member"],
+            source_task_sha256=item["source_task_sha256"],
+            source_task_checksum=item["source_task_checksum"],
+            execution_requirements=shape,
+            **kwargs,
+        )
+
+    parent = collect("interrupted-parent")
+    assert parent.source_producer_interrupted and parent.annotation is None and not parent.conclusive
+    repeat = collect(
+        "interrupted-repeat",
+        redrive_parent=parent,
+        redrive_decision=ContentEvidenceReference(
+            uri=str(FIXTURES / "interruption-decision.json"),
+            sha256="8835dfa4a282ba4cb05bce07722c6e8e880d95d66ce9ffd4ce42b2c8187801b5",
+        ),
+    )
+    require_negative_control(repeat)
+    assert repeat.redrive_parent == parent
+    assert repeat.annotation == "negative_control_verifier_error" and not repeat.passed(None)
+    unsupported = collect("unsupported-outcomes")
+    require_negative_control(unsupported)
+    assert unsupported.annotation == "negative_control_verifier_error" and not unsupported.passed(None)
