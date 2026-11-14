@@ -54,6 +54,14 @@ def run_probe(probe: Probe) -> dict:
         if not oom_logs:
             oom_logs = job.logs(substring="out of memory", max_lines=8, tail=True)
         if not oom_logs:
+            stall_logs = job.logs(substring="No progress after process_started", max_lines=8, tail=True)
+            if stall_logs and probe.phase.startswith("B"):
+                # A first-update stall is a bounded observation for the batch
+                # search, not a tree-fatal error: record it like a memory
+                # limit so the search can fall back to accumulation growth.
+                result.update(status="stall_limit", error=str(error))
+                (root / "probe-result.json").write_text(json.dumps(result, indent=2))
+                return result
             raise
         result.update(status="memory_limit", error=str(error))
         (root / "probe-result.json").write_text(json.dumps(result, indent=2))
@@ -119,16 +127,19 @@ def saturation_search(size: int, candidates: tuple[Probe, ...]) -> dict:
         probe = pending.pop(0)
         report = run_probe(probe)
         reports.append(report)
+        stalled = report["status"] == "stall_limit"
         memory_limited = report["status"] == "memory_limit"
-        if not memory_limited and any(report["measurement"][key] != 0 for key in ("sender_dropped", "receiver_dropped")):
+        if not (stalled or memory_limited) and any(
+            report["measurement"][key] != 0 for key in ("sender_dropped", "receiver_dropped")
+        ):
             reason = "missing_or_nonzero_dispatch_counts"
             break
-        headroom = None if memory_limited else report["measurement"]["minimum_memory_headroom_fraction"]
-        if not memory_limited and headroom is None:
+        headroom = None if (stalled or memory_limited) else report["measurement"]["minimum_memory_headroom_fraction"]
+        if not (stalled or memory_limited) and headroom is None:
             reason = "missing_memory_statistics"
             break
-        if memory_limited or headroom < 0.1:
-            reason = "memory_limit_before_bracketed_saturation"
+        if stalled or memory_limited or headroom < 0.1:
+            reason = "stall_limit_before_bracketed_saturation" if stalled else "memory_limit_before_bracketed_saturation"
             if accumulating or not valid:
                 break
             # Spend the remaining bounded probes on accumulation at the last
