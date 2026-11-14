@@ -861,8 +861,9 @@ Their Parquet rows contain `task_spec` and `task_sha256`; import validates every
 hash, task identity and required environment, rejects duplicate IDs and population
 count changes, and writes the original task strings into the corpus views.
 Conversation-only tasks need no runtime envelope or machine. The pinned source
-declaration must record its qualification and SAMPLE/FULL oversight; importing a
-published cohort does not supply missing reviews or execute its controls.
+declaration must record its qualification and its recipe-QA history; importing a
+published cohort does not supply missing reviews or execute its controls, and
+admission still requires the evidence-derived SAMPLE or FULL level.
 
 Native Harbor execution runs `environment.setup.command` with its declared
 `timeout_sec` before agent access. Task `agent.env` values apply only to the
@@ -1307,7 +1308,7 @@ environments; uv retains its configured package cache.
 An LLM judge is part of a task's grading semantics. A judged TaskSpec whose
 `JudgeSpec.model` is empty, or whose rubric and judge settings are unstated, does
 not describe what grades the task. Such a source is unrepaired, whatever its
-sample review found, and stays at oversight `none`.
+sample review found, and its derived oversight level stays QUICK or below.
 
 ### Choose a judge tier
 
@@ -1404,7 +1405,7 @@ graded real tasks end to end through the production grader:
 
 Record the judge definition, its endpoint at validation time, the verdicts and
 the agreement in the source's oversight evidence. A judge that cannot be reached
-or validated leaves the source at oversight `none`.
+or validated leaves the source at the conversion-only QUICK level.
 The production reference and checklist graders retain each parsed provider
 response, including token usage, under `judge_responses`. Confirm that every
 remote prompt plus its completion budget fits the tier's declared context.
@@ -2694,17 +2695,31 @@ solutions are supplied, and so do nop negative controls for workspace-graded
 tasks. Oversight still differs in its other quality checks and blinded review. A
 sampled oracle run cannot qualify either mode.
 
-Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
-`OversightEvidence` that points at the campaign, the recipe revision and the
-verification summary behind it. `none` means converted without review: the source is listed but
-not admitted. The level is the weakest review the admission rests on, so a cohort whose
+Every source also carries an `OversightLevel` — `none`, `quick`, `sample` or
+`full` — with an `OversightEvidence` that points at the receipt behind it. The
+level is never hand-declared: a late-stage ingestion step derives it from the
+current-pin QA evidence, strongest first — a current-pin FULL binding
+(`bind_full_content_result` matching the configured input via
+`matches_full_content_input`) derives `full`, a current-pin SAMPLE receipt
+derives `sample`, and anything else is conversion-only `quick`. The derived
+level is the same value the Atlas main table's Quality column shows. A declared
+level that contradicts the derived one fails ingestion with a clear message;
+an agreeing one may remain (bindings and test fixtures may still set it).
+`quick` and `none` mean the source is listed but not admitted: the level is
+the weakest review the admission rests on, so a cohort whose
 setup fidelity ran on every task but whose grader controls ran on a sample is
 `sample`, not `full`. `independent_qc` stays separate evidence about the upstream
-release and does not raise the level.
+release and does not raise the level. The evidence's `receipt_uri` names the
+receipt the derived level rests on; hand-written history never sets it.
+
+Historical recipe-QA prose (campaign, recipe revision, verification text,
+reviewed and admitted counts) is kept as `RecipeQAHistoricalNotes` on the
+declaration's `recipe_qa_history`. It is clearly labeled history: it can never
+assert a level, and it does not feed the derivation.
 
 Runnable agentic sources require an accepted task format, a production snapshot-identity
-measurement and its basis, an execution-requirement failure count, and SAMPLE or FULL
-oversight with verification evidence. A missing required record blocks admission.
+measurement and its basis, an execution-requirement failure count, and evidence-derived
+SAMPLE or FULL oversight with verification evidence. A missing required record blocks admission.
 The grandfathered MarinSkyRL sources retain their existing admission policy.
 Conversion and diagnostic review can collect evidence before admission; there is
 no inventory-only substitute for a registered converter.
@@ -2997,6 +3012,17 @@ counts unique contracts flagged by any copy's lexical measurement. The original
 raw `contaminated_tasks` numerator is preserved. Duplicate and combined-drop
 manifests plus the original dedup census are required provenance. Evaluation
 receipts remain measurement-only and cannot certify training admission.
+
+### Evidence-derived oversight levels
+
+`bind_derived_oversight` runs in the same final stage, adjacent to
+`bind_derived_contract_tags` (either order; each binder is independent). It reads the
+current-pin evidence — the FULL content Result binding and the SAMPLE content Result
+receipt — and attaches the derived `OversightLevel` with its receipt pointer, exactly as
+[curation modes and oversight levels](#curation-modes-and-oversight-levels) describes. A
+declared level that contradicts the derived one fails ingestion; dataset declarations no
+longer declare one, and their earlier recipe-QA blocks survive only as
+`recipe_qa_history`.
 
 ### Package-lock graders use the worker's local runtime
 

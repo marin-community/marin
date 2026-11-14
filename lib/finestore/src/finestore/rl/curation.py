@@ -316,6 +316,9 @@ class OversightLevel(StrEnum):
     NONE = "none"
     """Inventory only: no execution evidence, so the source is not selectable."""
 
+    QUICK = "quick"
+    """A current-pin conversion exists, with no content review yet; never admits tasks."""
+
     SAMPLE = "sample"
     """Execution was verified on a documented sample of tasks."""
 
@@ -330,6 +333,29 @@ class OversightEvidence(CatalogRecord):
     recipe_revision: str | None = None
     verification: str
     level: OversightLevel = OversightLevel.NONE
+    reviewed: int | None = None
+    admitted: int | None = None
+    receipt_uri: str | None = None
+    """The evidence receipt the derived level rests on; hand-written history never sets it."""
+
+    @model_validator(mode="after")
+    def _receipt_asserts_derived_level(self) -> "OversightEvidence":
+        if self.receipt_uri is not None and self.level is OversightLevel.NONE:
+            raise ValueError("A receipt pointer requires an evidence-derived level above NONE")
+        return self
+
+
+class RecipeQAHistoricalNotes(CatalogRecord):
+    """Historical recipe-QA prose, kept for the record; it can never assert a level.
+
+    The oversight level is derived from current-pin evidence. These fields carry
+    the campaign, recipe revision and verification text a source's earlier QA
+    recorded, with its reviewed and admitted counts, purely as history.
+    """
+
+    campaign: str | None = None
+    recipe_revision: str | None = None
+    verification: str
     reviewed: int | None = None
     admitted: int | None = None
 
@@ -753,6 +779,9 @@ class SourceDeclaration(CatalogRecord):
 
     judge_no_reference_count: int = 0
     """Judge-graded tasks graded without reference answers."""
+
+    recipe_qa_history: RecipeQAHistoricalNotes | None = None
+    """Historical recipe-QA prose; it can never assert an oversight level."""
     grading_environment: GradingEnvironmentEvidence | None = None
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None

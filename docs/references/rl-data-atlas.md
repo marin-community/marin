@@ -78,9 +78,10 @@ publication. It states what each outcome guarantees and links each step to the
 normative section of the [task curation reference](task-curation.md) and to the
 enforcing code. Per-outcome counts, Daytona labels and oracle-validation counts
 are computed in the browser from the same `/sources` response as **By source**,
-so they follow each catalog load without a code release. Sources from snapshots
-published before declarations carried an oversight level count as *oversight
-not declared*. Edit the rules in the reference first, then the page text in
+so they follow each catalog load without a code release. Each source's Quality
+label is derived from its current-pin QA evidence by the curation pipeline, so
+the levels cannot drift from the evidence they point at. Edit the rules in the
+reference first, then the page text in
 `infra/marina/apps/rl_data_catalog/dist/guide.html`, and release the app.
 
 ## Browsing sources
@@ -97,7 +98,11 @@ content review or backend fit never supplies an admitted count. The Filtration
 ledger links the canonical filter, private output and validation receipts with
 their SHA-256 hashes and records exclusions by typed reason. The table also lists training/evaluation use,
 Quality, Result, lexical contamination, backend evidence and leading
-curriculum area. The levels define required content-review scope: QUICK converts
+curriculum area. Quality is the evidence-derived oversight level, computed by
+the curation pipeline from the current-pin QA evidence — a current-pin FULL
+binding shows FULL, a current-pin SAMPLE receipt shows SAMPLE, and
+conversion-only sources show QUICK — and the levels define required
+content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
 and FULL requires a review of the whole retained population. An explicitly accepted
 whole-source waiver also displays FULL when its pinned evidence accounts for every
@@ -191,6 +196,15 @@ contract fields (`agentic`, turn shape, reply-only delivery, workspace-graded)
 follow the same census and replace hand-written shape tags; a declared shape tag
 that contradicts the derived shape fails ingestion, so the two can never
 disagree in the catalog.
+
+**Oversight level** is likewise derived, never hand-declared: the curation
+pipeline reads the current-pin QA evidence and attaches the strongest level it
+supports (FULL binding, SAMPLE receipt, conversion-only QUICK). The source
+Evidence page shows exactly one level, identical to the main table's Quality
+column, with its basis and a pointer to the receipt it rests on. The earlier
+recipe-QA prose (campaign, recipe revision, verification text, reviewed and
+admitted counts) survives on the Evidence page in a separate **Historical
+recipe QA notes** card that cannot assert a level.
 
 Examples is the admitted count after filtration; there is no separate oracle
 column. For a source with oracles it requires completed full-population oracle
@@ -322,7 +336,8 @@ versions response's top-level `current_version`.
 The loader selects preview display policy only for UUID
 `c9742a15-fb46-4d56-bc88-aa916351ebd3`. A source awaiting an exact-input SAMPLE
 Result displays QUICK with “SAMPLE review in progress” in its details and Quality
-tooltip. The declaration's oversight and evidence remain unchanged, and absent
+tooltip. The evidence-derived oversight level and its receipt remain unchanged by
+this display policy, and absent
 Results, issue rates and coverage remain unmeasured. Sources displayed as SAMPLE
 or FULL still require a computed Result. Catalog publication and production
 imports retain their strict Result gate; preview imports retain all admission

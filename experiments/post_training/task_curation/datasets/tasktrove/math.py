@@ -49,8 +49,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import (
-    OversightEvidence,
-    OversightLevel,
+    RecipeQAHistoricalNotes,
     RlDataSource,
     SourceInfo,
     SourceOrigin,
@@ -258,7 +257,7 @@ SOURCES = (
                 "155 references the production math-verify parser rejects are rejected at conversion; "
                 "contained grader controls 72/72 on the seeded sample; blinded review 7/7 attempted agree."
             ),
-            oversight=OversightEvidence(
+            recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
                 recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
                 verification=(
@@ -269,7 +268,6 @@ SOURCES = (
                     "agree with the reference (13 excluded as competition-difficulty, coverage reported). "
                     "Evidence: atlas-env-audit qa-knowledge/ (fidelity, controls, blinded)"
                 ),
-                level=OversightLevel.SAMPLE,
                 reviewed=24,
                 admitted=3941,
             ),
@@ -300,7 +298,7 @@ SOURCES = (
                 "match the upstream instructions verbatim, so the defects are in the source data, not "
                 "the conversion (2 of the 20-case blinded panel; exactly the inclusive 10% boundary)."
             ),
-            oversight=OversightEvidence(
+            recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
                 recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
                 verification=(
@@ -311,7 +309,6 @@ SOURCES = (
                     "agree; 2 rows flagged as suspected conversion defects (underdetermined statements), "
                     "2 competition-difficulty cases excluded with reasons. Evidence: atlas-env-audit qa-knowledge/"
                 ),
-                level=OversightLevel.SAMPLE,
                 reviewed=24,
                 admitted=42621,
             ),
@@ -340,7 +337,7 @@ SOURCES = (
                 "golden 23/24 (the failing task is the one unparseable-reference row, now rejected), "
                 "empty 24/24, wrong 24/24; blinded review 19/19 attempted agree."
             ),
-            oversight=OversightEvidence(
+            recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
                 recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
                 verification=(
@@ -351,7 +348,6 @@ SOURCES = (
                     "24/24, wrong 24/24. Blinded review of 20 seeded cases: 19 solved blind, all 19 agree "
                     "(1 figure-dependent case excluded). Evidence: atlas-env-audit qa-knowledge/"
                 ),
-                level=OversightLevel.SAMPLE,
                 reviewed=24,
                 admitted=57424,
             ),
@@ -383,7 +379,7 @@ SOURCES = (
                 "each confirmed by independent recomputation), leaving 12 sampled references "
                 "unverified by blind solve (review-coverage caveat). Admitted at SAMPLE."
             ),
-            oversight=OversightEvidence(
+            recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
                 recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
                 verification=(
@@ -397,7 +393,6 @@ SOURCES = (
                     "remain unverified by this method (review-coverage caveat). "
                     "Evidence accompanies tasks.parquet at the pinned private revision"
                 ),
-                level=OversightLevel.SAMPLE,
                 reviewed=24,
                 admitted=2221,
             ),
@@ -425,7 +420,7 @@ SOURCES = (
                 "reviewed defect unchanged); 125 unparsable-reference rows rejected at conversion; "
                 "contained grader controls 72/72; blinded review 20/20 attempted agree."
             ),
-            oversight=OversightEvidence(
+            recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
                 recipe_revision="datasets/tasktrove/math.py version 3; archive open-thoughts/TaskTrove @ 02923004846e",
                 verification=(
@@ -435,7 +430,6 @@ SOURCES = (
                     "24-task seeded sample: golden 24/24, empty 24/24, wrong 24/24. Blinded review of 20 "
                     "seeded cases: 20 solved blind, all 20 agree. Evidence: atlas-env-audit qa-knowledge/"
                 ),
-                level=OversightLevel.SAMPLE,
                 reviewed=24,
                 admitted=110604,
             ),

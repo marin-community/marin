@@ -34,8 +34,7 @@ from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTie
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
 from experiments.post_training.task_curation.source import (
-    OversightEvidence,
-    OversightLevel,
+    RecipeQAHistoricalNotes,
     RlDataSource,
     SourceInfo,
     SourceOrigin,
@@ -421,7 +420,7 @@ SOURCES = (
                 "production grading path, agreement 59/60 across the MEDIUM pair (one conservative "
                 "0.5 disagreement on this source)."
             ),
-            oversight=OversightEvidence(
+            recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
                 recipe_revision="datasets/tasktrove/judged.py version 3 "
                 "(QA_PINNED_SOURCES: MEDIUM tier settings under RUBRIC_CHECKLIST); "
@@ -435,7 +434,6 @@ SOURCES = (
                     "a wrong submission judged against the expected 0.0). Self-judged verdicts recorded "
                     "before any judge run. Evidence: atlas-env-audit qa-knowledge/"
                 ),
-                level=OversightLevel.SAMPLE,
                 reviewed=10,
                 admitted=44939,
             ),
@@ -619,8 +617,7 @@ def published_reply(source: RlDataSource[CurationRecipe]) -> RlDataSource[Prebui
             quality_result=QUALITY_RESULTS[source.name],
             tags=source.info.tags,
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
-            oversight=OversightEvidence(
-                level=OversightLevel.NONE,
+            recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
                 recipe_revision="TaskTrove MEDIUM conversion version 3",
                 verification="Private QUICK import; no SAMPLE/FULL qualification is claimed. "

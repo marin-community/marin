@@ -27,6 +27,7 @@ from finestore.rl.curation import (
     OversightLevel,
     PipelineReference,
     QualityResultFinalization,
+    RecipeQAHistoricalNotes,
     RoleExecutionEvidence,
     SourceDeclaration,
     SourceOrigin,
@@ -176,7 +177,10 @@ class SourceInfo:
     """
 
     oversight: OversightEvidence | None = None
-    """The review this source's admission rests on, with its evidence pointers."""
+    """The evidence-derived oversight level and its receipt pointer."""
+
+    recipe_qa_history: RecipeQAHistoricalNotes | None = None
+    """Historical recipe-QA prose; it can never assert an oversight level."""
 
     derived_contract: DerivedContractSummary | None = None
     """The late-stage derived contract shape and grader types of the measured population.
@@ -347,7 +351,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             or info.oversight.level not in {OversightLevel.SAMPLE, OversightLevel.FULL}
             or not info.oversight.verification.strip()
         ):
-            blockers.append("SAMPLE or FULL oversight with verification evidence is missing")
+            blockers.append("evidence-derived SAMPLE or FULL oversight is missing")
         if "agentic" not in info.tags:
             return tuple(blockers)
         if info.task_format is None or (
@@ -485,6 +489,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             judge_rubric_counts=dict(info.derived_contract.judge_rubric_counts) if info.derived_contract else {},
             judge_reference_count=(info.derived_contract.judge_reference_count if info.derived_contract else 0),
             judge_no_reference_count=(info.derived_contract.judge_no_reference_count if info.derived_contract else 0),
+            recipe_qa_history=info.recipe_qa_history,
             grading_environment=info.grading_environment,
             integrity_contracts=info.integrity_contracts,
             actor_census_input=info.actor_census_input,

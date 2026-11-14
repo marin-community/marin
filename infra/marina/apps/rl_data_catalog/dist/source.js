@@ -84,10 +84,17 @@ async function render(data, sourceId) {
   sections.push(card('Grader profile', [['Grader', graderChip(d)], ['Per-type task counts', d.grader_type_counts], ['Judge rubrics', d.judge_rubric_counts], ['Judge tasks with reference', d.judge_reference_count], ['Judge tasks without reference', d.judge_no_reference_count], ['Current-input census receipt', d.derived_contract_receipt && pointer(d.derived_contract_receipt.uri)], ['Census binding', d.derived_contract_receipt?.input], ['Scanned TaskSpec bytes', d.derived_contract_receipt?.scanned_task_specs_sha256]], 'Derived from the measured task contracts. Unbound or changed inputs remain Pending.'));
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
   sections.push(card('Oversight evidence', [
-    ['Declared level', d.oversight], ['Campaign', d.oversight_evidence?.campaign], ['Recipe revision', d.oversight_evidence?.recipe_revision],
-    ['Verification', d.oversight_evidence?.verification], ['Reviewed', d.oversight_evidence?.reviewed],
+    ['Level', node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`)],
+    ['Basis', d.oversight_evidence?.verification],
+    ['Receipt', d.oversight_evidence?.receipt_uri && pointer(d.oversight_evidence.receipt_uri)],
+    ['Reviewed', d.oversight_evidence?.reviewed],
     ['Sampled grader qualification', d.oracle_validation],
-  ], 'Recorded execution qualification. This historical record does not establish current post-filtration admission.'));
+  ], 'The level is derived from the same QA evidence as the main-table Quality column: a current-pin FULL binding, SAMPLE receipt, or conversion-only QUICK.'));
+  sections.push(card('Historical recipe QA notes', [
+    ['Campaign', d.recipe_qa_history?.campaign], ['Recipe revision', d.recipe_qa_history?.recipe_revision],
+    ['Verification', d.recipe_qa_history?.verification], ['Reviewed', d.recipe_qa_history?.reviewed],
+    ['Admitted', d.recipe_qa_history?.admitted],
+  ], 'Historical recipe-QA prose, kept for the record. It can never assert an oversight level; the current level is the evidence-derived one above.'));
   sections.push(card('Recorded grader controls', [
     ['Last curation', curation && `${curation.mode} pass, ${curation.status}`], ['Control status', controls?.status],
     ['Control sample', controls && controls.sample_count != null ? `${number.format(controls.sample_count)} of ${number.format(controls.eligible_count)} eligible tasks` : null],

@@ -16,9 +16,8 @@ from finestore.rl.curation import (
     LexicalContaminationEvidence,
     OracleFiltrationEvidence,
     OracleValidation,
-    OversightEvidence,
-    OversightLevel,
     PipelineReference,
+    RecipeQAHistoricalNotes,
     WithinSourceDedupEvidence,
 )
 from huggingface_hub import HfApi, hf_hub_download
@@ -210,8 +209,7 @@ def bind_oracle_admitted_release(
         lexical_contamination=receipt.lexical,
         grading_environment=receipt.grading.evidence,
         oracle_validation=OracleValidation.EXECUTED,
-        oversight=OversightEvidence(
-            level=OversightLevel.SAMPLE,
+        recipe_qa_history=RecipeQAHistoricalNotes(
             campaign=evidence.validation.uri,
             recipe_revision=receipt.actor.input.converter_revision,
             reviewed=receipt.sample.review.attempted_count,

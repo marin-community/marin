@@ -19,8 +19,7 @@ from dataclasses import replace
 from finestore.rl.curation import (
     IndependentQC,
     OracleValidation,
-    OversightEvidence,
-    OversightLevel,
+    RecipeQAHistoricalNotes,
     Verdict,
 )
 from taskcompendium.pipeline.models import IntendedUse
@@ -102,11 +101,10 @@ def _tasktrove_qa_release(
             family=family,
             tags=tags,
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
-            oversight=OversightEvidence(
+            recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",
                 recipe_revision=recipe_revision,
                 verification=evidence,
-                level=OversightLevel.SAMPLE,
                 reviewed=reviewed,
                 admitted=expected_rows,
             ),
@@ -159,7 +157,7 @@ def sources() -> list[RlDataSource]:
                     "/blob/5b43c6f4c2322a5808e4dbdfaf4f0052037d3607/liveness.jsonl"
                 ),
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py version 3; frozen VerifyIT @ d8cdda47f4",
                     verification=(
@@ -173,7 +171,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=8222,
                     admitted=8222,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "Excluded: the pinned payload reads only numeric rewards and can hide verifier failures. "
@@ -218,7 +215,7 @@ def sources() -> list[RlDataSource]:
                     "/blob/c96a95bc94e4824fae425811f246501f64abfadd/liveness.jsonl"
                 ),
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py version 3; frozen VerifyIT @ d8cdda47f4",
                     verification=(
@@ -232,7 +229,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=5116,
                     admitted=5116,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "Excluded: the pinned payload reads only numeric rewards and can hide verifier failures. "
@@ -272,7 +268,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=0,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="Snowball Smartie RL",
                     recipe_revision="calibforge_rebuild.py @ 817f7dbd00",
                     verification=(
@@ -283,7 +279,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=1357,
                     admitted=1357,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "Excluded pending file-delivery repair and qualification with verifier execution receipts. "
@@ -326,7 +321,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=1498,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/nl2bash.py @ e6be97168d",
                     verification=(
@@ -338,7 +333,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=1498,
                     admitted=1498,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "1,498 nl2bash tasks converted to run in the environment their archives specify: the "
@@ -380,7 +374,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=9745,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
                     verification=(
@@ -392,7 +386,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=9745,
                     admitted=9745,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "9,745 codeforces tasks converted to run in the environment their archives specify: "
@@ -435,7 +428,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=13973,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/code.py @ e6be97168d",
                     verification=(
@@ -447,7 +440,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=13973,
                     admitted=13973,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "13,973 competitive-coding tasks converted to run in the environment their archives "
@@ -491,7 +483,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=505,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -503,7 +495,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=505,
                     admitted=505,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "505 curriculum-easy tasks converted to run in their archived environment, lowered onto "
@@ -543,7 +534,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=488,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -555,7 +546,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=488,
                     admitted=488,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "488 curriculum-medium tasks converted to run in their archived environment, lowered onto "
@@ -595,7 +585,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=477,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/python_tests.py version 8; verifyit @ f0155c1143",
                     verification=(
@@ -609,7 +599,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=477,
                     admitted=477,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "477 e2egit-v2 tasks preserve their archived environment, lowered onto its digest-pinned base. "
@@ -649,7 +638,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=4993,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -661,7 +650,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=4993,
                     admitted=4993,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "4,993 e2egit-large tasks converted to run in their archived environment, lowered onto "
@@ -700,7 +688,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=4842,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -712,7 +700,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=4842,
                     admitted=4842,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "4,842 multifile tasks converted to run in their archived environment, lowered onto "
@@ -751,7 +738,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=500,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -763,7 +750,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=500,
                     admitted=500,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "500 pymethods2test tasks converted to run in their archived environment, lowered onto "
@@ -803,7 +789,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=4990,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -815,7 +801,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=4990,
                     admitted=4990,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "4,990 pymethods2test-large tasks converted to run in their archived environment, lowered onto "
@@ -855,7 +840,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=492,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -867,7 +852,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=492,
                     admitted=492,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "492 stack-pytest tasks converted to run in their archived environment, lowered onto "
@@ -907,7 +891,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=4991,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -919,7 +903,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=4991,
                     admitted=4991,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "Excluded: this release contains the large Unitsyn population rather than the 491-row small cohort. "
@@ -960,7 +943,7 @@ def sources() -> list[RlDataSource]:
                 ),
                 daytona_execution_failures=4991,
                 oracle_validation=OracleValidation.SKIPPED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision=LEGACY_PYTHON_TESTS_RECIPE_REVISION,
                     verification=(
@@ -972,7 +955,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=4991,
                     admitted=4991,
-                    level=OversightLevel.NONE,
                 ),
                 notes=(
                     "4,991 unitsyn-python-large tasks converted to run in their archived environment, lowered onto "
@@ -1008,7 +990,7 @@ def sources() -> list[RlDataSource]:
                     "zero mapping failures. Evidence: " + swesmith_evidence + "daytona-identity.json"
                 ),
                 oracle_validation=OracleValidation.EXECUTED,
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="SWE-smith verifier repair v5",
                     recipe_revision="43a40938875b4fbc4286a0784f6a7454110a0453",
                     verification=(
@@ -1020,7 +1002,6 @@ def sources() -> list[RlDataSource]:
                     ),
                     reviewed=swesmith_repaired.expected_rows,
                     admitted=swesmith_repaired.expected_rows,
-                    level=OversightLevel.FULL,
                 ),
                 independent_qc=IndependentQC(
                     verdict=Verdict.GOOD,

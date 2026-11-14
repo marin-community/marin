@@ -63,6 +63,7 @@ from experiments.post_training.task_curation.oracle_admitted_release import (
     bind_selected_source_content,
 )
 from experiments.post_training.task_curation.oracle_release import bind_oracle_filtered_release
+from experiments.post_training.task_curation.oversight_binding import bind_derived_oversight
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.remediation_binding import bind_retained_release
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
@@ -166,6 +167,10 @@ def all_sources() -> dict[str, RlDataSource]:
         for source_id, source in sources.items()
     }
     receipts = derived_contract_receipts()
+    selected = {
+        source_id: bind_derived_oversight(source, samples.get(source.info.id), full_content.get(source.info.id))
+        for source_id, source in selected.items()
+    }
     return {
         source_id: bind_derived_contract_tags(source, receipts.get(source.info.id))
         for source_id, source in selected.items()

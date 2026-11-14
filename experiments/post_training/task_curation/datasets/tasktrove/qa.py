@@ -28,8 +28,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
 from experiments.post_training.task_curation.source import (
-    OversightEvidence,
-    OversightLevel,
+    RecipeQAHistoricalNotes,
     RlDataSource,
     SourceInfo,
     SourceOrigin,
@@ -269,7 +268,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "published); MEDIUM judge e2e 30/30 on the seeded sample through the production "
                     "grading path."
                 ),
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/qa.py version 5 "
                     "(MEDIUM JUDGE_TIERS pin); archive open-thoughts/TaskTrove @ 02923004846e",
@@ -281,7 +280,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "submissions (10 positive, 10 wrong, 10 empty) graded as expected. Evidence: "
                         "atlas-env-audit qa-knowledge/ (fidelity, judge-packets, medium-batch)"
                     ),
-                    level=OversightLevel.SAMPLE,
                     reviewed=10,
                     admitted=122314,
                 ),
@@ -306,7 +304,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "fidelity discrepancies (no dedup collisions); HEAVY judge e2e 30/30 on the seeded "
                     "sample through the GLM relay."
                 ),
-                oversight=OversightEvidence(
+                recipe_qa_history=RecipeQAHistoricalNotes(
                     campaign="RL Data Atlas",
                     recipe_revision="datasets/tasktrove/qa.py version 5 "
                     "(HEAVY JUDGE_TIERS pin); archive open-thoughts/TaskTrove @ 02923004846e",
@@ -318,7 +316,6 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                         "10 wrong including the flagged small-angle leniency trap, 10 empty) graded as "
                         "expected. Evidence: atlas-env-audit qa-knowledge/ (fidelity, judge-packets, heavy-batch)"
                     ),
-                    level=OversightLevel.SAMPLE,
                     reviewed=10,
                     admitted=150644,
                 ),
