@@ -16,11 +16,11 @@ model-agnostic.
     ``nyu-dice-lab/wildchat50m-rewild-sft-385700`` at the same weights and LR, so the instruction
     dataset is the only varying factor.
 
-``model_ref``/``tokenizer_path`` point at a prepared Delphi checkpoint + tokenizer (reserved
-slots renamed so ``<|start_think|>``=128002 … are single ids, embeddings reinitialized), staged per
-prefix before launch. :func:`delphi_prepared_checkpoint_step` regenerates that prepared checkpoint
-reproducibly from the raw ``laion/delphi-*`` base — run it to (re)stage the artifact this config
-points at. A future config can instead depend on such a step directly (``PreparedModel``) to build
+``model_ref`` pins a prepared Delphi checkpoint + tokenizer on the Hub (reserved slots renamed so
+``<|start_think|>``=128002 … are single ids, embeddings reinitialized). ``HFModel`` copies that commit
+to the regional prefix on CPU before training and loads both from the copy.
+:func:`delphi_prepared_checkpoint_step` regenerates a prepared checkpoint reproducibly from the raw
+``laion/delphi-*`` base. A future config can instead depend on such a step directly (``PreparedModel``) to build
 its inputs from a clean prefix.
 
 Remaining prerequisites:
@@ -44,10 +44,11 @@ from experiments.sft.delphi_chat_template import DELPHI_RESERVED_TOKEN_RENAMES, 
 from experiments.sft.launcher import DatasetSpec, HFModel, SFTSpec, run_sft_cli
 from experiments.sft.prepare_checkpoint import prepare_checkpoint_step
 
-# Prepared (reserved-slot-renamed + embedding-reinit'd) checkpoint + tokenizer. Stage per prefix
-# (gs:// for TPU, s3:// for CoreWeave) before launch; build it with delphi_prepared_checkpoint_step.
+# Prepared (reserved-slot-renamed + embedding-reinit'd) checkpoint + tokenizer; build a new one with
+# delphi_prepared_checkpoint_step.
 DELPHI_1E22_PREPARED_CKPT = "laion/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7"
-DELPHI_PREPARED_TOKENIZER = "laion/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7"
+# The Hub commit SFT loads; HFModel copies it to the regional prefix before training.
+DELPHI_1E22_PREPARED_REVISION = "56cc5aaf65cd59d6632962cee636a0423abfbf66"
 
 # Raw base for the preparation step: reserved slots still named ``<|reserved_special_token_N|>``.
 DELPHI_1E22_BASE_MODEL = "laion/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7"
@@ -55,7 +56,7 @@ DELPHI_1E22_BASE_REVISION = "56cc5aaf65cd59d6632962cee636a0423abfbf66"
 
 # The prepared tokenizer already has <|start_think|>=128002 … as single ids, so HFModel's defaults
 # (qwen3, eos 128001 + 128009) apply unchanged; both specs share this model source.
-_DELPHI_MODEL = HFModel(model_ref=DELPHI_1E22_PREPARED_CKPT, tokenizer_path=DELPHI_PREPARED_TOKENIZER)
+_DELPHI_MODEL = HFModel(model_ref=f"{DELPHI_1E22_PREPARED_CKPT}@{DELPHI_1E22_PREPARED_REVISION}")
 
 # The magpie-90 / warmup-10 cold-start recipe LR; cosine to 0, 10% warmup (LLaMA-Factory parity).
 _DELPHI_OPTIMIZER = AdamConfig(

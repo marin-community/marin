@@ -31,12 +31,10 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
-    FINGERPRINT_KEY,
     STEP_RUNNER_EXECUTOR_VERSION,
-    VERSION_KEY,
     StepRecordIdentity,
     check_drift,
-    is_mutable_version,
+    forces_rebuild,
     write_step_record,
 )
 from marin.execution.remote import RemoteCallable, sanitize_job_name
@@ -129,9 +127,10 @@ def step_is_built(step: StepSpec) -> bool:
     same condition the launcher uses to skip a step, evaluated here at scheduling
     time so an already-built node's dependencies are pruned from the schedule
     instead of rebuilt; the launcher re-checks authoritatively before serving the
-    node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
+    node. A step that :func:`forces_rebuild` (a ``dev`` version or a legacy ``null`` record) is
+    never pruned.
     """
-    if step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")):
+    if forces_rebuild(step):
         return False
     return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
 

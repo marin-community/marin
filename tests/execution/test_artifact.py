@@ -237,6 +237,20 @@ def test_read_artifact_adopts_pre_6649_bare_payload(tmp_path):
     )
 
 
+def test_legacy_null_record_rebuilds(tmp_path, monkeypatch):
+    """A bare ``null`` record from an older executor carries no provenance, so the step rebuilds."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    art = _toy(V, "a")
+    run(art)
+    (tmp_path / "datasets/toy" / V / ".artifact.json").write_text("null")
+
+    run(art)
+
+    record = read_record(f"{tmp_path}/datasets/toy/{V}")
+    assert record.fingerprint == art.fingerprint()
+    assert record.result == {"payload": "a"}
+
+
 def test_read_record_leaves_a_genuine_data_record_untouched(tmp_path):
     """A modern record with identity but no ``result`` is not mistaken for a bare payload."""
     (tmp_path / ".artifact.json").write_text(
