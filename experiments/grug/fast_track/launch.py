@@ -63,7 +63,7 @@ MOE_TPP = 60
 # These pin the reference budget so a candidate architecture's own param count cannot move the
 # baseline it is compared against (data-match holds these tokens; compute-match holds 6*N*tokens).
 # They are NOT recomputed from the candidate model on purpose. Regenerate deliberately only when the
-# baseline recipe itself changes, via `_active_params(_h100_ladder_model(h100_ladder_rung(size), dense=dense))`.
+# baseline recipe itself changes, via `_active_params(h100_ladder_model(size, dense=dense, vocab_size=V16384_VOCAB))`.
 _BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
     ("d512", False): 20_840_448,
     ("d512", True): 18_087_936,
@@ -80,7 +80,7 @@ _BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
 # pin the compute-match budget so it holds the baseline's *true* FLOPs, not an active-param proxy, and
 # so a candidate architecture cannot move the budget it is compared against. NOT recomputed from the
 # candidate. Regenerate deliberately only when the baseline recipe changes, via
-# `_compute_flops(model_config=_h100_ladder_model(h100_ladder_rung(size), dense=dense))[0]`.
+# `_compute_flops(model_config=h100_ladder_model(size, dense=dense, vocab_size=V16384_VOCAB))[0]`.
 _BASELINE_FLOPS_PER_EXAMPLE: dict[tuple[str, bool], int] = {
     ("d512", False): 1_133_066_059_776,
     ("d512", True): 1_065_420_324_864,
@@ -168,13 +168,13 @@ def h100_ladder_rung(size: str) -> H100LadderRung:
     raise ValueError(f"size must be one of {list(H100_LADDER_SIZES)}, got {size!r}")
 
 
-def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelConfig:
-    """Build the ladder model at the rung's width: MoE (384 experts, top-8, pooled-wave EP), or a
+def h100_ladder_model(size: str, *, dense: bool, vocab_size: int) -> GrugModelConfig:
+    """The model that ``build_h100_ladder_run`` trains at ``size``: MoE (384 experts, top-8, pooled-wave EP), or a
     dense baseline (``dense``) of one DenseMLP(hidden, 3*hidden) SwiGLU per block."""
-    shape = rung.shape
+    shape = h100_ladder_rung(size).shape
     hidden = shape.hidden_dim
     return GrugModelConfig(
-        vocab_size=V16384_VOCAB,
+        vocab_size=vocab_size,
         dense_mlp=dense,
         hidden_dim=hidden,
         intermediate_dim=3 * hidden if dense else hidden // 2,
@@ -316,7 +316,7 @@ def build_h100_ladder_run(
         raise ValueError("wandb_project must not be empty")
 
     rung = h100_ladder_rung(size)
-    model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    model = h100_ladder_model(size, dense=dense, vocab_size=vocab_size)
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
     if rung.global_device_count % (expert_axis_size * replica_axis_size) != 0:

@@ -43,8 +43,7 @@ from experiments.grug.fast_track.launch import (
     SEQ_LEN,
     V16384_TOKENIZER,
     V16384_VOCAB,
-    _h100_ladder_model,
-    h100_ladder_rung,
+    h100_ladder_model,
 )
 from experiments.grug.fast_track.model import GrugModelConfig, Transformer
 
@@ -167,11 +166,6 @@ def accuracies(questions: Sequence[Question], logprobs: Sequence[float]) -> Task
     return TaskScore(acc=correct / n, acc_norm=correct_norm / n, choice_bits=bits / n, questions=n)
 
 
-def dense_config(rung: str) -> GrugModelConfig:
-    """The fast_track dense model at ``rung``, built the way ``launch.py --dense`` builds it."""
-    return dataclasses.replace(_h100_ladder_model(h100_ladder_rung(rung), dense=True), vocab_size=V16384_VOCAB)
-
-
 @eqx.filter_jit
 def _row_logprobs(model: Transformer, tokens: jax.Array, weights: jax.Array) -> jax.Array:
     loss = model.next_token_loss(tokens, weights, mask=AttentionMask.causal(), reduction="none")
@@ -228,7 +222,7 @@ def main(rung: str, runs_root: str, choice_root: str, run_ids: tuple[str, ...]) 
     tokenizer = load_tokenizer(V16384_TOKENIZER)
     questions = {task.name: task_questions(task) for task in TASKS}
     rows = {name: choice_rows(tokenizer, qs) for name, qs in questions.items()}
-    config = dense_config(rung)
+    config = h100_ladder_model(rung, dense=True, vocab_size=V16384_VOCAB)
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     with jax.set_mesh(mesh):
         for run_id, step_dir in checkpoints.items():
