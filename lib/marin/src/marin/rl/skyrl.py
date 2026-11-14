@@ -962,7 +962,8 @@ def skyrl_step(
     )
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
-        attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
+        # OmegaConf reads an unquoted id such as 104e63883176 as a float; a leading letter keeps it a string.
+        attempt_id = "<attempt_id>" if ctx.is_fingerprint else f"a{uuid.uuid4().hex[:11]}"
         if ctx.is_fingerprint:
             temporary_root = "<temporary_output_path>"
         else:

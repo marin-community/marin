@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from cloud.iris import launch_config
+from yaml import safe_load
 
 
 def check_vendored_launcher() -> None:
@@ -23,7 +24,9 @@ def load_documents(source: Path, output: Path) -> None:
             path = Path(directory) / f"{index}.yaml"
             path.write_text(yaml, encoding="utf-8")
             try:
-                launch_config.load_launch_config(path)
+                loaded = launch_config.load_launch_config(path).run.attempt_id
+                written = safe_load(yaml)["run"]["attempt_id"]
+                assert loaded == written, f"run.attempt_id {written!r} loads as {loaded!r}"
             except Exception as error:
                 failures[case] = f"{type(error).__name__}: {error}"
     output.write_text(json.dumps(failures))
