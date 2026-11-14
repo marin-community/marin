@@ -37,11 +37,12 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
     *[(reward, failure, judge) for reward in (0.0, 1.0) for failure in (None, "json") for judge in (False, True)],
     (0.0, "nonretryable", False), (1.0, "nonretryable", False),
     (1.0, "html", False), (1.0, "input_tokenize", False), (1.0, "native", False),
+    (0.0, "missing_image", False),
 ])
 def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, graded_reward, upstream_failure, with_judge):
     infrastructure_first = upstream_failure in {"json", "html", "input_tokenize", "nonretryable"}
     unserved = upstream_failure == "input_tokenize"
-    native = upstream_failure in {"native", "input_tokenize"}
+    native = upstream_failure in {"native", "input_tokenize", "missing_image"}
     provider_wait = upstream_failure in {"json", "html"}
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
@@ -67,6 +68,14 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
         task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
     ).model_dump_json())
+    if upstream_failure == "missing_image":
+        (directory / "task.toml").write_text('[environment]\ndocker_image = "example.test/native:latest"\nworkdir = "/app"\n')
+        (directory / "instruction.md").write_text("Original native task")
+        (directory / "tests").mkdir()
+        (directory / "tests/test.sh").write_text("exit 0\n")
+        source = source.model_copy(update={"tasks": [
+            source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory)}),
+        ]})
     config = difficulty_trials.CandidateRun(
         solver=Solver.HOSTED,
         identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
@@ -133,9 +142,12 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     physical_attempts = []
     continuing = False
+    original_execute_trial = difficulty_trials.execute_trial
 
     async def physical_trial(configuration, authentication):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
+        if upstream_failure == "missing_image" and configuration.agent.name == "terminus-2":
+            return await original_execute_trial(configuration, authentication)
         if configuration.agent.name == "terminus-2":
             llm = OpenAILLM(model_name="openai/fixture", api_key="fixture", api_base=configuration.agent.kwargs["api_base"], model_info=configuration.agent.kwargs["model_info"])
             assert llm.get_model_context_limit() == 65536
@@ -190,6 +202,19 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
+    if upstream_failure == "missing_image":
+        assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("pending", 1, 0, 1)
+        assert measurement.infrastructure_attempts == 0
+        evidence = json.loads(next(output.glob("*/attempts/*/*/construction-error.json")).read_text())
+        assert evidence["runtime_sha256"] == runtime_sha256
+        assert evidence["exception_type"] == "MissingPreparedImageError"
+        ledger = json.loads(next(output.glob("*/attempts.json")).read_text())
+        assert [(attempt["task_id"], attempt["status"], attempt["reward"]) for attempt in ledger["attempts"]] == [
+            ("scored", "pending", None), ("blocked", "scored", 0.0),
+        ]
+        assert not candidate_requests
+        assert len(physical_attempts) == 1
+        return
     assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
         "pending", 0 if unserved or provider_wait else 1, 0 if unserved or provider_wait else int(graded_reward), 2 if unserved or provider_wait else 1)
     assert blocker in measurement.reason

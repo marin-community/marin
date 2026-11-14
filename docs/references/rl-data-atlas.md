@@ -896,6 +896,10 @@ The Iris parent allows network access; each LOCAL role enforces its source polic
 SAFE tasks remain explicitly unmeasured until their Daytona factory and snapshot
 qualification are available. Missing original environment artifacts and
 unqualified judge routes also retain explicit reasons.
+If a native service lacks a pinned prepared image, Harbor records a
+`missing_environment_artifact:prepared_image` pending reason before execution.
+The campaign continues to other tasks without assigning a solver grade or
+counting an infrastructure attempt for that missing image.
 
 GLM judges use the same production host service at temperature 0.7. The host
 records requested and effective parameters while preserving each source's

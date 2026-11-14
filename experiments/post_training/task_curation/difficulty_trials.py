@@ -32,6 +32,7 @@ from finestore.rl.difficulty import (
     register_difficulty,
 )
 from finestore.store import DataStore
+from harbor.environments.docker_translate import MissingPreparedImageError
 from harbor.host_capabilities import host_capabilities_from_environment
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfig, TrialConfig
 from harbor.trial.trial import Trial
@@ -253,8 +254,22 @@ def run_task(
             environment=EnvironmentConfig(type=task.backend, kwargs=options),
         )
 
-        # Framework exceptions propagate and stop dispatch; they are never fabricated as solver zeros.
-        trial, result = asyncio.run(execute_trial(configuration, authentication))
+        try:
+            trial, result = asyncio.run(execute_trial(configuration, authentication))
+        except MissingPreparedImageError as error:
+            pending_reason = f"missing_environment_artifact:prepared_image:{error}"
+            write_json_evidence(
+                destination / f"{number:02d}" / "construction-error.json",
+                {
+                    "task_id": task.task_id,
+                    "runtime_sha256": task.runtime_sha256,
+                    "backend": task.backend,
+                    "exception_type": type(error).__name__,
+                    "reason": pending_reason,
+                },
+            )
+            attempts.append(DifficultyAttempt(task_id=task.task_id, status="pending", reward=None))
+            return TaskOutcome(attempts, pending_reason)
         get_artifact_writer().flush(timeout=300)
         archive = local / "trial-artifacts.tar.gz"
         with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
