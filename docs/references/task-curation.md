@@ -25,7 +25,7 @@ owns reusable source importers and the corpus publisher.
 
 ## Current admission policy
 
-These rules include the admission display policy for Atlas preview revision 15 (2026-11-14). When a
+These rules include the admission display policy for Atlas preview revision 16 (2026-11-14). When a
 later section of this reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
@@ -106,6 +106,16 @@ grading assessment are unchanged.
 - Cross-source overlap matches each task to its nearest neighbor in the other
   source (exact hash, then near-duplicate or embedding search). Task IDs never pair
   tasks. A model may not downgrade a pair whose measured overlap clears the threshold.
+  Cross-source overlap is advisory: it never removes tasks from a source. The Atlas
+  folds source B under source A only when at least 95% of B's tasks are measured
+  inside A. Partial or unmeasured pairs never fold and never chain groups together.
+  They appear as directional notes instead, such as "73% of X's tasks are in Y".
+  The superset is shown on top; mutual duplicates prefer the larger task count, then
+  FULL, SAMPLE, QUICK, then source ID. See
+  [cross-source overlap](rl-data-atlas.md) for the measurement details.
+- The Daytona SAFE/UNSAFE/N/A measurement is still required at ingestion for
+  agentic sources, but the Atlas shows it on the Backends evidence page rather than
+  as a main-table column.
 
 **Quality.** Result is GOOD when at least 90% of reviewed tasks are clean, BAD
 when at least 50% have issues, and SOME_ISSUES otherwise. QC never rejects a task
