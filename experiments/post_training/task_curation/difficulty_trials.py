@@ -170,7 +170,7 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
                 "max_turns": 50,
                 "temperature": config.settings.temperature,
                 "model_info": {
-                    "max_input_tokens": config.settings.input_tokens,
+                    "max_input_tokens": config.settings.context_tokens,
                     "max_output_tokens": config.settings.output_tokens,
                     "input_cost_per_token": 0.0,
                     "output_cost_per_token": 0.0,

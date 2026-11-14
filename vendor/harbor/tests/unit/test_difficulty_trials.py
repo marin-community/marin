@@ -14,6 +14,8 @@ import httpx
 import pytest
 from finestore.reader import ReadView
 from harbor.llms.vllm_tokenization import tokenize_url
+from harbor.llms.vllm_tokenization import completion_budget_from_count
+from harbor.llms.openai_llm import OpenAILLM
 from finestore.rl.difficulty import (
     MEASUREMENTS,
     SOLVER_MODELS,
@@ -30,10 +32,11 @@ from experiments.post_training.task_curation import difficulty_relay, difficulty
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 
 
-@pytest.mark.parametrize("upstream_failure", [None, "json", "html", "input_tokenize"])
+@pytest.mark.parametrize("upstream_failure", [None, "json", "html", "input_tokenize", "native"])
 def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure):
-    infrastructure_first = upstream_failure is not None
+    infrastructure_first = upstream_failure in {"json", "html", "input_tokenize"}
     unserved = upstream_failure == "input_tokenize"
+    native = upstream_failure in {"native", "input_tokenize"}
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
     blocker = "missing_environment_artifact: fixture/original/requirements.lock"
@@ -48,7 +51,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         sample=sample, sample_receipt={"uri": "fixture:sample", "sha256": "e" * 64},
         tasks=[
             PreparedTask(task_id="scored", runtime_sha256=runtime_sha256, path=str(tmp_path / "source-task"),
-                         workload="native" if unserved else "task_spec", backend="local", reason=None, judge_model=None),
+                         workload="native" if native else "task_spec", backend="local", reason=None, judge_model=None),
             PreparedTask(task_id="blocked", runtime_sha256=runtime_sha256, path=None,
                          workload="task_spec", backend="local", reason=blocker, judge_model=None),
         ],
@@ -98,6 +101,15 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     async def physical_trial(configuration, authentication):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
+        if native:
+            llm = OpenAILLM(
+                model_name="openai/fixture", api_key="fixture", api_base=configuration.agent.kwargs["api_base"],
+                model_info=configuration.agent.kwargs["model_info"],
+            )
+            assert completion_budget_from_count(
+                prompt_tokens=40000, context_window=llm.get_model_context_limit(),
+                max_output_tokens=llm.get_model_output_limit(),
+            ) == 16384
         failed = infrastructure_first and not physical_attempts
         physical_attempts.append(configuration.trial_name)
         directory = configuration.trials_dir / configuration.trial_name
