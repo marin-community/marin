@@ -3,7 +3,9 @@
 Marina hosts independently released application packages behind authentication.
 Frontends, Python backends and current revisions live in Postgres. Every application
 uses `marina release`; restarting or deploying Marina updates the base runtime and
-preserves each app's selected revision. Merging source does not release it or load its data.
+preserves each app's selected revision. Eligible maintained apps release after
+their source reaches `main`. Ad hoc and manually managed apps use the CLI.
+Releasing code does not load application data.
 
 ## Choose the application shape
 
@@ -87,6 +89,33 @@ safeguards; server authentication and version checks remain authoritative. Any
 internal Marina user can update, change the access mode, roll back or archive an
 existing application. Publisher identity records attribution without restricting
 access. Initial named registration and host bindings still require an operator.
+
+### Release on merge
+
+The [release policy](https://github.com/marin-community/marin/blob/main/.github/marina-app-releases.toml)
+lists every maintained app and its test paths. Add an entry when adding an app.
+Set `release_on_merge = false` when a release
+requires operator coordination, such as pausing a job or selecting a new serving
+catalog. The existing Snowball tree nightly workflow remains separate.
+
+For an enabled app, the [Pulumi rollout workflow](https://github.com/marin-community/marin/blob/main/.github/workflows/ops-pulumi-rollout.yaml)
+waits for any runtime rollout from the same push, then runs one release job per
+changed app. It includes declared `source_paths`, runs the policy's tests
+(including migration tests where the app has `migrate()`), validates with
+`marina release --dry-run`, and publishes from clean current `main` with
+`--base-version` set to the inspected live version. If `main` advances
+during validation, `marina release` exits with code 75; CI refreshes its
+checkout and repeats the tests and dry-run.
+A live-version conflict fails the job; inspect the selected revision before
+trying again.
+
+The [daily drift check](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-app-release-drift.yaml)
+checks every maintained app, including manual ones, and reports commits absent
+from the selected release. A legacy release without Git provenance is reported
+as `unrecorded`; it requires an inspected manual release before automation
+can publish later changes. A failed app job does not stop
+other apps' jobs. Migrations needing live coordination should keep their app
+manual until that procedure is complete.
 
 For source layouts, manifests, auth, runtime configuration and the first production
 handover, see the [Marina reference](https://github.com/marin-community/marin/blob/main/infra/marina/README.md).

@@ -10,14 +10,9 @@ from typing import Any
 
 import click
 
+from scripts.ci.marina_app_releases import marina
+
 APP_DIR = "infra/marina/apps/snowball_family_tree"
-
-
-def marina(*arguments: str) -> dict[str, Any]:
-    result = subprocess.run(
-        ["uv", "run", "--no-sync", "marina", *arguments, "--json"], check=True, stdout=subprocess.PIPE, text=True
-    )
-    return json.loads(result.stdout)
 
 
 def write_record(path: Path, record: dict[str, Any]) -> None:

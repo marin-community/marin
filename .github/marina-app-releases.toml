@@ -1,0 +1,41 @@
+# Release policy for maintained Marina apps. Keep every app with an applet.toml
+# listed here. Paths in tests are relative to infra/marina.
+
+[apps.belay]
+release_on_merge = true
+tests = ["apps/belay/tests"]
+
+[apps.echo]
+# The hourly sync must be paused for some schema migrations.
+release_on_merge = false
+tests = ["apps/echo/tests"]
+
+[apps.evaldash]
+release_on_merge = true
+tests = ["apps/evaldash/tests"]
+
+[apps.filer]
+release_on_merge = true
+tests = ["tests/test_applets.py"]
+
+[apps.python_playground]
+release_on_merge = true
+tests = ["tests/test_python_playground.py"]
+
+[apps.rl_data_catalog]
+# Code releases are coordinated with selecting a complete serving catalog.
+release_on_merge = false
+tests = ["tests/test_rl_data_catalog.py"]
+
+[apps.snowball_family_tree]
+# This app has its own reviewed nightly release workflow.
+release_on_merge = false
+tests = ["tests/test_applets.py"]
+
+[apps.tasktrove]
+release_on_merge = true
+tests = ["apps/tasktrove/tests"]
+
+[apps.zephyr]
+release_on_merge = true
+tests = ["apps/zephyr/tests"]

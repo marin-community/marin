@@ -15,6 +15,10 @@ from rigging.provenance import git_output
 RELEASE_METADATA = "dist/marina-release.json"
 
 
+class StaleMainError(RuntimeError):
+    """The release checkout is older than the remote main branch."""
+
+
 def require_current_main(repo_dir: Path) -> str:
     """Require a clean checkout at origin's current main and return its full commit."""
     if git_output(["status", "--porcelain", "--untracked-files=all"], repo_dir):
@@ -25,7 +29,7 @@ def require_current_main(repo_dir: Path) -> str:
     # Query the remote directly: tracking refs and rerun CI checkouts may be stale.
     remote = git_output(["ls-remote", "--exit-code", "origin", "refs/heads/main"], repo_dir, timeout=30)
     if commit != remote.split()[0]:
-        raise RuntimeError(
+        raise StaleMainError(
             "Releases require origin's current main commit by default; "
             "update the checkout or use --allow-dirty to override."
         )

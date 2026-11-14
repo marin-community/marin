@@ -125,3 +125,91 @@ jobs:
           service-account: ${{ matrix.service_account }}
           gcp-project-id: hai-gcp-models
           config: ${{ matrix.config }}
+
+  discover-apps:
+    if: github.repository == 'marin-community/marin' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.apps.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Select changed Marina apps
+        id: apps
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          apps="$(python3 scripts/ci/marina_app_releases.py select --before "$BEFORE_SHA" --after "$HEAD_SHA")"
+          echo "apps=$apps" >> "$GITHUB_OUTPUT"
+
+  release-app:
+    needs: [discover-apps, deploy]
+    if: >-
+      always() &&
+      github.repository == 'marin-community/marin' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.discover-apps.result == 'success' &&
+      (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') &&
+      needs.discover-apps.outputs.apps != '{"include":[]}'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover-apps.outputs.apps) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: marina-app-release-${{ matrix.name }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install Marina and test dependencies
+        run: uv sync --locked --package marin-marina --group test --no-default-groups
+      - name: Authenticate the main-only deployment identity
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+      - name: Test and release changed source
+        run: |
+          uv run --no-sync python scripts/ci/marina_app_releases.py release \
+            "${{ matrix.name }}" --record "$RUNNER_TEMP/marina-app-release.json"
+      - name: Summarize the release record
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/marina-app-release.json" ]]; then
+            {
+              echo "### Marina app: ${{ matrix.name }}"
+              echo '```json'
+              cat "$RUNNER_TEMP/marina-app-release.json"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain the release record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marina-app-release-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/marina-app-release.json
+          if-no-files-found: ignore
