@@ -1039,3 +1039,15 @@ def test_a_projection_uses_each_rungs_latest_result() -> None:
         ]
     }
     assert {r: t["id"] for r, t in latest_ladder_trials(entry).items()} == {"d512": "t003"}
+
+
+def test_a_relaunched_ladder_is_not_held_by_its_crashed_attempts_trials() -> None:
+    def trial(tid: str, size: int, loss: float | None = None) -> dict:
+        return {"id": tid, "rung": f"competitive-d{size}", **({"loss": [loss]} if loss is not None else {})}
+
+    crashed = [trial(f"t02{i}", size) for i, size in enumerate((512, 768, 1024, 1280), 5)]
+    relaunch = [trial("t029", 512, 2.85), trial("t030", 768, 2.60), trial("t031", 1024, 2.40), trial("t032", 1280, None)]
+    trials = crashed + relaunch
+    assert [t["id"] for t in ladder_rungs_left(trials, relaunch[2])] == ["t032"]
+    relaunch[3]["loss"] = [2.27]
+    assert ladder_rungs_left(trials, relaunch[3]) == []

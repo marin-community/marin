@@ -1459,9 +1459,11 @@ def record_projection(registry_id: str, *, dry_run: bool) -> tuple[Verdict, str]
 
 
 def ladder_rungs_left(trials: list[dict], finished: dict) -> list[dict]:
-    """The idea's other ladder-rung trials with no result yet: while any remain, the idea stays running and only its
-    last rung scores the entry."""
-    return [t for t in trials if t is not finished and t.get("loss") is None and t.get("rung") in LADDER_RUNGS]
+    """The idea's other ladder rungs whose latest trial has no result yet: while any remain, the idea stays running and
+    only its last rung scores the entry. Only each rung's latest trial counts, so a relaunched ladder is not held by
+    the trials of an earlier attempt that crashed."""
+    latest = {t.get("rung"): t for t in trials if t.get("rung") in LADDER_RUNGS}
+    return [t for rung, t in latest.items() if rung != finished.get("rung") and t.get("loss") is None]
 
 
 @dataclass(frozen=True)
