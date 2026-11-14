@@ -51,7 +51,7 @@ a parent that carries its CoreWeave keys as explicit environment (``iris job run
 Iris copies those into both jobs' environments, where they override the secrets, and blanking them
 would leave the jobs with empty storage credentials.
 
-The registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
+The default registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
 there is no short-lived scoped token to hand the push job instead. Exposure that remains: secret
 values persist in the controller database, and both image jobs carry the submitter's CoreWeave
 storage credentials, which Iris requires on every CoreWeave job and the output uploader uses. The
@@ -69,6 +69,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.request import parse_http_list, parse_keqv_list
 
 import httpx
 from iris.cli.connect import connect_controller
@@ -230,6 +231,28 @@ def manifest_readback(credential: RegistryCredential, repository: str, tag: str)
     try:
         with httpx.Client(auth=auth, headers=headers, timeout=60, follow_redirects=False) as client:
             by_tag = client.get(f"{base}/manifests/{tag}")
+            scheme, _, parameters = by_tag.headers.get("www-authenticate", "").partition(" ")
+            if by_tag.status_code == 401 and scheme.lower() == "bearer":
+                challenge = parse_keqv_list(parse_http_list(parameters))
+                realm = httpx.URL(challenge["realm"])
+                registry = httpx.URL(f"https://{credential.registry}")
+                if (
+                    (realm.scheme, realm.host, realm.port) != (registry.scheme, registry.host, registry.port)
+                    or realm.username
+                    or realm.password
+                ):
+                    raise ValueError("Registry token endpoint must share the credential's HTTPS origin")
+                authorization = client.get(realm, params={"service": challenge["service"], "scope": challenge["scope"]})
+                authorization.raise_for_status()
+                payload = authorization.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Registry token response must be a JSON object")
+                token = payload.get("token") or payload["access_token"]
+                if not isinstance(token, str) or not token:
+                    raise ValueError("Registry token response must contain a nonempty token")
+                client.auth = None
+                client.headers["Authorization"] = f"Bearer {token}"
+                by_tag = client.get(f"{base}/manifests/{tag}")
             by_tag.raise_for_status()
             digest = f"sha256:{hashlib.sha256(by_tag.content).hexdigest()}"
             by_digest = client.get(f"{base}/manifests/{digest}")

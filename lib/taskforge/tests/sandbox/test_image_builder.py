@@ -3,6 +3,7 @@
 
 """The registry credential's parsing and the environment of a publish's jobs, submitted through a recording fake."""
 
+import hashlib
 import json
 import subprocess
 from collections.abc import Iterator
@@ -234,6 +235,59 @@ def test_registry_readback_failure_is_a_host_failure(monkeypatch, failure):
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
     with pytest.raises(ImageJobFailed):
         manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag")
+
+
+@pytest.mark.parametrize("authentication", ["basic", "bearer"])
+def test_registry_readback_resolves_authenticated_manifest_and_platform(monkeypatch, authentication):
+    manifest = json.dumps({"config": {"digest": "sha256:config"}, "layers": []}).encode()
+    digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
+    token_requests = []
+
+    def respond(request):
+        if request.url.path == "/token":
+            token_requests.append(request)
+            assert request.headers["authorization"].startswith("Basic ")
+            assert request.url.params == httpx.QueryParams(service="registry.example", scope="repository:task:pull")
+            return httpx.Response(200, json={"token": "scoped-read-token"})
+        if authentication == "bearer" and request.headers["authorization"] != "Bearer scoped-read-token":
+            return httpx.Response(
+                401,
+                headers={
+                    "www-authenticate": (
+                        'Bearer realm="https://registry.example/token",service="registry.example",scope="repository:task:pull"'
+                    )
+                },
+            )
+        if request.url.path == "/v2/task/blobs/sha256:config":
+            return httpx.Response(200, json={"os": "linux", "architecture": "amd64"})
+        assert request.url.path in ("/v2/task/manifests/build-tag", f"/v2/task/manifests/{digest}")
+        return httpx.Response(200, content=manifest)
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    assert manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag") == digest
+    assert bool(token_requests) is (authentication == "bearer")
+
+
+def test_registry_challenge_cannot_forward_credentials_to_another_origin(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            401,
+            headers={
+                "www-authenticate": (
+                    'Bearer realm="https://other.example/token",service="registry.example",scope="repository:task:pull"'
+                )
+            },
+        )
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(ImageJobFailed):
+        manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag")
+    assert [request.url.host for request in requests] == ["registry.example"]
 
 
 def test_archive_request_uses_the_coreweave_credentials_of_the_jobs_secret_files(monkeypatch, tmp_path):
