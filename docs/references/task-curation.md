@@ -1679,6 +1679,77 @@ write the same three map fields explicitly for each oracle TaskSpec:
 task_name, task_checksum and task_sha256. Lowered envelopes also include
 runtime_sha256, binding the deployment shape and settings.
 
+Converted TaskSpecs without native Harbor packages use the TaskSpec trial workload.
+Prepare a frozen, retained cohort with:
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.task_spec_harbor \
+  --cohort /path/to/converted/tasks.parquet --output /path/to/task-spec-packages-v1
+~~~
+
+This writes an unchanged private `task-spec.json` payload and the task map. The
+wrapper's `task.toml` supplies missing CPU, RAM, disk, agent-timeout and
+verifier-timeout budgets, starting at 1 CPU, 2048 MiB RAM, 2048 MiB disk, 300
+seconds and 60 seconds. Source limits remain fixed. Preparation does not apply deduplication or lexical drops.
+Run `calibrate` against the emitted `task-map.json` with `--environment local`
+and the worker's delegated cgroup-v2 directory (`cgroup_parent`) and writable
+loop-device backing directory (`disk_root`) in `--environment-kwargs`. The
+LOCAL disk backend must first pass its loop/OverlayFS/ENOSPC qualification
+([#11349](https://github.com/marin-community/marin/pull/11349)). LOCAL rejects
+unenforceable limits. An unresolved `docker_build` in either the actor or
+verifier environment remains blocked and needs a separately versioned source
+repair with QA; this adapter does not replace it with an image.
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet \
+  --task-map /path/to/task-spec-packages-v1/task-map.json \
+  --output-dir /path/to/calibrated-v1 --environment local --concurrency 4 \
+  --environment-kwargs '{"cgroup_parent":"/sys/fs/cgroup/atlas","disk_root":"/var/tmp/atlas-disks","model_endpoint":"https://judge.example/v1","model_name":"declared-judge-model"}' \
+  --calibration-solutions /path/to/calibration-solutions
+~~~
+
+For candidate trials, select `task-spec-chat` with explicit `api_base`,
+`max_turns` and `max_tokens` agent kwargs. It consumes the original conversation
+and final-submission tools; shell tools require the declared actor machine.
+External tool-provider implementations are unsupported. Actor files and setup commands run only in the declared actor
+environment. Script graders and non-judge Verifyit graders retain their declared
+verifier environment.
+A conversation-only task receives no actor image. Verifyit judge mode uses production
+host-side grading through the declared JudgeSpec and connection. Its trusted
+framework worker enforces the verifier CPU, RAM, disk and time budget; it leaves
+the TaskSpec and task package lock unchanged and installs no SDK into the task
+environment. Both paths use the production structured-verdict parser. Judge
+transport requires `model_endpoint` and its declared `model_name` in environment
+kwargs. A verifier-only loopback relay carries requests to that fixed endpoint;
+provider credentials stay on the host. Agent/verifier credential declarations
+configure host transport and do not modify TaskSpec environment variables.
+
+The `oracle` control executes a preserved file-task `solution/solve.sh` in its
+declared actor environment. A task without an original oracle instead reads
+`solution/response.json`, containing a JSON array of exactly one OpenAI-format assistant message,
+from `--calibration-solutions/<task-id>/`. That response is calibration-only.
+Select `nop` for independent empty-submission liveness. These controls receive
+no candidate-model settings. Shared-state grading, state capture, tool providers,
+unresolved image builds and oracle delivery without an explicit supported
+contract remain execution blockers; the adapter does not rewrite them.
+
+Changes to TaskSpec provisioning require the dedicated LOCAL regression below
+on a privileged Linux CPU worker with delegated cgroup v2, loop devices and
+ext4 mount tools. It executes the frozen tau and language-mixing JudgeSpecs through the production
+host service and a local HTTP judge fixture, preserving their original task locks. The test observes
+the actual CPU/memory controller values, exact disk-image allocation and cleanup.
+It does not provide oracle, admission or external-model quality evidence.
+Ordinary offline test selection excludes this runtime suite.
+
+~~~bash
+uv run --project vendor/harbor --frozen --extra runtime --group test python -m pytest \
+  --noconftest -p lib.shellbox.tests.conftest -c vendor/harbor/pyproject.toml \
+  --local-cgroup-parent /sys/fs/cgroup/path/to/delegated/worker \
+  vendor/harbor/tests/runtime/test_taskcompendium_local.py \
+  -m 'runtime and not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not windows_containers'
+~~~
+
 ~~~bash
 uv run python -m experiments.post_training.task_curation.oracle_filter map \
   --cohort /path/to/converted/tasks.parquet \

@@ -21,10 +21,10 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import assess_grading_environment
+from taskcompendium.harbor.adapter import unsupported_harbor_contract
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, TaskSpec
-from taskcompendium.pipeline.oracle_filter import has_oracle_solution
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.runtime.resources import has_oracle_solution, resource_bytes
 
 from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.full_qc_inputs import task_contract
@@ -88,9 +88,9 @@ def task_blockers(task: TaskSpec) -> set[str]:
         if has_oracle_solution(task) and "solution/solve.sh" not in oracle_paths:
             blockers.add("oracle_without_solve_sh")
     else:
-        # Exporting these contracts requires a production conversation adapter; the legacy
-        # exporter can introduce an actor image and file-answer instructions.
-        blockers.add("requires_faithful_harbor_adapter")
+        unsupported = unsupported_harbor_contract(task)
+        if unsupported is not None:
+            blockers.add(unsupported)
         environments = [task.environment_requirements]
         if task.grader.kind != "none":
             environments.append(task.grader.environment)

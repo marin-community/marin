@@ -58,6 +58,31 @@ class VerifierRuntimeError(Exception):
     pass
 
 
+def structured_rewards(data: bytes) -> dict[str, float | int]:
+    """Parse the production structured-verdict contract for native and TaskSpec trials."""
+    try:
+        verdict = json.loads(data)
+    except (ValueError, TypeError) as error:
+        raise VerifierOutputParseError("Invalid structured verifier verdict") from error
+    if not isinstance(verdict, dict) or not isinstance(verdict.get("detail"), dict):
+        raise VerifierOutputParseError("Invalid structured verifier verdict fields")
+    # The task's verifier owns setup responsibility. A scored setup
+    # failure can be an agent failure (for example, not cloning a repo).
+    # Infrastructure failures are explicitly non-scored verdicts.
+    if verdict.get("status") != "scored":
+        raise VerifierRuntimeError(
+            f"Structured verifier did not score the candidate: {verdict}"
+        )
+    reward = verdict.get("reward")
+    if (
+        not isinstance(reward, (float, int))
+        or isinstance(reward, bool)
+        or not math.isfinite(reward)
+    ):
+        raise VerifierOutputParseError("Invalid structured verifier reward")
+    return {"reward": reward}
+
+
 class Verifier(BaseVerifier):
     def __init__(
         self,
@@ -100,27 +125,7 @@ class Verifier(BaseVerifier):
         if requires_verdict and not verdict_path.exists():
             raise VerifierRuntimeError("Structured verifier produced no verdict")
         if requires_verdict:
-            try:
-                verdict = json.loads(verdict_path.read_text())
-            except (ValueError, TypeError) as error:
-                raise VerifierOutputParseError("Invalid structured verifier verdict") from error
-            if not isinstance(verdict, dict) or not isinstance(verdict.get("detail"), dict):
-                raise VerifierOutputParseError("Invalid structured verifier verdict fields")
-            # The task's verifier owns setup responsibility. A scored setup
-            # failure can be an agent failure (for example, not cloning a repo).
-            # Infrastructure failures are explicitly non-scored verdicts.
-            if verdict.get("status") != "scored":
-                raise VerifierRuntimeError(
-                    f"Structured verifier did not score the candidate: {verdict}"
-                )
-            reward = verdict.get("reward")
-            if (
-                not isinstance(reward, (float, int))
-                or isinstance(reward, bool)
-                or not math.isfinite(reward)
-            ):
-                raise VerifierOutputParseError("Invalid structured verifier reward")
-            return {"reward": reward}
+            return structured_rewards(verdict_path.read_bytes())
         if self.trial_paths.reward_json_path.exists():
             return self._parse_reward_json()
         elif self.trial_paths.reward_text_path.exists():

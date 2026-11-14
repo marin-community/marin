@@ -21,7 +21,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import assess_grading_environment
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
-from taskcompendium.pipeline.oracle_filter import has_oracle_solution
+from taskcompendium.runtime.resources import has_oracle_solution
 
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation

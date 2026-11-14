@@ -30,6 +30,7 @@ class TaskPaths:
     """
 
     CONFIG_FILENAME = "task.toml"
+    TASK_SPEC_FILENAME = "task-spec.json"
 
     def __init__(self, task_dir: Path | str):
         """
@@ -59,6 +60,10 @@ class TaskPaths:
     def config_path(self) -> Path:
         """Path to the task.toml configuration file."""
         return self.task_dir / self.CONFIG_FILENAME
+
+    @property
+    def task_spec_path(self) -> Path:
+        return self.task_dir / self.TASK_SPEC_FILENAME
 
     @property
     def environment_dir(self) -> Path:
