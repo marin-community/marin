@@ -61,9 +61,8 @@ class RunnerSpec(Protocol):
 class RolloutWorkerResources:
     """Size of a rollout worker pool, how its workers start, and how long a worker may go without completing a request.
 
-    Workers start one at a time, each ``start_interval_seconds`` after the previous one is up, because each imports
-    its runner stack and loads its tokenizer from a shared filesystem, and spacing the starts keeps those page-ins
-    from overlapping each other and the engines' weight loads. An interval of zero starts every worker at once.
+    A positive ``start_interval_seconds`` staggers worker imports and tokenizer loads.
+    Zero starts every worker at once.
     """
 
     num_workers: int
@@ -174,16 +173,16 @@ class RolloutWorkerPool:
         interval = self._resources.start_interval_seconds
         if interval == 0:
             actors = [self._launch_worker(index) for index in range(count)]
-            await asyncio.gather(*(actor.startup.remote() for actor in actors))
             self._actors = actors
+            await asyncio.gather(*(actor.startup.remote() for actor in actors))
             logger.info("Rollout workers started: count={}", count)
             return
         for index in range(count):
             if index:
                 await asyncio.sleep(interval)
             actor = self._launch_worker(index)
-            await actor.startup.remote()
             self._actors.append(actor)
+            await actor.startup.remote()
             logger.info("Rollout worker {}/{} started", index + 1, count)
 
     def _launch_worker(self, index: int) -> ActorHandle:
