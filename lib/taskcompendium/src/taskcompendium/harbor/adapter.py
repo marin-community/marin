@@ -12,7 +12,14 @@ import tomlkit
 
 from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment
 from taskcompendium.harbor.execution import native_execution_limits
-from taskcompendium.models import AnswerType, EnvironmentRequirements, ExecutionRequirements, NoGrader, TaskSpec
+from taskcompendium.models import (
+    AnswerType,
+    EnvironmentRequirements,
+    ExecutionRequirements,
+    NoGrader,
+    TaskResource,
+    TaskSpec,
+)
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import conversation_messages
 
@@ -21,9 +28,8 @@ ARCHIVED_SOURCE_CONFIG = "source_archive/task.toml"
 ARCHIVED_SOURCE_PROVENANCE = "taskcompendium/crosscode-remediation.json"
 
 
-def declared_execution_limits(task: TaskSpec) -> dict[str, int | float]:
-    """Read source limits, including provenance-bound oracle archives, rejecting disagreements."""
-    declared = task.execution_requirements.model_dump() if task.execution_requirements is not None else {}
+def source_task_configurations(task: TaskSpec) -> tuple[TaskResource, ...]:
+    """Return source task configurations, requiring provenance for repaired oracle archives."""
     configurations = [
         resource
         for resources in (task.resources.all, task.resources.worker, task.resources.verifier, task.resources.oracle)
@@ -42,7 +48,13 @@ def declared_execution_limits(task: TaskSpec) -> dict[str, int | float]:
         ):
             raise ValueError(f"{task.id}: archived source configuration has conflicting repair provenance")
         configurations.append(oracle[ARCHIVED_SOURCE_CONFIG])
-    for resource in configurations:
+    return tuple(configurations)
+
+
+def declared_execution_limits(task: TaskSpec) -> dict[str, int | float]:
+    """Read source limits, including provenance-bound oracle archives, rejecting disagreements."""
+    declared = task.execution_requirements.model_dump() if task.execution_requirements is not None else {}
+    for resource in source_task_configurations(task):
         limits = native_execution_limits(tomllib.loads(resource_bytes(resource).decode()))
         for name, value in limits.declared.items():
             if name in declared and declared[name] != value:
