@@ -39,6 +39,10 @@ _DURATION = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)")
 _LOG_VOLUME = "${HOST_AGENT_LOGS_PATH}:${ENV_AGENT_LOGS_PATH}"
 
 
+class MissingPreparedImageError(ValueError):
+    """A declared service has no immutable prepared image for execution."""
+
+
 class PreparedImageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     image: str
@@ -155,7 +159,7 @@ def _machine(
         image_reference = image_reference or task.docker_image
         workdir = task.workdir or workdir
     if image_reference is None or PINNED_IMAGE.fullmatch(image_reference) is None:
-        raise ValueError(
+        raise MissingPreparedImageError(
             f"Service {name!r} requires a prepared image pinned with @sha256 in shellbox-images.json"
         )
     if not workdir or not PurePosixPath(workdir).is_absolute():

@@ -422,13 +422,20 @@ blocks cleanup.
 `/backends` serves the selected matrix, revision, profile and limit observations.
 Each `/sources` row includes `backend_capabilities`: census basis, input digests,
 role demands, resource ranges, supported/partial/unsupported task counts and
-blockers. Both slots must fit for a single-backend deployment; per-role results
-also describe split execution. `role_backend_assignments` records the Daytona
-deployment: the actor uses Daytona and a package-lock grader uses LOCAL. Read
-the assigned backend's `roles` counts for each role. Daytona safety counts only
-actor snapshots and actor refusals; a reply-only task has no Daytona actor and
-is N/A. LOCAL grader quota or feature failures remain visible independently.
-Backend names are never distribution features.
+blockers. Fit is role-aware: a role is measured only where it is a candidate.
+A role whose environment resolves to a kind the backend cannot host (a
+HostImage grader environment on an image-only backend) is `not_applicable`
+there, with the exclusion counted in `not_applicable`; a role the population
+does not declare (a grader-only source has no actor) is `role_absent`. Neither
+is a failure, and neither contributes blockers. Genuine demand failures stay
+typed on candidate backends. A task's outcome on a backend is the worst
+applicable-role outcome; with no applicable roles it is `not_applicable`, and
+a task that declares no roles is `role_absent`. `role_backend_assignments`
+records the Daytona deployment: the actor uses Daytona and a package-lock
+grader uses LOCAL. Read the assigned backend's `roles` counts for each role.
+Daytona safety counts only actor snapshots and actor refusals; a reply-only
+task has no Daytona actor and is N/A. LOCAL grader quota or feature failures
+remain visible independently. Backend names are never distribution features.
 The map carries the catalog's `grading_environment` census unchanged; its
 required/declared boundary counts and mismatch reasons come from converted-row
 evidence. The loader rejects a map carrying different grading evidence.
@@ -900,7 +907,10 @@ The Iris parent allows network access; each LOCAL role enforces its source polic
 SAFE tasks remain explicitly unmeasured until their Daytona factory and snapshot
 qualification are available. Missing original environment artifacts and
 unqualified judge routes also retain explicit reasons.
-
+If a native service lacks a pinned prepared image, Harbor records a
+`missing_environment_artifact:prepared_image` pending reason before execution.
+The campaign continues to other tasks without assigning a solver grade or
+counting an infrastructure attempt for that missing image.
 GLM judges use the same production host service at temperature 0.7. The host
 records requested and effective parameters while preserving each source's
 TaskSpec, rubric and grading token limits. A blank declared judge model uses the explicitly recorded
