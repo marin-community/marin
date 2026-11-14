@@ -205,6 +205,7 @@ LEADER_OVERRIDES = {
     "mns128api4": ("--api-server-count", "4"),
     "fg128api4": ("--api-server-count", "4"),
     "fg128stack": ("--api-server-count", "4"),
+    "fg192stack": ("--api-server-count", "4"),
 }
 
 MOE_CONFIG_DIR = "experiments/evaluation/hero_vllm_hillclimb/moe_configs"
@@ -216,6 +217,10 @@ LABEL_ENV = {
     # Fused-MoE Triton configs tuned for Hero's EP16 decode shapes on GB200 (moe_tune.py).
     "fg128moe": (("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),),
     "fg128stack": (
+        ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
+        ("VLLM_USE_NCCL_SYMM_MEM", "1"),
+    ),
+    "fg192stack": (
         ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
     ),
@@ -305,6 +310,13 @@ CANDIDATE_ARGS = {
     "fg128stack": (
         "--max-num-seqs",
         "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    # The full stack at 192 sequences per engine (KV holds about 220 sequences of 1.1K tokens).
+    "fg192stack": (
+        "--max-num-seqs",
+        "192",
         "--compilation-config",
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
@@ -514,6 +526,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--concurrencies", default="64,256,512")
     parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument("--waves", type=int, default=3)
+    parser.add_argument("--client-processes", type=int, default=1, help="Load-generator processes")
     parser.add_argument("--long-lengths", default="4096,32768,65536")
     parser.add_argument("--profile-per-engine", default="1,32,128", help="Sequences per engine for the profile phase")
     parser.add_argument("--vllm-arg", action="append", default=[], help="Extra vLLM flag; repeat per token")
@@ -733,6 +746,7 @@ def _variant_config(args, target: ServedTarget, name, item, geometry, iris_confi
                 concurrencies=tuple(int(c) for c in args.concurrencies.split(",")),
                 max_tokens=args.max_tokens,
                 waves=args.waves,
+                client_processes=args.client_processes,
             ),
             long_lengths=tuple(int(n) for n in args.long_lengths.split(",")),
             data_parallel_size=geometry.global_data_parallel_size,

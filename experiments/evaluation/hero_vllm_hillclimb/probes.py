@@ -8,9 +8,11 @@ a fixed data-parallel engine carry vLLM's ``X-data-parallel-rank`` header.
 """
 
 import asyncio
+import concurrent.futures
 import itertools
 import json
 import logging
+import multiprocessing
 import time
 from dataclasses import dataclass, field
 
@@ -32,6 +34,8 @@ class LoadConfig:
     max_tokens: int
     waves: int
     temperature: float = 1.0
+    # Load-generator processes; one asyncio process tops out near 35,000 streamed tokens/s.
+    client_processes: int = 1
 
 
 @dataclass(frozen=True)
@@ -363,42 +367,37 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig, on_progre
 
     for concurrency in config.load.concurrencies:
         total = concurrency * config.load.waves
-        queue: asyncio.Queue[int] = asyncio.Queue()
-        for index in range(total):
-            queue.put_nowait(index)
-        records: list[dict] = [dict() for _ in range(total)]
-        last_submit = [0.0]
-
-        async def worker(queue=queue, records=records, last_submit=last_submit) -> None:
-            while True:
-                try:
-                    index = queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    return
-                last_submit[0] = time.monotonic()
-                body = {
-                    "prompt": prompts[index % len(prompts)],
-                    "max_tokens": config.load.max_tokens,
-                    "temperature": config.load.temperature,
-                    "seed": index,
-                    "ignore_eos": True,
-                }
-                for attempt in range(_STREAM_ATTEMPTS):
-                    try:
-                        await _stream_request(client, body, records[index])
-                        break
-                    except (aiohttp.ServerDisconnectedError, aiohttp.ClientOSError):
-                        records[index] = {"retries": attempt + 1}
-                        if attempt + 1 == _STREAM_ATTEMPTS:
-                            raise
-
         start = time.monotonic()
         cpu: dict = {}
         sampler = asyncio.create_task(_sample_cpu(cpu))
-        await asyncio.gather(*(worker() for _ in range(concurrency)))
+        processes = min(config.load.client_processes, concurrency)
+        if processes == 1:
+            parts = [await _closed_loop(client, prompts, list(range(total)), concurrency, config.load)]
+        else:
+            loop = asyncio.get_running_loop()
+            # fork: the entrypoint is pickled, so spawn could not re-import the main module.
+            context = multiprocessing.get_context("fork")
+            with concurrent.futures.ProcessPoolExecutor(processes, mp_context=context) as pool:
+                parts = await asyncio.gather(
+                    *(
+                        loop.run_in_executor(
+                            pool,
+                            _closed_loop_process,
+                            client.base_url,
+                            client.model,
+                            prompts,
+                            list(range(part, total, processes)),
+                            concurrency // processes + (part < concurrency % processes),
+                            config.load,
+                        )
+                        for part in range(processes)
+                    )
+                )
         sampler.cancel()
+        records = [record for part_records, _ in parts for record in part_records]
+        last_submit = max(part_last for _, part_last in parts)
         firsts = sorted(r["stamps"][0][0] for r in records if r.get("stamps"))
-        window = (firsts[min(concurrency, len(firsts)) - 1], last_submit[0])
+        window = (firsts[min(concurrency, len(firsts)) - 1], last_submit)
         results[f"c{concurrency}"] = _summarize(records, concurrency=concurrency, window=window)
         results[f"c{concurrency}"]["makespan"] = time.monotonic() - start
         results[f"c{concurrency}"]["cpu"] = _cpu_summary(cpu)
@@ -406,6 +405,55 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig, on_progre
             on_progress(results)
         logger.info("C%d: %s", concurrency, {k: v for k, v in results[f"c{concurrency}"].items() if k != "requests"})
     return results
+
+
+async def _closed_loop(
+    client: Client, prompts: list[list[int]], indices: list[int], workers: int, load: LoadConfig
+) -> tuple[list[dict], float]:
+    """Run ``workers`` closed-loop streams over ``indices``; return the records and the last submit time."""
+    queue: asyncio.Queue[int] = asyncio.Queue()
+    for index in indices:
+        queue.put_nowait(index)
+    records = {index: {} for index in indices}
+    last_submit = [0.0]
+
+    async def worker() -> None:
+        while True:
+            try:
+                index = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            last_submit[0] = time.monotonic()
+            body = {
+                "prompt": prompts[index % len(prompts)],
+                "max_tokens": load.max_tokens,
+                "temperature": load.temperature,
+                "seed": index,
+                "ignore_eos": True,
+            }
+            for attempt in range(_STREAM_ATTEMPTS):
+                try:
+                    await _stream_request(client, body, records[index])
+                    break
+                except (aiohttp.ServerDisconnectedError, aiohttp.ClientOSError):
+                    records[index] = {"retries": attempt + 1}
+                    if attempt + 1 == _STREAM_ATTEMPTS:
+                        raise
+
+    await asyncio.gather(*(worker() for _ in range(workers)))
+    return list(records.values()), last_submit[0]
+
+
+def _closed_loop_process(
+    base_url: str, model: str, prompts: list[list[int]], indices: list[int], workers: int, load: LoadConfig
+) -> tuple[list[dict], float]:
+    """One load-generator process; time.monotonic is system-wide, so stamps merge across processes."""
+
+    async def run() -> tuple[list[dict], float]:
+        async with Client(base_url, model) as client:
+            return await _closed_loop(client, prompts, indices, workers, load)
+
+    return asyncio.run(run())
 
 
 async def _post_root(client: Client, path: str) -> float:
