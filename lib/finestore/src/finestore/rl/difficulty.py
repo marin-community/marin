@@ -299,7 +299,10 @@ def measurement_from_attempts(
         denominator = 1 + z * z / n
         center = (rate + z * z / (2 * n)) / denominator
         margin = z * math.sqrt(rate * (1 - rate) / n + z * z / (4 * n * n)) / denominator
-        interval = {"low": max(0.0, center - margin), "high": min(1.0, center + margin)}
+        interval = {
+            "low": 0.0 if solved == 0 else max(0.0, center - margin),
+            "high": 1.0 if solved == n else min(1.0, center + margin),
+        }
     return DifficultyMeasurement.model_validate(
         {
             **measurement.model_dump(mode="json"),
