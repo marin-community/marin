@@ -272,8 +272,12 @@ class TaskSpecTrial(Trial):
                     raise ValueError("Oracle/protected runtime differs from the preserved source runtime")
         actor_network = self.source_runtime.network("task_machine") if self.source_runtime else None
         verifier_network = self.source_runtime.network("verifier_machine") if self.source_runtime else None
+        required_actor = actor_machine_required(self.specification)
+        if isinstance(self.agent, TaskSpecOracleAgent) and self.agent.command is not None:
+            required_actor = oracle_actor_required(self.specification)
         self.network_policy = TaskNetworkPolicyReceipt(
             source_runtime_sha256=self.source_runtime.runtime_sha256 if self.source_runtime else None,
+            actor_required=required_actor,
             actor_declared=actor_network,
             verifier_declared=verifier_network,
             actor_effective=None,
@@ -395,10 +399,7 @@ class TaskSpecTrial(Trial):
         self.factory = local_machine_factory(**kwargs)
         if self.factory.cgroup_parent is None:
             raise ValueError("Declared TaskSpec CPU and memory require cgroup enforcement")
-        required_actor = actor_machine_required(task)
-        if isinstance(self.agent, TaskSpecOracleAgent) and self.agent.command is not None:
-            required_actor = oracle_actor_required(task)
-        if required_actor:
+        if self.network_policy.actor_required:
             factory = _NetworkFactory(self.factory, self, "task_machine")
             if (
                 isinstance(self.agent, TaskSpecOracleAgent)

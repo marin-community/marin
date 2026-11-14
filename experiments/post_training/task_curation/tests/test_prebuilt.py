@@ -53,13 +53,9 @@ def _write(tmp_path, rows: list[dict]):
     receipt = oracle_receipt(specs)
     for row, spec in zip(rows, specs, strict=True):
         runtime_sha256 = canonical_sha256(json.loads(row["lowered_task_spec"]).get("runtime"))
-        liveness = receipt.tasks[spec.id].no_oracle_liveness
         receipt.tasks[spec.id] = receipt.tasks[spec.id].model_copy(
             update={
                 "runtime_sha256": runtime_sha256,
-                "no_oracle_liveness": (
-                    liveness.model_copy(update={"runtime_sha256": runtime_sha256}) if liveness else None
-                ),
             }
         )
     (tmp_path / prebuilt.ORACLE_FILTER_FILENAME).write_text(receipt.model_dump_json())
@@ -396,12 +392,12 @@ def test_canonical_judged_release_preserves_tasks_without_a_runtime_envelope(tmp
 
 
 @pytest.mark.parametrize("mode", [SourceProcessingMode.SAMPLE, SourceProcessingMode.FULL])
-def test_prebuilt_rejects_calibration_only_success_without_no_oracle_liveness(tmp_path, monkeypatch, mode):
+def test_prebuilt_rejects_calibration_only_success_without_strong_model_executability(tmp_path, monkeypatch, mode):
     published = _write(tmp_path, [prebuilt_task("calibration-only")])
     receipt_path = published.parent / prebuilt.ORACLE_FILTER_FILENAME
     document = json.loads(receipt_path.read_text())
     entry = document["tasks"]["calibration-only"]
-    entry["no_oracle_liveness"] = None
+    entry["executability_run"] = None
     entry["exclusion_reason"] = OracleExclusionReason.NO_ORACLE_LIVENESS.value
     receipt_path.write_text(json.dumps(document))
     monkeypatch.setattr(prebuilt, "hf_hub_download", lambda **kwargs: str(published.parent / kwargs["filename"]))
@@ -428,7 +424,7 @@ def test_prebuilt_rejects_calibration_only_success_without_no_oracle_liveness(tm
     source = with_admission_census(source)
     step = prebuilt.import_prebuilt(source, PipelineOptions(mode, CampaignRuntime()))
     invocation = step.build_config(StepContext.for_run(str(tmp_path / "admitted"), str(tmp_path)))
-    with pytest.raises(ValueError, match="no-oracle liveness qualification"):
+    with pytest.raises(ValueError, match="no-oracle executability qualification"):
         step.run(invocation)
 
 
