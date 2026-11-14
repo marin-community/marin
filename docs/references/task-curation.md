@@ -1489,11 +1489,25 @@ exclusion counts. Prior deduplication and lexical measurements remain in the
 archived input lineage. The active uniqueness census describes only the new
 output rows; oracle exclusions are recorded separately.
 
-Changing the population clears earlier actor, grading, oversight and content
-qualification. New nonempty admissions require current oracle/control receipts
-and fresh qualification for the filtered pin. A zero-row output remains visible
+This binding supports empty outputs. Changing the population clears earlier
+actor, grading, oversight and content qualification. The output remains visible
 as excluded, with zero Atlas Examples and a filtration blocker. It carries no
 actor census or inferred Daytona safety and cannot enter admitted selection.
+
+Reproduce complete input-ID coverage, typed exclusions, output hashes and
+PRIVATE pinned readback before generating registry shards:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_release \
+  --manifest oracle-release-inputs.json --output-dir oracle-release-receipts
+```
+
+The manifest is a list of `OracleReleaseInput` records: source ID, filtration
+evidence, output dedup census and local paths for the original cohort, canonical
+oracle-filter receipt and output Parquet. The command uses the configured source
+before filtration and checks its original pin, then writes `part-*.json` shards.
+Empty outputs also receive empty source fingerprints bound to their new pins;
+they have no cross-source overlap candidates.
 
 Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
 `memory_mb`, `storage_mb`, `agent_timeout_sec` and `verifier_timeout_sec`.

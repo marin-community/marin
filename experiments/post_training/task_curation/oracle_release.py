@@ -3,6 +3,7 @@
 
 """Bind private oracle-filtered releases independently of lexical retention."""
 
+import argparse
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
@@ -13,15 +14,16 @@ from finestore.rl.curation import (
     PipelineReference,
     WithinSourceDedupEvidence,
 )
-from pydantic import BaseModel, ConfigDict, model_validator
+from huggingface_hub import HfApi, hf_hub_download
+from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.oracle_filter import MechanicalOracleTaskReceipt, OracleExclusionReason, OracleFilterReceipt
 
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.oracle_filter import row_runtime, row_runtime_hash, row_task
+from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.retained_release import (
     RETAINED_IMPORT_VERSION,
     RetainedCohort,
@@ -42,6 +44,8 @@ class OracleFilteredReleaseReceipt(BaseModel):
     @model_validator(mode="after")
     def _exact_population(self) -> "OracleFilteredReleaseReceipt":
         evidence, dedup = self.filtration, self.output_dedup
+        if evidence.admitted_count:
+            raise ValueError("Oracle release binding currently supports only empty outputs")
         if self.source_id != self.original_info.id:
             raise ValueError("Oracle filtration belongs to another source")
         if (self.original_pipeline.source, self.original_pipeline.revision) != (
@@ -124,9 +128,7 @@ def verify_oracle_release(
     )
     if dict(counts) != evidence.exclusion_counts:
         raise ValueError("Published exclusions differ from canonical typed outcomes")
-    if evidence.admitted_count and receipt.version != 4:
-        raise ValueError("New admitted releases require current oracle/control evidence")
-    if any(reason in counts for reason in (OracleExclusionReason.INFRASTRUCTURE, "negative_control_pending")):
+    if OracleExclusionReason.INFRASTRUCTURE in counts:
         raise ValueError("Unresolved oracle/control infrastructure cannot be published")
     return receipt
 
@@ -152,7 +154,7 @@ def bind_oracle_filtered_release(
         ),
         expected_rows=evidence.admitted_count,
         tasks_parquet_sha256=evidence.tasks_parquet.sha256,
-        intended_use=IntendedUse.EVAL if "eval" in source.info.tags else IntendedUse.TRAIN,
+        intended_use=source.config.intended_use,
         evidence_url=evidence.validation.uri,
     )
     tags = source.info.tags
@@ -189,3 +191,56 @@ def bind_oracle_filtered_release(
         ),
     )
     return bind_actor_census(RlDataSource(info=info, config=config, pipeline=import_retained), None)
+
+
+class OracleReleaseInput(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: str
+    filtration: OracleFiltrationEvidence
+    output_dedup: WithinSourceDedupEvidence
+    original_cohort: Path
+    oracle_filter: Path
+    output_cohort: Path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    args = parser.parse_args()
+    # Source declarations import this module when loading installed release shards.
+    from experiments.post_training.task_curation.sources import sources_before_oracle_filtration  # noqa: PLC0415
+
+    sources = sources_before_oracle_filtration()
+    inputs = TypeAdapter(list[OracleReleaseInput]).validate_json(args.manifest.read_bytes())
+    receipts = {}
+    for item in inputs:
+        if item.source_id in receipts:
+            raise ValueError(f"Duplicate oracle release input: {item.source_id}")
+        source = sources[item.source_id]
+        receipt = OracleFilteredReleaseReceipt(
+            source_id=item.source_id,
+            original_pipeline=source.pipeline_reference,
+            original_info=source.info,
+            filtration=item.filtration,
+            output_dedup=item.output_dedup,
+        )
+        verify_oracle_release(item.filtration, item.original_cohort, item.oracle_filter, item.output_cohort)
+        release = item.filtration.filtered_release
+        if not HfApi().repo_info(release.repo, repo_type="dataset", revision=release.revision).private:
+            raise ValueError("Oracle-filtered publication is not private")
+        published = hf_hub_download(
+            repo_id=release.repo, repo_type="dataset", revision=release.revision, filename="tasks.parquet"
+        )
+        if file_sha256(StoragePath(published)) != item.filtration.tasks_parquet.sha256:
+            raise ValueError("Pinned publication differs from the verified output")
+        if bind_oracle_filtered_release(source, receipt).current_release != release:
+            raise ValueError("Configured oracle release differs from publication")
+        receipts[item.source_id] = receipt.model_dump(mode="json")
+    args.output_dir.mkdir(parents=True, exist_ok=False)
+    write_receipt_shards(args.output_dir, receipts)
+
+
+if __name__ == "__main__":
+    main()

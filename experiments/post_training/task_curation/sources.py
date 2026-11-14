@@ -65,12 +65,12 @@ from experiments.post_training.task_curation.source_policy import GRANDFATHERED_
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
 
-def all_sources() -> dict[str, RlDataSource]:
+def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
+    """Return configured populations before selecting oracle-filtered private pins."""
     full_content_bindings = full_content_result_bindings()
     actor_receipts = actor_census_receipts()
     lexical_receipts = lexical_measurements()
     retained_receipts = retained_release_receipts()
-    oracle_receipts = oracle_release_receipts()
     quality_receipts = sample_qc_receipts()
     grading_receipts = grading_census_receipts()
     dedup_receipts = read_dedup_receipts(
@@ -138,18 +138,18 @@ def all_sources() -> dict[str, RlDataSource]:
     ]
     sources = [bind_sample_result(source, quality_receipts.get(source.info.id)) for source in sources]
     sources = [bind_full_content_result(source, full_content_bindings.get(source.info.id)) for source in sources]
-    sources = [
-        (
-            bind_oracle_filtered_release(source, oracle_receipts[source.info.id])
-            if source.info.id in oracle_receipts
-            else source
-        )
-        for source in sources
-    ]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
     return {source.info.id: source for source in sources if source.info.id not in retired_admission_source_ids()}
+
+
+def all_sources() -> dict[str, RlDataSource]:
+    receipts = oracle_release_receipts()
+    return {
+        source_id: bind_oracle_filtered_release(source, receipts[source_id]) if source_id in receipts else source
+        for source_id, source in sources_before_oracle_filtration().items()
+    }
 
 
 def require_accepted_task_format(source: RlDataSource) -> None:
