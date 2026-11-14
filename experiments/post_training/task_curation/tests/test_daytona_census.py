@@ -24,7 +24,7 @@ from experiments.post_training.task_curation.daytona_identity import (
     count_native_spec_identities,
 )
 
-pytest.importorskip("harbor")
+pytest.importorskip("harbor_config")
 
 
 def test_daytona_role_census_routes_lock_grader_locally_and_retains_its_quota_failure():
