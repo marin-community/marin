@@ -19,6 +19,7 @@ from finestore.rl.difficulty import (
     SolverIdentity,
 )
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
 
 from experiments.post_training.task_curation import difficulty_trials
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
@@ -43,6 +44,11 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                          workload="task_spec", backend="local", reason=blocker, judge_model=None),
         ],
     )
+    directory = tmp_path / "source-task"
+    directory.mkdir()
+    (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
+        task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime={},
+    ).model_dump_json())
     config = difficulty_trials.CandidateRun(
         solver=Solver.HOSTED,
         identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="fixture-pin",
@@ -76,7 +82,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": 1.0}))
         (directory / "network-policy.json").write_text(json.dumps({
             "source_runtime_sha256": runtime_sha256, "actor_declared": None, "verifier_declared": None,
-            "actor_effective": None, "verifier_effective": "deny",
+            "actor_required": False, "actor_effective": None, "verifier_effective": "deny",
         }))
         result = SimpleNamespace(finished_at=datetime.now(UTC), completion="completed", exception_info=None,
                                  verifier_result=SimpleNamespace(rewards={"reward": 1.0}),

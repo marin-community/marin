@@ -41,7 +41,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
 from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
-from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_relay import budget_relay
@@ -198,17 +198,14 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
             raise FileExistsError(archive_target)
         copy(str(archive), str(archive_target), no_clobber=True)
         if task.workload == "task_spec":
+            binding = read_source_runtime(Path(task.path))
             policy = TaskNetworkPolicyReceipt.model_validate_json(
                 (trial.paths.trial_dir / "network-policy.json").read_text()
             )
-            if policy.source_runtime_sha256 != task.runtime_sha256:
+            if binding is None or binding.runtime_sha256 != task.runtime_sha256:
                 raise ValueError("Trial network policy is not bound to the selected source runtime")
-            for declared, effective in (
-                (policy.actor_declared, policy.actor_effective),
-                (policy.verifier_declared, policy.verifier_effective),
-            ):
-                if declared is not None and effective is not None and declared != effective:
-                    raise ValueError("Trial changed an original declared network policy")
+            if not network_policy_qualified(binding, policy):
+                raise ValueError("Trial changed an original declared network policy")
         attempt = DifficultyAttempt(
             task_id=task.task_id,
             status="pending" if unserved else ("scored" if reward is not None else "infrastructure"),
