@@ -1,0 +1,37 @@
+{
+  "deadline": {
+    "archive_sha256": "1dcbf9c79db17382d56b96922fe032451c7335bba0f2a02afda0864fc6878702",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-08/attempt-002/trials/ffed8e5863dffbbdcbcb76d4fd9bfee450709bd773fd2171143fe20078e11725.tar.zst",
+    "control_member": "ffed8e5863dffbbdcbcb76d4fd9bfee450709bd773fd2171143fe20078e11725/negative-control.json"
+  },
+  "sqlfluff_cli_list": {
+    "archive_sha256": "552c0722e828eaca89c02392e62275f30aa087057f71d39ed62acae88e005bc2",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-08/attempt-002/trials/02893e28dc0c1955513981e997602a9d6ce9718c92185edab367965226f5e5cc.tar.zst",
+    "control_member": "02893e28dc0c1955513981e997602a9d6ce9718c92185edab367965226f5e5cc/negative-control.json"
+  },
+  "sqlfluff_plugin_manager": {
+    "archive_sha256": "76095fc7fd198d91fc87797991073cb0a8c33ecb5f622c6751237dec9c8e0058",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-12/attempt-004/trials/6ec08f1c4f3c69a072049dc20dce4e6443e525506cc493a3b4f449f731a660a3.tar.zst",
+    "control_member": "6ec08f1c4f3c69a072049dc20dce4e6443e525506cc493a3b4f449f731a660a3/negative-control.json"
+  },
+  "patsy_keyerror": {
+    "archive_sha256": "e4a4eb319895e582b42f28b4dd4f03d56718ecbed9dd0de7ca6d1936ab9af91d",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-02/attempt-002/trials/34926592a52aa4110ef9fe7efc7e392d33b29447a2bc65cf9793ec44fea00b92.tar.zst",
+    "control_member": "34926592a52aa4110ef9fe7efc7e392d33b29447a2bc65cf9793ec44fea00b92/negative-control.json"
+  },
+  "native_abort": {
+    "archive_sha256": "08a1ec7441e471887dfeca9c5781cf3d947f73c5e6de7e278b3ae063cd0919e7",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-03/attempt-000/trials/a2143023e514e6a4a3b620d0b594ff6c6c53417dbc94dfd85c96c444fc93d91f.tar.zst",
+    "control_member": "a2143023e514e6a4a3b620d0b594ff6c6c53417dbc94dfd85c96c444fc93d91f/negative-control.json"
+  },
+  "native_segfault": {
+    "archive_sha256": "f9894694fd7856c73c285ded2ca141197c7b04d8aafb94895ac5464b6dccdbc7",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-11/attempt-002/trials/6d7c246bc9380f8fe2ee153ee2f015aaecc9f9dd138158a40c292e87f5c6d573.tar.zst",
+    "control_member": "6d7c246bc9380f8fe2ee153ee2f015aaecc9f9dd138158a40c292e87f5c6d573/negative-control.json"
+  },
+  "killed": {
+    "archive_sha256": "02aeca8c40e2ea766fbcdc0af55ef8d0189ab4e6dc2c1edfaab3aeba0cc83cc7",
+    "archive_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-swe/smartie-full-negatives/2026.11.14.1/worker-07/attempt-004/trials/79201c77f45f8478c9bced814fb5f80380bad95d8b7c08ade1903b638ce624b5.tar.zst",
+    "control_member": "79201c77f45f8478c9bced814fb5f80380bad95d8b7c08ade1903b638ce624b5/negative-control.json"
+  }
+}

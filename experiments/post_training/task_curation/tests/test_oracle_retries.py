@@ -40,7 +40,6 @@ from experiments.post_training.task_curation.local_host_admission import (
 from experiments.post_training.task_curation.oracle_filter import (
     backend_code_files,
     calibrate_cohort,
-    filter_cohort,
     harbor_inspection,
     merge_retry_maps,
     native_requirements,
@@ -50,6 +49,7 @@ from experiments.post_training.task_curation.oracle_filter import (
 )
 from experiments.post_training.task_curation.prior_phase_failures import bind_prior_phase_failures
 
+from .negative_control_fixtures import filter_with_negative_controls as filter_cohort
 from .prebuilt_fixtures import prebuilt_task
 from .prior_phase_fixtures import preserved_phase_failure
 

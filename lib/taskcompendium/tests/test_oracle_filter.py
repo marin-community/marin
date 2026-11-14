@@ -164,7 +164,7 @@ def test_historical_v2_receipt_is_readable_but_cannot_establish_new_admission(or
         entry.pop("outcome")
         entry.pop("executability_run")
     receipt = OracleFilterReceipt.model_validate(document)
-    with pytest.raises(ValueError, match=r"version 3.*archival"):
+    with pytest.raises(ValueError, match=r"version 4.*archival"):
         require_oracle_filter(current, receipt)
 
 
@@ -178,6 +178,7 @@ def test_declared_network_permission_requires_matching_production_observation(mi
     document = oracle_receipt([current]).model_dump(mode="json")
     entry = document["tasks"][current.id]
     entry["runtime_sha256"] = canonical_sha256(runtime)
+    entry["negative_control"]["runtime_sha256"] = canonical_sha256(runtime)
     packet = {
         "source_runtime_sha256": canonical_sha256(runtime),
         "actor_required": True,

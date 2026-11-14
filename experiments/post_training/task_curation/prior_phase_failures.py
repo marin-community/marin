@@ -4,16 +4,14 @@
 """Bind archived phase deadlines without rewriting production Trial results."""
 
 import hashlib
-import io
 import json
-import tarfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
-import zstandard
-from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.oracle_filter import PriorPhaseFailureReceipt, ResourceCalibrationReceipt
+
+from experiments.post_training.task_curation.archive_evidence import verified_archive_members
 
 
 def require_prior_phase_failure(evidence: PriorPhaseFailureReceipt, result: dict) -> None:
@@ -29,23 +27,8 @@ def require_prior_phase_failure(evidence: PriorPhaseFailureReceipt, result: dict
     actual_path = PurePosixPath(unquote(trial_uri.path)) / "exception.txt"
     if trial_uri.scheme != "file" or PurePosixPath(evidence.archive_root) / member != actual_path:
         raise ValueError("Earlier exception archive belongs to another physical Trial")
-    payload = StoragePath(evidence.archive.uri).read_bytes()
-    if hashlib.sha256(payload).hexdigest() != evidence.archive.sha256:
-        raise ValueError("Earlier phase archive bytes changed")
     config_member = str(member.with_name("config.json"))
-    selected = {}
-    with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(payload)) as raw:
-        with tarfile.open(fileobj=raw, mode="r|") as archive:
-            for item in archive:
-                if item.name not in {str(member), config_member}:
-                    continue
-                if item.name in selected or not item.isfile():
-                    raise ValueError("Earlier phase archive contains ambiguous evidence members")
-                stream = archive.extractfile(item)
-                assert stream is not None
-                selected[item.name] = stream.read()
-    if selected.keys() != {str(member), config_member}:
-        raise ValueError("Earlier phase archive is missing its exception or persisted Trial config")
+    selected = verified_archive_members(evidence.archive, {str(member), config_member})
     if json.loads(selected[config_member]) != result["config"]:
         raise ValueError("Earlier phase archive config differs from the actual production Trial")
     exception = selected[str(member)]

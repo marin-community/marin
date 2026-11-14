@@ -36,7 +36,6 @@ from experiments.post_training.task_curation.oracle_filter import (
     calibrated_task,
     calibration_package_identity,
     collect_trials,
-    filter_cohort,
     harbor_inspection,
     native_requirements,
     write_task_map,
@@ -44,6 +43,7 @@ from experiments.post_training.task_curation.oracle_filter import (
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_cohort
 from experiments.post_training.task_curation.task_spec_harbor import prepare
 
+from .negative_control_fixtures import filter_with_negative_controls as filter_cohort
 from .prebuilt_fixtures import prebuilt_task
 
 

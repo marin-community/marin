@@ -45,14 +45,17 @@ from taskcompendium.pipeline.oracle_filter import (
     MechanicalOracleTaskReceipt,
     NativeOracleSuccessPolicy,
     NativeVerifierGrade,
+    NegativeControlApplicability,
     OracleExclusionReason,
     OracleFilterReceipt,
+    OracleNegativeControlReceipt,
     OracleTaskReceipt,
     OracleTrialReceipt,
     PriorPhaseFailureReceipt,
     ResourceCalibrationReceipt,
     SourcePytestEnvironment,
     VerifierResourceProfile,
+    negative_control_applicability,
     next_trial_requirements,
     oracle_failure_reason,
     pre_oracle_host_unavailable,
@@ -68,7 +71,9 @@ from taskcompendium.pipeline.resource_calibration import (
 )
 from taskcompendium.runtime.resources import has_oracle_solution, inline_resource
 
+from experiments.post_training.task_curation.harbor_inspection import harbor_inspection
 from experiments.post_training.task_curation.local_host_admission import LocalHostAdmission, LocalHostAdmissionConfig
+from experiments.post_training.task_curation.negative_controls import require_negative_control
 from experiments.post_training.task_curation.prior_phase_failures import require_prior_phase_failure
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -88,6 +93,9 @@ BACKEND_CODE_FILES = {
     "experiments/post_training/task_curation/oracle_filter.py",
     "experiments/post_training/task_curation/local_host_admission.py",
     "experiments/post_training/task_curation/prior_phase_failures.py",
+    "experiments/post_training/task_curation/archive_evidence.py",
+    "experiments/post_training/task_curation/negative_controls.py",
+    "experiments/post_training/task_curation/harbor_inspection.py",
 }
 FAILURE_LOG_BYTES = 64 * 1024
 CALIBRATION_ATTEMPT_TIMEOUT = 72 * 60 * 60
@@ -206,30 +214,6 @@ def receipt_from_trial(
             TaskNetworkPolicyReceipt.model_validate_json(network_path.read_text()) if network_path.exists() else None
         ),
     )
-
-
-def harbor_inspection(kind: str, paths: list[str]) -> dict:
-    """Validate in Harbor's locked runtime without importing it into the curation environment."""
-    result = subprocess.run(
-        [
-            "uv",
-            "run",
-            "--project",
-            str(HARBOR_PROJECT),
-            "--frozen",
-            "--extra",
-            "taskcompendium",
-            "python",
-            "-m",
-            "harbor.cli.curation_inspect",
-            kind,
-        ],
-        input=json.dumps(paths),
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    return json.loads(result.stdout)
 
 
 def row_task(row: dict) -> TaskSpec | None:
@@ -384,6 +368,7 @@ def filter_cohort(
     mechanical_outcomes: Path | None = None,
     input_evidence: ContentEvidenceReference | None = None,
     native_success_policies: Path | None = None,
+    negative_controls: Path | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -442,6 +427,18 @@ def filter_cohort(
             if task_id in controls:
                 raise ValueError(f"Duplicate executability control task: {task_id}")
             controls[task_id] = ExecutabilityRunReceipt.model_validate(record["receipt"])
+    negative = {}
+    if negative_controls is not None:
+        for line in negative_controls.read_text().splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            task_id = record["task_id"]
+            if task_id in negative or task_id not in mappings:
+                raise ValueError(f"Duplicate or unknown physical negative control: {task_id}")
+            control = OracleNegativeControlReceipt.model_validate(record["receipt"])
+            require_negative_control(control)
+            negative[task_id] = control
     mechanical = {}
     if mechanical_outcomes is not None:
         for line in mechanical_outcomes.read_text().splitlines():
@@ -612,6 +609,15 @@ def filter_cohort(
                         if control is None
                         else OracleExclusionReason.EXECUTABILITY_RUN_FAILED
                     )
+                applicability = negative_control_applicability(task) if oracle else None
+                negative_control = negative.get(task.id)
+                if reason is None and applicability is NegativeControlApplicability.WORKSPACE:
+                    if negative_control is None or (
+                        not negative_control.conclusive and negative_control.annotation is None
+                    ):
+                        reason = OracleExclusionReason.NEGATIVE_CONTROL_PENDING
+                    elif negative_control.passed(policy):
+                        reason = OracleExclusionReason.NEGATIVE_CONTROL_PASSED
                 entry = OracleTaskReceipt(
                     task_sha256=canonical_sha256(task.model_dump(mode="json")),
                     runtime_sha256=row_runtime_hash(row),
@@ -619,6 +625,8 @@ def filter_cohort(
                     source_task_sha256=mapping["task_sha256"],
                     source_task_checksum=mapping.get("source_task_checksum", checksum),
                     native_success_policy=policy,
+                    negative_control=negative_control,
+                    negative_control_applicability=applicability,
                     has_oracle=oracle,
                     trials=(calibration.attempts[-1],) if oracle else (),
                     calibration=calibration,
@@ -1251,6 +1259,7 @@ def main() -> None:
     collect.add_argument("--mechanical-outcomes", type=Path, help="typed per-task mechanical outcome JSONL")
     collect.add_argument("--input-evidence-uri", help="immutable cohort URI for tasks with no execution proof")
     collect.add_argument("--native-success-policies", type=Path)
+    collect.add_argument("--negative-controls", type=Path)
     calibrate = commands.add_parser("calibrate")
     calibrate.add_argument("--cohort", type=Path, required=True)
     calibrate.add_argument("--task-map", type=Path, required=True)
@@ -1344,6 +1353,7 @@ def main() -> None:
             else None
         ),
         args.native_success_policies,
+        args.negative_controls,
     )
 
 
