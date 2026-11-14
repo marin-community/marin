@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, Subset
 from skyrl_train.trajectory_runners.trajectory_processing import (
     get_metrics_from_trajectory_batch,
     get_rollout_metrics,
+    get_trajectory_passes,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
@@ -237,7 +238,9 @@ def async_step_metrics(
 
 def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, float]:
     """Return response lengths, stop reasons, score contributions and environment metrics."""
-    lengths = [len(tokens) for tokens in trajectory_batch["response_ids"]]
+    optimized_lengths = [len(tokens) for tokens in trajectory_batch["response_ids"]]
+    episodes = trajectory_batch.get("episode_statistics")
+    lengths = optimized_lengths if episodes is None else [value["generated_tokens"] for value in episodes]
     count = len(lengths)
     if not count:
         raise ValueError("Evaluation response metrics require a nonempty batch")
@@ -271,7 +274,13 @@ def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, 
         response_tokens=float(sum(lengths)),
         response_tokens_mean=sum(lengths) / count,
         response_tokens_max=float(max(lengths)),
+        optimized_response_tokens=float(sum(optimized_lengths)),
+        excluded_count=float(sum(trajectory_batch.get("exclude_from_baseline") or [])),
     )
+    if episodes is not None:
+        for field in ("assistant_turns", "tool_calls", "conversations"):
+            metrics[field] = float(sum(value[field] for value in episodes))
+            metrics[f"{field}_mean"] = metrics[field] / count
     if stops is None or metrics["stop_reason_coverage"] != 1:
         return metrics
     scores = [sum(reward) if isinstance(reward, list) else reward for reward in trajectory_batch["rewards"]]
@@ -318,6 +327,9 @@ def calculate_per_dataset_metrics(
         sanitized_data_source = sanitize_data_source(data_source)
         eval_metrics[f"eval/{sanitized_data_source}/avg_score"] = avg_score
         eval_metrics[f"eval/{sanitized_data_source}/pass_at_{n_samples_per_prompt}"] = pass_at_n
+        raw_batch = {key: value for key, value in subset_trajectory_batch.items() if key != "exclude_from_baseline"}
+        _, raw_pass = get_metrics_from_trajectory_batch(raw_batch, subset_uids)
+        eval_metrics[f"eval/{sanitized_data_source}/raw_verifier_pass_at_{n_samples_per_prompt}"] = raw_pass
         eval_metrics.update(
             {
                 f"eval/{sanitized_data_source}/{key}": value

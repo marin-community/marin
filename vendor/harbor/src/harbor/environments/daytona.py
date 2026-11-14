@@ -6,6 +6,7 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from enum import StrEnum
 from pathlib import Path
 
 from daytona import AsyncDaytona
@@ -34,6 +35,7 @@ from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
     DEFAULT_SANDBOX_TTL_MINUTES,
+    DaytonaDeclarativeMachineFactory,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkPolicy,
@@ -51,6 +53,11 @@ from shellbox.process_session import (
     finish_owned,
     own_cleanup,
 )
+
+
+class DaytonaProvisioning(StrEnum):
+    SNAPSHOT = "snapshot"
+    DECLARATIVE = "declarative"
 
 
 def task_snapshot_source(docker_image: str | None, environment_dir: Path) -> RegistryImage | DockerfileSource:
@@ -99,6 +106,7 @@ class DaytonaEnvironment(BaseEnvironment):
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
+        provisioning: DaytonaProvisioning = DaytonaProvisioning.SNAPSHOT,
         model_endpoint: str | None = None,
         model_name: str | None = None,
         judge_access: JudgeAccess = JudgeAccess.VERIFIER,
@@ -125,11 +133,16 @@ class DaytonaEnvironment(BaseEnvironment):
             client_factory = (
                 connection.client_factory() if connection is not None else None
             )
-        self.factory = DaytonaMachineFactory(
+        factory_type = {
+            DaytonaProvisioning.SNAPSHOT: DaytonaMachineFactory,
+            DaytonaProvisioning.DECLARATIVE: DaytonaDeclarativeMachineFactory,
+        }[DaytonaProvisioning(provisioning)]
+        self.factory = factory_type(
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
             network_policy=policy,
+            snapshot_leaser=kwargs.get("host_capabilities", HostCapabilities()).snapshot_leaser,
         )
         self.model_endpoint, self.model_name = model_endpoint, model_name
         self.judge_access = JudgeAccess(judge_access)

@@ -29,6 +29,17 @@ from skyrl_train.group_admission import GroupAdvantageInvariant, GroupAdvantageK
 GRPO_FLAT_REWARD_STD_TOLERANCE = 1e-6
 
 
+def expand_outcome_to_steps(
+    outcome: torch.Tensor,
+    final_mask: torch.Tensor,
+    step_mask: torch.Tensor,
+    trajectory_index: torch.Tensor,
+) -> torch.Tensor:
+    """Broadcast a scalar outcome to each turn's actions, not the final turn's length."""
+    scalar = outcome.sum(dim=-1) / final_mask.sum(dim=-1).clamp_min(1)
+    return scalar[trajectory_index].unsqueeze(-1) * step_mask
+
+
 @register_advantage_estimator(AdvantageEstimator.UNIFORM, group_contract=NoGroupAdvantage())
 def compute_uniform_advantage(
     token_level_rewards: torch.Tensor,

@@ -49,6 +49,8 @@ from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_ASYNC_TIMEOUT_SECONDS = 30 * 60
+
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
 _CHECKPOINT_PHASE_DURATION_METRIC = "checkpoint_phase_duration_seconds"
 
@@ -490,6 +492,7 @@ class Checkpointer:
         debug: CheckpointDebugConfig | None = None,
         write_config: TensorStoreWriteConfig | None = None,
         metadata: Mapping[str, Any] | None = None,
+        async_timeout_seconds: float = DEFAULT_ASYNC_TIMEOUT_SECONDS,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -515,6 +518,7 @@ class Checkpointer:
                 checkpoints still clean up temporary checkpoints because they supersede them for recovery.
             write_config: how a save divides work across the processes holding the state
             metadata: application metadata committed with every checkpoint this checkpointer saves
+            async_timeout_seconds: deadline for asynchronous checkpoint writes and coordination
         """
         _check_application_metadata(metadata)
         if keep_last_temporary_checkpoints < 0:
@@ -551,7 +555,7 @@ class Checkpointer:
                 raise ValueError("Step policies must be sorted by 'until' value")
 
         # The default of 5 minutes is too short even for modestly sized models for some reason
-        self._manager = GlobalAsyncCheckpointManager(timeout_secs=60 * 30)
+        self._manager = GlobalAsyncCheckpointManager(timeout_secs=async_timeout_seconds)
 
         if jax.process_index() == 0:
             self._async_checkpoint_remover_queue: queue.Queue[str] = queue.Queue(maxsize=-1)
@@ -1271,6 +1275,7 @@ def _get_fs_and_plain_path(path, fs=None):
 @dataclass
 class CheckpointerConfig:
     base_path: str = "checkpoints/"
+    async_timeout_seconds: float = DEFAULT_ASYNC_TIMEOUT_SECONDS
     temporary_base_path: Optional[str] = None
     """Separate base path for temporary (time-policy) checkpoints. When set, temporary checkpoints
     are written here instead of base_path, allowing use of region-local storage with lifecycle TTL."""
@@ -1322,6 +1327,7 @@ class CheckpointerConfig:
             debug=self.debug,
             write_config=self.write,
             metadata=metadata,
+            async_timeout_seconds=self.async_timeout_seconds,
         )
 
     def __post_init__(self):

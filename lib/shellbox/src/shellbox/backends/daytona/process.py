@@ -10,11 +10,13 @@ import shlex
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from daytona import DaytonaNotFoundError, SessionExecuteRequest
+from daytona import DaytonaError, DaytonaNotFoundError, SessionExecuteRequest
 from daytona._async.process import AsyncProcess
+from rigging.redaction import redact_string
 
 from shellbox import process_framing
 from shellbox.backends.daytona import bridge
+from shellbox.backends.daytona.cleanup import DaytonaCleanupError
 from shellbox.backends.docker.machine import INTERRUPT_TIMEOUT
 from shellbox.machine import MachineTerminated
 from shellbox.process_framing import CHUNK_BYTES, EXIT, STDERR, STDIN, STDOUT, FrameDecoder, decode_frame, encode_frame
@@ -90,7 +92,8 @@ class DaytonaProcessSession(StreamProcessSession):
             self._stdout_frames.finish()
             self._stderr_frames.finish()
             if self._code is None:
-                raise RuntimeError("Daytona process stream ended without a complete exit frame")
+                diagnostic = redact_string(self.stderr.decode("utf-8", errors="replace"))
+                raise RuntimeError(f"Daytona process stream ended without a complete exit frame; stderr: {diagnostic}")
         except asyncio.CancelledError:
             if self._closing is None:
                 self._error = MachineTerminated("Daytona process stream was interrupted")
@@ -149,6 +152,10 @@ class DaytonaProcessSession(StreamProcessSession):
                     await self._process.delete_session(self.name, request_timeout=INTERRUPT_TIMEOUT)
                 except DaytonaNotFoundError:
                     pass
+                except DaytonaError as error:
+                    raise DaytonaCleanupError(
+                        "delete_session", {"session_id": self.name, "request_timeout": INTERRUPT_TIMEOUT}, error
+                    ) from None
         except BaseException:
             await self._failed_cleanup()
             raise

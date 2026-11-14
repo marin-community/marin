@@ -52,11 +52,13 @@ def dispatch_grug_training_run(
     local_entrypoint: Callable[[ConfigT], None],
     resources: ResourceConfig,
     max_retries_failure: int = 3,
+    max_retries_preemption: int = 100,
     max_task_failures: int = 10,
     processes_per_task: int = 1,
     priority: int = INHERIT_PRIORITY,
     extras: list[str] | None = None,
     termination_grace: Duration = Duration.from_seconds(60),
+    timeout: Duration | None = None,
 ) -> None:
     """Submit a grug train entrypoint through Fray and wait for completion.
 
@@ -80,10 +82,12 @@ def dispatch_grug_training_run(
             extras=extras_for_resources(resources) if extras is None else extras,
         ),
         max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
         max_task_failures=max_task_failures,
         processes_per_task=processes_per_task,
         priority=priority,
         termination_grace=termination_grace,
+        timeout=timeout,
     )
     logger.info("Dispatching grug training via Fray: %s", request.name)
     job = current_client().submit(request)

@@ -71,12 +71,18 @@ class ModelSession(Protocol):
         ...
 
     async def reply(
-        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
+        self,
+        observations: tuple[dict[str, Any], ...],
+        *,
+        token_ids: tuple[int, ...] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ModelTurn:
         """Send ``observations`` after the model's last message, and return the next turn.
 
         ``token_ids`` pins the exact tokens of the next prompt. They must start with the tokens served so far:
         under ``TraceMode.EXACT_TOKENS``, other tokens break the token contract before the request is sent.
+        ``options`` replaces the request options without resetting the conversation; omitted options reuse
+        the last successful request's settings.
         """
         ...
 

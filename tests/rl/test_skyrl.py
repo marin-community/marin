@@ -963,3 +963,11 @@ def test_skyrl_spec_rejects_unsupported_training_strategy() -> None:
     # Unsupported curriculum strategies must fail before the launcher allocates workers.
     with pytest.raises(ValueError, match=r"trainer\.strategy=megatron"):
         dataclasses.replace(_spec(), config_yaml=_config_yaml(strategy="fsdp2"))
+
+
+def test_archive_retention_reaches_the_iris_launch_document() -> None:
+    spec = dataclasses.replace(_spec(), retention=SkyRLRetentionPolicy(resume_checkpoint_count=-1))
+    step = skyrl_step(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["artifacts"]["resume_checkpoint_count"] == -1

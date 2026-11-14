@@ -1,0 +1,413 @@
+[
+  {
+    "trial": "04194d6428e74d4abe220f62b3799ac9",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02672",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "09da488cf2864965b9ea788730795eff",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26328",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ImportError while loading conftest '/testbed/test/conftest.py'.\ntest/conftest.py:9: in <module>\n    import yaml\nE   ModuleNotFoundError: No module named 'yaml'"
+      }
+    }
+  },
+  {
+    "trial": "0edb168f44454a91ac6260e8b230146b",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-21661",
+    "verdict": {
+      "reward": 0.0,
+      "status": "scored",
+      "detail": {
+        "reason": "setup_failed",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git\n",
+        "passed": 0,
+        "total": 0
+      }
+    }
+  },
+  {
+    "trial": "17bf7f171a97473c85cd7a499c9618e5",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04032",
+    "verdict": null
+  },
+  {
+    "trial": "28d60e14ac9d4145be6c11cf3684bdb6",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07223",
+    "verdict": {
+      "reward": 0.0,
+      "status": "scored",
+      "detail": {
+        "reason": "setup_failed",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git\n",
+        "passed": 0,
+        "total": 0
+      }
+    }
+  },
+  {
+    "trial": "309e646b37b6454ca9887a90fd9f24c3",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28254",
+    "verdict": {
+      "reward": 0.0,
+      "status": "scored",
+      "detail": {
+        "reason": "setup_failed",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git\n",
+        "passed": 0,
+        "total": 0
+      }
+    }
+  },
+  {
+    "trial": "3353370429d14c8f83fae43b09c7956b",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23788",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ImportError while loading conftest '/testbed/test/conftest.py'.\ntest/conftest.py:9: in <module>\n    from conan.internal.api.detect.detect_vs import vswhere\nconan/__init__.py:1: in <module>\n    from conan.internal.model.conan_file import ConanFile\nconan/internal/model/conan_file.py:4: in <module>\n    from conan.api.output import ConanOutput, Color\nconan/api/output.py:7: in <module>\n    import colorama\nE   ModuleNotFoundError: No module named 'colorama'"
+      }
+    }
+  },
+  {
+    "trial": "3357c326f18c45ab93bc55cd515c5ece",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04032",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "336bb97c3523449a8a6c904e7f5295be",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04803",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit -9): ts/test_teradata.py ............                             [ 49%]\ntests/dialects/test_trino.py .....                                       [ 50%]\ntests/dialects/test_tsql.py ............................................ [ 56%]\n....                                                                     [ 57%]\ntests/test_build.py .                                                    [ 57%]\ntests/test_diff.py ...........                                           [ 58%]\ntests/test_executor.py ........F"
+      }
+    }
+  },
+  {
+    "trial": "33c920b968f4420e93b11b4fc97c3320",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04600",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "350bc4c659624ed19e38b09d993588cd",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-16253",
+    "verdict": {
+      "reward": 1.0,
+      "status": "scored",
+      "detail": {
+        "passed": 143,
+        "total": 143,
+        "exit_code": 0
+      }
+    }
+  },
+  {
+    "trial": "35a16284f2e64add9749acd9eadf60d2",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03120",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "375793c68fda485994320636f84a3a30",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23788",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ImportError while loading conftest '/testbed/test/conftest.py'.\ntest/conftest.py:9: in <module>\n    from conan.internal.api.detect.detect_vs import vswhere\nconan/__init__.py:1: in <module>\n    from conan.internal.model.conan_file import ConanFile\nconan/internal/model/conan_file.py:4: in <module>\n    from conan.api.output import ConanOutput, Color\nconan/api/output.py:7: in <module>\n    import colorama\nE   ModuleNotFoundError: No module named 'colorama'"
+      }
+    }
+  },
+  {
+    "trial": "3b0fa1a884f44f7e9d62260f991f2377",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-06228",
+    "verdict": null
+  },
+  {
+    "trial": "3d150f05557a43e9bae07a86ce235c72",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02967",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ERROR: Missing required plugins: pytest-cov, pytest-xdist"
+      }
+    }
+  },
+  {
+    "trial": "3df2bd26563445c4b3473d4162b70c49",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07610",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ages/_pytest/config/__init__.py\", line 2012, in _resolve_warning_category\n    m = __import__(module, None, None, [klass])\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/testbed/sunpy/__init__.py\", line 11, in <module>\n    from sunpy.util import system_info\n  File \"/testbed/sunpy/util/__init__.py\", line 1, in <module>\n    from sunpy.util.decorators import *\n  File \"/testbed/sunpy/util/decorators.py\", line 8, in <module>\n    import numpy as np\nModuleNotFoundError: No module named 'numpy'"
+      }
+    }
+  },
+  {
+    "trial": "3ef835296e544596b9183511056c51df",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04803",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit -9): ts/test_teradata.py ............                             [ 49%]\ntests/dialects/test_trino.py .....                                       [ 50%]\ntests/dialects/test_tsql.py ............................................ [ 56%]\n....                                                                     [ 57%]\ntests/test_build.py .                                                    [ 57%]\ntests/test_diff.py ...........                                           [ 58%]\ntests/test_executor.py ........F"
+      }
+    }
+  },
+  {
+    "trial": "435d692afcca43c3bc3a8f294691d3d5",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04600",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit -9): ============================= test session starts ==============================\nplatform linux -- Python 3.10.22, pytest-8.4.2, pluggy-1.7.0\nrootdir: /testbed\nconfigfile: pyproject.toml\nplugins: platformdirs-4.12.4, json-report-1.5.0, metadata-3.1.1\ncollected 20 items\n\ntests/test_executor.py ........F"
+      }
+    }
+  },
+  {
+    "trial": "4601e6692581412bb754fadb5289248b",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03120",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "487aacca9a664f509a97276579a308b2",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-25947",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ImportError while loading conftest '/testbed/test/conftest.py'.\ntest/conftest.py:9: in <module>\n    import yaml\nE   ModuleNotFoundError: No module named 'yaml'"
+      }
+    }
+  },
+  {
+    "trial": "4b33f4b3a4c541ca8115be4c16bfd308",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04803",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "548f16fb69e246fb854ad4e5b8941aff",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-06283",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "56aadc87d6a441b49f102f15cdd27b0b",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04803",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "5706d418fba44fa0856c48e6ca1406bd",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02672",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest report contains collection failures"
+      }
+    }
+  },
+  {
+    "trial": "572263d283fa41f69dc10be8bf51d352",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27244",
+    "verdict": {
+      "reward": 1.0,
+      "status": "scored",
+      "detail": {
+        "passed": 221,
+        "total": 221,
+        "exit_code": 0
+      }
+    }
+  },
+  {
+    "trial": "573269d8a1344983acdca10da770a5be",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07610",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ages/_pytest/config/__init__.py\", line 2012, in _resolve_warning_category\n    m = __import__(module, None, None, [klass])\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/testbed/sunpy/__init__.py\", line 11, in <module>\n    from sunpy.util import system_info\n  File \"/testbed/sunpy/util/__init__.py\", line 1, in <module>\n    from sunpy.util.decorators import *\n  File \"/testbed/sunpy/util/decorators.py\", line 8, in <module>\n    import numpy as np\nModuleNotFoundError: No module named 'numpy'"
+      }
+    }
+  },
+  {
+    "trial": "594c0891008646398ce88f7b2c20d6f7",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03324",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ERROR: file or directory not found: tests/test_delta.py"
+      }
+    }
+  },
+  {
+    "trial": "649aef89be264a03945e14e747b0c1ca",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-21715",
+    "verdict": {
+      "reward": 0.0,
+      "status": "scored",
+      "detail": {
+        "reason": "setup_failed",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git\n",
+        "passed": 0,
+        "total": 0
+      }
+    }
+  },
+  {
+    "trial": "6d2ce9b2320341e691591b17a8e748b9",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02967",
+    "verdict": {
+      "reward": 0.0,
+      "status": "infra_error",
+      "detail": {
+        "error": "RuntimeError: pytest producer failed before a usable json report (exit 4): ERROR: Missing required plugins: pytest-cov, pytest-xdist"
+      }
+    }
+  },
+  {
+    "trial": "75715f65a41c49d882f7ebb81040a042",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-21661",
+    "verdict": {
+      "reward": 1.0,
+      "status": "scored",
+      "detail": {
+        "passed": 7230,
+        "total": 7230,
+        "exit_code": 0
+      }
+    }
+  },
+  {
+    "trial": "8f45307c5e28481d832ecf81dd4289d6",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-06749",
+    "verdict": {
+      "reward": 0.0,
+      "status": "scored",
+      "detail": {
+        "reason": "setup_failed",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git\n",
+        "passed": 0,
+        "total": 0
+      }
+    }
+  },
+  {
+    "trial": "944c6a9935da4e7abbd13e569cf7696f",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26328",
+    "verdict": {
+      "reward": 0.0,
+      "status": "scored",
+      "detail": {
+        "reason": "setup_failed",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git\n",
+        "passed": 0,
+        "total": 0
+      }
+    }
+  },
+  {
+    "trial": "9cff0b88c8ee4e71b67dd8943d8ca53a",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28304",
+    "verdict": {
+      "reward": 0.0,
+      "status": "scored",
+      "detail": {
+        "reason": "setup_failed",
+        "stderr": "fatal: not a git repository (or any of the parent directories): .git\n",
+        "passed": 0,
+        "total": 0
+      }
+    }
+  },
+  {
+    "trial": "bb0e45b3f9a6487c8234e0174a9cc16f",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-09423",
+    "verdict": null
+  },
+  {
+    "trial": "cf81a1216e104af1ae6bcfc854cd41e1",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02274",
+    "verdict": {
+      "reward": 1.0,
+      "status": "scored",
+      "detail": {
+        "passed": 1179,
+        "total": 1179,
+        "exit_code": 0
+      }
+    }
+  },
+  {
+    "trial": "f53a0cf362b4457a8dec0741ca0abf7c",
+    "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03120",
+    "verdict": {
+      "reward": 0.0,
+      "status": "scored",
+      "detail": {
+        "passed": 837,
+        "total": 919,
+        "first_failure": "tests/test_command.py::TestCommands::test_deeppatch_command[t1.toml-t2.toml-args5-0]",
+        "exit_code": 1,
+        "output": "taOther::test_none_in_delta_object - Asser...\nFAILED tests/test_delta.py::TestDeltaOther::test_delta_with_json_serializer\nFAILED tests/test_delta.py::TestDeltaOther::test_brackets_in_keys - Assertion...\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_compare_func1 - Assert...\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_compare_func_with_duplicates_removed\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_compare_func_with_duplicates_added\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_compare_func_path_specific\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_compare_func_nested_changes\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_delta_force1 - Asserti...\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_flatten_dict_with_one_key_added\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_flatten_list_with_one_item_added\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_flatten_set_with_one_item_added\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_flatten_tuple_with_one_item_added\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_subtract_delta1 - Asse...\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_subtract_delta_made_from_flat_dicts1\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_subtract_delta_made_from_flat_dicts2\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_list_of_alphabet_and_its_delta\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_detla_add_to_empty_iterable_and_flatten\nFAILED tests/test_delta.py::TestDeltaCompareFunc::test_flat_dict_and_deeply_nested_dict\nFAILED tests/test_path.py::test_get_item[obj0-root[2][1]-5] - assert 5 == None\nFAILED tests/test_path.py::test_get_item[obj1-root[1][0]['2']-b] - AssertionE...\nFAILED tests/test_path.py::test_get_item[obj2-root['test [a]']-b] - Assertion...\nFAILED tests/test_path.py::test_get_item[obj3-root[\"a']['b']['c\"]-1] - assert...\n================= 83 failed, 866 passed, 10 skipped in 11.04s =================="
+      }
+    }
+  }
+]

@@ -4,6 +4,7 @@
 """Exercise the Daytona adapter against a local process and filesystem fake."""
 
 import asyncio
+import json
 import math
 import os
 import shlex
@@ -27,14 +28,17 @@ pytest.importorskip("daytona")
 
 from daytona import (
     AsyncDaytona,
+    CreateSandboxFromImageParams,
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
     DaytonaNotFoundError,
+    DaytonaValidationError,
     Resources,
 )
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.backends.daytona.machine import (
+    DaytonaDeclarativeMachineFactory,
     DaytonaMachine,
     DaytonaMachineFactory,
     DaytonaNetworkMode,
@@ -221,7 +225,10 @@ class LocalSnapshots:
 
 class LocalDaytona:
     def __init__(self):
-        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess())
+        async def get_work_dir():
+            return str(Path.cwd())
+
+        self.sandbox = SimpleNamespace(fs=LocalFiles(), process=LocalProcess(), get_work_dir=get_work_dir)
         self.deleted = False
         self.closed = False
         self.params = None
@@ -250,6 +257,50 @@ class LocalDaytona:
 
     async def __aexit__(self, _exc_type, _exc, _traceback):
         self.closed = True
+
+
+@pytest.mark.parametrize("factory_type", [DaytonaMachineFactory, DaytonaDeclarativeMachineFactory])
+def test_daytona_long_guest_command_remains_available_for_verification(tmp_path, factory_type):
+    class IdleStoppingClient(LocalDaytona):
+        async def create(self, params, *, timeout):
+            self.params = params
+            self.timeout = timeout
+            process = self.sandbox.process
+            execute = process.exec
+            elapsed_minutes = 0
+
+            async def execute_with_idle_timeout(command, **kwargs):
+                nonlocal elapsed_minutes
+                # Advance provider inactivity without sleeping or shortening a
+                # production deadline. Guest work is not a provider event.
+                if command.endswith("guest-work"):
+                    elapsed_minutes += 30
+                stop = 15 if params.auto_stop_interval is None else params.auto_stop_interval
+                pause = params.auto_pause_interval or 0
+                if any(interval and elapsed_minutes >= interval for interval in (stop, pause)):
+                    raise DaytonaValidationError("Sandbox is not running", status_code=400)
+                return await execute(command, **kwargs)
+
+            process.exec = execute_with_idle_timeout
+            return self.sandbox
+
+    async def scenario():
+        client = IdleStoppingClient()
+        machine = await factory_type(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            await client.sandbox.process.exec("true guest-work", cwd="/")
+            workspace = tmp_path / "answer"
+            result = await machine.run(Command(("sh", "-c", 'printf answer > "$1"', "sh", str(workspace))))
+            assert result.exit_code == 0
+            verified = await machine.run(Command(("cat", str(workspace))))
+            assert verified.stdout == b"answer"
+        finally:
+            await machine.close()
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
@@ -344,7 +395,8 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
     asyncio.run(scenario())
 
 
-def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> None:
+@pytest.mark.parametrize("inherit_workdir", [False, True])
+def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path, inherit_workdir: bool) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
     original_inode = workdir.stat().st_ino
@@ -357,21 +409,27 @@ def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path) -> N
         async def exec(self, command, cwd=None, env=None, timeout=None):
             if self.workdir_replaced and cwd is None:
                 raise OSError("Provider process retained the deleted working directory")
-            result = await super().exec(command, cwd=cwd, env=env, timeout=timeout)
+            # The provider starts omitted-cwd commands in the image WORKDIR.
+            result = await super().exec(command, cwd=cwd or str(workdir), env=env, timeout=timeout)
             self.workdir_replaced = workdir.stat().st_ino != original_inode
             return result
 
     async def scenario():
         client = LocalDaytona()
         client.sandbox.process = StaleWorkdirProcess()
+
+        async def get_work_dir():
+            return str(workdir)
+
+        client.sandbox.get_work_dir = get_work_dir
         machine = await DaytonaMachineFactory(lambda: client).create(
-            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(workdir))
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="" if inherit_workdir else str(workdir))
         )
         try:
             replaced = await machine.run(Command(("sh", "-c", 'rm -rf "$PWD" && mkdir -p "$PWD" && printf recreated')))
             assert (replaced.exit_code, replaced.stdout) == (0, b"recreated")
-            following = await machine.run(Command(("printf", "ready")))
-            assert (following.exit_code, following.stdout) == (0, b"ready")
+            following = await machine.run(Command(("pwd", "-P")))
+            assert (following.exit_code, following.stdout.strip()) == (0, str(workdir).encode())
             assert workdir.stat().st_ino != original_inode
         finally:
             await machine.close()
@@ -487,7 +545,7 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files"])
+@pytest.mark.parametrize("interrupt_failure", ["exit", "timeout", "files", "validation"])
 @pytest.mark.parametrize("interruption", ["timeout", "cancel"])
 def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_failure, interruption):
     entered = asyncio.Event()
@@ -498,6 +556,12 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
                 entered.set()
                 await asyncio.Future()
             if "stop-command" in command:
+                if interrupt_failure == "validation":
+                    raise DaytonaValidationError(
+                        "synthetic cleanup rejection sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+                        status_code=400,
+                        error_code="INVALID_REQUEST",
+                    )
                 if interrupt_failure == "timeout":
                     raise TimeoutError("Provider interruption timed out")
                 if interrupt_failure == "files":
@@ -526,6 +590,19 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
             with pytest.raises(RuntimeError) as failure:
                 await pending
             assert isinstance(failure.value.__cause__, TimeoutError if interrupt_failure == "timeout" else RuntimeError)
+        if interrupt_failure == "validation":
+            diagnostic = (
+                json.loads(failure.value.__notes__[0].split(": ", 1)[1])
+                if interruption == "cancel"
+                else json.loads(str(failure.value.__cause__))
+            )
+            assert diagnostic["operation"] == "stop_command"
+            assert diagnostic["error_type"] == "DaytonaValidationError"
+            assert diagnostic["status_code"] == 400
+            assert diagnostic["error_code"] == "INVALID_REQUEST"
+            assert diagnostic["request"]["cwd"] == "/"
+            assert "stop-command" in diagnostic["request"]["command"]
+            assert diagnostic["message"] == "synthetic cleanup rejection [REDACTED]"
         assert client.deleted and client.closed
         with pytest.raises(RuntimeError, match="closed"):
             await machine.run(Command(("true",)))
@@ -1313,3 +1390,60 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
 
     del spec["name"]
     assert SnapshotRequest.from_dict(spec) == request
+
+
+@pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
+@pytest.mark.parametrize("accepted_then_failed", [False, True])
+def test_declarative_daytona_preserves_task_image_and_cleans_up_without_snapshots(
+    tmp_path, source_kind, accepted_then_failed
+):
+    class DeclarativeClient(LocalDaytona):
+        def __init__(self):
+            super().__init__()
+            # No snapshot service exists on this account. Any access is a regression.
+            del self.snapshot
+            self.sandbox.process = SimpleNamespace(exec=self.exec, close=self.close)
+
+        async def exec(self, *args, **kwargs):
+            return SimpleNamespace(exit_code=0, result="/usr/bin/setsid")
+
+        async def close(self):
+            pass
+
+        async def create(self, params, *, timeout):
+            assert isinstance(params, CreateSandboxFromImageParams)
+            self.params = params
+            self.timeout = timeout
+            if accepted_then_failed:
+                raise RuntimeError("Connection lost after provider accepted creation")
+            return self.sandbox
+
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.12-slim\nCOPY fixture.txt /fixture.txt\nWORKDIR /task\n")
+    (tmp_path / "fixture.txt").write_text("original task fixture")
+    source = (
+        RegistryImage("task@sha256:" + "a" * 64) if source_kind == "registry" else DockerfileSource(tmp_path, dockerfile)
+    )
+
+    async def scenario():
+        client = DeclarativeClient()
+        factory = DaytonaDeclarativeMachineFactory(lambda: client)
+        spec = MachineSpec(source, workdir="", cpus=2, memory_mb=4096, storage_mb=10240, env={"TASK_ENV": "kept"})
+        if accepted_then_failed:
+            with pytest.raises(RuntimeError):
+                await factory.create(spec)
+        else:
+            machine = await factory.create(spec)
+            assert machine.spec.source == source
+            await machine.close()
+        params = client.params
+        assert params.resources == Resources(cpu=2, memory=4, disk=10, gpu=None)
+        assert params.env_vars == {"TASK_ENV": "kept"}
+        assert params.network_block_all is True
+        if source_kind == "registry":
+            assert params.image == source.reference
+        else:
+            assert params.image.dockerfile() == dockerfile.read_text()
+        assert client.deleted and client.closed
+
+    asyncio.run(scenario())

@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
+from rigging.redaction import redact_string
+
 import numpy as np
 from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import RolloutContractError
@@ -73,11 +75,12 @@ class ModelClient(Protocol):
 class ModelServerError(RuntimeError):
     """A model-serving failure with safe diagnostics for retained trajectories."""
 
-    def __init__(self, category: str, request_id: str | None, status_code: int | None):
+    def __init__(self, category: str, request_id: str | None, status_code: int | None, message: str = ""):
+        self.message = redact_string(message)[:4096]
         self.category = category
         self.request_id = request_id
         self.status_code = status_code
-        super().__init__(f"Model server error: {category}; request_id={request_id}")
+        super().__init__(f"Model server error: {category}; request_id={request_id}; {self.message}")
 
 
 class ContextLengthExceededError(ModelServerError):
@@ -426,6 +429,7 @@ class DirectModelClient:
                     category=response.get("error_category", "server_error"),
                     request_id=response.get("request_id", request_id),
                     status_code=error.get("code") if isinstance(error, dict) else None,
+                    message=str(error.get("message", "")) if isinstance(error, dict) else str(error),
                 )
             choice = response["choices"][0]
             response_ids = choice.get("token_ids")

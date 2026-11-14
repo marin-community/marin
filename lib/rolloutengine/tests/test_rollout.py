@@ -485,6 +485,42 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
     assert len(factory.machines) == 1
 
 
+async def test_agent_output_budget_changes_keep_every_turn_and_preserve_request_options():
+    # Pi varies this cap as the context fills, even when its message history continues unchanged.
+    caps = (16384, 12554, 14982, 14732, 14359, 14133, 13915)
+    options = [{"max_completion_tokens": caps[index % len(caps)], "temperature": 0.7} for index in range(60)]
+
+    async def agent(_context, complete):
+        history = [{"role": "user", "content": "Return 12."}]
+        for index, settings in enumerate(options):
+            turn = await complete(Prompt(tuple(history), settings))
+            message = json.loads(json.dumps(turn.message))
+            if index < len(options) - 1:
+                # The real Pi round trip reformats tool JSON and adds an empty reasoning field.
+                message["tool_calls"][0]["function"]["arguments"] = json.dumps(
+                    json.loads(message["tool_calls"][0]["function"]["arguments"]), indent=2
+                )
+                message["reasoning_content"] = None
+                history.extend(
+                    [message, {"role": "tool", "tool_call_id": message["tool_calls"][0]["id"], "content": "Done."}]
+                )
+
+    model = ReplayModel(
+        [shell_call("echo done", call_id=f"call-{index}") for index in range(59)]
+        + [{"role": "assistant", "content": "12"}]
+    )
+    result = await engine(model, harnesses={"agent": AgentHarness(agent)}).run_task(
+        rollout_spec(arithmetic_task(), harness="agent", max_turns=60)
+    )
+    assert result.grade.reward == 1.0
+    assert len(result.rollout.conversations) == 1
+    conversation = result.rollout.conversations[0]
+    assert len(conversation.steps) == 60
+    assert sum(conversation.loss_mask) == 60
+    assert [request.options for request in model.requests] == options
+    assert all(request.continuation is not None for request in model.requests[1:])
+
+
 @pytest.mark.parametrize("compact", [False, True])
 async def test_agent_harness_receives_engine_turns_and_controls_next_history(compact):
     first = ({"role": "user", "content": "Return 12."},)

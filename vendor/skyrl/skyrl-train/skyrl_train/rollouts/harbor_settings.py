@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 HARBOR_EXCEPTION = "harbor_exception_type"
+HARBOR_MODEL_LIMIT = "harbor_model_limit"
 # Harbor trials one run executes at once when its config leaves n_concurrent_trials unset.
 DEFAULT_CONCURRENT_TRIALS = 16
 
@@ -41,6 +42,9 @@ DEFAULT_RETRY_EXCLUSIONS = frozenset(
     {
         "AgentTimeoutError",
         "VerifierTimeoutError",
+        "AddTestsDirError",
+        "DownloadVerifierDirError",
+        "VerifierRuntimeError",
         "RewardFileNotFoundError",
         "RewardFileEmptyError",
         "VerifierOutputParseError",

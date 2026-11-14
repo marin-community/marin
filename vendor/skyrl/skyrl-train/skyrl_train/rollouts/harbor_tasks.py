@@ -15,6 +15,7 @@ from skyrl_train.rollouts.training_record import TrainingRollout
 
 from skyrl_train.rollouts.harbor_settings import (
     HARBOR_EXCEPTION,
+    HARBOR_MODEL_LIMIT,
     EnvironmentConfig,
     EnvironmentType,
     RetryConfig,
@@ -191,11 +192,18 @@ def harbor_grading_failure(rollout: TrainingRollout) -> TrainingRollout:
     if rollout.failure is not None:
         return rollout
     exception_type = rollout.grade.diagnostics.get(HARBOR_EXCEPTION)
+    model_limit = rollout.grade.diagnostics.get(HARBOR_MODEL_LIMIT)
+    model_ended = model_limit is not None and (
+        exception_type != "NonZeroAgentExitCodeError" or model_limit == rollout.stop_reason
+    )
     if exception_type is not None:
-        return replace(
-            rollout,
-            failure=RolloutFailure(exception_type, diagnostics={"timed_out": exception_type == "AgentTimeoutError"}),
-        )
+        # Generic process exits need the engine's matching limit as well as Pi's
+        # message. Cleanup and network failures remain infrastructure failures.
+        if not model_ended:
+            return replace(
+                rollout,
+                failure=RolloutFailure(exception_type, diagnostics={"timed_out": exception_type == "AgentTimeoutError"}),
+            )
     if rollout.grade.status != Outcome.INFRA_ERROR:
         return rollout
     return replace(

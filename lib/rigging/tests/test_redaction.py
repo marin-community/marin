@@ -99,10 +99,12 @@ def test_redact_value_preserves_tokenizers_parallelism():
 
 def test_redact_string_redacts_prefixed_tokens():
     slack_token = "xox" + "b-1234567890-abcdefghijklmnopqrstuvwxyz"
+    hf_token = "hf_" + "Q" * 32
     raw = (
         "aws=AKIAIOSFODNN7EXAMPLE "
         "github=ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ "
         f"slack={slack_token} "
+        f"hf={hf_token} "
         "jwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     )
 
@@ -111,8 +113,9 @@ def test_redact_string_redacts_prefixed_tokens():
     assert "AKIAIOSFODNN7EXAMPLE" not in redacted
     assert "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ" not in redacted
     assert slack_token not in redacted
+    assert hf_token not in redacted
     assert "eyJhbGciOiJIUzI1NiJ9" not in redacted
-    assert redacted.count(REDACTED_VALUE) == 4
+    assert redacted.count(REDACTED_VALUE) == 5
 
 
 def test_redact_string_redacts_private_keys():

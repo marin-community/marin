@@ -349,7 +349,9 @@ def test_host_hf_export_matches_device_format_and_splits_experts(tmp_path):
     assert tensors["scalar"].shape == ()
 
 
-def test_host_hf_export_resumes_after_input_failure_and_rejects_corruption(tmp_path):
+def test_host_hf_export_resumes_after_input_failure_and_rejects_corruption(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(hf_export.telemetry, "event", lambda name, body: events.append((name, body.fields)))
     source = tmp_path / "source"
     source.mkdir()
     values = np.arange(6, dtype=np.float32).reshape(2, 3)
@@ -385,6 +387,9 @@ def test_host_hf_export_resumes_after_input_failure_and_rejects_corruption(tmp_p
     with pytest.raises(ValueError, match="integrity"):
         hf_export.save_host_hf_shards(shards, load, str(destination), **options)
     assert first.read_bytes() == damaged
+    assert {body["phase"] for _, body in events} == {"serialization", "hash"}
+    assert all(name == "hf_export_phase" and body["succeeded"] for name, body in events)
+    assert all(body["started_unix_ms"] <= body["finished_unix_ms"] for _, body in events)
 
 
 def _export_on_cpu_rank(coordinator, destination, expected):

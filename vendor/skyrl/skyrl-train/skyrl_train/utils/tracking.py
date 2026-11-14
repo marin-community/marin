@@ -16,12 +16,15 @@
 # limitations under the License.
 
 import dataclasses
+import json
 from enum import Enum
 from functools import partial
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, List, Self, Union
 from loguru import logger
+from marinskyrl.resource_locator import join_resource_path
+from skyrl_train.io import io
 from rigging.secrets import require_secret
 from omegaconf import DictConfig, OmegaConf
 import pprint
@@ -103,6 +106,13 @@ class Tracking:
                 ),
             )
             run_id = run.id
+            export_path = OmegaConf.select(config, "trainer.export_path")
+            if export_path is not None:
+                io.makedirs(export_path, exist_ok=True)
+                io.write_bytes_atomic(
+                    join_resource_path(export_path, "wandb-run.json"),
+                    json.dumps({"entity": run.entity, "project": run.project, "id": run.id, "url": run.url}).encode(),
+                )
             run.define_metric(_WANDB_STEP_METRIC)
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run

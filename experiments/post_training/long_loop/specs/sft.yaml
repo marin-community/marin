@@ -1,0 +1,92 @@
+format: sft_spec
+profile: snowball_h100
+xla_flags:
+- --xla_gpu_shard_autotuning=false
+pack: true
+target_positions: 50063212544
+source_step_positions: 67108864
+stop_after_steps: 23872
+serialized_chat:
+  message_start_id: 128006
+  assistant_prefix:
+  - 128006
+  - 78191
+  - 128007
+  - 198
+wandb_project: marin-long-loop
+model:
+  attention_implementation: gpu_fa4_cute
+  capacity_factor: 1.0
+  ce_grad_in_forward_token_block_size: null
+  expert_chunks: 1
+  global_every: 4
+  global_kv_heads: null
+  head_dim: 128
+  hidden_dim: 2560
+  initializer_std: 0.009882117688026186
+  intermediate_dim: 1280
+  latent_dim: null
+  layer_norm_eps: 1.0e-05
+  local_kv_heads: null
+  max_seq_len: 262144
+  moe_implementation: sonic
+  num_expert_waves: 1
+  num_experts: 256
+  num_experts_per_token: 4
+  num_heads: 20
+  num_kv_heads: 5
+  num_layers: 26
+  num_shared_experts: 1
+  pooled_transport_capacity_factor: null
+  qb_estimator: topk
+  qb_hist_bins: 1000
+  qk_mult: 1.75
+  qk_mult_long_scale: 1.0
+  remat_mode: recompute_all
+  report_capacity_overflow: false
+  rope:
+    scaling_factor: null
+    theta: 10000.0
+  rope_fused: false
+  sconv: false
+  sconv_kernel: 4
+  sconv_sites:
+  - k
+  - attn
+  - mlp
+  shared_expert_intermediate_dim: 2560
+  sliding_window: 2048
+  vocab_size: 128256
+resources:
+  container_profile: null
+  cpu: 64
+  device:
+    count: 8
+    kind: gpu
+    variant: H100
+  disk: 500GB
+  image: null
+  preemptible: false
+  ram: 1500GB
+  replicas: 32
+  target_cluster: null
+  zone: null
+task_timeout_seconds: 72000
+seq_len: 262144
+batch_size: 8
+per_device_parallelism: 1
+mesh:
+  axes:
+    data: 1
+    replica: 1
+    model: 1
+    expert: 8
+  compute_mapping:
+    batch:
+    - replica_dcn
+    - data
+    - expert
+    position: context
+  dcn_axes:
+    replica_dcn: 1
+    context: 32

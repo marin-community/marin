@@ -697,3 +697,17 @@ def test_source_launch_rejects_conflicting_author_values(tmp_path):
         OmegaConf.save(raw, path)
         with pytest.raises(ValueError, match=error):
             load_launch_config(path)
+
+
+def test_literal_source_ids_survive_launch_composition(tmp_path: Path) -> None:
+    raw = raw_launch_config()
+    routes = {
+        "https://files.pythonhosted.org/packages/42/21/bb9f6d2f76424f8b516fe83f8026e52e466b0202341bb4ee7a9861e06277/reasoning_gym-0.1.25-py3-none-any.whl": "nonagentic",
+        "open-athena/Snowball-Smartie-RL-2026.10.15.32-Data": "nonagentic",
+        "long-loop-smartie-swesmith": "agentic",
+    }
+    raw["skyrl"].setdefault("trainer", {}).setdefault("rollout_buffer", {})["source_routes"] = routes
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    compiled = load_launch_config(path)
+    assert OmegaConf.to_container(compiled.skyrl.trainer.rollout_buffer.source_routes) == routes

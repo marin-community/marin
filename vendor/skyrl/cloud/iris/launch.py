@@ -15,15 +15,15 @@ from typing import Any, Protocol
 
 from iris.client.client import JobFailedError
 from iris.cluster.client.job_info import get_job_info
-from iris.resources.state import JobState
+from iris.resources.state import JobState, TERMINAL_JOB_STATES
 from omegaconf import DictConfig, OmegaConf
 from loguru import logger
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
-from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
+from cloud.iris.launch_config import FinalizationMode, RunMode, SubmissionMode, hugging_face_models, load_launch_config
 from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
-from marinskyrl.checkpoint_paths import policy_export_path, selected_export_step
+from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, policy_export_path, selected_export_step
 from marinskyrl.hf_model import HuggingFaceModelCache, validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
@@ -40,6 +40,13 @@ class LaunchState(StrEnum):
     FAILED = "failed"
 
 
+class FinalizationState(StrEnum):
+    NOT_REQUESTED = "not_requested"
+    COMPLETED = "completed"
+    SKIPPED_NO_CHECKPOINT = "skipped_no_checkpoint"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class LaunchOutcome:
     """Result of one launcher backend submission."""
@@ -47,6 +54,7 @@ class LaunchOutcome:
     job_id: str
     job_state: str
     exit_code: int
+    failure: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +78,8 @@ class LaunchResult:
     runtime_profile: str
     model: ExportedPolicy | None
     failure: str | None
+    finalization: FinalizationState = FinalizationState.NOT_REQUESTED
+    finalization_failure: str | None = None
 
 
 class LaunchBackend(Protocol):
@@ -206,6 +216,8 @@ def _result(
     outcome: LaunchOutcome | None = None,
     model: ExportedPolicy | None = None,
     failure: str | None = None,
+    finalization: FinalizationState = FinalizationState.NOT_REQUESTED,
+    finalization_failure: str | None = None,
 ) -> LaunchResult:
     return LaunchResult(
         run_id=str(config.run.id),
@@ -217,6 +229,8 @@ def _result(
         runtime_profile=str(config.runtime.profile),
         model=model,
         failure=failure,
+        finalization=finalization,
+        finalization_failure=finalization_failure,
     )
 
 
@@ -231,16 +245,34 @@ def _record_failure(
     config: DictConfig,
     outcome: LaunchOutcome,
     failure: str,
+    *,
+    finalization_failure: str | None = None,
 ) -> LaunchResult:
-    result = _result(config, LaunchState.FAILED, outcome=outcome, failure=failure)
+    result = _result(
+        config, LaunchState.FAILED, outcome=outcome, failure=failure,
+        finalization=FinalizationState.FAILED if finalization_failure else FinalizationState.NOT_REQUESTED,
+        finalization_failure=finalization_failure,
+    )
     attempt_uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
     write_json(attempt_uri, _manifest(config, result))
+    if config.run.finalization == FinalizationMode.ANY_TERMINAL and outcome.job_state in TERMINAL_JOB_STATES:
+        write_json(str(config.artifacts.terminal_manifest_uri), _manifest(config, result))
     return result
+
+
+def _has_committed_best(config: DictConfig) -> bool:
+    path = StoragePath(join_resource_path(str(config.artifacts.checkpoint_root), BEST_CHECKPOINT_FILENAME))
+    if not path.exists():
+        return False
+    best = json.loads(path.read_text())
+    # The selection callback publishes native best only after checkpoint commit.
+    return best["model_format"] == "native"
 
 
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
+    finalization_mode = FinalizationMode(config.run.finalization)
     terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
     if StoragePath(terminal_manifest_uri).exists():
         raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")
@@ -264,33 +296,46 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:
-            outcome = LaunchOutcome(job_id=str(error.job_id), job_state=error.status.state.value, exit_code=1)
+            outcome = LaunchOutcome(
+                job_id=str(error.job_id), job_state=error.status.state.value, exit_code=1,
+                failure=error.status.error_message or error.status.status_message or None,
+            )
 
-        if outcome.exit_code != 0:
-            return _record_failure(config, outcome, f"Iris job reached {outcome.job_state}")
         if config.run.submission == SubmissionMode.DETACH:
+            if outcome.exit_code != 0:
+                return _record_failure(config, outcome, f"Iris job reached {outcome.job_state}")
             return _result(config, LaunchState.SUBMITTED, outcome=outcome)
-        if outcome.job_state != JobState.SUCCEEDED.value:
+        failure = (
+            outcome.failure or f"Iris job reached {outcome.job_state}"
+            if outcome.exit_code != 0 or outcome.job_state != JobState.SUCCEEDED.value else None
+        )
+        if failure and (finalization_mode != FinalizationMode.ANY_TERMINAL or outcome.job_state not in TERMINAL_JOB_STATES):
             return _record_failure(config, outcome, f"Iris job reached {outcome.job_state}")
-        if config.run.export_hf:
+        skipped = finalization_mode == FinalizationMode.ANY_TERMINAL and not _has_committed_best(config)
+        if config.run.export_hf and not skipped:
             try:
                 active_backend.export_terminal_policy(resolved_path)
             except (OSError, subprocess.CalledProcessError, ValueError) as error:
-                return _record_failure(config, outcome, f"Terminal policy export failed: {error}")
+                reason = f"Terminal policy export failed: {error}"
+                return _record_failure(config, outcome, failure or reason, finalization_failure=reason)
 
     model = None
-    if config.run.export_hf:
+    if config.run.export_hf and not skipped:
         try:
             model = _exported_policy(config)
         except ValueError as error:
-            return _record_failure(config, outcome, str(error))
-    if not StoragePath(str(config.artifacts.resolved_config_uri)).exists():
+            return _record_failure(config, outcome, failure or str(error), finalization_failure=str(error))
+    if not skipped and not StoragePath(str(config.artifacts.resolved_config_uri)).exists():
         return _record_failure(
             config,
             outcome,
             f"Successful Iris job did not persist resolved config: {config.artifacts.resolved_config_uri}",
         )
-    result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
+    result = _result(
+        config, LaunchState.FAILED if failure else LaunchState.SUCCEEDED,
+        outcome=outcome, model=model, failure=failure,
+        finalization=(FinalizationState.SKIPPED_NO_CHECKPOINT if skipped else FinalizationState.COMPLETED),
+    )
     payload = _manifest(config, result)
     attempt_uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
     write_json(attempt_uri, payload)

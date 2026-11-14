@@ -8,16 +8,52 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from fray.types import ResourceConfig
+from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint_or_initialize
 from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import AdamConfig
 from levanter.testing.helpers import use_test_mesh
 from marin.execution.lazy import StepContext
-from marin.training.training import apply_output_path
+from marin.training.training import TrainLmOnPodConfig, apply_output_path
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 
+from experiments.sft import launcher
 from experiments.sft.launcher import HFModel, SFTSpec
+
+
+@pytest.mark.parametrize("override", [None, 345600])
+@pytest.mark.parametrize(
+    "device,platform", [(CpuConfig(), "cpu"), (GpuConfig("H100"), "cuda,cpu"), (TpuConfig("v4-8"), None)]
+)
+def test_native_sft_dispatch_preserves_accelerator_platform_and_timeout(monkeypatch, override, device, platform):
+    monkeypatch.setenv("MARIN_TEMP_PREFIX", "s3://marin-us-east-08a/tmp")
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu")
+    submitted = []
+
+    def capture_remote(fn, **execution):
+        def submit(config):
+            submitted.append((execution, config))
+
+        return submit
+
+    monkeypatch.setattr(launcher, "remote", capture_remote)
+    kwargs = {} if override is None else {"task_timeout_seconds": override}
+    model = HFModel("unused-no-download", **kwargs)
+    pod = TrainLmOnPodConfig(
+        train_config=None,
+        resources=ResourceConfig(device=device),
+        env_vars={"XLA_FLAGS": "--xla_gpu_shard_autotuning=false"},
+    )
+    model.run(pod)
+    assert submitted[0][0]["timeout"] == Duration.from_seconds(259200 if override is None else override)
+    assert submitted[0][1] is pod
+    assert submitted[0][0]["env_vars"]["MARIN_TEMP_PREFIX"] == "s3://marin-us-east-08a/tmp"
+    assert submitted[0][0]["env_vars"].get("JAX_PLATFORMS") == platform
+    flags = submitted[0][0]["env_vars"]["XLA_FLAGS"].split()
+    assert "--xla_gpu_shard_autotuning=false" in flags
+    if isinstance(device, GpuConfig):
+        assert any(flag.startswith("--xla_gpu_nccl_termination_timeout_seconds=") for flag in flags)
 
 
 @pytest.fixture

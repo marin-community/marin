@@ -159,6 +159,42 @@ class LocalLaunchBackend:
             (root / name).write_text("{}")
 
 
+@pytest.mark.parametrize("state", ["succeeded", "failed", "killed", "worker_failed", "unschedulable"])
+@pytest.mark.parametrize("committed", [True, False])
+def test_any_terminal_exports_committed_best_and_preserves_rl_outcome(tmp_path, state, committed):
+    path = _config_path(tmp_path)
+    config = yaml.safe_load(path.read_text())
+    config["run"]["finalization"] = "any_terminal"
+    config["skyrl"]["trainer"]["hf_export_checkpoint"] = "best"
+    config["artifacts"] = {name: str(tmp_path / name) for name in config["artifacts"]}
+    path.write_text(yaml.safe_dump(config))
+    reason = None if state == "succeeded" else "GroupAdmissionStalledError: no admitted groups"
+
+    class TerminalBackend(LocalLaunchBackend):
+        def launch(self, config_path):
+            super().launch(config_path)
+            if committed:
+                (tmp_path / "checkpoint_root/best_checkpoint.json").write_text(
+                    json.dumps({"model_format": "native", "step": 3})
+                )
+            return LaunchOutcome("/user/training", state, 0 if state == "succeeded" else 1, reason)
+
+    backend = TerminalBackend()
+    result = execute_launch(path, backend=backend)
+    terminal = json.loads((tmp_path / "terminal_manifest_uri").read_text())["result"]
+    assert terminal["iris_job_state"] == state
+    assert terminal["failure"] == reason
+    assert terminal["state"] == ("succeeded" if state == "succeeded" else "failed")
+    if committed:
+        assert backend.export_jobs == [str(tmp_path / "export_root/global_step_3/policy")]
+        assert result.model is not None and result.model.global_step == 3
+        assert terminal["finalization"] == "completed"
+    else:
+        assert backend.export_jobs == []
+        assert result.model is None
+        assert terminal["finalization"] == "skipped_no_checkpoint"
+
+
 @pytest.mark.parametrize("export_hf", [None, True], ids=["default-native", "explicit-hf"])
 def test_completed_launch_defaults_to_native_result_and_exports_only_on_opt_in(tmp_path: Path, export_hf: bool | None):
     path = _config_path(tmp_path)

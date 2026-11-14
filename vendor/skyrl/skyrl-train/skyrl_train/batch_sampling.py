@@ -29,6 +29,8 @@ def _refresh_filtered_rollout_metrics(filtered: TrajectoryBatch) -> None:
             filtered.get("env_metrics"),
             filtered.get("env_classes"),
             verification_results=filtered.get("verification_results"),
+            episode_statistics=filtered.get("episode_statistics"),
+            excluded=filtered.get("exclude_from_baseline"),
         )
     )
     filtered["rollout_metrics"] = metrics

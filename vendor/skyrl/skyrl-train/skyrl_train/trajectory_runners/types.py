@@ -35,7 +35,7 @@ class TrajectoryID:
 
 @dataclass
 class BatchMetadata:
-    global_step: int
+    global_step: int | None
     training_phase: TrainingPhase
 
 
@@ -99,6 +99,13 @@ class VerifierTestCollection(TypedDict):
     tests: List[VerifierTestRecord]
 
 
+class EpisodeStatistics(TypedDict):
+    generated_tokens: int
+    assistant_turns: int
+    tool_calls: int
+    conversations: int
+
+
 class TrajectoryBatch(TypedDict):
     """Normalized output shared by trajectory runners and trainer consumers.
 
@@ -125,6 +132,7 @@ class TrajectoryBatch(TypedDict):
     reward_shaping_versions: Optional[List[int]]
     verification_results: List[Optional[VerificationResult]]
     evidence_messages: List[Optional[list[dict[str, Any]]]]
+    episode_statistics: NotRequired[List[EpisodeStatistics]]
     verifier_tests: Optional[List[Optional[VerifierTestCollection]]]
     loss_masks: List[List[int]]
     stop_reasons: Optional[List[str]]

@@ -60,32 +60,35 @@ class TrainingRollout:
     conversations: tuple[ConversationRecord, ...] = ()
 
 
+def conversation_steps(conversation: ConversationRecord) -> tuple[TrainingStep, ...]:
+    """Project transition rewards while retaining each exact model turn."""
+    return tuple(
+        TrainingStep(
+            step.turn,
+            TrainingTransition(
+                done=step.transition.done,
+                observations=step.transition.observations,
+                reward=data.reward,
+                token_rewards=data.token_rewards,
+                token_credit=data.token_credit,
+                reward_components=data.reward_components,
+                grade=data.grade,
+                task_grade=data.task_grade,
+                metrics=step.transition.metrics,
+            ),
+            step.response_end,
+            step.messages,
+        )
+        for step in conversation.steps
+        for data in [step.transition.data if isinstance(step.transition.data, StepReward) else StepReward()]
+    )
+
+
 def training_rollout(result: GradedRollout, spec: TaskRolloutSpec) -> TrainingRollout:
     """Select the last conversation for optimization and keep the full attempt for audit."""
     rollout = result.rollout
     conversation = rollout.conversations[-1] if rollout.conversations else None
-    steps: tuple[TrainingStep, ...] = ()
-    if conversation is not None:
-        steps = tuple(
-            TrainingStep(
-                step.turn,
-                TrainingTransition(
-                    done=step.transition.done,
-                    observations=step.transition.observations,
-                    reward=data.reward,
-                    token_rewards=data.token_rewards,
-                    token_credit=data.token_credit,
-                    reward_components=data.reward_components,
-                    grade=data.grade,
-                    task_grade=data.task_grade,
-                    metrics=step.transition.metrics,
-                ),
-                step.response_end,
-                step.messages,
-            )
-            for step in conversation.steps
-            for data in [step.transition.data if isinstance(step.transition.data, StepReward) else StepReward()]
-        )
+    steps = conversation_steps(conversation) if conversation is not None else ()
     grade = result.grade
     if isinstance(spec.task.grader, NoGrader) and steps:
         grades = [step.transition.grade for step in steps if step.transition.grade is not None]

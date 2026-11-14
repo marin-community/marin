@@ -88,7 +88,8 @@ def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.Monkey
     assert started[0].returncode is not None and started[0].returncode < 0
 
 
-def test_external_sigterm_returns_128_plus_signum() -> None:
+@pytest.mark.parametrize("ready_count", [1, 2])
+def test_external_sigterm_returns_128_plus_signum_during_startup(ready_count: int) -> None:
     # The supervisor itself is SIGTERMed (preemption/task termination). It
     # forwards the signal to the children, which die reporting negative signal
     # codes (-15). The supervisor must surface 128+SIGTERM (143) — the killed
@@ -105,15 +106,15 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
         [sys.executable, "-c", supervisor_src], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     assert proc.stdout is not None
-    # Signal only once both children are live, so the forwarded SIGTERM is what
-    # ends them (rather than racing their startup).
+    # The first READY can arrive while other ranks are still spawning. Both
+    # partial and complete startup must forward termination and return 143.
     ready = 0
     for line in proc.stdout:
         if "READY" in line:
             ready += 1
-            if ready == 2:
+            if ready == ready_count:
                 break
-    assert ready == 2, "children did not start"
+    assert ready == ready_count, "children did not start"
     proc.send_signal(signal.SIGTERM)
     proc.communicate(timeout=30)
     assert proc.returncode == 128 + signal.SIGTERM
@@ -201,3 +202,14 @@ def test_build_multigpu_hook_requires_gpu() -> None:
 def test_build_multigpu_hook_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
         build_multigpu_hook(_gpu_resources(8), 3)
+
+
+def test_rank_streams_preserved_on_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(tmp_path))
+    code = (
+        "import os,sys; r=os.environ['IRIS_MULTIGPU_PROCESS_INDEX']; "
+        "print('out-'+r,flush=True); print('err-'+r,file=sys.stderr,flush=True); sys.exit(7)"
+    )
+    assert run(nproc=1, devices_per_proc=1, child_argv=_py(code)) == 7
+    assert (tmp_path / "rank-0.stdout.log").read_text() == "out-0\n"
+    assert (tmp_path / "rank-0.stderr.log").read_text() == "err-0\n"

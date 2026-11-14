@@ -284,6 +284,36 @@ summaries. Compare timezone-aware timestamps in UTC. Resolved configurations,
 logs, and trial metadata can contain capability JWTs inside model ingress URLs;
 redact those as well as named API keys before publication.
 
+## Cleanup and verifier failures
+
+Shellbox disables provider idle auto-stop and auto-pause at sandbox creation.
+Daytona's default container auto-stop interval is 15 minutes; guest processes
+do not refresh that timer, so an agent can lose its sandbox during a long
+command. The sandbox TTL and normal teardown still apply. See Daytona's
+[lifecycle documentation](https://www.daytona.io/docs/en/sandboxes/).
+
+An `AddTestsDirError` caused by `Machine is closed` can follow failed agent
+cleanup; it does not establish that the task package lacks tests. Shellbox logs
+`Daytona cleanup request failed` with the control operation, its credential-free
+request, provider exception type, message, HTTP status and error code. Operations
+include `stop_command`, `remove_command_files` and `delete_session`. Inspect the
+trial's `secondary_exception_info` for cancellation-cleanup diagnostics even
+when its primary exception is a later verifier failure. Preserve fail-closed
+cleanup when agent termination cannot be confirmed. A validation error alone
+does not establish that the process was already terminated.
+
+Harbor and the SkyRL task worker exclude tests-upload, verifier-runtime and
+verifier-download failures from whole-trial retries by default. Keep these
+attempts unscored; rerunning the agent discards its completed workspace and can
+repeat a long model episode. An explicit retry configuration can override these
+defaults, so inspect the resolved policy when diagnosing a replay.
+
+For missing structured verdicts, inspect the verifier stdout before assigning a
+task-authoring cause. Equal test and supervisor deadlines can suppress timeout
+verdict publication ([#11240](https://github.com/marin-community/marin/issues/11240)).
+Repair the budget nesting in a new task release and preserve partial output;
+do not alter a running dataset's grading semantics.
+
 ## Making a dataset Daytona-safe
 
 A dataset is Daytona-safe when it runs on the RL org as configured: its tasks
@@ -322,10 +352,12 @@ re-measurement; none changes a task's own instruction, files or grader.
 
 Re-measure with the production path, not a reimplementation:
 `experiments/post_training/task_curation/daytona_identity.py` materializes each
-task's environment, builds the `MachineSpec` through Harbor's mapping
-(`harbor.environments.daytona.machine_spec`), names it with
-`shellbox.backends.daytona.machine.snapshot_identity`, and runs
-`daytona_execution_failure` per task. Record the resulting count, the ten-snapshot
+task's environment and builds native-task `MachineSpec` values through Harbor's
+mapping (`harbor.environments.daytona.machine_spec`). Lowered TaskCompendium specs
+use their declared agent and grader environments. Both paths derive names through
+`shellbox.backends.daytona.snapshot.snapshot_request_for_spec(...).name`; lowered
+specs also check the factory's environment capabilities and reject unresolved
+build contexts. Record the resulting count, the ten-snapshot
 threshold and the basis on the source; the verdict
 (`finestore.rl.curation.daytona_verdict`) is derived from them. Nothing in this
 procedure creates or deletes a snapshot; cleanup stays with the operator

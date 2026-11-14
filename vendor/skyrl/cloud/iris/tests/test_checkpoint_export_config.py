@@ -1,5 +1,6 @@
 """Behavior tests for config-native checkpoint export derivation."""
 
+import asyncio
 import json
 import sys
 from dataclasses import replace
@@ -13,13 +14,19 @@ from cloud.iris.export_hf_checkpoint import (
     _run_export,
     checkpoint_export_launch_config,
 )
-from cloud.iris.launch_config import derive_launch_topology
+from cloud.iris.launch_config import (
+    derive_launch_topology,
+    load_launch_config,
+    validate_launch_config,
+)
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
-from skyrl_train.callbacks.builtin import HFModelSaveCallback
+from skyrl_train.callbacks.builtin import CheckpointCallback, EvaluationCallback, HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.hf_export import read_hf_export_request
 from skyrl_train.trainer import RayPPOTrainer
+from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.hf_export_schema import HFExportRequest
 from marinskyrl.checkpoint_paths import selected_export_step
 
@@ -91,6 +98,21 @@ def test_checkpoint_export_config_carries_request_fields_as_data() -> None:
     assert config.skyrl.trainer.placement.policy_num_gpus_per_node == 4
     assert config.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
     assert config.skyrl.checkpoint_export.export_root == request.export_path
+
+
+def test_policy_only_export_accepts_training_expert_block_transport(tmp_path: Path) -> None:
+    path = tmp_path / "training.yaml"
+    OmegaConf.save(OmegaConf.create(raw_launch_config()), path)
+    training = load_launch_config(path)
+    training.skyrl.generator.weight_sync_transport = "expert_block"
+    request = _request()
+
+    export = checkpoint_export_launch_config(training, request, _spec(request))
+    allocation = validate_launch_config(export)
+
+    assert allocation.num_nodes * allocation.gpus_per_node == 4
+    assert export.runtime.entrypoint == "skyrl_train.entrypoints.checkpoint_export"
+    assert export.skyrl.checkpoint_export.checkpoint_path == request.checkpoint_path
 
 
 def test_checkpoint_export_config_preserves_federated_routing() -> None:
@@ -282,3 +304,62 @@ async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata, 
     assert request is not None
     assert request.step == 15
     assert request.checkpoint_path == str(tmp_path / "global_step_15")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("save_fails", [False, True])
+async def test_evaluation_pauses_new_rollouts_before_checkpoint_io(tmp_path: Path, save_fails) -> None:
+    # Replace accelerator/storage work at its boundary. Run the production
+    # callback ordering and TrainingContext pause/drain/resume methods.
+    context = TrainingContext.__new__(TrainingContext)
+    context._submission_allowed = asyncio.Event()
+    context._submission_allowed.set()
+    context._running = set()
+    context._failure = asyncio.get_running_loop().create_future()
+    dispatched = asyncio.Event()
+    checkpoint_started = asyncio.Event()
+    dispatcher = None
+
+    async def finish_existing_rollout():
+        await checkpoint_started.wait()
+        (tmp_path / "existing-rollout.json").write_text('{"completed": true}')
+
+    context._running.add(asyncio.create_task(finish_existing_rollout()))
+
+    async def submit_new_rollout():
+        await context._submission_allowed.wait()
+        dispatched.set()
+
+    class LocalStageIO(RayPPOTrainer):
+        async def _save_intermediate_checkpoint(self, state):
+            nonlocal dispatcher
+            dispatcher = asyncio.create_task(submit_new_rollout())
+            checkpoint_started.set()
+            yielded = asyncio.get_running_loop().create_future()
+            asyncio.get_running_loop().call_soon(yielded.set_result, None)
+            await yielded
+            (tmp_path / "checkpoint.json").write_text(json.dumps({"fresh_rollout_started": dispatched.is_set()}))
+            if save_fails:
+                raise OSError("fixture storage failure")
+
+        async def _evaluate_and_log(self, state, *, commit):
+            await context.pause_and_drain()
+            (tmp_path / "validation.json").write_text(json.dumps({"step": state.global_step}))
+
+    trainer = LocalStageIO.__new__(LocalStageIO)
+    trainer.context = context
+    trainer._control = TrainerControl()
+    trainer.callback_handler = CallbackHandler([CheckpointCallback(save_steps=2), EvaluationCallback(eval_steps=2)])
+    trainer.eval_dataset = ["validation-task"]
+    trainer.all_timings = {}
+    state = TrainerState(global_step=2, epoch=0, total_steps=4, num_steps_per_epoch=4)
+    if save_fails:
+        with pytest.raises(OSError, match="fixture storage failure"):
+            await trainer._run_step_end_callbacks(state)
+    else:
+        await trainer._run_step_end_callbacks(state)
+    await dispatcher
+    assert json.loads((tmp_path / "checkpoint.json").read_text()) == {"fresh_rollout_started": False}
+    assert dispatched.is_set()
+    assert json.loads((tmp_path / "existing-rollout.json").read_text()) == {"completed": True}
+    assert (tmp_path / "validation.json").exists() is not save_fails

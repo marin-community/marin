@@ -9,6 +9,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
+from shellbox.backends.daytona.leases import SnapshotLeaser
+
 from harbor.utils.env import protected_environment_values
 from harbor_config.env import get_required_host_vars, resolve_env_vars
 
@@ -132,6 +135,7 @@ class HostCapabilities:
     """Host authority passed outside serialized job and task configuration."""
 
     daytona: DaytonaConnection | None = field(default=None, repr=False)
+    snapshot_leaser: SnapshotLeaser | None = field(default=None, repr=False)
     model_authentication: Mapping[str, str] = field(default_factory=dict, repr=False)
     protected_values: frozenset[str] = field(default_factory=frozenset, repr=False)
 
@@ -149,11 +153,6 @@ def host_capabilities_from_environment(
     model_authentication: Mapping[str, str],
 ) -> HostCapabilities:
     """Resolve backend and model authority from one executable-owned snapshot."""
-    # Shellbox is an optional Harbor extra; DaytonaConnection travels in its own
-    # module so a Harbor install without the Daytona extra can still import this
-    # core capability type.
-    from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL, DaytonaConnection
-
     return HostCapabilities(
         daytona=DaytonaConnection(
             api_key=environment.get("DAYTONA_API_KEY"),

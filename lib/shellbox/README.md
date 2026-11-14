@@ -78,6 +78,17 @@ set, creates missing snapshots and reclaims stale ones. See the
 [Daytona operations runbook](../../.agents/ops/daytona.md#snapshot-preflight-and-reclamation)
 for the account-wide one-hour purge policy.
 
+
+For the dedicated [Daytona Eval account](../../.agents/ops/daytona.md#credentials-and-account-selection), select
+`provisioning: declarative` in Harbor's environment kwargs. Harbor creates a
+sandbox directly from the task's registry image or Dockerfile with
+`CreateSandboxFromImageParams`, without creating or leasing named snapshots.
+`DaytonaMachineFactory` remains snapshot-backed;
+`DaytonaDeclarativeMachineFactory` uses the same command and cleanup behavior.
+SkyRL exposes this choice as `terminal_bench.harbor.daytona_provisioning`. The
+long-loop Micro210 recipe selects `declarative` with `DAYTONA_EVAL_API_KEY`;
+training keeps its existing snapshot policy.
+
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local
 Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")`
 for the existing Iris command and file-transfer backend. Host-side Terminus-2

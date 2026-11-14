@@ -307,6 +307,11 @@ class RetryConfig(BaseModel):
         default_factory=lambda: {
             "AgentTimeoutError",
             "VerifierTimeoutError",
+            # Verification has already consumed an agent attempt. Retrying the
+            # whole trial cannot repair its final workspace or missing verdict.
+            "AddTestsDirError",
+            "DownloadVerifierDirError",
+            "VerifierRuntimeError",
             "RewardFileNotFoundError",
             "RewardFileEmptyError",
             "VerifierOutputParseError",

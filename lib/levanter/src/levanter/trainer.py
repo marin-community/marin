@@ -492,7 +492,16 @@ class Trainer:
         if model is not None and not load_checkpoint:
             # The concrete model is on its target mesh. Avoid a compiled init/merge with
             # another live copy of its parameters.
-            return init_state_and_model(model_init, training_key)
+            arrays = [leaf for leaf in jax.tree.leaves(model) if isinstance(leaf, jax.Array)]
+            logger.info(
+                "Concrete optimizer initialization: mesh=%s model_bytes_per_device=%d largest_parameter_shards=%s",
+                self.device_mesh,
+                sum(leaf.addressable_shards[0].data.nbytes for leaf in arrays),
+                [(leaf.shape, str(leaf.sharding)) for leaf in sorted(arrays, key=lambda leaf: leaf.nbytes)[-3:]],
+            )
+            state = init_state_and_model(model_init, training_key)
+            logger.info("Concrete optimizer initialization completed")
+            return state
 
         trainer_state_shape = eqx.filter_eval_shape(init_state_and_model, model_init, training_key)
         saveable_train_state = saveable_training_mask(trainer_state_shape, is_trainable)

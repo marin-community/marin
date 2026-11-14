@@ -484,6 +484,9 @@ class Algorithm(Section):
 
 
 class RolloutBuffer(Section):
+    consumed_route_quotas: OpenMap = field({})
+    "Exact consumed-group quotas, enforced at lease admission; full_batch only."
+    source_routes: OpenMap = field({})
     max_staleness_steps: NonNegativeInt = field(0)
     "How many steps the generating policy may lag the step that trains on its group. colocate_all requires 0."
     batch_policy: Literal["full_batch", "rolling"] = field("full_batch")
@@ -634,6 +637,8 @@ class Trainer(Section):
     run_name: str | None = field("test_run")
     logger: LoggingBackend | tuple[LoggingBackend, ...] = field("wandb")
     tracker_commit_each_step: bool = field(True)
+    dump_training_order: bool = field(False)
+    "Persist ordered task/trajectory IDs without full token batches"
     dump_data_batch: bool = field(False)
     dump_eval_results: bool = field(True)
     log_level: str = field("INFO")
@@ -768,21 +773,24 @@ class TrajectoryRetention(Section):
     phases: tuple[Literal["train", "eval"], ...] = field(["train"])
     sample_count_per_step: int = field(1)
     sample_fraction: int | float = field(0.0)
+    eval_sample_fraction: Annotated[int | float, Field(ge=0, le=1)] | None = field(None)
+    "Optional eval-only override of the train fraction"
     always_retain_failures: bool = field(True)
     always_retain_non_terminating: bool = field(True)
     always_retain_loops: bool = field(True)
     accepted_stop_reasons: tuple[str, ...] = unset_field()
     reward_below: int | float | None = field(None)
     reward_above: int | float | None = field(None)
-    max_bytes_per_step: int = field(838860800)
+    max_bytes_per_step: int | None = field(838860800)
     "Set either bound to null to make that dimension unlimited."
-    max_bytes_per_run: int = field(26843545600)
+    max_bytes_per_run: int | None = field(26843545600)
     required: bool = field(False)
     publish_timeout_seconds: int = field(120)
     shutdown_timeout_seconds: int = field(30)
     redact_fields: tuple[str, ...] = field([])
     model_path: str = unset_field()
     model_source_identity: str = unset_field()
+    model_checkpoint_step: NonNegativeInt | None = field(None)
     resume_path: str = unset_field()
     inference_backend: Literal["vllm"] = unset_field()
 

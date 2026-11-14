@@ -1,17 +1,19 @@
 """Installed-agent runtime admission through the real Harbor trial boundary."""
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 
 import pytest
-from harbor.environments import daytona
-from harbor.host_capabilities import HostCapabilities
+from harbor.host_capabilities import HostCapabilities, task_model_environment
 from shellbox.backends.daytona.connection import DaytonaConnection
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import AgentConfig
+from harbor.utils.env import resolve_env_vars
 from omegaconf import OmegaConf
 from shellbox.machine import ExitReason, Result
 from taskcompendium.models import Source
+from verifyit.modes.grade_judge import JudgeConnection
 
 from skyrl_train.dataset.harbor_import import harbor_trial_task
 from skyrl_train.rollouts import agent_runtime
@@ -37,18 +39,26 @@ class UnusedDecoder:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["train", "eval"])
-async def test_original_trial_uses_captured_phase_connection_at_provider_startup(tmp_path, monkeypatch, phase):
+@pytest.mark.parametrize("with_judge", [False, True])
+@pytest.mark.parametrize("declares_judge", [False, True])
+async def test_original_trial_uses_captured_phase_connection_at_provider_startup(
+    tmp_path, monkeypatch, phase, with_judge, declares_judge
+):
     package = tmp_path / "package"
     package.mkdir()
     (package / "environment").mkdir()
     (package / "tests").mkdir()
     (package / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
     (package / "instruction.md").write_text("Write an answer.")
-    (package / "task.toml").write_text('[environment]\ndocker_image = "fixture/image:latest"\n')
+    (package / "task.toml").write_text(
+        '[environment]\ndocker_image = "fixture/image:latest"\n'
+        + ('[verifier.env]\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n' if declares_judge else "")
+    )
     task = harbor_trial_task(package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
     lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
     settings = InstalledAgentSettings(
         agent=AgentConfig(name="pi", kwargs={"thinking_format": "qwen-chat-template"}),
+        judge_model="fixture-judge" if with_judge else None,
         output_path=str(tmp_path / "attempts"),
         setup_timeout=5,
         run_timeout=5,
@@ -64,6 +74,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
         settings,
         AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()),
         128,
+        judge=JudgeConnection("http://127.0.0.1:2/v1", "host-only-judge-key") if with_judge else None,
         daytona_connection=connections["train"],
         eval_daytona_connection=connections["eval"],
     )
@@ -94,7 +105,7 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     async def registered_endpoint(port, *, request_timeout):
         yield LocalEndpoint()
 
-    monkeypatch.setattr(daytona, "AsyncDaytona", UnavailableDaytona)
+    monkeypatch.setattr("daytona.AsyncDaytona", UnavailableDaytona)
     monkeypatch.setattr(agent_runtime, "registered_agent_endpoint", registered_endpoint)
     await runtime.startup()
     try:
@@ -115,6 +126,12 @@ async def test_original_trial_uses_captured_phase_connection_at_provider_startup
     assert len(attempts) == 1
     assert (attempts[0] / "identity.json").is_file()
     assert list((attempts[0] / "trials").glob("*/result.json"))
+    consumed = json.loads(next((attempts[0] / "trials").glob("*/config.json")).read_text())
+    # The provider-facing trial must not require a Python relay for shell-only
+    # verifiers merely because this run has a judge available.
+    expected_endpoint = "http://127.0.0.1:2/v1" if with_judge and declares_judge else None
+    assert consumed["environment"]["kwargs"].get("model_endpoint") == expected_endpoint
+
 
 
 @pytest.mark.asyncio
@@ -144,3 +161,44 @@ async def test_borrowed_machine_commands_use_explicit_environment_and_reject_hos
     assert result.stdout == "task-value:unset"
     with pytest.raises(ValueError, match="host credential material"):
         await environment.exec("true", env={"DISGUISED": "host-secret"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("judge_key", ["EMPTY", "synthetic-host-judge-secret"])
+async def test_verifier_guest_relay_binding_keeps_real_credentials_on_host(tmp_path, monkeypatch, judge_key):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "environment").mkdir()
+    (package / "tests").mkdir()
+    (package / "tests/test.sh").write_text("#!/bin/sh\nexit 0\n")
+    (package / "instruction.md").write_text("Answer in answer.txt")
+    (package / "task.toml").write_text(
+        '[environment]\ndocker_image = "fixture/image:latest"\n'
+        '[verifier.env]\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n'
+    )
+    task = harbor_trial_task(package, source=Source(dataset="bixbench-fixture", revision="1", row="0", importer_revision="1"))
+    lowered = lowered_task(task, "harbor_trial", attempt_timeout=15, total_turn_timeout=5)
+    settings = InstalledAgentSettings(agent=AgentConfig(name="pi"), judge_model="fixture-judge",
+        output_path=str(tmp_path / "attempts"), setup_timeout=5, run_timeout=5, cleanup_timeout=5,
+        service_startup_timeout=5, service_shutdown_timeout=5)
+    connection = DaytonaConnection("synthetic-daytona-secret", "https://fixture.invalid", "us")
+    runtime = InstalledAgentRuntime(settings,
+        AgentInferenceBackend("fixture", 1024, unexpected_model_request, UnusedDecoder()), 128,
+        judge=JudgeConnection("https://host-judge.invalid/v1", judge_key),
+        daytona_connection=connection, eval_daytona_connection=connection)
+
+    async def check_binding(complete, *, host_capabilities, **kwargs):
+        assert host_capabilities.model_authentication["https://host-judge.invalid/v1"] == judge_key
+        resolved = resolve_env_vars({"OPENAI_API_KEY": "${OPENAI_API_KEY}",
+            "OPENAI_BASE_URL": "${OPENAI_BASE_URL}"}, source=task_model_environment("fixture-judge"),
+            protected_values=host_capabilities.protected_values)
+        assert resolved["OPENAI_API_KEY"] == "EMPTY"
+        assert resolved["OPENAI_BASE_URL"].startswith("http://127.0.0.1:")
+        for secret in ["synthetic-daytona-secret"] + ([judge_key] if judge_key != "EMPTY" else []):
+            with pytest.raises(ValueError, match="host credential material"):
+                resolve_env_vars({"DISGUISED": secret}, source={}, protected_values=host_capabilities.protected_values)
+        return resolved
+
+    monkeypatch.setattr(runtime, "run_original_trial", check_binding)
+    harness = runtime.original_harness(lowered, "fixture", HarborTaskSettings.from_config(OmegaConf.create({})), "eval")
+    await harness.run_trial(unexpected_model_request)
