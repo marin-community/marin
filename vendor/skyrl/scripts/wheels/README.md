@@ -2,7 +2,6 @@
 
 `build_native.sh` builds native extensions from exact upstream commits. It uses
 ordinary source builds and does not rewrite wheel contents after compilation.
-Runtime installation consumes published wheels; it does not invoke this script.
 The [SkyRL lockfile](../../uv.lock) records their URLs and SHA-256 hashes.
 The [TE 2.21 native release](https://github.com/marin-community/marin/releases/tag/skyrl-native-te221-cu132torch2141-20261113-0821e3af)
 contains the qualified wheels and their original build records.
@@ -13,12 +12,25 @@ contains the qualified wheels and their original build records.
 | Transformer Engine Torch 2.21.0 | `7457e47d26d9d02dfb783007335dfbe75e1b90a8` | 2.14.1+cu132 / 13.2.2 | x86_64, aarch64 |
 | causal-conv1d and Mamba | Commits selected in the script | 2.13.0+cu132 / 13.2.1 | x86_64 |
 
-FA2 and TE use [native-cu132-torch214.txt](native-cu132-torch214.txt), including
-NVCC/CCCL 13.2.86. FA2's upstream source selects C++20 for Torch 2.14 and excludes
-its optional Cute packages. Its supported `FLASH_ATTN_LOCAL_VERSION` option adds
-the Marin build label. TE's matching Python and CUDA packages come from PyPI;
-this recipe rebuilds only its Torch binding. Core and Bridge remain stock PyPI
-0.18.0 and 0.6.0.
+TE's Python package and GPU library use NVIDIA's official wheels. NVIDIA does
+not publish a CUDA 13 ARM wheel for TE 2.21's PyTorch binding. The
+[published CUDA 13 x86 binding](https://github.com/NVIDIA/TransformerEngine/releases/tag/v2.21.0)
+targets NVIDIA's PyTorch container release 26.08 and has not been qualified with
+our Torch 2.14.1/CUDA 13.2 stack. This recipe builds the binding from unchanged
+source for that stack on both architectures.
+[Upstream issue #3310](https://github.com/NVIDIA/TransformerEngine/issues/3310)
+and [PR #3311](https://github.com/NVIDIA/TransformerEngine/pull/3311) track
+expanding CUDA 13 wheel coverage; that PR currently targets Torch 2.11.
+
+[native-cu132-torch214.txt](native-cu132-torch214.txt) pins the packages used to
+compile the TE binding, including NVCC/CCCL 13.2.86. RL jobs install the published
+wheel through `uv.lock`; they do not use this file or compile TE. A qualified
+official binding wheel could replace our build for each architecture.
+
+The FA2 build also uses this requirements file. FA2's upstream source selects
+C++20 for Torch 2.14 and excludes its optional Cute packages. Its supported
+`FLASH_ATTN_LOCAL_VERSION` option adds the Marin build label. Core and Bridge
+remain stock PyPI 0.18.0 and 0.6.0.
 
 TE 2.21 accepts FA2 2.8.4. TE 2.19 requires FA2 below 2.8.4, so it cannot consume
 this FA2 build without a different source selection. Do not change a package's
