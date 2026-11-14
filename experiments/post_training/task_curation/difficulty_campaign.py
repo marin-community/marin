@@ -220,13 +220,6 @@ def main() -> None:
         if {source.declaration.id for source in sources} != set(args.source_id):
             raise ValueError("Requested source is absent from the frozen selection")
     pin = PINS[args.solver]
-    for selected_solver in {args.solver, Solver.HOSTED}:
-        selected_pin = PINS[selected_solver]
-        template = Path(
-            hf_hub_download(SOLVER_MODELS[selected_solver], "chat_template.jinja", revision=selected_pin.revision)
-        )
-        if hashlib.sha256(template.read_bytes()).hexdigest() != selected_pin.template_sha256:
-            raise ValueError("Pinned chat template differs from the resolved model identity")
     args.local_root.mkdir(parents=True)
     options = worker_limits(args.local_root)
     if args.registry_auth_secret is not None:
@@ -235,6 +228,14 @@ def main() -> None:
         authfile.chmod(0o600)
         options["registry_authfile"] = str(authfile)
     prepared = [prepare_source(source, args.local_root / "prepared") for source in sources]
+    has_judge = any(task.judge_model is not None for source in prepared for task in source.tasks)
+    for selected_solver in {args.solver} | ({Solver.HOSTED} if has_judge else set()):
+        selected_pin = PINS[selected_solver]
+        template = Path(
+            hf_hub_download(SOLVER_MODELS[selected_solver], "chat_template.jinja", revision=selected_pin.revision)
+        )
+        if hashlib.sha256(template.read_bytes()).hexdigest() != selected_pin.template_sha256:
+            raise ValueError("Pinned chat template differs from the resolved model identity")
     prepared_path = args.local_root / "prepared-sources.json"
     prepared_path.write_text(json.dumps([source.model_dump(mode="json") for source in prepared]) + "\n")
     write_json_evidence(
@@ -259,19 +260,26 @@ def main() -> None:
     with solver_endpoint(args.solver, settings) as (endpoint, api_model, api_key, jobs):
         probe = probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
         judge_pin = PINS[Solver.HOSTED]
-        judge_endpoint = resolve_glm_base_url(GLM_RELAY_JOB)
-        judge_probe = (
-            probe
-            if args.solver == Solver.HOSTED
-            else probe_endpoint(
-                Solver.HOSTED,
-                judge_endpoint,
-                GLM_MODEL,
-                require_secret(GLM_BULK_TOKEN_ENV),
-                sampling_settings(Solver.HOSTED, []),
+        judge_endpoint = ""
+        judge_probe = None
+        if has_judge:
+            judge_endpoint = resolve_glm_base_url(GLM_RELAY_JOB)
+            judge_probe = (
+                probe
+                if args.solver == Solver.HOSTED
+                else probe_endpoint(
+                    Solver.HOSTED,
+                    judge_endpoint,
+                    GLM_MODEL,
+                    require_secret(GLM_BULK_TOKEN_ENV),
+                    sampling_settings(Solver.HOSTED, []),
+                )
             )
+        judge_revision = (
+            f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}"
+            if judge_probe is not None
+            else "unqualified:no-judge-tasks"
         )
-        judge_revision = f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}"
         completion = probe["tools_thinking_probe"]["completion"]
         revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
         receipt = write_json_evidence(
