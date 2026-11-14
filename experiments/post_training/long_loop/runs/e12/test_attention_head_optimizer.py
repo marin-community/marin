@@ -82,6 +82,10 @@ def test_frozen_leaves_stay_exact_across_nonzero_steps(jit):
         for a, b, active in zip(jax.tree.leaves(initial), jax.tree.leaves(params), jax.tree.leaves(mask), strict=True)
         if active
     )
+    frozen_names = ("token_embed", "mlp", "rms_attn", "attn_gate")
+    for path, leaf in jax.tree_util.tree_flatten_with_path(state)[0]:
+        if hasattr(leaf, "shape"):
+            assert not any(name in str(path) for name in frozen_names)
     # Frozen expert bank is rank four. No optimizer array may have its shape.
     assert not any(getattr(x, "ndim", 0) == 4 for x in jax.tree.leaves(state))
 
