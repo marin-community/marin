@@ -58,6 +58,7 @@ from taskcompendium.pipeline.oracle_filter import (
     pre_oracle_host_unavailable,
     recovered_source_runtime_requirements,
     require_infrastructure_retry_parent,
+    retry_start_allocations,
     source_environment_incompatibility,
     trial_network_qualified,
 )
@@ -940,9 +941,8 @@ def calibrate_cohort(
     calibration_solutions: Path | None = None,
     retry_contexts: dict[str, InfrastructureRetryContext] | None = None,
     prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
-    initial_requirements: dict[str, ExecutionRequirements] | None = None,
+    initial_allocations: dict[str, tuple[ExecutionRequirements, ExecutionRequirements | None]] | None = None,
     host_admission: LocalHostAdmission | None = None,
-    initial_verifier_execution_requirements: dict[str, ExecutionRequirements | None] | None = None,
 ) -> None:
     """Fold calibration into full-population oracle filtering; collect the same trials afterward."""
     mappings = json.loads(task_map.read_text())
@@ -966,7 +966,7 @@ def calibrate_cohort(
         raise ValueError("Calibration task map must cover exactly the full converted population")
     if retry_contexts is not None and retry_contexts.keys() != mappings.keys():
         raise ValueError("Infrastructure phase context must cover exactly the approved partition")
-    if initial_requirements is not None and (retry_contexts is None or initial_requirements.keys() != mappings.keys()):
+    if initial_allocations is not None and (retry_contexts is None or initial_allocations.keys() != mappings.keys()):
         raise ValueError("Resumed allocations must cover the approved retry partition")
     destination.mkdir(parents=True, exist_ok=False)
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -981,11 +981,11 @@ def calibrate_cohort(
                 calibration_solutions,
                 None if retry_contexts is None else retry_contexts[task.id],
                 prepare_attempt,
-                initial_requirements=None if initial_requirements is None else initial_requirements[task.id],
+                initial_requirements=None if initial_allocations is None else initial_allocations[task.id][0],
                 source_runtime=runtimes[task.id],
                 host_admission=host_admission,
                 initial_verifier_execution_requirements=(
-                    initial_verifier_execution_requirements[task.id] if initial_verifier_execution_requirements else None
+                    initial_allocations[task.id][1] if initial_allocations is not None else None
                 ),
             )
             for task in tasks
@@ -1211,16 +1211,15 @@ def retry_cohort(
     if parents.keys() != plan.approvals.keys():
         raise ValueError("Retry plan does not cover its exact parent partition")
     transitions = {}
-    verifier_starts = {}
+    initial_allocations = {}
     for task_id, parent in parents.items():
         calibration = ResourceCalibrationReceipt.model_validate(parent["calibration"])
-        if plan.source_runtime_resource_recovery is not None:
-            recovered = recovered_source_runtime_requirements(calibration, plan.source_runtime_resource_recovery)
-            verifier_starts[task_id] = initial_verifier_requirements(
-                recovered.execution_requirements, recovered.verifier
-            )
-        else:
-            verifier_starts[task_id] = calibration.attempts[-1].verifier_execution_requirements
+        recovered = (
+            recovered_source_runtime_requirements(calibration, plan.source_runtime_resource_recovery)
+            if plan.source_runtime_resource_recovery is not None
+            else None
+        )
+        initial_allocations[task_id] = retry_start_allocations(calibration, recovered)
         native = Path(parent["task_path"])
         checksum = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
         if checksum != parent.get("source_task_checksum", parent["task_checksum"]):
@@ -1235,7 +1234,7 @@ def retry_cohort(
             parent_map_sha256=plan.parent_map_sha256,
             parent_mapping_sha256=canonical_sha256(parent),
             parent_history_sha256=canonical_sha256({"phases": parent.get("infrastructure_retries", [])}),
-            parent_calibration=ResourceCalibrationReceipt.model_validate(parent["calibration"]),
+            parent_calibration=calibration,
             backend_fix=plan.backend_fix,
             approval=plan.approvals[task_id],
             local_host=plan.local_host,
@@ -1260,18 +1259,7 @@ def retry_cohort(
         retry_contexts=contexts,
         prepare_attempt=prepare_attempt,
         host_admission=host_admission,
-        initial_verifier_execution_requirements=verifier_starts,
-        initial_requirements={
-            task_id: (
-                recovered_source_runtime_requirements(
-                    ResourceCalibrationReceipt.model_validate(parent["calibration"]),
-                    plan.source_runtime_resource_recovery,
-                ).execution_requirements
-                if plan.source_runtime_resource_recovery is not None
-                else ResourceCalibrationReceipt.model_validate(parent["calibration"]).execution_requirements
-            )
-            for task_id, parent in parents.items()
-        },
+        initial_allocations=initial_allocations,
     )
     require_backend_fix(plan.backend_fix)
     current = json.loads((phase / "task-map.json").read_text())

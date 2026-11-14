@@ -577,6 +577,17 @@ def recovered_source_runtime_requirements(
     return RecoveredRuntimeRequirements(shape, preserved, verifier)
 
 
+def retry_start_allocations(
+    parent: ResourceCalibrationReceipt, recovered: RecoveredRuntimeRequirements | None
+) -> tuple[ExecutionRequirements, ExecutionRequirements | None]:
+    """Return the actor and verifier allocations for an approved retry phase."""
+    if recovered is None:
+        return parent.execution_requirements, parent.attempts[-1].verifier_execution_requirements
+    return recovered.execution_requirements, initial_verifier_requirements(
+        recovered.execution_requirements, recovered.verifier
+    )
+
+
 class InfrastructureRetryPlan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     cohort_path: str
@@ -861,17 +872,17 @@ class OracleTaskReceipt(BaseModel):
                     {**INITIAL_REQUIREMENTS.model_dump(), **current.preserved_requirements}
                 )
             )
-            expected_start = previous.execution_requirements
+            recovered = (
+                recovered_source_runtime_requirements(previous, transition.source_runtime_resource_recovery)
+                if transition.source_runtime_resource_recovery is not None
+                else None
+            )
+            expected_start, expected_verifier_start = retry_start_allocations(previous, recovered)
             expected_preserved = previous.preserved_requirements
             expected_verifier = previous.verifier
-            if transition.source_runtime_resource_recovery is not None:
-                recovered = recovered_source_runtime_requirements(previous, transition.source_runtime_resource_recovery)
-                expected_start = recovered.execution_requirements
+            if recovered is not None:
                 expected_preserved = recovered.preserved_requirements
                 expected_verifier = recovered.verifier
-            expected_verifier_start = previous.attempts[-1].verifier_execution_requirements
-            if transition.source_runtime_resource_recovery is not None:
-                expected_verifier_start = initial_verifier_requirements(expected_start, expected_verifier)
             if current.attempts[0].verifier_execution_requirements != expected_verifier_start:
                 raise ValueError("Infrastructure retry did not resume its exact approved verifier allocation")
             if start != expected_start:
