@@ -51,8 +51,10 @@ from taskforge.spec.draft import (
     rollout_engine,
     rollout_limits,
 )
-from tests.conftest import ListLedger
-from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
+
+# Pytest uses different package prefixes under the root and Taskforge configs.
+from ..conftest import ListLedger  # noqa: TID252
+from ..sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader  # noqa: TID252
 
 POLICY = LLMPolicy(max_continuations=0)
 # Grading runs on the grader-base verifier machine, here served by ShellSim through the fixture factory.
