@@ -22,6 +22,8 @@ from rolloutengine.models import (
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     TRACE_METRIC,
+    ContextRecovery,
+    ContextRejected,
     ContextWindowExceeded,
     Continuation,
     ConversationRecord,
@@ -173,11 +175,20 @@ class _Recorder:
     and records a sent request that has no answer. Final observations replace such a request.
     """
 
-    def __init__(self, model: Model, limits: RolloutLimits, mode: TraceMode, events: EventSink):
+    def __init__(
+        self,
+        model: Model,
+        limits: RolloutLimits,
+        mode: TraceMode,
+        events: EventSink,
+        *,
+        context_recovery: ContextRecovery,
+    ):
         self.model = model
         self.limits = limits
         self.mode = mode
         self.events = events
+        self.context_recovery = context_recovery
         self.earlier: list[ConversationRecord] = []
         self.conversation: _Conversation | None = None
         self.request: _Request | None = None
@@ -371,13 +382,14 @@ class _Recorder:
             outcome = TimeoutError("The model turn deadline expired")
         if self._ended():
             raise RolloutEnded("The harness ended, or a deadline expired, while the model generated")
-        if isinstance(outcome, ContextWindowExceeded):
-            # Nothing was served. Preserve the pending turn so either a shorter
-            # reply or a compacted conversation can be submitted under the same
-            # attempt deadline and cumulative token/turn limits.
-            self.request = None
-            self._set_tool_deadline(self.limits.tool_turn_timeout)
-            raise outcome
+        if isinstance(outcome, ContextRejected):
+            if self.context_recovery == ContextRecovery.ALWAYS or (
+                self.context_recovery == ContextRecovery.AFTER_TURN and self.has_response
+            ):
+                self.request = None
+                self._set_tool_deadline(self.limits.tool_turn_timeout)
+                raise ContextWindowExceeded(str(outcome)) from outcome.error
+            outcome = outcome.error
         self._record_request(request)
         conversation = self.conversation
         assert conversation is not None
@@ -562,7 +574,7 @@ async def harness_rollout(
     """
     harness.check(task, limits)
     run_id = uuid.uuid4().hex if run_id is None else run_id
-    recorder = _Recorder(model, limits, trace, events)
+    recorder = _Recorder(model, limits, trace, events, context_recovery=harness.context_recovery)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)

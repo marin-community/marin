@@ -15,6 +15,7 @@ from rolloutengine.models import (
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
+    ContextRecovery,
     LimitReached,
     ModelTurn,
     Prompt,
@@ -94,6 +95,8 @@ async def run_harbor_trial(
 
 class HarborTrialHarness:
     """Let Harbor finish verification after the model reaches its rollout limit."""
+
+    context_recovery = ContextRecovery.AFTER_TURN
 
     def __init__(self, run_trial: Callable[[AgentCompletion], Awaitable[TrialResult]], reward_key: str) -> None:
         self.run_trial = run_trial
