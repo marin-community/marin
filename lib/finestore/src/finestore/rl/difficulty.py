@@ -3,9 +3,10 @@
 
 """Immutable Atlas difficulty measurements and their retained-population receipts."""
 
+from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from finestore.layout import OnConflict
 from finestore.rl.curation import CatalogRecord, ContentEvidenceReference, DatasetRelease
@@ -162,6 +163,14 @@ class DifficultyMeasurement(CatalogRecord):
     gpu_hours: float = Field(ge=0)
     input_tokens: int = Field(ge=0)
     output_tokens: int = Field(ge=0)
+
+    @field_validator("created_at")
+    @classmethod
+    def _utc_timestamp(cls, value: str) -> str:
+        instant = datetime.fromisoformat(value)
+        if instant.tzinfo is None:
+            raise ValueError("Difficulty observation timestamps require a timezone")
+        return instant.astimezone(UTC).isoformat()
 
     @model_validator(mode="after")
     def _coverage(self) -> "DifficultyMeasurement":

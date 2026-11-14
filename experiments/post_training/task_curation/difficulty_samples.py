@@ -35,6 +35,14 @@ class DifficultySource(BaseModel):
     backend: str
 
 
+def relocated_panel(inventory: SampleInventory, path: str, root: StoragePath) -> SamplePanel:
+    """Retain the original census and bind its unchanged panel bytes to their staged path."""
+    (root / "original-inventory.json").write_text(inventory.model_dump_json(indent=2) + "\n")
+    staged = inventory.model_copy(update={"panel_path": path, "evidence_url": str(root / "inventory.json")})
+    (root / "inventory.json").write_text(staged.model_dump_json(indent=2) + "\n")
+    return staged.qc_panel()
+
+
 def prepare_sample(
     declaration: SourceDeclaration, inventory: SampleInventory, output_root: str, resume_root: str | None
 ) -> DifficultySource:
@@ -58,6 +66,9 @@ def prepare_sample(
     ):
         raise ValueError(f"Panel inventory differs from the current pinned population: {declaration.id}")
     panel = inventory.qc_panel()
+    root = StoragePath(output_root) / canonical_sha256(declaration.id)[:20]
+    if root.exists():
+        raise FileExistsError(f"Select a new difficulty sample version: {root}")
     if resume_root is not None:
         previous = StoragePath(resume_root) / canonical_sha256(declaration.id)[:20] / "source.json"
         if previous.exists():
@@ -88,17 +99,17 @@ def prepare_sample(
             ):
                 raise ValueError(f"Earlier difficulty evidence changed: {declaration.id}")
             LOGGER.info("Reused verified difficulty sample: %s", declaration.id)
-            return source.model_copy(
+            result = source.model_copy(
                 update={
                     "declaration": declaration,
                     "backend": "daytona" if declaration.daytona_safety == "safe" else "local",
+                    "panel": relocated_panel(inventory, source.panel.panel_path, root),
                 }
             )
+            (root / "source.json").write_text(result.model_dump_json(indent=2) + "\n")
+            return result
     tasks, contracts = panel_tasks(panel)
-    root = StoragePath(output_root) / canonical_sha256(declaration.id)[:20]
     receipt = root / "sample.json"
-    if root.exists():
-        raise FileExistsError(f"Select a new difficulty sample version: {root}")
     drop_manifest = StoragePath(declaration.within_source_dedup.drop_manifest_uri)
     sample = DifficultySample(
         source_id=declaration.id,
@@ -128,7 +139,7 @@ def prepare_sample(
         raise ValueError(f"Sample receipt changed on readback: {declaration.id}")
     result = DifficultySource(
         declaration=declaration,
-        panel=panel.model_copy(update={"panel_path": str(copied_panel)}),
+        panel=relocated_panel(inventory, str(copied_panel), root),
         sample=sample,
         sample_receipt=ContentEvidenceReference(uri=str(receipt), sha256=digest),
         backend="daytona" if declaration.daytona_safety == "safe" else "local",

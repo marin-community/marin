@@ -4,6 +4,7 @@
 """Project revision-bound difficulty evidence without promoting historical results."""
 
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any
 
 from finestore.rl.difficulty import PROTOCOL_ID, DifficultyMeasurement, MeasurementStatus, Solver
@@ -26,7 +27,9 @@ def difficulty_summary(declaration: dict[str, Any], records: Iterable[Difficulty
     current: dict[Solver, DifficultyMeasurement] = {}
     historical = []
     population = declaration.get("actor_census_input")
-    for record in sorted(records, key=lambda item: (item.created_at, item.measurement_id), reverse=True):
+    for record in sorted(
+        records, key=lambda item: (datetime.fromisoformat(item.created_at), item.measurement_id), reverse=True
+    ):
         matches = (
             record.protocol_id == PROTOCOL_ID
             and record.release.model_dump(mode="json") == declaration["current_release"]
