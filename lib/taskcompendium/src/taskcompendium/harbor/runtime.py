@@ -52,6 +52,7 @@ class TaskNetworkPolicyReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_runtime_sha256: str | None
+    actor_required: bool
     actor_declared: NetworkPolicy | None
     verifier_declared: NetworkPolicy | None
     actor_effective: NetworkPolicy | None

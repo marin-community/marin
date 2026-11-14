@@ -174,6 +174,7 @@ def test_declared_network_permission_requires_matching_production_observation(mi
     entry["runtime_sha256"] = canonical_sha256(runtime)
     packet = {
         "source_runtime_sha256": canonical_sha256(runtime),
+        "actor_required": True,
         "actor_declared": "allow",
         "verifier_declared": "deny",
         "actor_effective": "allow",

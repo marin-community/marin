@@ -205,13 +205,6 @@ def row_runtime_hash(row: dict) -> str | None:
     return canonical_sha256(runtime) if runtime is not None else None
 
 
-def row_runtime(row: dict) -> dict | None:
-    if "lowered_task_spec" in row:
-        return json.loads(row["lowered_task_spec"])["runtime"]
-    runtime = row.get("runtime")
-    return json.loads(runtime) if runtime is not None else None
-
-
 def cohort_sha256(cohort: Path) -> str:
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
     return (

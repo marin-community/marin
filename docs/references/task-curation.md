@@ -1671,7 +1671,7 @@ release's private evidence archive. `infrastructure_pending` counts unscored
 cases separately from source oracle failures.
 
 Tasks without original solutions require a production actor run using GLM-5.3,
-temperature 0.7, and at most three turns, followed by the task's own grader.
+temperature 0.7, and at most three turns, followed by the task's original grader.
 Preserve source-declared limits and calibrate only missing dimensions. A completed
 actor run with a valid structured verdict establishes executability; record its
 reward separately, including zero. Provider and infrastructure failures remain
@@ -1684,7 +1684,12 @@ Pass `collect --executability-runs RUNS.jsonl` with one
 count, model configuration, and immutable model request/response evidence
 references. The trial must match the final calibration attempt and native task
 checksum. Prebuilt imports enforce the same requirement. This collector consumes
-completed evidence; it does not launch model requests.
+completed evidence; it does not launch model requests. The actor run itself is the
+final calibration attempt. If its shape changes, collect a new run and its model
+evidence at that shape. Construct the record using the shared
+`taskcompendium.pipeline.oracle_filter.ExecutabilityRunReceipt` schema; its
+`model_evidence` entries identify archived request/response objects by URI and
+SHA-256, not credential files.
 
 Oracle filter wire version 3 also accepts `MechanicalOracleTaskReceipt` entries
 for tasks whose complete contract cannot execute or has no execution proof. Supply
@@ -1697,6 +1702,9 @@ SHA-256. It contains no invented trial, shape, or calibration. With
 includes every filtered original row in `excluded-tasks.parquet` and counts reasons
 in `oracle-filter-summary.json`. Version 2 receipts remain readable as archives and
 cannot establish new admission.
+Use an explicit mechanical outcome for a measured contract blocker and retain its
+diagnostic evidence. Use automatic `executability_proof_missing` only when no
+production mapping or measured outcome exists. Both paths exclude the task.
 
 For both SAMPLE and FULL, run the production Harbor Trial with the restored
 ORACLE agent over the complete converted population. The filter retains exactly
@@ -1707,10 +1715,13 @@ Retry infrastructure failures up to two times before excluding them.
 
 Keep the task's environment, network permission, setup and solution scripts.
 For converted TaskSpec packets, call `write_source_runtime(task, runtime, directory)`
-after export and before measuring the native checksum. This preserves the original
-runtime in `source-runtime.json`. Production trials record declared and effective
+after export and before `write_task_map` measures the complete Harbor directory.
+The checksum includes `source-runtime.json`. Production trials record declared and effective
 actor/verifier permissions separately in `network-policy.json`; source-declared
-permissions require matching observations for admission. Unsupported backend
+permissions must equal the effective permissions for each required machine role.
+The receipt records `actor_required` from the actual execution plan; an actorless
+original command uses the grader machine. A missing or mismatched observation
+cannot establish admission. Unsupported backend
 policies remain filtered as `network_policy_unsupported`. An absent role or network
 field remains undeclared.
 Export or acquire the cohort's faithful Harbor packages first; do not prebake

@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.grading_environment import GradingEnvironmentMode
-from taskcompendium.harbor.adapter import actor_machine_required
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
@@ -168,7 +167,7 @@ def trial_network_qualified(task: TaskSpec, runtime: dict | None, trial: OracleT
         observed.source_runtime_sha256 == (binding.runtime_sha256 if binding else None)
         and observed.actor_declared == actor
         and observed.verifier_declared == verifier
-        and (actor is None or not actor_machine_required(task) or observed.actor_effective == actor)
+        and (actor is None or not observed.actor_required or observed.actor_effective == actor)
         and (verifier is None or observed.verifier_effective == verifier)
     )
 
