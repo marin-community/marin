@@ -59,7 +59,7 @@ class RuntimePolicy(StrEnum):
 
 # Each arm reproduced the source-runtime first-update stall before approval.
 LOSS_CURVE_RECOVERY_ARMS = frozenset((size, mask) for size in (512, 768, 1024) for mask in (Mask.FULL, Mask.ASSISTANT))
-CALIBRATION_RECOVERY_SIZES = (512, 768)
+CALIBRATION_RECOVERY_ARMS = LOSS_CURVE_RECOVERY_ARMS - {(1024, Mask.ASSISTANT)}
 
 
 @dataclass(frozen=True)
@@ -134,7 +134,7 @@ def budget_steps(size: int, budget: float) -> int:
 
 def calibration_cells() -> tuple[Cell, ...]:
     return tuple(
-        Cell(d, mask, 0, 20, (20,), "calibration-recovery" if d in CALIBRATION_RECOVERY_SIZES else "calibration")
+        Cell(d, mask, 0, 20, (20,), "calibration-recovery" if (d, mask) in CALIBRATION_RECOVERY_ARMS else "calibration")
         for d in SIZES
         for mask in Mask
     )
