@@ -166,7 +166,7 @@ Equal-family mean averages answers per task, tasks per family, then families. Sl
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
 
 Train-long-harbor adds 30 pinned BFCL, 30 SWE-bench Verified and 30 OpenThoughts-TBLite trials
-on Daytona at each evaluation. Set `DAYTONA_EVAL_API_KEY` before submission. Checkpoint choice
+on Daytona at each evaluation. Set `DAYTONA_EVAL_API_KEY` and `DAYTONA_TARGET` before submission. Checkpoint choice
 requires at least 99% native coverage and 90% in each Harbor cohort; `eval/all` pools native and
 Harbor scored rewards. Per-cohort metrics are `eval/harbor/<cohort>/*`; trial artifacts live under
 `exports/inline_harbor/`. A Harbor error stops training; rerunning the same command resumes from
