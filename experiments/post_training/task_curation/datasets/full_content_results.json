@@ -241,5 +241,46 @@
     "coverage_complete": true,
     "finalization": "complete",
     "waiver": null
+  },
+  "TaskTrove:tasktrove-math_oracle-qa": {
+    "source_id": "TaskTrove:tasktrove-math_oracle-qa",
+    "input": {
+      "dataset_id": "open-athena/campaign-release-tasktrove-math-oracle-qa-940292d1-retained-20261113-v1",
+      "dataset_revision": "43d45617973824331f2ea485927c12eeb0461c43",
+      "converter_version": "2026.11.13.1",
+      "converter_revision": "2f4b27ba2e",
+      "measured_tasks": 57419,
+      "task_specs_sha256": "cd7b352da9c00c0b3270f09d09a0ddf73d75c6705a2e2c8e05ec28ef595e7b44",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/940292d1b2df69913683/actor/.artifact.json"
+    },
+    "contract_index": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/a4aa7960267026ac4e7c/2026.11.12.2/attempts/4765559703994c1187c3bd0dd29e3b65/contracts.parquet",
+      "sha256": "9bb5ec654cbc542939ea01bdca47eccef4075e63fe6b935e528982eb3be081b8"
+    },
+    "review_receipt": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/a4aa7960267026ac4e7c/attempts/1ebe0c5e90f04aff925439abf8b07cda/.artifact.json",
+      "sha256": "98c7c57aa41ed53237294288c4cd860413b802c2f89e72b10334a4c0fcc5e467"
+    },
+    "records": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/repair-overlay/2026.11.13.1/a4aa7960267026ac4e7c/attempts/1ebe0c5e90f04aff925439abf8b07cda/reviews.parquet",
+      "sha256": "3440ead163d979add62e0fd7253a4c0631809c70fada9e1377ed4410fc679a28"
+    },
+    "result": {
+      "reviewed": 57253,
+      "issue_count": 5020,
+      "issues": [],
+      "repair_recommendation": "Inspect all task-level issue evidence and qualify repairs with renewed QA. Resolve unavailable and uncertain observations before source-wide conclusions.",
+      "unavailable_count": 122,
+      "uncertain_count": 44,
+      "sample_count": 57419,
+      "issue_rate": 0.08768099488236425,
+      "verdict": "good"
+    },
+    "coverage_complete": false,
+    "finalization": "accepted_incomplete",
+    "waiver": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/math-oracle.json",
+      "sha256": "fee1d43e1f605272566dae046eb482bbd0fdc43a24966733e065756e64749c0e"
+    }
   }
 }
