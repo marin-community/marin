@@ -23,6 +23,7 @@ from experiments.post_training.task_curation.oracle_admitted_release import (
     bind_oracle_admitted_release,
     bind_selected_source_content,
 )
+from experiments.post_training.task_curation.oversight_binding import bind_derived_oversight
 from experiments.post_training.task_curation.prebuilt import (
     import_oracle_harbor_prebuilt,
     import_taskcompendium_prebuilt,
@@ -149,6 +150,7 @@ def admitted_release(tmp_path):
 def test_native_filtered_pin_is_selectable_with_fresh_qualification(admitted_release):
     source, receipt = admitted_release
     bound = bind_oracle_admitted_release(source, receipt)
+    bound = bind_derived_oversight(bound, receipt.sample, receipt.full_content)
 
     assert bound.pipeline is import_oracle_harbor_prebuilt
     assert bound.current_release == receipt.filtration.filtered_release
