@@ -9,6 +9,7 @@ import logging
 import re
 from collections import Counter
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -43,7 +44,7 @@ def budget_relay(
     tokenizer_model: str,
     tokenizer_revision: str,
     parameters: dict,
-    budget: RequestBudget,
+    budget: RequestBudget | None,
     receipts: Path,
 ):
     """Serve task-labelled, non-streaming chat and pinned CPU tokenization locally.
@@ -75,7 +76,8 @@ def budget_relay(
                 self.wfile.write(data)
 
             def do_GET(self):
-                self.respond(200, {"data": [{"id": model, "max_model_len": budget.context_tokens}]})
+                metadata = {} if budget is None else {"max_model_len": budget.context_tokens}
+                self.respond(200, {"data": [{"id": model, **metadata}]})
 
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", "0"))
@@ -87,7 +89,8 @@ def budget_relay(
                     **body.get("chat_template_kwargs", {}),
                     **parameters.get("extra_body", {}).get("chat_template_kwargs", {}),
                 }
-                if "messages" in body:
+                tokens = []
+                if (budget is not None or self.path.endswith("/tokenize")) and "messages" in body:
                     tokens = tokenizer.apply_chat_template(
                         chat_template_messages(body["messages"]),
                         tools=body.get("tools") or None,
@@ -96,18 +99,20 @@ def budget_relay(
                         return_dict=False,
                         **template,
                     )
-                else:
+                elif budget is not None or self.path.endswith("/tokenize"):
                     tokens = tokenizer.encode(body["prompt"], add_special_tokens=body.get("add_special_tokens", True))
-                if self.path.endswith("/tokenize") and len(tokens) <= budget.input_tokens:
-                    self.respond(200, {"tokens": tokens, "count": len(tokens), "max_model_len": budget.context_tokens})
+                if self.path.endswith("/tokenize") and (budget is None or len(tokens) <= budget.input_tokens):
+                    metadata = {} if budget is None else {"max_model_len": budget.context_tokens}
+                    self.respond(200, {"tokens": tokens, "count": len(tokens), **metadata})
                     return
                 if not self.path.endswith(("/v1/chat/completions", "/tokenize")) or body.get("stream"):
                     self.respond(400, {"error": "non-streaming chat completions required"})
                     return
+                requested_body = deepcopy(body)
                 body.update({key: value for key, value in parameters.items() if key != "extra_body"})
                 body.update(parameters.get("extra_body", {}))
                 body["model"] = model
-                if len(tokens) <= budget.input_tokens:
+                if budget is not None and len(tokens) <= budget.input_tokens:
                     body["max_tokens"] = min(
                         body.get("max_tokens", budget.output_tokens),
                         budget.output_tokens,
@@ -121,9 +126,17 @@ def budget_relay(
                 root = receipts / task / f"{number:06d}"
                 root.mkdir(parents=True, exist_ok=False)
                 (root / "request.json").write_text(
-                    json.dumps({"route": self.path, "prompt_tokens": len(tokens), "body": body}) + "\n"
+                    json.dumps(
+                        {
+                            "route": self.path,
+                            "prompt_tokens": len(tokens) if budget is not None else None,
+                            "requested_body": requested_body,
+                            "body": body,
+                        }
+                    )
+                    + "\n"
                 )
-                if len(tokens) > budget.input_tokens:
+                if budget is not None and len(tokens) > budget.input_tokens:
                     payload = {
                         "error": {
                             "code": "input_budget_unserved",
@@ -150,11 +163,15 @@ def budget_relay(
                         }
                 (root / "response.json").write_text(json.dumps({"status": status, "body": payload}) + "\n")
                 usage = payload.get("usage")
-                if status == 200 and (
-                    usage is None
-                    or usage["prompt_tokens"] > budget.input_tokens
-                    or usage["completion_tokens"] > budget.output_tokens
-                    or usage["prompt_tokens"] + usage["completion_tokens"] > budget.context_tokens
+                if (
+                    budget is not None
+                    and status == 200
+                    and (
+                        usage is None
+                        or usage["prompt_tokens"] > budget.input_tokens
+                        or usage["completion_tokens"] > budget.output_tokens
+                        or usage["prompt_tokens"] + usage["completion_tokens"] > budget.context_tokens
+                    )
                 ):
                     status, payload = 502, {
                         "error": {
