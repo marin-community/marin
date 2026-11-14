@@ -36,13 +36,14 @@ from taskcompendium.backend_fields import (
     SCRIPT_GRADER_FIELDS,
     TASK_FIELDS,
 )
-from taskcompendium.backend_requirements import BackendSurvey, RuntimeProfile
+from taskcompendium.backend_requirements import BackendSurvey, FitSupport, RuntimeProfile
 from taskcompendium.models import EnvironmentRequirements, ExecutionRequirements, ScriptGrader, TaskResource, TaskSpec
 
 from experiments.post_training.task_curation.backend_capabilities import (
     build_survey,
     main,
     merge_surveys,
+    production_matrix,
     source_map,
 )
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -103,7 +104,9 @@ def test_lock_grader_storage_has_no_backend_and_quota_removal_preserves_mixed_de
     }
     defaults = {"agent": RUNTIME, "grader": RUNTIME}
     before = source_map("cohort", [document], matrix, checkers, {}, defaults)
-    assert all(fit.roles["grader"] == {Support.UNSUPPORTED: 1} for fit in before.backends.values())
+    assert before.backends["local"].roles["grader"] == {FitSupport.UNSUPPORTED: 1}
+    assert before.backends["docker"].roles["grader"] == {FitSupport.NOT_APPLICABLE: 1}
+    assert before.backends["docker"].not_applicable == {"grader:host_image": 1}
     assert before.demands["grader"][Requirement.HOST_IMAGE] == 1
     assert before.resource_ranges["grader"]["storage_mb"] == (1024, 1024)
     assert before.role_backend_assignments == {"agent": {"daytona": 1}, "grader": {"local": 1}}
@@ -111,8 +114,65 @@ def test_lock_grader_storage_has_no_backend_and_quota_removal_preserves_mixed_de
     after = source_map("cohort-v2", [document], matrix, checkers, {}, defaults)
     assert after.backends["local"].roles["grader"] == {Support.PARTIAL: 1}
     assert after.backends["docker"].roles["agent"] == {Support.PARTIAL: 1}
-    assert after.backends["docker"].roles["grader"] == {Support.UNSUPPORTED: 1}
+    assert after.backends["docker"].roles["grader"] == {FitSupport.NOT_APPLICABLE: 1}
+    assert after.backends["docker"].task_counts == {Support.PARTIAL: 1}
     assert after.backends["local"].roles["agent"] == {Support.UNSUPPORTED: 1}
+
+
+def test_grader_only_host_image_population_fits_local_and_excludes_image_backends():
+    """A grader-only HostImage+lock population (Evalchemy:aime24) is not a backend-wide failure.
+
+    LOCAL runs these graders in production, so its fit is supported; backends that cannot
+    host a HostImage environment are not candidates at all, not failures.
+    """
+    checkers = _unit_checkers()
+    matrix = production_matrix(checkers)
+    documents = [
+        {
+            "task": {
+                "grader": {
+                    "environment": {"command_semantics": "linux_process", "packages_lock": "math.lock"},
+                    "timeout": 600,
+                },
+                "resources": {"verifier": [{"path": "grader-files.tar", "bytes": "AAAA"}]},
+            },
+            "runtime": {},
+        }
+        for _ in range(3)
+    ]
+    mapped = source_map("aime24", documents, matrix, checkers, {}, {"agent": RUNTIME, "grader": RUNTIME})
+    local = mapped.backends["local"]
+    assert local.support == FitSupport.SUPPORTED
+    assert local.task_counts == {FitSupport.SUPPORTED: 3}
+    assert local.roles["agent"] == {FitSupport.ROLE_ABSENT: 3}
+    assert local.roles["grader"] == {FitSupport.SUPPORTED: 3}
+    assert local.blockers == {} and local.not_applicable == {}
+    assert local.validation_errors == {}
+    for backend, fit in mapped.backends.items():
+        if backend == "local":
+            continue
+        assert fit.support == FitSupport.NOT_APPLICABLE, backend
+        assert fit.task_counts == {FitSupport.NOT_APPLICABLE: 3}, backend
+        assert fit.roles["agent"] == {FitSupport.ROLE_ABSENT: 3}, backend
+        assert fit.roles["grader"] == {FitSupport.NOT_APPLICABLE: 3}, backend
+        assert fit.not_applicable == {"grader:host_image": 3}, backend
+        assert fit.blockers == {} and fit.validation_errors == {}, backend
+
+
+def test_underspecified_environment_stays_a_typed_blocker_on_every_backend():
+    """Applicability never hides a role that resolves to no machine environment."""
+    checkers = _unit_checkers()
+    document = {
+        "task": {"grader": {"environment": {"command_semantics": "linux_process"}}},
+        "runtime": {},
+    }
+    mapped = source_map(
+        "underspecified", [document], production_matrix(checkers), checkers, {}, {"agent": RUNTIME, "grader": RUNTIME}
+    )
+    for backend, fit in mapped.backends.items():
+        assert fit.roles["grader"] == {FitSupport.UNSUPPORTED: 1}, backend
+        assert fit.not_applicable == {}, backend
+        assert fit.validation_errors, backend
 
 
 def test_conversation_only_census_needs_no_backend_despite_deployment_defaults():
@@ -138,7 +198,12 @@ def test_conversation_only_census_needs_no_backend_despite_deployment_defaults()
         {"agent": RUNTIME, "grader": RUNTIME},
     )
     assert mapped.demands == {}
-    assert mapped.backends["docker"].task_counts == {Support.SUPPORTED: 1}
+    assert mapped.backends["docker"].support == FitSupport.ROLE_ABSENT
+    assert mapped.backends["docker"].task_counts == {FitSupport.ROLE_ABSENT: 1}
+    assert mapped.backends["docker"].roles == {
+        "agent": {FitSupport.ROLE_ABSENT: 1},
+        "grader": {FitSupport.ROLE_ABSENT: 1},
+    }
 
 
 def test_declared_capacity_reaches_backend_checks_and_conflicting_runtime_fails():
@@ -214,14 +279,9 @@ def test_unclassified_capability_preserves_the_other_role_and_known_requirements
     fit = mapped.backends["docker"]
     assert fit.task_counts == {Support.UNSUPPORTED: 1}
     assert fit.roles["agent"] == {Support.UNSUPPORTED: 1}
-    assert fit.roles["grader"] == {Support.UNSUPPORTED: 1}
-    assert fit.blockers == {
-        "agent:nemotron-agent:ns_tools_simple_agent": 1,
-        "grader:cleanup_timeout": 1,
-        "grader:startup_timeout": 1,
-        "grader:host_image": 1,
-        "grader:packages_lock": 1,
-    }
+    assert fit.roles["grader"] == {FitSupport.NOT_APPLICABLE: 1}
+    assert fit.not_applicable == {"grader:host_image": 1}
+    assert fit.blockers == {"agent:nemotron-agent:ns_tools_simple_agent": 1}
     assert mapped.demands["agent"][Requirement.DOCKER_IMAGE] == 1
     assert mapped.demands["grader"][Requirement.PACKAGES_LOCK] == 1
     assert mapped.demands["grader"][Requirement.HOST_IMAGE] == 1
@@ -461,6 +521,21 @@ def test_actor_capacity_preserves_independent_separate_grader_profile():
             {},
             {"agent": RUNTIME, "grader": RUNTIME},
         )
+
+
+def test_production_matrix_records_local_runtime_and_startup_evidence():
+    """LOCAL file transfers and command deadlines carry production trial evidence; the
+    runtime startup deadline is rolloutengine-owned wherever the validator accepted it."""
+    checkers = _unit_checkers()
+    cells = {(cell.backend, cell.requirement): cell for cell in production_matrix(checkers)}
+    for requirement in (Requirement.FILE_UPLOAD, Requirement.COMMAND_TIMEOUT):
+        assert cells["local", requirement].support == Support.SUPPORTED
+        assert cells["docker", requirement].support == Support.PARTIAL
+    for backend in ("docker", "local"):
+        # The validator accepted the probe, so its measured PARTIAL downgrade is replaced.
+        assert cells[backend, Requirement.STARTUP_TIMEOUT].support == Support.SUPPORTED, backend
+    # A validator that rejected the startup probe keeps its measured rejection.
+    assert cells["qemu", Requirement.STARTUP_TIMEOUT].support == Support.UNSUPPORTED
 
 
 def _unit_checkers() -> dict[str, Checker]:
