@@ -249,7 +249,8 @@ def test_parallel_bootstrap_waits_for_every_check_and_reports_failure(tmp_path):
     transformer_engine = site_packages / "transformer_engine/common/__init__.py"
     transformer_engine.write_text(
         transformer_engine.read_text()
-        + f"import select\nwith open({str(barrier)!r}, 'rb', buffering=0) as gate:\n"
+        + "import select\n"
+        + f"with open(os.open({str(barrier)!r}, os.O_RDONLY | os.O_NONBLOCK), 'rb', buffering=0) as gate:\n"
         + "    assert select.select([gate], [], [], 8)[0], 'concurrent import never started'\n"
         + "    assert gate.read(1) == b'r'\n"
         + "raise RuntimeError('megatron import failed')\n"
