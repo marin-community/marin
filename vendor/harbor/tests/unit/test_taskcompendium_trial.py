@@ -157,12 +157,14 @@ def original_task(name):
 
 
 @pytest.mark.parametrize(
-    "answer,reward,exit_code,timed_out",
-    [("42", 1.0, 0, False), ("41", 0.0, 0, False), ("42", 1.0, 7, False), ("42", 0.0, -1, True)],
+    "answer,reward,exit_code,timed_out,custom_workspace",
+    [("42", 1.0, 0, False, None), ("41", 0.0, 0, False, None),
+     ("42", 1.0, 7, False, None), ("42", 0.0, -1, True, None),
+     ("42", 1.0, 0, False, "/custom-grader")],
 )
 @pytest.mark.asyncio
 async def test_actorless_original_command_runs_in_grader_environment_and_preserves_answer(
-    tmp_path, monkeypatch, answer, reward, exit_code, timed_out
+    tmp_path, monkeypatch, answer, reward, exit_code, timed_out, custom_workspace
 ):
     task = exact_answer_task(
         RawRow("original-command", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
@@ -184,13 +186,23 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
             ),
         }
     )
+    if custom_workspace is not None:
+        task = task.model_copy(update={
+            "grader": ScriptGrader(
+                argv=("python3", "/tests/check.py"), cwd=custom_workspace,
+                answer_path=custom_workspace + "/answer.txt", environment=environment,
+            ),
+            "resources": task.resources.model_copy(update={
+                "verifier": (inline_resource("check.py", b"from pathlib import Path\nprint(float(Path('answer.txt').read_text().strip() == '42'))\n"),),
+            }),
+        })
     original = task.model_dump_json()
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
     write_oracle_command(
         task,
         {},
-        OracleCommand("bash ../solution/solve.sh", answer_file="/app/answer.txt"),
+        OracleCommand("bash ../solution/solve.sh", answer_file=(custom_workspace or "/app") + "/answer.txt"),
         directory,
         source_revision="a" * 40,
         source_definition_path="fixtures/oracle.py",

@@ -43,11 +43,11 @@ from taskcompendium.harbor.protected_runtime import (
     read_runtime_binding,
 )
 from taskcompendium.models import (
-    DEFAULT_WORKSPACE,
     ExecutionRequirements,
     TaskSpec,
     VerifyitGrader,
     judge_spec,
+    grader_workspace,
 )
 from taskcompendium.runtime.grading import (
     VERDICT_PATH,
@@ -429,8 +429,7 @@ class TaskSpecTrial(Trial):
             raise ValueError("An actor-less OracleCommand requires its original grader environment")
         environment = task.grader.environment
         if environment.working_directory is None:
-            # OracleCommand falls back to the grader workspace, not the actor workspace.
-            environment = environment.model_copy(update={"working_directory": DEFAULT_WORKSPACE})
+            environment = environment.model_copy(update={"working_directory": grader_workspace(task.grader)})
         async with AsyncExitStack() as stack:
             machine = await self._await_phase(
                 stack.enter_async_context(
