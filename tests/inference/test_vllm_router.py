@@ -195,7 +195,8 @@ def test_router_never_publishes_an_endpoint_with_an_unavailable_worker():
         ((), 1),
         pytest.param(
             (
-                "--data-parallel-size=4",
+                "--data-parallel-size=2",
+                "--data_parallel_size=4",
                 "--data-parallel-size-local=2",
                 "--nnodes=2",
                 "--node-rank=0",
@@ -267,7 +268,7 @@ def test_managed_router_rejects_native_load_balancers_that_cannot_dispatch_globa
 @pytest.mark.parametrize(
     "geometry,native_args",
     [
-        (None, ("--data-parallel-size=4",)),
+        (None, ("-dp", "4")),
         (ServingGeometry(1, 4, 1, 4), ()),
     ],
 )
