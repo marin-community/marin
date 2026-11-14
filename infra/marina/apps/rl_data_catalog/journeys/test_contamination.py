@@ -398,4 +398,6 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     expect(page.locator("#fit .chip")).to_have_count(0)
     basis = page.locator("#census .field").filter(has=page.get_by_text("Measurement basis", exact=True))
     expect(basis.locator("dd")).to_have_text("Not measured")
+    converter = page.locator("#census .field").filter(has=page.get_by_text("Converter version", exact=True))
+    expect(converter.locator("dd")).to_have_text("Not recorded")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

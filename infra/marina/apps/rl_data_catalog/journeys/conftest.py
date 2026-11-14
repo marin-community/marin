@@ -77,6 +77,8 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 *review_declarations(),
                 (False, pending_review_declaration()),
             ]:
+                if declaration.id == "Marin:unmeasured":
+                    declaration = declaration.model_copy(update={"pipeline": None})
                 if declaration.name in {"clean", "eval"}:
                     declaration = with_declaration_admission_census(declaration)
                 if declaration.id == "Marin:clean":

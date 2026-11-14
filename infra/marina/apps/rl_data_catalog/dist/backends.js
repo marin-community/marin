@@ -22,7 +22,7 @@ async function render(sourceId) {
       ['Unassessed reason', census?.reason],
       ['Measured tasks', census?.basis === 'converted_spec_census' ? census.task_count : 'Not measured'],
       ['Current dataset', declaration.current_release && receiptLink(declaration.current_release.url, `${declaration.current_release.repo} @ ${declaration.current_release.revision}`)],
-      ['Converter version', declaration.pipeline.version],
+      ['Converter version', declaration.pipeline?.version ?? 'Not recorded'],
       ['Task inputs and SHA-256', inputs.children.length ? inputs : 'Not measured'],
       ['Role assignments', census?.role_backend_assignments],
       ['Declared requirements by role', census?.demands],
