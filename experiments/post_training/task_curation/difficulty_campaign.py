@@ -43,6 +43,7 @@ from experiments.post_training.task_curation.difficulty_serving_probe import pro
 LOGGER = logging.getLogger(__name__)
 PRIORITY = job_pb2.PRIORITY_BAND_PRODUCTION
 TARGET_REGION = "rno2a"
+MODEL_CACHE_ROOT = "s3://marin-rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
 
 
@@ -108,7 +109,11 @@ def solver_endpoint(solver: Solver):
         Platform.GPU, gpu_type="H100", gpu_count=PINS[solver].gpus, target_cluster=TARGET_CLUSTER
     )
     config = inference_config_for_model(
-        definition, hardware, env_vars={}, priority=PRIORITY, api_model=SOLVER_MODELS[solver]
+        definition,
+        hardware,
+        env_vars={"MARIN_TEMP_PREFIX": MODEL_CACHE_ROOT},
+        priority=PRIORITY,
+        api_model=SOLVER_MODELS[solver],
     )
     if not isinstance(config.engine, VllmEngineConfig):
         raise ValueError("Difficulty local solvers require the vLLM engine")
@@ -239,6 +244,7 @@ def main() -> None:
                 "placement": {
                     "root_target_cluster": TARGET_CLUSTER,
                     "child_region": TARGET_REGION,
+                    "model_cache_root": MODEL_CACHE_ROOT,
                     "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                 },
                 "sampling": request_parameters(args.solver),
