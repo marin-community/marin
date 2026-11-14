@@ -247,8 +247,10 @@ def _admit_conversion(
             ),
         )
     result = admit_converted_row(converted, recipe)
-    if isinstance(converted.result, NormalizedTask) and not require_oracle_filter(
-        converted.result.task, oracle_filter, source_context=source_context
+    if (
+        isinstance(converted.result, NormalizedTask)
+        and not isinstance(converted.result.task.grader, NoGrader)
+        and not require_oracle_filter(converted.result.task, oracle_filter, source_context=source_context)
     ):
         entry = oracle_filter.tasks[converted.raw.id]
         result["audit"]["decision"] = Decision(
@@ -409,7 +411,9 @@ def _admit(
                 "filter_status": Disposition.REJECT.value,
                 "filter_reasons": [*(row["filter_reasons"] or []), issue],
             }
-        elif not require_oracle_filter(task, oracle_filter, source_context=source_context):
+        elif not isinstance(task.grader, NoGrader) and not require_oracle_filter(
+            task, oracle_filter, source_context=source_context
+        ):
             assert oracle_filter is not None
             entry = oracle_filter.tasks[task.id]
             row = {

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import ContentEvidenceReference
+from finestore.rl.curation import ContentEvidenceReference, NoOracleStaticBlocker, NoOracleStaticRetentionEvidence
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
@@ -24,9 +24,13 @@ from experiments.post_training.task_curation.oracle_filter import cohort_sha256,
 
 STATIC_REASONS = {
     "grading_environment_mismatch": OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER,
-    "grading_environment_unknown": OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER,
+    "grading_environment_unavailable": OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER,
+    "no_executable_task_spec_grader": OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER,
     "task_spec_tool_provider_required": OracleExclusionReason.TOOL_PROVIDER_REQUIRED,
     "task_spec_shared_executor_required": OracleExclusionReason.SHARED_EXECUTOR_REQUIRED,
+    "task_spec_state_capture_required": OracleExclusionReason.BACKEND_CONTRACT_UNSUPPORTED,
+    "task_spec_provider_contract_invalid": OracleExclusionReason.BACKEND_CONTRACT_UNSUPPORTED,
+    "task_spec_unresolved_build": OracleExclusionReason.ENVIRONMENT_CONTRACT_UNRESOLVED,
     "mutable_image": OracleExclusionReason.UNPINNED_ENVIRONMENT,
     "mutable_docker_base": OracleExclusionReason.UNPINNED_ENVIRONMENT,
     "missing_environment": OracleExclusionReason.ENVIRONMENT_CONTRACT_UNRESOLVED,
@@ -102,19 +106,34 @@ def collect_static_retention(
     pq.write_table(table.take(pa.array(kept, type=pa.int64())), output / "tasks.parquet", compression="zstd")
     (output / "oracle-filter.json").write_text(receipt.model_dump_json(indent=2) + "\n")
     (output / "static-exclusions.json").write_text(json.dumps(blocked, sort_keys=True, indent=2) + "\n")
+    exclusion_counts = dict(Counter(NoOracleStaticBlocker(item["reason"].value) for item in blocked.values()))
+    filter_hash = file_sha256(StoragePath(str(output / "oracle-filter.json")))
     summary = {
         "source": context.model_dump(mode="json"),
         "input_rows": len(tasks),
         "static_retained_count": len(kept),
         "unique_static_excluded_count": len(blocked),
-        "exclusion_counts": dict(Counter(item["reason"] for item in blocked.values())),
+        "exclusion_counts": exclusion_counts,
         "executability": "unmeasured",
         "source_commands": 0,
         "provider_creations": 0,
         "model_requests": 0,
         "tasks_sha256": file_sha256(StoragePath(str(output / "tasks.parquet"))),
-        "oracle_filter_sha256": file_sha256(StoragePath(str(output / "oracle-filter.json"))),
+        "oracle_filter_sha256": filter_hash,
     }
+    evidence = NoOracleStaticRetentionEvidence(
+        source_id=context.source_id,
+        source_release=context.source_release,
+        current_input=context.current_input,
+        intended_use=context.intended_use,
+        retained_cohort=cohort_evidence,
+        retained_count=len(tasks),
+        static_retained_count=len(kept),
+        exclusion_counts=exclusion_counts,
+        oracle_filter=ContentEvidenceReference(uri=str((output / "oracle-filter.json").resolve()), sha256=filter_hash),
+        policy_sha256=context.policy.sha256,
+    )
+    (output / "static-retention-evidence.json").write_text(evidence.model_dump_json(indent=2) + "\n")
     (output / "static-retention.json").write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n")
     return receipt
 

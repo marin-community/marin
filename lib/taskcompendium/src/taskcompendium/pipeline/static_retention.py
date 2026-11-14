@@ -3,6 +3,7 @@
 
 """Static no-oracle retention, explicitly separate from measured execution."""
 
+import re
 from typing import Literal
 
 from finestore.rl.curation import ActorCensusInput, DatasetRelease, NoOracleExecutabilityPolicy, SourceUse
@@ -22,6 +23,12 @@ class NoOracleSourceContext(BaseModel):
 
     @model_validator(mode="after")
     def validate_current_pin(self):
+        if (
+            not self.current_input.converter_version
+            or not self.current_input.converter_revision
+            or re.fullmatch(r"[0-9a-f]{64}", self.current_input.task_specs_sha256) is None
+        ):
+            raise ValueError("No-oracle context requires a complete converter and TaskSpec-population identity")
         if (self.current_input.dataset_id, self.current_input.dataset_revision) != (
             self.source_release.repo,
             self.source_release.revision,

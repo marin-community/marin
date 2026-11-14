@@ -89,8 +89,14 @@ def test_static_collection_preserves_task_and_runtime_rows_without_trials_or_res
     cohort, original, context, evidence = frozen_cohort(tmp_path, [answer, agentic])
     output = tmp_path / "retained"
     receipt = collect_static_retention(cohort, context, evidence, output)
-    loaded = load_oracle_filter(str(output / "oracle-filter.json"), source_context=context)
+    loaded = load_oracle_filter(
+        str(output / "oracle-filter.json"),
+        source_context=context,
+        expected_sha256=hashlib.sha256((output / "oracle-filter.json").read_bytes()).hexdigest(),
+    )
     assert loaded == receipt
+    with pytest.raises(ValueError, match="independently configured receipt SHA-256"):
+        load_oracle_filter(str(output / "oracle-filter.json"), source_context=context)
     assert loaded.uniform_requirements is None
     assert pq.read_table(output / "tasks.parquet").to_pylist() == original
     assert all(task.execution_requirements is None for task in (answer, agentic))

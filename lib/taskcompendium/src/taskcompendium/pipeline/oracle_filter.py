@@ -1531,10 +1531,18 @@ class OracleFilterReceipt(BaseModel):
         return shape if all(entry.calibration.execution_requirements == shape for entry in entries) else None
 
 
-def load_oracle_filter(path: str, *, source_context: NoOracleSourceContext | None = None) -> OracleFilterReceipt:
-    receipt = OracleFilterReceipt.model_validate(decode_json_value(StoragePath(path).read_text()))
+def load_oracle_filter(
+    path: str, *, source_context: NoOracleSourceContext | None = None, expected_sha256: str | None = None
+) -> OracleFilterReceipt:
+    with StoragePath(path).open("rb") as stream:
+        payload = stream.read()
+    if expected_sha256 is not None and hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise ValueError("Oracle filter bytes differ from the configured receipt SHA-256")
+    receipt = OracleFilterReceipt.model_validate(decode_json_value(payload.decode()))
     if receipt.no_oracle_source is not None and source_context != receipt.no_oracle_source:
         raise ValueError("Static retention load requires independently bound current source context")
+    if receipt.no_oracle_source is not None and expected_sha256 is None:
+        raise ValueError("Static retention load requires the independently configured receipt SHA-256")
     return receipt
 
 

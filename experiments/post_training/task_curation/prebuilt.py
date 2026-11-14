@@ -32,6 +32,7 @@ from finestore.rl.curation import (
     DatasetRelease,
     LexicalContaminationEvidence,
     NoOracleExecutabilityPolicy,
+    NoOracleStaticRetentionEvidence,
     SourceUse,
 )
 from huggingface_hub import hf_hub_download
@@ -234,6 +235,7 @@ class PrebuiltImport:
     no_oracle_policy: NoOracleExecutabilityPolicy | None = None
     current_input: ActorCensusInput | None = None
     source_id: str = ""
+    static_retention: NoOracleStaticRetentionEvidence | None = None
 
 
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -379,6 +381,7 @@ def prebuilt_artifact(
             source.info.no_oracle_executability_policy,
             source.info.actor_census_input,
             source.info.id,
+            source.info.no_oracle_static_retention,
         )
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
@@ -396,9 +399,18 @@ def prebuilt_artifact(
         grading: Counter[str] = Counter()
         oracle_filter = None
         source_context = None
-        if invocation.no_oracle_policy is not None:
-            if invocation.current_input is None:
-                raise ValueError("No-oracle static admission requires the independent current input census")
+        static = invocation.static_retention
+        if static is not None:
+            if (
+                invocation.current_input is None
+                or invocation.no_oracle_policy is None
+                or static.source_id != invocation.source_id
+                or static.current_input != invocation.current_input
+                or static.policy_sha256 != invocation.no_oracle_policy.sha256
+                or static.retained_cohort.sha256 != file_sha256(StoragePath(str(local)))
+                or static.intended_use != SourceUse(invocation.cohort.intended_use.value)
+            ):
+                raise ValueError("Static retention metadata differs from the configured current source context")
             source_context = NoOracleSourceContext(
                 source_id=invocation.source_id,
                 source_release=DatasetRelease(
@@ -446,7 +458,11 @@ def prebuilt_artifact(
                     revision=invocation.cohort.revision,
                     filename=ORACLE_FILTER_FILENAME,
                 )
-                oracle_filter = load_oracle_filter(receipt_path, source_context=source_context)
+                oracle_filter = load_oracle_filter(
+                    receipt_path,
+                    source_context=source_context,
+                    expected_sha256=static.oracle_filter.sha256 if static is not None else None,
+                )
                 with (
                     Path(receipt_path).open("rb") as source_file,
                     (destination / ORACLE_FILTER_FILENAME).open("wb") as output_file,

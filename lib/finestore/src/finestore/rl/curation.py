@@ -660,6 +660,7 @@ class NoOracleStaticRetentionEvidence(CatalogRecord):
     def _static_partition(self):
         if any(value <= 0 for value in self.exclusion_counts.values()) or (
             self.retained_count != self.static_retained_count + sum(self.exclusion_counts.values())
+            or self.current_input.measured_tasks != self.retained_count
         ):
             raise ValueError("Static retention must partition unique retained tasks exactly once")
         if (self.current_input.dataset_id, self.current_input.dataset_revision) != (

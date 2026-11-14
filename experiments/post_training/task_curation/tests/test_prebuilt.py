@@ -55,10 +55,8 @@ from .prebuilt_fixtures import prebuilt_task
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
 
 
-@pytest.mark.parametrize("foreign_converter", [False, True])
-def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_context(
-    tmp_path, monkeypatch, foreign_converter
-):
+@pytest.mark.parametrize("state", ["valid", "foreign_converter", "changed_filter"])
+def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_context(tmp_path, monkeypatch, state):
     task = TaskSpec.model_validate(json.loads(prebuilt_task("static")["lowered_task_spec"])["task"])
     task = task.model_copy(update={"execution_requirements": None})
     serialized = task.model_dump_json()
@@ -114,20 +112,7 @@ def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_c
     output = tmp_path / "static-receipt"
     collect_static_retention(cohort, context, cohort_evidence, output)
     filter_path = output / "oracle-filter.json"
-    static = NoOracleStaticRetentionEvidence(
-        source_id=source.info.id,
-        source_release=source.current_release,
-        current_input=context.current_input,
-        intended_use=source.intended_use,
-        retained_cohort=cohort_evidence,
-        retained_count=1,
-        static_retained_count=1,
-        exclusion_counts={},
-        policy_sha256=policy.sha256,
-        oracle_filter=ContentEvidenceReference(
-            uri=str(filter_path), sha256=hashlib.sha256(filter_path.read_bytes()).hexdigest()
-        ),
-    )
+    static = NoOracleStaticRetentionEvidence.model_validate_json((output / "static-retention-evidence.json").read_text())
     source = replace(
         source,
         info=replace(
@@ -137,7 +122,7 @@ def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_c
         ),
     )
     assert source.declaration.no_oracle_static_retention == static
-    if foreign_converter:
+    if state == "foreign_converter":
         source = replace(
             source,
             info=replace(
@@ -145,6 +130,10 @@ def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_c
                 actor_census_input=context.current_input.model_copy(update={"converter_revision": "foreign-converter"}),
             ),
         )
+    if state == "changed_filter":
+        document = json.loads(filter_path.read_text())
+        document["recipe_identity"] = "another-producer-recipe"
+        filter_path.write_text(json.dumps(document))
     monkeypatch.setattr(
         prebuilt,
         "hf_hub_download",
@@ -154,8 +143,12 @@ def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_c
     step = prebuilt.import_taskcompendium_prebuilt(source, PipelineOptions(SourceProcessingMode.FULL, CampaignRuntime()))
     destination = tmp_path / "admitted"
     invocation = step.build_config(StepContext.for_run(str(destination), str(tmp_path)))
-    if foreign_converter:
-        with pytest.raises(ValueError, match="independently bound current source context"):
+    if state == "foreign_converter":
+        with pytest.raises(ValueError, match="configured current source context"):
+            step.run(invocation)
+        return
+    if state == "changed_filter":
+        with pytest.raises(ValueError, match="configured receipt SHA-256"):
             step.run(invocation)
         return
     assert step.run(invocation).status == "completed"

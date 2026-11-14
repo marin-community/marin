@@ -23,7 +23,7 @@ from typing import Any, cast
 
 import click
 import requests
-from finestore.rl.curation import LexicalContaminationEvidence
+from finestore.rl.curation import ContentEvidenceReference, LexicalContaminationEvidence
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -397,7 +397,10 @@ def _source_config(
     controls: Controls | None,
     *,
     source_context: NoOracleSourceContext | None = None,
+    receipt_evidence: ContentEvidenceReference | None = None,
 ) -> SourcePipelineConfig:
+    receipt_path = settings.oracle_filter_receipt or (receipt_evidence.uri if receipt_evidence is not None else None)
+    receipt_sha256 = receipt_evidence.sha256 if receipt_evidence is not None else None
     review = settings.config.review if settings.config is not None else settings.review
     decontamination = (
         LexicalContaminationEvidence.model_validate_json(StoragePath(settings.decontamination_receipt).read_text())
@@ -413,8 +416,8 @@ def _source_config(
             lexical_contamination=decontamination,
             no_oracle_source_context=source_context,
             oracle_filter=(
-                load_oracle_filter(settings.oracle_filter_receipt, source_context=source_context)
-                if settings.oracle_filter_receipt
+                load_oracle_filter(receipt_path, source_context=source_context, expected_sha256=receipt_sha256)
+                if receipt_path
                 else settings.config.oracle_filter
             ),
         )
@@ -439,8 +442,8 @@ def _source_config(
         lexical_contamination=decontamination,
         no_oracle_source_context=source_context,
         oracle_filter=(
-            load_oracle_filter(settings.oracle_filter_receipt, source_context=source_context)
-            if settings.oracle_filter_receipt
+            load_oracle_filter(receipt_path, source_context=source_context, expected_sha256=receipt_sha256)
+            if receipt_path
             else None
         ),
     )
@@ -507,7 +510,13 @@ def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions)
             intended_use=source.intended_use,
             policy=policy,
         )
-    config = _source_config(options.recipe_settings, options.mode, recipe.controls, source_context=source_context)
+    config = _source_config(
+        options.recipe_settings,
+        options.mode,
+        recipe.controls,
+        source_context=source_context,
+        receipt_evidence=static.oracle_filter if static is not None else None,
+    )
     if config.lexical_contamination is None:
         config = replace(config, lexical_contamination=source.info.lexical_contamination)
     dataset = source.dataset

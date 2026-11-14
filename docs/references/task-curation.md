@@ -2046,12 +2046,14 @@ uv run python -m experiments.post_training.task_curation.static_retention \
 ```
 
 The output contains `oracle-filter.json`, unchanged retained rows in
-`tasks.parquet`, `static-exclusions.json` and `static-retention.json`. Supply
+`tasks.parquet`, `static-exclusions.json`, a diagnostic `static-retention.json`,
+and typed `NoOracleStaticRetentionEvidence` in `static-retention-evidence.json`. Supply
 `--recipe-identity` when the source recipe processor consumes the receipt.
 `load_oracle_filter` and `require_oracle_filter` require an independently configured
 `source_context` for static retention. Consumers reconstruct their expected context
 from current source configuration, independently of the receipt, and compare the
-two. Native consumers also supply the checksum read by Harbor from the original
+two. Loading also requires `expected_sha256` from the configured receipt reference.
+Native consumers supply the checksum read by Harbor from the original
 package, independently of its recorded checksum. The prebuilt consumer derives these
 bindings from its configured pin, current input census and downloaded cohort.
 Source metadata carries optional `no_oracle_executability_policy` and
