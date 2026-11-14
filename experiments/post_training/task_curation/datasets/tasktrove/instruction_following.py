@@ -3,8 +3,8 @@
 
 """TaskTrove instruction-following sources, graded in process by verifyit.
 
-The IFEval source's constraints map directly to verifyit's IFEval checks, which score the fraction
-satisfied. Structured tasks accept any schema-valid instance. Conversion excludes malformed,
+The IFEval source's constraints map directly to verifyit's IFEval checks; the reward is 1 only when
+all of them pass. Structured tasks accept any schema-valid instance. Conversion excludes malformed,
 vacuous or contradictory schemas and conflicting public language requirements.
 """
 
@@ -81,14 +81,23 @@ For a constraint-only verifier, reference_status concerns agreement between publ
 configuration. There is no canonical answer key; its absence alone is not missing context, a reason for
 reference_status=unknown, or a reason to downgrade a clearly answerable task.
 
-Distinguish a contradiction in the written instructions from impossibility under the checker. Some shared checks
-approximate language, word counts, or sentence structure; passing them does not repair a bad prompt.
+Distinguish a contradiction in the written instructions from impossibility under the checker. The shared checks count a
+letter or digit followed by any letters, digits and combining marks, with any apostrophes and zero-width joiners or
+non-joiners inside it, as one word, so a hyphen separates words and an unbroken run of Han or kana characters is one
+word, except in a check that compares words, where each such letter is one word. Keyword checks find a keyword that no
+letter or digit precedes, directly or through combining marks, and no letter, digit or combining mark follows, so an
+underscore next to it does not hide it; Han and kana letters do not count here. A sentence ends at a line break, at a
+Chinese, Japanese, Devanagari, Arabic, Armenian or Ethiopic sentence-final mark, and at ., !, ? or an ellipsis before
+whitespace, after any closing quotes or brackets. Outside detectable_format:sentence_hyphens, the dot of an abbreviation
+such as "Dr." ends a sentence too. The language check is approximate, and change_case:english_capital and
+change_case:english_lowercase look only at letter case. Passing a check does not repair a bad prompt.
 
-Shared checker details: copy:repeat_phrase requires at least N unchanged case-insensitive substring occurrences, so
-transformed variants do not satisfy it. letters:letter_counting counts ASCII word matches rather than letters.
-count:count_unique requires at least five unique ASCII words and 50% uniqueness, not all words unique.
-startend:end_checker uses literal endswith, including closing delimiters. Use these facts to identify concrete
-prompt/checker mismatches; under-enforcement alone does not make an otherwise meaningful content request unanswerable.
+Shared checker details: copy:repeat_phrase requires exactly N copies of the phrase, each with one word other than the
+first and last replaced. letters:letter_counting counts letters of every script, so each Han character is one letter.
+startend:end_checker matches the phrase ignoring letter case, with no word after it, so a closing quote or Markdown
+markup may follow it. detectable_format:sentence_hyphens fails any line break in the reply. Use these facts to identify
+concrete prompt/checker mismatches; under-enforcement alone does not make an otherwise meaningful content request
+unanswerable.
 
 Assess whether a short answer can still convey the requested content. Do not infer impossibility just because a story
 must be compressed or a constraint makes the task difficult. Use quality=good and high confidence when there is no
