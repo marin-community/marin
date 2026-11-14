@@ -36,6 +36,36 @@ def content_source(tmp_path):
 
 
 @pytest.fixture
+def small_source(tmp_path):
+    """A 60-task source whose complete population fits one SAMPLE panel."""
+    source = number_source(tmp_path / "input")
+    actor = actor_census_input(source.dataset.name, source.dataset.revision, source.version, 60)
+    return replace(
+        source,
+        info=replace(
+            source.info,
+            actor_census_input=actor,
+            within_source_dedup=deduplication_evidence(actor.dataset_id, actor.dataset_revision, source.version, 60),
+        ),
+    )
+
+
+def panel_receipt(source, sample_size, reviewed, unavailable=0):
+    receipt = sample_receipt(source)
+    panel = receipt.review.panel.model_copy(update={"sample_size": sample_size})
+    result = receipt.review.result.model_copy(
+        update={"reviewed": reviewed, "sample_count": sample_size, "unavailable_count": unavailable}
+    )
+    review = receipt.review.model_copy(update={"panel": panel, "attempted_count": sample_size, "result": result})
+    return receipt.model_copy(update={"review": review})
+
+
+@pytest.fixture
+def whole_population_receipt(small_source):
+    return panel_receipt(small_source, 60, 60)
+
+
+@pytest.fixture
 def full_binding(content_source):
     return whole_source_binding(content_source, QualityResultFinalization.COMPLETE)
 
@@ -52,6 +82,26 @@ def test_sample_receipt_derives_sample_with_receipt(content_source):
     bound = bind_derived_oversight(content_source, receipt, None)
     assert bound.info.oversight.level is OversightLevel.SAMPLE
     assert bound.info.oversight.receipt_uri == receipt.review.path
+
+
+def test_whole_population_panel_derives_full(small_source, whole_population_receipt):
+    """A complete-population panel with full coverage is a whole-source review."""
+    bound = bind_derived_oversight(small_source, whole_population_receipt, None)
+    assert bound.info.oversight.level is OversightLevel.FULL
+    assert bound.info.oversight.receipt_uri == whole_population_receipt.review.path
+    assert bound.info.oversight.reviewed == 60
+
+
+def test_incomplete_population_panel_stays_sample(small_source):
+    bound = bind_derived_oversight(small_source, panel_receipt(small_source, 50, 50), None)
+    assert bound.info.oversight.level is OversightLevel.SAMPLE
+
+
+def test_uncertain_whole_population_panel_stays_sample(small_source):
+    """Unavailable observations break the table's aggregate FULL policy, so the panel stays a sample."""
+    receipt = panel_receipt(small_source, 60, 58, unavailable=2)
+    bound = bind_derived_oversight(small_source, receipt, None)
+    assert bound.info.oversight.level is OversightLevel.SAMPLE
 
 
 def test_no_evidence_derives_quick(content_source):
@@ -98,14 +148,19 @@ def test_matching_declared_level_is_tolerated(content_source):
     assert bound.info.oversight.level is OversightLevel.SAMPLE
 
 
-def test_derived_level_matches_table_quality(content_source, full_binding):
+def test_derived_level_matches_table_quality(content_source, full_binding, small_source, whole_population_receipt):
     """The Evidence-page level equals the main-table Quality for every level."""
     # Production order: content binding attaches the Result, then the level is derived.
     quick = bind_derived_oversight(content_source, None, None)
     sample = bind_derived_oversight(
         bind_sample_result(content_source, sample_receipt(content_source)), sample_receipt(content_source), None
     )
+    whole = bind_derived_oversight(
+        bind_sample_result(small_source, whole_population_receipt), whole_population_receipt, None
+    )
     full = bind_derived_oversight(bind_full_content_result(content_source, full_binding), None, full_binding)
-    for bound in (quick, sample, full):
+    for bound in (quick, sample, whole, full):
         served = bound.declaration.model_dump(mode="json")
         assert served["oversight"].upper() == quality(served, None).value, bound.info.oversight.level
+    assert whole.info.oversight.level is OversightLevel.FULL
+    assert whole.info.oversight.receipt_uri == whole_population_receipt.review.path

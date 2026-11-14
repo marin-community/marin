@@ -2700,8 +2700,11 @@ Every source also carries an `OversightLevel` — `none`, `quick`, `sample` or
 level is never hand-declared: a late-stage ingestion step derives it from the
 current-pin QA evidence, strongest first — a current-pin FULL binding
 (`bind_full_content_result` matching the configured input via
-`matches_full_content_input`) derives `full`, a current-pin SAMPLE receipt
-derives `sample`, and anything else is conversion-only `quick`. The derived
+`matches_full_content_input`) derives `full`; a current-pin SAMPLE receipt
+derives `full` when its panel attempted every retained task with complete
+coverage and no unavailable observation, mirroring the main table's aggregate
+FULL policy, and `sample` otherwise; and anything else is conversion-only
+`quick`. The derived
 level is the same value the Atlas main table's Quality column shows. A declared
 level that contradicts the derived one fails ingestion with a clear message;
 an agreeing one may remain (bindings and test fixtures may still set it).
@@ -3020,6 +3023,9 @@ receipts remain measurement-only and cannot certify training admission.
 current-pin evidence — the FULL content Result binding and the SAMPLE content Result
 receipt — and attaches the derived `OversightLevel` with its receipt pointer, exactly as
 [curation modes and oversight levels](#curation-modes-and-oversight-levels) describes. A
+SAMPLE receipt whose panel attempted every retained task with complete coverage derives
+FULL, so the derivation matches the main table's aggregate FULL policy for every source.
+A
 declared level that contradicts the derived one fails ingestion; dataset declarations no
 longer declare one, and their earlier recipe-QA blocks survive only as
 `recipe_qa_history`.

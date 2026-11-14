@@ -6,8 +6,10 @@
 The oversight level is never hand-declared: it is read from the same single
 source of truth the Atlas main table's Quality column uses — the current-pin
 FULL binding, then the current-pin SAMPLE receipt, then conversion-only QUICK.
-Recipe-QA prose survives only as clearly labeled history, which can never
-assert a level.
+A SAMPLE receipt whose panel attempted every retained task with complete
+coverage is a whole-source review and derives FULL, mirroring the table's
+aggregate FULL policy. Recipe-QA prose survives only as clearly labeled
+history, which can never assert a level.
 """
 
 from dataclasses import replace
@@ -20,6 +22,21 @@ from experiments.post_training.task_curation.sample_qc_binding import SampleQCRe
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
 
 
+def covers_whole_population(sample: SampleQCReceipt) -> bool:
+    """Whether the panel attempted every retained task with complete coverage.
+
+    This mirrors the table's aggregate FULL policy: the recorded QC evidence
+    covers the retained population and no observation is unavailable, so the
+    panel is a whole-source review rather than a sample.
+    """
+    panel, result = sample.review.panel, sample.review.result
+    return (
+        sample.review.attempted_count == panel.retained_tasks
+        and result.reviewed + result.uncertain_count == panel.retained_tasks
+        and result.unavailable_count == 0
+    )
+
+
 def derived_oversight_level(
     source: RlDataSource,
     sample: SampleQCReceipt | None,
@@ -29,6 +46,8 @@ def derived_oversight_level(
     if full_content is not None and matches_full_content_input(source, full_content):
         return OversightLevel.FULL
     if sample is not None:
+        if covers_whole_population(sample):
+            return OversightLevel.FULL
         return OversightLevel.SAMPLE
     return OversightLevel.QUICK
 
@@ -58,9 +77,13 @@ def bind_derived_oversight[ConfigT: CatalogConfig](
         receipt = full_content.review_receipt.uri
         reviewed = full_content.result.reviewed
         basis = "current-pin FULL content Result binding"
-    elif level is OversightLevel.SAMPLE and sample is not None:
+    elif sample is not None:
         receipt = sample.review.path
-        basis = "current-pin SAMPLE content Result receipt"
+        if level is OversightLevel.FULL:
+            reviewed = sample.review.result.reviewed
+            basis = "current-pin complete-population content panel"
+        else:
+            basis = "current-pin SAMPLE content Result receipt"
     evidence = OversightEvidence(
         verification=f"Evidence-derived from the {basis}; identical to the Atlas main-table Quality.",
         level=level,

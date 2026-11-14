@@ -100,8 +100,9 @@ their SHA-256 hashes and records exclusions by typed reason. The table also list
 Quality, Result, lexical contamination, backend evidence and leading
 curriculum area. Quality is the evidence-derived oversight level, computed by
 the curation pipeline from the current-pin QA evidence — a current-pin FULL
-binding shows FULL, a current-pin SAMPLE receipt shows SAMPLE, and
-conversion-only sources show QUICK — and the levels define required
+binding shows FULL, a current-pin SAMPLE receipt shows SAMPLE unless its
+complete-population panel covers every retained task, which also shows FULL,
+and conversion-only sources show QUICK — and the levels define required
 content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
 and FULL requires a review of the whole retained population. An explicitly accepted
