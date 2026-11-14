@@ -26,8 +26,8 @@ from taskcompendium.pipeline.oracle_filter import (
     LocalExecutionHostTransition,
     OracleExclusionReason,
     OracleFilterReceipt,
-    load_oracle_filter,
     ResourceCalibrationReceipt,
+    load_oracle_filter,
 )
 from taskcompendium.runtime.resources import inline_resource
 

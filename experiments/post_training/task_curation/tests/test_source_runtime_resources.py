@@ -4,6 +4,7 @@
 """Recover the forty frozen fc4 attempts that ran below original role budgets."""
 
 import gzip
+import io
 import json
 from pathlib import Path
 
@@ -18,7 +19,9 @@ def test_all_forty_original_fc4_attempts_keep_old_history_and_recover_exact_role
     fixtures = Path(__file__).parent / "fixtures"
     parent_bytes = gzip.decompress((fixtures / "fc4-forty-parent-maps.json.gz").read_bytes())
     parents = json.loads(parent_bytes)
-    rows = pq.read_table(fixtures / "fc4-forty-original-rows.parquet").to_pylist()
+    rows = pq.read_table(
+        io.BytesIO(gzip.decompress((fixtures / "fc4-forty-original-rows.parquet.gz").read_bytes()))
+    ).to_pylist()
     recovered = []
     for row in rows:
         task = row_task(row)
@@ -32,7 +35,9 @@ def test_all_forty_original_fc4_attempts_keep_old_history_and_recover_exact_role
         original = parent.model_dump(mode="json")
         shape, preserved, verifier = recovered_source_runtime_requirements(parent, binding)
         assert shape == ExecutionRequirements(
-            cpus=2, memory_mb=4096, storage_mb=10240,
+            cpus=2,
+            memory_mb=4096,
+            storage_mb=10240,
             agent_timeout_sec=parent.execution_requirements.agent_timeout_sec,
             verifier_timeout_sec=parent.execution_requirements.verifier_timeout_sec,
         )
@@ -40,8 +45,11 @@ def test_all_forty_original_fc4_attempts_keep_old_history_and_recover_exact_role
         assert verifier.fixed == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
         assert verifier.mode == parent.verifier.mode
         assert parent.execution_requirements == ExecutionRequirements(
-            cpus=1, memory_mb=2048, storage_mb=2048,
-            agent_timeout_sec=shape.agent_timeout_sec, verifier_timeout_sec=shape.verifier_timeout_sec,
+            cpus=1,
+            memory_mb=2048,
+            storage_mb=2048,
+            agent_timeout_sec=shape.agent_timeout_sec,
+            verifier_timeout_sec=shape.verifier_timeout_sec,
         )
         assert parent.model_dump(mode="json") == original
         assert not parent.passed
