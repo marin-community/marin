@@ -32,6 +32,21 @@ from experiments.post_training.snowball_isoflop.probes import (
 from experiments.post_training.snowball_isoflop.run import run_training_pod
 
 
+def classify_probe_failure(text: str, phase: str) -> str | None:
+    """Classify a failed probe's worker log tail, or None when unclassified.
+
+    The batch search treats an optimizer-offload out-of-memory and a first-update
+    progress-watchdog stall as bounded observations; every other failure is
+    fatal. Classification reads a client-side log tail because the server-side
+    substring search does not reliably cover fresh regional log entries.
+    """
+    if "RESOURCE_EXHAUSTED" in text or "out of memory" in text:
+        return "memory_limit"
+    if "No progress after process_started" in text and phase.startswith("B"):
+        return "stall_limit"
+    return None
+
+
 def run_probe(probe: Probe) -> dict:
     pod = build_probe_pod(probe)
     root = StoragePath(pod.output_path)
@@ -50,21 +65,12 @@ def run_probe(probe: Probe) -> dict:
         assert context.job_id is not None and context.client is not None
         if not error.job_id.to_wire().startswith(f"{context.job_id.to_wire()}/"):
             raise ValueError("Probe failure belongs to another job tree") from error
-        job = context.client.job(error.job_id)
-        oom_logs = job.logs(substring="RESOURCE_EXHAUSTED", max_lines=8, tail=True)
-        if not oom_logs:
-            oom_logs = job.logs(substring="out of memory", max_lines=8, tail=True)
-        if not oom_logs:
-            stall_logs = job.logs(substring="No progress after process_started", max_lines=8, tail=True)
-            if stall_logs and probe.phase.startswith("B"):
-                # A first-update stall is a bounded observation for the batch
-                # search, not a tree-fatal error: record it like a memory
-                # limit so the search can fall back to accumulation growth.
-                result.update(status="stall_limit", error=str(error))
-                (root / "probe-result.json").write_text(json.dumps(result, indent=2))
-                return result
+        tail = context.client.job(error.job_id).logs(max_lines=400, tail=True)
+        text = "\n".join((getattr(entry, "data", None) or repr(entry)) for entry in tail)
+        status = classify_probe_failure(text, probe.phase)
+        if status is None:
             raise
-        result.update(status="memory_limit", error=str(error))
+        result.update(status=status, error=str(error))
         (root / "probe-result.json").write_text(json.dumps(result, indent=2))
         return result
     gate = read_json(str(root / "initial-eval-match.json"))
