@@ -108,7 +108,7 @@ function showLeaf(key) {
     link.href = `source.html#${new URLSearchParams({source_id: row.id})}`;
     name.append(link, node('small', row.id));
     tr.append(name, node('td', row.origin), node('td', row.oversight || 'not declared'),
-      node('td', row.daytona?.state || row.daytona_safety || 'not recorded'), node('td', row.oracle_validation || 'not recorded'));
+      node('td', row.daytona?.state || row.daytona_safety || 'not recorded'));
     return tr;
   }));
   $('leaf-list').hidden = false;

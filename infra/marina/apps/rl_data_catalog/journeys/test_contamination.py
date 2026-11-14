@@ -540,3 +540,15 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
         })"""
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.locator(".atlas-tabs").get_by_role("link", name="Getting started", exact=True).click()
+    count = page.locator('button[data-leaf="sample"]')
+    expect(count).to_have_text(re.compile(r"^\d+$"))
+    count.click()
+    table = page.locator(".leaf-sources")
+    expect(table.locator("thead th")).to_have_text(["Source", "Origin", "Execution oversight", "Daytona"])
+    expect(page.locator("#leaf-rows tr").first).to_be_visible()
+    assert table.evaluate(
+        "t => [...t.tBodies[0].rows].every(r => r.cells.length === 4 && [...r.cells].every((c,i,a) => "
+        "!a[i+1] || c.getBoundingClientRect().right <= a[i+1].getBoundingClientRect().left + 1))"
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
