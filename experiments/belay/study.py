@@ -4,10 +4,10 @@
 """Studies on the ``custom`` track: a question answered by an analysis of trained checkpoints, with no verdict.
 
 A study spec (``experiments/belay/runs/X####.yaml``, ``kind: study``) lists runs, each launched through an existing
-Track's command (``B tracks``) with its checkpoints under ``tmp/ttl=30d/belay/studies/X####/``, and analysis steps,
-each a script ``experiments/belay/studies/X####.py`` run on one run's checkpoint by ``B analyze``. The maintainer's
-approval sets the budget (nodes and hours); a study whose runs could exceed it is refused. New model code, production
-priority and the hero rack are not studies: those go to a maintainer.
+Track's command (``B tracks``) with its output under ``tmp/ttl=30d/belay/studies/X####/``, and analysis steps, each a
+script ``experiments/belay/studies/X####.py`` run on one run's saved checkpoints and W&B history by ``B analyze``.
+The maintainer's approval sets the budget (nodes and hours); a study whose runs could exceed it is refused. New model
+code, production priority and the hero rack are not studies: those go to a maintainer.
 
     experiment: X0300
     kind: study
@@ -22,7 +22,7 @@ priority and the hero rack are not studies: those go to a maintainer.
         hours: 0.5               # the session's estimate of the run's wall time
     analysis:
       - script: experiments/belay/studies/X0300.py
-        input: base              # the run whose final checkpoint it reads
+        input: base              # the run whose checkpoints and history it reads
 """
 
 import re
@@ -30,6 +30,7 @@ import shlex
 from dataclasses import dataclass, field
 
 import yaml
+from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.belay.config import CONFIG, GB200_CLUSTER, TRACKS, Track
 from experiments.belay.posts import BOT_MARK, title
@@ -37,6 +38,8 @@ from experiments.belay.submit import SETTING_OPTIONS, check_setting, run_name, t
 
 STUDY_KIND = "study"
 STUDY_ROOT = "tmp/ttl=30d/belay/studies"
+# The launcher writes a run's output under this prefix of its cluster's bucket (STUDY_ROOT is below it).
+LAUNCH_PREFIX = "marin"
 STUDIES_DIR = "experiments/belay/studies"
 # Launcher flags Belay sets itself (name, seed, output, cluster, priority), and the ones that would put checkpoints
 # outside the study's prefix: a study may not pass them.
@@ -197,17 +200,26 @@ def study_command(study: Study, run: StudyRun, band: str | None = None) -> list[
     return track_command(run.track, name, flags, seed=run.seed, output_root=prefix, band=band)
 
 
+def study_root(cluster: str, experiment: str) -> str:
+    """The study's directory in ``cluster``'s bucket (``cw-<region>`` keeps run data in ``marin-<region>``): its runs'
+    output, the W&B history its analysis reads and its report."""
+    return f"s3://marin-{cluster.removeprefix('cw-')}/{LAUNCH_PREFIX}/{study_prefix(experiment)}"
+
+
 def checkpoint_root(study: Study, run: StudyRun) -> str:
-    """Where the run's saved checkpoints land (``<step-N>`` directories below it)."""
-    bucket = f"s3://marin-{TRACKS[run.track].cluster.removeprefix('cw-')}"
-    return f"{bucket}/{study_prefix(study.experiment)}/{run_name(study.experiment, run.name)}/checkpoints"
+    """Where the run's saved checkpoints land (``step-N`` directories below it): the launcher keeps them on the
+    region's temporary checkpoint storage, keyed by the run's output path."""
+    output = f"{study_root(TRACKS[run.track].cluster, study.experiment)}/{run_name(study.experiment, run.name)}"
+    return temporary_checkpoint_base_path(output)
 
 
 def refuse_input(experiment: str, path: str) -> None:
-    """Refuse a checkpoint path outside ``s3://<bucket>/tmp/ttl=30d/belay/studies/<experiment>/``."""
-    pattern = rf"s3://marin-[a-z0-9-]+/{re.escape(study_prefix(experiment))}/\S+"
+    """Refuse a path that is not the checkpoints directory of one of the study's runs (``checkpoint_root``), or a
+    ``step-N`` in it."""
+    run = rf"{LAUNCH_PREFIX}/{re.escape(study_prefix(experiment))}/[^/\s]+"
+    pattern = rf"s3://marin-[a-z0-9-]+/tmp/ttl=\d+d/checkpoints-temp/marin-[a-z0-9-]+/{run}/checkpoints(/step-\d+)?"
     if not re.fullmatch(pattern, path) or ".." in path.split("/"):
-        raise SystemExit(f"refusing: {path!r} is not under s3://<bucket>/{study_prefix(experiment)}/")
+        raise SystemExit(f"refusing: {path!r} is not a checkpoints directory of a {experiment} study run")
 
 
 def run_rows(study: Study) -> list[str]:

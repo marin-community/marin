@@ -167,8 +167,9 @@ no run may be longer than the hours.
      - script: experiments/belay/studies/X####.py
        input: <the run key whose checkpoint it reads>
    ```
-   Belay sets the run name, seed, output path, cluster and priority and adds `--save-checkpoints`; checkpoints land
-   only under `tmp/ttl=30d/belay/studies/X####/`. Do not pass `--output-path`, `--run-id`, `--seed`,
+   Belay sets the run name, seed, output path, cluster and priority and adds `--save-checkpoints`; the runs' output
+   lands under `tmp/ttl=30d/belay/studies/X####/`, and their checkpoints on the region's temporary checkpoint storage
+   (kept 14 days, so analyze within two weeks of the runs finishing). Do not pass `--output-path`, `--run-id`, `--seed`,
    `--target-cluster`, `--priority`, `--submit` or `--temporary-checkpoints-only`; `--resume-from` only for a
    checkpoint under the study's own prefix.
 2. **Run:** `B study X#### --spec <file>`
@@ -179,9 +180,12 @@ no run may be longer than the hours.
      setting no config field takes): run the escalate command it prints, then stop. A setting that needs a new
      field is step 0, not an escalation.
 3. **The analysis script** goes in through `B code-change X#### --start` / `--finish`, as
-   `experiments/belay/studies/X####.py`. It defines `analyze(params, out_dir)`: `params` maps each checkpoint array
-   path (`params/...`) to a NumPy array; it writes `report.md` and any PNG figures it links into `out_dir`. Its gates:
-   it writes its report on a tiny synthetic checkpoint on CPU, and pre-commit passes. Any other file in the same
+   `experiments/belay/studies/X####.py`. It defines `analyze(checkpoints, history, out_dir)`: `checkpoints` maps
+   each saved step to its parameters (each checkpoint array path, `params/...`, to a NumPy array; a step is read when
+   looked up), so a question about change over training walks every step; `history` is the run's W&B log, one dict
+   per logged row (`_step` and its metrics), so statistics the run logged during training need no checkpoint; it
+   writes `report.md` and any PNG figures it links into `out_dir`. Its gates: it writes its report on a tiny synthetic
+   run (checkpoints at two steps, a short history) on CPU, and pre-commit passes. Any other file in the same
    change is model code and gets the section 1b gates. Write it while the runs train, or after.
 4. When the runs finish, `B run-finished X####` marks the thread `study analysis` and prints each analysis step's
    `B analyze` command (section 2e).
@@ -253,9 +257,10 @@ sessions run it only when a maintainer asks. Each post shows a `Reproduce:` line
 ## 2e. analyze (a study's analysis step)
 
 1. **Run:** `B analyze X#### --script experiments/belay/studies/X####.py --input <checkpoint>`, as `run-finished`
-   printed it. `--input` is a run's checkpoints directory (the newest step is read) or one `step-N` in it, and must
-   be under `s3://<bucket>/tmp/ttl=30d/belay/studies/X####/`.
-   - It runs the committed script as a CPU job on the checkpoint's cluster, copies `report.md` and its figures to
+   printed it. `--input` is one of the study's runs' checkpoints directories (every saved step is passed) or one
+   `step-N` in it.
+   - It copies the run's W&B history next to the study, runs the committed script as a CPU job on the checkpoints'
+     cluster, copies `report.md` and its figures to
      `experiments/belay/analysis/X####/` on the registry branch with the entry's status `report`, marks the thread
      `report` with the link.
    - **If it refuses** (another script, a checkpoint outside the study's prefix, a script not yet committed): fix
