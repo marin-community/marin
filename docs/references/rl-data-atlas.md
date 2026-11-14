@@ -87,12 +87,17 @@ not declared*. Edit the rules in the reference first, then the page text in
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
 curriculum area. The levels define required content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
-and FULL requires a complete review of the whole retained population. Execution qualification is recorded separately. Result uses the
+and FULL requires a review of the whole retained population. An explicitly accepted
+whole-source waiver also displays FULL when its pinned evidence accounts for every
+unreviewed task and reason; strict coverage remains false. Execution qualification is recorded separately. Result uses the
 inclusive issue-rate boundaries above.
 
 The loader records required and conclusive reviewed counts plus coverage
 completeness. Result is provisional if coverage is incomplete or any required
-observation remains unreviewed or uncertain. A completed SAMPLE review is final
+observation remains unreviewed or uncertain, unless a verified whole-source
+finalization accepts those observations with pinned waiver evidence. Its Result is
+final while Evidence retains the incomplete coverage, unreviewed count and exact
+reasons. A completed SAMPLE review is final
 for its sample; the Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
@@ -123,7 +128,7 @@ not describe residual overlap in the retained release or semantic decontaminatio
 The source table legend and Getting started guide define the same five states.
 Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
 Result from incomplete content review carries a provisional variant within its
-chip. Review progress and lower bounds appear only on the source Evidence page.
+chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
 
 **Daytona safe** measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;
@@ -147,8 +152,10 @@ where the release claims one, and a link to its pinned manifest — beside, and
 distinct from, the sampled quality. Open a source for
 pipeline details and links to its original dataset, assessment and curriculum
 coverage. The leading curriculum domain links directly to that source's coverage
-within the domain. On small screens, the table keeps name, count and quality
-visible; source details contain the remaining fields.
+within the domain. Columns size to their contents, and enum chips stay on one line
+without subtitles.
+On small screens, scroll the table horizontally to reach every column; its header
+and body scroll together without widening the page.
 
 ## Updating Atlas
 
@@ -242,6 +249,20 @@ uv run marina release /tmp/atlas-preview-package --allow-dirty --base-version CU
 
 Use a fresh output directory for each build. Replace `CURRENT_VERSION` with the
 versions response's top-level `current_version`.
+
+The loader selects preview display policy only for UUID
+`c9742a15-fb46-4d56-bc88-aa916351ebd3`. A source awaiting an exact-input SAMPLE
+Result displays QUICK with “SAMPLE review in progress” in its details and Quality
+tooltip. The declaration's oversight and evidence remain unchanged, and absent
+Results, issue rates and coverage remain unmeasured. Sources displayed as SAMPLE
+or FULL still require a computed Result. Catalog publication and production
+imports retain their strict Result gate; preview imports retain all admission
+and grading-census checks. Display policy is part of the load identity, so a
+preview import cannot make a later strict import skip validation.
+Matching computed aggregate and independent sample-panel counts display SAMPLE
+without changing execution oversight. The same pure projection runs during
+loading and API reads, so a code upgrade keeps an existing selected catalog
+readable even if a later strict reload is rejected.
 
 Before validation and release, optional frozen partial-review observations can
 replace `dist/measurements/content-progress.json`. Its JSON object contains

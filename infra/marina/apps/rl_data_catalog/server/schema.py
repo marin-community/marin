@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS atlas_current (
     name TEXT PRIMARY KEY, load_id TEXT
 );
 ALTER TABLE atlas_loads ADD COLUMN IF NOT EXISTS review_completeness_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE atlas_loads ADD COLUMN IF NOT EXISTS display_policy TEXT NOT NULL DEFAULT 'strict';
 INSERT INTO atlas_current (name) VALUES ('latest') ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS curriculum_loads (
     load_id TEXT PRIMARY KEY, release_id TEXT NOT NULL, release_uri TEXT NOT NULL,

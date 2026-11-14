@@ -1533,6 +1533,8 @@ inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
 three infrastructure attempts applies independently to this approved phase.
+Calibration validates and deduplicates Harbor's selected-result copy and physical
+attempt result before consuming the physical verdict, oracle exit and resource receipts.
 Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
 This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
 standalone Harbor trials without it keep PHASE behavior. Safe provider retries
@@ -1899,6 +1901,18 @@ serving context from 262,144 to 524,288 tokens and generation limits from
 in-flight v2 work and its valid observations keep their original identities.
 The [FULL-QC reviewer changelog](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#complete-retained-population-review)
 records cache separation, resume commands and the preserved v2 repair policy.
+
+Whole-source content Result finality is recorded explicitly as `complete` or
+`accepted_incomplete`, independently of coverage. The latter requires a pinned
+waiver enumerating every unreviewed task and exact reason, and preserves
+missing-review and uncertainty counts. This accepted whole-source review displays
+Quality FULL and a final Result; strict coverage remains false on Evidence.
+Exact-input whole-source bindings
+take precedence over later SAMPLE panels; input changes invalidate that finality.
+See [final whole-source Results](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#final-whole-source-content-results)
+for offline evidence verification and transport. Completed SAMPLE panels retain
+their existing finality semantics. Content finality supplies neither execution
+qualification nor permission to publish a remediated dataset.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and
@@ -2269,6 +2283,8 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   --plans s3://BUCKET/frozen-plans.json --version YYYYMMDD-v1 \
   --evidence-root s3://BUCKET/new-publication-prefix --workers 4
 ```
+
+#### Retained release census
 
 After readback, `retained_census` measures the retained actor and integrity
 population using the existing complete census. It also writes a normalized

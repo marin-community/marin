@@ -7,19 +7,15 @@ import json
 import time
 import uuid
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import click
 from finestore.rl.curation import (
     MAX_UNAVAILABLE_JUDGMENT_SHARE,
-    AssessmentItem,
-    AssessmentPopulation,
     CurationCatalog,
     JudgmentStatus,
-    SourceDeclaration,
-    Verdict,
     validate_items,
 )
 from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
@@ -42,11 +38,20 @@ from experiments.post_training.task_curation.catalog_identity import (
 )
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
+from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
+from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
-REVIEW_COMPLETENESS_VERSION = 1
+REVIEW_COMPLETENESS_VERSION = 5
+
+
+class CatalogDisplayPolicy(StrEnum):
+    STRICT = "strict"
+    PREVIEW = "preview"
+
+
 TABLE_COLUMNS = {
     "sources": (
         "id TEXT, declaration JSONB, assessment_key TEXT, latest_attempt_key TEXT, "
@@ -69,45 +74,6 @@ TABLE_COLUMNS = {
     "identity_surveys": "survey_id TEXT, metadata JSONB",
     "duplicate_reviews": "left_source TEXT, right_source TEXT, review JSONB",
 }
-
-
-@dataclass(frozen=True)
-class ReviewCompleteness:
-    reviewed: int
-    required: int
-    coverage_complete: bool
-
-    @property
-    def provisional(self) -> bool:
-        return not self.coverage_complete or self.reviewed < self.required
-
-
-def review_completeness(
-    declaration: SourceDeclaration, populations: list[AssessmentPopulation], items: list[AssessmentItem]
-) -> dict[str, Any] | None:
-    """Bind Result completeness to its required review panel, independently of Quality."""
-    aggregate = declaration.quality_result
-    if aggregate is not None:
-        assert aggregate.sample_count is not None
-        completeness = ReviewCompleteness(
-            reviewed=aggregate.reviewed,
-            required=aggregate.sample_count,
-            coverage_complete=aggregate.unavailable_count == 0,
-        )
-    elif populations:
-        required = next(row.sample_count for row in populations if row.cohort == "admitted")
-        panel = [row for row in items if row.cohort == "admitted"]
-        completeness = ReviewCompleteness(
-            reviewed=sum(
-                row.status == JudgmentStatus.REVIEWED and row.has_task and row.verdict != Verdict.UNKNOWN
-                for row in panel
-            ),
-            required=required,
-            coverage_complete=len(panel) == required and all(row.status == JudgmentStatus.REVIEWED for row in panel),
-        )
-    else:
-        return None
-    return {**asdict(completeness), "provisional": completeness.provisional}
 
 
 def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
@@ -144,7 +110,12 @@ def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows
 
 
 def load_catalog(
-    catalog: CurationCatalog, query: AppletQuery, backend_map: BackendSurvey, identities: SourceIdentitySurvey
+    catalog: CurationCatalog,
+    query: AppletQuery,
+    backend_map: BackendSurvey,
+    identities: SourceIdentitySurvey,
+    *,
+    display_policy: CatalogDisplayPolicy = CatalogDisplayPolicy.STRICT,
 ) -> dict[str, Any]:
     """Stage and validate a snapshot, then select it if the serving pointer is unchanged."""
     started = time.monotonic()
@@ -161,7 +132,7 @@ def load_catalog(
     survey_id = canonical_sha256(backend_survey_payload(backend_map))
     current = query(
         """
-        SELECT c.load_id, l.catalog_root, l.snapshot_id, l.review_completeness_version,
+        SELECT c.load_id, l.catalog_root, l.snapshot_id, l.review_completeness_version, l.display_policy,
             b.survey_id, i.survey_id AS identity_id FROM atlas_current c
         JOIN atlas_loads l USING (load_id)
         LEFT JOIN atlas_backend_surveys b USING (load_id)
@@ -175,12 +146,14 @@ def load_catalog(
         current[0]["survey_id"],
         current[0]["identity_id"],
         current[0]["review_completeness_version"],
+        current[0]["display_policy"],
     ) == (
         catalog.root,
         snapshot.snapshot_id,
         survey_id,
         identity_id,
         REVIEW_COMPLETENESS_VERSION,
+        display_policy,
     ):
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
@@ -198,8 +171,9 @@ def load_catalog(
 
     execute(
         """
-        INSERT INTO atlas_loads (load_id, catalog_root, snapshot_id, created_at, review_completeness_version)
-        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :review_completeness_version)
+        INSERT INTO atlas_loads
+            (load_id, catalog_root, snapshot_id, created_at, review_completeness_version, display_policy)
+        VALUES (:load_id, :catalog_root, :snapshot_id, :created_at, :review_completeness_version, :display_policy)
     """,
         {
             "load_id": load_id,
@@ -207,6 +181,7 @@ def load_catalog(
             "snapshot_id": snapshot.snapshot_id,
             "created_at": snapshot.created_at,
             "review_completeness_version": REVIEW_COMPLETENESS_VERSION,
+            "display_policy": display_policy,
         },
     )
     sources = [canonical_snapshot_source(source) for source in catalog.sources(snapshot.snapshot_id)]
@@ -274,7 +249,13 @@ def load_catalog(
         key = source.assessment_key
         record["review_completeness"] = review_completeness(source.declaration, [], [])
         if key is None:
-            require_content_result(source.declaration, source.curation, key)
+            display = quality_display(
+                source.declaration.model_dump(mode="json"),
+                source.curation.model_dump(mode="json") if source.curation else None,
+                key,
+            )
+            if display_policy is CatalogDisplayPolicy.STRICT or display.quality is not Quality.QUICK:
+                require_content_result(source.declaration, source.curation, key)
             continue
         assessment = canonical_assessment(catalog.assessment(key))
         if assessment.source_id != source.id:
@@ -362,7 +343,17 @@ def main(catalog_root: str, applet_id: str, service_url: str, backend_map: Path,
     survey = canonical_backend_survey(json.loads(backend_map.read_text()))
     identities = canonical_identity_survey(json.loads(source_identities.read_text()))
     click.echo(
-        json.dumps(load_catalog(CurationCatalog(catalog_root), applet_query(service_url, applet_id), survey, identities))
+        json.dumps(
+            load_catalog(
+                CurationCatalog(catalog_root),
+                applet_query(service_url, applet_id),
+                survey,
+                identities,
+                display_policy=(
+                    CatalogDisplayPolicy.PREVIEW if applet_id == PREVIEW_APP_ID else CatalogDisplayPolicy.STRICT
+                ),
+            )
+        )
     )
 
 

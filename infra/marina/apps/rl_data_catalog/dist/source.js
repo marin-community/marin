@@ -51,8 +51,10 @@ async function render(data, sourceId) {
   $('title').textContent = d.display_name;
   $('message').textContent = `${d.origin} · ${d.id} · catalog snapshot ${data.catalog.snapshot_id}`;
   const result = data.result;
+  const qualityBadge = node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`);
+  if (data.quality_review_status) qualityBadge.title = data.quality_review_status;
   $('labels').replaceChildren(
-    node('span', `Quality ${data.quality}`, `chip level level-${data.quality.toLowerCase()}`),
+    qualityBadge,
     node('span', result ? `Result ${resultLabels[result]}${data.result_provisional ? ' · provisional' : ''}` : 'Result not assessed', `chip quality-${result ? resultClasses[result] : 'unassessed'}${result && data.result_provisional ? ' result-provisional' : ''}`),
     contaminationChip(data.contamination_status),
     node('span', `Daytona ${daytonaLabel(data.daytona)}`, 'chip quality-unassessed'),
@@ -133,12 +135,19 @@ async function render(data, sourceId) {
     ['Evidence', pointer(progress.evidence_uri)],
   ], 'This observation does not determine FULL or Result. Partial-batch reviews may be additional.'));
   const qualityResult = d.quality_result;
+  if (data.quality_review_status) sections.push(card('Content review status', [
+    ['Status', data.quality_review_status], ['Declared oversight', d.oversight],
+  ], 'No exact-input Result is available yet. The preview displays QUICK while the review is pending.'));
   sections.push(card('Content review coverage', data.review_completeness ? [
-    ['Status', data.result_provisional ? 'Provisional / incomplete' : 'Required content review complete'],
+    ['Status', data.result_provisional ? 'Provisional / incomplete' : d.quality_result_finalization === 'accepted_incomplete' ? 'Final with accepted whole-source waiver' : 'Required content review complete'],
+    ['Strict coverage complete', String(data.review_completeness.coverage_complete)],
+    ['Unreviewed tasks', qualityResult?.unavailable_count],
+    ['Finalization waiver and exact unreviewed reasons', d.quality_result_waiver && pointer(d.quality_result_waiver.uri)],
+    ['Waiver SHA-256', d.quality_result_waiver?.sha256],
     ['Conclusive reviewed contracts', data.review_completeness?.reviewed], ['Required reviews', data.review_completeness?.required], ['Retained contracts', d.within_source_dedup?.unique_count],
     ['Execution qualification', d.oversight],
     ['Review evidence', d.independent_qc?.evidence_url && pointer(d.independent_qc.evidence_url)],
-  ] : [], 'Content QA and execution qualification are separate. FULL requires complete recorded review coverage.'));
+  ] : [], 'Content QA and execution qualification are separate. A whole-source waiver can finalize FULL while strict coverage remains incomplete; its receipt lists every unreviewed task and exact reason.'));
   sections.push(card('Computed Result', qualityResult ? [
     ['Conclusive reviews', qualityResult.reviewed], ['Tasks with issues', qualityResult.issue_count],
     ['Issue rate', qualityResult.issue_rate == null ? null : `${(100 * qualityResult.issue_rate).toFixed(2)}%`],
