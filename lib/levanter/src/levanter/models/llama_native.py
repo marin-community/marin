@@ -212,7 +212,7 @@ class NativeLlamaAttention(eqx.Module):
     ) -> Float[Array, "B S D"]:
         q, k, v = self.project_qkv(x, pos_ids, sharding=self.sharding)
         if self.config.attention_implementation == "reference":
-            output = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+            output = reference_attention(q, k, v, mask, logits_dtype=None)
         else:
             output = attention(q, k, v, mask, implementation=self.config.attention_implementation)
         return self.project_output(output, dtype=x.dtype, sharding=self.sharding)
