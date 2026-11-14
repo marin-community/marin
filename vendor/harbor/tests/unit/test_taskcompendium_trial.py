@@ -17,9 +17,6 @@ from pathlib import Path
 import httpx
 import pytest
 import tomlkit
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from transformers import PreTrainedTokenizerFast
 from rolloutengine.models import RolloutLimits
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
@@ -167,21 +164,13 @@ def declared_oracle(task):
 
 
 @pytest.mark.asyncio
-async def test_candidate_renders_replayed_tool_arguments_without_changing_wire_history(tmp_path, monkeypatch):
+async def test_candidate_preserves_tool_wire_history_across_turns(tmp_path, monkeypatch):
     task = exact_answer_task(
         RawRow("tool-replay", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
         prompt="Use the shell, then return 42.", answers=("42",), ignore_case=False,
     ).model_copy(update={"environment_requirements": EnvironmentRequirements(
         capabilities=("shell",), command_semantics=CommandSemantics.LINUX_PROCESS, working_directory="/workspace",
     )})
-    # GLM's pinned template iterates decoded argument mappings; OpenAI wire history uses JSON strings.
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]")), unk_token="[UNK]",
-        chat_template="""{% for message in messages %}{{ message.content or '' }}
-{% for call in message.get('tool_calls') or [] %}
-{% for key, value in call.function.arguments.items() %}{{key}}={{value}}{% endfor %}
-{% endfor %}{% endfor %}""",
-    )
     requests = []
     arguments = json.dumps({"command": "printf replay > marker"})
 
@@ -201,15 +190,13 @@ async def test_candidate_renders_replayed_tool_arguments_without_changing_wire_h
         })
 
     real_client = agents.AsyncOpenAI
-    monkeypatch.setattr(agents.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
     monkeypatch.setattr(agents, "AsyncOpenAI", lambda **kwargs: real_client(
         **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(response)),
     ))
     agent = agents.TaskSpecChatAgent(
         logs_dir=tmp_path / "agent", model_name="openai/candidate", model_alias="openai/candidate",
-        api_base="https://candidate.fixture/v1", max_turns=2, max_tokens=128, context_window=65536,
-        max_input_tokens=49152, request_parameters={"temperature": 0.7},
-        tokenizer_model="fixture/tool-replay", tokenizer_revision="9" * 40,
+        api_base="https://candidate.fixture/v1", max_turns=2, max_tokens=128,
+        request_parameters={"temperature": 0.7},
     )
     actor_root = tmp_path / "actor"
     (actor_root / "workspace").mkdir(parents=True)
@@ -533,11 +520,6 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
         (directory / "solution/response.json").write_text(json.dumps([candidate]))
 
     real_client = agents.AsyncOpenAI
-    class Tokenizer:
-        def apply_chat_template(self, *args, **kwargs):
-            return list(range(10))
-
-    monkeypatch.setattr(agents.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
     monkeypatch.setattr(
         agents,
         "AsyncOpenAI",
@@ -572,10 +554,7 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
                             "api_base": "https://candidate.fixture/v1",
                             "max_turns": 1,
                             "max_tokens": 128,
-                            "context_window": 65536,
-                            "max_input_tokens": 49152,
                             "request_parameters": {"temperature": 0.7, "top_p": 0.95, "extra_body": {"top_k": 20}},
-                            "tokenizer_model": "fixture/candidate", "tokenizer_revision": "f" * 40,
                         }
                         if agent_name == "task-spec-chat"
                         else {}
@@ -645,8 +624,7 @@ async def test_candidate_sampling_cannot_replace_original_task_tools(tmp_path, m
             task=TaskConfig(path=directory), trial_name="tool-replacement", trials_dir=tmp_path / "trials",
             agent=AgentConfig(name="task-spec-chat", model_name="openai/candidate", kwargs={
                 "api_base": "https://candidate.fixture/v1", "max_turns": 1, "max_tokens": 128,
-                "context_window": 65536, "max_input_tokens": 49152, "request_parameters": override,
-                "tokenizer_model": "fixture/candidate", "tokenizer_revision": "f" * 40,
+                "request_parameters": override,
             }),
         ))
     assert calls == []
@@ -823,6 +801,8 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
     def respond(request):
         requests.append(json.loads(request.content))
         if len(requests) == 2:
+            if failure == "input_budget":
+                return httpx.Response(400, json={"error": {"code": "input_budget_unserved"}})
             return httpx.Response(503, json={"error": {"message": "provider unavailable", "type": "server_error"}})
         return httpx.Response(
             200,
@@ -856,11 +836,6 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
         )
 
     real_client = agents.AsyncOpenAI
-    class Tokenizer:
-        def apply_chat_template(self, *args, **kwargs):
-            return list(range(49153 if failure == "input_budget" else 10))
-
-    monkeypatch.setattr(agents.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
     monkeypatch.setattr(
         agents,
         "AsyncOpenAI",
@@ -881,16 +856,14 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
                     "api_base": "https://candidate.fixture/v1",
                     "max_turns": 3,
                     "max_tokens": 128,
-                    "context_window": 65536, "max_input_tokens": 49152,
-                    "request_parameters": {"temperature": 0.7}, "tokenizer_model": "fixture/candidate",
-                    "tokenizer_revision": ("0" if failure == "input_budget" else "f") * 40,
+                    "request_parameters": {"temperature": 0.7},
                 },
             ),
             environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
         )
     )
     result = await trial.run()
-    assert len(requests) == (0 if failure == "input_budget" else 2)
+    assert len(requests) == 2
     assert result.exception_info.exception_type == "RolloutInterrupted"
     assert result.verifier_result is None
     assert not (trial.paths.verifier_dir / "verdict.json").exists()
@@ -899,7 +872,7 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
     assert any(
         message["role"] == "tool" and json.loads(message["content"])["stdout"] == "partial observation\n"
         for message in messages
-    ) == (failure == "provider_outage")
+    )
     assert len(machines.machines) == 1
     assert machines.machines[0].closed
 

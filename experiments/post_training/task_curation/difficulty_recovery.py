@@ -134,6 +134,8 @@ def recovered_source(
             raise ValueError("Previous campaign retried a task after its first scored result")
         if attempt.status == "scored":
             task = tasks[attempt.task_id]
+            if task.workload == "native" and serving.get("native_client_context_safety_buffer_tokens") != 0:
+                raise ValueError("Native continuation requires the corrected full-context worker receipt")
             archive = StoragePath(payload["archive"])
             data = archive.read_bytes()
             if hashlib.sha256(data).hexdigest() != payload["archive_sha256"]:

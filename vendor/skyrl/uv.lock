@@ -2100,7 +2100,7 @@ requires-dist = [
     { name = "tinker", marker = "extra == 'tinker'", specifier = ">=0.14.0" },
     { name = "tinker-cookbook", marker = "extra == 'tinker'", specifier = ">=0.1.0" },
     { name = "toml", specifier = ">=0.10.2" },
-    { name = "transformers", marker = "extra == 'taskcompendium'", specifier = ">=5.0" },
+    { name = "transformers", marker = "extra == 'runtime'", specifier = ">=5.0" },
     { name = "typer", specifier = ">=0.16.0" },
     { name = "universal-pathlib", specifier = ">=0.2.6" },
     { name = "uvicorn", specifier = ">=0.38.0" },

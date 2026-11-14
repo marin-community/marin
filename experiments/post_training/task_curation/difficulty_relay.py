@@ -6,22 +6,28 @@
 import hashlib
 import json
 import logging
+import re
 from collections import Counter
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, Thread
 
 import httpx
-from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS
 from harbor.environments.model_relay import _upstream_error
-from rigging.chat_templates import chat_template_messages
+from rolloutengine.chat import chat_template_messages
 from transformers import AutoTokenizer
-
-CONTEXT_TOKENS, INPUT_TOKENS, OUTPUT_TOKENS = (int(value) for value in PROTOCOLS[PROTOCOL_ID].sampling[:3])
 
 LOGGER = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 600
+
+
+@dataclass(frozen=True)
+class RequestBudget:
+    context_tokens: int
+    input_tokens: int
+    output_tokens: int
 
 
 class ReceiptHTTPServer(ThreadingHTTPServer):
@@ -37,6 +43,7 @@ def budget_relay(
     tokenizer_model: str,
     tokenizer_revision: str,
     parameters: dict,
+    budget: RequestBudget,
     receipts: Path,
 ):
     """Serve task-labelled, non-streaming chat and pinned CPU tokenization locally.
@@ -44,6 +51,8 @@ def budget_relay(
     The upstream credential remains in the trusted host. Every actual request and
     response is retained before returning it to Harbor. Server usage is authoritative.
     """
+    if re.fullmatch(r"[0-9a-f]{40}", tokenizer_revision) is None:
+        raise ValueError("Difficulty tokenization requires an immutable Hugging Face revision")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model, revision=tokenizer_revision)
     numbers = Counter()
     lock = Lock()
@@ -66,7 +75,7 @@ def budget_relay(
                 self.wfile.write(data)
 
             def do_GET(self):
-                self.respond(200, {"data": [{"id": model, "max_model_len": CONTEXT_TOKENS}]})
+                self.respond(200, {"data": [{"id": model, "max_model_len": budget.context_tokens}]})
 
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", "0"))
@@ -89,19 +98,23 @@ def budget_relay(
                     )
                 else:
                     tokens = tokenizer.encode(body["prompt"], add_special_tokens=body.get("add_special_tokens", True))
-                if self.path.endswith("/tokenize"):
-                    self.respond(200, {"tokens": tokens, "count": len(tokens), "max_model_len": CONTEXT_TOKENS})
+                if self.path.endswith("/tokenize") and len(tokens) <= budget.input_tokens:
+                    self.respond(200, {"tokens": tokens, "count": len(tokens), "max_model_len": budget.context_tokens})
                     return
-                if not self.path.endswith("/v1/chat/completions") or body.get("stream"):
+                if not self.path.endswith(("/v1/chat/completions", "/tokenize")) or body.get("stream"):
                     self.respond(400, {"error": "non-streaming chat completions required"})
                     return
                 body.update({key: value for key, value in parameters.items() if key != "extra_body"})
                 body.update(parameters.get("extra_body", {}))
                 body["model"] = model
-                body["max_tokens"] = min(
-                    body.get("max_tokens", OUTPUT_TOKENS), OUTPUT_TOKENS, CONTEXT_TOKENS - len(tokens)
-                )
-                task = hashlib.sha256(self.path.removesuffix("/v1/chat/completions").encode()).hexdigest()
+                if len(tokens) <= budget.input_tokens:
+                    body["max_tokens"] = min(
+                        body.get("max_tokens", budget.output_tokens),
+                        budget.output_tokens,
+                        budget.context_tokens - len(tokens),
+                    )
+                route = self.path.removesuffix("/v1/chat/completions").removesuffix("/tokenize")
+                task = hashlib.sha256(route.encode()).hexdigest()
                 with lock:
                     number = numbers[task]
                     numbers[task] += 1
@@ -110,7 +123,7 @@ def budget_relay(
                 (root / "request.json").write_text(
                     json.dumps({"route": self.path, "prompt_tokens": len(tokens), "body": body}) + "\n"
                 )
-                if len(tokens) > INPUT_TOKENS:
+                if len(tokens) > budget.input_tokens:
                     payload = {
                         "error": {
                             "code": "input_budget_unserved",
@@ -139,9 +152,9 @@ def budget_relay(
                 usage = payload.get("usage")
                 if status == 200 and (
                     usage is None
-                    or usage["prompt_tokens"] > INPUT_TOKENS
-                    or usage["completion_tokens"] > OUTPUT_TOKENS
-                    or usage["prompt_tokens"] + usage["completion_tokens"] > CONTEXT_TOKENS
+                    or usage["prompt_tokens"] > budget.input_tokens
+                    or usage["completion_tokens"] > budget.output_tokens
+                    or usage["prompt_tokens"] + usage["completion_tokens"] > budget.context_tokens
                 ):
                     status, payload = 502, {
                         "error": {

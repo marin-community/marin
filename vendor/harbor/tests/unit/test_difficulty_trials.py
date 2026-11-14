@@ -28,11 +28,14 @@ from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
 
 from experiments.post_training.task_curation import difficulty_relay, difficulty_trials
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
+from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 
 
-@pytest.mark.parametrize("upstream_failure", [None, "json", "html"])
-@pytest.mark.parametrize("graded_reward", [0.0, 1.0])
-def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure, graded_reward):
+@pytest.mark.parametrize("graded_reward,upstream_failure,workload,legacy_buffer", [
+    *[(reward, failure, "task_spec", 0) for reward in (0.0, 1.0) for failure in (None, "json", "html")],
+    *[(reward, None, "native", buffer) for reward in (0.0, 1.0) for buffer in (0, 8)],
+])
+def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure, graded_reward, workload, legacy_buffer):
     infrastructure_first = upstream_failure is not None
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
@@ -48,7 +51,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         sample=sample, sample_receipt={"uri": "fixture:sample", "sha256": "e" * 64},
         tasks=[
             PreparedTask(task_id="scored", runtime_sha256=runtime_sha256, path=str(tmp_path / "source-task"),
-                         workload="task_spec", backend="local", reason=None, judge_model=None),
+                         workload=workload, backend="local", reason=None, judge_model=None),
             PreparedTask(task_id="blocked", runtime_sha256=runtime_sha256, path=None,
                          workload="task_spec", backend="local", reason=blocker, judge_model=None),
         ],
@@ -68,7 +71,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                                   temperature=0.7, top_p=0.95, top_k=20, min_p=0, repetition_penalty=1,
                                   presence_penalty=0, frequency_penalty=0, thinking="low", deviations=[]),
         endpoint="https://model.fixture/v1", api_model="glm-5.3", api_key_secret=None,
-        request_parameters={}, environment_options={}, judge_endpoint="https://judge.fixture/v1",
+        environment_options={}, judge_endpoint="https://judge.fixture/v1",
         judge_api_key_secret="unused", workers=2, gpu_count=0, attempts_per_task=2, task_limit=None,
     )
     source_path = tmp_path / "sources.json"
@@ -80,8 +83,9 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     output = campaign / "trials"
     serving = {
         "protocol": "atlas-difficulty-v3", "solver": "hosted", "model": config.identity.model,
+        "native_client_context_safety_buffer_tokens": legacy_buffer,
         "tokenizer_revision": config.identity.tokenizer_revision,
-        "chat_template_sha256": config.identity.chat_template_sha256, "sampling": config.request_parameters,
+        "chat_template_sha256": config.identity.chat_template_sha256, "sampling": request_parameters(config.settings),
         "tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}},
     }
     serving_bytes = json.dumps(serving).encode()
@@ -180,6 +184,11 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                                     "--output-root", str(second / "trials"), "--local-root", str(tmp_path / "continued-local"),
                                     "--previous-campaign", str(campaign), "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
                                     "--source-queue-sha256", "1" * 64])
+    if workload == "native" and legacy_buffer:
+        with pytest.raises(ValueError, match="Native continuation requires"):
+            difficulty_trials.main()
+        assert len(physical_attempts) == 1
+        return
     difficulty_trials.main()
     rows = list(ReadView(str(second / "trials" / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (continued,) = [DifficultyMeasurement.model_validate(row) for row in rows]
