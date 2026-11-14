@@ -19,6 +19,7 @@ pub use provider::is_remote_object_store;
 pub use remote::{build_remote_object_store, RemoteObjectStore};
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ObjectRef as ProtoObjectRef;
@@ -289,6 +290,13 @@ pub trait ObjectStore: Send + Sync {
         _pins: &CachePins,
     ) -> Result<Option<PathBuf>, StatsError> {
         self.cached_path(reference).await
+    }
+
+    /// A view of this store whose cache reads do not queue behind query reads.
+    /// `None` when the store has no separate limiter; the caller then reads
+    /// through the store itself.
+    fn maintenance_reads(&self) -> Option<Arc<dyn ObjectStore>> {
+        None
     }
 
     /// Consider an optional fill after a query cache miss. Reuse history and

@@ -13,7 +13,7 @@ from taskcompendium.models import TaskSpec
 from rolloutengine.cleanup import _retain_task
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.shell import task_prompt
-from rolloutengine.models import ModelTurn, Prompt, RolloutEnded, RolloutLimits
+from rolloutengine.models import ContextRecovery, ModelTurn, Prompt, RolloutEnded, RolloutLimits
 
 
 class AgentCompletion(Protocol):
@@ -36,6 +36,8 @@ class AgentHarness:
     not get, such as an answer tool or a tool provider. The task rollout reference gives the rules for
     cancelled calls and for the shutdown of the agent.
     """
+
+    context_recovery = ContextRecovery.ALWAYS
 
     agent: AgentRun
 

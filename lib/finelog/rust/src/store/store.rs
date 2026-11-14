@@ -4542,9 +4542,10 @@ mod tests {
         std::fs::remove_dir_all(remote_dir).ok();
     }
 
-    /// Tables share two maintenance slots, so a table with an L0 backlog waits a
-    /// full round of every table between visits. One visit must therefore drain
-    /// more than one run, or flushes outpace compaction on a busy hub.
+    /// Tables share `MAX_CONCURRENT_MAINTENANCE_CYCLES` maintenance slots, so a
+    /// table with an L0 backlog waits a full round of every table between
+    /// visits. One visit must therefore drain more than one run, or flushes
+    /// outpace compaction on a busy hub.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn object_backed_cycle_drains_more_than_one_l0_run() {
         let data_dir = crate::test_support::unique_dir("object_drain_data");

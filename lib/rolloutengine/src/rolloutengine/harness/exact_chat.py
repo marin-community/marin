@@ -11,7 +11,7 @@ from taskcompendium.models import CONVERSATION_ANSWERS, TaskSpec
 from taskcompendium.submission import conversation_messages
 
 from rolloutengine.harness.core import HarnessContext, ModelSession
-from rolloutengine.models import Prompt, RolloutLimits
+from rolloutengine.models import ContextRecovery, Prompt, RolloutLimits
 
 EXACT_CHAT_HARNESS = "exact_chat"
 
@@ -19,6 +19,8 @@ EXACT_CHAT_HARNESS = "exact_chat"
 @dataclass(frozen=True)
 class ExactChatHarness:
     """Keep the task conversation unchanged and use the caller's sampling options."""
+
+    context_recovery = ContextRecovery.NEVER
 
     options: dict[str, Any] = field(default_factory=dict)
 
