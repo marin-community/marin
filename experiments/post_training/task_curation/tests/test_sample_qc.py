@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 import shutil
 from dataclasses import replace
@@ -9,24 +10,33 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ActorCensusInput, ContentEvidenceReference, SourceQualityResult
-from marin.execution.artifact import read_record, write_record
+from marin.execution.artifact import ArtifactRecord, read_record, result_type_name, write_record
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
-from taskcompendium.models import TaskSpec
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.review import ChatReviewer
+from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
 from experiments.post_training.task_curation.admission_inventory import PANEL_SCHEMA
-from experiments.post_training.task_curation.difficulty_samples import relocated_panel, sample_oracle_state
+from experiments.post_training.task_curation.difficulty_samples import (
+    OracleFilterBinding,
+    prepare_sample,
+    relocated_panel,
+)
 from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
-from experiments.post_training.task_curation.published_census import population_documents
+from experiments.post_training.task_curation.lexical_contamination import write_text_population
+from experiments.post_training.task_curation.published_census import population_documents, population_rows
 from experiments.post_training.task_curation.sample_qc import SamplePanel, panel_tasks, review_panel
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.sample_qc_binding import bind_sample_result
 from experiments.post_training.task_curation.sample_qc_receipts import sample_qc_receipt
 from experiments.post_training.task_curation.source import SourceOrigin, SourceReference
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
+from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 
 
 @pytest.fixture
@@ -72,16 +82,106 @@ def sample_panel(qc_inputs, tmp_path):
     return panel
 
 
-def test_oracle_bearing_resample_leaves_pre_filter_queue_when_filter_evidence_is_bound(sample_panel):
-    inventory = SampleInventory.model_validate_json(StoragePath(sample_panel.evidence_url).read_text())
-    assert sample_oracle_state(inventory, None)["resample_after_oracle_filter"]
-    receipt = ContentEvidenceReference(uri="s3://fixture/oracle-filter.json", sha256="f" * 64)
-    state = sample_oracle_state(inventory, receipt)
-    assert state == {
-        "pre_oracle_filter": False,
-        "resample_after_oracle_filter": False,
-        "oracle_filter_receipt": receipt,
-    }
+def test_sample_filter_proof_must_cover_unselected_retained_tasks(sample_panel, tmp_path):
+    original = next(task for task in panel_tasks(sample_panel)[0] if task.id == "kept")
+    tasks = [
+        original.model_copy(
+            update={
+                "id": f"task-{index:03d}",
+                "context": ConversationInput(events=(TextMessage(role="user", content=f"Return {index}."),)),
+            }
+        )
+        for index in range(101)
+    ]
+    files = write_text_population(((task.model_dump(mode="json"), {}) for task in tasks), str(tmp_path / "full"))
+    source = number_source(tmp_path / "numbers")
+    population = SourceTextPopulation.raw_load(sample_panel.input_artifact).model_copy(
+        update={
+            "path": str(tmp_path / "full"),
+            "source_id": source.info.id,
+            "dataset_id": source.dataset.name,
+            "dataset_revision": source.dataset.revision,
+            "task_count": 101,
+            "task_specs_sha256": files.task_specs_sha256,
+            "main_output_dir": files.main_output_dir,
+            "specs_output_dir": files.specs_output_dir,
+        }
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=population.path,
+            result_type=result_type_name(type(population)),
+            result=population.result_payload(),
+        )
+    )
+    rows = [{"task_id": json.loads(row["task_spec"])["id"], **row} for row in population_rows(population)]
+    _, selected = seeded_sample(rows, size=100, key=lambda row: seeded_order(row["task_id"], 0))
+    panel_path = tmp_path / "panel-100.parquet"
+    pq.write_table(pa.Table.from_pylist(selected, schema=PANEL_SCHEMA), panel_path)
+    inventory = SampleInventory.model_validate_json(StoragePath(sample_panel.evidence_url).read_text()).model_copy(
+        update={
+            "source_id": source.info.id,
+            "dataset_id": population.dataset_id,
+            "dataset_revision": population.dataset_revision,
+            "input_artifact": population.path,
+            "task_specs_sha256": population.task_specs_sha256,
+            "scanned_task_specs_sha256": hashlib.sha256("".join(row["task_spec"] for row in rows).encode()).hexdigest(),
+            "retained_tasks": 101,
+            "oracle_tasks": 101,
+            "sample_size": 100,
+            "panel_path": str(panel_path),
+            "panel_sha256": file_sha256(StoragePath(str(panel_path))),
+            "evidence_url": str(tmp_path / "inventory-101.json"),
+        }
+    )
+    StoragePath(inventory.evidence_url).write_text(inventory.model_dump_json())
+    dedup = deduplication_evidence(population.dataset_id, population.dataset_revision, "1", 101).model_copy(
+        update={"drop_manifest_uri": str(tmp_path / "drops.parquet")}
+    )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            within_source_dedup=dedup,
+            actor_census_input=ActorCensusInput(
+                dataset_id=population.dataset_id,
+                dataset_revision=population.dataset_revision,
+                converter_version="1",
+                converter_revision=population.converter_revision,
+                measured_tasks=101,
+                task_specs_sha256=population.task_specs_sha256,
+                evidence_url=inventory.evidence_url,
+            ),
+        ),
+    )
+    pq.write_table(pa.table({"task_id": pa.array([], type=pa.string())}), dedup.drop_manifest_uri)
+    selected_ids = {row["task_id"] for row in selected}
+    for name, cohort in (("partial", [task for task in tasks if task.id in selected_ids]), ("complete", tasks)):
+        proof = oracle_receipt(cohort)
+        proof = proof.model_copy(
+            update={
+                "tasks": {
+                    key: entry.model_copy(update={"runtime_sha256": canonical_sha256({})})
+                    for key, entry in proof.tasks.items()
+                }
+            }
+        )
+        assert all(proof.admits(task, {}) for task in cohort)
+        path = StoragePath(str(tmp_path / f"{name}-filter.json"))
+        path.write_text(proof.model_dump_json())
+        reference = ContentEvidenceReference(uri=str(path), sha256=file_sha256(path))
+        binding = {
+            source.info.id: OracleFilterBinding(
+                population_count=101, task_specs_sha256=population.task_specs_sha256, receipt=reference
+            )
+        }
+        if name == "partial":
+            with pytest.raises(ValueError, match="does not cover the retained population"):
+                prepare_sample(source.declaration, inventory, str(tmp_path / name), None, binding)
+        else:
+            result = prepare_sample(source.declaration, inventory, str(tmp_path / name), None, binding)
+            assert not result.sample.pre_oracle_filter and not result.sample.resample_after_oracle_filter
+            assert result.sample.oracle_filter_receipt == reference
 
 
 def test_sample_review_keeps_full_population_identity_and_reuses_exact_panel_evidence(

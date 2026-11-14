@@ -1,5 +1,5 @@
 /* Copyright The Marin Authors. SPDX-License-Identifier: Apache-2.0 */
-// The four-row comparison follows the October Atlas difficulty renderer.
+// Keep solver rows in protocol order so missing measurements do not shift model positions.
 window.AtlasDifficulty = (() => {
   const titles = {small: 'Small', large: 'Large', hosted: 'Hosted', snowball: 'Snowball v0.1'};
   const solvers = Object.keys(titles);

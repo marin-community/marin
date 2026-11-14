@@ -434,6 +434,16 @@ def harbor_payload(
     actor_build = environment.docker_build
     if actor_build is None and environment.docker_image not in BUILT_IMAGES.values():
         actor_build = source_actor_build(task, source=source, mode=verifier.mode, package=verifyit_package_root)
+    if actor_build is not None:
+        # Harbor uploads setup_files before the pre-agent setup; build contexts do not deliver them.
+        for resource in (*task.resources.all, *task.resources.worker):
+            if not resource.path.startswith("setup_files/"):
+                continue
+            if resource.path in files:
+                raise UnsupportedHarborTask(f"Setup resource collides with generated file: {resource.path}")
+            files[resource.path] = resource_bytes(resource)
+            if resource.mode:
+                modes[resource.path] = resource.mode
     # ARC's Harbor compatibility recipe supplies scorer imports independently of its native package lock.
     if environment.packages_lock is not None and (actor_build is None or source not in ARC_SOURCES):
         raise UnsupportedHarborTask("Agent package locks require an environment build")

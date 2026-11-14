@@ -17,6 +17,7 @@ from taskcompendium.models import ExecutionRequirements, NoGrader, judge_spec
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.staging import resource_files
 
+from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.prebuilt import validate_native_package
@@ -37,10 +38,25 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
         if reason is not None:
             reason = f"awaiting_executability_filtered_admission_population:{reason}"
         judge = judge_spec(task.grader)
-        if source.backend == "daytona":
+        if reason is None and source.backend == "daytona":
             reason = "daytona_snapshot_preflight_pending" if native else "faithful_daytona_task_spec_factory_pending"
-        if judge is not None and (judge.model != "glm-5.3" or judge.temperature != 0.7):
+        if reason is None and judge is not None and (judge.model != "glm-5.3" or judge.temperature != 0.7):
             reason = f"production_judge_route_or_temperature_not_qualified:{judge.model}:temperature={judge.temperature}"
+        if reason is None:
+            environments = [task.environment_requirements]
+            if not isinstance(task.grader, NoGrader):
+                environments.append(task.grader.environment)
+            missing = sorted(
+                {
+                    environment.packages_lock
+                    for environment in environments
+                    if environment is not None
+                    and environment.packages_lock is not None
+                    and not packages_lock_exists(environment.packages_lock)
+                }
+            )
+            if missing:
+                reason = "original_packages_lock_unavailable:" + ",".join(missing)
         directory = root / canonical_sha256(source.declaration.id)[:20] / canonical_sha256(task.id)[:20]
         if reason is None:
             if native:

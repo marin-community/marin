@@ -9,8 +9,13 @@ import json
 import shutil
 import tomllib
 from pathlib import Path
+from typing import Any
 
+from finestore.rl.curation import ActorCensusInput
 from rigging.provenance import git_output
+
+from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 APP_SOURCE = Path("infra/marina/apps/rl_data_catalog")
 PRODUCTION_APP_ID = "fb11c931-5861-4878-8bb5-a964d652b45f"
@@ -27,8 +32,58 @@ IMPORT_RELOCATIONS = {
 }
 
 
-def prepare_preview(checkout: Path, output: Path) -> None:
+def oracle_inventory_payload(raw: bytes) -> dict[str, Any]:
+    """Translate a full-population SAMPLE inventory ledger into pinned browser observations."""
+    ledger = json.loads(raw)
+    if (ledger["schema_version"], ledger["kind"]) != (2, "full_population_oracle_inventory"):
+        raise ValueError("Expected a version-2 full-population oracle inventory ledger")
+    rows: list[dict[str, Any]] = []
+    identifiers: set[str] = set()
+    for row in ledger["rows"]:
+        binding = ActorCensusInput.model_validate(row["current_input"])
+        inventory = SampleInventory.model_validate(row["inventory"])
+        identifier = canonical_source_id(row["source_id"])
+        actual = (
+            inventory.dataset_id,
+            inventory.dataset_revision,
+            inventory.converter_version,
+            inventory.task_specs_sha256,
+            inventory.retained_tasks,
+        )
+        expected = (
+            binding.dataset_id,
+            binding.dataset_revision,
+            binding.converter_version,
+            binding.task_specs_sha256,
+            binding.measured_tasks,
+        )
+        if actual != expected or canonical_source_id(inventory.source_id) != identifier:
+            raise ValueError(f"Oracle inventory differs from its actor input: {identifier}")
+        if identifier in identifiers or inventory.oracle_tasks > inventory.retained_tasks:
+            raise ValueError(f"Oracle inventory has duplicate sources or invalid oracle counts: {identifier}")
+        identifiers.add(identifier)
+        rows.append(
+            {
+                "source_id": identifier,
+                "input": binding.model_dump(mode="json"),
+                "oracle_tasks": inventory.oracle_tasks,
+                "execution_qualification": inventory.execution_qualification,
+                "evidence_url": inventory.evidence_url,
+                "inventory_manifest_uri": row["inventory_manifest_uri"],
+                "inventory_manifest_sha256": row["inventory_manifest_sha256"],
+                "scanned_task_specs_sha256": inventory.scanned_task_specs_sha256,
+                "panel_path": inventory.panel_path,
+                "panel_sha256": inventory.panel_sha256,
+            }
+        )
+    if len(rows) != ledger["sources"] or sum(row["input"]["measured_tasks"] for row in rows) != ledger["retained_tasks"]:
+        raise ValueError("Oracle inventory totals do not cover its declared population")
+    return {"sources": rows, "source_ledger_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def prepare_preview(checkout: Path, output: Path, oracle_inventory: Path | None = None) -> None:
     """Write a new preview-only package and record hashes of its canonical model inputs."""
+    observations = oracle_inventory_payload(oracle_inventory.read_bytes()) if oracle_inventory is not None else None
     source = checkout / APP_SOURCE
     if output.resolve().is_relative_to(checkout.resolve()):
         raise ValueError("Stage the preview outside the source checkout")
@@ -67,11 +122,19 @@ def prepare_preview(checkout: Path, output: Path) -> None:
         for before, after in IMPORT_RELOCATIONS.items():
             content = content.replace(before, after)
         path.write_text(content)
-    metadata = {
+    metadata: dict[str, Any] = {
         "source_revision": git_output(["rev-parse", "HEAD"], checkout),
         "modules": modules,
         "preview_only": True,
     }
+    if observations is not None:
+        payload = (json.dumps(observations, indent=2) + "\n").encode()
+        (output / "dist/measurements/oracle-inventory.json").write_bytes(payload)
+        metadata["oracle_inventory"] = {
+            "source_sha256": observations["source_ledger_sha256"],
+            "packaged_sha256": hashlib.sha256(payload).hexdigest(),
+            "sources": len(observations["sources"]),
+        }
     (output / "dist/bundled-model-provenance.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
@@ -79,8 +142,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--oracle-inventory", type=Path, help="Verified full-population SAMPLE inventory ledger")
     args = parser.parse_args()
-    prepare_preview(args.checkout, args.output)
+    prepare_preview(args.checkout, args.output, args.oracle_inventory)
 
 
 if __name__ == "__main__":

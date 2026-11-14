@@ -3,6 +3,8 @@
 
 """A reader distinguishes measured overlap, remediation and missing evidence."""
 
+import re
+
 import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
@@ -77,6 +79,8 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         expect(chip).to_have_text(status)
         expect(chip).to_be_visible()
     expect(page.locator('tr[data-source-id="Marin:eval"] .overlap-cell')).to_have_text("1")
+    expect(page.locator('tr[data-source-id="Marin:required"] .use-cell')).to_have_text("Training")
+    expect(page.locator('tr[data-source-id="Marin:eval"] .use-cell')).to_have_text("Evaluation")
     expect(page.locator('tr[data-source-id="Marin:eval"] .issue-rate-cell')).to_have_text("0.00%")
     expect(page.locator('tr[data-source-id="Marin:unmeasured"] .overlap-cell')).to_have_text("—")
     expect(page.locator('tr[data-source-id="Marin:stale-clean"] .overlap-cell')).to_have_text("—")
@@ -87,7 +91,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         "cell.textContent === cell.firstElementChild.textContent)"
     )
     page.locator("#contamination-legend summary").click()
-    expect(page.locator("#contamination-legend")).to_contain_text("Cleanliness is unknown")
+    assert set(page.locator("#contamination-legend dt .chip").all_text_contents()) == set(expected.values())
     for width in (1440, 390):
         page.set_viewport_size({"width": width, "height": 900})
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -96,10 +100,25 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         assert page.locator("#details").evaluate("dialog => dialog.scrollWidth <= dialog.clientWidth")
         expect(page.locator("#details")).to_contain_text("1 / 3 overlapping tasks")
         page.locator("#close-details").click()
+        page.locator('tr[data-source-id="Marin:required"] .source-name').click()
+        pending = (
+            page.locator("#detail-fields .field")
+            .filter(has=page.get_by_text("Lexically contaminated tasks removed", exact=True))
+            .locator("dd")
+        )
+        expect(pending).to_contain_text("Pending")
+        expect(pending).to_contain_text(re.compile(r"\b1\b"))
+        page.locator("#close-details").click()
     page.locator('tr[data-source-id="Marin:eval"] .source-name').click()
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels .contamination-chip")).to_have_text("MEASURED, EVAL")
     expect(page.locator("#sections")).to_contain_text("Flagged tasks")
+    lexical_drops = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
+    expect(
+        lexical_drops.locator(".field")
+        .filter(has=page.get_by_text("Lexically contaminated tasks removed", exact=True))
+        .locator("dd")
+    ).to_have_text("0")
     page.get_by_role("link", name="Getting started", exact=True).click()
     expect(page.locator("#contamination")).to_contain_text("NOT MEASURED")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -195,6 +214,30 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     expect(page.locator("#rows tr")).to_have_count(23)
     chip = page.locator('tr[data-source-id="Marin:clean"] td:nth-child(9) .chip')
     expect(chip).to_have_text("UNSAFE: too_many_snapshots, unbuilt_image")
+    expect(page.get_by_role("columnheader", name="Backends")).to_be_visible()
+    expect(page.get_by_role("columnheader", name="Grading")).to_be_visible()
+    expect(page.get_by_role("columnheader", name="Examples", exact=True).get_by_role("button")).to_have_count(0)
+    source_header = page.locator("#headers th").first
+    expect(source_header).to_have_attribute("aria-sort", "ascending")
+    before = page.locator("#rows tr").evaluate_all("rows => rows.map(row => row.dataset.sourceId)")
+    source_header.get_by_role("button").click()
+    expect(source_header).to_have_attribute("aria-sort", "descending")
+    assert page.locator("#rows tr").evaluate_all("rows => rows.map(row => row.dataset.sourceId)") == list(
+        reversed(before)
+    )
+    source_header.get_by_role("button").click()
+    clean = page.locator('tr[data-source-id="Marin:clean"]')
+    assert set(clean.locator(".backend-chips .chip").all_text_contents()) == {
+        "Docker",
+        "LOCAL: PARTIAL: docker_image",
+        "Daytona: UNSUPPORTED: packages_lock",
+    }
+    expect(clean.locator(".grading-chips .chip")).to_have_text("SEPARATE")
+    expect(clean.locator("td").nth(1)).to_have_text("Pending")
+    assert page.locator(".enum-chips").evaluate_all(
+        "groups => groups.every(g => [...g.children].every(c => c.classList.contains('chip')) && "
+        "g.textContent === [...g.children].map(c => c.textContent).join(''))"
+    )
     scroller = page.locator(".table-scroller")
     assert scroller.evaluate("element => element.scrollWidth > element.clientWidth")
     for right_edge in (False, True):
@@ -229,6 +272,39 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     page.locator('tr[data-source-id="Marin:clean"] .source-name').click()
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels")).to_contain_text("too_many_snapshots, unbuilt_image")
+    ledger = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
+    oracle_field = (
+        ledger.locator(".field").filter(has=page.get_by_text("Oracle-failing tasks removed", exact=True)).locator("dd")
+    )
+    admitted_field = (
+        ledger.locator(".field").filter(has=page.get_by_text("Admitted after all filtration", exact=True)).locator("dd")
+    )
+    expect(oracle_field).to_have_text(re.compile(r"^N/A\b"))
+    expect(admitted_field).to_have_text(re.compile(r"^Pending\b"))
+    executability_field = (
+        ledger.locator(".field")
+        .filter(has=page.get_by_text("Unexecutable on production backend dropped (by typed reason)", exact=True))
+        .locator("dd")
+    )
+    expect(executability_field).to_have_text(re.compile(r"^Pending\b"))
+    expect(page.locator(".backend-table tbody tr")).to_have_count(3)
+    expect(page.locator(".backend-table")).to_contain_text("packages lock")
+    expect(page.locator(".backend-table")).to_contain_text("docker image")
+    for right_edge in (False, True):
+        page.locator(".backend-table").locator("xpath=..").evaluate(
+            "(element, right) => element.scrollLeft = right ? element.scrollWidth : 0", right_edge
+        )
+        assert page.locator(".backend-table").evaluate(
+            """table => {
+          const headers = [...table.tHead.rows[0].cells].map(cell => cell.getBoundingClientRect());
+          return [...table.tBodies[0].rows].every(row => [...row.cells].every((cell, index, cells) => {
+            const bounds = cell.getBoundingClientRect(), next = cells[index + 1]?.getBoundingClientRect();
+            return (!next || bounds.right <= next.left + 1) &&
+              Math.abs(bounds.left - headers[index].left) <= 1 &&
+              Math.abs(bounds.right - headers[index].right) <= 1;
+          }));
+        }"""
+        )
     assert page.locator(".field").evaluate_all(
         """fields => fields.every(field => {
       const label = field.querySelector('dt').getBoundingClientRect();
@@ -238,3 +314,20 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     journey.shoot(f"wide-evidence-{theme}-{width}")
+    page.get_by_role("link", name="By source", exact=True).click()
+    page.locator("#show-all").check()
+    page.locator('tr[data-source-id="Marin:stale-clean"] .source-name').click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    stale_ledger = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
+    stale_oracle = (
+        stale_ledger.locator(".field")
+        .filter(has=page.get_by_text("Oracle-failing tasks removed", exact=True))
+        .locator("dd")
+    )
+    expect(stale_oracle).to_have_text(re.compile(r"^Pending\b"))
+    original_oracles = (
+        stale_ledger.locator(".field")
+        .filter(has=page.get_by_text("Original oracle-bearing tasks", exact=True))
+        .locator("dd")
+    )
+    expect(original_oracles).to_have_text("Not measured")

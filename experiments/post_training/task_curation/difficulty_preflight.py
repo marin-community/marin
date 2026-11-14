@@ -17,6 +17,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.adapter import declared_execution_limits, unsupported_harbor_contract
 from taskcompendium.models import NoGrader, judge_spec
 
+from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.prebuilt import validate_native_package
 from experiments.post_training.task_curation.sample_qc import panel_tasks
@@ -32,6 +33,17 @@ def inspect_source(source: DifficultySource, output_root: str) -> dict:
         if native:
             validate_native_package(task)
         judge = judge_spec(task.grader)
+        environments = [task.environment_requirements]
+        if not isinstance(task.grader, NoGrader):
+            environments.append(task.grader.environment)
+        locks = sorted(
+            {
+                environment.packages_lock
+                for environment in environments
+                if environment is not None and environment.packages_lock is not None
+            }
+        )
+        missing_locks = [path for path in locks if not packages_lock_exists(path)]
         rows.append(
             {
                 "task_id": task.id,
@@ -39,6 +51,8 @@ def inspect_source(source: DifficultySource, output_root: str) -> dict:
                 "workload": "native" if native else "task_spec",
                 "unsupported_contract": None if native else unsupported_harbor_contract(task),
                 "grader_type": type(task.grader).__name__,
+                "original_packages_locks": locks,
+                "missing_packages_locks": missing_locks,
                 "judge": None if judge is None else asdict(judge),
                 "declared_limits": declared_execution_limits(task),
                 "environment": task.environment_requirements.model_dump(mode="json"),

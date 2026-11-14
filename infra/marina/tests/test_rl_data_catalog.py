@@ -69,8 +69,10 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
+from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.catalog_identity import backend_survey_payload, canonical_backend_survey
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     actor_census_input,
     grading_evidence,
@@ -312,6 +314,7 @@ def publish_sample(
         type="RLVR",
         turns="Single-turn",
         is_benchmark=False,
+        intended_use="train",
         kind="Dataset",
         status="Available",
         pipeline={"name": "fixture", "version": "1", "source": "fixture", "revision": "1", "files": []},
@@ -583,6 +586,44 @@ def curriculum_release(tmp_path: Path, unavailable_status: str = "insufficient_c
     )
     (tmp_path / "coverage.json").write_text(coverage.model_dump_json())
     return path
+
+
+@pytest.mark.parametrize("retired_source", ["Marin:a", "Marin:inventory", "MarinSkyRL:aime24"])
+def test_retired_curriculum_is_rejected_before_idempotency_or_sql(tmp_path, monkeypatch, retired_source):
+    path = curriculum_release(tmp_path)
+    if retired_source == "MarinSkyRL:aime24":
+        release = json.loads(path.read_text())
+        release["inventory"][0].update(id=retired_source, origin=SourceOrigin.HUGGINGFACEH4, upstream_dataset="aime24")
+        release["sources"][0]["source_id"] = retired_source
+        path.write_text(json.dumps(release))
+    inputs = [path, tmp_path / "coverage.json", tmp_path / "tasks.parquet", tmp_path / "statistics.parquet"]
+    original_bytes = {file: file.read_bytes() for file in inputs}
+    ledger = tmp_path / "retirement-ledger.json"
+    ledger.write_text(json.dumps({"entries": [{"id": retired_source, "disposition": "retired_admission_check"}]}))
+    reference = tmp_path / "retirement-reference.json"
+    reference.write_text(
+        json.dumps(
+            {
+                "repo": "fixture/retirements",
+                "revision": "a" * 40,
+                "path": "retirements.json",
+                "sha256": hashlib.sha256(ledger.read_bytes()).hexdigest(),
+            }
+        )
+    )
+    monkeypatch.setattr(retirement, "RETIREMENTS_PATH", reference)
+    monkeypatch.setattr(registry, "hf_hub_download", lambda **_kwargs: str(ledger))
+    retirement.retired_admission_source_ids.cache_clear()
+    queries = []
+
+    def already_selected(sql, parameters):
+        queries.append((sql, parameters))
+        return {"rows": [{"release_id": "first", "release_uri": str(path)}]}
+
+    with pytest.raises(ValueError, match=f"Retired sources.*{canonical_source_id(retired_source)}"):
+        load_curriculum(str(path), str(tmp_path / "coverage.json"), already_selected)
+    assert queries == []
+    assert {file: file.read_bytes() for file in inputs} == original_bytes
 
 
 @pytest.mark.parametrize("unavailable_status", ["insufficient_context", "skipped"])
@@ -920,6 +961,17 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         (expected, with_declaration_admission_census(declaration))
         for expected, declaration in contamination_declarations()
     ]
+    benchmark_train = next(declaration for _, declaration in cases if declaration.id == "Marin:required")
+    historical = benchmark_train.model_dump(mode="json")
+    historical.pop("intended_use")
+    cases.append(
+        (
+            "NOT MEASURED",
+            SourceDeclaration.model_validate(
+                {**historical, "id": "Marin:historical", "upstream_dataset": "historical", "is_benchmark": True}
+            ),
+        )
+    )
     with DataStore.open(root, writer_id="lexical") as store:
         register_catalog(store)
         with store.transaction() as tx:
@@ -957,6 +1009,9 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         assert sources["Marin:unmeasured"]["lexical_contamination"] is None
         assert sources["Marin:unmeasured"]["issue_rate"] is None
         assert sources["Marin:eval"]["issue_rate"] == 0.0
+        assert sources["Marin:required"]["intended_use"] == "train"
+        assert sources["Marin:historical"]["intended_use"] == "unknown"
+        assert client.get("/source", params={"source_id": "Marin:historical"}).json()["intended_use"] == "unknown"
 
 
 def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catalog_database, catalog_query, tmp_path):
@@ -1489,6 +1544,67 @@ def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_p
     assert canonical_sha256(backend_survey_payload(survey)) == canonical_sha256(raw)
 
 
+@pytest.mark.parametrize("stale_input", [False, True])
+def test_preview_packages_producer_oracle_inventory_and_rejects_mixed_pins(tmp_path, stale_input):
+    binding = actor_census_input("openai/gsm8k", "a" * 40, "1", 3)
+    inventory = SampleInventory(
+        source_id="MarinSkyRL:gsm8k",
+        dataset_id=binding.dataset_id,
+        dataset_revision=binding.dataset_revision,
+        converter_version=binding.converter_version,
+        input_artifact="s3://fixture/population",
+        task_specs_sha256=binding.task_specs_sha256,
+        scanned_task_specs_sha256="f" * 64,
+        retained_tasks=3,
+        sample_seed=0,
+        sample_size=3,
+        panel_path="s3://fixture/panel.parquet",
+        panel_sha256="b" * 64,
+        evidence_url="s3://fixture/inventory.json",
+        oracle_tasks=0,
+        execution_qualification="not_assessed",
+    )
+    actor = binding.model_dump(mode="json")
+    if stale_input:
+        actor["dataset_revision"] = "b" * 40
+    ledger = {
+        "schema_version": 2,
+        "kind": "full_population_oracle_inventory",
+        "sources": 1,
+        "retained_tasks": 3,
+        "rows": [
+            {
+                "source_id": "OpenAI:gsm8k",
+                "current_input": actor,
+                "inventory": inventory.model_dump(mode="json"),
+                "inventory_manifest_uri": "s3://fixture/inventory-manifest.json",
+                "inventory_manifest_sha256": "c" * 64,
+            }
+        ],
+    }
+    source = tmp_path / "oracle-ledger.json"
+    source.write_text(json.dumps(ledger))
+    checkout = Path(__file__).resolve().parents[3]
+    output = tmp_path / "preview"
+    if stale_input:
+        with pytest.raises(ValueError, match="Oracle inventory differs from its actor input"):
+            prepare_preview(checkout, output, source)
+        assert not output.exists()
+        return
+    prepare_preview(checkout, output, source)
+    observations = json.loads((output / "dist/measurements/oracle-inventory.json").read_text())
+    assert observations["sources"][0]["source_id"] == "OpenAI:gsm8k"
+    assert observations["sources"][0]["input"] == binding.model_dump(mode="json")
+    assert observations["sources"][0]["oracle_tasks"] == 0
+    assert observations["sources"][0]["execution_qualification"] == "not_assessed"
+    provenance = json.loads((output / "dist/bundled-model-provenance.json").read_text())["oracle_inventory"]
+    assert provenance["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert (
+        provenance["packaged_sha256"]
+        == hashlib.sha256((output / "dist/measurements/oracle-inventory.json").read_bytes()).hexdigest()
+    )
+
+
 @pytest.mark.parametrize("preview", [False, True])
 def test_atlas_packages_resolve_aliases_without_repository_imports(tmp_path, monkeypatch, preview):
     checkout = Path(__file__).resolve().parents[3]
@@ -1622,7 +1738,7 @@ def test_role_projection_requires_receipt_and_preserves_frozen_sample_roles(cata
         assert client.get("/curriculum").json()["release_id"] == raw_coverage["coverage_id"]
         with catalog_database.begin() as connection:
             connection.execute(
-                text("UPDATE atlas_sources SET declaration=jsonb_set(declaration, '{is_benchmark}', 'true')")
+                text("UPDATE atlas_sources SET declaration=jsonb_set(declaration, '{intended_use}', '\"eval\"')")
             )
         changed_coverage = {**corrected_coverage, "sample_paths": ["unapproved-samples.parquet"]}
         changed_path = Path(documents["corrected"]["coverage_uri"])
