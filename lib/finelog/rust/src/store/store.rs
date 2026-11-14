@@ -161,6 +161,7 @@ pub fn log_registered_schema() -> Schema {
 /// resolved key and known bounds, paths, and lowest `seq`. Captured under one hold
 /// of the insertion lock so all segment metadata describes exactly the same paths.
 pub struct NamespaceSnapshot {
+    pub read_deadline: Option<tokio::time::Instant>,
     pub schema: SchemaRef,
     pub exact_postings_policy: BTreeMap<String, Vec<String>>,
     pub key_column: String,
@@ -328,7 +329,6 @@ impl Store {
             (Some(provider), Some(root)) => Some(Arc::new(CachedObjectStore::new(
                 Arc::new(provider.clone()),
                 root.clone(),
-                Arc::clone(&query_visibility),
                 object_cache_bytes,
             )?) as Arc<dyn ObjectStore>),
             _ => None,
@@ -1339,24 +1339,25 @@ impl Store {
 
     /// The process-wide query-visibility lock. Query/FetchLogs handlers hold the
     /// READ side across the full DataFusion scan; structural mutations that
-    /// unlink segments (`drop_table`, compaction/eviction) take the WRITE side.
+    /// unlink legacy segments or drop a table take the WRITE side. Object-cache
+    /// eviction uses per-file pins; object compaction retains immutable inputs.
     /// See the field doc on [`Store`].
     pub fn query_visibility(&self) -> &tokio::sync::RwLock<()> {
         self.tables.query_visibility()
     }
 
-    /// Snapshot every live namespace into a `RegisteredProvider` over its sealed
+    /// Snapshot requested live namespaces into `RegisteredProvider`s over their sealed
     /// segments — the registration set for a `Query`.
     ///
-    /// Snapshot the live registry, then for each namespace capture its arrow
+    /// Snapshot the live registry, then for each requested namespace capture its arrow
     /// schema + sealed-segment paths (under the engine's insertion lock).
-    /// Visibility = sealed segments ONLY (the RAM buffer is not exposed). Every
-    /// live namespace is registered so cross-namespace SQL and the reserved `log`
+    /// Visibility = sealed segments ONLY (the RAM buffer is not exposed). Requested
+    /// live namespaces are registered so cross-namespace SQL and the reserved `log`
     /// namespace both resolve.
-    pub fn query_providers(&self) -> Result<Vec<RegisteredProvider>, StatsError> {
+    pub fn query_providers(&self, names: &[String]) -> Result<Vec<RegisteredProvider>, StatsError> {
         let mut out = Vec::new();
         for ns in self.catalog.snapshot_live() {
-            if self.tables.get(&ns.name).is_none() {
+            if !names.contains(&ns.name) || self.tables.get(&ns.name).is_none() {
                 // A registry entry with no runtime is a transient state during
                 // (re)build; skip it rather than fail the whole query.
                 continue;
@@ -1383,6 +1384,7 @@ impl Store {
     ) -> Result<NamespaceProvider, StatsError> {
         let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.indices)
             .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?
+            .with_read_deadline(snapshot.read_deadline)
             .with_segment_artifacts(snapshot.artifacts)
             .with_segment_indexes_enabled(segment_indexes_enabled_for(name))
             .with_exact_postings_policy(snapshot.exact_postings_policy)
@@ -1396,19 +1398,6 @@ impl Store {
         })
     }
 
-    /// The tightest maximum query time among the object-backed tables a server
-    /// read plans over, or `None` when it plans over none.
-    ///
-    /// The read's effective deadline may not exceed this: past it the table
-    /// stops promising that objects retired by a newer state are still readable.
-    pub fn object_query_bound(&self) -> Option<Duration> {
-        self.tables
-            .runtimes()
-            .iter()
-            .filter_map(|runtime| runtime.snapshot_query_bound())
-            .min()
-    }
-
     /// Snapshot `name`'s arrow schema alongside one consistent observation of its sealed
     /// segments: the paths a scan may read, and the lowest `seq` those paths hold. Both
     /// describe the same segment set, so a reader can tell a `seq` it simply has not
@@ -1417,6 +1406,7 @@ impl Store {
         let engine = self.tables.require(name)?;
         let segments = engine.query_snapshot()?;
         Ok(NamespaceSnapshot {
+            read_deadline: segments.read_deadline,
             schema: Arc::clone(engine.arrow_schema()),
             exact_postings_policy: engine.schema().exact_postings_policy(),
             key_column: engine.key_column().to_string(),
@@ -2136,7 +2126,6 @@ mod tests {
         let source = store.catalog.object_segments("iris.worker").unwrap()[0]
             .source
             .clone();
-
         let runtime = store.tables.require("iris.worker").unwrap();
         let lease = runtime.controller().begin_compaction().unwrap();
         runtime
@@ -2153,19 +2142,15 @@ mod tests {
             .unwrap()
             .key_bounds
             .is_empty());
-        let localized = runtime.controller().localize(&source).await.unwrap();
-        let footer = crate::store::segment::read_segment_footer_at(
-            &localized,
-            0,
-            1,
-            Some(runtime.key_column()),
-        )
-        .unwrap();
-        assert_eq!(footer.min_key_value.as_deref(), Some("w-a"));
+        std::fs::remove_file(&path).unwrap();
 
         maintenance::run(&runtime, TableWork::KeyBounds)
             .await
             .unwrap();
+        assert!(
+            !Path::new(&path).exists(),
+            "footer recovery must not populate the cache"
+        );
         let repaired_row = store
             .catalog
             .list_segments("iris.worker")
@@ -2191,7 +2176,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn cold_index_backfill_localizes_its_object_source() {
+    async fn cold_index_backfill_reads_remotely_without_caching_or_rebuilding_again() {
         let data_dir = crate::test_support::unique_dir("cold_index_backfill_data");
         let remote_dir = crate::test_support::unique_dir("cold_index_backfill_remote");
         let store = Store::new(
@@ -2261,7 +2246,30 @@ mod tests {
             .unwrap()
             .remove(0);
         assert!(!rebuilt.artifacts.is_empty());
-        assert!(Path::new(&rebuilt.path).exists());
+        assert!(!Path::new(&rebuilt.path).exists());
+        let bundle = runtime
+            .query_snapshot()
+            .unwrap()
+            .artifacts
+            .get(&rebuilt.path)
+            .unwrap()
+            .bundle
+            .clone()
+            .unwrap();
+        assert!(crate::indices::format::read_header(&bundle).is_some());
+        maintenance::run(&runtime, TableWork::IndexArtifacts)
+            .await
+            .unwrap();
+        let again = restarted
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            again.artifacts, rebuilt.artifacts,
+            "source eviction must not trigger another index build"
+        );
+        assert!(!Path::new(&again.path).exists());
 
         restarted.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
@@ -2272,7 +2280,7 @@ mod tests {
     /// pinned state and then localizes exactly the objects it selected. Returns
     /// the row count.
     async fn scan_table(store: &Store, table: &str) -> i64 {
-        let providers = store.query_providers().unwrap();
+        let providers = store.query_providers(&[table.to_owned()]).unwrap();
         let sql = format!("SELECT * FROM \"{table}\"");
         let result = crate::query::run_query_over(&crate::query::make_ctx(), providers, &sql)
             .await
@@ -3157,6 +3165,7 @@ mod tests {
             .unwrap()
             .catalog_generation;
 
+        let old_read = store.query_providers(&["iris.worker".into()]).unwrap();
         // Same layout, different operating policy.
         let registration = store
             .register_versioned_table(
@@ -3181,6 +3190,35 @@ mod tests {
             .iter()
             .all(|segment| segment.table_spec_version == 2));
         assert_eq!(store.query_snapshot("iris.worker").unwrap().paths, before);
+        tokio::task::spawn_blocking(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async {
+                tokio::time::pause();
+                let deadline = crate::query::snapshot_deadline(&old_read).unwrap();
+                tokio::time::advance(
+                    deadline.saturating_duration_since(tokio::time::Instant::now())
+                        + Duration::from_millis(1),
+                )
+                .await;
+                let error = crate::query::run_query_over(
+                    &crate::query::make_ctx(),
+                    old_read,
+                    "SELECT * FROM \"iris.worker\"",
+                )
+                .await
+                .err()
+                .expect("the captured snapshot deadline must expire");
+                assert!(
+                    crate::query::is_read_deadline(&error),
+                    "a later policy change must not extend an existing snapshot's lifetime"
+                );
+            });
+        })
+        .await
+        .unwrap();
         assert_eq!(scan_table(&store, "iris.worker").await, 1);
 
         store.shutdown(Duration::from_secs(1)).await;
@@ -4483,6 +4521,51 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(mem_bytes, vec![10, 20, 30]);
+        store.shutdown(Duration::from_secs(1)).await;
+        std::fs::remove_dir_all(data_dir).ok();
+        std::fs::remove_dir_all(remote_dir).ok();
+    }
+
+    /// Tables share `MAX_CONCURRENT_MAINTENANCE_CYCLES` maintenance slots, so a
+    /// table with an L0 backlog waits a full round of every table between
+    /// visits. One visit must therefore drain more than one run, or flushes
+    /// outpace compaction on a busy hub.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn object_backed_cycle_drains_more_than_one_l0_run() {
+        let data_dir = crate::test_support::unique_dir("object_drain_data");
+        let remote_dir = crate::test_support::unique_dir("object_drain_remote");
+        let store = Store::new(
+            Some(data_dir.clone()),
+            remote_dir.to_string_lossy().into_owned(),
+            crate::indices::cache::DEFAULT_INDEX_CACHE_MB,
+            ServeMode::Shadow,
+        )
+        .unwrap();
+        store.bootstrap_maintenance();
+        store
+            .register_versioned_table("iris.worker", object_backed_spec(1))
+            .unwrap();
+        store.publish_object_catalog("iris.worker").await.unwrap();
+        let table = store.tables.require("iris.worker").unwrap();
+        // Two full L0 jobs plus one flush, which stays below the count trigger.
+        let flushes = 2 * crate::store::compaction::object_driver::OBJECT_MAX_L0_INPUTS as i64 + 1;
+        for index in 0..flushes {
+            let (_, ipc) = worker_ipc(&[("w", index, index)]);
+            store.write_rows("iris.worker", &ipc, None).unwrap();
+            table.flush().await.unwrap();
+        }
+        assert_eq!(
+            store.query_snapshot("iris.worker").unwrap().paths.len(),
+            flushes as usize
+        );
+
+        store
+            .maintain_namespace("iris.worker", false)
+            .await
+            .unwrap();
+
+        assert_eq!(store.query_snapshot("iris.worker").unwrap().paths.len(), 3);
+        assert_eq!(scan_table(&store, "iris.worker").await, flushes);
         store.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
         std::fs::remove_dir_all(remote_dir).ok();

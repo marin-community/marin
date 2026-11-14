@@ -107,6 +107,8 @@ class K8sService(Protocol):
 
     def apply_json(self, manifest: dict) -> None: ...
 
+    def patch_node(self, name: str, patch: dict) -> None: ...
+
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
 
     def iter_json(
@@ -326,6 +328,9 @@ class CloudK8sService:
                         **({"namespace": ns} if ns else {}),
                     )
             except ApiException as e:
+                if res is K8sResource.SECRETS:
+                    # API validation failures can echo the rejected credential data.
+                    raise KubectlError(f"apply Secret/{name} failed ({e.status})") from None
                 raise KubectlError(
                     f"apply {kind}/{name} failed ({e.status}): {e.reason} {(e.body or '')[:_ERROR_BODY_MAX_LEN]}"
                 ) from e
@@ -478,6 +483,19 @@ class CloudK8sService:
                 name = item.get("metadata", {}).get("name")
                 if name:
                     self.delete(resource, name, wait=wait)
+
+    def patch_node(self, name: str, patch: dict) -> None:
+        """Merge-patch a node, retaining resourceVersion preconditions when supplied."""
+        with _k8s_call(f"patch node/{name}"):
+            try:
+                self._resource_api(K8sResource.NODES).patch(
+                    body=patch,
+                    name=name,
+                    content_type="application/merge-patch+json",
+                    **self._request_timeout_kwargs(),
+                )
+            except ApiException as error:
+                raise KubectlError(f"patch node/{name} failed ({error.status}): {error.reason}") from error
 
     # -- remove_finalizer ----------------------------------------------------
 
@@ -739,7 +757,16 @@ class CloudK8sService:
                                 stdout=stdout,
                                 stderr="\n".join(part for part in (stderr, timeout_error) if part),
                             )
-                        return ExecResult(returncode=resp.returncode, stdout=stdout, stderr=stderr)
+                        try:
+                            returncode = resp.returncode
+                        except ValueError as exc:
+                            # kubernetes-client parses a failed exec's error-channel cause as an integer exit code.
+                            return ExecResult(
+                                returncode=1,
+                                stdout=stdout,
+                                stderr="\n".join(part for part in (stderr, str(exc)) if part),
+                            )
+                        return ExecResult(returncode=returncode, stdout=stdout, stderr=stderr)
                     finally:
                         resp.close()
             except (ApiException, TransportError) as e:

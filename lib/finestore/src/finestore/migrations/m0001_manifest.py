@@ -21,6 +21,7 @@ from finestore.layout import (
     CommitToken,
     FineStoreLayout,
     HeadMetadata,
+    KeyRange,
     Manifest,
     ManifestTable,
     OnConflict,
@@ -81,6 +82,14 @@ class LegacyReadShard:
     commit_sequence: int = 0
     primary_key_sorted: bool = False
 
+    @property
+    def row_commit_upper_bound(self) -> int:
+        return self.commit_sequence
+
+    @property
+    def key_range(self) -> KeyRange | None:
+        return None
+
 
 @dataclasses.dataclass(frozen=True)
 class _LegacyReadTable:
@@ -105,6 +114,7 @@ class LegacyReadView(_ReadOperations):
     """
 
     def __init__(self, root: str) -> None:
+        super().__init__()
         self.root = root
         root_path = StoragePath(root)
         archive = _LegacyArchiveMetadata.model_validate_json((root_path / "_archive.json").read_bytes())

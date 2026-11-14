@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.hooks.multigpu_main in-task GPU process supervisor (a user-invoked
+"""Tests for the iris.jax.multigpu_main in-task GPU process supervisor (a user-invoked
 runtime helper, not something the scheduler injects). None of this imports jax."""
 
 from __future__ import annotations
@@ -13,11 +13,18 @@ import sys
 import textwrap
 
 import pytest
+from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import ResourceSpec, gpu_device
-from iris.hooks import multigpu_main as multigpu
-from iris.hooks.multigpu import MultiGpuHook, build_multigpu_hook
-from iris.hooks.multigpu_main import main, run
-from rigging.timing import Duration
+from iris.jax import multigpu_main as multigpu
+from iris.jax.multigpu import MultiGpuHook, build_multigpu_hook
+from iris.jax.multigpu_main import main, run
+
+
+@pytest.fixture(autouse=True)
+def _reset_job_context():
+    set_job_info(None)
+    yield
+    set_job_info(None)
 
 
 def _py(code: str) -> list[str]:
@@ -47,7 +54,8 @@ def test_run_terminates_peers_when_one_fails() -> None:
 def test_run_sigkills_a_peer_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
     # Rank 0 fails; the peer traps SIGTERM and would sleep 30s. With escalation,
     # the supervisor SIGKILLs it after the grace period and still returns 3.
-    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
+    monkeypatch.setenv("IRIS_TASK_ID", "/test/supervisor/0")
+    monkeypatch.setenv("IRIS_TERMINATION_GRACE_MS", "1000")
     code = (
         "import os,sys,signal,time\n"
         "if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0': sys.exit(3)\n"
@@ -88,7 +96,7 @@ def test_external_sigterm_returns_128_plus_signum() -> None:
     supervisor_src = textwrap.dedent(
         """
         import sys
-        from iris.hooks.multigpu_main import run
+        from iris.jax.multigpu_main import run
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
         sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """

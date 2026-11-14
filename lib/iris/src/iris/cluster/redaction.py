@@ -40,8 +40,8 @@ def _env_var_flag_key(token: str, next_token: str | None) -> str | None:
 def redact_request_env_vars(
     request: controller_pb2.Controller.LaunchJobRequest,
 ) -> controller_pb2.Controller.LaunchJobRequest:
-    """Return a copy of *request* with sensitive env var values replaced."""
-    if not request.environment.env_vars:
+    """Redact credential-looking env values and every explicit secret value."""
+    if not request.environment.env_vars and not request.environment.secrets:
         return request
 
     redacted = controller_pb2.Controller.LaunchJobRequest()
@@ -50,6 +50,7 @@ def redact_request_env_vars(
     redacted_env = redact_value(dict(env_vars))
     env_vars.clear()
     env_vars.update(redacted_env)
+    redacted.environment.secrets.update(dict.fromkeys(request.environment.secrets, REDACTED_VALUE))
     return redacted
 
 

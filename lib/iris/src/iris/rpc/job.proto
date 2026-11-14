@@ -475,9 +475,12 @@ message ResourceSpecProto {
 // ENVIRONMENT CONFIGURATION
 // ============================================================================
 
-// Job environment configuration
+// Job environment configuration.
 message EnvironmentConfig {
   map<string, string> env_vars = 2;  // Environment variables to set
+  // Explicit application credentials, delivered as read-only files by name.
+  // Values remain in authenticated job state and are redacted from display APIs.
+  map<string, string> secrets = 7;
   // Resolved setup scripts the worker runs in order before the command. The
   // client builds this list (default project sync, or caller-provided); empty
   // means no setup. Child jobs inherit it to reproduce the parent's environment.
@@ -663,12 +666,63 @@ enum ContainerProfile {
   CONTAINER_PROFILE_DEFAULT = 2;        // status quo: SYS_PTRACE (+SYS_RESOURCE on TPU)
   CONTAINER_PROFILE_DOCKER_ACCESS = 3;  // DEFAULT + host docker socket (build / sibling containers)
   CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
-  // Runs the whole container under the gVisor runtime (docker --runtime=runsc /
-  // k8s runtimeClassName=gvisor). In-container root gets the docker default cap
-  // set (setuid/apt work) while the intercepted guest kernel isolates the host,
-  // so it is NOT elevated — safe to grant without admin. Requires runsc installed
-  // on the worker/node; incompatible with TPU/GPU passthrough.
-  CONTAINER_PROFILE_GVISOR = 5;
+  // Temporary compatibility for running clients: gVisor with the legacy
+  // cluster environment, workspace bundles, caches and CLUSTER egress default.
+  // New clients must use SANDBOX. The controller rollout owner removes this
+  // once legacy submitters are upgraded and their profile-5 jobs finish.
+  CONTAINER_PROFILE_GVISOR = 5 [deprecated = true];
+  // For model-controlled workloads. Runs the whole container under the gVisor
+  // runtime (docker --runtime=runsc / k8s runtimeClassName=gvisor), so
+  // in-container root gets the docker default cap set (setuid/apt work) while
+  // the intercepted guest kernel isolates the host. The task receives only the
+  // job's own env_vars and Iris task identity: no cluster task_env or injected
+  // secrets, no controller address, no shared node cache mounts, and no
+  // Kubernetes service account token. Its egress policy cannot be CLUSTER or
+  // ALLOWLIST. The job must carry no workspace bundle. CPU-only (runsc cannot
+  // pass a GPU/TPU through). Not elevated.
+  CONTAINER_PROFILE_SANDBOX = 6;
+}
+
+// What a task's network can reach. INTERNET and NONE both deny the controller,
+// workers, other tasks and the cloud metadata server, and a task under either
+// runs without the Kubernetes log-shipping and output-upload sidecars.
+enum EgressPolicy {
+  // Resolved by the controller that runs the job: INTERNET for a SANDBOX job;
+  // ALLOWLIST on a cluster whose allowlist is the default; CLUSTER otherwise. A
+  // child job inherits its parent's policy and adds the parent's rules to its
+  // own.
+  EGRESS_POLICY_UNSPECIFIED = 0;
+  // The cluster network: the node's host network where configured, the
+  // controller, workers and other tasks. Not allowed for SANDBOX.
+  EGRESS_POLICY_CLUSTER = 1;
+  // Public internet addresses only: private, carrier-grade NAT and link-local
+  // ranges are blocked. On Docker workers it needs the host egress filter that
+  // worker bootstrap installs.
+  EGRESS_POLICY_INTERNET = 2;
+  // No network beyond DNS on Kubernetes; loopback only on Docker workers.
+  EGRESS_POLICY_NONE = 3;
+  // The cluster's internal services, and the domains and networks on the
+  // cluster's allowlist and the job's egress_allow rules. Kubernetes denies
+  // everything else. Docker workers refuse DNS lookups of other names but do
+  // not filter connections. A Kubernetes cluster runs the job under CLUSTER
+  // instead when it lacks Cilium, or, on a host-network cluster, when the job
+  // is a GPU job with more than one task, which needs InfiniBand. Not allowed
+  // for SANDBOX.
+  EGRESS_POLICY_ALLOWLIST = 4;
+}
+
+// A destination an ALLOWLIST task may reach beyond the cluster's allowlist.
+message EgressRule {
+  oneof destination {
+    // A DNS name ("api.openai.com") or a pattern whose "*" stands for exactly
+    // one label ("*.openai.com" matches "api.openai.com", not "openai.com" or
+    // "a.b.openai.com").
+    string domain = 1;
+    // An IPv4 or IPv6 network in CIDR notation ("203.0.113.0/24").
+    string cidr = 2;
+  }
+  // TCP ports the rule admits. Empty admits every port and protocol.
+  repeated int32 ports = 3;
 }
 
 // ============================================================================
@@ -687,6 +741,8 @@ message RunTaskRequest {
   string bundle_id = 5;
   ResourceSpecProto resources = 6;
   iris.time.Duration timeout = 7;
+  // Controller-resolved SIGTERM-to-SIGKILL budget, excluding runtime teardown.
+  iris.time.Duration termination_grace = 19;
   repeated string ports = 8;
   int32 attempt_id = 9;
   repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
@@ -719,4 +775,16 @@ message RunTaskRequest {
   // DEFAULT. Never set directly by a client — clients request a profile via
   // LaunchJobRequest.container_profile, which the controller authorizes.
   ContainerProfile container_profile = 15;
+
+  // The task's egress policy, resolved by the controller (never UNSPECIFIED).
+  EgressPolicy egress_policy = 16;
+
+  // Controller-minted bearer token (role "task", subject = the job's owner)
+  // that the task's own Iris client presents to the controller. Empty for a
+  // profile that withholds it (SANDBOX) or a controller without a JWT signer.
+  string task_token = 17;
+
+  // The job's destinations beyond the cluster allowlist. Workers apply them
+  // only under EGRESS_POLICY_ALLOWLIST.
+  repeated EgressRule egress_allow = 18;
 }

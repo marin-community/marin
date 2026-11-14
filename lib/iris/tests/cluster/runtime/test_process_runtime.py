@@ -1,15 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavioral tests for ProcessRuntime mount resolution and TMPFS cleanup."""
+"""Behavioral tests for ProcessRuntime process sampling and filesystem setup."""
 
 import sys
+from io import StringIO
 from pathlib import Path
 
-from iris.cluster.runtime.process import ProcessRuntime
+from iris.cluster.runtime.process import ProcessRuntime, _read_proc_cpu_millicores
 from iris.cluster.runtime.types import ContainerConfig, ContainerPhase, MountKind, MountSpec
 from iris.rpc import job_pb2
 from iris.test_util import wait_for_condition
+
+
+def test_process_cpu_stat_with_parentheses_in_name_reports_cpu_usage(monkeypatch):
+    stat = "42 (python) worker) S 0 1 1 0 -1 4194560 12345 0 0 0 80 20 0 0 20 0 8 0 6000 0 0 0"
+
+    def open_proc(path):
+        if path == "/proc/42/stat":
+            return StringIO(stat)
+        if path == "/proc/stat":
+            return StringIO("cpu  2000 0 0 0 0 0 0 0 0 0\n")
+        raise AssertionError(f"Unexpected proc path: {path}")
+
+    monkeypatch.setattr("builtins.open", open_proc)
+    monkeypatch.setattr("os.cpu_count", lambda: 8)
+
+    millicores, total, process_ticks = _read_proc_cpu_millicores(42, 1000, 90)
+
+    assert (millicores, total, process_ticks) == (80, 2000, 100)
 
 
 def _make_config(
@@ -50,6 +69,34 @@ def _run(runtime: ProcessRuntime, config: ContainerConfig):
     lines = [line.data for line in handle.log_reader().read_all() if line.source == "stdout"]
     assert handle.status().exit_code == 0
     return handle, lines
+
+
+def test_process_remaps_secret_mount_without_exporting_values(tmp_path, monkeypatch):
+    monkeypatch.delenv("SERVICE_KEY", raising=False)
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir()
+    (secret_dir / "SERVICE_KEY").write_text("submitted-credential")
+    config = _make_config(
+        [MountSpec("task-secrets", "/run/rigging/secrets", MountKind.SECRET, read_only=True)],
+        args=[],
+        env={
+            "RIGGING_SECRETS_DIR": "/run/rigging/secrets",
+        },
+    )
+    config.secret_host_path = secret_dir
+    config.entrypoint.run_command.argv[:] = [
+        sys.executable,
+        "-c",
+        "import os; from rigging.secrets import require_secret; "
+        "assert 'SERVICE_KEY' not in os.environ; "
+        "assert require_secret('SERVICE_KEY') == 'submitted-credential'; print('file-only')",
+    ]
+    runtime = ProcessRuntime(cache_dir=tmp_path / "cache")
+    handle, lines = _run(runtime, config)
+    try:
+        assert lines == ["file-only"]
+    finally:
+        handle.cleanup()
 
 
 def test_tmpfs_mounts_across_containers_use_distinct_host_directories(tmp_path):

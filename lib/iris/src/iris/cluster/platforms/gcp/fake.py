@@ -72,7 +72,6 @@ class InMemoryGcpService:
         # LOCAL mode params
         controller_address: str | None = None,
         cache_path: Path | None = None,
-        fake_bundle: Path | None = None,
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
         worker_attributes_by_group: dict[str, dict[str, str | int | float]] | None = None,
@@ -108,7 +107,6 @@ class InMemoryGcpService:
         # LOCAL mode: worker spawning params
         self._controller_address = controller_address
         self._cache_path = cache_path
-        self._fake_bundle = fake_bundle
         self._port_allocator = port_allocator
         self._threads = threads or (ThreadContainer(name="gcp-service-local") if mode == ServiceMode.LOCAL else None)
         self._worker_attributes_by_group = worker_attributes_by_group or {}

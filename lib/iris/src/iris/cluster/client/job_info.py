@@ -14,10 +14,14 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from google.protobuf import json_format
+from rigging.auth import StaticTokenProvider
+from rigging.credentials import ClientCredentials
+from rigging.timing import Duration
 
 from iris.cluster.constraints import Constraint
-from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV, IRIS_WORKER_REGION_ENV
+from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV, IRIS_WORKER_REGION_ENV
 from iris.cluster.types import JobName, TaskAttempt
+from iris.preemption import DEFAULT_TERMINATION_GRACE, TERMINATION_GRACE_ENV, resolve_termination_grace
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -29,6 +33,7 @@ class JobInfo:
 
     task_id: JobName
     num_tasks: int = 1
+    termination_grace: Duration = field(default_factory=lambda: DEFAULT_TERMINATION_GRACE)
     attempt_id: int = 0
     attempt_uid: str | None = None
     worker_id: str | None = None
@@ -36,6 +41,9 @@ class JobInfo:
 
     controller_address: str | None = None
     """Address of the controller that started this job, if any."""
+
+    task_token: str | None = None
+    """Controller-minted token this task's client presents as the job's owner."""
 
     advertise_host: str = "127.0.0.1"
     """The externally visible host name to use when advertising services."""
@@ -57,6 +65,13 @@ class JobInfo:
 
     worker_region: str | None = None
     """Physical region of the worker running this task."""
+
+    @property
+    def credentials(self) -> ClientCredentials | None:
+        """Credentials for RPCs from this task to its controller, if it was given a token."""
+        if not self.task_token:
+            return None
+        return ClientCredentials(token_provider=StaticTokenProvider(self.task_token))
 
     @property
     def task_attempt(self) -> TaskAttempt:
@@ -108,13 +123,18 @@ def get_job_info() -> JobInfo | None:
             for item in json.loads(constraints_json):
                 constraints.append(Constraint.from_proto(json_format.ParseDict(item, job_pb2.Constraint())))
 
+        # Workers deployed before termination-grace metadata use the controller's default.
         info = JobInfo(
             task_id=task_id,
             num_tasks=int(os.environ.get("IRIS_NUM_TASKS", "1")),
+            termination_grace=resolve_termination_grace(
+                Duration.from_ms(int(os.environ.get(TERMINATION_GRACE_ENV, DEFAULT_TERMINATION_GRACE.to_ms())))
+            ),
             attempt_id=attempt_id,
             attempt_uid=os.environ.get(IRIS_ATTEMPT_UID_ENV),
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
+            task_token=os.environ.get(IRIS_TASK_TOKEN_ENV),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
             setup_scripts=(
                 json.loads(os.environ["IRIS_JOB_SETUP_SCRIPTS"]) if "IRIS_JOB_SETUP_SCRIPTS" in os.environ else None

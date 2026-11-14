@@ -152,7 +152,7 @@ interface StatusTextRow {
 
 const { data: statusTextData, refresh: fetchStatusText } = useLogServerStatsRpc<QueryResponse>(
   'Query',
-  () => ({ sql: detailSql(props.taskId) }),
+  () => ({ sql: detailSql(props.taskId, timestampMs(task.value?.submittedAt)) }),
 )
 
 const statusTextDetail = computed<string>(() => {

@@ -51,6 +51,7 @@ from iris.cluster.controller.backend import (
     BackendObservationRequest,
     BackendRecoveryRequest,
     BackendRecoveryResult,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderUnsupportedError,
     ReconcileObservation,
@@ -103,6 +104,7 @@ from iris.cluster.types import (
     WorkerId,
 )
 from iris.managed_thread import get_thread_container
+from iris.preemption import DEFAULT_TERMINATION_GRACE, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.backends import make_mock_platform
 from iris.testing.controller_state import (
@@ -176,6 +178,12 @@ class FakeProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
+
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
+        return EgressAllowlistMode.OPT_IN
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
@@ -217,6 +225,8 @@ class MockController:
         self.backend = Mock()
         self.backend.descriptor = worker_backend_descriptor()
         self.backend.job_feasibility.return_value = None
+        self.backend.validate_job.return_value = None
+        self.backend.egress_allowlist_mode.return_value = EgressAllowlistMode.OPT_IN
         self.backend.runtime_image.return_value = ""
         self.worker_health = WorkerHealthTracker()
         self.backend_observation = BackendObservation()
@@ -311,7 +321,7 @@ def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
             log_service_address="",
             local_log_dir=config.local_state_dir / "log-server",
             host=config.host,
-            worker_token=config.auth.worker_token if config.auth and config.auth.worker_token else None,
+            worker_token_provider=config.auth.worker_token_provider if config.auth else None,
         )
         backend = provider if provider is not None else FakeProvider()
         controller = Controller(
@@ -369,6 +379,9 @@ def make_direct_job_request(
     task_image: str = "",
     coscheduling_group_by: str = "",
     priority_band: int = 0,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
 ) -> controller_pb2.Controller.LaunchJobRequest:
     job_name = JobName.root("test-user", name)
     req = controller_pb2.Controller.LaunchJobRequest(
@@ -379,9 +392,13 @@ def make_direct_job_request(
         replicas=replicas,
         task_image=task_image,
         priority_band=priority_band,
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
     )
     if coscheduling_group_by:
         req.coscheduling.group_by = coscheduling_group_by
+    req.termination_grace.CopyFrom(duration_to_proto(DEFAULT_TERMINATION_GRACE))
     return req
 
 
@@ -392,6 +409,9 @@ def submit_direct_job(
     task_image: str = "",
     coscheduling_group_by: str = "",
     priority_band: int = 0,
+    max_retries_failure: int = 0,
+    max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
 ) -> list[JobName]:
     jid = JobName.root("test-user", name)
     req = make_direct_job_request(
@@ -400,6 +420,9 @@ def submit_direct_job(
         task_image=task_image,
         coscheduling_group_by=coscheduling_group_by,
         priority_band=priority_band,
+        max_retries_failure=max_retries_failure,
+        max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
     )
     with state._db.transaction() as cur:
         ops.job.submit(
@@ -610,6 +633,15 @@ def submit_job(
     mirror service-layer behavior, then submits and returns the created tasks.
     """
     inject_device_constraints(request)
+    request.termination_grace.CopyFrom(
+        duration_to_proto(
+            resolve_termination_grace(
+                Duration.from_ms(request.termination_grace.milliseconds)
+                if request.HasField("termination_grace")
+                else None
+            )
+        )
+    )
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
@@ -701,6 +733,7 @@ def make_job_request(
     )
     if scheduling_timeout_seconds > 0:
         request.scheduling_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(scheduling_timeout_seconds)))
+    request.termination_grace.CopyFrom(duration_to_proto(DEFAULT_TERMINATION_GRACE))
     return request
 
 

@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
@@ -43,6 +43,8 @@ from iris.cluster.runtime.profile import (
 )
 from iris.cluster.runtime.types import (
     ACCELERATOR_SHM_FALLBACK_BYTES,
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
@@ -56,10 +58,13 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
+
+_SETUP_CPU_MIN_MILLICORES = 1000
 
 # Substrings that indicate a docker/registry infrastructure problem rather than
 # a user-code error.  Checked case-insensitively against stderr from docker
@@ -192,6 +197,18 @@ RESERVED_HOST_PORTS = "8081,8431,8470-8482"
 
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
+# The bridge network an EGRESS_POLICY_INTERNET task runs on. Worker bootstrap
+# creates it on bridge EGRESS_BRIDGE and installs host firewall rules that drop
+# its traffic to EGRESS_BLOCKED_CIDRS and to the host itself. It writes
+# EGRESS_RESOLV_CONF, naming public resolvers, only after those rules are in
+# place, so the file's presence means the filter is installed. EGRESS_RUN_DIR is
+# on the host's tmpfs: a reboot clears the rules and the file together.
+EGRESS_NETWORK = "iris-egress"
+EGRESS_BRIDGE = "iris-egress0"
+EGRESS_RUN_DIR = "/run/iris"
+EGRESS_RESOLV_CONF = f"{EGRESS_RUN_DIR}/egress/resolv.conf"
+EGRESS_DNS_SERVERS: tuple[str, ...] = ("8.8.8.8", "1.1.1.1")
+
 _NETWORK_SYSCTLS: dict[str, str] = {
     "net.ipv4.ip_local_port_range": EPHEMERAL_PORT_RANGE,
     "net.ipv4.ip_local_reserved_ports": RESERVED_HOST_PORTS,
@@ -262,7 +279,7 @@ def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
     # while isolating the host — no --privileged, no --cap-drop. gVisor cannot do
     # TPU/GPU passthrough, so accelerator tasks are rejected upstream (controller
     # LaunchJob) and never reach here; the is_tpu_run guard is defensive.
-    if resolved == job_pb2.CONTAINER_PROFILE_GVISOR and not is_tpu_run:
+    if resolved in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX) and not is_tpu_run:
         return ["--runtime", "runsc"]
 
     privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
@@ -479,10 +496,12 @@ class DockerContainerHandle:
         )
         build_memory_mb = build_memory_bytes // (1024 * 1024)
 
+        # Small coordinator requests should not throttle transient uv builds.
         build_container_id = self._docker_create(
             command=["bash", "/app/_setup_env.sh"],
             label_suffix="_build",
             memory_limit_mb=build_memory_mb,
+            cpu_millicores=max(_SETUP_CPU_MIN_MILLICORES, self.config.get_cpu_millicores() or 0),
         )
 
         build_logs: list[LogLine] = []
@@ -653,6 +672,7 @@ exec {quoted_cmd}
         label_suffix: str = "",
         include_devices: bool = False,
         memory_limit_mb: int | None = None,
+        cpu_millicores: int | None = None,
     ) -> str:
         """Create a Docker container. Returns container_id.
 
@@ -665,6 +685,7 @@ exec {quoted_cmd}
             include_devices: If True, also pass through accelerator devices.
             memory_limit_mb: Override memory limit in MB. When None, uses
                 the task's requested memory from config.resources.
+            cpu_millicores: Override the task's requested CPU for this container.
         """
         config = self.config
         self.runtime.ensure_image(config.image)
@@ -698,10 +719,14 @@ exec {quoted_cmd}
             cmd.extend(["--network", config.network_mode])
         else:
             cmd.append("--add-host=host.docker.internal:host-gateway")
+        if config.resolv_conf is not None:
+            cmd.extend(["-v", f"{config.resolv_conf}:/etc/resolv.conf:ro"])
 
         # Network sysctl tuning for containers with own network namespace (#3066).
-        # Host-network containers inherit host settings from VM bootstrap.
-        if config.network_mode != "host":
+        # Host-network containers inherit host settings from VM bootstrap, a
+        # container without a network has nothing to tune, and gVisor sandboxes
+        # on the egress network do not accept every host sysctl.
+        if config.network_mode not in (NETWORK_MODE_HOST, NETWORK_MODE_NONE, EGRESS_NETWORK):
             for key, value in _NETWORK_SYSCTLS.items():
                 cmd.extend(["--sysctl", f"{key}={value}"])
 
@@ -719,6 +744,8 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.attempt_id={config.attempt_id}"])
         if config.attempt_uid:
             cmd.extend(["--label", f"iris.attempt_uid={config.attempt_uid}"])
+        if config.termination_grace is not None:
+            cmd.extend(["--label", f"iris.termination_grace_ms={config.termination_grace.to_ms()}"])
         if config.worker_id:
             cmd.extend(["--label", f"iris.worker_id={config.worker_id}"])
         # Phase label: used during adoption to distinguish adoptable run
@@ -732,15 +759,15 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.ports={json.dumps(config.ports)}"])
 
         # Resource limits (cgroups v2) — always applied
-        cpu_millicores = config.get_cpu_millicores()
-        if cpu_millicores:
+        effective_cpu_millicores = cpu_millicores or config.get_cpu_millicores()
+        if effective_cpu_millicores:
             if self.runtime.capacity_type == CapacityType.ON_DEMAND:
                 # Soft weight: on-demand workers let containers burst onto idle
                 # host CPU; the scheduler still places by cpu_millicores.
-                shares = max(2, int(cpu_millicores * 1024 / 1000))
+                shares = max(2, int(effective_cpu_millicores * 1024 / 1000))
                 cmd.extend(["--cpu-shares", str(shares)])
             else:
-                cmd.extend(["--cpus", str(cpu_millicores / 1000)])
+                cmd.extend(["--cpus", str(effective_cpu_millicores / 1000)])
         effective_memory_mb = memory_limit_mb or config.get_memory_mb()
         if effective_memory_mb:
             cmd.extend(["--memory", f"{effective_memory_mb}m"])
@@ -958,13 +985,15 @@ class DockerRuntime:
         mounts: list[MountSpec],
         workdir_host_path: Path | None = None,
         output_host_path: Path | None = None,
+        secret_host_path: Path | None = None,
     ) -> list[ResolvedMount]:
         """Convert semantic MountSpecs to ResolvedMount instances.
 
         Creates host directories as needed. WORKDIR uses the explicit host path
         created by the task attempt. OUTPUT uses its separate attempt-local host
-        path. CACHE gets shared dirs under cache_dir. TMPFS uses Docker --tmpfs
-        for per-container isolation (no host dir).
+        path. SECRET uses secret_host_path as a read-only mount. CACHE gets
+        shared dirs under cache_dir. TMPFS uses Docker --tmpfs for
+        per-container isolation (no host dir).
         """
         result: list[ResolvedMount] = []
         for mount in mounts:
@@ -981,6 +1010,10 @@ class DockerRuntime:
             elif mount.kind == MountKind.TMPFS:
                 # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
                 result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
+            elif mount.kind == MountKind.SECRET:
+                if secret_host_path is None:
+                    raise RuntimeError("SECRET mount requires secret_host_path")
+                result.append(ResolvedMount(str(secret_host_path), mount.container_path, "ro", mount.kind))
             elif mount.kind == MountKind.CACHE:
                 host_dir = self._cache_dir / cache_host_dirname(mount.container_path)
                 host_dir.mkdir(parents=True, exist_ok=True)
@@ -997,6 +1030,7 @@ class DockerRuntime:
             config.mounts,
             workdir_host_path=config.workdir_host_path,
             output_host_path=config.output_host_path,
+            secret_host_path=config.secret_host_path,
         )
         handle = DockerContainerHandle(config=config, runtime=self, _resolved_mounts=resolved)
         self._handles.append(handle)
@@ -1062,6 +1096,7 @@ class DockerRuntime:
 
             task_id = labels.get("iris.task_id", "")
             attempt_id_str = labels.get("iris.attempt_id")
+            termination_grace_ms = labels.get("iris.termination_grace_ms")
             if not task_id or attempt_id_str is None:
                 # Missing required labels — cannot adopt
                 continue
@@ -1086,6 +1121,11 @@ class DockerRuntime:
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
                     started_at=state.get("StartedAt", ""),
                     workdir_host_path=workdir_host_path,
+                    termination_grace=(
+                        Duration.from_ms(int(termination_grace_ms))
+                        if termination_grace_ms is not None
+                        else DEFAULT_TERMINATION_GRACE
+                    ),
                     ports=json.loads(labels.get("iris.ports", "{}")),
                 )
             )

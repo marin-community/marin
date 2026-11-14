@@ -1276,14 +1276,13 @@ def analyze(registry_id: str, script: str, checkpoint: str, *, dry_run: bool) ->
     ]
     name = f"belay-analyze-{registry_id}-{datetime.datetime.now():%m%d-%H%M%S}"
     command = remote_job_command(name, cluster, module, STUDY_JOB_RESOURCES)
-    shown = [arg if arg not in (os.environ.get(k) for k in CLUSTER_STORAGE_KEYS) else "<key>" for arg in command]
-    print(f"{'would run' if dry_run else 'running'}: {shlex.join(shown)}")
+    print(f"{'would run' if dry_run else 'running'}: {shlex.join(command)}")
     target = report_dir(CONFIG.registry_checkout, registry_id)
     url = report_url(registry_id, "report")
     if dry_run:
         print(f"would copy {out}/report.md and its figures to {target} and commit them to {CONFIG.registry_branch}")
     else:
-        subprocess.run(command, check=True, capture_output=True)
+        submit_job(command)
         job = f"/{resolve_job_user()}/{name}"
         print(f"waiting for {job} ...")
         job_state = wait_for_job(job)
@@ -1574,6 +1573,26 @@ def advance(nxt: Next, *, dry_run: bool) -> None:
 PROFILE_JOB_RESOURCES = ("--cpu", "4", "--memory", "32GB", "--disk", "20GB", "--enable-extra-resources")
 PROFILE_JOB_TIMEOUT = 1800
 CLUSTER_STORAGE_KEYS = ("CW_KEY_ID", "CW_KEY_SECRET")
+
+
+def redacted(text: str) -> str:
+    """``text`` with every storage key value in this process's environment replaced by ``<key>``."""
+    for key in CLUSTER_STORAGE_KEYS:
+        value = os.environ.get(key)
+        if value:
+            text = text.replace(value, "<key>")
+    return text
+
+
+def submit_job(command: list[str]) -> None:
+    """Submit an Iris job whose command line carries storage keys: a failure shows Iris's own output with the keys
+    redacted, never the command (a CalledProcessError would print it, keys included)."""
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        output = redacted(f"{result.stdout}\n{result.stderr}").strip()
+        raise SystemExit(f"iris job run exited {result.returncode}:\n{output}")
+
+
 # Iris job setup lines (dependency installs) that the summary leaves out.
 _JOB_SETUP_LINE = re.compile(
     r"^(\+ |Installed |Resolved |Prepared |Download|Building |Built |Audited |Uninstalled |installing |"
@@ -1588,9 +1607,9 @@ def iris_cli(*args: str) -> list[str]:
 def remote_job_command(
     name: str, cluster: str, module: list[str], resources: tuple[str, ...] = PROFILE_JOB_RESOURCES
 ) -> list[str]:
-    """``iris job run`` for a small CPU job on ``cluster`` with the submitter's storage keys from the environment."""
-    keys = [arg for key in CLUSTER_STORAGE_KEYS if os.environ.get(key) for arg in ("-e", key, os.environ[key])]
-    if cluster.startswith("cw-") and len(keys) != 3 * len(CLUSTER_STORAGE_KEYS):
+    """``iris job run`` for a small CPU job on ``cluster``. The Iris client forwards the submitter's storage keys from
+    the environment as job secrets (files on the worker), so they never appear on a command line."""
+    if cluster.startswith("cw-") and not all(os.environ.get(key) for key in CLUSTER_STORAGE_KEYS):
         raise SystemExit(f"refusing: export {' and '.join(CLUSTER_STORAGE_KEYS)} (your CoreWeave storage keys) first")
     return iris_cli(
         "job",
@@ -1605,7 +1624,6 @@ def remote_job_command(
         str(PROFILE_JOB_TIMEOUT),
         "--job-name",
         name,
-        *keys,
         "--",
         "python",
         "-m",
@@ -1638,11 +1656,10 @@ def analyze_profile(run: str, compare: str | None, cluster: str, *, dry_run: boo
     module = ["marin.profiling.step_profile", run, "--xprof-root", root, *(["--compare", compare] if compare else [])]
     name = f"belay-profile-{run}-{datetime.datetime.now():%m%d-%H%M%S}"[:63]
     command = remote_job_command(name, cluster, module)
-    shown = [arg if arg not in (os.environ.get(k) for k in CLUSTER_STORAGE_KEYS) else "<key>" for arg in command]
-    print(f"{'would run' if dry_run else 'running'}: {shlex.join(shown)}")
+    print(f"{'would run' if dry_run else 'running'}: {shlex.join(command)}")
     if dry_run:
         return
-    subprocess.run(command, check=True, capture_output=True)
+    submit_job(command)
     job = f"/{resolve_job_user()}/{name}"
     print(f"waiting for {job} ...")
     state = wait_for_job(job)

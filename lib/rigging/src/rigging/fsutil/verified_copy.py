@@ -18,7 +18,7 @@ from fsspec import AbstractFileSystem
 
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import S3UploadPolicy, filesystem_for
-from rigging.fsutil.transfer import (
+from rigging.filesystem.transfer import (
     COPY_CHUNK_BYTES,
     TransferLocation,
     _backend,
@@ -335,7 +335,7 @@ def _copy_or_resume(
         raise VerifiedCopyError(f"source size changed while copying {source.path}")
     current_info = source_fs.info(source.source_path)
     current_size = int(current_info.get("size") or 0)
-    current_identity = _source_identity(current_info)
+    current_identity = _source_identity(current_info, matching=source.identity)
     if current_size != source.size or current_identity != source.identity:
         destination_fs.rm(staging_path)
         raise VerifiedCopyError(f"source identity changed while copying {source.path}")
@@ -410,7 +410,9 @@ def _promote(
     parent, separator, _ = destination_path.rpartition("/")
     if separator:
         filesystem.makedirs(parent, exist_ok=True)
-    copy_options = {"preserve_etag": True} if _is_s3(filesystem) else {}
+    # CoreWeave rejects UploadPartCopy for a one-part MPU containing a small file.
+    # The destination content check below still verifies an ordinary copy.
+    copy_options = {"preserve_etag": True} if _is_s3(filesystem) and verified.size >= S3_UPLOAD_PART_BYTES else {}
     filesystem.cp_file(staging_path, destination_path, **copy_options)
     filesystem.invalidate_cache(destination_path)
     promoted = _DestinationFile(
@@ -435,18 +437,38 @@ def _copy_with_hash(
     digest = hashlib.sha256()
     multipart_etag = _MultipartEtag(S3_UPLOAD_PART_BYTES) if _has_fixed_s3_uploads(destination_fs) else None
     copied_size = 0
-    destination_options = {"block_size": S3_UPLOAD_PART_BYTES} if multipart_etag is not None else {}
-    with (
-        source_fs.open(source_path, "rb") as source,
-        destination_fs.open(destination_path, "wb", **destination_options) as destination,
-    ):
-        while chunk := source.read(COPY_CHUNK_BYTES):
-            digest.update(chunk)
-            if multipart_etag is not None:
-                multipart_etag.update(chunk)
-            destination.write(chunk)
-            copied_size += len(chunk)
-    expected_etag = multipart_etag.etag(copied_size) if multipart_etag is not None else None
+    is_s3 = _is_s3(destination_fs)
+    destination_options: dict[str, int | bool] = {"autocommit": False} if is_s3 else {}
+    if multipart_etag is not None:
+        destination_options["block_size"] = S3_UPLOAD_PART_BYTES
+    with source_fs.open(source_path, "rb") as source:
+        destination = destination_fs.open(destination_path, "wb", **destination_options)
+        try:
+            while chunk := source.read(COPY_CHUNK_BYTES):
+                digest.update(chunk)
+                if multipart_etag is not None:
+                    multipart_etag.update(chunk)
+                destination.write(chunk)
+                copied_size += len(chunk)
+            destination.close()
+            if is_s3:
+                destination.commit()
+        except BaseException:
+            if is_s3:
+                # Closing an uncommitted s3fs writer flushes parts but cannot publish them.
+                try:
+                    destination.close()
+                finally:
+                    destination.discard()
+            else:
+                destination.close()
+                if destination_fs.exists(destination_path):
+                    destination_fs.rm(destination_path)
+            raise
+    # Uncommitted small S3 writes use a one-part MPU; verify those by content.
+    expected_etag = (
+        multipart_etag.etag(copied_size) if multipart_etag is not None and copied_size >= S3_UPLOAD_PART_BYTES else None
+    )
     return _CopiedFile(digest.hexdigest(), copied_size, expected_etag)
 
 
@@ -481,7 +503,12 @@ def _destination_matches_marker(
 ) -> bool:
     if marker.staging_identity.startswith(SHA256_IDENTITY_PREFIX):
         return _sha256(filesystem, path) == marker.staging_identity.removeprefix(SHA256_IDENTITY_PREFIX)
-    return destination.identity == marker.staging_identity
+    if destination.identity == marker.staging_identity:
+        return True
+    if marker.staging_identity.startswith(ETAG_IDENTITY_PREFIX) and marker.staging_identity.rpartition("-")[2].isdigit():
+        # UploadPartCopy can change a multipart ETag without changing the bytes.
+        return _sha256(filesystem, path) == marker.sha256
+    return False
 
 
 def _sha256(filesystem: AbstractFileSystem, path: str) -> str:
@@ -610,8 +637,8 @@ def _validate_completed_source(
             raise VerifiedCopyError(f"source content changed after destination completion: {source.path}")
 
 
-def _source_identity(info: dict[str, Any]) -> str | None:
-    for key in (
+def _source_identity(info: dict[str, Any], *, matching: str | None = None) -> str | None:
+    keys: tuple[str, ...] = (
         "generation",
         "version_id",
         "VersionId",
@@ -624,8 +651,13 @@ def _source_identity(info: dict[str, Any]) -> str | None:
         "updated",
         "mtime",
         "LastModified",
-    ):
+    )
+    if matching is not None:
+        keys = (matching.partition("=")[0],)
+    for key in keys:
         value = info.get(key)
+        if key in ("version_id", "VersionId") and value in ("", "null"):
+            continue
         if value is not None:
             return f"{key}={value!s}"
     return None

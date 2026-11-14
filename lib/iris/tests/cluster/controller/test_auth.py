@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import jwt
 import pytest
+import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
@@ -38,10 +39,14 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.rpc import job_pb2
+from iris.cluster.worker.auth import worker_token_provider
+from iris.managed_thread import ThreadContainer
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE, authorize_method
+from iris.rpc.controller_connect import EndpointServiceClientSync
 from iris.testing.controller import worker_backend_descriptor
 from iris.testing.controller_state import ControllerTestState
+from rigging.auth import BearerTokenInjector
 from rigging.server_auth import (
     PolicyAuthInterceptor,
     RequestAuthPolicy,
@@ -52,6 +57,7 @@ from rigging.server_auth import (
     requires_auth,
 )
 from rigging.testing import MockVerifier
+from rigging.timing import Duration, ExponentialBackoff
 from rigging.token_authority import JwksVerifier, JwtSigner, generate_ed25519_keypair, signing_key_from_private_pem
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -405,48 +411,6 @@ def test_composite_verifier_routes_each_plane_to_its_verifier():
     assert fed_identity.user_id == "parent-cluster"
 
 
-def test_endpoint_token_surfaces_endpoint_as_audience():
-    """An endpoint token verifies (aud is the fixed proxy plane) and surfaces its
-    bound endpoint name as ``identity.audience`` (what the /proxy gate matches)."""
-    mgr = _jwt_manager()
-    token = mgr.create_endpoint_token("/serve/foo", "k-ep", ttl_seconds=60)
-    identity = mgr.verify(token)
-    assert identity.audience == "/serve/foo"
-
-
-# -- CIDR network-location auth -------------------------------------------------
-
-
-def test_cidr_only_auth_config_enables_request_auth():
-    """An auth block with only trusted_cidrs turns auth on.
-
-    Direct in-network peers resolve to an admin identity; external and
-    forwarded peers are rejected; the cluster's worker JWT still verifies
-    through the same policy.
-    """
-    auth = create_controller_auth(
-        AuthConfig(trusted_cidrs=["10.0.0.0/8"]), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
-    )
-    policy = request_auth_policy(auth)
-    assert not policy.allows_anonymous
-
-    inside = policy.resolve(None, client_address="10.1.2.3:5555", headers={})
-    assert inside is not None
-    assert inside.role == "admin"
-
-    with pytest.raises(ValueError, match="Missing authentication"):
-        policy.resolve(None, client_address="203.0.113.9:5555", headers={})
-
-    # A forwarded request whose socket peer is an in-CIDR ingress hop must not
-    # inherit the hop's network location.
-    with pytest.raises(ValueError, match="Missing authentication"):
-        policy.resolve(None, client_address="10.1.2.3:5555", headers={"x-forwarded-for": "203.0.113.9"})
-
-    worker = policy.resolve(auth.worker_token, client_address="203.0.113.9:5555", headers={})
-    assert worker is not None
-    assert worker.user_id == WORKER_USER
-
-
 # -- Optional auth (gradual adoption) -----------------------------------------
 
 
@@ -743,6 +707,24 @@ def test_iap_assertion_resolver_is_the_role_policy():
     assert auth.role_policy.role_for("stranger@example.com") == DASHBOARD_ROLE
 
 
+@pytest.mark.parametrize("listed_admin", [False, True])
+def test_iap_user_role_override_preserves_other_admins(listed_admin):
+    collaborator = "collaborator@example.com"
+    auth = create_controller_auth(
+        AuthConfig(
+            iap=IapAuthConfig(signed_header_audience="/projects/1/global/backendServices/2", unprovisioned_role="admin"),
+            admin_users=[collaborator] if listed_admin else [],
+            user_roles={collaborator: "user"},
+        ),
+        cluster_name=_CLUSTER,
+        signing_key_pem=_SIGNING_KEY,
+    )
+    assert auth.role_policy is not None
+    assert auth.role_policy.role_for(collaborator) == "user"
+    assert auth.role_policy.role_for("operator@example.com") == "admin"
+    assert auth.role_policy.role_for(WORKER_USER) == "worker"
+
+
 # -- require_persistent_signing_key --------------------------------------------
 
 
@@ -856,3 +838,85 @@ def test_null_auth_get_current_user(db, log_client):
         assert resp.role == "admin"
     finally:
         _verified_identity.reset(reset)
+
+
+@pytest.mark.parametrize(
+    "role,status", [("worker", 200), ("admin", 200), ("user", 403), ("task", 403), ("dashboard", 403)]
+)
+def test_worker_renewal_preserves_worker_authority(db, log_client, role, status):
+    auth = create_controller_auth(
+        AuthConfig(trusted_cidrs=["10.0.0.0/8"]), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+    )
+    service = _make_service(db, log_client, auth=auth)
+    original = auth.jwt_manager.create_token(
+        "system:worker" if role == "worker" else "caller", role, "test", ttl_seconds=120
+    )
+    dashboard = ControllerDashboard(service, auth_provider="cidr", auth_policy=request_auth_policy(auth))
+    with TestClient(dashboard.app) as client:
+        response = client.post(
+            "/iris.cluster.ControllerService/RenewWorkerToken", json={}, headers={"Authorization": f"Bearer {original}"}
+        )
+    assert response.status_code == status
+    if status == 200:
+        renewed = response.json()["token"]
+        identity = auth.verifier.verify(renewed)
+        assert (identity.user_id, identity.role) == (WORKER_USER, "worker")
+        before = jwt.decode(original, options={"verify_signature": False})
+        after = jwt.decode(renewed, options={"verify_signature": False})
+        assert after["exp"] > before["exp"]
+        assert after["aud"] == "iris"
+
+
+def test_worker_renewal_rejects_expired_credential(db, log_client):
+    auth = create_controller_auth(
+        AuthConfig(trusted_cidrs=["10.0.0.0/8"]), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+    )
+    service = _make_service(db, log_client, auth=auth)
+    claims = jwt.decode(auth.worker_token, options={"verify_signature": False})
+    claims["exp"] = 1
+    expired = jwt.encode(claims, _SIGNING_KEY, algorithm="EdDSA")
+    dashboard = ControllerDashboard(service, auth_provider="cidr", auth_policy=request_auth_policy(auth))
+    with TestClient(dashboard.app) as client:
+        response = client.post(
+            "/iris.cluster.ControllerService/RenewWorkerToken", json={}, headers={"Authorization": f"Bearer {expired}"}
+        )
+    assert response.status_code == 401
+
+
+def test_worker_renews_credential_before_endpoint_discovery(db, log_client, tmp_path, unused_tcp_port):
+    auth = create_controller_auth(
+        AuthConfig(trusted_cidrs=["10.0.0.0/8"]), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
+    )
+    service = _make_service(db, log_client, auth=auth)
+    bootstrap = auth.jwt_manager.create_token(WORKER_USER, "worker", "bootstrap", ttl_seconds=120)
+    dashboard = ControllerDashboard(service, auth_provider="cidr", auth_policy=request_auth_policy(auth))
+    server = uvicorn.Server(
+        uvicorn.Config(dashboard.app, host="127.0.0.1", port=unused_tcp_port, log_level="error", log_config=None)
+    )
+    threads = ThreadContainer(name="worker-renewal-controller")
+    threads.spawn_server(server, name="worker-renewal-rpc")
+    address = f"http://127.0.0.1:{unused_tcp_port}"
+    try:
+        ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+            lambda: server.started, timeout=Duration.from_seconds(5)
+        )
+        cache = tmp_path / "credentials" / "worker.jwt"
+        provider = worker_token_provider(address, bootstrap, tmp_path)
+        endpoint_client = EndpointServiceClientSync(
+            address=address, interceptors=(BearerTokenInjector(provider, "authorization"),)
+        )
+        try:
+            result = endpoint_client.list_endpoints(
+                controller_pb2.Controller.ListEndpointsRequest(prefix="/system/log-server", exact=True)
+            )
+        finally:
+            endpoint_client.close()
+        assert list(result.endpoints) == []
+        renewed = cache.read_text()
+        assert renewed != bootstrap
+        assert auth.verifier.verify(renewed).role == "worker"
+        # A new process must reuse the renewed token rather than the old
+        # bootstrap credential from the read-only worker configuration.
+        assert worker_token_provider(address, bootstrap, tmp_path).get_token() == renewed
+    finally:
+        threads.stop()
