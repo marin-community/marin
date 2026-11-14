@@ -77,7 +77,7 @@ from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
-from infra.marina.apps.rl_data_catalog.server.quality import intended_use, result
+from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
@@ -999,10 +999,7 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         assert sources["Marin:eval"]["issue_rate"] == 0.0
         assert sources["Marin:required"]["intended_use"] == "train"
         assert sources["Marin:historical"]["intended_use"] == "unknown"
-        assert (
-            intended_use(client.get("/source", params={"source_id": "Marin:historical"}).json()["declaration"])
-            == "unknown"
-        )
+        assert client.get("/source", params={"source_id": "Marin:historical"}).json()["intended_use"] == "unknown"
 
 
 def test_loaded_assemblies_keep_inflight_and_uncertain_results_provisional(catalog_database, catalog_query, tmp_path):
