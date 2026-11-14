@@ -198,9 +198,9 @@ function filtrationRows(source) {
     ['Measured EVAL examples (not admitted TRAIN)', admission?.state === 'eval_only' ? admission.example_count : null],
     ['Unexecutable on production backend dropped (by typed reason)', counts?.oracle_tasks === 0 ? 'Per-task executability run is not required under the pinned no-oracle policy; static exclusions remain applied' : admission?.state === 'excluded' ? 'No retained tasks; typed exclusions are recorded above' : 'Pending: no pin-bound per-task production-executability receipt is recorded'],
     ['Admitted after all filtration', admission?.admitted_count ?? 'Pending: full-population filtration and production executability are not established'],
-    ...['policy', 'oracle_inventory', 'static_audit'].map(key => {
+    ...['policy', 'actorless_policy', 'oracle_inventory', 'static_audit'].map(key => {
       const evidence = counts?.[key];
-      const label = {policy: 'No-oracle count policy ruling', oracle_inventory: 'Current-input oracle census', static_audit: 'Current-input static blocker audit'}[key];
+      const label = {policy: 'No-oracle count policy ruling', actorless_policy: 'Actorless exemption ruling', oracle_inventory: 'Current-input oracle census', static_audit: 'Current-input static blocker audit'}[key];
       if (!evidence) return [label, null];
       const span = node('span'); span.append(receiptLink(evidence.uri, label + ' ↗'), ' · SHA-256 ', node('code', evidence.sha256));
       return [label, span];

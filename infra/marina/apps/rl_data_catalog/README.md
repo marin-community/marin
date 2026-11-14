@@ -69,3 +69,8 @@ measurements remain explicit and do not become zero exclusions.
 Count observations are bundled as immutable Python data with a provenance hash;
 releasing them does not alter the selected catalog, archived packets or training
 selection. The production package's default observation set is empty.
+
+Actorless count observations also cite ruling `b02c3b35…22da118`. Their bound
+audit removes agentic-only exclusions using the actual TaskSpec actor/harness
+contract, while preserving grading and other applicable checks. Both policy
+references remain visible in source Evidence.

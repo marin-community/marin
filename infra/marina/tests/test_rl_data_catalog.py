@@ -1683,17 +1683,24 @@ def test_preview_packages_producer_oracle_inventory_and_rejects_mixed_pins(tmp_p
     )
 
 
-def test_preview_bundles_current_count_evidence_into_the_served_api(catalog_database, catalog_query, tmp_path):
+@pytest.mark.parametrize("actorless_exempt", [False, True])
+def test_preview_bundles_current_count_evidence_into_the_served_api(
+    catalog_database, catalog_query, tmp_path, actorless_exempt
+):
     root = str(tmp_path / "catalog")
     publish_sample(root, "counted", source_id="Marin:counted", duplicates=1)
     load_catalog(CurationCatalog(root), catalog_query)
     with catalog_database.connect() as connection:
         raw = connection.execute(text("SELECT declaration FROM atlas_sources")).scalar_one()
     declaration = SourceDeclaration.model_validate(raw)
+    observation = count_evidence(declaration, 0, 0 if actorless_exempt else 1).model_dump(mode="json")
+    if actorless_exempt:
+        observation["actorless_policy"] = {
+            "uri": "https://example.org/actorless.md",
+            "sha256": "b02c3b3565e4baee24092fd6faa5c24da54c8712576f6a16e2b979e9e22da118",
+        }
     count_file = tmp_path / "counts.json"
-    count_file.write_text(
-        json.dumps({"version": 1, "sources": [count_evidence(declaration, 0, 1).model_dump(mode="json")]})
-    )
+    count_file.write_text(json.dumps({"version": 1, "sources": [observation]}))
     output = tmp_path / "preview"
     prepare_preview(Path(__file__).resolve().parents[3], output, source_counts=count_file)
     package = read_applet_package(package_applet(output))
@@ -1703,11 +1710,13 @@ def test_preview_bundles_current_count_evidence_into_the_served_api(catalog_data
         api = getattr(module, factory_name)(cast(AppletServices, CatalogServices(catalog_database)))
         with TestClient(api) as client:
             source = client.get("/sources").json()["sources"][0]
-            assert source["filtration"]["example_count"] == 1
-            assert source["filtration"]["admitted_count"] == 1
+            assert source["filtration"]["example_count"] == (2 if actorless_exempt else 1)
+            assert source["filtration"]["admitted_count"] == (2 if actorless_exempt else 1)
             detail = client.get("/source", params={"source_id": declaration.id}).json()
             assert detail["filtration"] == source["filtration"]
             assert detail["filtration"]["count_evidence"]["policy"]["sha256"].startswith("028c7dfb")
+            if actorless_exempt:
+                assert detail["filtration"]["count_evidence"]["actorless_policy"] == observation["actorless_policy"]
     finally:
         remove_backend_revision(applet_id, 1, package.digest)
 
