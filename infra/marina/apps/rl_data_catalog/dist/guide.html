@@ -27,7 +27,7 @@
 
   <section aria-labelledby="policy-title" id="policy">
     <h2 id="policy-title">Current admission policy</h2>
-    <p><strong>Examples</strong> is the number of admitted tasks after filtration. There is no separate oracle column. The header shows admitted tasks, sources pending filtration and excluded sources. A source without a current admission receipt shows Examples Pending.</p>
+    <p><strong>Examples</strong> is the number of admitted tasks after filtration. There is no separate oracle column. The header shows admitted tasks, oracle sources pending oracle filtration and excluded sources. A source without an oracle shows its retained count minus typed static blockers. A source with an oracle shows Examples Pending until its current admission receipt exists.</p>
     <ul>
       <li><strong>Sources with oracles.</strong> The original oracle solution runs on every task through the production Harbor trial path. Tasks whose oracle fails are dropped before ingestion. When the grader reads the agent's workspace, a <code>nop</code> agent that does nothing must also fail: a task is admitted only if its oracle passes and its nop does not. A nop pass excludes the task as <code>NEGATIVE_CONTROL_PASSED</code>. A nop run killed by a signal or an interrupted producer gets one re-drive at the same budget. A 600-second verifier deadline or a source error on the unsolved state counts as not passing. Tasks graded only on their answer need no nop control.</li>
       <li><strong>Sources without oracles.</strong> Examples is the count retained after deduplication and lexical decontamination, minus tasks with a typed static blocker such as <code>tool_provider_required</code>. No per-task execution proof is required for now.</li>

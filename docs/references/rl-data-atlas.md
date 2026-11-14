@@ -88,7 +88,10 @@ not declared*. Edit the rules in the reference first, then the page text in
 **By source** shows post-filtration Examples only where current-pin evidence establishes
 the count. A complete private output with zero retained tasks and explicit Excluded
 status displays **EXCLUDED** and Examples **0**; it does not claim admission.
-Other sources display **IN PROGRESS**, retain their current admission status in the
+A no-oracle source displays its static-retained count: retained after dedup and
+lexical decontamination, minus typed static blockers (agentic-only blockers count
+only for agentic TaskSpecs). Oracle sources without a current-pin admission
+receipt display **IN PROGRESS**, retain their current admission status in the
 tooltip and Evidence, and leave Examples Pending. A pre-filtration converted count,
 content review or backend fit never supplies an admitted count. The Filtration
 ledger links the canonical filter, private output and validation receipts with

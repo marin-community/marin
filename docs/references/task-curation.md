@@ -30,8 +30,9 @@ later section of this reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
 has no separate oracle column. Its header shows
-`<N> admitted · <k> pending filtration · <m> excluded`. A source without a
-current-pin admission receipt shows Examples Pending.
+`<N> admitted · <k> pending oracle filtration · <m> excluded`. A no-oracle source
+shows its static-retained count (below). An oracle source shows Examples Pending
+until its current-pin admission receipt exists.
 
 - *Sources with oracles.* Run the original oracle over the complete population
   through the production Harbor trial path, in SAMPLE and FULL. Tasks that fail
