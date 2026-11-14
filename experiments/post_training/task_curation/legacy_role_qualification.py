@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
-from taskcompendium.pipeline.legacy_roles import LegacyRoleAllocation, LegacyRoleQualificationReceipt
+from taskcompendium.pipeline.legacy_roles import (
+    LegacyRoleAdoptionDecision,
+    LegacyRoleAllocation,
+    LegacyRoleQualificationReceipt,
+)
 from taskcompendium.pipeline.oracle_filter import ResourceCalibrationReceipt
 
 from experiments.post_training.task_curation.archive_evidence import verified_archive_members
@@ -51,7 +55,14 @@ def legacy_role_qualifications(
     """Verify audit membership and original bytes before qualifying the requested subset."""
     inputs = json.loads(_verified_bytes(evidence.input_partition))
     audit = json.loads(_verified_bytes(evidence.audit))
-    _verified_bytes(evidence.decision)
+    decision = LegacyRoleAdoptionDecision.model_validate_json(_verified_bytes(evidence.decision))
+    if (
+        decision.input_partition_sha256 != evidence.input_partition.sha256
+        or decision.audit_sha256 != evidence.audit.sha256
+        or decision.producer_revision != inputs["backend_revision"]
+    ):
+        raise ValueError("Legacy adoption decision scope differs from the requested partition or audit")
+    _verified_bytes(decision.ruling)
     if (
         audit["version"] != 2
         or audit["input_partition_sha256"] != evidence.input_partition.sha256
@@ -126,6 +137,7 @@ def legacy_role_qualifications(
             input_partition=evidence.input_partition,
             audit=evidence.audit,
             decision=evidence.decision,
+            adoption_decision=decision,
         )
         if task_id in qualified:
             raise ValueError("Legacy input partition repeats a task")

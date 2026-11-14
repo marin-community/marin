@@ -2763,13 +2763,17 @@ object, using the actual evidence URIs and SHA-256 digests:
 The partition enumerates the frozen task identities and original receipt/archive
 hashes, plus the producer's file manifest and artifact closure. The audit binds
 each original final result to its constructor capture under that producer. The
-decision authorizes adoption of that exact partition. The collector verifies
+decision is a `LegacyRoleAdoptionDecision` JSON object: version 1, disposition
+`adopted`, exact `producer_revision`, `input_partition_sha256`, `audit_sha256`,
+and a `ruling` evidence reference. Both approved digests must match the supplied
+partition and audit before any task qualifies. The collector verifies
 these bytes and each requested member independently; tasks outside the partition
 receive no legacy qualification.
 
 The new `oracle-filter.json` records `OracleTaskReceipt.legacy_role_qualification`.
 It binds the evidence to the filtered output's TaskSpec projection and supplies
-that TaskSpec's qualified verifier allocation.
+that TaskSpec's qualified verifier allocation. Its embedded `adoption_decision`
+retains the ruling and exact scope for validation when the receipt is reloaded.
 Original trial JSON, calibration history and unknown allocation fields remain
 unchanged. Actorless trials retain an absent actor and their observed oracle
 helper allocation.

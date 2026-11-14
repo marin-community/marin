@@ -23,6 +23,18 @@ class LegacyRoleAllocation(BaseModel):
     machine_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class LegacyRoleAdoptionDecision(BaseModel):
+    """The exact frozen partition and audit authorized by an adoption ruling."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    version: Literal[1]
+    disposition: Literal["adopted"]
+    producer_revision: Literal["2c5eea40f264158596f62e593dd21ecaeaa4dc52"]
+    input_partition_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    audit_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ruling: ContentEvidenceReference
+
+
 class LegacyRoleQualificationReceipt(BaseModel):
     """Qualify one immutable completed pass without changing its original receipt."""
 
@@ -46,9 +58,16 @@ class LegacyRoleQualificationReceipt(BaseModel):
     input_partition: ContentEvidenceReference
     audit: ContentEvidenceReference
     decision: ContentEvidenceReference
+    adoption_decision: LegacyRoleAdoptionDecision
 
     @model_validator(mode="after")
     def validate_frozen_contract(self):
+        if (
+            self.adoption_decision.producer_revision != self.producer_revision
+            or self.adoption_decision.input_partition_sha256 != self.input_partition.sha256
+            or self.adoption_decision.audit_sha256 != self.audit.sha256
+        ):
+            raise ValueError("Legacy adoption decision scope differs from its frozen partition or audit")
         if (
             self.source_runtime.task_sha256 != self.source_task_sha256
             or self.consumed_task_sha256 != self.source_task_sha256
