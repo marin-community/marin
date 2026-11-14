@@ -1168,7 +1168,7 @@ release has been authorized. Preserve the previous artifacts and receipts.
 
 ### Refreshing displayed measurements without replacing the catalog
 
-The [release procedure](../../infra/marina/apps/rl_data_catalog/RELEASE.md#intended-measurement-refreshes)
+The [release procedure](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/RELEASE.md#intended-measurement-refreshes)
 provides pinned overlap-survey, derived Grader-profile and confidence-export load
 commands. Overlap refreshes bind to the frozen fingerprint inputs and preserve
 legacy survey/review bytes for retained revisions. Grader profiles bind the full
