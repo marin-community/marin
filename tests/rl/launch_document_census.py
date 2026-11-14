@@ -15,10 +15,16 @@ from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training import async_rl, iceball_micro, skyrl_port_smoke, snowball_online_eagle
+from experiments.post_training import (
+    async_rl,
+    iceball_micro,
+    skyrl_port_smoke,
+    snowball_online_eagle,
+    snowball_rl,
+    snowball_rl_presets,
+)
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
-from experiments.post_training.inventory import train_quick_loop as inventory
 from experiments.post_training.mismatch_probe import launch as mismatch
 from experiments.post_training.task_sessions import validation
 
@@ -46,11 +52,6 @@ def _probe_step(artifact_root: Path, **settings: Any) -> ArtifactStep[SkyRLRun]:
         input_version=VERSION,
         **settings,
     )
-
-
-def _inventory_step(artifact_root: Path) -> ArtifactStep[SkyRLRun]:
-    selection = ArtifactStep.adopt("rl-data/task-selection/census", VERSION, str(artifact_root / "selection"))
-    return inventory.build_run(VERSION, selection=selection)
 
 
 def _port_smoke_step(stage: str) -> ArtifactStep[SkyRLRun]:
@@ -99,7 +100,8 @@ def launch_builders(
         settings=("context_budget.request_window_tokens=256", "context_budget.max_new_tokens_per_turn=128"),
     )
     builders["canary/seed-identity"] = partial(canary.build_run, preset="dry", version=VERSION, seed=18)
-    builders["inventory/train"] = partial(_inventory_step, artifact_root)
+    for name, preset in snowball_rl_presets.PRESETS.items():
+        builders[f"snowball/{name}"] = partial(snowball_rl.build_run, preset)
     for stage in ("train", "resume"):
         builders[f"port-smoke/{stage}"] = partial(_port_smoke_step, stage)
     builders["iceball/workflow"] = _iceball_step
