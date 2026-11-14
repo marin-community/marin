@@ -239,6 +239,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
 
         native = {"config": relocate(config), "result": deepcopy(NATIVE_RECORD["receipt"]["result"])}
         launch, result = native["config"], native["result"]
+        max_steps = launch["skyrl"]["trainer"]["max_steps"]
+        generating = isinstance(preset.recipe.layout.workload, presets.Generation)
         pin = gate.control_pin(preset) if preset.gated else None
         result.update(
             iris_job_id="/tests/native-run",
@@ -261,7 +263,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 result=SkyRLRun(
                     path=str(root),
                     hf_model_uri=None,
-                    global_step=preset.updates,
+                    global_step=0 if generating else max_steps,
                     tokenizer_uri="tests/tokenizer",
                     tokenizer_revision="test-revision",
                     checkpoint_root=str(root / "checkpoints"),
@@ -272,9 +274,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             ).model_dump(mode="json"),
         )
         (root / ".executor_status").write_text("SUCCESS")
-        generating = isinstance(preset.recipe.layout.workload, presets.Generation)
         stored_metrics = {}
-        for step in (0,) if generating else range(1, preset.updates + 1):
+        for step in (0,) if generating else range(1, max_steps + 1):
             row = deepcopy(NATIVE_RECORD["metrics"])
             row = {key: value for key, value in row.items() if not key.startswith("timing/step_wall/")}
             row.update(
@@ -331,7 +332,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                     pa.table({"task_spec": [task.model_copy(update={"id": item}).model_dump_json() for item in ids]}),
                     path,
                 )
-            sessions = [(-1 if generating else preset.updates, score)]
+            sessions = [(-1 if generating else max_steps, score)]
             if evaluation.at_start:
                 sessions.insert(0, (0, initial_score))
             for step, average in sessions:

@@ -52,6 +52,7 @@ function showDetails(run) {
     ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
     ['Verdict', run.gate_result?.verdict], ['Label', run.gate_result?.label], ['Gate', run.gate], ['Failed facts', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
+    ['Planned updates', run.planned_updates], ['Measured updates', run.measured_updates?.join(', ')],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
     ['Timing scope', run.timing_scope], ['Run date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],

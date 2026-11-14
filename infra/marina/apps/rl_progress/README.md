@@ -22,8 +22,10 @@ publication refreshes that attempt's record; a missing issue preserves its store
 issue link. Other attempts remain separate.
 
 Native failures and failed training invariants set `status: failed` and name `failed_facts`.
-Records carry native identity, source and engine facts, and the launcher's issue. The gate result
-contains the report's climbed metrics, constraints, invariants, verdict and label; controls and
+Records carry native identity, source and engine facts, and the launcher's issue.
+The planned update count and measured update indices come from the run's effective configuration;
+the detail view shows them beside the observed optimizer count. Missing stored values are unknown.
+The gate result contains the report's climbed metrics, constraints, invariants, verdict and label; controls and
 train-long have no gate verdict. Update counts use stored metrics and checkpoint parents.
 Lineage duration sums those native jobs' stored windows. Missing lineage records leave both
 measurements unknown; a missing window leaves elapsed time unknown with a timing note.

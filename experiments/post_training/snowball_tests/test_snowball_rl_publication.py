@@ -46,6 +46,7 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
         ("lineage-unknown-grandparent", None, None, []),
         ("untracked-native", None, None, []),
         ("updates-override", 1, 3600, []),
+        ("train-long-updates-override", 2, 3600, []),
         ("negative-duration", None, None, []),
     ],
 )
@@ -58,8 +59,12 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
 
     monkeypatch.setattr("marin.rl.skyrl.run_skyrl", forbid_live)
     monkeypatch.setattr("marin.rl.skyrl.read_skyrl_attempt", forbid_live)
-    name = "learning-medium"
-    preset = replace(presets.PRESETS[name], updates=2, measured=range(1, 3))
+    name = "train-long" if "updates-override" in case else "learning-medium"
+    preset = (
+        presets.PRESETS[name]
+        if name == "train-long"
+        else replace(presets.PRESETS[name], updates=2, measured=range(1, 3))
+    )
     monkeypatch.setattr(presets, "PRESETS", dict(presets.PRESETS) | {name: preset})
     weights = Path(presets.artifact_prefix(preset.recipe.layout.cluster)) / "weights" / "2026.11.10"
     initializer = SkyRLRun(
@@ -85,7 +90,8 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     )
     inputs = GateInputs(
         preset_name=name,
-        settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01"),
+        settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01")
+        + ((f"trainer.max_steps={expected_updates}",) if name == "train-long" else ()),
         tasks=f"snowball-100k@{presets.DEFAULT_SELECTION_VERSION}",
         init="weights@2026.11.10",
     )
@@ -146,9 +152,6 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     write_metrics(source, metrics)
     if case == "native-composed":
         shutil.rmtree(source / "exports/dumped_evals")
-    if case == "updates-override":
-        receipt["config"]["skyrl"]["trainer"]["max_steps"] = 1
-        write_receipt(source, receipt)
     if case == "negative-duration":
         receipt["result"]["finished_at"] = "2026-11-06T20:40:00+00:00"
         write_receipt(source, receipt)
@@ -169,10 +172,12 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     assert (
         row["label"]
         == f"{name} trainer.policy.optimizer_config.lr=2e-06 trainer.policy.optimizer_config.weight_decay=0.01 "
-        f"tasks={inputs.tasks} init=weights@2026.11.10"
+        + (f"trainer.max_steps={expected_updates} " if name == "train-long" else "")
+        + f"tasks={inputs.tasks} init=weights@2026.11.10"
     )
     assert row["issue"] is None and row["gate_result"] is None
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
+    assert (row["planned_updates"], row["measured_updates"]) == ((1, [1]) if case == "updates-override" else (2, [1, 2]))
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
     assert row["status"] == ("failed" if expected_facts else "succeeded")
     assert row["failed_facts"] == expected_facts

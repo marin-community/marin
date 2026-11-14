@@ -37,6 +37,7 @@ Use `use-iris` for job inspection and `use-fsutil` for object-store reads.
    Record the finishing status's `rl_progress_url` with the verdict; the launcher publishes using
    the caller's Marina login. Follow the recipe's [publication procedure](../../../docs/recipes/snowball-rl.md#dashboard-publication)
    for retries and pinned controls.
+   Use `--url ORIGIN` when publication targets a local Marina stack.
 
 Follow the recipe's [input and flag contracts](../../../docs/recipes/snowball-rl.md#change-one-input),
 [comparison rules](../../../docs/recipes/snowball-rl.md#compare-with-controls) and

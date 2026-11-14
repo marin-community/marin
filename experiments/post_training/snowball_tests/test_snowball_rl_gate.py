@@ -362,6 +362,7 @@ def test_evaluation_protocol_compares_requests_and_recorded_training_or_engine_c
         ("candidate-compose", 4),
         ("train-candidate-compose", 4),
         ("train-pass", 0),
+        ("train-local-origin", 0),
         ("train-failed", 3),
         ("malformed-control", 4),
         ("malformed-status", 4),
@@ -391,6 +392,7 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         "control-missing-receipt",
         "partial-retry",
         "data-short",
+        "train-local-origin",
     }
     preset_name = (
         "train-long"
@@ -417,8 +419,13 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     roots = controls(recorded_runs, preset.name) if preset.gated else []
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
+    settings = ("trainer.max_steps=2",) if case == "train-local-origin" else ()
     built = snowball.build_run(
-        preset, control=control, replicates=replicas, tasks=selection if case == "data-short" else None
+        preset,
+        control=control,
+        replicates=replicas,
+        tasks=selection if case == "data-short" else None,
+        settings=settings,
     )
     sources = (
         []
@@ -430,7 +437,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
                 speed=150 if case == "fail" else 101,
                 score=0.1 if case == "fail-no-login" else 0.5,
                 fingerprint=training.fingerprint(),
-                inputs=(GateInputs(preset_name=preset_name, tasks=SELECTION_IDENTITY) if case == "data-short" else None),
+                inputs=GateInputs(
+                    preset_name=preset_name,
+                    tasks=SELECTION_IDENTITY if case == "data-short" else None,
+                    settings=settings,
+                ),
                 attempt_id=f"native-{index}",
             )
             for index, training in enumerate(built.runs)
@@ -530,7 +541,11 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         if unavailable["value"] and (case != "partial-retry" or record.attempt_id == "native-1"):
             raise RuntimeError("Credential unavailable; run iris login")
         published.append(record.model_dump(mode="json"))
-        return "https://progress.test/#" + urlencode({"run": record.run_id, "attempt": record.attempt_id})
+        return (
+            (service_url or "https://progress.test")
+            + "/#"
+            + urlencode({"run": record.run_id, "attempt": record.attempt_id})
+        )
 
     monkeypatch.setattr("experiments.post_training.publish_rl_progress.publish_result", publish)
     if case == "child":
@@ -553,6 +568,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
         arguments.append("--control")
     if case == "data-short":
         arguments.extend(["--tasks", SELECTION_IDENTITY])
+    if case == "train-local-origin":
+        arguments.extend(["--set", settings[0], "--url", "http://127.0.0.1:55777"])
     if replicas == 2:
         arguments.extend(["--replicates", "2"])
     try:
@@ -607,6 +624,15 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     if expected == 0 and not unavailable["value"]:
         for row in snapshot["runs"]:
             assert parse_qs(urlsplit(row["rl_progress_url"]).fragment)["attempt"] == [row["attempt_id"]]
+    if case == "train-local-origin":
+        assert (snapshot["updates"], snapshot["measured_updates"]) == (2, [1, 2])
+        assert "report" not in snapshot and "verdict" not in snapshot
+        assert snapshot["runs"][0]["rl_progress_url"].startswith("http://127.0.0.1:55777/")
+        assert (published[0]["planned_updates"], published[0]["measured_updates"], published[0]["optimizer_steps"]) == (
+            2,
+            [1, 2],
+            2,
+        )
     if case == "changed-source":
         monkeypatch.setattr(Provenance, "capture", submitted_provenance)
     unavailable["value"] = False
@@ -620,6 +646,8 @@ def test_submission_waits_for_the_coordinator_and_returns_the_verdict(
     recovered = yaml.safe_load("preset:" + repeated.output.rpartition("\npreset:")[2].split("\n# ", 1)[0])
     assert recovered["publication"]["unserved_records"] == [] and recovered["publication"]["errors"] == []
     assert all(row["issue"] == 74 for row in recovered["runs"])
+    if case == "train-local-origin":
+        assert recovered["runs"][0]["rl_progress_url"].startswith("http://127.0.0.1:55777/")
     if case == "mixed-native-failed":
         retry = next(row for row in published if row["attempt_id"] == "native-retry")
         assert retry["status"] == "succeeded" and retry["gate_result"]["verdict"] == "pass" and retry["issue"] == 74

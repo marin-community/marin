@@ -104,6 +104,8 @@ class RunSummary(BaseModel):
     timing_scope: Identity
     status: Literal["succeeded", "failed"]
     optimizer_steps: Count | None
+    planned_updates: Count | None = None
+    measured_updates: list[Count] | None = None
     source_revision: Identity
     data_identity: Identity
     initializer_identity: Identity

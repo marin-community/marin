@@ -323,6 +323,7 @@ def _status(
                 "reason": f"native job {crashed['iris_job_id']} is {crashed['state']}",
                 "iris_job_id": crashed["iris_job_id"],
             }
+    preset = preset.with_updates(planned[0]["skyrl"]["trainer"]["max_steps"])
     return {
         "preset": preset.name,
         "code": asdict(Provenance.capture(presets.REPO_ROOT)),
@@ -369,18 +370,25 @@ def _iris_client() -> Iterator[IrisClient]:
 
 
 def _publish_records(
-    run: SnowballRun, preset: presets.Preset, *, issue: int | None = None
+    run: SnowballRun, preset: presets.Preset, *, issue: int | None = None, service_url: str | None = None
 ) -> snowball_rl_publication.PublicationOutcome | None:
     if not preset.publishes:
         return None
     prefix = presets.artifact_prefix(preset.recipe.layout.cluster)
     gate_path = run.gate.path(prefix) if run.gate is not None else None
     outputs = [training.path(prefix) for training in run.runs]
-    return snowball_rl_publication.publish_runs(outputs, preset, gate_path=gate_path, issue=issue)
+    return snowball_rl_publication.publish_runs(
+        outputs, preset, gate_path=gate_path, issue=issue, service_url=service_url
+    )
 
 
 def _wait_for_run(
-    job: JobName, handles: list[ArtifactStep], preset: presets.Preset, *, issue: int | None = None
+    job: JobName,
+    handles: list[ArtifactStep],
+    preset: presets.Preset,
+    *,
+    issue: int | None = None,
+    service_url: str | None = None,
 ) -> None:
     with _iris_client() as client:
         parent = client.job(job).wait(recipe.RUN_TIMEOUT_HOURS * 3600, poll_interval=60, raise_on_failure=False)
@@ -392,7 +400,7 @@ def _wait_for_run(
     run = _from_handles(handles)
     run = replace(run, gate=snowball_rl_gate.completed_gate(run.gate))
     try:
-        publication = _publish_records(run, preset, issue=issue)
+        publication = _publish_records(run, preset, issue=issue, service_url=service_url)
     except Exception as error:
         publication = snowball_rl_publication.PublicationOutcome(
             errors=[str(error)], retry="Repeat the original command with --wait."
@@ -435,13 +443,14 @@ def _run_command(function: Callable) -> click.Command:
                 build_artifacts(gate, max_concurrent=max_concurrent)
             job = None
         if options["wait"] and job is not None:
-            _wait_for_run(job, handles, preset, issue=options["issue"])
+            _wait_for_run(job, handles, preset, issue=options["issue"], service_url=options["url"])
 
     return click.command(cls=SnowballCommand, help=__doc__)(build_options_with_runner(checked, runner))
 
 
 @_run_command
 @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for launcher publication.")
+@click.option("--url", help="Marina origin for run publication (defaults to the Marina service).")
 @click.option(
     "--wait",
     is_flag=True,
@@ -516,6 +525,7 @@ def main(
     control: bool,
     requirements: tuple[str, ...],
     issue: int | None,
+    url: str | None,
 ) -> tuple[ArtifactStep, ...]:
     preset = presets.PRESETS[preset_name]
     run = build_run(

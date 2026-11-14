@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 import click
 from finestore.rl.run_records import AttemptRecord, attempt_lineage
@@ -80,9 +80,7 @@ def build_record(
     preset = presets.PRESETS[inputs.preset_name]
     if launch.max_steps is None:
         raise ValueError("Stored native max_steps is unavailable")
-    preset = replace(
-        preset, updates=launch.max_steps, measured=preset.recipe.layout.workload.planned_steps(launch.max_steps)
-    )
+    preset = preset.with_updates(launch.max_steps)
     attempt_id = launch.attempt_id
     provenance = result.provenance or {}
     tracking = attempt_tracking(receipt, launch)
@@ -160,6 +158,8 @@ def build_record(
         status="failed" if failed else "succeeded",
         failed_facts=failed,
         optimizer_steps=optimizer_steps,
+        planned_updates=preset.recipe.layout.workload.update_count(preset.updates),
+        measured_updates=list(preset.measured),
         iris_job_id=result.iris_job_id,
         wandb_url=tracking.get("wandb_url"),
         engine=tracking.get("engine"),

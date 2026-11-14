@@ -61,6 +61,7 @@ checkpoints or export; learner and engine token rates are descriptive telemetry.
 After `--run --wait` observes the coordinator finish, the launcher publishes learning-medium,
 data-medium and train-long attempts using the caller's Marina login. Pass `--issue ISSUE_NUMBER`
 and record the finishing status's `rl_progress_url` with the verdict.
+Use `--url ORIGIN` to publish to a local Marina stack; the default is the Marina service.
 
 Repeat the original command with `--wait` from the same source and inputs. The executor reuses
 successful steps and runs failed work, then the launcher retries publication from stored outputs.
