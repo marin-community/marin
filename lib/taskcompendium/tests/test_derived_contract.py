@@ -4,7 +4,7 @@
 """Derived contract tags and grader types come from the final TaskSpec, not declarations."""
 
 import pytest
-from verifyit.spec import ExactSpec, JudgeSpec, PytestSpec, RUBRIC_CHECKLIST, ScriptSpec, UnsolvableSpec
+from verifyit.spec import RUBRIC_CHECKLIST, ExactSpec, JudgeSpec, PytestSpec, ScriptSpec, UnsolvableSpec
 
 from taskcompendium.derived_contract import (
     DerivedContract,
@@ -146,4 +146,4 @@ def test_unclassifiable_grader_raises():
 
 def test_empty_population_summary_raises():
     with pytest.raises(ValueError, match="at least one task"):
-        summarize_contracts(()).grader_type
+        _ = summarize_contracts(()).grader_type

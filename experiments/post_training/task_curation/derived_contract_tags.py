@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from experiments.post_training.task_curation.derived_contract_census import DerivedContractReceipt
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource
 
 
 class DerivedContractShard(BaseModel):

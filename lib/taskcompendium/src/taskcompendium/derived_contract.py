@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from verifyit.spec import JudgeSpec
 
 from taskcompendium.execution_applicability import is_nonagentic_task
-from taskcompendium.grader_type import GraderType, JudgeDetails, derive_grader_type, judge_details
+from taskcompendium.grader_type import GraderType, JudgeDetails, derive_grader_type
 from taskcompendium.models import (
     AnswerType,
     Grader,
@@ -125,9 +125,9 @@ class DerivedContractSummary:
         )
 
 
-def summarize_contracts(derived: tuple[DerivedContract, ...], judges: tuple[JudgeSpec, ...] = ()) -> (
-    DerivedContractSummary
-):
+def summarize_contracts(
+    derived: tuple[DerivedContract, ...], judges: tuple[JudgeSpec, ...] = ()
+) -> DerivedContractSummary:
     """Aggregate derived task contracts into a source-level summary.
 
     ``judges`` carries one judge contract per ``LLM_JUDGE`` task, so the summary can record the
@@ -144,15 +144,11 @@ def summarize_contracts(derived: tuple[DerivedContract, ...], judges: tuple[Judg
         workspace_graded_count=sum(contract.workspace_graded for contract in derived),
         judge_rubric_counts=dict(sorted(Counter(judge.rubric for judge in judges).items())),
         judge_reference_count=sum(bool(judge.references) or bool(judge.exact_gate_answers) for judge in judges),
-        judge_no_reference_count=sum(
-            not (bool(judge.references) or bool(judge.exact_gate_answers)) for judge in judges
-        ),
+        judge_no_reference_count=sum(not (bool(judge.references) or bool(judge.exact_gate_answers)) for judge in judges),
     )
 
 
-def summary_contradictions(declared_tags: frozenset[str] | set[str], summary: DerivedContractSummary) -> (
-    tuple[str, ...]
-):
+def summary_contradictions(declared_tags: frozenset[str] | set[str], summary: DerivedContractSummary) -> tuple[str, ...]:
     """Declared shape tags that disagree with the population's derived shape.
 
     Declared shape tags are population-wide claims: every task must agree with the tag, so a
@@ -175,7 +171,7 @@ def task_contracts(tasks: tuple[TaskSpec, ...]) -> DerivedContractSummary:
     contracts = tuple(derive_contract(task) for task in tasks)
     judges = tuple(
         spec
-        for task, contract in zip(tasks, contracts)
+        for task, contract in zip(tasks, contracts, strict=True)
         if contract.grader_type is GraderType.LLM_JUDGE
         for spec in (judge_spec(task.grader),)
         if spec is not None

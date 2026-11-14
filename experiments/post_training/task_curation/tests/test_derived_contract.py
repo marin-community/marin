@@ -19,7 +19,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
-from verifyit.spec import ExactSpec, JudgeSpec, PytestSpec, RUBRIC_CHECKLIST
+from verifyit.spec import RUBRIC_CHECKLIST, ExactSpec, JudgeSpec, PytestSpec
 
 from experiments.post_training.task_curation.derived_contract_census import (
     DerivedContractCensusInput,
@@ -151,9 +151,7 @@ def test_binder_binds_the_measured_population(tmp_path):
 
 def test_binder_stale_binding_stays_pending(tmp_path):
     receipt = census_source(population_fixture(tmp_path, (reply_task("task-1", JUDGE),)), str(tmp_path / "census"))
-    bound = bind_derived_contract_tags(
-        source_with(SourceReference("open-athena/fixture", "other-pin", "url")), receipt
-    )
+    bound = bind_derived_contract_tags(source_with(SourceReference("open-athena/fixture", "other-pin", "url")), receipt)
     assert bound.info.derived_contract is None
 
 

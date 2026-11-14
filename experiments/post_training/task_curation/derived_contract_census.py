@@ -16,9 +16,9 @@ import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import ActorCensusInput
+from huggingface_hub import HfApi
 from pydantic import BaseModel, ConfigDict, model_validator
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -32,6 +32,7 @@ from taskcompendium.grader_type import GraderType, judge_details
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec, judge_spec
 
+from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 
 LOGGER = logging.getLogger(__name__)
@@ -149,12 +150,11 @@ def census_source(config: DerivedContractCensusInput, output_root: str) -> Deriv
     LOGGER.info("Derived contract census %s: %s", receipt.source_id, receipt.summary.grader_type_counts)
     return receipt
 
+
 def census_inputs_from_grading_receipts(prefix: str | None = None) -> list[DerivedContractCensusInput]:
     """Reuse the frozen population and actor bindings the grading census already measured."""
-    from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
-
     inputs = []
-    for source_id, receipt in sorted(grading_census_receipts().items()):
+    for receipt in sorted(grading_census_receipts().values(), key=lambda receipt: receipt.source_id):
         if prefix is not None and not receipt.population_path.startswith(prefix):
             continue
         population = SourceTextPopulation.raw_load(receipt.population_path)
@@ -197,7 +197,7 @@ def main() -> None:
             source_id = pending[future]
             try:
                 results.append(future.result().model_dump(mode="json"))
-            except Exception as error:  # noqa: BLE001 - collect every source's failure before failing the run
+            except Exception as error:
                 LOGGER.error("Derived contract census failed for %s: %s", source_id, error)
                 failures[source_id] = f"{type(error).__name__}: {error}"
     if failures:
@@ -209,8 +209,6 @@ def main() -> None:
     payload = json.dumps(results, indent=2) + "\n"
     target.write_text(payload)
     if args.upload_hf:
-        from huggingface_hub import HfApi
-
         HfApi().upload_file(
             path_or_fileobj=payload.encode(),
             path_in_repo=args.upload_hf,
