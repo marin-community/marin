@@ -45,6 +45,16 @@ APT_COMMAND = re.compile(r"\bapt(?:-get)?\s+(?:-\S+\s+)*(?:install|update|upgrad
 APT_FETCH = re.compile(r"\bGet:\d+ https?://\S*ubuntu\.com")
 
 
+def require_hf_location(location: str) -> None:
+    """Fail before serving when the catalog location is an object-store path.
+
+    The served model name is the location, and terminus-2 accepts only ``hosted_vllm/<org>/<model>`` names, so
+    an ``s3://`` location fails every trial when the agent is built, after the GPUs are already held.
+    """
+    if "://" in location:
+        raise ValueError(f"terminus-2 needs an HF repository location for its model name, got {location!r}")
+
+
 def apt_usage(trial_dirs: list[Path]) -> dict:
     """Count trials whose agent ran an apt command in any attempt, and those whose terminal shows a mirror download."""
     ran, fetched = [], []
@@ -116,6 +126,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args.output.mkdir(parents=True)
     model = models()[args.model]
+    require_hf_location(model.location)
     model_kwargs = harbor_model_agent_kwargs(model)
     (config,) = preflight_harbor_configs([(args.policy, model_kwargs)], judge_model=None)
     dataset = (args.policy.parent / yaml.safe_load(args.policy.read_text())["datasets"][0]["path"]).resolve()

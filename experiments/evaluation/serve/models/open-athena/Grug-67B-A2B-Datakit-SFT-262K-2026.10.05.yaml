@@ -1,9 +1,8 @@
 name: grug-67b-a2b-datakit-sft-262k-2026-10-05
-# The 10/05 Datakit SFT HF export (Snowball ablation start), region-local in cw-rno2a.
-location: s3://marin-rno2a/marin/models/grug-datakit-sft-262k-20261005-ac60d940-r1
-# The export's source repository; its tokenizer files match the export byte for byte.
-tokenizer: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05
-tokenizer_revision: ac60d9401820953943f5a56e06f36e13c86b12d6
+# The 10/05 Datakit SFT (Snowball ablation start), pinned to the commit its rno2a export came from. An HF location
+# keeps the served model name a valid hosted_vllm id; the serving cache fills from a CPU job before GPUs are reserved.
+location: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05
+revision: ac60d9401820953943f5a56e06f36e13c86b12d6
 apply_chat_template: true
 resource_hint:
   gpu:

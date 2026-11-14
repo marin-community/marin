@@ -3,7 +3,10 @@
 
 import json
 
-from experiments.post_training.tmax_reserve.pilot import apt_usage, pass_at_k
+import pytest
+
+from experiments.evaluation.models import models
+from experiments.post_training.tmax_reserve.pilot import apt_usage, pass_at_k, require_hf_location
 
 
 def _trial(root, name, keystrokes, screen):
@@ -42,3 +45,10 @@ def test_pass_at_k_ignores_unscored_trials():
     result = pass_at_k(trials)
     assert result["tasks"] == {"a": {"attempts": 2, "passes": 1}, "b": {"attempts": 1, "passes": 0}}
     assert result["mean_pass_at_1"] == 0.25 and result["pass_at_k"] == 0.5
+
+
+def test_pilot_models_have_hf_locations_and_object_store_paths_are_refused():
+    for name in ("qwen3.6-27b", "grug-67b-a2b-datakit-sft-262k-2026-10-05"):
+        require_hf_location(models()[name].location)
+    with pytest.raises(ValueError, match="HF repository location"):
+        require_hf_location("s3://marin-rno2a/marin/models/grug-datakit-sft-262k-20261005-ac60d940-r1")
