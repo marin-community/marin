@@ -15,6 +15,7 @@ from pathlib import Path
 
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SOLVER_THINKING, Solver
 from huggingface_hub import hf_hub_download
+from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.external_dependencies import VLLM_GPU_RELEASE
@@ -40,7 +41,7 @@ from experiments.post_training.task_curation.difficulty_samples import Difficult
 from experiments.post_training.task_curation.difficulty_serving_probe import probe_endpoint
 
 LOGGER = logging.getLogger(__name__)
-PRIORITY = 100
+PRIORITY = job_pb2.PRIORITY_BAND_PRODUCTION
 JOB_TIMEOUT = Duration.from_seconds(259200)
 
 
