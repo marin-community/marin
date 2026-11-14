@@ -5,10 +5,10 @@
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from marina.client import AppletQuery
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
@@ -117,7 +117,10 @@ def manifest_documents(reference: CurriculumManifests) -> ManifestDocuments:
 
 
 def validated_role_projection(
-    reference: ManifestReference, release_uri: str, coverage_uri: str, query: AppletQuery
+    reference: ManifestReference,
+    release_uri: str,
+    coverage_uri: str,
+    query: Callable[[str, dict[str, Any]], dict[str, Any]],
 ) -> RoleProjection:
     """Require exact metadata changes and current catalog authority before accepting historical roles."""
     receipt = RoleProjection.model_validate_json(manifest_bytes(reference))

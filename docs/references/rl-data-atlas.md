@@ -305,11 +305,13 @@ counts remain Pending. Backend requirement fit alone does not establish executio
 
 After the package release, load the complete catalog with the
 [catalog loader](#updating-atlas), using the explicit preview app ID above.
-Use the [curriculum loader](#curriculum-coverage) twice: first pass the deployment's
-pre-remediation `release.json` and `coverage.json`, then the retained pair.
-Each successful load selects its release and retains the previous selection,
-so this order makes retained coverage primary and pre-remediation coverage previous
-evidence. Keep the exact input URIs and hashes in the deployment record.
+Use the [curriculum loader](#curriculum-coverage) to select the verified live-source
+`release.json` and `coverage.json`. Preserve the existing retained 59-source load
+as the previous selectable release. On a new app, load that retained pair before
+the live-source pair. Older pre-remediation and archived all-source artifacts
+remain immutable historical evidence in the SHA-bound provenance receipt; they
+are not additional selectable releases. Keep exact input URIs and hashes in the
+deployment record.
 
 Production remains on hold. Before a production release, the shared runtime must
 carry these canonical modules natively; this preview staging command always targets
@@ -667,7 +669,10 @@ sample, and `/source-duplicates` returns review provenance, opinions and groups.
 Choose a domain from the picker or open an area to see its topics and skills.
 Breadcrumbs return to parent areas or all domains. Search names and descriptions
 across the curriculum, and filter counts by source or training/evaluation use.
-The URL preserves the selected area, release and filters. The coverage-population picker keeps the retained release primary and makes the previous pre-remediation release available as evidence. Select a count to read sampled
+The URL preserves the selected area, release and filters. The coverage-population
+picker shows the selected live-source release and the previous retained 59-source
+release. Older pre-remediation and archived all-source artifacts remain historical
+evidence through their SHA-bound provenance receipts. Select a count to read sampled
 examples, then open an example for its public instruction preview, embedding
 text, cosine similarity to curriculum anchors and alternative matches.
 Long instruction previews record the original character count and truncation.
@@ -735,6 +740,38 @@ coverage artifacts and previously stored releases remain available as historical
 evidence. An archived all-source cut is distinct from a newer selected catalog:
 prepare a separate release and coverage pair with consistent source lineage for
 that selection instead of relabelling the archived manifests or changing their pins.
+
+`experiments.post_training.task_curation.curriculum_projection` produces this
+separate pair from existing scored assignments. Its immutable inputs manifest
+binds the archived release, coverage and verification receipt, the exact current
+declarations, registered converter Use bindings and retirement ledger, and any
+replacement public-input manifests.
+It requires the live source set to equal the archived set minus retired sources.
+Registered converter Use is authoritative; a benchmark marker does not override
+an explicit TRAIN Use. QC metadata updates are recorded separately from
+task-producing inputs. Changed
+pins require a complete task-ID and public-input comparison; only an exact match
+permits reusing scores while rebinding TaskSpec hashes and source keys.
+
+The CPU pass filters full assignment files, verifies every retained value after
+readback, and rebuilds statistics and deterministic review samples for the selected
+population. Selected-source statistics must equal the archived statistics. This
+replenishes area samples whose old candidates came from retired sources. It does
+not compute vectors or matching scores and never overwrites archived artifacts.
+Run it in the data's region with a new artifact prefix:
+
+```bash
+uv run python -m experiments.post_training.task_curation.curriculum_projection \
+  --inputs IMMUTABLE_PROJECTION_INPUTS_JSON --inputs-sha256 INPUTS_SHA256 \
+  --artifact-root REGIONAL_NEW_ARTIFACT_PREFIX --workers 2 --worker-memory 64g
+```
+
+The dry run prints the identity-bound output path. Add `--run` inside a CPU Iris
+job with an explicit co-located `--target-cluster`, production priority and
+`--timeout 259200`. The output contains `release.json`, `coverage.json` and
+`projection-receipt.json`; pass the two manifests to the maintained loader above
+after validating them against the selected catalog. Keep the original manifests
+for historical reads.
 
 A metadata-only TRAIN-to-EVAL correction requires `--role-projection RECEIPT_URI
 RECEIPT_SHA256`. Set `--release` and `--coverage` to the receipt's exact corrected
