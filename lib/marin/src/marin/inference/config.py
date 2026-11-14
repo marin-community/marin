@@ -72,7 +72,10 @@ def validate_serving_geometry_args(args: tuple[str, ...]) -> None:
 
 @dataclass(frozen=True)
 class ServingGeometry:
-    """GPU ranks per pipeline stage and stages per Iris gang."""
+    """Global vLLM parallelism and GPU placement per Iris task.
+
+    Local data parallelism defaults to the global data-parallel size.
+    """
 
     tensor_parallel_size: int
     data_parallel_size: int

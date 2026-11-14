@@ -196,7 +196,10 @@ def notify_iris_vllm_stopped(launch: IrisGangIdentity) -> None:
 
 @contextlib.contextmanager
 def iris_vllm_followers(launch: IrisGangIdentity) -> Iterator[None]:
-    """Request follower shutdown when the leader's workload is finished."""
+    """Stop followers after the leader workload returns successfully.
+
+    On failure, leave healthy followers running for Iris to retry the leader.
+    """
     if launch.task_index != 0:
         raise RuntimeError("Only the vLLM leader may coordinate followers")
     if launch.num_tasks == 1:

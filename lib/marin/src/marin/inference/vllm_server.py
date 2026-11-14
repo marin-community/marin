@@ -816,7 +816,12 @@ def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
 
 
 class VllmEnvironment:
-    """Manage vLLM server lifecycle and eval-client configuration."""
+    """Own native vLLM and its optional session router.
+
+    With ``wait_for_ready=False``, entering starts only the native process.
+    Call ``wait_until_ready()`` before reading the final ``server_url``.
+    Routing derives its global rank count from the final native arguments.
+    """
 
     def __init__(
         self,
@@ -893,7 +898,7 @@ class VllmEnvironment:
         *,
         poll_interval_seconds: float = 5,
     ) -> None:
-        """Wait once for the running vLLM process to become HTTP-ready."""
+        """Wait for native vLLM and the optional router to become HTTP-ready."""
         if self.model_id is not None:
             return
         if self.vllm_server is None:
@@ -968,26 +973,28 @@ class VllmEnvironment:
 
     @property
     def command(self) -> tuple[str, ...]:
-        """Return the effective argv of the running server."""
+        """Return the effective argv of the running native vLLM process."""
         if self._command is None:
             raise RuntimeError("vLLM server is not running in this environment.")
         return tuple(self._command)
 
     @property
     def server_url(self) -> str:
+        """OpenAI URL, including ``/v1``; routed after readiness when enabled."""
         if self.router is not None:
             return self.router.server_url
         return self.worker_server_url
 
     @property
     def worker_server_url(self) -> str:
-        """Direct worker URL; worker metrics remain here when routing is enabled."""
+        """Direct native OpenAI URL, including ``/v1``."""
         if self.vllm_server is None:
             raise RuntimeError("vLLM server is not running in this environment.")
         return self.vllm_server.server_url
 
     @property
     def metrics_url(self) -> str:
+        """Native worker metrics URL, including ``/metrics``, with or without routing."""
         return f"{self.worker_server_url.removesuffix(OPENAI_API_SUFFIX)}/metrics"
 
     def debug_snapshot(self) -> dict[str, str | int | None]:

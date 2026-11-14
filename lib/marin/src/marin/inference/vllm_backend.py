@@ -129,7 +129,10 @@ class VllmBackend:
         extra_args: Sequence[str] = (),
         subprocess_env: Mapping[str, str] | None = None,
     ) -> Iterator[VllmEnvironment]:
-        """Start vLLM without imposing HTTP readiness on the caller."""
+        """Start native vLLM and yield its environment before HTTP readiness.
+
+        The environment owns the optional router configured by this backend.
+        """
         chat_template_content = _resolved_chat_template(spec)
         resolved_port = available_port(self.host) if self.port is None or self.config.router is not None else self.port
         model = self._model_config(spec)
