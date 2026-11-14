@@ -416,6 +416,7 @@ trials:
     value_embeds: gated
   commit: d25c30bbe9
   priority: batch
+  step_time_change: +1%
 - id: t021
   variant: gated value embeds on MLA, table LR 0.3x
   rung: competitive-d512
@@ -488,6 +489,12 @@ trials:
   commit: 13f1918b05
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.2691
+  delta:
+  - -0.0015
+  steps: 20023
+  baseline: s7n-d1280L16 2.2706 (same commit, seed 0)
 events:
 - type: adopted
   batch: '89'
