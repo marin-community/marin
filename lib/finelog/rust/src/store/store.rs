@@ -149,8 +149,9 @@ pub fn log_registered_schema() -> Schema {
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
             // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
-            // Each segment covers a short time span, but the key column is
-            // `key`, so key bounds say nothing about time.
+            // Each segment covers a short time span, so per-segment bounds in
+            // the catalog drop most segments for a time-bounded search; the
+            // key column is `key`, so key bounds cannot.
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false).with_catalog_bounds(),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
             Column::new("cluster", ColumnType::COLUMN_TYPE_STRING, true),
@@ -175,6 +176,7 @@ pub struct NamespaceSnapshot {
     pub key_column: String,
     pub paths: Vec<String>,
     pub key_bounds: BTreeMap<String, (String, String)>,
+    pub column_bounds: BTreeMap<String, crate::store::column_bounds::ColumnBounds>,
     pub seq_bounds: BTreeMap<String, (i64, i64)>,
     pub row_counts: BTreeMap<String, u64>,
     pub partitions: BTreeMap<String, crate::partition_policy::SegmentPartition>,
@@ -1404,6 +1406,7 @@ impl Store {
             .with_segment_indexes_enabled(segment_indexes_enabled_for(name))
             .with_exact_postings_policy(snapshot.exact_postings_policy)
             .with_segment_key_bounds(snapshot.key_column, snapshot.key_bounds)
+            .with_segment_column_bounds(snapshot.column_bounds)
             .with_segment_seq_bounds(snapshot.seq_bounds)
             .with_segment_row_counts(snapshot.row_counts)
             .with_segment_partitions(physical_partition_policy_for(name), snapshot.partitions);
@@ -1427,6 +1430,7 @@ impl Store {
             key_column: engine.key_column().to_string(),
             paths: segments.paths,
             key_bounds: segments.key_bounds,
+            column_bounds: segments.column_bounds,
             seq_bounds: segments.seq_bounds,
             row_counts: segments.row_counts,
             partitions: segments.partitions,
@@ -5331,7 +5335,8 @@ mod tests {
         assert_eq!(fingerprint(flagged), fingerprint(plain));
     }
 
-    /// `iris.worker` keyed on `worker_id`, with catalog bounds on `timestamp_ms`.
+    /// `iris.worker` keyed on `worker_id`, with catalog bounds on `timestamp_ms`:
+    /// its key bounds cannot prune by time, so only the column bounds can.
     fn time_bounded_worker_spec() -> ValidatedTableSpec {
         let mut schema = worker_schema_keyed_on("worker_id");
         for column in &mut schema.columns {
@@ -5415,6 +5420,80 @@ mod tests {
                 .collect()
         }
 
+        fn provider(&self, pruning: bool) -> crate::query::provider::NamespaceProvider {
+            let mut snapshot = self.store.query_snapshot("iris.worker").unwrap();
+            if !pruning {
+                snapshot.column_bounds.clear();
+            }
+            self.store
+                .namespace_provider("iris.worker", snapshot)
+                .unwrap()
+        }
+
+        async fn rows(&self, sql: &str, pruning: bool) -> String {
+            let providers = vec![crate::query::RegisteredProvider {
+                name: "iris.worker".to_string(),
+                provider: self.provider(pruning),
+            }];
+            let result = crate::query::run_query_over(&crate::query::make_ctx(), providers, sql)
+                .await
+                .unwrap();
+            datafusion::arrow::util::pretty::pretty_format_batches(&result.batches)
+                .unwrap()
+                .to_string()
+        }
+
+        /// How many segments the scan plans for `sql`, from the filters DataFusion
+        /// pushes into it.
+        async fn planned_segments(&self, sql: &str) -> usize {
+            use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+            use datafusion::logical_expr::LogicalPlan;
+
+            let ctx = crate::query::make_ctx();
+            ctx.register_table(
+                datafusion::common::TableReference::bare("iris.worker"),
+                Arc::new(self.provider(true)),
+            )
+            .unwrap();
+            let plan = ctx.sql(sql).await.unwrap().into_optimized_plan().unwrap();
+            let mut filters = Vec::new();
+            plan.apply(|node| {
+                if let LogicalPlan::TableScan(scan) = node {
+                    filters.extend(scan.filters.iter().cloned());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+            self.provider(true)
+                .segment_paths_for_filters(&filters)
+                .len()
+        }
+
+        /// Assert each time filter returns the same rows with and without column
+        /// bounds, and plans the expected number of segments with them.
+        async fn assert_results_unchanged(&self, expected_planned: [usize; 5]) {
+            let filters = [
+                "timestamp_ms >= 2000",
+                "timestamp_ms BETWEEN 1200 AND 2100",
+                "timestamp_ms > 2400.5",
+                // The OPS form: `extract(epoch ...) * 1000` is a Float64.
+                "timestamp_ms > extract(epoch from TIMESTAMP '1970-01-01 00:00:02') * 1000 - 400",
+                "timestamp_ms < 1000",
+            ];
+            for (filter, expected) in filters.iter().zip(expected_planned) {
+                let sql = format!(
+                    "SELECT worker_id, mem_bytes, timestamp_ms FROM \"iris.worker\" \
+                     WHERE {filter} ORDER BY timestamp_ms, mem_bytes"
+                );
+                assert_eq!(
+                    self.rows(&sql, true).await,
+                    self.rows(&sql, false).await,
+                    "{filter}: rows differ with column bounds"
+                );
+                assert_eq!(self.planned_segments(&sql).await, expected, "{filter}");
+            }
+        }
+
         fn cleanup(self) {
             std::fs::remove_dir_all(self.data_dir).ok();
             std::fs::remove_dir_all(self.remote_dir).ok();
@@ -5432,6 +5511,41 @@ mod tests {
                 Some(ColumnRange::new(3_000, 3_500))
             ]
         );
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn time_filters_prune_by_column_bounds() {
+        let table = TimeBoundedTable::new("column_bounds_pruned", false).await;
+        table.assert_results_unchanged([2, 2, 2, 2, 1]).await;
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn segments_without_column_bounds_are_always_scanned() {
+        let table = TimeBoundedTable::new("column_bounds_absent", false).await;
+        for path in &table.paths {
+            table.clear_column_bounds(path);
+        }
+        assert_eq!(table.recorded_bounds(), vec![None, None, None]);
+        table.assert_results_unchanged([3, 3, 3, 3, 3]).await;
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mix_of_segments_with_and_without_column_bounds_keeps_results() {
+        // Mid-backfill, some segments have bounds and the rest are scanned.
+        let table = TimeBoundedTable::new("column_bounds_partial", false).await;
+        table.clear_column_bounds(&table.paths[2]);
+        assert_eq!(
+            table.recorded_bounds(),
+            vec![
+                Some(ColumnRange::new(1_000, 1_500)),
+                Some(ColumnRange::new(2_000, 2_500)),
+                None
+            ]
+        );
+        table.assert_results_unchanged([2, 3, 2, 2, 2]).await;
         table.cleanup();
     }
 
@@ -5490,6 +5604,7 @@ mod tests {
             sources_after, sources_before,
             "the backfill reuses each object"
         );
+        table.assert_results_unchanged([2, 2, 2, 2, 1]).await;
         table.cleanup();
     }
 

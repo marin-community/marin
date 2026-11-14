@@ -3,8 +3,10 @@
 
 //! Per-segment min/max of the columns a table flags with `catalog_bounds`.
 //!
-//! Flush, merge and spec migration record them; maintenance backfills them
-//! from Parquet footers for segments written before the column was flagged.
+//! Query planning drops a segment whose bounds miss a filter's range before it
+//! opens the file. The bounds are optional catalog metadata: a segment without
+//! them for a filtered column is always scanned, so absent or partial bounds
+//! never change a result.
 //!
 //! An object segment's bounds are stored beside the `ObjectRef` keys in its
 //! `object_segments.source_json`, and in its checkpoint `CatalogSegment`. An
