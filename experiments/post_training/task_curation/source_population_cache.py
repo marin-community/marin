@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -24,6 +24,7 @@ from taskcompendium.source_fingerprints import CURRENT_OVERLAP_VERSION, SourceFi
 
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.task_neighbors import (
+    SHINGLE_CACHE_BYTES,
     PopulationIndex,
     TaskContent,
     content_rows,
@@ -34,6 +35,7 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import original_so
 logger = logging.getLogger(__name__)
 
 
+CONTENT_TEXT_VERSION: Final = "complete-context-v1"
 CONTENT_SCHEMA = pa.schema(
     [
         ("task_id", pa.string()),
@@ -53,7 +55,7 @@ class PreparedPopulation(BaseModel):
     sha256: str
     inputs_sha256: str
     task_count: int
-    text_version: Literal["complete-context-v1"] = "complete-context-v1"
+    text_version: Literal["complete-context-v1"] = CONTENT_TEXT_VERSION
 
 
 class PopulationLocations(BaseModel):
@@ -107,7 +109,7 @@ def cache_population(
             "inputs": fingerprint.inputs,
             "task_count": fingerprint.task_count,
             "prepared_sha256": prepared.sha256 if prepared else None,
-            "text_version": "complete-context-v1",
+            "text_version": CONTENT_TEXT_VERSION,
         }
     )
     path = cache_dir / f"{cache_key}.parquet"
@@ -167,10 +169,12 @@ def read_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
     return PopulationIndex([TaskContent(**row) for row in pq.read_table(path).to_pylist()], inputs)
 
 
-def read_hash_population(path: Path, inputs: dict[str, str]) -> PopulationIndex:
+def read_hash_population(
+    path: Path, inputs: dict[str, str], *, shingle_cache_bytes: int = SHINGLE_CACHE_BYTES
+) -> PopulationIndex:
     """Read hash gates now; load normalized conversation text only when matching needs it."""
     rows = [TaskContent(text="", **row) for row in pq.read_table(path, columns=HASH_COLUMNS).to_pylist()]
-    return PopulationIndex(rows, inputs, partial(read_normalized_rows, path))
+    return PopulationIndex(rows, inputs, partial(read_normalized_rows, path), shingle_cache_bytes=shingle_cache_bytes)
 
 
 def read_normalized_rows(path: Path) -> list[TaskContent]:

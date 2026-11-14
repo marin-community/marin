@@ -112,6 +112,9 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
     for environment in (document.get("environment", {}), document.get("verifier", {}).get("environment", {})):
         for name in ("cpus", "memory_mb", "storage_mb"):
             environment.pop(name, None)
+    for owner in (document, document.get("verifier", {})):
+        if owner.get("environment") == {}:
+            owner.pop("environment")
     for phase in ("agent", "verifier"):
         if phase in document:
             document[phase].pop("timeout_sec", None)
@@ -127,7 +130,9 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
         and file != path / "task.toml"
         and not (oracle_kind == "calibration_only" and file.relative_to(path).parts[0] == "solution")
     }
-    return canonical_sha256({"task": document, "files": files})
+    return canonical_sha256(
+        {"task": document, "files": files, "grading_environment_mode": native_verifier_profile(path).mode.value}
+    )
 
 
 def receipt_from_trial(

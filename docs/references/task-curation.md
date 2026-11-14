@@ -1503,11 +1503,15 @@ bytes, with the pinned revision and canonical callable identity of its declared
 `Controls.golden`. The command runs inside production
 Harbor Trial. An actor-less task uses a separate machine of its original grader
 environment in the grader workspace; it keeps the original agent budgets and
-deadline and closes before verification. The captured answer becomes the final
+deadline and closes before verification. The delivery adapter creates the declared
+answer file's parent directory before running the original command in its source
+working directory. The captured answer becomes the final
 assistant text with the original conversation preserved, using the canonical
 UTF-8 replacement policy. Trial artifacts retain the untouched `answer.bin`
 bytes, actual source exit and resource usage. This control
 adds no candidate actor. Changed task, resource or runtime bindings fail closed.
+Oracle resource uploads use the shared PAX archive path to preserve original
+file bytes, modes and nanosecond timestamps before the command executes.
 
 An explicitly repaired managed environment can also supply `expected-runtime.json`,
 bound to its TaskSpec and runtime. Selected source-grader and oracle-control
@@ -2001,6 +2005,11 @@ disk-overflow correctness check. Run `collect` against the same calibrated run; 
 Each attempt uses a fresh container and a fresh native package directory.
 Preserve the original packages, trials and published prefixes; select a new
 output version when rerunning.
+
+Single-step native Trial results record the verifier script's return code in
+`verifier_result.exit_code`, separately from its reward. This field records the
+process outcome; it does not enforce negative-control admission. Multi-step mean
+reward aggregates have no single verifier process exit code.
 
 The collector requires every task's trial, preserves its independent
 solution exit code and structured verifier verdict, and emits oracle-filter.json
