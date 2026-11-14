@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from taskcompendium.harbor.adapter import declared_execution_limits, write_harbor_task
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -21,6 +22,7 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from verifyit.grade import Status
 from verifyit.modes.grade_script import grade
@@ -70,7 +72,7 @@ def original_task() -> TaskSpec:
     )
 
 
-def test_repaired_fragment_exports_the_exact_oracle_and_a_separate_private_grader():
+def test_repaired_fragment_exports_the_exact_oracle_and_a_separate_private_grader(tmp_path):
     original = original_task()
     repaired = repair_task(original, actor_image=ACTOR_IMAGE, grader_image=GRADER_IMAGE).task
     payload = harbor_payload(
@@ -88,6 +90,45 @@ def test_repaired_fragment_exports_the_exact_oracle_and_a_separate_private_grade
     archived = {r.path: resource_bytes(r) for r in repaired.resources.oracle}
     assert archived["source_archive/tests/test.sh"] == NATIVE_SCRIPT.read_bytes()
     assert archived["source_archive/tests/solution.txt"] == b"target()\n"
+    assert declared_execution_limits(repaired) == {"agent_timeout_sec": 900.0, "verifier_timeout_sec": 720.0}
+    with pytest.raises(ValueError, match="original agent_timeout_sec"):
+        write_harbor_task(repaired, tmp_path / "shortened", INITIAL_REQUIREMENTS)
+    requirements = INITIAL_REQUIREMENTS.model_copy(update={"agent_timeout_sec": 900.0, "verifier_timeout_sec": 720.0})
+    directory = tmp_path / "preserved"
+    write_harbor_task(repaired, directory, requirements)
+    wrapper = tomllib.loads((directory / "task.toml").read_text())
+    assert (wrapper["agent"]["timeout_sec"], wrapper["verifier"]["timeout_sec"]) == (900.0, 720.0)
+    assert TaskSpec.model_validate_json((directory / "task-spec.json").read_text()) == repaired
+
+
+@pytest.mark.parametrize("conflict", ["current_config", "explicit_limits"])
+def test_repaired_archived_deadlines_reject_conflicting_limits(tmp_path, conflict):
+    repaired = repair_task(original_task(), actor_image=ACTOR_IMAGE, grader_image=GRADER_IMAGE).task
+    if conflict == "current_config":
+        repaired = repaired.model_copy(
+            update={
+                "resources": repaired.resources.model_copy(
+                    update={"all": (inline_resource("task.toml", b"[agent]\ntimeout_sec=300.0\n"),)}
+                )
+            }
+        )
+    else:
+        repaired = repaired.model_copy(update={"execution_requirements": INITIAL_REQUIREMENTS})
+    with pytest.raises(ValueError, match="conflicting original agent_timeout_sec"):
+        write_harbor_task(repaired, tmp_path / "conflicting", INITIAL_REQUIREMENTS)
+
+
+@pytest.mark.parametrize("provenance", ["missing", "different_version"])
+def test_archived_limits_require_the_repair_provenance(tmp_path, provenance):
+    repaired = repair_task(original_task(), actor_image=ACTOR_IMAGE, grader_image=GRADER_IMAGE).task
+    if provenance == "missing":
+        oracle = tuple(r for r in repaired.resources.oracle if r.path != "taskcompendium/crosscode-remediation.json")
+        repaired = repaired.model_copy(update={"resources": repaired.resources.model_copy(update={"oracle": oracle})})
+    else:
+        repaired = repaired.model_copy(update={"labels": {**repaired.labels, "remediation_version": "other-repair"}})
+    requirements = INITIAL_REQUIREMENTS.model_copy(update={"agent_timeout_sec": 900.0, "verifier_timeout_sec": 720.0})
+    with pytest.raises(ValueError, match="repair provenance"):
+        write_harbor_task(repaired, tmp_path / "unbound", requirements)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="The archived comparator requires GNU sed and tac")
