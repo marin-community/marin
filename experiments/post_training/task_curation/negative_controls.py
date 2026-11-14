@@ -35,7 +35,7 @@ def _require_task_spec_preparation(
     setup: dict,
     source_task_sha256: str,
     execution_requirements: ExecutionRequirements,
-) -> TaskNetworkPolicyReceipt:
+) -> tuple[TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding | None]:
     preparation = json.loads(members[str(root / "task-spec-preparation.json")])
     specification_bytes = members[str(root / "source-task-spec.json")]
     task = TaskSpec.model_validate_json(specification_bytes)
@@ -47,6 +47,14 @@ def _require_task_spec_preparation(
     )
     if binding is not None:
         binding.require_task(task)
+    configured_runtime = result["config"]["task"].get("source_runtime")
+    prepared_runtime = None
+    if configured_runtime is None and binding is not None:
+        packet_runtime = TaskSpecRuntimeBinding.model_validate_json(members["consumed-packet/source-runtime.json"])
+        if packet_runtime != binding:
+            raise ValueError("Negative control preparation differs from its consumed packet runtime")
+        prepared_runtime = binding
+        configured_runtime = binding.model_dump(mode="json")
     if (
         negative_control_setup_kind(task) is not NegativeControlSetupKind.TASK_SPEC_PREPARATION
         or preparation != control["preparation"]
@@ -59,7 +67,7 @@ def _require_task_spec_preparation(
         or preparation["public_preparation_sha256"] != canonical_sha256(public_task_preparation(task))
         or preparation["source_native_checksum"] != control["task_checksum"]
         or preparation["runtime_sha256"] != control["runtime_sha256"]
-        or preparation["source_runtime"] != result["config"]["task"].get("source_runtime")
+        or preparation["source_runtime"] != configured_runtime
         or preparation["execution_requirements"] != execution_requirements.model_dump(mode="json")
         or preparation["verifier_execution_requirements"] != result["config"]["task"]["verifier_execution_requirements"]
         or preparation["actor_required"] != actor_machine_required(task)
@@ -82,7 +90,7 @@ def _require_task_spec_preparation(
         )
     ):
         raise ValueError("Negative control has no matching successful production TaskSpec preparation")
-    return network
+    return network, prepared_runtime
 
 
 def negative_control_from_archive(
@@ -119,7 +127,7 @@ def negative_control_from_archive(
     members = verified_archive_members(
         archive,
         {control_member, result_member, setup_member, descriptor_member, *preparation_names},
-        optional_names=frozenset({verdict_member, *rewards}),
+        optional_names=frozenset({verdict_member, *rewards, "consumed-packet/source-runtime.json"}),
     )
     result = json.loads(members[result_member])
     setup = json.loads(members[setup_member])
@@ -148,12 +156,12 @@ def negative_control_from_archive(
         or setup["source_agent_timeout_sec"] != execution_requirements.agent_timeout_sec
     ):
         raise ValueError("Negative control does not preserve the original package and public setup boundary")
-    network = (
+    network, prepared_runtime = (
         _require_task_spec_preparation(
             members, root, trial_root, control, result, setup, source_task_sha256, execution_requirements
         )
         if converted
-        else None
+        else (None, None)
     )
     if setup_kind is not None and setup["setup_kind"] != setup_kind.value:
         raise ValueError("Negative-control preparation kind differs from its actual setup receipt")
@@ -209,6 +217,7 @@ def negative_control_from_archive(
         setup_artifact=reference(setup_member),
         setup_kind=setup_kind,
         preparation_artifact=reference(descriptor_member) if converted else None,
+        prepared_source_runtime=prepared_runtime,
         verdict_artifact=reference(verdict_member) if verdict_member in members else None,
         trial=trial,
         score=(verdict or {}).get("reward"),

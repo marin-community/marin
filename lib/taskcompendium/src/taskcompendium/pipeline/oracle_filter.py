@@ -975,6 +975,7 @@ class OracleNegativeControlReceipt(BaseModel):
     setup_artifact: ContentEvidenceReference
     setup_kind: NegativeControlSetupKind | None = Field(default=None, exclude_if=lambda value: value is None)
     preparation_artifact: ContentEvidenceReference | None = Field(default=None, exclude_if=lambda value: value is None)
+    prepared_source_runtime: TaskSpecRuntimeBinding | None = Field(default=None, exclude_if=lambda value: value is None)
     verdict_artifact: ContentEvidenceReference | None
     trial: OracleTrialReceipt
     score: float | None
@@ -989,6 +990,14 @@ class OracleNegativeControlReceipt(BaseModel):
     def validate_physical_control(self):
         result = self.trial.result
         require_nop_trial_config(result.get("config") or {})
+        prepared_runtime = self.prepared_source_runtime
+        if prepared_runtime is not None and (
+            self.setup_kind is not NegativeControlSetupKind.TASK_SPEC_PREPARATION
+            or result["config"]["task"].get("source_runtime") is not None
+            or prepared_runtime.task_sha256 != self.source_task_sha256
+            or prepared_runtime.runtime_sha256 != self.runtime_sha256
+        ):
+            raise ValueError("Prepared negative-control runtime differs from its source or recorded configuration")
         if (self.setup_kind is NegativeControlSetupKind.TASK_SPEC_PREPARATION) != (
             self.preparation_artifact is not None
         ):
@@ -1060,7 +1069,7 @@ class OracleNegativeControlReceipt(BaseModel):
                     (
                         TaskSpecRuntimeBinding.model_validate(configured_runtime)
                         if configured_runtime is not None
-                        else None
+                        else self.prepared_source_runtime
                     ),
                     self.trial.network_policy,
                 )

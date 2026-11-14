@@ -289,12 +289,15 @@ def test_producer_1485_checks_unselected_partition_evidence_before_qualification
         legacy_producer_1485_qualifications(producer_1485_evidence, frozenset({selected["task_id"]}))
 
 
+@pytest.mark.parametrize("old_name", ["taco", "calendar"])
 def test_collector_keeps_both_legacy_producers_and_pending_controls_in_one_cohort(
-    tmp_path, evidence, producer_1485_evidence
+    tmp_path, evidence, producer_1485_evidence, old_name
 ):
     old_inputs = json.loads(Path(evidence.input_partition.uri).read_bytes())
     old_audit = json.loads(Path(evidence.audit.uri).read_bytes())
-    old_entry = next(entry for entry in old_inputs["entries"] if Path(entry["trial_archive_uri"]).name == "taco.tar.gz")
+    old_entry = next(
+        entry for entry in old_inputs["entries"] if Path(entry["trial_archive_uri"]).name == f"{old_name}.tar.gz"
+    )
     old_mapping = json.loads(Path(old_entry["receipt_uri"]).read_bytes())["receipt"]
     older_inputs = json.loads(Path(producer_1485_evidence.input_partition.uri).read_bytes())
     older_audit = json.loads(Path(producer_1485_evidence.audit.uri).read_bytes())
@@ -384,15 +387,22 @@ def test_collector_keeps_both_legacy_producers_and_pending_controls_in_one_cohor
         "2c5eea40f264158596f62e593dd21ecaeaa4dc52",
         "1485f1b6c64640b5c15a1bffc113d49eefdc60b6",
     }
-    assert all(entry.original_oracle_passed and not entry.passed for entry in receipt.tasks.values())
-    assert all(
-        entry.exclusion_reason is OracleExclusionReason.NEGATIVE_CONTROL_PENDING for entry in receipt.tasks.values()
-    )
+    assert all(entry.original_oracle_passed for entry in receipt.tasks.values())
+    assert receipt.tasks[old.task.id].passed is (old_name == "calendar")
+    assert receipt.tasks[older.task.id].exclusion_reason is OracleExclusionReason.NEGATIVE_CONTROL_PENDING
+    if old_name == "taco":
+        assert receipt.tasks[old.task.id].exclusion_reason is OracleExclusionReason.NEGATIVE_CONTROL_PENDING
+    else:
+        published = TaskSpec.model_validate_json(pq.read_table(output).to_pylist()[0]["task_spec"])
+        assert canonical_sha256(published.model_dump(mode="json")) == (
+            receipt.tasks[old.task.id].legacy_role_qualification.published_task_sha256
+        )
+        assert receipt.admits(published, old.runtime)
     assert all(
         entry.calibration.attempts[-1].verifier_execution_requirements is None for entry in receipt.tasks.values()
     )
     assert {path: path.read_bytes() for path in originals} == originals
-    assert pq.read_table(output).num_rows == 0
+    assert pq.read_table(output).num_rows == int(old_name == "calendar")
     assert load_oracle_filter(str(output.parent / "oracle-filter.json")) == receipt
 
 

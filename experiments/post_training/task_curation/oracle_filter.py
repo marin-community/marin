@@ -669,7 +669,7 @@ def filter_cohort(
                 ):
                     raise ValueError(f"Separate-role allocation is unqualified without verifier evidence: {task.id}")
                 final_package = Path(calibration.attempts[-1].result["config"]["task"]["path"])
-                if not is_nonagentic_task(task) and not scored_failure:
+                if (qualification is not None or not is_nonagentic_task(task)) and not scored_failure:
                     task = calibrated_task_spec(
                         task, requirements, verifier_requirements, (final_package / "task.toml").read_bytes()
                     )

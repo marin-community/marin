@@ -5,7 +5,9 @@
 
 import gzip
 import hashlib
+import io
 import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,66 @@ from experiments.post_training.task_curation.negative_controls import (
 from lib.taskcompendium.tests.oracle_filter_fixtures import negative_control_policy
 
 FIXTURES = Path(__file__).parent / "fixtures/negative_controls"
+
+
+def test_actual_nop_packet_runtime_preserves_unset_configuration_and_admits_scored_negative():
+    index = json.loads((FIXTURES / "packet-runtime-fallback-index.json").read_text())
+    archive = FIXTURES / "packet-runtime-fallback.tar.gz"
+    original = archive.read_bytes()
+    source = index["source"]
+    receipt = negative_control_from_archive(
+        ContentEvidenceReference(uri=str(archive), sha256=index["archive_sha256"]),
+        "nop-control/negative-control.json",
+        source_task_sha256=source["source_task_sha256"],
+        source_task_checksum=source["source_task_checksum"],
+        execution_requirements=ExecutionRequirements.model_validate(source["execution_requirements"]),
+    )
+    loaded = OracleNegativeControlReceipt.model_validate_json(receipt.model_dump_json())
+    require_negative_control(loaded)
+    assert loaded.conclusive and not loaded.passed(None)
+    assert loaded.score == 0
+    assert loaded.prepared_source_runtime.runtime_sha256 == source["runtime_sha256"]
+    assert loaded.trial.result["config"]["task"]["source_runtime"] is None
+    assert archive.read_bytes() == original
+
+
+@pytest.mark.parametrize("changed_binding", ["packet", "configuration"])
+def test_nop_packet_runtime_rejects_another_binding_despite_consistent_archive_hash(tmp_path, changed_binding):
+    index = json.loads((FIXTURES / "packet-runtime-fallback-index.json").read_text())
+    source = index["source"]
+    archive = tmp_path / "changed.tar.gz"
+    with tarfile.open(FIXTURES / "packet-runtime-fallback.tar.gz") as original:
+        control = json.load(original.extractfile("nop-control/negative-control.json"))
+        binding = json.load(original.extractfile("consumed-packet/source-runtime.json"))
+        binding["runtime"] = {"foreign": True}
+        binding["runtime_sha256"] = canonical_sha256(binding["runtime"])
+        updates = {}
+        if changed_binding == "packet":
+            updates["consumed-packet/source-runtime.json"] = json.dumps(binding).encode()
+        else:
+            result = control["trial_result"]
+            result["config"]["task"]["source_runtime"] = binding
+            payload = json.dumps(result).encode()
+            name = "nop-control/trials/" + result["trial_name"] + "/result.json"
+            updates[name] = payload
+            control["trial_result_file_sha256"] = hashlib.sha256(payload).hexdigest()
+            updates["nop-control/negative-control.json"] = json.dumps(control).encode()
+        with tarfile.open(archive, "w:gz") as output:
+            for info in original.getmembers():
+                data = updates.get(info.name)
+                if data is None and info.isfile():
+                    data = original.extractfile(info).read()
+                if data is not None:
+                    info.size = len(data)
+                output.addfile(info, io.BytesIO(data) if data is not None else None)
+    with pytest.raises(ValueError, match=r"runtime|source contract"):
+        negative_control_from_archive(
+            ContentEvidenceReference(uri=str(archive), sha256=hashlib.sha256(archive.read_bytes()).hexdigest()),
+            "nop-control/negative-control.json",
+            source_task_sha256=source["source_task_sha256"],
+            source_task_checksum=source["source_task_checksum"],
+            execution_requirements=ExecutionRequirements.model_validate(source["execution_requirements"]),
+        )
 
 
 def retained_archive(tmp_path, name):

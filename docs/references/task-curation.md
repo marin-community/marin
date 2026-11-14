@@ -3236,6 +3236,13 @@ failure. Admission derives the
 preparation kind from the source contract; verifier allocation presence does
 not select it.
 
+An inherited Trial configuration can leave `source_runtime` null while
+production preparation reads the binding from the consumed native packet.
+For this case the collector requires the archived
+`consumed-packet/source-runtime.json` to match the preparation manifest and
+records `prepared_source_runtime`. Network qualification uses that verified
+binding; the original Result configuration remains unchanged.
+
 A passing nop excludes the task as `negative_control_passed`. Missing controls,
 setup failures, zero-test reports and unresolved infrastructure outcomes remain
 `negative_control_pending`. A completed source verifier deadline keeps its absent
