@@ -7,7 +7,7 @@ summary: 'Try adding **spelling-normalised byte embeddings** to the input. Each 
   leading spaces and lowercasing, so " The", "the" and "The" share every byte row. Add two small feature rows to keep what
   the normalisation removes: leading space…'
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-6862858613
@@ -36,6 +36,19 @@ trials:
   steps: 3030
   baseline: belay-X0226-control 3.0451 (same commit, seed 0)
   step_time_change: +1%
+- id: t002
+  variant: spelling-normalised byte embeddings, 4-rung ladder
+  rung: competitive-d512
+  protocol: equal_steps
+  batch: X0226
+  date: '2026-11-14'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0226
+  wandb: []
+  settings:
+    spelling_byte_embeds: 'true'
+  commit: fdba357fa8
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
   rationale: −0.0112 at equal time (step time within 1%, equal data = equal time); ladder escalated, not run; MFU not run
