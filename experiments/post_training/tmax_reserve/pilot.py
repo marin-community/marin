@@ -24,8 +24,11 @@ from iris.rpc import job_pb2
 from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS
 from marin.evaluation.harbor.agent_context import CANDIDATE_API_KEY_ENV
 from marin.evaluation.harbor.driver_config import HarborRuntimeOverlay, preflight_harbor_configs
+from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.serving_config import inference_config_for_model
+from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import remote_inference
 from rigging.filesystem.buckets import filesystem_for
 from rigging.secrets import require_secret
@@ -45,14 +48,22 @@ APT_COMMAND = re.compile(r"\bapt(?:-get)?\s+(?:-\S+\s+)*(?:install|update|upgrad
 APT_FETCH = re.compile(r"\bGet:\d+ https?://\S*ubuntu\.com")
 
 
-def require_hf_location(location: str) -> None:
-    """Fail before serving when the catalog location is an object-store path.
-
-    The served model name is the location, and terminus-2 accepts only ``hosted_vllm/<org>/<model>`` names, so
-    an ``s3://`` location fails every trial when the agent is built, after the GPUs are already held.
-    """
-    if "://" in location:
-        raise ValueError(f"terminus-2 needs an HF repository location for its model name, got {location!r}")
+def pilot_inference_config(model: ModelConfig) -> RemoteInferenceConfig:
+    """The pilot's 8-GPU serve for ``model``, lowered as the evaluation launcher does, on a non-preemptible node."""
+    inference = inference_config_for_model(
+        model,
+        AcceleratorChoice(platform=Platform.GPU, gpu_type=SERVE_GPU, gpu_count=SERVE_GPU_COUNT),
+        env_vars={},
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
+        # Serve under a Harbor-safe name, as the launcher does; the default (the location) fails terminus-2's
+        # hosted_vllm name check for object-store locations.
+        api_model=canonical_served_name(model.name),
+    )
+    # A preempted serve stalls every trial in flight; the pilot holds its node for the whole run.
+    return replace(
+        inference,
+        iris=replace(inference.iris, worker_resources=replace(inference.iris.worker_resources, preemptible=False)),
+    )
 
 
 def apt_usage(trial_dirs: list[Path]) -> dict:
@@ -126,21 +137,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args.output.mkdir(parents=True)
     model = models()[args.model]
-    require_hf_location(model.location)
     model_kwargs = harbor_model_agent_kwargs(model)
     (config,) = preflight_harbor_configs([(args.policy, model_kwargs)], judge_model=None)
     dataset = (args.policy.parent / yaml.safe_load(args.policy.read_text())["datasets"][0]["path"]).resolve()
-    inference = inference_config_for_model(
-        model,
-        AcceleratorChoice(platform=Platform.GPU, gpu_type=SERVE_GPU, gpu_count=SERVE_GPU_COUNT),
-        env_vars={},
-        priority=job_pb2.PRIORITY_BAND_INHERIT,
-    )
-    # A preempted serve stalls every trial in flight; the pilot holds its node for the whole run.
-    inference = replace(
-        inference,
-        iris=replace(inference.iris, worker_resources=replace(inference.iris.worker_resources, preemptible=False)),
-    )
+    inference = pilot_inference_config(model)
     try:
         with remote_inference(inference) as session:
             session.wait_until_ready()

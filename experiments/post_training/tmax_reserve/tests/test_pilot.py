@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-
-import pytest
+import re
+from dataclasses import replace
 
 from experiments.evaluation.models import models
-from experiments.post_training.tmax_reserve.pilot import apt_usage, pass_at_k, require_hf_location
+from experiments.post_training.tmax_reserve.pilot import apt_usage, pass_at_k, pilot_inference_config
 
 
 def _trial(root, name, keystrokes, screen):
@@ -47,8 +47,12 @@ def test_pass_at_k_ignores_unscored_trials():
     assert result["mean_pass_at_1"] == 0.25 and result["pass_at_k"] == 0.5
 
 
-def test_pilot_models_have_hf_locations_and_object_store_paths_are_refused():
-    for name in ("qwen3.6-27b", "grug-67b-a2b-datakit-sft-262k-2026-10-05"):
-        require_hf_location(models()[name].location)
-    with pytest.raises(ValueError, match="HF repository location"):
-        require_hf_location("s3://marin-rno2a/marin/models/grug-datakit-sft-262k-20261005-ac60d940-r1")
+def test_object_store_model_serves_under_a_name_terminus2_accepts():
+    # An s3:// location used to become the served name, so terminus-2 refused every trial when building the agent.
+    model = replace(
+        models()["grug-67b-a2b-datakit-sft-262k-2026-10-05"],
+        location="s3://marin-rno2a/marin/models/grug-datakit-sft-262k-20261005-ac60d940-r1",
+    )
+    served = pilot_inference_config(model).model.model_id
+    # terminus-2 requires hosted_vllm/<model> with each segment [A-Za-z0-9._-]{1,64} (harbor.llms.utils).
+    assert re.fullmatch(r"[A-Za-z0-9._-]{1,64}", served), served
