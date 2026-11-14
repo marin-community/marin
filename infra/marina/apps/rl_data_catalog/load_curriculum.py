@@ -18,6 +18,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
 from experiments.post_training.task_curation.catalog_identity import canonical_declaration
+from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.load import batches, insert_rows
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference, validated_role_projection
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -115,6 +116,11 @@ def load_curriculum(
             "inventory": [canonical_declaration(row) for row in release.inventory],
         }
     )
+    retired = (
+        {row.id for row in release.inventory} | {row.source_id for row in release.sources}
+    ) & retired_admission_source_ids()
+    if retired:
+        raise ValueError(f"Retired sources cannot enter the selected curriculum: {sorted(retired)}")
     coverage = CurriculumCoverage.model_validate_json(StoragePath(coverage_uri).read_text())
     if (coverage.alignment_release_id, coverage.curriculum_key, coverage.task_count) != (
         release.release_id,
