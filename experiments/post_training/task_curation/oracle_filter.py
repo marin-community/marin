@@ -112,6 +112,9 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
     for environment in (document.get("environment", {}), document.get("verifier", {}).get("environment", {})):
         for name in ("cpus", "memory_mb", "storage_mb"):
             environment.pop(name, None)
+    for owner in (document, document.get("verifier", {})):
+        if owner.get("environment") == {}:
+            owner.pop("environment")
     for phase in ("agent", "verifier"):
         if phase in document:
             document[phase].pop("timeout_sec", None)
