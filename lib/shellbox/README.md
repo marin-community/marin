@@ -22,7 +22,7 @@ The base wheel contains the machine API and guest source. The [vendored Harbor p
 
 `factory.check_environment(requirements, spec)` checks task semantics, capabilities and software support before acquisition. Factories retain the requested `MachineSpec`; prepared images and bundles are backend inputs. The check does not promise available capacity or installed executables.
 
-The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
+The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. By default it builds each distinct image once into a reusable account snapshot; `DaytonaImageBuild.DECLARATIVE` builds the image for every sandbox instead and creates no snapshot. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
 Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the local, Daytona, QEMU and ShellSim environment adapters. Machines retain their runtime between commands; QEMU and ShellSim also support persistent Bash sessions.
 
@@ -268,15 +268,16 @@ Model commands that run as root can stop other root-owned processes.
 
 For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
-Each machine owns and closes its client. The factory creates sandboxes from shared
-snapshots. Snapshot names derive from the registry reference or build-context contents
-and the requested resources. Use immutable image references. A mutable tag can
-select a snapshot built from an earlier image. Snapshot creation requires available organization quota.
+Each machine owns and closes its client. In the default build mode, the factory
+creates sandboxes from shared snapshots. Snapshot names derive from the registry
+reference or build-context contents and the requested resources. Use immutable
+image references. A mutable tag can select a snapshot built from an earlier image.
+Snapshot creation requires available organization quota.
 Machine cleanup deletes the sandbox and retains the snapshot for reuse.
 The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
 `value`. Without a policy override, the factory uses `MachineSpec.network`.
-`MachineSpec.startup_timeout` bounds snapshot preparation and sandbox creation. Without
+`MachineSpec.startup_timeout` bounds image preparation and sandbox creation. Without
 this value, the factory uses its `create_timeout` setting.
 The pinned Daytona SDK does not upload local `ADD` inputs. Dockerfiles with `ADD`
 require a prebuilt registry image.

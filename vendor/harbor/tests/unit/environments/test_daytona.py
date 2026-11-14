@@ -21,6 +21,7 @@ from openai import (
 
 from harbor.host_capabilities import HostCapabilities
 from daytona import (
+    CreateSandboxFromImageParams,
     CreateSnapshotParams,
     DaytonaNotFoundError,
     Resources,
@@ -731,6 +732,39 @@ def test_daytona_adapter_launches_from_the_override_snapshot_request(tmp_path):
     assert client.sandbox_params.snapshot == client.snapshot_params.name
     assert client.sandbox_params.network_block_all is True
     assert client.closed
+
+
+def test_declarative_adapter_builds_the_sandbox_image_without_a_snapshot(tmp_path):
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    (environment_dir / "Dockerfile").write_text("FROM ubuntu:24.04\n")
+    client = RecordingSnapshotClient()
+
+    adapter = DaytonaEnvironment(
+        environment_dir=environment_dir,
+        environment_name="task",
+        session_id="trial",
+        trial_paths=TrialPaths(tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(cpus=1, memory_mb=1024, storage_mb=1024),
+        override_cpus=2,
+        override_memory_mb=2049,
+        override_storage_mb=1025,
+        image_build="declarative",
+        client_factory=lambda: client,
+    )
+
+    async def run():
+        async with asyncio.TaskGroup() as service_tasks:
+            await adapter.start(False, service_tasks=service_tasks)
+            await adapter.stop(True)
+
+    asyncio.run(run())
+
+    assert client.snapshot_params is None
+    assert isinstance(client.sandbox_params, CreateSandboxFromImageParams)
+    assert client.sandbox_params.resources == Resources(cpu=2, memory=3, disk=2, gpu=None)
+    with pytest.raises(ValueError):
+        adapter.snapshot_request()
 
 
 def test_task_snapshot_source_selects_and_validates_the_task_environment(tmp_path) -> None:
