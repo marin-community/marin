@@ -168,33 +168,43 @@ function backendDetails(source) {
   table.append(body); wrap.append(table); return wrap;
 }
 function filtrationChip(filtration) {
-  const label = {excluded: 'EXCLUDED', pending: 'IN PROGRESS', complete: 'COMPLETE'}[filtration.state];
-  const chip = node('span', label, `chip quality-${filtration.state === 'complete' ? 'good' : 'unassessed'}`);
+  const label = {excluded: 'EXCLUDED', pending: 'IN PROGRESS', pending_oracle: 'PENDING ORACLE', pending_static: 'PENDING STATIC', static_retained: 'NO ORACLE', static_blocked: 'STATIC BLOCKED', eval_only: 'EVAL ONLY', complete: 'COMPLETE'}[filtration.state];
+  const chip = node('span', label, `chip quality-${['complete', 'static_retained'].includes(filtration.state) ? 'good' : 'unassessed'}`);
   chip.title = `${filtration.reason} Current source state: ${filtration.source_status}.`;
   return chip;
 }
 function filtrationRows(source) {
   const lexical = source.lexical_contamination, dedup = source.within_source_dedup, oracle = source.oracle_inventory;
-  const output = source.oracle_filtration, admission = source.filtration;
+  const output = source.oracle_filtration, admission = source.filtration, counts = admission?.count_evidence;
   const measured = ['NO ISSUES', 'REMEDIATED', 'MEASURED, EVAL'].includes(source.contamination_status);
   const receipt = measured ? lexical?.receipt : null;
   const pendingRemediation = source.contamination_status === 'REMEDIATION REQUIRED';
   const zeroDrops = (source.contamination_status === 'NO ISSUES' && lexical?.contaminated_tasks === 0) || source.contamination_status === 'MEASURED, EVAL';
   return [
     ['Filtration', admission && filtrationChip(admission)],
-    ['Current admission state', admission?.state === 'excluded' ? 'Excluded' : 'Pending qualified current-pin receipt'],
+    ['Current admission state', {excluded: 'Excluded', static_retained: 'Retained under no-oracle policy', static_blocked: 'No tasks remain after typed static exclusions', eval_only: 'Measured only (EVAL)', pending_oracle: 'Pending oracle filtration'}[admission?.state] || 'Pending qualified current-pin receipt'],
     ['Recorded source status', source.status],
     ['Raw converted input measured for retention', measured ? lexical?.measured_tasks : dedup?.raw_count],
     ['Original population before oracle filtration', output?.original_count],
-    ['Original oracle-bearing tasks', oracle?.oracle_tasks ?? 'Not measured'],
+    ['Original oracle-bearing tasks', counts?.oracle_tasks ?? oracle?.oracle_tasks ?? 'Not measured'],
     ['Oracle-failing tasks removed', output ? Object.entries(output.exclusion_counts).filter(([reason]) => reason === 'oracle_failed').reduce((sum, [, count]) => sum + count, 0) : oracle?.oracle_tasks === 0 ? 'N/A: complete census found no shipped oracle solutions' : 'Pending: no complete population-wide oracle-filter receipt is recorded'],
     ['Filtration exclusions by typed reason', output?.exclusion_counts],
     ['Post-oracle filtered population', output?.admitted_count],
     ['Within-source duplicates removed', receipt?.duplicate_dropped_tasks ?? dedup?.within_source_duplicates],
     ['Lexically contaminated tasks removed', pendingRemediation ? `Pending: remediation for ${lexical.contaminated_tasks} measured overlapping input tasks is not verified at the current pin` : receipt?.dropped_tasks ?? (zeroDrops ? 0 : 'Not measured')],
     [output ? 'Current filtered population' : 'Pre-filtration retained converted population', dedup?.unique_count],
-    ['Unexecutable on production backend dropped (by typed reason)', admission?.state === 'excluded' ? 'No retained tasks; typed exclusions are recorded above' : 'Pending: no pin-bound per-task production-executability receipt is recorded'],
+    ['Typed static blocker tasks excluded (unique)', counts?.static_blocked_tasks],
+    ['Static blocker reason counts (may overlap)', counts?.static_reason_counts],
+    ['Measured EVAL examples (not admitted TRAIN)', admission?.state === 'eval_only' ? admission.example_count : null],
+    ['Unexecutable on production backend dropped (by typed reason)', counts?.oracle_tasks === 0 ? 'Per-task executability run is not required under the pinned no-oracle policy; static exclusions remain applied' : admission?.state === 'excluded' ? 'No retained tasks; typed exclusions are recorded above' : 'Pending: no pin-bound per-task production-executability receipt is recorded'],
     ['Admitted after all filtration', admission?.admitted_count ?? 'Pending: full-population filtration and production executability are not established'],
+    ...['policy', 'oracle_inventory', 'static_audit'].map(key => {
+      const evidence = counts?.[key];
+      const label = {policy: 'No-oracle count policy ruling', oracle_inventory: 'Current-input oracle census', static_audit: 'Current-input static blocker audit'}[key];
+      if (!evidence) return [label, null];
+      const span = node('span'); span.append(receiptLink(evidence.uri, label + ' ↗'), ' · SHA-256 ', node('code', evidence.sha256));
+      return [label, span];
+    }),
     ...['oracle_filter', 'tasks_parquet', 'validation'].map(key => {
       const evidence = output?.[key];
       const label = {oracle_filter: 'Canonical oracle filter receipt', tasks_parquet: 'Read-back private output', validation: 'Filtration validation receipt'}[key];

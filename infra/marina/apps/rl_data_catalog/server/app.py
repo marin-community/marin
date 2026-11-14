@@ -15,12 +15,14 @@ from sqlalchemy.engine import Connection
 from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
 
 from .contamination import contamination
+from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
 from .difficulty import difficulty_records, difficulty_summary
 from .filtration import filtration
 from .quality import intended_use, issue_rate, quality_display, result
 from .schema import SCHEMA_SQL
+from .source_counts import SourceCounts
 from .source_identity import canonical_source_id, original_source_id
 
 
@@ -153,6 +155,7 @@ def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) ->
 def create_api(services: AppletServices) -> FastAPI:
     api = FastAPI()
     engine = services.engine()
+    counts = {item.source_id: item for item in SourceCounts.model_validate_json(SOURCE_COUNTS).sources}
     register_curriculum_routes(api, engine)
 
     @api.get("/sources")
@@ -191,7 +194,7 @@ def create_api(services: AppletServices) -> FastAPI:
                         "curation": row["curation"],
                         "quality": display.quality,
                         "quality_review_status": display.review_status,
-                        "filtration": filtration(row["declaration"]),
+                        "filtration": filtration(row["declaration"], counts.get(row["id"])),
                         "review_completeness": row["review_completeness"],
                         "result_provisional": (row["review_completeness"] or {}).get("provisional"),
                         "contamination_status": contamination(row["declaration"]),
@@ -458,7 +461,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "difficulty": difficulty,
             "intended_use": intended_use(declaration),
             "contamination_status": contamination(declaration),
-            "filtration": filtration(declaration),
+            "filtration": filtration(declaration, counts.get(declaration["id"])),
             "curation": source["curation"],
             "diagnostics": source["diagnostics"],
             "backend_capabilities": capabilities,

@@ -15,6 +15,7 @@ from finestore.rl.curation import ActorCensusInput
 from rigging.provenance import git_output
 
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
+from infra.marina.apps.rl_data_catalog.server.source_counts import SourceCounts
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 APP_SOURCE = Path("infra/marina/apps/rl_data_catalog")
@@ -81,9 +82,13 @@ def oracle_inventory_payload(raw: bytes) -> dict[str, Any]:
     return {"sources": rows, "source_ledger_sha256": hashlib.sha256(raw).hexdigest()}
 
 
-def prepare_preview(checkout: Path, output: Path, oracle_inventory: Path | None = None) -> None:
+def prepare_preview(
+    checkout: Path, output: Path, oracle_inventory: Path | None = None, source_counts: Path | None = None
+) -> None:
     """Write a new preview-only package and record hashes of its canonical model inputs."""
     observations = oracle_inventory_payload(oracle_inventory.read_bytes()) if oracle_inventory is not None else None
+    count_raw = source_counts.read_bytes() if source_counts is not None else None
+    count_payload = SourceCounts.model_validate_json(count_raw) if count_raw is not None else None
     source = checkout / APP_SOURCE
     if output.resolve().is_relative_to(checkout.resolve()):
         raise ValueError("Stage the preview outside the source checkout")
@@ -117,6 +122,7 @@ def prepare_preview(checkout: Path, output: Path, oracle_inventory: Path | None 
         "server/contamination.py",
         "server/difficulty.py",
         "server/filtration.py",
+        "server/source_counts.py",
     ):
         path = output / relative
         content = path.read_text()
@@ -136,6 +142,16 @@ def prepare_preview(checkout: Path, output: Path, oracle_inventory: Path | None 
             "packaged_sha256": hashlib.sha256(payload).hexdigest(),
             "sources": len(observations["sources"]),
         }
+    if count_payload is not None and count_raw is not None:
+        payload = count_payload.model_dump_json()
+        (output / "server/count_evidence.py").write_text(
+            "# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n\n" + f"SOURCE_COUNTS = {payload!r}\n"
+        )
+        metadata["source_counts"] = {
+            "source_sha256": hashlib.sha256(count_raw).hexdigest(),
+            "packaged_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+            "sources": len(count_payload.sources),
+        }
     (output / "dist/bundled-model-provenance.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
@@ -144,8 +160,9 @@ def main() -> None:
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--oracle-inventory", type=Path, help="Verified full-population SAMPLE inventory ledger")
+    parser.add_argument("--source-counts", type=Path, help="Current-input static count observations and policy evidence")
     args = parser.parse_args()
-    prepare_preview(args.checkout, args.output, args.oracle_inventory)
+    prepare_preview(args.checkout, args.output, args.oracle_inventory, args.source_counts)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@
 
 from finestore.rl.curation import SourceDeclaration
 
+from infra.marina.apps.rl_data_catalog.server.source_counts import NO_ORACLE_POLICY_SHA256, SourceCountEvidence
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -48,5 +49,26 @@ def filtered_declaration(retained: int) -> SourceDeclaration:
             "lexical_contamination": None,
             "status": "Excluded" if retained == 0 else "Not selectable",
             "oracle_filtration": evidence,
+        }
+    )
+
+
+def count_evidence(declaration: SourceDeclaration, oracle_tasks: int, blocked: int | None) -> SourceCountEvidence:
+    assert declaration.actor_census_input is not None
+    return SourceCountEvidence.model_validate(
+        {
+            "source_id": declaration.id,
+            "input": declaration.actor_census_input,
+            "intended_use": declaration.intended_use,
+            "oracle_tasks": oracle_tasks,
+            "static_blocked_tasks": blocked,
+            "static_reason_counts": (
+                {"tool_provider_required": blocked, "shared_executor_required": blocked} if blocked else {}
+            ),
+            "policy": {"uri": "https://example.org/no-oracle-policy.md", "sha256": NO_ORACLE_POLICY_SHA256},
+            "oracle_inventory": {"uri": "https://example.org/oracle-inventory.json", "sha256": "b" * 64},
+            "static_audit": (
+                {"uri": "https://example.org/static-audit.json", "sha256": "c" * 64} if blocked is not None else None
+            ),
         }
     )

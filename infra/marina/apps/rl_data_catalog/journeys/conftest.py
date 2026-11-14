@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import ActorCensusInput, SourceDeclaration
 from finestore.rl.difficulty import Solver
 from marina.applets import applet_schema
 from marina.db import DatabaseSpec, engine_for
@@ -25,7 +25,7 @@ from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
 from infra.marina.apps.rl_data_catalog.tests.backend_fixtures import backend_source_maps
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
-from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import filtered_declaration
+from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence, filtered_declaration
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import pending_review_declaration, review_declarations
 
 APP_ID = UUID("fb11c931-5861-4878-8bb5-a964d652b45f")
@@ -61,6 +61,23 @@ def marina_kernel(marina_database: DatabaseSpec, tmp_path_factory: pytest.TempPa
             }
         )
     )
+    observations = []
+    for _, declaration in contamination_declarations():
+        if declaration.name not in {"clean", "eval", "stale-clean", "required"}:
+            continue
+        declaration = with_declaration_admission_census(declaration)
+        if declaration.name == "clean":
+            declaration = SourceDeclaration.model_validate(
+                {**declaration.model_dump(mode="json"), "actor_census_input": ACTOR_INPUT}
+            )
+        observation = count_evidence(
+            declaration, 1 if declaration.name == "required" else 0, None if declaration.name == "required" else 1
+        )
+        if declaration.name == "stale-clean":
+            observation = observation.model_copy(update={"input": ActorCensusInput.model_validate(ACTOR_INPUT)})
+        observations.append(observation.model_dump(mode="json"))
+    payload = json.dumps({"version": 1, "sources": observations})
+    (apps / "rl_data_catalog/server/count_evidence.py").write_text(f"SOURCE_COUNTS = {payload!r}\n")
     install_preview_sources(apps, marina_database)
     with running_kernel(MarinaConfig(data_root=str(root), iap_audience=None, database=marina_database)) as kernel:
         yield kernel
@@ -82,7 +99,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
             ]:
                 if declaration.id == "Marin:unmeasured":
                     declaration = declaration.model_copy(update={"pipeline": None})
-                if declaration.name in {"clean", "eval"}:
+                if declaration.name in {"clean", "eval", "required"}:
                     declaration = with_declaration_admission_census(declaration)
                 if declaration.id == "Marin:clean":
                     declaration = SourceDeclaration.model_validate(

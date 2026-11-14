@@ -56,3 +56,16 @@ Header totals cover all live sources. Admitted examples show the final known
 admitted sum and source counts still pending filtration or excluded. Quality
 shows catalog-wide QUICK/SAMPLE/FULL totals; both cards label displayed counts
 separately as Shown after filters and duplicate folding.
+
+Preview source counts can be supplied to `prepare_preview.py --source-counts` as
+version-1 observations. Each record binds the exact actor-census input and Use,
+the oracle inventory, the unique current static-blocker count and its audit,
+and policy ruling SHA `028c7dfb…e2f3953`. The API withholds counts on any input or
+Use change. No-oracle Examples equal retained minus the measured blocker union;
+EVAL counts remain measured-only and never enter admitted TRAIN totals. Oracle
+sources stay Pending oracle filtration without final evidence. Missing static
+measurements remain explicit and do not become zero exclusions.
+
+Count observations are bundled as immutable Python data with a provenance hash;
+releasing them does not alter the selected catalog, archived packets or training
+selection. The production package's default observation set is empty.

@@ -317,7 +317,14 @@ no-oracle census is complete.
 The filtration ledger separately records tasks dropped because their whole
 contract cannot execute on a production backend, grouped by typed reason. Until
 pin-bound per-task executability receipts are attached, this step and admitted
-counts remain Pending. Backend requirement fit alone does not establish execution.
+counts remain Pending for oracle-bearing sources without final oracle-filter evidence.
+Under the pinned no-oracle policy ruling, no-oracle Examples are the current retained
+population minus unique typed static blockers. EVAL counts are measured-only and
+excluded from admitted TRAIN totals. The Evidence page records the policy and audit
+URI/SHA pairs. Count observations bind the full current actor-census input and Use;
+missing or stale static evidence remains unmeasured. Overlapping blocker reasons
+never count a task twice. This count policy does not change training selection.
+Backend requirement fit alone does not establish execution.
 
 After the package release, load the complete catalog with the
 [catalog loader](#updating-atlas), using the explicit preview app ID above.

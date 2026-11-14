@@ -92,7 +92,7 @@ from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
-from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import filtered_declaration
+from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence, filtered_declaration
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -1681,6 +1681,35 @@ def test_preview_packages_producer_oracle_inventory_and_rejects_mixed_pins(tmp_p
         provenance["packaged_sha256"]
         == hashlib.sha256((output / "dist/measurements/oracle-inventory.json").read_bytes()).hexdigest()
     )
+
+
+def test_preview_bundles_current_count_evidence_into_the_served_api(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "counted", source_id="Marin:counted", duplicates=1)
+    load_catalog(CurationCatalog(root), catalog_query)
+    with catalog_database.connect() as connection:
+        raw = connection.execute(text("SELECT declaration FROM atlas_sources")).scalar_one()
+    declaration = SourceDeclaration.model_validate(raw)
+    count_file = tmp_path / "counts.json"
+    count_file.write_text(
+        json.dumps({"version": 1, "sources": [count_evidence(declaration, 0, 1).model_dump(mode="json")]})
+    )
+    output = tmp_path / "preview"
+    prepare_preview(Path(__file__).resolve().parents[3], output, source_counts=count_file)
+    package = read_applet_package(package_applet(output))
+    applet_id = uuid.uuid4()
+    try:
+        module, factory_name = load_backend_entrypoint(applet_id, 1, package)
+        api = getattr(module, factory_name)(cast(AppletServices, CatalogServices(catalog_database)))
+        with TestClient(api) as client:
+            source = client.get("/sources").json()["sources"][0]
+            assert source["filtration"]["example_count"] == 1
+            assert source["filtration"]["admitted_count"] == 1
+            detail = client.get("/source", params={"source_id": declaration.id}).json()
+            assert detail["filtration"] == source["filtration"]
+            assert detail["filtration"]["count_evidence"]["policy"]["sha256"].startswith("028c7dfb")
+    finally:
+        remove_backend_revision(applet_id, 1, package.digest)
 
 
 @pytest.mark.parametrize("preview", [False, True])

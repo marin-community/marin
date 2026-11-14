@@ -16,7 +16,7 @@ const originLabels = {tasktrove: 'TaskTrove', evalchemy: 'Evalchemy', harbor_hub
 function originOf(row) { return originLabels[row.origin] || row.origin; }
 function resultKey(row) { return row.result || 'none'; }
 function value(row, key) {
-  if (key === 'examples') return row.filtration.admitted_count;
+  if (key === 'examples') return row.filtration.example_count;
   if (key === 'filtration') return row.filtration.state;
   if (key === 'use') return row.intended_use || 'unknown';
   if (key === 'quality') return qualityOrder[row.quality];
@@ -161,7 +161,7 @@ function sourceRow(row, others, canonical) {
       toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); render(); });
       name.prepend(toggle);
     }
-    const examples = node('td', row.filtration.admitted_count == null ? 'Pending' : number.format(row.filtration.admitted_count), 'num');
+    const examples = node('td', row.filtration.example_count == null ? (row.filtration.state === 'pending_oracle' ? 'Pending oracle filtration' : 'Pending') : number.format(row.filtration.example_count), 'num');
     examples.title = row.filtration.reason;
     const filtration = node('td', undefined, 'filtration-cell'); filtration.append(filtrationChip(row.filtration));
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
@@ -239,9 +239,10 @@ function details(row) {
 function metrics(displayed) {
   const samples = rows => {
     const admitted = rows.reduce((sum, row) => sum + (row.filtration.admitted_count ?? 0), 0);
-    const pending = rows.filter(row => row.filtration.admitted_count == null).length;
+    const pending = rows.filter(row => row.filtration.state === 'pending_oracle').length;
+    const unknown = rows.filter(row => row.filtration.example_count == null && row.filtration.state !== 'pending_oracle').length;
     const excluded = rows.filter(row => row.filtration.state === 'excluded').length;
-    return `${number.format(admitted)} admitted · ${number.format(pending)} pending filtration · ${number.format(excluded)} excluded`;
+    return `${number.format(admitted)} admitted · ${number.format(pending)} pending oracle filtration · ${number.format(excluded)} excluded` + (unknown ? ` · ${number.format(unknown)} counts unmeasured` : "");
   };
   const qualityCounts = rows => ['QUICK', 'SAMPLE', 'FULL'].map(level => number.format(rows.filter(row => row.quality === level).length)).join(' / ');
   $('metric-sources').textContent = `${number.format(state.sources.length)} / ${number.format(displayed.length)}`;

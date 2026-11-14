@@ -231,7 +231,7 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     expect(clean.locator(".backends-link")).to_have_text("Backends \u203a")
     assert clean.locator(".backends-cell").evaluate("cell => cell.getBoundingClientRect().width < 150")
     expect(clean.locator(".grading-chips .chip")).to_have_text("SEPARATE")
-    expect(clean.locator("td").nth(1)).to_have_text("Pending")
+    expect(clean.locator("td").nth(1)).to_have_text("2")
     zero = page.locator('tr[data-source-id="Marin:filtered-zero"]')
     expect(zero.locator("td").nth(1)).to_have_text("0")
     expect(zero.locator(".filtration-cell .chip")).to_have_text("EXCLUDED")
@@ -284,13 +284,13 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
         ledger.locator(".field").filter(has=page.get_by_text("Admitted after all filtration", exact=True)).locator("dd")
     )
     expect(oracle_field).to_have_text(re.compile(r"^N/A\b"))
-    expect(admitted_field).to_have_text(re.compile(r"^Pending\b"))
+    expect(admitted_field).to_have_text("2")
     executability_field = (
         ledger.locator(".field")
         .filter(has=page.get_by_text("Unexecutable on production backend dropped (by typed reason)", exact=True))
         .locator("dd")
     )
-    expect(executability_field).to_have_text(re.compile(r"^Pending\b"))
+    expect(executability_field).to_contain_text("not required under the pinned no-oracle policy")
     expect(page.locator(".backend-table tbody tr")).to_have_count(3)
     expect(page.locator(".backend-table")).to_contain_text("packages lock")
     expect(page.locator(".backend-table")).to_contain_text("docker image")
@@ -499,17 +499,41 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
     quality = [sum(source["quality"] == level for source in sources) for level in ("QUICK", "SAMPLE", "FULL")]
     assert quality[0] > 0
     totals = " / ".join(str(count) for count in quality)
-    expect(page.locator("#metric-examples")).to_have_text("0 admitted · 24 pending filtration · 1 excluded")
+    expect(page.locator("#metric-examples")).to_have_text(
+        "2 admitted · 1 pending oracle filtration · 1 excluded · 21 counts unmeasured"
+    )
     expect(page.locator("#metric-quality")).to_have_text(totals)
     expect(page.locator("#metric-quality-shown")).to_contain_text("Shown 0 /")
     page.locator("#show-all").check()
-    expect(page.locator("#metric-examples-shown")).to_have_text("Shown 0 admitted · 24 pending filtration · 1 excluded")
+    expect(page.locator("#metric-examples-shown")).to_have_text(
+        "Shown 2 admitted · 1 pending oracle filtration · 1 excluded · 21 counts unmeasured"
+    )
     expect(page.locator("#metric-quality-shown")).to_have_text(f"Shown {totals}")
+    page.locator("#search").fill("eval")
+    evaluation = page.locator('tr[data-source-id="Marin:eval"]')
+    expect(evaluation.locator("td").nth(1)).to_have_text("2")
+    expect(evaluation.locator(".filtration-cell .chip")).to_have_text("EVAL ONLY")
+    page.locator("#search").fill("clean")
+    train = page.locator('tr[data-source-id="Marin:clean"]')
+    expect(train.locator("td").nth(1)).to_have_text("2")
+    expect(train.locator(".filtration-cell .chip")).to_have_text("NO ORACLE")
+    train.locator(".source-name").click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    expect(page.locator("#sections")).to_contain_text("028c7dfbc7800350eb6bf1ccb2be61b1810447f3d7fb76596318764c0e2f3953")
+    expect(page.get_by_role("link", name="No-oracle count policy ruling ↗")).to_have_attribute(
+        "href", "https://example.org/no-oracle-policy.md"
+    )
+    page.get_by_role("link", name="By source", exact=True).click()
+    page.locator("#show-all").check()
     page.locator("#search").fill("filtered-zero")
     expect(page.locator("#rows tr")).to_have_count(1)
     expect(page.locator("#metric-sources")).to_have_text("25 / 1")
-    expect(page.locator("#metric-examples")).to_have_text("0 admitted · 24 pending filtration · 1 excluded")
-    expect(page.locator("#metric-examples-shown")).to_have_text("Shown 0 admitted · 0 pending filtration · 1 excluded")
+    expect(page.locator("#metric-examples")).to_have_text(
+        "2 admitted · 1 pending oracle filtration · 1 excluded · 21 counts unmeasured"
+    )
+    expect(page.locator("#metric-examples-shown")).to_have_text(
+        "Shown 0 admitted · 0 pending oracle filtration · 1 excluded"
+    )
     expect(page.locator("#metric-quality")).to_have_text(totals)
     assert page.locator(".metrics > div").evaluate_all(
         """cards => cards.every((card, i) => {
