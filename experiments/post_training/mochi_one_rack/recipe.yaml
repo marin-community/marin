@@ -137,7 +137,7 @@ generator:
       memory_limit: 8589934592
     compilation_config:
       mode: 3
-      # Variable-size DP/EP collectives can fail under graph replay. Keep
+      # allgather_reducescatter's variable-size DP/EP collectives can fail under graph replay. Keep
       # compilation enabled; retest PIECEWISE after a graph fix is qualified.
       # https://github.com/vllm-project/vllm/pull/59646
       cudagraph_mode: NONE
