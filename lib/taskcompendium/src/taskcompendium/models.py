@@ -27,8 +27,8 @@ from shellbox.machine import PackageSpec, UnsupportedMachineSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
+from verifyit.judge_contract import validate_judge_spec
 from verifyit.modes.extract import extract_boxed
-from verifyit.modes.grade_judge import validate_judge_spec
 from verifyit.spec import (
     DEFAULT_OUTPUT,
     DEFAULT_WORKSPACE,
