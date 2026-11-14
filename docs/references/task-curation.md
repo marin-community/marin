@@ -1640,11 +1640,39 @@ uv run python -m experiments.post_training.task_curation.oracle_filter merge-ret
   --task-map ORIGINAL_FULL_CALIBRATED_MAP --retry-map NEW_PHASE/task-map.json --output NEW_FULL_MAP
 ```
 
+Each task receipt records `source_task_sha256` and `source_task_checksum` before
+calibrated requirements are projected into the admitted TaskSpec. Every retry
+transition must match these original-source anchors. Legacy receipts without
+anchors are checked against their entry task/package identity; an unanchored
+partial-source projection is rejected. Absent anchors remain omitted so archived
+history hashes are unchanged.
+
 Use a fresh phase directory under the existing calibration root so `collect` can
 inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
-three infrastructure attempts applies independently to this approved phase.
+three infrastructure attempts applies independently to this approved phase. A new scored
+original negative keeps `oracle_failed`; a measured source-declared deadline keeps
+its phase timeout exclusion. Earlier infrastructure history does not mask these
+new source outcomes.
+For partially declared tasks, the phase records `initial_requirements` and starts
+at the parent's final calibrated allocation. Declared and preserved source limits
+remain fixed; an earlier OOM increase is retained instead of starting over.
+
+A replacement LOCAL worker may supply `retry-plan --local-host HOST.json`.
+`LocalExecutionHostTransition` records exact `parent_kwargs`, replacement
+`current_kwargs`, and nonempty immutable URI/SHA-256 `scope_evidence`. Only
+`cgroup_parent`, `disk_root`, `image_cache`, and `registry_authfile` may change;
+backend type and every logical option remain fixed. Before dispatch, the runner
+verifies the evidence hashes and the replacement cgroup's containment inside the
+current worker's delegated scope, including CPU and memory controllers. Old worker
+paths and every prior attempt remain in the parent history.
+
+Historical TaskSpec packages without `source-runtime.json` may pass the original
+frozen runtime binding as `TaskConfig.source_runtime`. TaskSpec trials validate its
+task/runtime hashes and equality with any existing sidecar; native Harbor trials
+reject this field. The producer reads this binding from the frozen input cohort,
+so the historical package and its checksum remain unchanged.
 Calibration validates and deduplicates Harbor's selected-result copy and physical
 attempt result before consuming the physical verdict, oracle exit and resource receipts.
 Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.

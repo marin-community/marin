@@ -79,7 +79,7 @@ def budget_relay(
                 super().setup()
                 self.connection.settimeout(REQUEST_TIMEOUT)
 
-            def log_message(self, message_format, *args):
+            def log_message(self, _message_format, *args):
                 pass
 
             def respond(self, status, payload):

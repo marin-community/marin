@@ -45,7 +45,7 @@ from taskcompendium.harbor.protected_runtime import (
     RuntimeRole,
     read_runtime_binding,
 )
-from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, read_source_runtime
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, read_source_runtime
 from taskcompendium.models import (
     ExecutionRequirements,
     TaskSpec,
@@ -261,6 +261,11 @@ class TaskSpecTrial(Trial):
         if self.runtime_binding is not None:
             self.runtime_binding.require_task(self.specification)
         self.source_runtime = read_source_runtime(self.task.paths.task_dir)
+        if self.config.task.source_runtime is not None:
+            configured_runtime = TaskSpecRuntimeBinding.model_validate(self.config.task.source_runtime)
+            if self.source_runtime is not None and configured_runtime != self.source_runtime:
+                raise ValueError("Configured source runtime differs from the preserved packet")
+            self.source_runtime = configured_runtime
         if self.source_runtime is not None:
             self.source_runtime.require_task(self.specification)
         if self.source_runtime is not None:
