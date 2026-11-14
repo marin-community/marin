@@ -3,6 +3,8 @@
 
 """Shared source OracleCommand execution and conversation answer delivery."""
 
+from pathlib import PurePosixPath
+
 from shellbox.machine import Command, ExitReason, Machine, Result
 
 from taskcompendium.models import (
@@ -46,7 +48,18 @@ def oracle_environment(task: TaskSpec, command: OracleCommand) -> EnvironmentReq
 async def run_oracle_command(
     machine: Machine, command: OracleCommand, *, cwd: str | None, timeout: float, output_limit_bytes: int
 ) -> Result:
-    """Run the declared command, leaving exit-code policy to the caller."""
+    """Prepare the declared answer directory and run the unchanged source command."""
+    if command.answer_file is not None:
+        parent = PurePosixPath(command.answer_file).parent
+        if parent != PurePosixPath("."):
+            prepared = await machine.run(
+                Command(("mkdir", "-p", str(parent)), cwd=cwd, timeout=timeout, output_limit_bytes=output_limit_bytes)
+            )
+            if prepared.reason != ExitReason.EXITED or prepared.exit_code != 0:
+                raise OracleAnswerError(
+                    f"Could not prepare the declared oracle answer directory {parent}: "
+                    f"{prepared.stderr.decode(errors='replace')[-2000:]}"
+                )
     return await machine.run(
         Command(("/bin/bash", "-lc", command.command), cwd=cwd, timeout=timeout, output_limit_bytes=output_limit_bytes)
     )
