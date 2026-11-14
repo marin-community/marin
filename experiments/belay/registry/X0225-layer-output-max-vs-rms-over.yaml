@@ -12,7 +12,7 @@ code_commits:
 - 94ddd8bdc683eeeb11b2ad6168fe3708a986214b
 potential:
   score: null
-  rationale: 'Study: no verdict; analysis blocked by analyze run-name parse bug'
+  rationale: 'Study: no verdict; analyze crashes parsing run name from checkpoints-temp path'
   model: claude-opus-5-5
   date: '2026-11-14'
   inputs_digest: abb80d7e554f
