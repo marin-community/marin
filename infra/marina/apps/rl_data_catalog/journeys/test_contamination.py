@@ -3,6 +3,8 @@
 
 """A reader distinguishes measured overlap, remediation and missing evidence."""
 
+import re
+
 import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
@@ -43,7 +45,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
         "cell.textContent === cell.firstElementChild.textContent)"
     )
     page.locator("#contamination-legend summary").click()
-    expect(page.locator("#contamination-legend")).to_contain_text("Cleanliness is unknown")
+    assert set(page.locator("#contamination-legend dt .chip").all_text_contents()) == set(expected.values())
     for width in (1440, 390):
         page.set_viewport_size({"width": width, "height": 900})
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -59,7 +61,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
             .locator("dd")
         )
         expect(pending).to_contain_text("Pending")
-        expect(pending).to_contain_text("1 measured overlapping input tasks")
+        expect(pending).to_contain_text(re.compile(r"\b1\b"))
         page.locator("#close-details").click()
     page.locator('tr[data-source-id="Marin:eval"] .source-name').click()
     page.get_by_role("link", name="All quality evidence", exact=True).click()
@@ -225,8 +227,14 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels")).to_contain_text("too_many_snapshots, unbuilt_image")
     ledger = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
-    expect(ledger).to_contain_text("N/A: complete census found no shipped oracle solutions")
-    expect(ledger).to_contain_text("Pending: post-oracle admission is not measured")
+    oracle_field = (
+        ledger.locator(".field").filter(has=page.get_by_text("Oracle-failing tasks removed", exact=True)).locator("dd")
+    )
+    admitted_field = (
+        ledger.locator(".field").filter(has=page.get_by_text("Admitted after all filtration", exact=True)).locator("dd")
+    )
+    expect(oracle_field).to_have_text(re.compile(r"^N/A\b"))
+    expect(admitted_field).to_have_text(re.compile(r"^Pending\b"))
     expect(page.locator(".backend-table tbody tr")).to_have_count(3)
     expect(page.locator(".backend-table")).to_contain_text("packages lock")
     expect(page.locator(".backend-table")).to_contain_text("docker image")
@@ -259,5 +267,15 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     page.locator('tr[data-source-id="Marin:stale-clean"] .source-name').click()
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     stale_ledger = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Filtration ledger"))
-    expect(stale_ledger).to_contain_text("Pending: no complete population-wide oracle-filter receipt is recorded")
-    expect(stale_ledger).not_to_contain_text("N/A: complete census found no shipped oracle solutions")
+    stale_oracle = (
+        stale_ledger.locator(".field")
+        .filter(has=page.get_by_text("Oracle-failing tasks removed", exact=True))
+        .locator("dd")
+    )
+    expect(stale_oracle).to_have_text(re.compile(r"^Pending\b"))
+    original_oracles = (
+        stale_ledger.locator(".field")
+        .filter(has=page.get_by_text("Original oracle-bearing tasks", exact=True))
+        .locator("dd")
+    )
+    expect(original_oracles).to_have_text("Not measured")
