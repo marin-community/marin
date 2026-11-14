@@ -23,6 +23,10 @@ from here; ``LogStack`` resolves every table from this catalog.
   the autoscaler).
 - ``iris.task_state`` — periodic per-root-job task-state aggregates (producer:
   ``iris.cluster.controller.task_state_stats``).
+- ``iris.controller_db__{jobs,job_config,tasks,task_attempts}`` — durable copies of
+  the controller DB tables of the same names: one ``job_config`` row per job, at
+  submit, and one job, task or attempt row per change, written by the controller
+  that executes the work (producer: ``iris.cluster.controller.controller_rows``).
 """
 
 from dataclasses import dataclass
@@ -42,6 +46,10 @@ TASK_EVENT_NAMESPACE = "iris.task_event"
 PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
+JOB_NAMESPACE = "iris.controller_db__jobs"
+JOB_CONFIG_NAMESPACE = "iris.controller_db__job_config"
+TASK_ATTEMPT_NAMESPACE = "iris.controller_db__task_attempts"
+JOB_TASK_NAMESPACE = "iris.controller_db__tasks"
 
 
 class TaskEventSeverity(StrEnum):
@@ -67,6 +75,17 @@ TASK_EVENT_STORAGE_POLICY = StoragePolicy(
     max_bytes=1024 * 1024 * 1024,
     max_age_seconds=30 * 24 * 60 * 60,
 )
+
+
+# The iris.controller_db__* namespaces outlive the controller DB's 7-day
+# window. Their history stays in the archive (remote retention is retain_forever);
+# these policies only bound the hub's local copy, and older segments are read
+# back from the archive.
+_CONTROLLER_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
+JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
+JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
+TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
+JOB_TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_CONTROLLER_ROWS_MAX_AGE)
 
 
 def stats_timestamp() -> datetime:
@@ -222,6 +241,179 @@ class TaskEventRow(TaskEventDiagnostics):
     message: str
     source: str
     count: int
+
+
+@dataclass
+class IrisJob:
+    """A snapshot of one controller ``jobs`` row, written whenever a write path changes the job.
+
+    Rows are appended, never replaced: the job's current state is its row with
+    the latest ``(ts, seq)``. A job is identified by ``(cluster, root_job_id,
+    root_submitted_at_ms, job_id, submitted_at_ms)``, because job ids are reused
+    once a job ends, and a live parent can resubmit a child under the same name.
+    """
+
+    key_column: ClassVar[str] = "root_job_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    parent_job_id: str | None
+    depth: int
+    name: str
+    user_id: str
+    submitting_user: str
+    state: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    exit_code: int | None
+    error: str | None
+    num_tasks: int
+    scheduling_deadline_at: datetime | None
+    backend_id: str
+    # The controller DB's jobs.cluster: "local", or the peer the job was handed to.
+    # Named placement because this table's cluster is the writing controller.
+    placement: str
+    ts: datetime
+    # Reserved for submit-time job tags as a JSON object, e.g. {"project": ...,
+    # "category": ...}. Always NULL until Iris accepts job tags at submit.
+    tags: str | None = None
+
+
+@dataclass
+class IrisJobConfig:
+    """A job's config, written once when the job is submitted.
+
+    Copies the controller ``job_config`` columns whose values the controller or
+    a fixed vocabulary writes. Text the user wrote is not copied: the
+    environment, command lines, setup scripts, egress hosts, ports and bundle id.
+    The one exception is ``env_vars``: the allowlisted environment variables,
+    redacted. ``docs/controller-rows.md`` lists each excluded column.
+    """
+
+    key_column: ClassVar[str] = "root_job_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+    # Flattened from res_device_json: "gpu" or "tpu", the variant (e.g. "H100",
+    # "v5p-64") and the count per task, which iris.controller_db__jobs.num_tasks multiplies for the
+    # whole job. A CPU-only job has NULL, NULL and 0.
+    accelerator_kind: str | None
+    accelerator_type: str | None
+    accelerators_per_task: int
+    constraints_json: str | None
+    has_coscheduling: bool
+    # The worker attribute coscheduled tasks share, such as "tpu-name".
+    coscheduling_group_by: str
+    priority_band: str
+    preemption_policy: str
+    existing_job_policy: str
+    max_retries_failure: int
+    max_retries_preemption: int
+    max_task_failures: int
+    timeout_ms: int | None
+    scheduling_timeout_ms: int | None
+    termination_grace_ms: int
+    task_image: str
+    fail_if_exists: bool
+    container_profile: str
+    egress_policy: str
+    # The allowlisted environment variables (iris.cluster.redaction.
+    # CONTROLLER_ROW_ENV_VARS) as a JSON object, each value redacted; NULL when
+    # the job sets none. MARIN_PROVENANCE is stored as its parsed fields.
+    env_vars: str | None
+    ts: datetime
+
+
+@dataclass
+class IrisJobTask:
+    """A snapshot of one controller ``tasks`` row: every column, plus the job key.
+
+    Written at submit and whenever the task's state, current attempt, current
+    worker, error or exit code changes. Unlike the other controller rows, a change
+    to any other column alone writes no row: Kubernetes rewrites the pending
+    reason (``status_message``) on every reconcile. So every column other than
+    those five (``status_message``, ``container_id``, ``current_worker_address``,
+    ``backend_id``, ...) holds its value as of the task's last written change.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    task_id: str
+    task_index: int
+    state: str
+    error: str | None
+    exit_code: int | None
+    task_submitted_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    max_retries_failure: int
+    max_retries_preemption: int
+    current_attempt_id: int
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_insertion: int
+    priority_band: str
+    container_id: str | None
+    # The backend's reason a task is not running yet, as of this row's change.
+    status_message: str | None
+    current_worker_id: str | None
+    current_worker_address: str | None
+    backend_id: str
+    # The controller DB's tasks.cluster, named as on iris.controller_db__jobs.
+    placement: str
+    ts: datetime
+
+
+@dataclass
+class IrisTaskAttempt:
+    """A snapshot of one controller ``task_attempts`` row, written when the attempt changes.
+
+    An attempt is identified by ``attempt_uid``. ``(task_id, attempt_id)`` repeats
+    when a job name is reused, so a join to ``iris.task_event`` uses its
+    ``attempt_uid``, and a join to ``iris.task`` (which has none) also needs
+    ``ts`` between ``started_at`` and ``finished_at``; ``(cluster, root_job_id,
+    root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.controller_db__jobs``. ``node_name`` (Kubernetes)
+    or ``worker_id`` (worker VMs) places the attempt on a machine.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    task_id: str
+    attempt_id: int
+    attempt_uid: str
+    state: str
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    exit_code: int | None
+    error: str | None
+    terminal_reason: str
+    worker_id: str | None
+    node_name: str
+    pod_name: str
+    pod_uid: str
+    backend_id: str
+    ts: datetime
 
 
 class ProfileType(StrEnum):

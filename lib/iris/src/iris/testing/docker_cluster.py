@@ -168,6 +168,7 @@ class E2ECluster:
             port=self._controller_port,
             remote_state_dir=f"file://{bundle_dir}",
             local_state_dir=temp_path / "local",
+            cluster_id="docker-test",
         )
         log_stack = build_log_stack(
             log_service_address="",

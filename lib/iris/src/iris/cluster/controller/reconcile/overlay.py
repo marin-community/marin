@@ -246,6 +246,14 @@ class Overlay:
         state last-wins; error/exit_code/container_id/status_message last-non-null;
         started_at first-non-null; finished_at last-wins (may clear to None).
         """
+        prior = self._snapshot.tasks.get(delta.task_id)
+        if (
+            prior is None
+            or delta.state != prior.state
+            or (delta.error is not None and delta.error != prior.error)
+            or (delta.exit_code is not None and delta.exit_code != prior.exit_code)
+        ):
+            self._effects.changed_tasks.add(delta.task_id)
         old = self._effects.tasks.get(delta.task_id)
         if old is None:
             self._effects.tasks[delta.task_id] = delta

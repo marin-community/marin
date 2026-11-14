@@ -58,6 +58,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
 from iris.cluster.controller.caches import CacheRegistry
+from iris.cluster.controller.controller_rows import ControllerRowTables
 from iris.cluster.controller.schema import metadata, schema_migrations_table
 
 logger = logging.getLogger(__name__)
@@ -151,9 +152,18 @@ class Tx:
     while the write lock is still held (see ``write_transaction``).
     """
 
-    def __init__(self, conn: Connection, caches: CacheRegistry, seq: int, task_event_table: Table | None = None):
+    def __init__(
+        self,
+        conn: Connection,
+        caches: CacheRegistry,
+        seq: int,
+        task_event_table: Table | None = None,
+        controller_rows: ControllerRowTables | None = None,
+    ):
         self.conn = conn
         self.task_event_table = task_event_table
+        self.controller_rows = controller_rows
+        self._pre_commit_hooks: list[Callable[[], None]] = []
         self._hooks: list[Callable[[], None]] = []
         # The DB commit sequence sampled just BEFORE this cursor's snapshot was
         # established (``BEGIN``). It is a conservative lower bound on what the
@@ -194,6 +204,18 @@ class Tx:
         """
         self._hooks.append(hook)
 
+    def register_pre_commit(self, hook: Callable[[], None]) -> None:
+        """Register a hook that runs inside the transaction, just before ``COMMIT``.
+
+        Hooks run in registration order and may read and write through this
+        cursor. An exception rolls the transaction back.
+        """
+        self._pre_commit_hooks.append(hook)
+
+    def _fire_pre_commit_hooks(self) -> None:
+        for hook in self._pre_commit_hooks:
+            hook()
+
     def _fire_hooks(self) -> None:
         for hook in self._hooks:
             hook()
@@ -205,6 +227,7 @@ def write_transaction(
     write_lock: threading.RLock,
     caches: CacheRegistry,
     task_event_table: Table | None = None,
+    controller_rows: ControllerRowTables | None = None,
 ) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
@@ -224,9 +247,10 @@ def write_transaction(
         # Sample the commit sequence BEFORE opening the snapshot (conservative).
         seq = caches.commit_seq
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn, caches, seq, task_event_table)
+        tx = Tx(conn, caches, seq, task_event_table, controller_rows)
         try:
             yield tx
+            tx._fire_pre_commit_hooks()
         except Exception:
             conn.execute(text("ROLLBACK"))
             raise
@@ -284,6 +308,7 @@ class ControllerDB:
         self._lock = RLock()
         self._reopen_hooks: list[Callable[[], None]] = []
         self._task_event_table: Table | None = None
+        self._controller_rows: ControllerRowTables | None = None
         # Per-controller cache registry, mirrored onto every Tx this DB mints as
         # ``tx.caches``. Built before the engines so no cursor is ever minted
         # without it. Populated by higher layers (each per-controller memo
@@ -322,6 +347,9 @@ class ControllerDB:
 
     def attach_task_event_table(self, table: Table) -> None:
         self._task_event_table = table
+
+    def attach_controller_rows(self, tables: ControllerRowTables) -> None:
+        self._controller_rows = tables
 
     @property
     def sa_read_engine(self) -> Engine:
@@ -413,6 +441,7 @@ class ControllerDB:
             self._lock,
             self._caches,
             self._task_event_table,
+            self._controller_rows,
         ) as tx:
             yield tx
 

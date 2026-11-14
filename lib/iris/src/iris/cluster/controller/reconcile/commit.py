@@ -19,7 +19,7 @@ from sqlalchemy import bindparam, func
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.controller import reads
+from iris.cluster.controller import controller_rows, reads
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
@@ -269,6 +269,9 @@ def commit_effects(
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))
     _flush_jobs(cur, list(effects.jobs.values()))
+    controller_rows.record_task_changes(cur, effects.changed_tasks)
+    controller_rows.record_attempt_changes(cur, [(d.task_id, d.attempt_id) for d in effects.attempts.values()])
+    controller_rows.record_job_changes(cur, [d.job_id for d in effects.jobs.values()])
 
     task_events = tuple(effects.task_events)
     task_event_table = cur.task_event_table

@@ -106,6 +106,7 @@ from iris.cluster.types import (
 from iris.managed_thread import get_thread_container
 from iris.preemption import DEFAULT_TERMINATION_GRACE, resolve_termination_grace
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.testing import controller_rows_check
 from iris.testing.backends import make_mock_platform
 from iris.testing.controller_state import (
     ControllerTestState,
@@ -270,6 +271,7 @@ def make_controller_state(**kwargs):
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
+        controller_rows_check.install(db)
         yield ControllerTestState(db, **kwargs)
         db.close()
     finally:
@@ -314,6 +316,7 @@ def controller_factory(tmp_path) -> Iterator[Callable[..., Controller]]:
         if config is None:
             config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
             config_kwargs.setdefault("local_state_dir", tmp_path / "local")
+            config_kwargs.setdefault("cluster_id", "test-cluster")
             config = ControllerConfig(**config_kwargs)
         elif config_kwargs:
             raise TypeError("make_controller: pass either a config or config kwargs, not both")
