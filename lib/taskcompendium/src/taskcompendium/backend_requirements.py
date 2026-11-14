@@ -4,6 +4,7 @@
 """Derive backend demands from converted specs without treating backend choice as task data."""
 
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -13,7 +14,6 @@ from shellbox.requirements import (
     MACHINE_FIELDS,
     SOURCE_FIELDS,
     Requirement,
-    Support,
 )
 from shellbox.survey import CapabilityCell
 
@@ -82,13 +82,35 @@ def backend_schema_sha256() -> str:
     )
 
 
+class FitSupport(StrEnum):
+    """Fit outcomes for one role (or one task) on one backend.
+
+    The first three carry the capability verdict for roles the backend can host.
+    The last two are applicability outcomes, not failures: ``not_applicable``
+    marks a backend that is not a candidate for the role's environment kind
+    (a HostImage grader environment has no image-based candidate), and
+    ``role_absent`` marks a population that declares no environment for the
+    role at all (a grader-only source has no actor).
+    """
+
+    SUPPORTED = "supported"
+    PARTIAL = "partial"
+    UNSUPPORTED = "unsupported"
+    NOT_APPLICABLE = "not_applicable"
+    ROLE_ABSENT = "role_absent"
+
+
 class BackendFit(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    support: Support
-    task_counts: dict[Support, int]
-    roles: dict[str, dict[Support, int]]
+    support: FitSupport
+    task_counts: dict[FitSupport, int]
+    roles: dict[str, dict[FitSupport, int]]
+    """Both agent and grader always appear; absent roles carry role_absent counts."""
     blockers: dict[str, int]
+    """Genuine typed demands that fail on roles the backend can host."""
+    not_applicable: dict[str, int] = Field(default_factory=dict)
+    """Environment-kind exclusions, keyed ``role:<kind>`` with excluded task counts."""
     validation_errors: dict[str, int]
 
 
