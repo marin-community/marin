@@ -61,6 +61,7 @@ def test_final_archive_waits_for_inflight_upstream_reply(tmp_path, monkeypatch):
             with preserved_model_traffic(local, output), difficulty_relay.budget_relay(
                 endpoint=f"http://127.0.0.1:{upstream.server_port}/v1", model="fixture", api_key="fixture",
                 tokenizer_model="fixture", tokenizer_revision="a" * 40, parameters={"temperature": 0.7}, receipts=local / "model-requests",
+                budget=difficulty_relay.CANDIDATE_BUDGET,
             ) as relay:
                 urls.put(relay)
                 assert finish.wait(10)

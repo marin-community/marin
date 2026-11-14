@@ -48,7 +48,7 @@ from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_poli
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_recovery import previous_campaign, recovered_source
-from experiments.post_training.task_curation.difficulty_relay import budget_relay
+from experiments.post_training.task_curation.difficulty_relay import CANDIDATE_BUDGET, budget_relay
 
 LOGGER = logging.getLogger(__name__)
 ATTEMPT_TIMEOUT = 259200
@@ -341,6 +341,7 @@ def main() -> None:
             tokenizer_model=config.identity.tokenizer,
             tokenizer_revision=config.identity.tokenizer_revision,
             parameters=config.request_parameters,
+            budget=CANDIDATE_BUDGET,
             receipts=args.local_root / "model-requests",
         ) as relay,
         (
@@ -351,6 +352,7 @@ def main() -> None:
                 tokenizer_model=config.judge_identity.tokenizer,
                 tokenizer_revision=config.judge_identity.tokenizer_revision,
                 parameters={"temperature": JUDGE_TEMPERATURE},
+                budget=None,
                 receipts=judge_root / "model-requests",
             )
             if has_judge

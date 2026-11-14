@@ -884,7 +884,7 @@ unqualified judge routes also retain explicit reasons.
 
 GLM judges use the same production host service at temperature 0.7. The host
 records requested and effective parameters while preserving each source's
-TaskSpec and rubric. A blank declared judge model uses the explicitly recorded
+TaskSpec, rubric and grading token limits. A blank declared judge model uses the explicitly recorded
 GLM host default; a different named model requires its own qualified route.
 Each source's attempt receipt links separate candidate and judge traffic
 archives and token counts. Final judge traffic, including replies that outlive

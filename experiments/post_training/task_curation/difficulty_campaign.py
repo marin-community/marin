@@ -278,6 +278,7 @@ def main() -> None:
                     "tokenizer_revision": judge_pin.revision,
                     "chat_template_sha256": judge_pin.template_sha256,
                     "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
+                    "token_budget": "original source request; production service enforces its served context",
                     "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
                     "serving_probe": judge_probe,
                 },

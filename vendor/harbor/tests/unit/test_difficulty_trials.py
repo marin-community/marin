@@ -102,7 +102,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     def judge_response(request):
         judge_requests.append(json.loads(request.content))
-        return httpx.Response(200, json={"usage": {"prompt_tokens": 1, "completion_tokens": 2}})
+        return httpx.Response(200, json={"usage": {"prompt_tokens": 1, "completion_tokens": 20000}})
 
     class Tokenizer:
         def apply_chat_template(self, *args, **kwargs):
@@ -138,7 +138,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
             # The machine boundary submits its declared temperature through the CLI's real host relay.
             endpoint = configuration.environment.kwargs["model_endpoint"]
             request = Request(endpoint + "/chat/completions", method="POST",
-                              data=json.dumps({"model": "glm-5.3", "temperature": 0.0,
+                              data=json.dumps({"model": "glm-5.3", "temperature": 0.0, "max_tokens": 32768,
                                                "messages": [{"role": "user", "content": "Original rubric"}]}).encode(),
                               headers={"Content-Type": "application/json"})
             with urlopen(request, timeout=10) as response:
@@ -204,9 +204,10 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         assert len(judge_requests) == 2
         assert {request["temperature"] for request in judge_requests} == {0.7}
         assert {request["model"] for request in judge_requests} == {"glm-5.3"}
+        assert {request["max_tokens"] for request in judge_requests} == {32768}
         assert continued.input_tokens == continued.output_tokens == 0
         ledger = json.loads(next((second / "trials").glob("*/attempts.json")).read_text())
-        assert (ledger["judge_input_tokens"], ledger["judge_output_tokens"]) == (1, 2)
+        assert (ledger["judge_input_tokens"], ledger["judge_output_tokens"]) == (1, 20000)
     assert len(list((second / "trials").glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1
     assert json.loads(next(output.glob("*/measurement.json")).read_text())["n"] == 1
 
