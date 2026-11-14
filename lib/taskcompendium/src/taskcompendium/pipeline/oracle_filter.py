@@ -140,9 +140,10 @@ class OracleTrialReceipt(BaseModel):
         config = self.result.get("config", {})
         verifier_allocation = self.verifier_execution_requirements
         configured_verifier = config.get("task", {}).get("verifier_execution_requirements")
+        recorded_verifier = verifier_allocation.model_dump(mode="json") if verifier_allocation is not None else None
+        if configured_verifier != recorded_verifier:
+            raise ValueError("Verifier allocation differs from the actual production Trial config")
         if verifier_allocation is not None:
-            if configured_verifier != verifier_allocation.model_dump(mode="json"):
-                raise ValueError("Verifier allocation differs from the actual production Trial config")
             if any(
                 getattr(verifier_allocation, name) != getattr(self.execution_requirements, name)
                 for name in ("agent_timeout_sec", "verifier_timeout_sec")
