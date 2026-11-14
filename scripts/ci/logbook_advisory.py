@@ -44,7 +44,7 @@ def excerpt(url: str, content: str | None) -> dict:
 
 
 def evidence(pr: dict, issue_number: str) -> dict:
-    """Read the issue and any matching index record from a fixed public repository."""
+    """Read the issue, index record, and pinned notebook from marin-logbooks."""
     issue_url = f"{WEB}/issues/{issue_number}"
     issue = github(f"issues/{issue_number}")
     if issue.get("pull_request"):
