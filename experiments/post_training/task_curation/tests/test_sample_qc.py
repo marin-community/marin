@@ -16,6 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
+from taskcompendium.pipeline.oracle_filter import OracleTaskReceipt
 from taskcompendium.pipeline.review import ChatReviewer
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
@@ -158,14 +159,18 @@ def test_sample_filter_proof_must_cover_unselected_retained_tasks(sample_panel, 
     selected_ids = {row["task_id"] for row in selected}
     for name, cohort in (("partial", [task for task in tasks if task.id in selected_ids]), ("complete", tasks)):
         proof = oracle_receipt(cohort)
-        proof = proof.model_copy(
-            update={
-                "tasks": {
-                    key: entry.model_copy(update={"runtime_sha256": canonical_sha256({})})
-                    for key, entry in proof.tasks.items()
+        entries = {}
+        for key, entry in proof.tasks.items():
+            assert isinstance(entry, OracleTaskReceipt) and entry.negative_control is not None
+            entries[key] = entry.model_copy(
+                update={
+                    "runtime_sha256": canonical_sha256({}),
+                    "negative_control": entry.negative_control.model_copy(
+                        update={"runtime_sha256": canonical_sha256({})}
+                    ),
                 }
-            }
-        )
+            )
+        proof = proof.model_copy(update={"tasks": entries})
         assert all(proof.admits(task, {}) for task in cohort)
         path = StoragePath(str(tmp_path / f"{name}-filter.json"))
         path.write_text(proof.model_dump_json())

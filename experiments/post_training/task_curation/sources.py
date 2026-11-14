@@ -30,6 +30,7 @@ from experiments.post_training.task_curation.datasets.full_content_results impor
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
+from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
 from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
@@ -51,15 +52,17 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
-from experiments.post_training.task_curation.full_content_binding import bind_full_content_result
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
+from experiments.post_training.task_curation.oracle_admitted_release import (
+    bind_oracle_admitted_release,
+    bind_selected_source_content,
+)
 from experiments.post_training.task_curation.oracle_release import bind_oracle_filtered_release
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.remediation_binding import bind_retained_release
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
-from experiments.post_training.task_curation.sample_qc_binding import bind_sample_result
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
@@ -67,11 +70,9 @@ from experiments.post_training.task_curation.within_source_binding import bind_w
 
 def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
     """Return configured populations before selecting oracle-filtered private pins."""
-    full_content_bindings = full_content_result_bindings()
     actor_receipts = actor_census_receipts()
     lexical_receipts = lexical_measurements()
     retained_receipts = retained_release_receipts()
-    quality_receipts = sample_qc_receipts()
     grading_receipts = grading_census_receipts()
     dedup_receipts = read_dedup_receipts(
         Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
@@ -136,8 +137,6 @@ def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
         bind_grading_census(source, grading_receipts[source.info.id]) if source.info.id in grading_receipts else source
         for source in sources
     ]
-    sources = [bind_sample_result(source, quality_receipts.get(source.info.id)) for source in sources]
-    sources = [bind_full_content_result(source, full_content_bindings.get(source.info.id)) for source in sources]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
@@ -146,9 +145,21 @@ def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
 
 def all_sources() -> dict[str, RlDataSource]:
     receipts = oracle_release_receipts()
+    admitted = oracle_admitted_release_receipts()
+    if receipts.keys() & admitted.keys():
+        raise ValueError("A source cannot select both empty and admitted oracle releases")
+    originals = sources_before_oracle_filtration()
+    sources = dict(originals)
+    for source_id, receipt in receipts.items():
+        sources[source_id] = bind_oracle_filtered_release(sources[source_id], receipt)
+    for source_id, receipt in admitted.items():
+        sources[source_id] = bind_oracle_admitted_release(sources[source_id], receipt)
+    samples, full_content = sample_qc_receipts(), full_content_result_bindings()
     return {
-        source_id: bind_oracle_filtered_release(source, receipts[source_id]) if source_id in receipts else source
-        for source_id, source in sources_before_oracle_filtration().items()
+        source_id: bind_selected_source_content(
+            originals[source_id], source, samples.get(source_id), full_content.get(source_id)
+        )
+        for source_id, source in sources.items()
     }
 
 

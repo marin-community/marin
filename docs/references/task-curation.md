@@ -1509,6 +1509,31 @@ before filtration and checks its original pin, then writes `part-*.json` shards.
 Empty outputs also receive empty source fingerprints bound to their new pins;
 they have no cross-source overlap candidates.
 
+Nonempty filtered outputs use `OracleAdmittedReleaseReceipt`. The receipt joins
+complete oracle/control decisions to actor, grading, lexical and sampled content
+evidence measured for the exact published dataset revision. SHARED grading, where
+the agent and grader use the same container, also requires a complete
+integrity-contract census. `TaskFormat.HARBOR` selects
+`import_oracle_harbor_prebuilt`; `TaskFormat.TASKCOMPENDIUM` selects
+`import_taskcompendium_prebuilt`. The selected `PrebuiltCohort.version` must match
+the actor census's recorded `converter_version` so its measurements cover that
+pipeline. Qualification of the original, unfiltered population remains archived.
+
+Generate registry receipt shards from the complete input cohort, canonical
+filter, output Parquet and hashed qualification metadata for the new revision:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_admitted_release \
+  --manifest admitted-oracle-input.json --output-dir admitted-oracle-receipts
+```
+
+The command rechecks input-ID coverage, typed exclusions, sampled observations
+and the published cohort before writing registry shards. After selecting the
+filtered pin, it attaches the seed-zero SAMPLE content review and any optional
+quality result covering the whole filtered population. Content evidence for the
+original pin remains archival. Unresolved infrastructure failures in original
+oracle trials or negative controls prevent release qualification.
+
 Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
 `memory_mb`, `storage_mb`, `agent_timeout_sec` and `verifier_timeout_sec`.
 Sizes use MiB and deadlines use seconds. Conversion may leave this field absent;
