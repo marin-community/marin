@@ -118,17 +118,15 @@ class LocalHostAdmission:
         now: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> Iterator[LocalHostSlot]:
-        """Wait before dispatch, then hold a slot through the entire Harbor subprocess."""
+        """Wait before dispatch; the caller releases only after confirmed resource cleanup."""
         backoff = ExponentialBackoff(initial=1, maximum=120, factor=2, jitter=0.5)
         while now() < deadline:
             slot = self.try_claim(task_id)
             if slot is not None:
-                try:
-                    if now() >= deadline:
-                        raise TimeoutError("LOCAL host admission deadline elapsed before source dispatch")
-                    yield slot
-                finally:
+                if now() >= deadline:
                     slot.release()
+                    raise TimeoutError("LOCAL host admission deadline elapsed before source dispatch")
+                yield slot
                 return
             delay = min(backoff.next_interval(), max(0, deadline - now()))
             logger.info("LOCAL host admission waiting: boot=%s worker=%s task=%s", self.boot_id, self.worker_id, task_id)
