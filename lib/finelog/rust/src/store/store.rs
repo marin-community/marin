@@ -2129,10 +2129,8 @@ mod tests {
         .unwrap();
         let ipc = crate::store::ipc::encode_ipc(&batch_schema, &[batch]).unwrap();
         store.write_rows("iris.worker", &ipc, None).unwrap();
-        store
-            .maintain_namespace("iris.worker", false)
-            .await
-            .unwrap();
+        // The backfill skips L0, so compact the segment to L1 first.
+        store.maintain_namespace("iris.worker", true).await.unwrap();
         let before = store.query_snapshot("iris.worker").unwrap();
         let path = before.paths[0].clone();
         assert_eq!(
@@ -5354,7 +5352,9 @@ mod tests {
     }
 
     impl TimeBoundedTable {
-        async fn new(tag: &str) -> Self {
+        /// `force_compact_l0` compacts each write's L0 into its own L1 segment,
+        /// the level the bounds backfill reads.
+        async fn new(tag: &str, force_compact_l0: bool) -> Self {
             let data_dir = crate::test_support::unique_dir(&format!("{tag}_data"));
             let remote_dir = crate::test_support::unique_dir(&format!("{tag}_remote"));
             let store = Store::new(
@@ -5372,7 +5372,7 @@ mod tests {
                 let (_, ipc) = worker_ipc(&[(worker, 1, start), (worker, 2, start + 500)]);
                 store.write_rows("iris.worker", &ipc, None).unwrap();
                 store
-                    .maintain_namespace("iris.worker", false)
+                    .maintain_namespace("iris.worker", force_compact_l0)
                     .await
                     .unwrap();
             }
@@ -5423,7 +5423,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn flushed_segments_record_column_bounds() {
-        let table = TimeBoundedTable::new("column_bounds_flushed").await;
+        let table = TimeBoundedTable::new("column_bounds_flushed", false).await;
         assert_eq!(
             table.recorded_bounds(),
             vec![
@@ -5436,8 +5436,24 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bounds_backfill_skips_l0_segments() {
+        let table = TimeBoundedTable::new("column_bounds_skip_l0", false).await;
+        for path in &table.paths {
+            table.clear_column_bounds(path);
+        }
+        let runtime = table.store.tables.require("iris.worker").unwrap();
+        let pending = maintenance::run(&runtime, TableWork::SegmentBounds)
+            .await
+            .unwrap();
+
+        assert!(!pending.has_more_work());
+        assert_eq!(table.recorded_bounds(), vec![None, None, None]);
+        table.cleanup();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn maintenance_backfills_column_bounds_from_footers_without_rewriting_objects() {
-        let table = TimeBoundedTable::new("column_bounds_backfill").await;
+        let table = TimeBoundedTable::new("column_bounds_backfill", true).await;
         let sources_before: Vec<_> = table
             .store
             .catalog
@@ -5519,6 +5535,11 @@ mod tests {
             .await
             .unwrap();
         write_log_rows(&store, 1_000).await;
+        // The backfill skips L0, so compact the segment to L1 first.
+        store
+            .maintain_namespace(LOG_NAMESPACE_NAME, true)
+            .await
+            .unwrap();
         store
             .publish_object_catalog(LOG_NAMESPACE_NAME)
             .await
