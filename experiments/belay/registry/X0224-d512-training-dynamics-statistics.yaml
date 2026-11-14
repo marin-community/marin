@@ -5,7 +5,7 @@ category: Training dynamics and schedules
 summary: 'Log and analyze some of these statistics during training (if some of these are too expensive then do it every tens
   or hundreds of steps):'
 source: intake
-status: approved
+status: report
 track: custom
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-5968183668
