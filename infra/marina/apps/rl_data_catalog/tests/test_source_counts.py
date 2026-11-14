@@ -13,7 +13,7 @@ from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_ev
     "name,blocked,remaining,admitted,state",
     [
         ("clean", 1, 2, 2, "static_retained"),
-        ("eval", 1, 2, 0, "eval_only"),
+        ("eval", 1, 2, 2, "static_retained"),
         ("clean", 3, 0, 0, "static_blocked"),
     ],
 )
@@ -27,6 +27,7 @@ def test_no_oracle_counts_subtract_unique_blockers_and_separate_eval(
     # Both reasons affect the same task. Subtract the measured union only once.
     assert result["example_count"] == remaining
     assert result["admitted_count"] == admitted
+    assert result["admitted_count"] + result["excluded_count"] == result["population_count"] == 3
     assert result["state"] == state
     assert result["count_evidence"]["policy"]["sha256"] == observation.policy.sha256
 

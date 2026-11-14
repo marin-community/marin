@@ -490,45 +490,75 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     expect(page.locator("#rows tr").first).to_be_visible()
     sources = page.evaluate("async () => (await (await fetch('api/sources')).json()).sources")
-    quality = [sum(source["quality"] == level for source in sources) for level in ("QUICK", "SAMPLE", "FULL")]
-    assert quality[0] > 0
-    totals = " / ".join(str(count) for count in quality)
-    expect(page.locator("#metric-examples")).to_have_text(
-        "2 admitted · 1 pending oracle filtration · 1 excluded · 21 counts unmeasured"
+    # A complete 110-task partition, including hidden admissions and folded EVAL tasks.
+    selected = {source["id"]: source for source in sources}
+    rows = []
+    for name, population, admitted, excluded, quality, use in [
+        ("clean", 40, 30, 10, "SAMPLE", "train"),
+        ("eval", 30, 20, 10, "FULL", "eval"),
+        ("required", 20, None, None, "SAMPLE", "train"),
+        ("filtered-zero", 10, 0, 10, "QUICK", "train"),
+        ("stale-clean", 10, 10, 0, "QUICK", "train"),
+    ]:
+        row = selected[f"Marin:{name}"]
+        row.update(quality=quality, result="BAD" if name == "filtered-zero" else "GOOD", intended_use=use)
+        row["filtration"] = {
+            "population_count": population,
+            "admitted_count": admitted,
+            "example_count": admitted,
+            "excluded_count": excluded,
+            "state": "pending_oracle" if admitted is None else "static_retained",
+            "reason": "Count reconciliation fixture",
+        }
+        if name in {"clean", "eval"}:
+            row["duplicate_group"] = {
+                "group_id": "fixture-duplicates",
+                "canonical_source_id": "Marin:clean",
+                "members": [
+                    {"source_id": "Marin:clean", "overlap_with_canonical": 1},
+                    {"source_id": "Marin:eval", "overlap_with_canonical": 1},
+                ],
+            }
+        rows.append(row)
+    page.route("**/api/sources", lambda route: route.fulfill(json={"sources": rows, "synced_at": "2026-11-14"}))
+    page.reload()
+    total = "60 tasks admitted (TRAIN 40 · EVAL 20) · 20 tasks pending oracle filtration · 30 tasks excluded"
+    expect(page.locator("#metric-examples")).to_have_text(total)
+    expect(page.locator("#metric-sources")).to_have_text("110 / 60")
+    expect(page.locator("#metric-quality")).to_have_text("20 / 60 / 30")
+    expect(page.locator("#metric-quality-shown")).to_have_text("Shown 0 / 60 / 0")
+    expect(page.locator("#task-reconciliation")).to_have_text(
+        "20 tasks hidden (QUICK/BAD); 10 admitted · 30 tasks folded (likely duplicates); 20 admitted"
     )
-    expect(page.locator("#metric-quality")).to_have_text(totals)
-    expect(page.locator("#metric-quality-shown")).to_contain_text("Shown 0 /")
-    page.locator("#show-all").check()
     expect(page.locator("#metric-examples-shown")).to_have_text(
-        "Shown 2 admitted · 1 pending oracle filtration · 1 excluded · 21 counts unmeasured"
+        "Shown 30 tasks admitted (TRAIN 30 · EVAL 0) · 20 tasks pending oracle filtration · 10 tasks excluded"
     )
-    expect(page.locator("#metric-quality-shown")).to_have_text(f"Shown {totals}")
-    page.locator("#search").fill("eval")
-    evaluation = page.locator('tr[data-source-id="Marin:eval"]')
-    expect(evaluation.locator("td").nth(1)).to_have_text("2")
-    expect(evaluation.locator(".filtration-cell .chip")).to_have_text("EVAL ONLY")
-    page.locator("#search").fill("clean")
-    train = page.locator('tr[data-source-id="Marin:clean"]')
-    expect(train.locator("td").nth(1)).to_have_text("2")
-    expect(train.locator(".filtration-cell .chip")).to_have_text("NO ORACLE")
-    train.locator(".source-name").click()
-    page.get_by_role("link", name="All quality evidence", exact=True).click()
-    expect(page.locator("#sections")).to_contain_text("028c7dfbc7800350eb6bf1ccb2be61b1810447f3d7fb76596318764c0e2f3953")
-    expect(page.get_by_role("link", name="No-oracle count policy ruling ↗")).to_have_attribute(
-        "href", "https://example.org/no-oracle-policy.md"
+    # Read the rendered counts; both populations must reconcile, not only the text labels.
+    shown = [int(value) for value in re.findall(r"\d+", page.locator("#metric-sources").inner_text())]
+    omitted = [int(value) for value in re.findall(r"\d+", page.locator("#task-reconciliation").inner_text())]
+    assert shown[1] + omitted[0] + omitted[2] == shown[0]
+    admitted_shown = int(re.findall(r"\d+", page.locator("#metric-examples-shown").inner_text())[0])
+    admitted_total = int(re.findall(r"\d+", page.locator("#metric-examples").inner_text())[0])
+    assert admitted_shown + omitted[1] + omitted[3] == admitted_total
+    page.locator("#difficulty-model").select_option("small")
+    page.locator("#use").select_option("train")
+    expect(page.locator("#task-reconciliation")).to_have_text(
+        "20 tasks hidden (QUICK/BAD); 10 admitted · 30 tasks filtered; 20 admitted"
     )
-    page.get_by_role("link", name="By source", exact=True).click()
-    page.locator("#show-all").check()
-    page.locator("#search").fill("filtered-zero")
-    expect(page.locator("#rows tr")).to_have_count(1)
-    expect(page.locator("#metric-sources")).to_have_text("25 / 1")
-    expect(page.locator("#metric-examples")).to_have_text(
-        "2 admitted · 1 pending oracle filtration · 1 excluded · 21 counts unmeasured"
-    )
-    expect(page.locator("#metric-examples-shown")).to_have_text(
-        "Shown 0 admitted · 0 pending oracle filtration · 1 excluded"
-    )
-    expect(page.locator("#metric-quality")).to_have_text(totals)
+    page.locator("#show-everything").click()
+    expect(page.locator("#difficulty-model")).to_have_value("all")
+    expect(page.locator("#use")).to_have_value("all")
+    expect(page.locator("#rows tr")).to_have_count(5)
+    expect(page.locator("#metric-sources")).to_have_text("110 / 110")
+    expect(page.locator("#metric-examples-shown")).to_have_text("Shown " + total)
+    expect(page.locator("#metric-quality-shown")).to_have_text("Shown 20 / 60 / 30")
+    expect(page.locator("#task-reconciliation")).to_have_text("All tasks shown.")
+    page.reload()
+    expect(page.locator("#rows tr")).to_have_count(5)
+    expect(page.locator("#task-reconciliation")).to_have_text("All tasks shown.")
+    page.locator("#clear-filters").click()
+    expect(page.locator("#rows tr")).to_have_count(2)
+    expect(page.locator("#difficulty-model")).to_have_value("all")
     assert page.locator(".metrics > div").evaluate_all(
         """cards => cards.every((card, i) => {
             const box = card.getBoundingClientRect(), next = cards[i + 1]?.getBoundingClientRect();
@@ -540,6 +570,7 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
         })"""
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.unroute("**/api/sources")
     page.locator(".atlas-tabs").get_by_role("link", name="Getting started", exact=True).click()
     count = page.locator('button[data-leaf="sample"]')
     expect(count).to_have_text(re.compile(r"^\d+$"))

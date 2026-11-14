@@ -32,18 +32,17 @@ function value(row, key) {
   return row[key];
 }
 function shownByDefault(row) { return row.quality !== 'QUICK' && row.result !== 'BAD'; }
-function filtered() {
+function matchesFilters(row) {
   const search = $('search').value.trim().toLowerCase();
-  const showAll = $('show-all').checked;
-  return state.sources.filter(row => {
-    if (!showAll && !shownByDefault(row)) return false;
-    if (state.origin !== 'all' && originOf(row) !== state.origin) return false;
-    if ($('use').value !== 'all' && value(row, 'use') !== $('use').value) return false;
-    if ($('quality').value !== 'all' && row.quality !== $('quality').value) return false;
-    if ($('result').value !== 'all' && resultKey(row) !== $('result').value) return false;
-    const text = [row.display_name, row.name, row.dataset_id, row.family, ...(row.tags || [])].join(' ').toLowerCase();
-    return !search || text.includes(search);
-  }).sort((a, b) => {
+  if (state.origin !== 'all' && originOf(row) !== state.origin) return false;
+  if ($('use').value !== 'all' && value(row, 'use') !== $('use').value) return false;
+  if ($('quality').value !== 'all' && row.quality !== $('quality').value) return false;
+  if ($('result').value !== 'all' && resultKey(row) !== $('result').value) return false;
+  const text = [row.display_name, row.name, row.dataset_id, row.family, ...(row.tags || [])].join(' ').toLowerCase();
+  return !search || text.includes(search);
+}
+function filtered() {
+  return state.sources.filter(row => ($('show-all').checked || shownByDefault(row)) && matchesFilters(row)).sort((a, b) => {
     const x = value(a, state.sort), y = value(b, state.sort);
     if (x === null || x === undefined) return y === null || y === undefined ? a.id.localeCompare(b.id) : 1;
     if (y === null || y === undefined) return -1;
@@ -101,13 +100,12 @@ function daytonaCell(row) {
 }
 function renderTabs() {
   const eligible = state.sources.filter(row => $('show-all').checked || shownByDefault(row));
-  const counts = {all: collapsed(eligible).length};
   const origins = ['all', ...[...new Set(state.sources.map(originOf))].sort()];
-  for (const origin of origins.slice(1)) counts[origin] = collapsed(eligible.filter(row => originOf(row) === origin)).length;
   $('origin-tabs').replaceChildren(...origins.map(origin => {
     const tab = node('button', origin === 'all' ? 'Origin' : origin, `tab${state.origin === origin ? ' selected' : ''}`);
     tab.type = 'button'; tab.setAttribute('aria-pressed', String(state.origin === origin));
-    tab.append(node('span', number.format(counts[origin] || 0)));
+    const tasks = eligible.filter(row => origin === 'all' || originOf(row) === origin);
+    tab.append(node('span', `${number.format(taskCounts(tasks).population)} tasks`));
     tab.addEventListener('click', () => { state.origin = origin; update(); });
     return tab;
   }));
@@ -117,7 +115,9 @@ function render() {
   $('headers').replaceChildren(...columns.map(([key, title]) => {
     const th = node('th'); th.scope = 'col';
     if (['examples', 'issue_rate', 'overlap'].includes(key)) th.className = 'num';
-    if (['evidence', 'examples'].includes(key)) { th.append(node('span', title, 'header-label')); return th; }
+    if (['evidence', 'examples'].includes(key) || (key === 'difficulty' && $('difficulty-model').value === 'all')) {
+      th.append(node('span', title, 'header-label')); return th;
+    }
     const button = node('button', title);
     th.setAttribute('aria-sort', state.sort === key ? state.direction === 1 ? 'ascending' : 'descending' : 'none');
     if (state.sort === key) button.append(node('span', state.direction === 1 ? '↑' : '↓', 'sort-indicator'));
@@ -130,7 +130,7 @@ function render() {
   const rows = filtered();
   const entries = collapsed(rows);
   const displayed = entries.flatMap(({row, others}) => [row, ...(expandedGroups.has(row.duplicate_group?.group_id) ? others : [])]);
-  metrics(displayed);
+  metrics(displayed, rows);
   $('rows').replaceChildren(...entries.flatMap(({row, others}) => {
     const groupId = row.duplicate_group?.group_id;
     const open = groupId && expandedGroups.has(groupId);
@@ -138,7 +138,7 @@ function render() {
   }));
   $('empty').hidden = displayed.length > 0;
   const hidden = state.sources.length - state.sources.filter(row => $('show-all').checked || shownByDefault(row)).length;
-  const folded = rows.length - entries.length;
+  const folded = rows.length - displayed.length;
   $('visible-count').textContent = `${number.format(displayed.length)} displayed sources` +
     (folded ? ` · ${number.format(folded)} likely duplicates folded` : '') + (hidden ? ` · ${number.format(hidden)} QUICK or BAD hidden` : '');
 }
@@ -158,7 +158,7 @@ function sourceRow(row, others, canonical) {
       toggle.title = `${others.length} likely duplicate member${others.length === 1 ? '' : 's'}`;
       toggle.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} likely duplicates for ${row.display_name}`);
       toggle.setAttribute('aria-expanded', String(expanded));
-      toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); render(); });
+      toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); update(); });
       name.prepend(toggle);
     }
     const examples = node('td', row.filtration.example_count == null ? (row.filtration.state === 'pending_oracle' ? 'Pending oracle filtration' : 'Pending') : number.format(row.filtration.example_count), 'num');
@@ -236,21 +236,42 @@ function details(row) {
   }
   $('detail-links').replaceChildren(...links); $('details').showModal();
 }
-function metrics(displayed) {
+function taskCounts(rows) {
+  const total = {population: 0, admitted: 0, train: 0, eval: 0, pending: 0, excluded: 0, unmeasured: 0};
+  for (const row of rows) {
+    const count = row.filtration;
+    total.population += count.population_count;
+    total.admitted += count.admitted_count ?? 0;
+    if (row.intended_use === 'train') total.train += count.admitted_count ?? 0;
+    if (row.intended_use === 'eval') total.eval += count.admitted_count ?? 0;
+    total.excluded += count.excluded_count ?? 0;
+    if (count.state === 'pending_oracle') total.pending += count.population_count;
+    else if (count.admitted_count == null) total.unmeasured += count.population_count;
+  }
+  return total;
+}
+function metrics(displayed, rows) {
   const samples = rows => {
-    const admitted = rows.reduce((sum, row) => sum + (row.filtration.admitted_count ?? 0), 0);
-    const pending = rows.filter(row => row.filtration.state === 'pending_oracle').length;
-    const unknown = rows.filter(row => row.filtration.example_count == null && row.filtration.state !== 'pending_oracle').length;
-    const excluded = rows.filter(row => row.filtration.state === 'excluded').length;
-    return `${number.format(admitted)} admitted · ${number.format(pending)} pending oracle filtration · ${number.format(excluded)} excluded` + (unknown ? ` · ${number.format(unknown)} counts unmeasured` : "");
+    const count = taskCounts(rows);
+    return `${number.format(count.admitted)} tasks admitted (TRAIN ${number.format(count.train)} · EVAL ${number.format(count.eval)})` +
+      ` · ${number.format(count.pending)} tasks pending oracle filtration · ${number.format(count.excluded)} tasks excluded` +
+      (count.unmeasured ? ` · ${number.format(count.unmeasured)} tasks with admission unmeasured` : '');
   };
-  const qualityCounts = rows => ['QUICK', 'SAMPLE', 'FULL'].map(level => number.format(rows.filter(row => row.quality === level).length)).join(' / ');
-  $('metric-sources').textContent = `${number.format(state.sources.length)} / ${number.format(displayed.length)}`;
+  const qualityCounts = rows => ['QUICK', 'SAMPLE', 'FULL'].map(level => number.format(taskCounts(rows.filter(row => row.quality === level)).population)).join(' / ');
+  $('metric-sources').textContent = `${number.format(taskCounts(state.sources).population)} / ${number.format(taskCounts(displayed).population)}`;
   $('metric-examples').textContent = samples(state.sources);
   $('metric-examples-shown').textContent = `Shown ${samples(displayed)}`;
   $('metric-quality').textContent = qualityCounts(state.sources);
   $('metric-quality-shown').textContent = `Shown ${qualityCounts(displayed)}`;
   $('metric-date').textContent = day(state.syncedAt);
+  const hidden = state.sources.filter(row => !$('show-all').checked && !shownByDefault(row));
+  const filtered = state.sources.filter(row => !hidden.includes(row) && !matchesFilters(row));
+  const folded = rows.filter(row => !displayed.includes(row));
+  const reasons = [[hidden, 'hidden (QUICK/BAD)'], [filtered, 'filtered'], [folded, 'folded (likely duplicates)']];
+  $('task-reconciliation').textContent = reasons.filter(([items]) => items.length).map(([items, reason]) => {
+    const count = taskCounts(items);
+    return `${number.format(count.population)} tasks ${reason}; ${number.format(count.admitted)} admitted`;
+  }).join(' · ') || 'All tasks shown.';
 }
 async function load() {
   const [data, inventory] = await Promise.all([json('api/sources'), json('measurements/oracle-inventory.json')]);
@@ -266,10 +287,11 @@ function viewUrl() {
   const params = new URLSearchParams();
   for (const id of ['search', 'use', 'quality', 'result', 'difficulty-model']) {
     const item = $(id).value.trim();
-    if (item && item !== 'all' && !(id === 'difficulty-model' && item === 'large')) params.set(id, item);
+    if (item && item !== 'all') params.set(id, item);
   }
   if (state.origin !== 'all') params.set('origin', state.origin);
   if ($('show-all').checked) params.set('all', '1');
+  if (expandedGroups.size) params.set('expanded', [...expandedGroups].sort().join(','));
   if (state.sort !== 'display_name') params.set('sort', state.sort);
   if (state.direction !== 1) params.set('direction', state.direction);
   return location.pathname + (params.size ? `#${params}` : '');
@@ -280,6 +302,8 @@ function readLocation() {
   for (const id of ['use', 'quality', 'result']) if (params.has(id)) $(id).value = params.get(id);
   if (AtlasDifficulty.solvers.includes(params.get('difficulty-model'))) $('difficulty-model').value = params.get('difficulty-model');
   $('show-all').checked = params.get('all') === '1';
+  expandedGroups.clear();
+  for (const group of (params.get('expanded') || '').split(',').filter(Boolean)) expandedGroups.add(group);
   state.origin = params.get('origin') === 'Task Trove' ? 'TaskTrove' : params.get('origin') || 'all';
   const sortable = columns.filter(([key]) => !['examples', 'evidence'].includes(key)).map(([key]) => key);
   state.sort = sortable.includes(params.get('sort')) ? params.get('sort') : 'display_name';
@@ -290,12 +314,25 @@ function update(replace = false) {
   render();
 }
 for (const id of ['use', 'quality', 'result']) $(id).addEventListener('change', () => update());
-$('difficulty-model').addEventListener('change', () => { state.sort = 'difficulty'; state.direction = -1; update(); });
+$('difficulty-model').addEventListener('change', () => {
+  state.sort = $('difficulty-model').value === 'all' ? 'display_name' : 'difficulty';
+  state.direction = state.sort === 'difficulty' ? -1 : 1;
+  update();
+});
 $('show-all').addEventListener('change', () => update());
 $('filters').addEventListener('submit', event => event.preventDefault());
 $('search').addEventListener('input', () => update(true));
 $('close-details').addEventListener('click', () => $('details').close());
-$('clear-filters').addEventListener('click', () => { $('filters').reset(); $('search').value = ''; state.origin = 'all'; update(); });
+function resetFilters() {
+  $('filters').reset(); $('search').value = ''; state.origin = 'all';
+  state.sort = 'display_name'; state.direction = 1; expandedGroups.clear();
+}
+$('clear-filters').addEventListener('click', () => { resetFilters(); update(); });
+$('show-everything').addEventListener('click', () => {
+  resetFilters(); $('show-all').checked = true;
+  for (const row of state.sources) if (row.duplicate_group) expandedGroups.add(row.duplicate_group.group_id);
+  update();
+});
 window.addEventListener('popstate', () => { readLocation(); render(); });
 $('export').addEventListener('click', () => {
   const quote = item => `"${String(item ?? '').replaceAll('"', '""')}"`;

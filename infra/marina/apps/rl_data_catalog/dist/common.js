@@ -168,7 +168,7 @@ function backendDetails(source) {
   table.append(body); wrap.append(table); return wrap;
 }
 function filtrationChip(filtration) {
-  const label = {excluded: 'EXCLUDED', pending: 'IN PROGRESS', pending_oracle: 'PENDING ORACLE', pending_static: 'PENDING STATIC', static_retained: 'NO ORACLE', static_blocked: 'STATIC BLOCKED', eval_only: 'EVAL ONLY', complete: 'COMPLETE'}[filtration.state];
+  const label = {excluded: 'EXCLUDED', pending: 'IN PROGRESS', pending_oracle: 'PENDING ORACLE', pending_static: 'PENDING STATIC', static_retained: 'NO ORACLE', static_blocked: 'STATIC BLOCKED', complete: 'COMPLETE'}[filtration.state];
   const chip = node('span', label, `chip quality-${['complete', 'static_retained'].includes(filtration.state) ? 'good' : 'unassessed'}`);
   chip.title = `${filtration.reason} Current source state: ${filtration.source_status}.`;
   return chip;
@@ -182,7 +182,7 @@ function filtrationRows(source) {
   const zeroDrops = (source.contamination_status === 'NO ISSUES' && lexical?.contaminated_tasks === 0) || source.contamination_status === 'MEASURED, EVAL';
   return [
     ['Filtration', admission && filtrationChip(admission)],
-    ['Current admission state', {excluded: 'Excluded', static_retained: 'Retained under no-oracle policy', static_blocked: 'No tasks remain after typed static exclusions', eval_only: 'Measured only (EVAL)', pending_oracle: 'Pending oracle filtration'}[admission?.state] || 'Pending qualified current-pin receipt'],
+    ['Current admission state', {excluded: 'Excluded', static_retained: 'Admitted under no-oracle policy', static_blocked: 'No tasks remain after typed static exclusions', pending_oracle: 'Pending oracle filtration'}[admission?.state] || 'Pending qualified current-pin receipt'],
     ['Recorded source status', source.status],
     ['Raw converted input measured for retention', measured ? lexical?.measured_tasks : dedup?.raw_count],
     ['Original population before oracle filtration', output?.original_count],
@@ -195,7 +195,7 @@ function filtrationRows(source) {
     [output ? 'Current filtered population' : 'Pre-filtration retained converted population', dedup?.unique_count],
     ['Typed static blocker tasks excluded (unique)', counts?.static_blocked_tasks],
     ['Static blocker reason counts (may overlap)', counts?.static_reason_counts],
-    ['Measured EVAL examples (not admitted TRAIN)', admission?.state === 'eval_only' ? admission.example_count : null],
+    ['Admitted EVAL tasks (excluded from TRAIN selection)', source.intended_use === 'eval' ? admission?.admitted_count : null],
     ['Unexecutable on production backend dropped (by typed reason)', counts?.oracle_tasks === 0 ? 'Per-task executability run is not required under the pinned no-oracle policy; static exclusions remain applied' : admission?.state === 'excluded' ? 'No retained tasks; typed exclusions are recorded above' : 'Pending: no pin-bound per-task production-executability receipt is recorded'],
     ['Admitted after all filtration', admission?.admitted_count ?? 'Pending: full-population filtration and production executability are not established'],
     ...['policy', 'actorless_policy', 'oracle_inventory', 'static_audit'].map(key => {

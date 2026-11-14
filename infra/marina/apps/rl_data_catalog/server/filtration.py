@@ -16,6 +16,8 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
         "example_count": None,
         "state": "pending",
         "admitted_count": None,
+        "population_count": declaration["within_source_dedup"]["unique_count"],
+        "excluded_count": None,
         "source_status": declaration["status"],
         "reason": "Filtration in progress: no complete current-pin admission receipt is recorded.",
     }
@@ -37,6 +39,8 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
             "example_count": 0,
             "state": "excluded",
             "admitted_count": 0,
+            "population_count": evidence.original_count,
+            "excluded_count": evidence.original_count,
             "source_status": declaration["status"],
             "reason": "Complete filtration retained no tasks; the source is excluded, with no admission claimed.",
         }
@@ -74,14 +78,16 @@ def counted_population(
     retained = counts.input.measured_tasks - counts.static_blocked_tasks
     training = counts.intended_use == "train"
     return {
-        "state": ("static_retained" if retained else "static_blocked") if training else "eval_only",
+        "state": "static_retained" if retained else "static_blocked",
         "example_count": retained,
-        "admitted_count": retained if training else 0,
+        "admitted_count": retained,
+        "population_count": counts.input.measured_tasks,
+        "excluded_count": counts.static_blocked_tasks,
         "source_status": declaration["status"],
         "reason": (
             "No oracle: retained population minus unique typed static blockers under the pinned policy."
             if training
-            else "Measured EVAL population after static exclusions; excluded from admitted TRAIN totals."
+            else "Admitted EVAL tasks after static exclusions; excluded from TRAIN selection."
         ),
         "count_evidence": evidence,
     }

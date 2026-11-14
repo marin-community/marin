@@ -16,11 +16,12 @@
   </section>
   <nav class="atlas-tabs" aria-label="Atlas views"><a href="./" aria-current="page">By source</a><a href="curriculum.html">By curriculum</a><a href="guide.html">Getting started</a><a href="archive.html">Review archive</a></nav>
   <section class="metrics" aria-label="Catalog totals">
-    <div title="Total counts all live sources. Displayed counts the visible rows after filters and duplicate folding. Expanding a group adds matching members to displayed counts."><span class="metric-label">SOURCES (TOTAL / DISPLAYED)</span><strong id="metric-sources">— / —</strong></div>
-    <div title="The first line covers all live sources; Shown covers displayed rows. Admitted totals count TRAIN examples. No-oracle counts use retained minus unique typed static blockers under the pinned policy; EVAL counts are measured-only. Pending oracle filtration and excluded count sources. QUICK/BAD are hidden and duplicate groups folded by default."><span class="metric-label">ADMITTED EXAMPLES</span><strong id="metric-examples" class="metric-summary">—</strong><span id="metric-examples-shown" class="metric-detail">Shown —</span></div>
-    <div title="Catalog-wide QUICK / SAMPLE / FULL counts cover all live sources. Shown counts only displayed rows: QUICK/BAD are hidden and duplicate groups folded by default."><span class="metric-label">QUALITY (QUICK / SAMPLE / FULL)</span><strong id="metric-quality">— / — / —</strong><span id="metric-quality-shown" class="metric-detail">Shown — / — / —</span></div>
+    <div title="Task populations across the catalog and displayed rows. Final-empty releases include their receipt's excluded input tasks; other releases use the current deduplicated population. Counts describe task instances across sources, which can overlap."><span class="metric-label">TASKS (TOTAL / SHOWN)</span><strong id="metric-sources" class="metric-summary">— / —</strong></div>
+    <div title="All counts are tasks. Admitted includes TRAIN and EVAL; EVAL stays excluded from TRAIN selection. Excluded includes unique static blockers and final-empty receipt exclusions. Shown follows filters and duplicate folding."><span class="metric-label">TASK ADMISSION</span><strong id="metric-examples" class="metric-summary">—</strong><span id="metric-examples-shown" class="metric-detail">Shown —</span></div>
+    <div title="Tasks grouped by their source's QUICK / SAMPLE / FULL quality label. Shown follows filters and duplicate folding. A source label does not imply every task was reviewed."><span class="metric-label">TASKS BY QUALITY (QUICK / SAMPLE / FULL)</span><strong id="metric-quality" class="metric-summary">— / — / —</strong><span id="metric-quality-shown" class="metric-detail">Shown — / — / —</span></div>
     <div class="freshness"><span class="metric-label">DATE</span><strong id="metric-date">—</strong></div>
   </section>
+  <p id="task-reconciliation" class="task-reconciliation" aria-live="polite"></p>
   <p id="message" class="sync-banner" role="status" aria-live="polite">Loading sources…</p>
   <section class="catalog">
     <div class="catalog-top">
@@ -31,9 +32,10 @@
       <label>Use<select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option><option value="unknown">Unknown</option></select></label>
       <label>Quality<select id="quality"><option value="all">All quality</option><option value="FULL">FULL</option><option value="SAMPLE">SAMPLE</option><option value="QUICK">QUICK</option></select></label>
       <label>Result<select id="result"><option value="all">All results</option><option value="GOOD">Good</option><option value="SOME_ISSUES">Some issues</option><option value="BAD">Bad</option><option value="UNKNOWN">Unknown</option><option value="none">Not assessed</option></select></label>
-      <label>Difficulty model<select id="difficulty-model"><option value="small">Small</option><option value="large" selected>Large</option><option value="hosted">Hosted</option><option value="snowball">Snowball v0.1</option></select></label>
+      <label>Difficulty model<select id="difficulty-model"><option value="all">All Difficulty</option><option value="small">Small</option><option value="large">Large</option><option value="hosted">Hosted</option><option value="snowball">Snowball v0.1</option></select></label>
       <label class="checkbox"><input id="show-all" type="checkbox"> Show QUICK-quality and BAD-result sources</label>
       <button id="clear-filters" class="text-button" type="button">Reset</button>
+      <button id="show-everything" class="text-button" type="button">Show everything</button>
     </form>
     <div class="table-scroller" tabindex="0" aria-label="Sources">
       <table class="source-table"><caption class="sr-only">Sources with examples, use, quality, result, issue rate, contamination, overlapping tasks, Daytona safety, backend fit, grading environment, curriculum area, last update, evidence and model difficulty</caption><thead><tr id="headers"></tr></thead><tbody id="rows"></tbody></table>

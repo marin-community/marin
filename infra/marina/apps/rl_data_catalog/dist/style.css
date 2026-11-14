@@ -150,10 +150,11 @@ a.secondary:hover { text-decoration: none; }
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 10px; background: #fff; overflow: hidden; margin-top: 22px; }
 .metrics > div { min-width: 0; padding: 18px 16px; border-right: 1px solid var(--line); }
 .metrics > div:last-child { border: 0; }
-.metric-label { color: var(--muted); display: block; font-size: clamp(7px, .65vw, 9px); letter-spacing: .5px; white-space: nowrap; }
+.metric-label { color: var(--muted); display: block; font-size: clamp(7px, .65vw, 9px); letter-spacing: .5px; }
 .metrics strong { display: block; white-space: nowrap; font-size: clamp(12px, 1.7vw, 24px); font-weight: 550; letter-spacing: -1px; margin: 10px 0 7px; font-variant-numeric: tabular-nums; }
 .metrics .metric-summary { white-space: normal; font-size: 13px; letter-spacing: 0; line-height: 1.5; overflow-wrap: anywhere; }
 .metric-detail { display: block; font-size: 11px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.task-reconciliation { font-size: 12px; color: var(--muted); margin: 10px 0 16px; overflow-wrap: anywhere; }
 .metrics .freshness { background: #f1f6f2; }
 .sync-banner { font-size: 11px; color: #6b7870; margin: 14px 2px 18px; min-height: 18px; line-height: 1.6; }
 .catalog-top { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px 0; }
