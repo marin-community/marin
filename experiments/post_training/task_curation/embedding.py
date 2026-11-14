@@ -69,7 +69,7 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import (
 INPUTS_VERSION = "2026.10.14.1"
 DESCRIPTIONS_VERSION = "2026.10.15.1"
 INSTRUCTION_TEXTS_VERSION = "2026.10.15.1"
-EMBEDDINGS_VERSION = "2026.10.15.2"
+EMBEDDINGS_VERSION = "2026.11.13.1"
 CURRICULUM_EMBEDDINGS_VERSION = "2026.11.13.1"
 ALIGNMENT_VERSION = "2026.10.15.2"
 PUBLICATION_VERSION = "2026.10.15.2"
@@ -465,12 +465,15 @@ def curation_embedding_pipeline(
     sample_size: int | None,
     seed: int,
     inventory: list[SourceDeclaration],
+    prepared_inputs: ArtifactStep[SemanticArtifact] | None = None,
+    prepared_descriptions: ArtifactStep[SemanticArtifact] | None = None,
+    prepared_curriculum_embeddings: ArtifactStep[SemanticArtifact] | None = None,
 ) -> CurationEmbeddingStages:
     """Bind independent task and curriculum embeddings before the assignment pass."""
     # Preserve artifact addresses; resolve public IDs at execution boundaries.
     curated = {original_source_id(key): value for key, value in canonical_source_map(curated).items()}
     inventory = [row.model_copy(update={"id": original_source_id(row.id)}) for row in inventory]
-    inputs = _named(
+    inputs = prepared_inputs or _named(
         apply(
             "rl-semantics/inputs",
             partial(_prepare, runtime),
@@ -483,7 +486,7 @@ def curation_embedding_pipeline(
             output_root=OUT,
         )
     )
-    descriptions = _named(
+    descriptions = prepared_descriptions or _named(
         apply(
             "rl-semantics/descriptions",
             partial(_describe, runtime, endpoint),
@@ -517,7 +520,7 @@ def curation_embedding_pipeline(
             output_root=OUT,
         )
     )
-    anchors = _named(
+    anchors = prepared_curriculum_embeddings or _named(
         apply(
             "rl-semantics/curriculum-embeddings",
             partial(_embed_curriculum, runtime, embedder_factory),

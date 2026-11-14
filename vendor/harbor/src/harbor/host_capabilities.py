@@ -22,7 +22,7 @@ VERIFIER_MODEL_ROLES = (
     "EXPANSION_MODEL",
 )
 _MODEL_ROLES = (*VERIFIER_MODEL_ROLES, "TAU2_USER_MODEL", "TAU2_NL_ASSERTIONS_MODEL")
-_MODEL_CREDENTIALS = ("OPENAI_API_KEY", "TOGETHER_API_KEY", "CUSTOM_API_KEY")
+MODEL_CREDENTIALS = ("OPENAI_API_KEY", "TOGETHER_API_KEY", "CUSTOM_API_KEY")
 
 
 def judge_model(values: Mapping[str, str]) -> str | None:
@@ -57,10 +57,10 @@ def endpoint_authentication(
     declared = {
         name: value
         for name, value in declarations.items()
-        if name in _MODEL_CREDENTIALS
+        if name in MODEL_CREDENTIALS
     }
     sources = {name for name, _ in get_required_host_vars(declared)}
-    if sources - set(_MODEL_CREDENTIALS):
+    if sources - set(MODEL_CREDENTIALS):
         raise ValueError(
             "Model credentials must name an explicit model-provider source"
         )

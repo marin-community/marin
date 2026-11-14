@@ -20,7 +20,7 @@ from taskcompendium.pipeline.oracle_filter import (
     next_trial_requirements,
     require_oracle_filter,
 )
-from taskcompendium.pipeline.resource_calibration import FailureSignal, ResourceDimension
+from taskcompendium.pipeline.resource_calibration import FailureSignal, ResourceDimension, ResourceUsage
 
 from .oracle_filter_fixtures import oracle_receipt
 from .pipeline_stages import SOURCE_FILES
@@ -145,3 +145,26 @@ def test_disk_limit_evidence_doubles_disk_even_with_an_infrastructure_verdict(ex
     assert next_trial_requirements(trial, {}, VerifierResourceProfile(mode=GradingEnvironmentMode.SHARED)) == (
         current.execution_requirements.model_copy(update={"storage_mb": current.execution_requirements.storage_mb * 2})
     )
+
+
+@pytest.mark.parametrize(
+    "usage,exception,expected",
+    [
+        (ResourceUsage(oom_kills=1), None, FailureSignal.OOM),
+        (ResourceUsage(), {"exception_type": "VerifierTimeoutError"}, FailureSignal.VERIFIER_TIMEOUT),
+        (ResourceUsage(), {"exception_type": "VerifierRuntimeError"}, FailureSignal.INFRASTRUCTURE),
+    ],
+)
+def test_structured_infrastructure_verdict_preserves_measured_resource_failures(usage, exception, expected):
+    current = task()
+    trial = oracle_receipt([current]).tasks[current.id].calibration.attempts[0]
+    result = {**trial.result, "exception_info": exception}
+    trial = trial.model_copy(
+        update={
+            "result": result,
+            "result_sha256": canonical_sha256(result),
+            "verdict": {"status": "infra_error", "reward": 0, "detail": {}},
+            "verifier_resource_usage": usage,
+        }
+    )
+    assert trial.failure_signal is expected

@@ -88,6 +88,53 @@ class PairVerdict(BaseModel):
         return self
 
 
+class TaskNeighbor(BaseModel):
+    """Content-selected partner; identifiers are receipts, never matching keys."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    task_id: str
+    partner_task_id: str | None
+    similarity: float
+    method: Literal["exact", "lsh", "unmatched"]
+    reference_match: bool | None
+    tests_match: bool | None
+
+
+class DirectionalOverlap(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    population: int
+    sampled: int
+    matched: int
+    fraction: float
+    ci_low: float
+    ci_high: float
+    exact_matched: int
+    exact_fraction: float
+    neighbors: list[TaskNeighbor]
+    neighbor_receipts_uri: str | None = None
+    neighbors_sha256: str | None = None
+
+
+CURRENT_OVERLAP_VERSION: Literal["content-nn-v3"] = "content-nn-v3"
+
+
+class MeasuredOverlap(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal["content-nn-v2", "content-nn-v3"] = CURRENT_OVERLAP_VERSION
+    seed: int
+    sample_size: int
+    left_inputs_sha256: str | None = None
+    right_inputs_sha256: str | None = None
+    similarity_threshold: float
+    duplicate_threshold: float
+    partial_threshold: float
+    left_to_right: DirectionalOverlap
+    right_to_left: DirectionalOverlap
+
+
 class DuplicateReview(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -99,6 +146,7 @@ class DuplicateReview(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     acknowledgement: str | None = None
+    measurement: MeasuredOverlap | None = None
 
 
 class DuplicateGroupMember(BaseModel):

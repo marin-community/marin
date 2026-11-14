@@ -70,6 +70,91 @@ curriculum matrix in worker memory and scores batches exactly. A curriculum edit
 reuses task vectors. Atlas imports precomputed counts and samples; the full task
 release and vectors stay in object storage.
 
+For a retained-population coverage backfill, `curriculum_backfill prepare`
+accepts a JSON list of `FrozenCoverageSource` records. Freeze each current
+declaration, exact population receipt and hash, TaskSpec column and directory,
+Use, and any complete exclusion manifest and hash. Also freeze
+`task_spec_scan_sha256`: SHA-256 of exact stored JSON cell bytes concatenated in
+lexicographically sorted Parquet-path and physical row order. Preparation checks
+that digest before publishing and rechecks raw inputs and exclusions before
+per-source or whole-corpus reuse. The expected scan digest is part of the frozen
+input and source key. Historical `task_specs_sha256` remains separate: some
+producers hash their original iteration order before sorting rows for storage.
+Do not equate those conventions or replace a frozen expectation with a new scan.
+Preparation preserves task identities, accounts for every exclusion, and writes
+only public semantic inputs.
+The adopted input name includes the frozen selection key so changed source
+lineage forks assignments even when instruction text and vectors are reused.
+Run preparation beside the private inputs; its output root may stage public
+inputs in the embedding worker's region. The existing embedding graph accepts
+that prepared input artifact and retains its normal vector cache and release format.
+
+```bash
+uv run python -m experiments.post_training.task_curation.curriculum_backfill prepare \
+  --selection FROZEN_SELECTION.json --output-root PUBLIC_INPUT_ROOT --workers 8
+uv run python -m experiments.post_training.task_curation.curriculum_backfill embed \
+  --corpus PUBLIC_INPUT_ROOT/corpus.json --artifact-root ARTIFACT_ROOT \
+  --cache-root VECTOR_CACHE_ROOT --stage descriptions --device cpu \
+  --workers 2 --worker-memory 64g --run
+```
+
+Then run `task_embeddings` and `curriculum_embeddings` with one CUDA worker
+inside a batch GPU job, followed by `coverage` on CPU workers. Use the same
+corpus, artifact root and cache for every stage. The final receipt binds the
+release and coverage hashes, source/task counts and embedding specification.
+Changed selections require a new output root; interrupted source attempts are
+preserved and completed source projections can be reused. Coverage measures
+converted populations and supplies no training admission or quality review.
+Size the enclosing job for its worker memory and coordinator. With an in-process
+worker pool, the shuffle samples the shared process RSS; an 8 GB worker budget
+below that baseline forces two-way spill merges even when the enclosing job has
+free memory. Choose the budget from measured reducer payloads and preserve the
+shuffle's existing memory-safety model.
+
+Harrier uses PyTorch SDPA with Flash, memory-efficient and math attention enabled.
+cuDNN attention is excluded because its execution-plan selection can fail on
+padded GB200 batches. Model/tokenizer pins, BF16 precision, pooling and cache
+keys stay the same. Record cross-device vector agreement against the reference
+cache before extending a CPU-produced population on GPU.
+The `harrier_parity` entry point checks a frozen 2,048-key reference bundle and
+writes a receipt before accepting the backend. Every vector must have cosine
+similarity at least 0.999 to its CPU BF16 reference, and both primary area
+assignments must agree for at least 99.5% of sampled tasks. A failed gate stops
+the run; preserve its receipt rather than changing the thresholds. CUDA execution
+requires `embed --parity-receipt IMMUTABLE_RECEIPT_URI`. The entry point checks
+acceptance, the exact embedding specification, and the running GPU, Torch and
+CUDA versions before executing the graph. The final coverage receipt records
+the parity receipt URI and byte hash. A CPU coverage pass can supply the same
+receipt to retain the accepted backend provenance without claiming to run on GPU.
+
+For a regional move, copy public Parquet and cache objects without clobbering,
+then verify sizes and checksums. Preserve source manifests and source keys;
+write new regional pointer records instead of rewriting historical records.
+A regional corpus can supply `prepared_descriptions` and
+`prepared_curriculum_embeddings` so the graph adopts those completed stages.
+Their adoption names include the immutable producer-record hash, so changed
+instruction or anchor content forks dependent outputs. Anchor adoption also
+requires the catalog, anchor records, hierarchy and embedding specification to
+match the requested `TASK_CURRICULUM`. All referenced runtime paths must point
+into the destination region.
+FineStore HEADs, manifests and table metadata also contain absolute paths;
+copying the cache bytes alone leaves reads pointed at the original region and
+prevents registering the relocated table for writes. After verifying the copy,
+FineStore's `fork_relocated_archive` admin operation creates a fresh regional archive manifest over the
+copied immutable shards. It preserves row-commit bounds and sequences, writes
+canonical table metadata under the new root, and accepts explicit prior roots
+for caches that have moved more than once. Keep the historical cache and failed
+attempts intact and use the fresh root for subsequent vector writes.
+
+```bash
+uv run python -m finestore.admin fork-relocated \
+  --original-root ORIGINAL_CACHE --copied-root VERIFIED_REGIONAL_COPY \
+  --output-root NEW_WRITABLE_CACHE --reference-root PRIOR_REGIONAL_ROOT
+```
+
+Repeat `--reference-root` for additional historical roots; omit it for a cache
+that has not previously moved. Existing output archives are rejected.
+
 | Part | Implementation and data models |
 |---|---|
 | Source selection and graph execution | [driver.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/driver.py), [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [TaskSpec](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py) |
@@ -821,7 +906,9 @@ Changing the contract or preamble requires a new dataset version and renewed QA.
 The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
 `shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE)`.
 It moves the exact initial repository/dependency setup into Harbor's pre-agent
-setup and uses common actor images. Publish the resulting native package, copy
+setup and uses common actor images. Source `setup_files/` resources retain their
+bytes and file modes in the native package, including tasks with declared build
+contexts; Harbor uploads them before running that setup. Publish the resulting native package, copy
 its metadata integrity contract into the TaskSpec, then run full-population
 Harbor ORACLE filtering and SAMPLE/FULL QA.
 
@@ -1533,6 +1620,8 @@ inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
 three infrastructure attempts applies independently to this approved phase.
+Calibration validates and deduplicates Harbor's selected-result copy and physical
+attempt result before consuming the physical verdict, oracle exit and resource receipts.
 Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
 This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
 standalone Harbor trials without it keep PHASE behavior. Safe provider retries
@@ -1589,6 +1678,77 @@ names and complete directory checksums. If package directories use other names,
 write the same three map fields explicitly for each oracle TaskSpec:
 task_name, task_checksum and task_sha256. Lowered envelopes also include
 runtime_sha256, binding the deployment shape and settings.
+
+Converted TaskSpecs without native Harbor packages use the TaskSpec trial workload.
+Prepare a frozen, retained cohort with:
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.task_spec_harbor \
+  --cohort /path/to/converted/tasks.parquet --output /path/to/task-spec-packages-v1
+~~~
+
+This writes an unchanged private `task-spec.json` payload and the task map. The
+wrapper's `task.toml` supplies missing CPU, RAM, disk, agent-timeout and
+verifier-timeout budgets, starting at 1 CPU, 2048 MiB RAM, 2048 MiB disk, 300
+seconds and 60 seconds. Source limits remain fixed. Preparation does not apply deduplication or lexical drops.
+Run `calibrate` against the emitted `task-map.json` with `--environment local`
+and the worker's delegated cgroup-v2 directory (`cgroup_parent`) and writable
+loop-device backing directory (`disk_root`) in `--environment-kwargs`. The
+LOCAL disk backend must first pass its loop/OverlayFS/ENOSPC qualification
+([#11349](https://github.com/marin-community/marin/pull/11349)). LOCAL rejects
+unenforceable limits. An unresolved `docker_build` in either the actor or
+verifier environment remains blocked and needs a separately versioned source
+repair with QA; this adapter does not replace it with an image.
+
+~~~bash
+uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
+  --cohort /path/to/converted/tasks.parquet \
+  --task-map /path/to/task-spec-packages-v1/task-map.json \
+  --output-dir /path/to/calibrated-v1 --environment local --concurrency 4 \
+  --environment-kwargs '{"cgroup_parent":"/sys/fs/cgroup/atlas","disk_root":"/var/tmp/atlas-disks","model_endpoint":"https://judge.example/v1","model_name":"declared-judge-model"}' \
+  --calibration-solutions /path/to/calibration-solutions
+~~~
+
+For candidate trials, select `task-spec-chat` with explicit `api_base`,
+`max_turns` and `max_tokens` agent kwargs. It consumes the original conversation
+and final-submission tools; shell tools require the declared actor machine.
+External tool-provider implementations are unsupported. Actor files and setup commands run only in the declared actor
+environment. Script graders and non-judge Verifyit graders retain their declared
+verifier environment.
+A conversation-only task receives no actor image. Verifyit judge mode uses production
+host-side grading through the declared JudgeSpec and connection. Its trusted
+framework worker enforces the verifier CPU, RAM, disk and time budget; it leaves
+the TaskSpec and task package lock unchanged and installs no SDK into the task
+environment. Both paths use the production structured-verdict parser. Judge
+transport requires `model_endpoint` and its declared `model_name` in environment
+kwargs. A verifier-only loopback relay carries requests to that fixed endpoint;
+provider credentials stay on the host. Agent/verifier credential declarations
+configure host transport and do not modify TaskSpec environment variables.
+
+The `oracle` control executes a preserved file-task `solution/solve.sh` in its
+declared actor environment. A task without an original oracle instead reads
+`solution/response.json`, containing a JSON array of exactly one OpenAI-format assistant message,
+from `--calibration-solutions/<task-id>/`. That response is calibration-only.
+Select `nop` for independent empty-submission liveness. These controls receive
+no candidate-model settings. Shared-state grading, state capture, tool providers,
+unresolved image builds and oracle delivery without an explicit supported
+contract remain execution blockers; the adapter does not rewrite them.
+
+Changes to TaskSpec provisioning require the dedicated LOCAL regression below
+on a privileged Linux CPU worker with delegated cgroup v2, loop devices and
+ext4 mount tools. It executes the frozen tau and language-mixing JudgeSpecs through the production
+host service and a local HTTP judge fixture, preserving their original task locks. The test observes
+the actual CPU/memory controller values, exact disk-image allocation and cleanup.
+It does not provide oracle, admission or external-model quality evidence.
+Ordinary offline test selection excludes this runtime suite.
+
+~~~bash
+uv run --project vendor/harbor --frozen --extra runtime --group test python -m pytest \
+  --noconftest -p lib.shellbox.tests.conftest -c vendor/harbor/pyproject.toml \
+  --local-cgroup-parent /sys/fs/cgroup/path/to/delegated/worker \
+  vendor/harbor/tests/runtime/test_taskcompendium_local.py \
+  -m 'runtime and not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual and not windows_containers'
+~~~
 
 ~~~bash
 uv run python -m experiments.post_training.task_curation.oracle_filter map \

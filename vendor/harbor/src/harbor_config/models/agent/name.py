@@ -10,6 +10,8 @@ class AgentName(str, Enum):
     MINI_SWE_AGENT = "mini-swe-agent"
     OPENCODE = "opencode"
     PI = "pi"
+    TASK_SPEC_CHAT = "task-spec-chat"
+    TASK_SPEC_RESPONSE = "task-spec-response"
 
     @classmethod
     def values(cls) -> set[str]:

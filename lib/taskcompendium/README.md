@@ -150,7 +150,9 @@ to build each context and replace it with a digest-pinned image. All three
 dependency forms require `LINUX_PROCESS` semantics. TaskCompendium supplies no
 build resolver; runtimes and SAMPLE/FULL controls reject unresolved contexts.
 Native requirements without packaging remain representable but cannot execute
-through the current adapters. Memory settings are advisory sizing hints.
+through the current adapters. Memory allocations remain attached to machine specifications. LOCAL enforces
+them with delegated cgroup v2; workers without delegation report unenforced limits. Execution qualification
+requires resource enforcement.
 
 The [Harbor exporter](../../experiments/post_training/task_curation/tasktrove/harbor_export.py) emits build inputs;
 see the [campaign quickstart](../../experiments/post_training/task_curation/README.md#harbor-compatibility-view)

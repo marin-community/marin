@@ -83,7 +83,7 @@ not declared*. Edit the rules in the reference first, then the page text in
 
 ## Browsing sources
 
-**By source** lists each source's unique example count, training/evaluation use,
+**By source** currently shows Pending for post-filtration admitted Examples, and lists training/evaluation use,
 Quality, Result, lexical contamination, actor-only Daytona verdict and leading
 curriculum area. The levels define required content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
@@ -126,6 +126,11 @@ pins, deduplication ledgers, lexical measurements, QC and archived assessment pa
 Counts describe the measured input before duplicate and lexical exclusions. They do
 not describe residual overlap in the retained release or semantic decontamination.
 The source table legend and Getting started guide define the same five states.
+Backends shows each measured backend's fit, with partial or unsupported requirement
+variants inside its chip. Evidence separates agent and grader support and blockers.
+Grading shows the required SHARED or SEPARATE boundary from the complete census;
+a declaration mismatch uses a warning variant and remains explicit in Evidence.
+N/A requires an applicable measured absence; missing evidence remains unmeasured.
 Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
 Result from incomplete content review carries a provisional variant within its
 chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
@@ -139,17 +144,20 @@ remediation lineage; changed task bytes require new qualification. Package-lock
 graders run on LOCAL with separate compatibility evidence. A source without a measured actor verdict cannot enter
 new ingestion. The backend map records each role's demands and blockers.
 
-Example counts describe unique converted task contracts after mandatory within-source
-deduplication, before training selection. Source details include the raw converted count,
+Examples requires completed oracle filtration and admission evidence, after oracle
+failures, within-source duplicates and training lexical overlap have been removed.
+Without that proof, Examples and admitted totals remain pending. Evidence and
+curriculum coverage separately show the retained converted population; content QA
+Results and sampled controls do not certify execution or admission. Source details include the raw converted count,
 duplicates dropped, and the exclusion manifest.
 Every entry has a registered conversion pipeline; there is no inventory-only
 path that substitutes a declared count for conversion.
 **Not assessed** means there is no current sampled assessment; **Unknown** is a
 completed assessment without enough conclusive judgments. Curation never re-grades
-independent QC; the **Independent QC** column and the source details present the
-release's own admission evidence — verdict, method, reviewed count, admitted count
-where the release claims one, and a link to its pinned manifest — beside, and
-distinct from, the sampled quality. Open a source for
+independent QC; source details present the release's reported verdict, method,
+reviewed count and pinned manifest beside the sampled quality. The manifest
+retains the full historical record; it does not substitute for current filtration
+and admission evidence. Open a source for
 pipeline details and links to its original dataset, assessment and curriculum
 coverage. The leading curriculum domain links directly to that source's coverage
 within the domain. Columns size to their contents, and enum chips stay on one line
@@ -216,8 +224,9 @@ Before selecting a new catalog load:
    Controller deployment/restart requires separate user authorization. Service
    groups and model relays remain unsupported on this environment.
 4. Verify every source has a complete, exact-pin `within_source_dedup` receipt and
-   Examples equals its `unique_count`, including QUICK sources. Check raw and duplicate
-   counts against the drop manifest, then verify version-bound lexical evidence.
+   Evidence and curriculum retained counts equal its `unique_count`, including QUICK
+   sources. Examples requires the separate post-oracle admission proof. Check raw and
+   duplicate counts against the drop manifest, then verify version-bound lexical evidence.
    New or changed admissions require a private TaskCompendium clean/remediated
    receipt after [lexical decontamination](task-curation.md#lexical-decontamination-before-publication);
    preserve grandfathered selection until explicitly approved.
@@ -270,6 +279,25 @@ replace `dist/measurements/content-progress.json`. Its JSON object contains
 `dataset_revision`, `retained_count`, `valid_reviews_lower_bound` and `evidence_uri`.
 The renderer requires an exact current ID, pin and unique-count match. Progress
 never determines FULL or Result.
+
+Pass `--oracle-inventory /path/to/current-310-oracle-inventory-ledger-v2.json`
+to `prepare_preview.py` to package an immutable full-population ledger produced
+from task curation's typed `SampleInventory` receipts. The preparer validates each
+receipt against its `ActorCensusInput`, checks population totals, canonicalizes
+source aliases and records input/output byte hashes. It emits
+`dist/measurements/oracle-inventory.json` with a `sources` list
+of frozen population observations: `source_id`, the complete `ActorCensusInput`
+object as `input`, `oracle_tasks`, `execution_qualification` and `evidence_url`.
+The renderer requires the entire actor input, current dataset pin, converter
+version and retained count to match. A measured zero establishes no shipped
+oracle solutions; it does not establish calibration, execution or admission.
+Missing and stale rows leave oracle filtering pending. No full-population
+oracle-filter receipt is currently attached to the catalog, so admitted counts
+remain pending even where the no-oracle census is complete.
+The filtration ledger separately records tasks dropped because their whole
+contract cannot execute on a production backend, grouped by typed reason. Until
+pin-bound per-task executability receipts are attached, this step and admitted
+counts remain Pending. Backend requirement fit alone does not establish execution.
 
 After the package release, load the complete catalog with the
 [catalog loader](#updating-atlas), using the explicit preview app ID above.
@@ -528,7 +556,10 @@ with Ctrl-C when finished; its database is disposable.
 ### Source identity and overlap review
 
 `source_duplicates fingerprint` reads complete converted TaskSpec populations
-before admission using the [backend survey's manifest shape](#backend-survey).
+before admission using the [backend survey's manifest shape](#backend-survey),
+plus an `input_uris` list aligned with each entry's local `paths`. Upload those
+complete TaskSpec files first; fingerprints retain their durable S3 URIs and
+verified local-file digests.
 It records seed-0 samples of at most
 20 normalized tasks, instruction MinHash sketches, reference/test hashes,
 upstream dataset revisions, identifier/URL hashes and within-source duplicate
@@ -548,44 +579,69 @@ requires their fingerprints. Generated CI input surveys are staged in private
 object storage under the run/attempt prefix; the code bundle carries only their
 SHA-256 manifest. The worker downloads and verifies those bytes before scanning,
 keeping input data outside Iris's workspace-bundle size limit.
-It ranks candidates mechanically and reviews only
-the top three per changed source. The runtime-selected `JudgeEndpoint` uses
-`Qwen/Qwen3.8-27B` at revision
-`37561816e66b5b9153b1b64c10968c18c1e6f4a0`, temperature 0.7 and prompt
-`source-overlap-v1`. Hosted endpoints must advertise that exact model. The local
-route owns one H100 through `remote_inference`, with compilation and CUDA graphs
-enabled, and releases it when the bounded batch exits. The local judge uses
-batch priority and a 65,536-token context, including up to 2,048 output tokens.
-The 4,200-second client read deadline covers worker readiness and one request,
-allowing managed batch-preemption recovery to finish before the caller times out.
-Every model response is checkpointed before opinion validation. Invalid opinions
-receive at most three attempts with unchanged request bytes and sampling settings.
-An exhausted pair is recorded as unresolved, including all response paths and
-validation errors; the scan continues through the remaining pairs. The CLI writes
-valid verdicts to `.receipts.jsonl`, raw responses beneath `.receipts.responses/`
-and unresolved pairs to `.receipts.unresolved.jsonl` beside the selected output.
-It fails after scanning if any pair remains unresolved. Unresolved pairs receive
-no duplicate/distinct label, group edge or acknowledgement. Transport and storage
-failures propagate. Identical complete requests reuse cached reviews without a
-model lease. Use a labelled duplicate/distinct fixture before
-accepting a new model or prompt.
+It ranks candidates mechanically and measures the top three per changed source on
+CPUs co-located with the TaskSpec inputs. Task IDs never select a partner or
+establish duplication. For each direction, the scan samples up to 4,096 task
+occurrences with seed 0, looks up their complete normalized instruction hashes
+in the other source's full population, then searches remaining queries with
+128-permutation character-5-gram MinHash and 32 LSH bands. Long whole wrapper
+lines shared by at least 90% of a source panel are removed before near matching.
+Complete conversation context is retained. Assistant prefills and tool state
+must agree before near matching can count a pair. Retrieved candidates are scored with word-trigram Jaccard; a score of at least
+0.90 counts as a near duplicate. The partner ID, score, reference-hash agreement
+and test-hash agreement are retained as evidence. Reference-only matches, such
+as the same A–D answer letters in different MMLU subjects, do not count.
+
+Every review carries both directional fractions and 95% Wilson intervals, plus
+full-population exact-instruction match counts. Census panels have point
+intervals. Duplicate requires at least 98% overlap in both directions, using
+the larger of each direction's interval lower bound and exact census fraction.
+Partial overlap requires a lower bound of at least 1% in either direction.
+Remaining pairs are distinct at that reporting threshold. The scalar partial
+overlap fraction is the smaller positive directional estimate; the two
+explicit directions remain authoritative for asymmetric subsets. LSH is
+approximate, and the intervals describe sampling uncertainty, not retrieval
+recall. The labels use deterministic measurements; no model can downgrade them.
 
 ```bash
-uv run --extra dedup python -m experiments.post_training.task_curation.source_duplicates fingerprint \
+uv run --all-packages python -m experiments.post_training.task_curation.source_duplicates fingerprint \
   --manifest identity-inputs.json --output source-identities.json
-uv run --extra dedup python -m experiments.post_training.task_curation.source_duplicates scan \
+uv run --all-packages python -m experiments.post_training.task_curation.source_duplicates scan \
   --fingerprints source-identities.json --changed-sources changed-sources.json \
-  --top-k 3 --route local --labels labelled-pairs.json \
+  --manifest identity-inputs.json --top-k 3 --labels labelled-pairs.json \
   --acknowledgements experiments/post_training/task_curation/source_duplicate_acknowledgements.json \
   --require-acknowledged --output source-identities-reviewed.json
 ```
 
-Reviews label pairs `duplicate`, `partial_overlap` (with the estimated fraction
-of the smaller population present in the larger), or `distinct`, with a reason.
+Omit `--manifest` when fingerprints pin complete durable S3 TaskSpec inputs.
+The pinned `source_population_locators.json` registry resolves historical opaque
+input names by file SHA-256 without changing their fingerprint or acknowledgement
+identities. It also selects SHA-verified regional content caches prepared next to
+their raw data. Unknown or out-of-region inputs fail preflight. CI selects pairs
+first, caches only those sources, and loads two populations at a time.
+The scan verifies each input SHA-256 and population count before matching.
+CI uses `cw-us-east-02a`, 16 CPUs, 64 GB RAM and a three-day Iris timeout.
+The hosted GitHub job can wait six hours; its expiry leaves the Iris job running
+under its own deadline.
+Measured receipts are written to `.receipts.jsonl` and `.receipts.neighbors/`.
 Non-distinct flags require resolution or an acknowledgement keyed by the exact
-request digest in `source_duplicate_acknowledgements.json`. Groups choose a
-stable canonical member for default collapsing; every source and its assessment
-remains available. These are advisory opinions, not deletion instructions.
+measurement digest in `source_duplicate_acknowledgements.json`. The digest includes a hash of every sampled neighbor and excludes output URIs,
+example truncation and shortlist scores, so CI and survey reruns agree. Old approvals
+remain attached to their old request; new content measurements need new approvals.
+Groups choose a stable canonical member for default collapsing; every source
+and assessment remains available. The flags are advisory.
+
+For a versioned survey rerun, use `source_neighbor_survey --survey URI
+--survey-sha256 SHA --output-root NEW_URI --allocated-cpus 16`. It retains every old pair, widens
+with full fingerprint hash evidence and a 256-task-per-source LSH discovery
+panel, then measures each selected pair against complete populations. It writes
+`source-identities-content-nn-v3.json`, `label-diff.json`, `openqa-integrity.json`
+and `result.json`. Complete per-sample neighbors live under `neighbors/`; the
+survey includes bounded examples and their receipt URIs. The diff preserves
+old labels, request digests and acknowledgements. Full exact-question reference
+checks for the OpenQA pairs are checkpointed under `integrity/` as soon as they
+complete. Cross-source agreement cannot exclude an answer defect shared by
+both sources. Use a fresh output root; old evidence is never overwritten.
 
 The staged loader selects fingerprints, pair reviews and groups atomically with
 the catalog and backend map. Pass the scan's reviewed output to the loader's
@@ -660,6 +716,13 @@ the release. Byte-bounded SQL requests keep import work proportional to the
 compact export. Failed loads preserve the selected release; the current and
 previous releases are retained. Run one curriculum loader per app at a time.
 APIs read Postgres without cloud scans.
+
+The loader rejects admission-retired sources before any SQL or current-release
+selection, including historical source aliases and inventory-only rows. Archived
+coverage artifacts and previously stored releases remain available as historical
+evidence. An archived all-source cut is distinct from a newer selected catalog:
+prepare a separate release and coverage pair with consistent source lineage for
+that selection instead of relabelling the archived manifests or changing their pins.
 
 A metadata-only TRAIN-to-EVAL correction requires `--role-projection RECEIPT_URI
 RECEIPT_SHA256`. Set `--release` and `--coverage` to the receipt's exact corrected
@@ -779,9 +842,11 @@ source shape requires every task to have passed at that shape.
 
 Every source declaration must contain a complete `within_source_dedup` receipt for the configured
 dataset pin and converter version, including QUICK sources. The receipt records raw converted
-TaskSpecs, unique contracts, duplicates dropped, and the duplicate-to-kept manifest. Atlas Examples
-uses the unique count; source details retain the raw count, duplicate count and exclusion manifest URI,
-with a Filer link beside S3 URIs.
+TaskSpecs, unique contracts, duplicates dropped, and the duplicate-to-kept manifest.
+Source details and curriculum coverage retain this converted-population count;
+Examples requires completed post-oracle admission evidence. Details also retain
+the raw count, duplicate count and exclusion manifest URI, with a Filer link
+beside S3 URIs.
 
 Ingest in this order: conversion → exact within-source deduplication → lexical decontamination →
 resource calibration and full-population oracle filtering → SAMPLE/FULL QA. Keep the lowest task

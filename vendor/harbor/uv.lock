@@ -1371,7 +1371,9 @@ all = [
     { name = "gcsfs" },
     { name = "marin-finestore" },
     { name = "marin-rigging" },
+    { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["daytona", "iris", "qemu", "shellsim"] },
+    { name = "marin-taskcompendium" },
     { name = "numpy" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
@@ -1402,7 +1404,9 @@ runtime = [
     { name = "gcsfs" },
     { name = "marin-finestore" },
     { name = "marin-rigging" },
+    { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["daytona", "iris"] },
+    { name = "marin-taskcompendium" },
     { name = "numpy" },
     { name = "pydantic-settings" },
     { name = "s3fs" },
@@ -1418,6 +1422,10 @@ sotopia = [
     { name = "numpy" },
     { name = "scikit-learn" },
     { name = "scipy" },
+]
+taskcompendium = [
+    { name = "marin-rolloutengine" },
+    { name = "marin-taskcompendium" },
 ]
 telemetry = [
     { name = "marin-rigging" },
@@ -1449,18 +1457,20 @@ requires-dist = [
     { name = "gcsfs", marker = "extra == 'runtime'" },
     { name = "harbor", extras = ["analysis", "runtime", "qemu", "shellsim", "datasets", "tinker"], marker = "extra == 'all'" },
     { name = "harbor", extras = ["archive", "telemetry"], marker = "extra == 'sotopia'" },
-    { name = "harbor", extras = ["archive", "telemetry", "daytona", "sotopia", "iris"], marker = "extra == 'runtime'" },
+    { name = "harbor", extras = ["archive", "telemetry", "daytona", "sotopia", "iris", "taskcompendium"], marker = "extra == 'runtime'" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "huggingface-hub", specifier = ">=1.3.2" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "marin-finestore", marker = "extra == 'archive'", editable = "../../lib/finestore" },
     { name = "marin-rigging", editable = "../../lib/rigging" },
     { name = "marin-rigging", marker = "extra == 'telemetry'", editable = "../../lib/rigging" },
+    { name = "marin-rolloutengine", marker = "extra == 'taskcompendium'", editable = "../../lib/rolloutengine" },
     { name = "marin-shellbox", marker = "extra == 'runtime'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["daytona"], marker = "extra == 'daytona'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["iris"], marker = "extra == 'iris'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["qemu"], marker = "extra == 'qemu'", editable = "../../lib/shellbox" },
     { name = "marin-shellbox", extras = ["shellsim"], marker = "extra == 'shellsim'", editable = "../../lib/shellbox" },
+    { name = "marin-taskcompendium", marker = "extra == 'taskcompendium'", editable = "../../lib/taskcompendium" },
     { name = "numpy", marker = "extra == 'sotopia'" },
     { name = "openai", specifier = ">=2" },
     { name = "orjson", specifier = ">=3.11.6" },
@@ -1486,7 +1496,7 @@ requires-dist = [
     { name = "universal-pathlib", specifier = ">=0.2.6" },
     { name = "uvicorn", specifier = ">=0.38.0" },
 ]
-provides-extras = ["runtime", "iris", "qemu", "shellsim", "sotopia", "analysis", "archive", "telemetry", "datasets", "daytona", "all", "tinker"]
+provides-extras = ["runtime", "taskcompendium", "iris", "qemu", "shellsim", "sotopia", "analysis", "archive", "telemetry", "datasets", "daytona", "all", "tinker"]
 
 [package.metadata.requires-dev]
 test = [
@@ -2289,6 +2299,33 @@ test = [
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+]
+
+[[package]]
+name = "marin-rolloutengine"
+version = "0.1.0"
+source = { editable = "../../lib/rolloutengine" }
+dependencies = [
+    { name = "marin-shellbox" },
+    { name = "marin-taskcompendium" },
+    { name = "openai" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marin-shellbox", editable = "../../lib/shellbox" },
+    { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
+    { name = "openai", specifier = ">=1.59.9" },
+    { name = "pydantic", specifier = ">=2" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "../../lib/shellbox" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]

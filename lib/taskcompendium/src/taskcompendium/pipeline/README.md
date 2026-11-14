@@ -85,7 +85,9 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    `GradingMachines`, which selects a bubblewrap sandbox on the worker for
    `packages_lock` requirements and a sandbox of the pinned image for image
    requirements. Shared runtime preparation validates the selected machine and
-   binds dependencies. Memory settings are advisory. Every grading machine has network
+   binds dependencies and preserves the controls' memory allocation. LOCAL enforces that allocation with
+   delegated cgroup v2; workers without delegation report unenforced limits. Controls revision 19 invalidates
+   results collected under the earlier advisory-memory behavior. Every grading machine has network
    access denied. Without controls the stage is skipped and sandbox graders
    stay unverified.
 

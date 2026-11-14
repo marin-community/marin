@@ -277,3 +277,9 @@ a.secondary:hover { text-decoration: none; }
   .difficulty-snowball .difficulty-fill { background: #bd95d4; }
   .difficulty-unmeasured { background: transparent; }
 }
+.enum-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.record-list { margin: 0; padding-left: 18px; }
+.record-list li { margin: 3px 0; }
+.backend-table th, .backend-table td { padding: 9px 12px; vertical-align: top; }
+.backend-table th { position: static; white-space: nowrap; }
+.backend-table .record-list { min-width: max-content; }
