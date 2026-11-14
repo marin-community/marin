@@ -1685,7 +1685,11 @@ and `--host-worker-id "$IRIS_TASK_ID"`, to `calibrate` or `retry`. All participa
 workers must use the same pinned control root and limit. Atomic conditional-object
 slots coordinate private pod namespaces by the Iris physical node name; the kernel
 boot ID must match the host contract. Admission waits before starting Harbor and
-holds a slot through its subprocess, including teardown. Each attempt records
+holds a slot through its subprocess, including teardown. Release requires a
+successful process exit and exactly one persisted production Trial with a
+completion manifest, emitted only after resource cleanup. Missing completion or
+abnormal termination retains the claim. Source negatives and deadlines retain
+their outcomes and can release a clean host. Each attempt records
 `host-admission.json`. Source machine arguments and execution limits do not change.
 
 Held claims never expire or get stolen. A crashed worker can leave a claim held;
@@ -1710,8 +1714,15 @@ references, and the exact `archive_member` and `archive_root`. The exception URI
 `archive.uri#archive_member`; its digest hashes the member bytes. The collector
 checks archive and member hashes, the physical Trial URI, exact archived config,
 the Harbor timeout traceback and the original source-declared phase budget.
-`bind_prior_phase_failures(original_map, proofs_by_result_hash, new_map)` writes a
-new map; production result JSON and old map bytes remain unchanged. Such a trial
+Write the evidence as a JSON list of `PriorPhaseFailureReceipt` objects, then bind
+it to a new map:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter bind-phase-failures \
+  --task-map original-map.json --evidence phase-failures.json --output bound-map.json
+```
+
+Production result JSON and old map bytes remain unchanged. Such a trial
 remains a source-deadline exclusion and cannot receive an infrastructure replay.
 Absent evidence is omitted from serialization so historical retry hashes remain
 unchanged. A persisted `lifecycle-result.json` is collected only when that Trial

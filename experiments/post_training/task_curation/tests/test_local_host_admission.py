@@ -73,9 +73,12 @@ def test_admission_wait_deadline_never_enters_source_execution(tmp_path):
     assert executed == []
     assert pool.try_claim("still-held") is None
     held.release()
-    with pool.claim("available-task", deadline=4, now=lambda: clock[0], sleep=sleep):
+    with pool.claim("available-task", deadline=4, now=lambda: clock[0], sleep=sleep) as slot:
         executed.append("source")
     assert executed == ["source"]
+    assert pool.try_claim("unconfirmed-cleanup") is None
+    slot.release()
+    assert pool.try_claim("confirmed-cleanup") is not None
 
 
 def test_inconsistent_boot_identity_cannot_open_a_second_pool_on_the_same_node(tmp_path):

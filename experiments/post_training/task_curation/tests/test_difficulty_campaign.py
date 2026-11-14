@@ -65,6 +65,7 @@ print(json.dumps([context, completion_budget_from_count(
             tmp_path,
             StoragePath(str(tmp_path / "output")),
             "fixture",
+            recovery_arguments=[],
         )
     finally:
         server.shutdown()

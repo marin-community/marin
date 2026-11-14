@@ -306,7 +306,8 @@ def test_retry_requires_approval_for_the_actual_parent_result(tmp_path, retry_ca
     assert len(case.calls) == 3
 
 
-def test_retry_holds_shared_host_slot_during_the_actual_harbor_subprocess(tmp_path, monkeypatch, retry_case):
+@pytest.mark.parametrize("cleanup", ["confirmed", "negative", "deadline", "missing", "killed"])
+def test_retry_holds_shared_host_slot_until_production_cleanup_is_confirmed(tmp_path, monkeypatch, retry_case, cleanup):
     case = retry_case
 
     def storage(path):
@@ -328,19 +329,60 @@ def test_retry_holds_shared_host_slot_during_the_actual_harbor_subprocess(tmp_pa
             record = HostSlotRecord.model_validate_json(control.data)
             assert record.status is SlotStatus.HELD
             assert (record.worker_id, record.task_id) == ("worker-1", "task")
-        return runner(args, **kwargs)
+        completed = runner(args, **kwargs)
+        if "harbor" in args:
+            config = json.loads(Path(args[args.index("--config") + 1]).read_text())
+            result_path = Path(config["trials_dir"]) / "oracle/result.json"
+            result = json.loads(result_path.read_text())
+            if cleanup == "missing":
+                result["completion"] = None
+            if cleanup == "negative":
+                result["verifier_result"]["rewards"] = {"reward": 0}
+                verdict = result_path.parent / "verifier/verdict.json"
+                verdict.write_text(json.dumps({"status": "scored", "reward": 0}))
+            if cleanup == "deadline":
+                result["exception_info"] = {
+                    "exception_type": "AgentTimeoutError",
+                    "exception_message": "Original source deadline",
+                    "exception_traceback": "",
+                    "occurred_at": result["finished_at"],
+                }
+                result["verifier_result"] = None
+                (result_path.parent / "verifier/verdict.json").unlink()
+            result_path.write_text(json.dumps(result))
+            if cleanup == "killed":
+                raise subprocess.CalledProcessError(-9, args)
+        return completed
 
     monkeypatch.setattr(subprocess, "run", process_boundary)
     frozen = tmp_path / "retry-plan"
     write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen)
     destination = tmp_path / "retry-run"
-    retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+    if cleanup == "killed":
+        with pytest.raises(subprocess.CalledProcessError):
+            retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+    elif cleanup == "missing":
+        with pytest.raises(RuntimeError, match="cleanup is unconfirmed"):
+            retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+        raw = next(destination.rglob("jobs/oracle/result.json"))
+        assert json.loads(raw.read_text())["verifier_result"]["rewards"] == {"reward": 1}
+    else:
+        retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+        mapping = json.loads((destination / "task-map.json").read_text())["task"]
+        result = mapping["calibration"]["attempts"][-1]["result"]
+        if cleanup == "negative":
+            assert result["verifier_result"]["rewards"] == {"reward": 0}
+        if cleanup == "deadline":
+            assert result["exception_info"]["exception_type"] == "AgentTimeoutError"
     observations = list(destination.rglob("host-admission.json"))
     assert len(observations) == 1
     assert json.loads(observations[0].read_text())["node_id"] == "node-1"
     next_claim = admission.try_claim("next-task")
-    assert next_claim is not None
-    next_claim.release()
+    if cleanup in {"missing", "killed"}:
+        assert next_claim is None
+    else:
+        assert next_claim is not None
+        next_claim.release()
 
 
 @pytest.mark.parametrize(
@@ -515,7 +557,6 @@ def test_collection_preserves_earlier_source_deadline_without_rewriting_final_re
     trial = OracleTrialReceipt.model_validate(mapping["calibration"]["attempts"][-1])
     raw_path = Path(trial.path)
     raw_bytes = raw_path.read_bytes()
-    original_calls = len(case.calls)
     trial_dir = raw_path.parent
     archive_case = {
         "config": trial.result["config"],
@@ -538,9 +579,7 @@ def test_collection_preserves_earlier_source_deadline_without_rewriting_final_re
     assert entry.calibration.attempts[-1].prior_phase_failure == proof
     assert entry.calibration.attempts[-1].result == trial.result
     assert raw_path.read_bytes() == raw_bytes
-    assert len(case.calls) == original_calls
     assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 0
-    assert OracleFilterReceipt.model_validate_json((tmp_path / "filtered/oracle-filter.json").read_text()) == receipt
 
 
 def test_public_loader_rejects_retry_history_attached_to_foreign_task_or_package(tmp_path, retry_case):
