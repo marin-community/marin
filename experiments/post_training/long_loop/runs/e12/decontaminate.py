@@ -202,6 +202,7 @@ def main():
         controls.append({"corpus": corpus, "kind": kind, "expected_flag": expected, "actual_flag": decision["flagged"]})
     decisions = decisions[:actual_candidates]
     all_hashes = {row["source_code_sha256"] for row in source}
+    excluded.intersection_update(all_hashes)
     (args.output / "decisions.jsonl").write_text("".join(json.dumps(x) + "\n" for x in decisions))
     (args.output / "allowed-code-hashes.json").write_text(json.dumps(sorted(all_hashes - excluded)) + "\n")
     manifest = {
