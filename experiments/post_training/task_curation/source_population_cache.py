@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -34,6 +34,7 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import original_so
 logger = logging.getLogger(__name__)
 
 
+CONTENT_TEXT_VERSION: Final = "complete-context-v1"
 CONTENT_SCHEMA = pa.schema(
     [
         ("task_id", pa.string()),
@@ -53,7 +54,7 @@ class PreparedPopulation(BaseModel):
     sha256: str
     inputs_sha256: str
     task_count: int
-    text_version: Literal["complete-context-v1"] = "complete-context-v1"
+    text_version: Literal["complete-context-v1"] = CONTENT_TEXT_VERSION
 
 
 class PopulationLocations(BaseModel):
@@ -107,7 +108,7 @@ def cache_population(
             "inputs": fingerprint.inputs,
             "task_count": fingerprint.task_count,
             "prepared_sha256": prepared.sha256 if prepared else None,
-            "text_version": "complete-context-v1",
+            "text_version": CONTENT_TEXT_VERSION,
         }
     )
     path = cache_dir / f"{cache_key}.parquet"
