@@ -20,6 +20,7 @@ from finestore.rl.difficulty import (
     Solver,
     SolverIdentity,
 )
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
@@ -39,23 +40,51 @@ class PreviousCampaign:
     root: StoragePath
     sources: dict[str, PreparedSource]
     serving: dict
+    parent: "PreviousCampaign | None"
+
+
+class CampaignParent(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    root: str
+    serving_receipt: ContentEvidenceReference
+    source_queue_sha256: str
 
 
 def previous_campaign(root: str, serving_sha256: str, source_queue_sha256: str) -> PreviousCampaign:
     """Bind a continuation to an explicitly selected prior serving and source queue."""
-    path = StoragePath(root)
-    if not (path / "trials" / "model-requests-final.json").exists():
-        raise ValueError("Previous worker has not drained and sealed its final model traffic")
-    serving_path = path / "serving.json"
-    if file_sha256(serving_path) != serving_sha256:
-        raise ValueError("Previous serving receipt differs from its requested digest")
-    prepared = json.loads((path / "prepared.json").read_text())
-    if prepared["source_queue_sha256"] != source_queue_sha256:
-        raise ValueError("Continuation cannot change the frozen source queue")
-    sources = [PreparedSource.model_validate(row) for row in prepared["sources"]]
-    return PreviousCampaign(
-        path, {source.sample.source_id: source for source in sources}, json.loads(serving_path.read_text())
-    )
+    chain = []
+    seen = set()
+    while True:
+        path = StoragePath(root)
+        if str(path) in seen:
+            raise ValueError("Campaign ancestry contains a cycle")
+        seen.add(str(path))
+        if not (path / "trials" / "model-requests-final.json").exists():
+            raise ValueError("Previous worker has not drained and sealed its final model traffic")
+        serving_path = path / "serving.json"
+        if file_sha256(serving_path) != serving_sha256:
+            raise ValueError("Previous serving receipt differs from its requested digest")
+        prepared = json.loads((path / "prepared.json").read_text())
+        if prepared["source_queue_sha256"] != source_queue_sha256:
+            raise ValueError("Continuation cannot change the frozen source queue")
+        sources = [PreparedSource.model_validate(row) for row in prepared["sources"]]
+        chain.append(
+            (path, {source.sample.source_id: source for source in sources}, json.loads(serving_path.read_text()))
+        )
+        parent_path = path / "trials" / "parent-campaign.json"
+        if not parent_path.exists():
+            break
+        parent = CampaignParent.model_validate_json(parent_path.read_text())
+        if parent.source_queue_sha256 != source_queue_sha256 or parent.serving_receipt.uri != str(
+            StoragePath(parent.root) / "serving.json"
+        ):
+            raise ValueError("Campaign ancestry differs from its source queue or serving binding")
+        root, serving_sha256 = parent.root, parent.serving_receipt.sha256
+    previous = None
+    for path, sources, serving in reversed(chain):
+        previous = PreviousCampaign(path, sources, serving, previous)
+    assert previous is not None
+    return previous
 
 
 def recovered_source(
@@ -110,12 +139,21 @@ def recovered_source(
         or measurement.model.model_dump(exclude={"serving_receipt"}) != identity.model_dump(exclude={"serving_receipt"})
     ):
         raise ValueError("Previous measurement differs from the continuation's source or model contract")
-    refs = []
+    inherited = (
+        recovered_source(previous.parent, source, solver, identity, settings, parameters, judge_identity)
+        if previous.parent is not None
+        else None
+    )
+    if measurement is None and inherited is not None:
+        measurement = inherited.measurement
+    refs = [] if inherited is None else list(inherited.attempt_receipts)
     if aggregate.exists():
-        refs = [
+        for ref in [
             ContentEvidenceReference.model_validate(row)
             for row in json.loads(aggregate.read_text()).get("attempt_receipts", [])
-        ]
+        ]:
+            if ref not in refs:
+                refs.append(ref)
     # Initial campaigns already persist individual attempts before aggregating a source.
     for path in sorted((base / "attempts" / "*" / "*" / "attempt.json").glob(), key=str):
         ref = ContentEvidenceReference(uri=str(path), sha256=file_sha256(path))
@@ -144,6 +182,8 @@ def recovered_source(
                     or prior_judge.get("effective_temperature") != PROTOCOLS[PROTOCOL_ID].temperature
                 ):
                     raise ValueError("Continuation cannot mix judge identities or unqualified judge temperature")
+            if task.workload == "native" and serving.get("native_client_context_safety_buffer_tokens") != 0:
+                raise ValueError("Native continuation requires the corrected full-context worker receipt")
             archive = StoragePath(payload["archive"])
             data = archive.read_bytes()
             if hashlib.sha256(data).hexdigest() != payload["archive_sha256"]:

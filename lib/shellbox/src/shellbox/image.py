@@ -256,10 +256,14 @@ def prepare_image(
     if isinstance(source, RegistryImage) and ("://" in source.reference or not source.reference.strip()):
         raise ValueError("RegistryImage requires a container image reference without a URL scheme")
     pinned_digest = None
+    registry_reference = source.reference if isinstance(source, RegistryImage) else ""
     if isinstance(source, RegistryImage):
-        match = re.fullmatch(r".+@(sha256:[0-9a-f]{64})", source.reference)
+        match = re.fullmatch(r"(.+)@(sha256:[0-9a-f]{64})", source.reference)
         if match is not None:
-            pinned_digest = match[1]
+            pinned_digest = match[2]
+            prefix, separator, name = match[1].rpartition("/")
+            # Skopeo rejects a supplementary tag beside a digest; registry ports stay in the prefix.
+            registry_reference = f"{prefix}{separator}{name.split(':', 1)[0]}@{pinned_digest}"
     if pinned_digest is not None and policy is None:
         destination = cache / pinned_digest.replace(":", "-")
         if destination.exists():
@@ -280,7 +284,7 @@ def prepare_image(
         if authfile is not None:
             skopeo_args.extend(("--src-authfile", str(authfile)))
         if isinstance(source, RegistryImage):
-            source_ref = f"docker://{source.reference}"
+            source_ref = f"docker://{registry_reference}"
         else:
             tag = f"harbor-image-build:{uuid.uuid4().hex}"
             try:
@@ -305,7 +309,7 @@ def prepare_image(
         source_blobs: tuple[bytes, ...] = ()
         binding = None
         if isinstance(source, RegistryImage) and pinned_digest is not None and pinned_digest != digest:
-            repository = source.reference.rsplit("@", 1)[0]
+            repository = registry_reference.rsplit("@", 1)[0]
             config_args = [
                 "skopeo",
                 "--override-os",

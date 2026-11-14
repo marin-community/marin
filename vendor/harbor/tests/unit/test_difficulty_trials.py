@@ -13,8 +13,8 @@ from urllib.request import Request, urlopen
 import httpx
 import pytest
 from finestore.reader import ReadView
-from harbor.llms.vllm_tokenization import tokenize_url, completion_budget_from_count
 from harbor.llms.openai_llm import OpenAILLM
+from harbor.llms.vllm_tokenization import completion_budget_from_count, tokenize_url
 from finestore.rl.difficulty import (
     MEASUREMENTS,
     SOLVER_MODELS,
@@ -32,14 +32,14 @@ from experiments.post_training.task_curation.difficulty_prepared import Prepared
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 
 
-@pytest.mark.parametrize("graded_reward,upstream_failure,with_judge", [
-    *[(reward, failure, judge) for reward in (0.0, 1.0) for failure in (None, "json") for judge in (False, True)],
-    (1.0, "html", False), (1.0, "input_tokenize", False), (1.0, "native", False),
+@pytest.mark.parametrize("graded_reward,upstream_failure,workload,legacy_buffer,with_judge", [
+    *[(reward, failure, "task_spec", 0, judge) for reward in (0.0, 1.0) for failure in (None, "json", "html") for judge in (False, True)],
+    *[(reward, None, "native", buffer, False) for reward in (0.0, 1.0) for buffer in (0, 8)],
+    (1.0, "input_tokenize", "native", 0, False),
 ])
-def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, graded_reward, upstream_failure, with_judge):
-    infrastructure_first = upstream_failure in {"json", "html", "input_tokenize"}
+def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure, graded_reward, workload, legacy_buffer, with_judge):
+    infrastructure_first = upstream_failure is not None
     unserved = upstream_failure == "input_tokenize"
-    native = upstream_failure in {"native", "input_tokenize"}
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
     blocker = "missing_environment_artifact: fixture/original/requirements.lock"
@@ -54,7 +54,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         sample=sample, sample_receipt={"uri": "fixture:sample", "sha256": "e" * 64},
         tasks=[
             PreparedTask(task_id="scored", runtime_sha256=runtime_sha256, path=str(tmp_path / "source-task"),
-                         workload="native" if native else "task_spec", backend="local", reason=None, judge_model="glm-5.3" if with_judge else None),
+                         workload=workload, backend="local", reason=None, judge_model="glm-5.3" if with_judge else None),
             PreparedTask(task_id="blocked", runtime_sha256=runtime_sha256, path=None,
                          workload="task_spec", backend="local", reason=blocker, judge_model="glm-5.3" if with_judge else None),
         ],
@@ -91,6 +91,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     output = campaign / "trials"
     serving = {
         "protocol": "atlas-difficulty-v3", "solver": "hosted", "model": config.identity.model,
+        "native_client_context_safety_buffer_tokens": legacy_buffer,
         "tokenizer_revision": config.identity.tokenizer_revision,
         "chat_template_sha256": config.identity.chat_template_sha256, "sampling": request_parameters(config.settings),
         "tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}},
@@ -131,8 +132,12 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     async def physical_trial(configuration, authentication):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
         if configuration.agent.name == "terminus-2":
-            llm = OpenAILLM(model_name="openai/fixture", api_key="fixture", api_base=configuration.agent.kwargs["api_base"], model_info=configuration.agent.kwargs["model_info"])
-            assert completion_budget_from_count(prompt_tokens=40000, context_window=llm.get_model_context_limit(), max_output_tokens=llm.get_model_output_limit()) == 16384
+            llm = OpenAILLM(model_name="openai/fixture", api_key="fixture",
+                           api_base=configuration.agent.kwargs["api_base"],
+                           model_info=configuration.agent.kwargs["model_info"])
+            assert llm.get_model_context_limit() == 65536
+            assert completion_budget_from_count(prompt_tokens=40000, context_window=llm.get_model_context_limit(),
+                                                max_output_tokens=llm.get_model_output_limit()) == 16384
         failed = infrastructure_first and not physical_attempts
         reward = 1.0 if continuing else graded_reward
         physical_attempts.append(configuration.trial_name)
@@ -205,6 +210,38 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         source.tasks[0], source.tasks[1].model_copy(update={"reason": None, "path": str(directory)}),
     ]})
     source_path.write_text(json.dumps([available.model_dump(mode="json")]))
+    previous_root = campaign
+    if workload == "task_spec" and upstream_failure is None:
+        original_relay = difficulty_trials.budget_relay
+
+        def broken_relay(**kwargs):
+            raise RuntimeError("framework failure before visiting sources")
+
+        async def broken_dispatch(configuration, authentication):
+            raise RuntimeError("framework failure before source aggregate")
+
+        for phase in ("relay", "dispatch"):
+            interrupted = tmp_path / f"interrupted-{phase}"
+            interrupted.mkdir()
+            (interrupted / "prepared.json").write_text(json.dumps({
+                "source_queue_sha256": "1" * 64, "sources": [available.model_dump(mode="json")],
+            }))
+            (interrupted / "serving.json").write_bytes(serving_bytes)
+            monkeypatch.setattr(difficulty_trials, "budget_relay", broken_relay if phase == "relay" else original_relay)
+            monkeypatch.setattr(difficulty_trials, "execute_trial", broken_dispatch)
+            monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
+                                            "--output-root", str(interrupted / "trials"),
+                                            "--local-root", str(tmp_path / f"interrupted-{phase}-local"),
+                                            "--previous-campaign", str(previous_root),
+                                            "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
+                                            "--source-queue-sha256", "1" * 64])
+            with pytest.raises(RuntimeError, match="framework failure"):
+                difficulty_trials.main()
+            assert (interrupted / "trials/model-requests-final.json").exists()
+            assert not list((interrupted / "trials").glob("*/attempts.json"))
+            previous_root = interrupted
+        monkeypatch.setattr(difficulty_trials, "budget_relay", original_relay)
+        monkeypatch.setattr(difficulty_trials, "execute_trial", physical_trial)
     second = tmp_path / "continuation"
     second.mkdir()
     (second / "prepared.json").write_text(json.dumps({
@@ -213,8 +250,13 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     (second / "serving.json").write_bytes(serving_bytes)
     monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
                                     "--output-root", str(second / "trials"), "--local-root", str(tmp_path / "continued-local"),
-                                    "--previous-campaign", str(campaign), "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
+                                    "--previous-campaign", str(previous_root), "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
                                     "--source-queue-sha256", "1" * 64])
+    if workload == "native" and legacy_buffer:
+        with pytest.raises(ValueError, match="Native continuation requires"):
+            difficulty_trials.main()
+        assert len(physical_attempts) == 1
+        return
     difficulty_trials.main()
     rows = list(ReadView(str(second / "trials" / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (continued,) = [DifficultyMeasurement.model_validate(row) for row in rows]
@@ -229,6 +271,29 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         assert continued.input_tokens == continued.output_tokens == 0
         ledger = json.loads(next((second / "trials").glob("*/attempts.json")).read_text())
         assert (ledger["judge_input_tokens"], ledger["judge_output_tokens"]) == (1, 20000)
+    if workload == "task_spec" and upstream_failure is None and graded_reward == 0:
+        for corruption in ("cycle", "serving", "queue"):
+            invalid = tmp_path / f"invalid-{corruption}"
+            (invalid / "trials").mkdir(parents=True)
+            (invalid / "prepared.json").write_bytes((second / "prepared.json").read_bytes())
+            (invalid / "serving.json").write_bytes(serving_bytes)
+            (invalid / "trials/model-requests-final.json").write_bytes(
+                (second / "trials/model-requests-final.json").read_bytes())
+            parent = invalid if corruption == "cycle" else campaign
+            (invalid / "trials/parent-campaign.json").write_text(json.dumps({
+                "root": str(parent), "source_queue_sha256": "2" * 64 if corruption == "queue" else "1" * 64,
+                "serving_receipt": {"uri": str(parent / "serving.json"),
+                                    "sha256": "f" * 64 if corruption == "serving" else hashlib.sha256(serving_bytes).hexdigest()},
+            }))
+            monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
+                                            "--output-root", str(tmp_path / f"invalid-{corruption}-output"),
+                                            "--local-root", str(tmp_path / f"invalid-{corruption}-local"),
+                                            "--previous-campaign", str(invalid),
+                                            "--previous-serving-sha256", hashlib.sha256(serving_bytes).hexdigest(),
+                                            "--source-queue-sha256", "1" * 64])
+            with pytest.raises(ValueError, match="cycle|ancestry|serving"):
+                difficulty_trials.main()
+            assert len(physical_attempts) == 2
     assert len(list((second / "trials").glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1
     assert json.loads(next(output.glob("*/measurement.json")).read_text())["n"] == 1
 

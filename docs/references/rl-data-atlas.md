@@ -650,12 +650,23 @@ complete. Cross-source agreement cannot exclude an answer defect shared by
 both sources. Use a fresh output root; old evidence is never overwritten.
 
 During direction measurement, exact instruction hashes and disjoint conversation
-states are checked before loading text. Discovery still prepares every population
-and scans its full text on a resumed run. Remaining directions share an atomic local normalization cache per source,
-and target populations are sharded across `--workers` CPU processes. To resume a
-run in a fresh output prefix, pass `--reuse-neighbor-root <prior-output-root>`;
-complete direction receipts are reused only under their input-bound direction
-key and after checking the full neighbor digest. Old outputs remain immutable.
+states are checked before loading text. A run without a frozen shortlist scans
+full text for discovery, including on resume. Pass `--pair-shortlist URI
+--pair-shortlist-sha256 SHA` to reuse a discovery checkpoint. Its survey SHA,
+population digests, discovery method and prior-pair coverage must match. Full
+survey runs write `pair-shortlist.json` before measurement and include its URI
+and SHA-256 in `result.json`. The checkpoint stores only source-pair keys; replay
+rebuilds scores and prior orientations from the pinned survey. It can be reused
+with a different measurement sample size. Verified population-cache staging
+still occurs.
+
+Remaining directions share an atomic normalization cache per source and a
+512 MiB default LRU payload budget for target word shingles. Set
+`--shingle-cache-bytes` to raise that per-worker budget for dense populations;
+`1073741824` requests 1 GiB. Eviction recomputes the same shingles. Target populations are sharded across `--workers` CPU processes.
+Pass `--reuse-neighbor-root <prior-output-root>` with a fresh output prefix to
+reuse complete direction receipts under their input-bound keys after checking
+the full neighbor digest. Old outputs remain immutable.
 
 The staged loader selects fingerprints, pair reviews and groups atomically with
 the catalog and backend map. Pass the scan's reviewed output to the loader's
@@ -905,6 +916,9 @@ network qualification. A task's first valid score, including zero, is retained;
 only unfinished tasks execute. Individual attempt receipts also survive a source
 aggregate interrupted by a framework failure. Every continuation writes a new
 catalog and retains references to the previous attempts.
+A continuation records its parent serving and source-queue bindings before
+dispatch. Later runs verify this ancestry even when an interrupted worker never
+visited a source or wrote its aggregate; inherited scores remain reusable once.
 
 Per-source token and GPU figures sum available source aggregates. An interrupted
 source may lack those totals; use every campaign's final model-traffic receipt

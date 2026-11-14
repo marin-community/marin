@@ -47,7 +47,11 @@ from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_poli
 
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
-from experiments.post_training.task_curation.difficulty_recovery import previous_campaign, recovered_source
+from experiments.post_training.task_curation.difficulty_recovery import (
+    CampaignParent,
+    previous_campaign,
+    recovered_source,
+)
 from experiments.post_training.task_curation.difficulty_relay import RequestBudget, budget_relay
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 
@@ -328,6 +332,15 @@ def main() -> None:
     if output.exists() or args.local_root.exists():
         raise FileExistsError("Preserve previous difficulty attempts and select a new version")
     args.local_root.mkdir(parents=True)
+    if previous is not None:
+        write_json_evidence(
+            output / "parent-campaign.json",
+            CampaignParent(
+                root=str(previous.root),
+                source_queue_sha256=args.source_queue_sha256,
+                serving_receipt={"uri": str(previous.root / "serving.json"), "sha256": args.previous_serving_sha256},
+            ).model_dump(mode="json"),
+        )
     key = "EMPTY" if config.api_key_secret is None else require_secret(config.api_key_secret)
     has_judge = any(task.judge_model is not None for source in sources for task in source.tasks)
     judge_root = args.local_root / "judge"
