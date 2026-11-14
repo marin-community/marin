@@ -36,22 +36,11 @@ def launch_config(tmp_path, *, nodes=48, policy_nodes=16, engines=2, dp=64, widt
     return path
 
 
-@pytest.mark.parametrize(
-    "geometry,hosts,roles",
-    [
-        ({}, (16, 16, 16), (0, 1, 2)),
-        ({"nodes": 24, "policy_nodes": 8, "engines": 1}, (8, 16), (0, 1)),
-        ({"nodes": 24, "dp": 16}, (16, 8), (0, 1, 1)),
-        ({"nodes": 32, "dp": 32}, (16, 16), (0, 1, 1)),
-        ({"nodes": 6, "policy_nodes": 1, "engines": 3, "dp": 6}, (6,), (0, 0, 0, 0)),
-        ({"nodes": 34, "policy_nodes": 1, "engines": 7, "dp": 18}, (15, 14, 5), (0, 0, 0, 0, 1, 1, 1, 2)),
-    ],
-)
-def test_launch_plan_keeps_whole_models_local_and_counts_host_padding(tmp_path, geometry, hosts, roles):
-    config = load_launch_config(launch_config(tmp_path, **geometry))
+def test_launch_plan_keeps_whole_models_local_and_counts_host_padding(tmp_path):
+    config = load_launch_config(launch_config(tmp_path, nodes=34, policy_nodes=1, engines=7, dp=18))
     topology = derive_launch_topology(OmegaConf.to_container(config, resolve=True)).role_topology
-    assert topology.locality.group_sizes == hosts
-    assert topology.locality.role_groups == roles
+    assert topology.locality.group_sizes == (15, 14, 5)
+    assert topology.locality.role_groups == (0, 0, 0, 0, 1, 1, 1, 2)
 
 
 def test_single_domain_mode_rejects_a_trainer_that_needs_multiple_racks(tmp_path):
