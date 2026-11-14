@@ -1640,6 +1640,13 @@ uv run python -m experiments.post_training.task_curation.oracle_filter merge-ret
   --task-map ORIGINAL_FULL_CALIBRATED_MAP --retry-map NEW_PHASE/task-map.json --output NEW_FULL_MAP
 ```
 
+Each task receipt records `source_task_sha256` and `source_task_checksum` before
+calibrated requirements are projected into the admitted TaskSpec. Every retry
+transition must match these original-source anchors. Legacy receipts without
+anchors are checked against their entry task/package identity; an unanchored
+partial-source projection is rejected. Absent anchors remain omitted so archived
+history hashes are unchanged.
+
 Use a fresh phase directory under the existing calibration root so `collect` can
 inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
@@ -1872,7 +1879,9 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
 ~~~
 
 For candidate trials, select `task-spec-chat` with explicit `api_base`,
-`max_turns` and `max_tokens` agent kwargs. It consumes the original conversation
+`max_turns`, `max_tokens` and `request_parameters` agent kwargs. Atlas routes
+its candidate endpoint through the protocol relay, which owns tokenization,
+request budgets and traffic receipts. The agent consumes the original conversation
 and final-submission tools; shell tools require the declared actor machine.
 External tool-provider implementations are unsupported. Actor files and setup commands run only in the declared actor
 environment. Script graders and non-judge Verifyit graders retain their declared

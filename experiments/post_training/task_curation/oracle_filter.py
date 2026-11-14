@@ -586,6 +586,8 @@ def filter_cohort(
                     task_sha256=canonical_sha256(task.model_dump(mode="json")),
                     runtime_sha256=row_runtime_hash(row),
                     harbor_task_checksum=checksum,
+                    source_task_sha256=mapping["task_sha256"],
+                    source_task_checksum=mapping.get("source_task_checksum", checksum),
                     has_oracle=oracle,
                     trials=(calibration.attempts[-1],) if oracle else (),
                     calibration=calibration,

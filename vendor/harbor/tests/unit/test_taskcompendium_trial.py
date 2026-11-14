@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 import pytest
 import tomlkit
+from rolloutengine.models import RolloutLimits
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Backend, ExitReason, NetworkPolicy, Result, UnsupportedMachineSpec
@@ -215,6 +216,53 @@ async def test_source_budgets_reach_actor_and_verifier_allocations_independently
 
 def declared_oracle(task):
     return OracleCommand("bash ../solution/solve.sh", answer_file=grader_workspace(task.grader) + "/answer.txt")
+
+
+@pytest.mark.asyncio
+async def test_candidate_preserves_tool_wire_history_across_turns(tmp_path, monkeypatch):
+    task = exact_answer_task(
+        RawRow("tool-replay", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Use the shell, then return 42.", answers=("42",), ignore_case=False,
+    ).model_copy(update={"environment_requirements": EnvironmentRequirements(
+        capabilities=("shell",), command_semantics=CommandSemantics.LINUX_PROCESS, working_directory="/workspace",
+    )})
+    requests = []
+    arguments = json.dumps({"command": "printf replay > marker"})
+
+    def response(request):
+        requests.append(json.loads(request.content))
+        message = {"role": "assistant", "content": "42"}
+        finish = "stop"
+        if len(requests) == 1:
+            message = {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "shell-1", "type": "function", "function": {"name": "shell", "arguments": arguments},
+            }]}
+            finish = "tool_calls"
+        return httpx.Response(200, json={
+            "id": f"reply-{len(requests)}", "object": "chat.completion", "created": 0, "model": "candidate",
+            "choices": [{"index": 0, "finish_reason": finish, "message": message}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+
+    real_client = agents.AsyncOpenAI
+    monkeypatch.setattr(agents, "AsyncOpenAI", lambda **kwargs: real_client(
+        **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(response)),
+    ))
+    agent = agents.TaskSpecChatAgent(
+        logs_dir=tmp_path / "agent", model_name="openai/candidate", model_alias="openai/candidate",
+        api_base="https://candidate.fixture/v1", max_turns=2, max_tokens=128,
+        request_parameters={"temperature": 0.7},
+    )
+    actor_root = tmp_path / "actor"
+    (actor_root / "workspace").mkdir(parents=True)
+    machine = FileMachine(root=actor_root, workdir="/workspace")
+    limits = RolloutLimits(max_turns=2, max_total_tokens=None, model_turn_timeout=5, tool_turn_timeout=5,
+                          total_turn_timeout=10, attempt_timeout=15, verifier_timeout=5, cleanup_timeout=1)
+    attempt = await agent.run_task(task, machine, limits)
+    assert (actor_root / "workspace/marker").read_text() == "replay"
+    assert requests[1]["messages"][1]["tool_calls"][0]["function"]["arguments"] == arguments
+    assert requests[1]["messages"][-1]["role"] == "tool"
+    assert attempt.conversation.events[-1].content == "42"
 
 
 @pytest.mark.parametrize(
@@ -630,6 +678,30 @@ async def test_converted_judge_task_preserves_contract_through_production_trial(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("override", [
+    {"tools": []}, {"tool_choice": "none"}, {"parallel_tool_calls": False},
+    {"extra_body": {"tools": []}}, {"extra_body": {"chat_template_kwargs": {"tools": []}}},
+])
+async def test_candidate_sampling_cannot_replace_original_task_tools(tmp_path, monkeypatch, override):
+    task = original_task("tau")
+    original = task.model_dump_json()
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    calls = []
+    monkeypatch.setattr(agents, "AsyncOpenAI", lambda **kwargs: calls.append(kwargs))
+    with pytest.raises(ValueError, match="sampling and template|task interface"):
+        await Trial.create(TrialConfig(
+            task=TaskConfig(path=directory), trial_name="tool-replacement", trials_dir=tmp_path / "trials",
+            agent=AgentConfig(name="task-spec-chat", model_name="openai/candidate", kwargs={
+                "api_base": "https://candidate.fixture/v1", "max_turns": 1, "max_tokens": 128,
+                "request_parameters": override,
+            }),
+        ))
+    assert calls == []
+    assert TaskSpec.model_validate_json((directory / "task-spec.json").read_text()).model_dump_json() == original
+
+
+@pytest.mark.asyncio
 async def test_tau_missing_original_lock_stops_before_candidate_or_machine(tmp_path, monkeypatch):
     task = original_task("tau")
     directory = tmp_path / "task"
@@ -771,7 +843,8 @@ async def test_judge_model_selection_respects_source_delegation(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_provider_outage_after_shell_turn_retains_history_without_scoring(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["provider_outage", "input_budget"])
+async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_path, monkeypatch, failure):
     task = exact_answer_task(
         RawRow("outage", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
         prompt="Use the shell, then answer 42.",
@@ -798,6 +871,8 @@ async def test_provider_outage_after_shell_turn_retains_history_without_scoring(
     def respond(request):
         requests.append(json.loads(request.content))
         if len(requests) == 2:
+            if failure == "input_budget":
+                return httpx.Response(400, json={"error": {"code": "input_budget_unserved"}})
             return httpx.Response(503, json={"error": {"message": "provider unavailable", "type": "server_error"}})
         return httpx.Response(
             200,

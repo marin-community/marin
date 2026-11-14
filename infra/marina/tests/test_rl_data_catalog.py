@@ -1524,6 +1524,29 @@ def test_difficulty_counting_excludes_infrastructure_and_keeps_partial_credit():
         measurement_from_attempts(measurement, [*attempts, attempts[1]])
 
 
+@pytest.mark.parametrize("reward", [0.0, 1.0])
+def test_full_sample_at_solve_rate_endpoint_keeps_a_valid_wilson_interval(reward):
+    declaration = with_declaration_admission_census(contamination_declarations()[0][1])
+    measurement = difficulty_measurement(declaration, Solver.SMALL)
+    sample = measurement.sample.model_copy(
+        update={
+            "population_count": 100,
+            "tasks": [measurement.sample.tasks[0].model_copy(update={"task_id": str(i)}) for i in range(100)],
+        }
+    )
+    measurement = measurement.model_copy(update={"sample": sample})
+    result = measurement_from_attempts(
+        measurement, [DifficultyAttempt(task_id=str(i), status="scored", reward=reward) for i in range(100)]
+    )
+    assert (result.status, result.n, result.solved, result.pending_tasks) == ("measured", 100, int(reward) * 100, 0)
+    if reward:
+        assert result.wilson_95.high == 1.0
+        assert result.wilson_95.low == pytest.approx(0.9630065017930143)
+    else:
+        assert result.wilson_95.low == 0.0
+        assert result.wilson_95.high == pytest.approx(0.03699349820698568)
+
+
 def test_historical_protocol_retains_its_original_sampling_contract():
     declaration = with_declaration_admission_census(contamination_declarations()[0][1])
     payload = difficulty_measurement(declaration, Solver.SMALL).model_dump(mode="json")
