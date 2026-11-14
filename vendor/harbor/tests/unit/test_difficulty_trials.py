@@ -7,7 +7,10 @@ import json
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
+import httpx
 import pytest
 from finestore.reader import ReadView
 from finestore.rl.difficulty import (
@@ -22,12 +25,13 @@ from finestore.rl.difficulty import (
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
 
-from experiments.post_training.task_curation import difficulty_trials
+from experiments.post_training.task_curation import difficulty_relay, difficulty_trials
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 
 
-@pytest.mark.parametrize("infrastructure_first", [False, True])
-def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, infrastructure_first):
+@pytest.mark.parametrize("upstream_failure", [None, "json", "html"])
+def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure):
+    infrastructure_first = upstream_failure is not None
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
     blocker = "missing_environment_artifact: fixture/original/requirements.lock"
@@ -71,9 +75,22 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     config_path.write_text(config.model_dump_json())
     output = tmp_path / "output"
 
-    @contextmanager
-    def model_service(**kwargs):
-        yield "https://model.fixture"
+    candidate_requests = []
+    real_client = httpx.Client
+
+    def model_response(request):
+        candidate_requests.append(json.loads(request.content))
+        if upstream_failure == "json":
+            return httpx.Response(503, json={"error": {"message": "Transient serving failure"}})
+        return httpx.Response(502, text="<html>Temporary gateway failure</html>")
+
+    class Tokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            return [1]
+
+    monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
+    monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(model_response)))
 
     physical_attempts = []
 
@@ -86,6 +103,15 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         verifier = directory / "verifier"
         agent.mkdir(parents=True)
         verifier.mkdir()
+        if failed:
+            endpoint = configuration.agent.kwargs["api_base"]
+            request = Request(endpoint + "/chat/completions", method="POST",
+                              data=json.dumps({"messages": [{"role": "user", "content": "Original task"}]}).encode(),
+                              headers={"Content-Type": "application/json"})
+            with pytest.raises(HTTPError) as error:
+                urlopen(request, timeout=10)
+            assert error.value.code == 502
+            assert isinstance(json.loads(error.value.read())["error"], str)
         if not failed:
             (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": 1.0}))
         (directory / "network-policy.json").write_text(json.dumps({
@@ -102,7 +128,6 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         trial = SimpleNamespace(paths=SimpleNamespace(trial_dir=directory, agent_dir=agent, verifier_dir=verifier))
         return trial, result
 
-    monkeypatch.setattr(difficulty_trials, "budget_relay", model_service)
     monkeypatch.setattr(difficulty_trials, "execute_trial", physical_trial)
     monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
                                     "--output-root", str(output), "--local-root", str(tmp_path / "local")])
@@ -116,3 +141,4 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
     assert attempts["pending_reasons"] == {"blocked": blocker}
     assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(infrastructure_first)
+    assert len(candidate_requests) == int(infrastructure_first)
