@@ -18,6 +18,8 @@ from taskcompendium.evaluation.spec import ResponseSelection
 def completion_text(message: Mapping[str, Any], stop_reason: str, selection: ResponseSelection) -> str:
     content = message.get("content") or ""
     reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+    if selection == "final_only":
+        return "" if message.get("refusal") else content
     if selection == "final_or_complete_boxed_reasoning":
         return content or (
             reasoning if stop_reason != "length" and re.search(r"\\(?:boxed|fbox)\s*\{", reasoning) else ""

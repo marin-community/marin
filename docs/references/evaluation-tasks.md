@@ -296,3 +296,35 @@ See [task curation](task-curation.md) for acquisition and publication,
 [task rollouts](task-rollouts.md) for single-task execution. Harbor execution remains
 separate. Historical Evalchemy archives remain readable; reproducing their runs
 requires the recorded checkout.
+
+## GenomeQA
+
+The `genomeqa` source publishes all 5,200 original questions from the pinned
+`HuggingFaceBio/genomeqa` binary and MCQ files. Conversion checks file hashes,
+question identities, answers, and the twelve task-by-format populations. The
+system prompt is read as a literal from a separately downloaded, pinned upstream
+`run.py`; upstream code is never executed. Neither the questions nor the prompt
+are bundled here. Their upstream reuse licenses are unspecified.
+
+The protocol specifies one response, temperature 0.7, top-p 0.95, thinking where
+supported, and a 16,384-token output allowance. Configure the run with at least
+that output allowance and the served model's tokenizer. Verify provider-specific
+reasoning controls and token accounting before running. Context preflight requires
+the full output allowance, retains the full prompt, and excludes rows that cannot
+fit. A result with any excluded or missing row is not a full GenomeQA result.
+
+The grader uses final content only, removes completed thinking blocks, and reads
+the last `### Answer` section or explicit `Answer:` declarations. Missing,
+conflicting, invalid, and length-limited answers receive zero. A provider's explicit
+refusal field suppresses answer content; only the `content_filter` stop reason
+is separately classified as refusal by the script grader. Other explicit refusals
+are recorded as missing answers, with the original message retained in the raw
+attempt archive.
+
+Each verdict carries `accuracy`, `genomeqa_macro`, and parsing diagnostics. The
+macro metric gives motif questions weight 5 and other questions weight 1, so
+each of the six biological subtasks and its two formats contributes equally.
+Accuracy remains unweighted for actual correct counts. Evaluation items retain
+subtask, format, and cell groups for downstream reporting. Headline summary
+computation and public launcher registration remain separate work. Keep question,
+prompt, and response artifacts in restricted storage pending sample-access controls.

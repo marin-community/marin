@@ -7,6 +7,7 @@
 # ruff: noqa: PLC0415
 
 import json
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -16,8 +17,18 @@ from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, infra
 from verifyit.spec import Constraint, JudgeSpec, parse_spec
 
 
-def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
+def score(scorer: str, config: dict[str, Any], response: str, *, stop_reason: str = "") -> Reward:
     # Scorers load only the dependencies of the selected dataset's environment.
+    if scorer == "genomeqa":
+        from .genomeqa import grade_genomeqa
+
+        return grade_genomeqa(
+            config["expected"],
+            config["options"],
+            config["cell_weight"],
+            response,
+            stop_reason,
+        )
     if scorer == "gsm8k_cot":
         from .math import grade_gsm8k_cot
 
@@ -92,7 +103,12 @@ def score(scorer: str, config: dict[str, Any], response: str) -> Reward:
 def main() -> None:
     config = json.loads(Path("/tests/config.json").read_text())
     try:
-        result = score(sys.argv[1], config, Path("/app/answer.txt").read_text())
+        result = score(
+            sys.argv[1],
+            config,
+            Path("/app/answer.txt").read_text(),
+            stop_reason=os.environ.get("TASKCOMPENDIUM_STOP_REASON", ""),
+        )
     except InvalidTask as error:
         result = invalid_task(str(error))
     except GradingInfraError as error:
