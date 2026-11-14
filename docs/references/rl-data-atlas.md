@@ -111,13 +111,17 @@ in the URL. The four totals show canonical groups, unique examples, displayed
 quality counts and catalog freshness. Source evidence pages include exact release
 pins, deduplication ledgers, lexical measurements, QC and archived assessment packets.
 
+**Use** comes from the registered converter's explicit TRAIN or EVAL policy. A
+benchmark tag describes a source and never overrides TRAIN. Historical declarations
+without recorded Use display Unknown.
+
 **Contamination** is computed from each source's lexical-decontamination record:
 
 - **NO ISSUES**: zero overlap measured for the current input pin or certified by
   a validated current retained-release receipt.
 - **REMEDIATED**: TRAIN overlap was excluded in a new pinned private TaskCompendium
   release, with a validated remediation receipt matching the current dataset pin.
-- **MEASURED, EVAL**: EVAL or benchmark overlap is retained by policy; the overlapping
+- **MEASURED, EVAL**: declared EVAL overlap is retained by policy; the overlapping
   count remains visible.
 - **REMEDIATION REQUIRED**: TRAIN overlap lacks verified remediation for the current
   private pin. This state violates the ingestion requirement.
