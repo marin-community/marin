@@ -122,7 +122,12 @@ def layout_probes(batch_probe: Probe) -> tuple[Probe, ...]:
         raise ValueError("The B-selected batch and microbatch must divide every C layout")
     return tuple(
         Probe(
-            "C-throughput", batch_probe.size, microbatch, batch_size // (microbatch * layout.batch_shards), layout=layout
+            "C-throughput",
+            batch_probe.size,
+            microbatch,
+            batch_size // (microbatch * layout.batch_shards),
+            layout=layout,
+            host_memory=batch_probe.host_memory,
         )
         for layout in layouts
     )

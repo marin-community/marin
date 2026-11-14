@@ -95,15 +95,16 @@ def score_endpoint(endpoint: Endpoint) -> dict:
         raise ValueError(f"Scoring requires a committed permanent checkpoint: {endpoint.checkpoint}")
     config = scoring_config(endpoint)
     (root / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
+    allocation = resources(endpoint.cell.host_memory)
     environment = resolve_training_env(
-        {**(build_pod(endpoint.cell).env_vars or {}), "JAX_PLATFORMS": "cuda,cpu"}, resources()
+        {**(build_pod(endpoint.cell).env_vars or {}), "JAX_PLATFORMS": "cuda,cpu"}, allocation
     )
     job = current_client().submit(
         JobRequest(
             name=config.trainer.id,
             entrypoint=Entrypoint.from_callable(eval_main, args=[config]),
-            resources=resources(),
-            environment=create_environment(extras=extras_for_resources(resources()), env_vars=environment),
+            resources=allocation,
+            environment=create_environment(extras=extras_for_resources(allocation), env_vars=environment),
             timeout=Duration.from_seconds(TASK_TIMEOUT),
             processes_per_task=8,
             priority=priority_band_value("interactive"),
@@ -125,6 +126,7 @@ def score_endpoint(endpoint: Endpoint) -> dict:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", help="Explicit endpoint lineage, including checkpoints retained before preemption")
     parser.add_argument("--calibration-size", type=int, choices=(512, 768, 1024))
     parser.add_argument(
         "--distribution",
@@ -144,6 +146,11 @@ def main():
         for cell in primary_cells()
         for step in cell.checkpoint_steps
     )
+    if args.manifest is not None:
+        if args.calibration_size is not None:
+            parser.error("A checkpoint manifest cannot be combined with calibration scoring")
+        endpoints = draccus.decode(tuple[Endpoint, ...], read_json(args.manifest))
+        distributions = tuple(dict.fromkeys(endpoint.distribution for endpoint in endpoints))
     if args.calibration_size is not None:
         if distributions != (ScoringDistribution.SFT,):
             parser.error("The calibration reload comparison uses the native SFT validation set")
