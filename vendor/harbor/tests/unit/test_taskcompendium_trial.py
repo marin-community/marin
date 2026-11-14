@@ -158,6 +158,60 @@ def original_task(name):
     return TaskSpec.model_validate_json((FIXTURES / f"{name}.json").read_text())
 
 
+@pytest.mark.parametrize(
+    "runtime,expected",
+    [
+        ({"task_machine": {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240},
+          "verifier_machine": {"cpus": 3, "memory_mb": 6144, "storage_mb": 20480}},
+         [(2, 4096, 10240), (3, 6144, 20480)]),
+        ({"task_machine": {"cpus": 2, "memory_mb": None}, "verifier_machine": {"storage_mb": 4096}},
+         [(2, 2048, 2048), (1, 2048, 4096)]),
+    ],
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grader_kind", ["script", "verifyit"])
+async def test_source_budgets_reach_actor_and_verifier_allocations_independently(
+    tmp_path, monkeypatch, runtime, expected, grader_kind
+):
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image="offline.test/task@sha256:" + "a" * 64,
+        working_directory="/app",
+    )
+    task = TaskSpec(
+        id="role-budgets", source=Source(dataset="fixture", revision="pin", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Return 42."),)),
+        environment_requirements=environment, answer_type=AnswerType.TEXT, answer_format=PlainText(),
+        grader=ScriptGrader(argv=("python3", "/tests/check.py"), cwd="/app", environment=environment,
+                            answer_path="/app/answer.txt"),
+        resources=ResourceGroups(verifier=(inline_resource(
+            "check.py", b"from pathlib import Path\nprint(float(Path('answer.txt').read_text() == '42'))\n"
+        ),)),
+    )
+    if grader_kind == "verifyit":
+        reference = exact_answer_task(
+            RawRow("role-budgets", task.source, {}), prompt="Return 42.", answers=("42",), ignore_case=False
+        )
+        task = task.model_copy(update={"grader": reference.grader})
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    write_source_runtime(task, runtime, directory)
+    response = tmp_path / "response.json"
+    response.write_text(json.dumps([{"role": "assistant", "content": "42"}]))
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    trial = await Trial.create(TrialConfig(
+        task=TaskConfig(path=directory), trial_name="role-budgets", trials_dir=tmp_path / "trials",
+        environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
+        agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
+    ))
+    result = await trial.run()
+    assert result.exception_info is None, result.exception_info
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert [(spec.cpus, spec.memory_mb, spec.storage_mb) for spec in machines.specifications] == expected
+    assert all(machine.closed for machine in machines.machines)
+
+
 def declared_oracle(task):
     return OracleCommand("bash ../solution/solve.sh", answer_file=grader_workspace(task.grader) + "/answer.txt")
 

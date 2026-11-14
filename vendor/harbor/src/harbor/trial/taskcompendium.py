@@ -335,7 +335,7 @@ class TaskSpecTrial(Trial):
             or self._verifier_timeout_sec != self.shape.verifier_timeout_sec
         ):
             raise ValueError("TaskSpec trials do not accept timeout overrides or multipliers")
-        self.runtime = MachineRuntimeSpec(
+        runtime = MachineRuntimeSpec(
             backend="local",
             network=actor_network if actor_network is not None else NetworkPolicy.DENY,
             cpus=self.shape.cpus,
@@ -346,8 +346,14 @@ class TaskSpecTrial(Trial):
             startup_timeout=self._environment_build_timeout_sec,
             cleanup_timeout=self.config.trial_cleanup_grace_sec,
         )
-        self.verifier_runtime = self.runtime.model_copy(
-            update={"network": verifier_network if verifier_network is not None else NetworkPolicy.DENY}
+        self.runtime = runtime.model_copy(
+            update=self.source_runtime.resource_limits("task_machine") if self.source_runtime else {}
+        )
+        self.verifier_runtime = runtime.model_copy(
+            update={
+                **(self.source_runtime.resource_limits("verifier_machine") if self.source_runtime else {}),
+                "network": verifier_network if verifier_network is not None else NetworkPolicy.DENY,
+            }
         )
         self.limits = RolloutLimits(
             max_turns=None,
@@ -566,9 +572,9 @@ class TaskSpecTrial(Trial):
             source = RegistryImage(grader.environment.docker_image)
         spec = MachineSpec(
             source,
-            cpus=self.shape.cpus,
-            memory_mb=self.shape.memory_mb,
-            storage_mb=self.shape.storage_mb,
+            cpus=self.verifier_runtime.cpus,
+            memory_mb=self.verifier_runtime.memory_mb,
+            storage_mb=self.verifier_runtime.storage_mb,
             network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
         )
@@ -626,9 +632,9 @@ class TaskSpecTrial(Trial):
         )
         spec = MachineSpec(
             image,
-            cpus=self.shape.cpus,
-            memory_mb=self.shape.memory_mb,
-            storage_mb=self.shape.storage_mb,
+            cpus=self.verifier_runtime.cpus,
+            memory_mb=self.verifier_runtime.memory_mb,
+            storage_mb=self.verifier_runtime.storage_mb,
             network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
             env=env,
