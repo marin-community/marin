@@ -197,6 +197,9 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
             worker=(inline_resource("app/input.txt", worker_input),),
             oracle=(inline_resource("solution/solve.sh", b"cat input.txt > answer.txt\n"),),
         )})
+    task = task.model_copy(update={"resources": task.resources.model_copy(update={
+        "oracle": tuple(resource.model_copy(update={"mode": "0750", "mtime_ns": 123000000456}) for resource in task.resources.oracle),
+    })})
     if custom_workspace is not None:
         task = task.model_copy(update={
             "grader": ScriptGrader(
@@ -221,6 +224,9 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
 
     async def source_boundary(machine, command):
         if command.argv == ("/bin/bash", "-lc", "bash ../solution/solve.sh"):
+            source = machine.local("/solution/solve.sh")
+            assert source.stat().st_mtime_ns == 123000000456
+            assert source.stat().st_mode & 0o777 == 0o750
             command_deadlines.append(command.timeout)
             if timed_out:
                 return Result(exit_code, b"partial oracle log", b"", False, False, ExitReason.TIMED_OUT)
