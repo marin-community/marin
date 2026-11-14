@@ -19,7 +19,12 @@ from taskcompendium.harbor.protected_runtime import ExpectedRuntime, RuntimeRole
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.models import Controls, IntendedUse
-from taskcompendium.pipeline.oracle_filter import ExecutabilityRunReceipt, OracleExclusionReason, require_oracle_filter
+from taskcompendium.pipeline.oracle_filter import (
+    ExecutabilityRunReceipt,
+    OracleExclusionReason,
+    load_oracle_filter,
+    require_oracle_filter,
+)
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 
@@ -203,12 +208,14 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         "newer-env",
         "invalid-reward",
         "calibration-only",
+        "no-oracle-env",
+        "no-oracle-oom",
         "live",
     ):
         row = prebuilt_task(task_id)
         envelope = json.loads(row["lowered_task_spec"])
         task = TaskSpec.model_validate(envelope["task"])
-        if task_id not in {"calibration-only", "live"}:
+        if task_id not in {"calibration-only", "live", "no-oracle-env", "no-oracle-oom"}:
             task = task.model_copy(
                 update={
                     "resources": task.resources.model_copy(
@@ -230,7 +237,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
             "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
             + (
                 '[environment.setup]\ncommand="pip install -q pytest==6.2.5"\ntimeout_sec=300\n'
-                if task_id == "source-env"
+                if task_id in {"source-env", "no-oracle-env"}
                 else ""
             )
             + "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
@@ -244,7 +251,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
             "runtime_sha256": canonical_sha256(envelope["runtime"]),
         }
         for attempt in range(
-            3 if task_id in {"infra", "source-env", "unmatched-env", "observed-env", "newer-env"} else 1
+            3 if task_id in {"infra", "source-env", "unmatched-env", "observed-env", "newer-env", "no-oracle-env"} else 1
         ):
             root = tmp_path / "jobs" / f"{task_id}-{attempt}"
             (root / "verifier").mkdir(parents=True)
@@ -271,12 +278,12 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                 "completion": {"trajectory_present": False},
                 "exception_info": (
                     {
-                        "exception_type": "RuntimeError",
+                        "exception_type": "OutOfMemoryError" if task_id == "no-oracle-oom" else "RuntimeError",
                         "exception_message": "backend unavailable",
                         "exception_traceback": "",
                         "occurred_at": datetime(2026, 11, 12, tzinfo=UTC).isoformat(),
                     }
-                    if task_id == "infra"
+                    if task_id in {"infra", "no-oracle-oom"}
                     else None
                 ),
             }
@@ -305,7 +312,7 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
                         )
                     },
                 }
-                if task_id in {"source-env", "unmatched-env", "observed-env", "newer-env"}
+                if task_id in {"source-env", "unmatched-env", "observed-env", "newer-env", "no-oracle-env"}
                 else {"status": "scored", "reward": 1}
             )
             if task_id == "invalid-reward":
@@ -339,9 +346,9 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
     conversion_manifest.write_text(
         json.dumps(
             {
-                "input_rows": 13,
-                "converted_rows": 11,
-                "within_source_dedup": {"raw_count": 13, "unique_count": 11, "within_source_duplicates": 2},
+                "input_rows": 15,
+                "converted_rows": 13,
+                "within_source_dedup": {"raw_count": 15, "unique_count": 13, "within_source_duplicates": 2},
                 "oracle_recipe_identity": "fixture-recipe",
             }
         )
@@ -350,7 +357,10 @@ def test_full_oracle_filter_excludes_failed_solutions_even_with_reward_one(tmp_p
         cohort, task_map, tmp_path / "jobs", output, conversion_manifest=conversion_manifest, executability_runs=controls
     )
     assert [row["path"] for row in pq.read_table(output).to_pylist()] == ["pass", "live"]
-    assert receipt.input_rows == 11
+    assert receipt.input_rows == 13
+    assert load_oracle_filter(str(output.parent / "oracle-filter.json")) == receipt
+    assert receipt.tasks["no-oracle-env"].exclusion_reason is OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
+    assert receipt.tasks["no-oracle-oom"].exclusion_reason is OracleExclusionReason.OOM
     assert receipt.conversion_rejections == 0
     assert receipt.tasks["invalid-reward"].exclusion_reason is OracleExclusionReason.INFRASTRUCTURE
     incompatible = receipt.tasks["source-env"]

@@ -7,6 +7,7 @@ import json
 from abc import abstractmethod
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from openai import AsyncOpenAI
 from rolloutengine.chat import ChatModel
@@ -91,11 +92,18 @@ class TaskSpecChatAgent(TaskSpecAgent):
     def name() -> str:
         return "task-spec-chat"
 
-    def __init__(self, *args, api_base: str, max_turns: int, max_tokens: int, **kwargs):
+    def __init__(self, *args, api_base: str, max_turns: int, max_tokens: int, request_parameters: dict[str, Any], **kwargs):
+        sampling = {"temperature", "top_p", "presence_penalty", "frequency_penalty", "reasoning_effort", "extra_body"}
+        extra = request_parameters.get("extra_body", {})
+        if request_parameters.keys() - sampling or extra.keys() - {"top_k", "min_p", "repetition_penalty", "chat_template_kwargs"}:
+            raise ValueError("Candidate request parameters may change only sampling and template controls")
+        if extra.get("chat_template_kwargs", {}).keys() - {"enable_thinking", "reasoning_effort"}:
+            raise ValueError("Candidate template controls cannot change the task interface")
         super().__init__(*args, **kwargs)
         self.api_base = api_base
         self.max_turns = max_turns
         self.max_tokens = max_tokens
+        self.request_parameters = request_parameters
 
     async def run_task(self, task: TaskSpec, machine: Machine | None, limits: RolloutLimits) -> GradingAttempt:
         self.attempt = empty_attempt(task)
@@ -110,6 +118,11 @@ class TaskSpecChatAgent(TaskSpecAgent):
 
             async def record(request: ModelRequest) -> ModelTurn:
                 self.model_input = chat_input(list(request.messages))
+                request = replace(request, options={
+                    **request.options,
+                    **self.request_parameters,
+                    "extra_body": {**request.options.get("extra_body", {}), **self.request_parameters.get("extra_body", {})},
+                })
                 turn = await model(request)
                 self.attempt = GradingAttempt(
                     chat_conversation([*request.messages, turn.message]),
