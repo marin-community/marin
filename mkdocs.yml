@@ -95,6 +95,7 @@ nav:
       - Agent Workflows: dev-guide/agent-workflows.md
       - Experiment Records: dev-guide/experiment-records.md
       - Research Engineering: dev-guide/research-engineering.md
+      - Frozen Batch Audits: dev-guide/frozen-batch-audits.md
       - Writing Style:
           - House Style: dev-guide/writing-style/index.md
           - Public Communication Conventions: dev-guide/writing-style/conventions.md
