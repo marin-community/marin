@@ -22,6 +22,7 @@ from sqlalchemy import text
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog.server.app import migrate
 from infra.marina.apps.rl_data_catalog.server.quality import review_completeness
+from infra.marina.apps.rl_data_catalog.tests.backend_fixtures import backend_source_maps
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
 from infra.marina.apps.rl_data_catalog.tests.review_fixtures import pending_review_declaration, review_declarations
@@ -76,6 +77,8 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 *review_declarations(),
                 (False, pending_review_declaration()),
             ]:
+                if declaration.id == "Marin:unmeasured":
+                    declaration = declaration.model_copy(update={"pipeline": None})
                 if declaration.name in {"clean", "eval"}:
                     declaration = with_declaration_admission_census(declaration)
                 if declaration.id == "Marin:clean":
@@ -124,37 +127,27 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                         "completeness": json.dumps(review_completeness(declaration, [], [])),
                     },
                 )
+            for source in backend_source_maps():
+                connection.execute(
+                    text(
+                        "INSERT INTO atlas_backend_sources (load_id,source_id,capabilities) "
+                        "VALUES ('lexical',:source,CAST(:capabilities AS JSONB))"
+                    ),
+                    {"source": source.source_id, "capabilities": source.model_dump_json()},
+                )
             connection.execute(
-                text(
-                    "INSERT INTO atlas_backend_sources (load_id,source_id,capabilities) "
-                    "VALUES ('lexical','Marin:clean',CAST(:capabilities AS JSONB))"
-                ),
+                text("INSERT INTO atlas_backend_surveys VALUES ('lexical','survey-fixture',CAST(:survey AS JSONB))"),
                 {
-                    "capabilities": json.dumps(
+                    "survey": json.dumps(
                         {
-                            "source_id": "Marin:clean",
-                            "basis": "converted_spec_census",
-                            "task_count": 3,
-                            "backends": {
-                                "docker": {
-                                    "support": "supported",
-                                    "roles": {"agent": {"supported": 3}, "grader": {"supported": 3}},
-                                    "blockers": {},
-                                    "validation_errors": {},
-                                },
-                                "local": {
-                                    "support": "partial",
-                                    "roles": {"agent": {"unsupported": 3}, "grader": {"supported": 3}},
-                                    "blockers": {"agent:docker_image": 3},
-                                    "validation_errors": {},
-                                },
-                                "daytona": {
-                                    "support": "unsupported",
-                                    "roles": {"agent": {"supported": 3}, "grader": {"unsupported": 3}},
-                                    "blockers": {"grader:packages_lock": 3},
-                                    "validation_errors": {},
-                                },
-                            },
+                            "catalog_root": "fixture",
+                            "snapshot_id": "lexical",
+                            "generated_at": "2026-11-14T10:00:00Z",
+                            "git_revision": "b" * 40,
+                            "schema_sha256": "c" * 64,
+                            "runtime_defaults": {"agent": {"backend": "daytona"}, "grader": {"backend": "local"}},
+                            "deployment_limits": {},
+                            "local_disk_pool": None,
                         }
                     )
                 },
