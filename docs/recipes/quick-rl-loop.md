@@ -137,3 +137,20 @@ configuration, and keep trial results in the experiment issue or report.
 Runs of the earlier `train_quick_loop` launcher evaluated the selection's
 20-task-per-family validation panel, most of them sampling at temperature 0.6.
 Do not compare their evaluation scores with `snowball_rl` runs.
+
+## Train SFT first
+
+The `sft-learning-medium` preset runs a short SFT before the same RL stage. It
+trains 10 updates of the
+[Snowball H100 recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py)
+from the pre-trained Snowball base model on 32 H100s (four nodes), then starts RL
+from that export:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl \
+  --preset sft-learning-medium --version "$RUN_VERSION"
+```
+
+The SFT artifact is named after the run with an `-sft` suffix and shares its
+version, so a later run with the same version reuses it. Run `learning-medium`
+as the reference that starts from the pinned SFT model.

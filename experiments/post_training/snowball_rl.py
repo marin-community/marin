@@ -4,7 +4,8 @@
 """Run a Snowball RL experiment from a named preset.
 
 \b
-  learning-medium  EvalLite score before and after 25 async RLOO-N updates; 40 H100.
+  learning-medium      EvalLite score before and after 25 async RLOO-N updates; 40 H100.
+  sft-learning-medium  learning-medium from a 10-update SFT of the Snowball base model; 32 H100, then 40.
 
 Without --run, print the plan.
 
@@ -18,6 +19,8 @@ Examples, each after `uv run python -m experiments.post_training.snowball_rl`:
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import click
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
@@ -27,14 +30,23 @@ from marin.rl.skyrl import SkyRLRun
 
 from experiments.post_training import snowball_rl_presets as presets
 from experiments.post_training import snowball_rl_recipe as recipe
+from experiments.sft.launcher import sft_step
 
 
 def build_run(
     preset: presets.Preset, *, tasks: ArtifactStep | None = None, init: ArtifactStep | None = None
 ) -> ArtifactStep[SkyRLRun]:
-    """Construct one Snowball run of a preset, optionally on other training tasks or from other initial weights."""
+    """Construct one Snowball run of a preset, optionally on other training tasks or from other initial weights.
+
+    A preset with an SFT stage trains its own initial weights first.
+    """
     name = user_owned_name(f"{presets.RUN_PREFIX}/{preset.name}")
-    spec = recipe.run_spec(preset, name=name, version=resolve_version(name, None), tasks=tasks, init=init)
+    version = resolve_version(name, None)
+    if preset.sft is not None:
+        if init is not None:
+            raise click.BadParameter(f"{preset.name} trains its own initial weights and accepts no --init")
+        init = sft_step(replace(preset.sft.spec, name=f"{name}-sft", version=version), preset.sft.resources)
+    spec = recipe.run_spec(preset, name=name, version=version, tasks=tasks, init=init)
     return recipe.run_step(preset, spec)
 
 

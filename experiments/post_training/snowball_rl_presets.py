@@ -12,6 +12,8 @@ from typing import Literal
 
 import click
 import yaml
+from fray.types import ResourceConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import is_mutable_version, read_record
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
@@ -39,6 +41,8 @@ from experiments.post_training.task_curation.inventory import (
     SELECTION_PREFIX,
     TRAIN_FILENAME,
 )
+from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
+from experiments.sft.launcher import SFTSpec, resources_from_accelerator
 
 REPO_ROOT = find_project_root(Path(__file__))
 RUN_PREFIX = "checkpoints/snowball-rl"
@@ -290,6 +294,34 @@ _ASYNC_P40 = Recipe(
 
 
 @dataclass(frozen=True)
+class SftInit:
+    """An SFT run whose terminal HF export the RL run starts from."""
+
+    spec: SFTSpec
+    resources: ResourceConfig
+
+
+_SFT_NODES = 4
+_SNOWBALL_SFT = SftInit(
+    spec=replace(
+        SNOWBALL_SFT,
+        num_train_steps=10,
+        # Experts shard across the eight GPUs of a node and context across nodes. With context inside a
+        # node, the 67B weights and Adam moments shard over only eight GPUs and exhaust their memory.
+        mesh=MeshConfig(
+            axes={"data": 1, "replica": 1, "model": 1, "expert": 8},
+            compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
+            dcn_axes={"replica_dcn": 1, "context": _SFT_NODES},
+        ),
+        # One conversation per sequence rejects any conversation longer than the sequence;
+        # packing truncates it instead.
+        pack=True,
+    ),
+    resources=replace(resources_from_accelerator("8xH100"), replicas=_SFT_NODES),
+)
+
+
+@dataclass(frozen=True)
 class Preset:
     name: str
     revision: str
@@ -300,6 +332,7 @@ class Preset:
     model: ArtifactHfModel = _DEFAULT_MODEL
     eval_lite: str = _DEFAULT_EVAL_LITE
     evaluations: tuple[Evaluation, ...] = ()
+    sft: SftInit | None = None
 
 
 _LEARNING_MEDIUM = Preset(
@@ -310,7 +343,15 @@ _LEARNING_MEDIUM = Preset(
     publishes=True,
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
 )
-PRESETS = MappingProxyType({preset.name: preset for preset in (_LEARNING_MEDIUM,)})
+PRESETS = MappingProxyType(
+    {
+        preset.name: preset
+        for preset in (
+            _LEARNING_MEDIUM,
+            replace(_LEARNING_MEDIUM, name="sft-learning-medium", sft=_SNOWBALL_SFT),
+        )
+    }
+)
 
 
 def cluster_config_path(cluster: str) -> str:
