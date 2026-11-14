@@ -42,7 +42,6 @@ from experiments.post_training.task_curation.difficulty_serving_probe import pro
 
 LOGGER = logging.getLogger(__name__)
 PRIORITY = job_pb2.PRIORITY_BAND_PRODUCTION
-TARGET_REGION = "rno2a"
 MODEL_CACHE_ROOT = "s3://marin-rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
 
@@ -125,7 +124,7 @@ def solver_endpoint(solver: Solver):
             worker_timeout=JOB_TIMEOUT,
             # The explicitly targeted root has already federated. Its whole job tree
             # stays on that peer; another cluster directive would request a second handoff.
-            worker_resources=replace(config.iris.worker_resources, target_cluster=None, regions=[TARGET_REGION]),
+            worker_resources=replace(config.iris.worker_resources, target_cluster=None, regions=None),
             endpoint_ready_timeout_seconds=259200,
         ),
     )
@@ -253,7 +252,7 @@ def main() -> None:
                 "serving_jobs": jobs,
                 "placement": {
                     "root_target_cluster": TARGET_CLUSTER,
-                    "child_region": TARGET_REGION,
+                    "child_region_constraint": None,
                     "model_cache_root": MODEL_CACHE_ROOT,
                     "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                 },
