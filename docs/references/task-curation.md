@@ -120,22 +120,40 @@ The `harrier_parity` entry point checks a frozen 2,048-key reference bundle and
 writes a receipt before accepting the backend. Every vector must have cosine
 similarity at least 0.999 to its CPU BF16 reference, and both primary area
 assignments must agree for at least 99.5% of sampled tasks. A failed gate stops
-the run; preserve its receipt rather than changing the thresholds.
+the run; preserve its receipt rather than changing the thresholds. CUDA execution
+requires `embed --parity-receipt IMMUTABLE_RECEIPT_URI`. The entry point checks
+acceptance, the exact embedding specification, and the running GPU, Torch and
+CUDA versions before executing the graph. The final coverage receipt records
+the parity receipt URI and byte hash. A CPU coverage pass can supply the same
+receipt to retain the accepted backend provenance without claiming to run on GPU.
 
 For a regional move, copy public Parquet and cache objects without clobbering,
 then verify sizes and checksums. Preserve source manifests and source keys;
 write new regional pointer records instead of rewriting historical records.
 A regional corpus can supply `prepared_descriptions` and
 `prepared_curriculum_embeddings` so the graph adopts those completed stages.
-All referenced runtime paths must point into the destination region.
+Their adoption names include the immutable producer-record hash, so changed
+instruction or anchor content forks dependent outputs. Anchor adoption also
+requires the catalog, anchor records, hierarchy and embedding specification to
+match the requested `TASK_CURRICULUM`. All referenced runtime paths must point
+into the destination region.
 FineStore HEADs, manifests and table metadata also contain absolute paths;
 copying the cache bytes alone leaves reads pointed at the original region and
 prevents registering the relocated table for writes. After verifying the copy,
-`fork_copied_cache_partition` creates a fresh regional archive manifest over the
+FineStore's `fork_relocated_archive` admin operation creates a fresh regional archive manifest over the
 copied immutable shards. It preserves row-commit bounds and sequences, writes
 canonical table metadata under the new root, and accepts explicit prior roots
 for caches that have moved more than once. Keep the historical cache and failed
 attempts intact and use the fresh root for subsequent vector writes.
+
+```bash
+uv run python -m finestore.admin fork-relocated \
+  --original-root ORIGINAL_CACHE --copied-root VERIFIED_REGIONAL_COPY \
+  --output-root NEW_WRITABLE_CACHE --reference-root PRIOR_REGIONAL_ROOT
+```
+
+Repeat `--reference-root` for additional historical roots; omit it for a cache
+that has not previously moved. Existing output archives are rejected.
 
 | Part | Implementation and data models |
 |---|---|
@@ -1600,6 +1618,8 @@ inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
 three infrastructure attempts applies independently to this approved phase.
+Calibration validates and deduplicates Harbor's selected-result copy and physical
+attempt result before consuming the physical verdict, oracle exit and resource receipts.
 Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
 This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
 standalone Harbor trials without it keep PHASE behavior. Safe provider retries

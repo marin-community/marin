@@ -27,8 +27,9 @@ Matching aggregate and independent SAMPLE-panel counts display SAMPLE even when
 declared execution oversight is unchanged. One pure projection serves the loader,
 source list and details; existing catalogs need no display-metadata backfill.
 Use the shared chip colors, with light and dark theme rules; a remediation warning
-also has a strong border. Phone layouts expose hidden columns through source
-details and Evidence. Do not rely on color alone to convey a state.
+also has a strong border. Phone layouts keep all columns reachable through
+contained horizontal scrolling, with the table header aligned to its body.
+Do not rely on color alone to convey a state.
 
 Run the installed-app browser regressions with:
 

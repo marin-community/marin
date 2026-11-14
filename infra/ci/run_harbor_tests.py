@@ -76,7 +76,7 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
     )
     if result.returncode:
         return result.returncode
-    # Census tests exercise Marin conversion as well as Harbor's native mapping.
+    # Curation conversion and queued-calibration checks need both Marin and Harbor.
     return subprocess.run(
         [
             "uv",
@@ -101,6 +101,7 @@ def run_harbor_tests(repo_root: Path, extra_args: tuple[str, ...] = ()) -> int:
             "--noconftest",
             "experiments/post_training/task_curation/tests/test_daytona_census.py",
             "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
+            "experiments/post_training/task_curation/tests/test_queued_calibration.py",
             *extra_args,
         ],
         cwd=repo_root,

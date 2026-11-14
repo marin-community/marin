@@ -138,3 +138,59 @@ def test_whole_source_waiver_is_full_final_with_incomplete_evidence(journey: Jou
     expect(coverage.locator('a[href="https://example.org/waiver-with-exact-reasons.json"]')).to_be_visible()
     expect(coverage).to_contain_text("a" * 64)
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: str, width: int) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.locator("#show-all").check()
+    expect(page.locator("#rows tr")).to_have_count(23)
+    chip = page.locator('tr[data-source-id="Marin:clean"] td:nth-child(9) .chip')
+    expect(chip).to_have_text("UNSAFE: too_many_snapshots, unbuilt_image")
+    scroller = page.locator(".table-scroller")
+    assert scroller.evaluate("element => element.scrollWidth > element.clientWidth")
+    for right_edge in (False, True):
+        scroller.evaluate("(element, right) => element.scrollLeft = right ? element.scrollWidth : 0", right_edge)
+        assert page.locator(".source-table").evaluate(
+            """table => {
+          const headers = [...table.tHead.rows[0].cells].map(cell => cell.getBoundingClientRect());
+          return [...table.tBodies[0].rows].every(row => {
+            const cells = [...row.cells];
+            return cells.every((cell, index) => {
+              const bounds = cell.getBoundingClientRect();
+              const next = cells[index + 1]?.getBoundingClientRect();
+              return (!next || bounds.right <= next.left + 1) &&
+                Math.abs(bounds.left - headers[index].left) <= 1 &&
+                Math.abs(bounds.right - headers[index].right) <= 1 &&
+                [...cell.querySelectorAll('.chip')].every(chip => {
+                  const rect = chip.getBoundingClientRect();
+                  return rect.left >= bounds.left && rect.right <= bounds.right &&
+                    getComputedStyle(chip).whiteSpace === 'nowrap' &&
+                    chip.scrollWidth <= chip.clientWidth;
+                });
+            });
+          });
+        }"""
+        )
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert page.locator("#rows td:has(> .chip)").evaluate_all(
+        "cells => cells.every(cell => cell.children.length === 1 && "
+        "cell.textContent === cell.firstElementChild.textContent)"
+    )
+    journey.shoot(f"wide-enums-{theme}-{width}")
+    page.locator('tr[data-source-id="Marin:clean"] .source-name').click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    expect(page.locator("#labels")).to_contain_text("too_many_snapshots, unbuilt_image")
+    assert page.locator(".field").evaluate_all(
+        """fields => fields.every(field => {
+      const label = field.querySelector('dt').getBoundingClientRect();
+      const value = field.querySelector('dd').getBoundingClientRect();
+      return label.right <= value.left && value.right <= field.getBoundingClientRect().right + 1;
+    })"""
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    journey.shoot(f"wide-evidence-{theme}-{width}")

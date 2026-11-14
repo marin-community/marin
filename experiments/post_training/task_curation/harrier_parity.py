@@ -29,6 +29,52 @@ PARITY_SAMPLE_SIZE = 2048
 
 
 @dataclass(frozen=True)
+class HarrierRuntime:
+    torch: str
+    cuda: str | None
+    gpu: str
+
+
+@dataclass(frozen=True)
+class AcceptedParity:
+    uri: str
+    sha256: str
+    runtime: HarrierRuntime
+
+
+def cuda_runtime() -> HarrierRuntime:
+    import torch  # noqa: PLC0415 - optional GPU inference dependency
+
+    return HarrierRuntime(str(torch.__version__), torch.version.cuda, torch.cuda.get_device_name())
+
+
+def accepted_parity(receipt_uri: str, spec: EmbeddingSpec) -> AcceptedParity:
+    """Validate the measured acceptance contract and bind its exact receipt bytes."""
+    encoded = StoragePath(receipt_uri).read_bytes()
+    receipt = json.loads(encoded)
+    if (
+        not receipt["accepted"]
+        or receipt["embedding_spec_sha256"] != canonical_sha256(spec.model_dump(mode="json"))
+        or receipt["thresholds"] != {"min_vector_cosine": MIN_VECTOR_COSINE, "min_area_agreement": MIN_AREA_AGREEMENT}
+    ):
+        raise ValueError("Parity receipt does not accept the requested embedding specification")
+    EmbeddingParity(**receipt["measurement"]).require_accepted()
+    return AcceptedParity(
+        receipt_uri,
+        hashlib.sha256(encoded).hexdigest(),
+        HarrierRuntime(receipt["torch"], receipt["cuda"], receipt["gpu"]),
+    )
+
+
+def accepted_cuda_parity(receipt_uri: str, spec: EmbeddingSpec) -> AcceptedParity:
+    """Reject a CUDA runtime that differs from the accepted GPU and Torch build."""
+    acceptance = accepted_parity(receipt_uri, spec)
+    if acceptance.runtime != cuda_runtime():
+        raise ValueError("CUDA runtime differs from the accepted parity receipt")
+    return acceptance
+
+
+@dataclass(frozen=True)
 class EmbeddingParity:
     rows: int
     min_cosine: float

@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import asdict
 from functools import partial
 from multiprocessing import get_context
 from typing import Annotated, Literal
@@ -16,8 +17,6 @@ from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.commit import ArchiveSnapshot, CommitCoordinator, CommitDelta, initialize_archive, write_schema
-from finestore.layout import FineStoreLayout, HeadMetadata, Manifest, ManifestTable, TableMetadata
 from finestore.rl.curation import SourceDeclaration
 from finestore.schema import arrow_schema
 from fray.types import ResourceConfig
@@ -30,9 +29,11 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.curriculum.alignment import CurriculumAnchor
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, EmbeddingSpec
 from taskcompendium.pipeline.semantics import TaskInputFile, TaskSemanticInput, task_semantic_input
 from zephyr.context import ZephyrContext
+from zephyr.readers import load_parquet
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.catalog_identity import canonical_declaration
@@ -42,71 +43,14 @@ from experiments.post_training.task_curation.embedding import (
     SemanticArtifact,
     curation_embedding_pipeline,
 )
+from experiments.post_training.task_curation.harrier_parity import accepted_cuda_parity, accepted_parity
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
+from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 LOGGER = logging.getLogger(__name__)
 BATCH_SIZE = 4096
 STAGES = ("descriptions", "task_embeddings", "curriculum_embeddings", "coverage")
-
-
-def fork_copied_cache_partition(
-    original_root: str, copied_root: str, output_root: str, *, reference_roots: tuple[str, ...] = ()
-) -> dict:
-    """Fork copied immutable shards into a writable archive with regional references."""
-    output_path = StoragePath(output_root)
-    copied_path = StoragePath(copied_root)
-    reference_paths = tuple(StoragePath(root) for root in (original_root, copied_root, *reference_roots))
-    output = FineStoreLayout(str(output_path))
-    if StoragePath(output.head_path).exists():
-        raise ValueError("Preserve existing cache forks; use a new output root")
-
-    def relocated(path: str) -> str:
-        location = StoragePath(path)
-        for root in reference_paths:
-            try:
-                relative = location.relative_to(root)
-            except ValueError:
-                continue
-            return str(copied_path / relative)
-        raise ValueError(f"Cache reference is outside the frozen source: {path}")
-
-    copied = FineStoreLayout(str(copied_path))
-    head = HeadMetadata.model_validate_json(StoragePath(copied.head_path).read_bytes())
-    manifest_bytes = StoragePath(relocated(head.manifest_path)).read_bytes()
-    manifest = Manifest.model_validate_json(manifest_bytes)
-    tables = {}
-    for name, table in manifest.tables.items():
-        metadata = TableMetadata.model_validate_json(StoragePath(relocated(table.metadata_path)).read_bytes())
-        tables[name] = ManifestTable(
-            metadata_path=write_schema(output, metadata),
-            shards=tuple(shard.model_copy(update={"path": relocated(shard.path)}) for shard in table.shards),
-        )
-    initialize_archive(output)
-    # Preserve row-commit bounds and sequence numbers when the immutable shards move.
-    seed = manifest.model_copy(
-        update={"commit_id": uuid4().hex, "parent_commit_id": None, "tables": tables, "maintainer_epoch": 0}
-    )
-    StoragePath(output.manifest_path(seed.commit_id)).write_text(seed.model_dump_json(indent=2))
-    token = CommitCoordinator(output).commit(CommitDelta(), base=ArchiveSnapshot(manifest=seed, token=None))
-    return {
-        "original_root": original_root,
-        "copied_root": copied_root,
-        "reference_roots": list(reference_roots),
-        "output_root": output_root,
-        "source_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
-        "commit_id": token.commit_id,
-        "sequence": token.sequence,
-        "tables": len(tables),
-        "shards": sum(len(table.shards) for table in tables.values()),
-        "rows": sum(shard.rows for table in tables.values() for shard in table.shards),
-        "all_metadata_paths_regional": all(
-            StoragePath(table.metadata_path).relative_to(output_path) for table in tables.values()
-        ),
-        "all_shard_paths_regional": all(
-            StoragePath(shard.path).relative_to(copied_path) for table in tables.values() for shard in table.shards
-        ),
-    }
 
 
 class FrozenCoverageSource(BaseModel):
@@ -280,6 +224,38 @@ def prepare_sources(sources: list[FrozenCoverageSource], output_root: str, worke
     corpus_path.write_text(json.dumps(corpus, ensure_ascii=False, indent=2), auto_mkdir=True)
 
 
+def prepared_semantics(root: str, name: str) -> ArtifactStep[SemanticArtifact]:
+    """Bind adopted semantic content to its immutable producer record."""
+    record = (StoragePath(root) / ".artifact.json").read_bytes()
+    SemanticArtifact.raw_load(root)
+    return ArtifactStep.adopt(
+        f"rl-semantics/{name}-{hashlib.sha256(record).hexdigest()[:16]}",
+        "2026.11.13.1",
+        source=root,
+        kind=SemanticArtifact,
+    )
+
+
+def prepared_curriculum(root: str, spec: EmbeddingSpec) -> ArtifactStep[SemanticArtifact]:
+    """Require adopted anchors to describe the requested curriculum and specification."""
+    path = StoragePath(root)
+    catalog = CurriculumCatalog.model_validate_json((path / "curriculum.json").read_bytes())
+    expected = CurriculumCatalog.model_validate_json(
+        (StoragePath(TASK_CURRICULUM.path()) / "curriculum.json").read_bytes()
+    )
+    anchor_paths = json.loads((path / "anchor_paths.json").read_bytes())
+    anchors = [CurriculumAnchor.model_validate(row) for part in anchor_paths for row in load_parquet(part)]
+    if (
+        catalog != expected
+        or anchors != expected.embedding_anchors()
+        or EmbeddingSpec.model_validate_json((path / "embedding_spec.json").read_bytes()) != spec
+        or json.loads((path / "nodes.json").read_bytes())
+        != [node.model_dump(mode="json") for node in expected.atlas_nodes()]
+    ):
+        raise ValueError("Adopted anchors differ from the requested curriculum or embedding specification")
+    return prepared_semantics(root, "regional-anchors")
+
+
 def run_stage(
     corpus_uri: str,
     artifact_root: str,
@@ -289,7 +265,11 @@ def run_stage(
     workers: int,
     worker_memory: str,
     run_graph: bool,
+    *,
+    parity_receipt_uri: str | None = None,
 ) -> None:
+    if device == "cuda" and parity_receipt_uri is None:
+        raise ValueError("CUDA embedding requires an accepted --parity-receipt")
     corpus = json.loads(StoragePath(corpus_uri).read_text())
     inventory = [canonical_declaration(SourceDeclaration.model_validate(row)) for row in corpus["inventory"]]
     curated = {}
@@ -306,6 +286,13 @@ def run_stage(
         max_tokens=16384,
         compute_dtype="bfloat16",
     )
+    parity = None
+    if parity_receipt_uri is not None:
+        parity = (
+            accepted_cuda_parity(parity_receipt_uri, spec)
+            if device == "cuda" and run_graph
+            else accepted_parity(parity_receipt_uri, spec)
+        )
     config = HarrierConfig(
         model=spec.model,
         revision=spec.revision,
@@ -338,22 +325,12 @@ def run_stage(
                 kind=SemanticArtifact,
             ),
             prepared_descriptions=(
-                ArtifactStep.adopt(
-                    "rl-semantics/regional-instructions",
-                    "2026.11.13.1",
-                    source=corpus["prepared_descriptions"],
-                    kind=SemanticArtifact,
-                )
+                prepared_semantics(corpus["prepared_descriptions"], "regional-instructions")
                 if "prepared_descriptions" in corpus
                 else None
             ),
             prepared_curriculum_embeddings=(
-                ArtifactStep.adopt(
-                    "rl-semantics/regional-anchors",
-                    "2026.11.13.1",
-                    source=corpus["prepared_curriculum_embeddings"],
-                    kind=SemanticArtifact,
-                )
+                prepared_curriculum(corpus["prepared_curriculum_embeddings"], spec)
                 if "prepared_curriculum_embeddings" in corpus
                 else None
             ),
@@ -405,6 +382,7 @@ def run_stage(
                     "coverage_uri": str(coverage_uri),
                     "coverage_sha256": file_sha256(coverage_uri),
                     "stages": paths,
+                    "parity_receipt": asdict(parity) if parity is not None else None,
                 }
                 (StoragePath(result.path) / "retained-coverage-receipt.json").write_text(json.dumps(receipt, indent=2))
 
@@ -426,6 +404,7 @@ def main() -> None:
     embed.add_argument("--workers", type=int, required=True)
     embed.add_argument("--worker-memory", required=True)
     embed.add_argument("--run", action="store_true")
+    embed.add_argument("--parity-receipt", help="Immutable accepted Harrier backend receipt; required for CUDA.")
     args = parser.parse_args()
     configure_coreweave_s3()
     if args.command == "prepare":
@@ -446,6 +425,7 @@ def main() -> None:
         args.workers,
         args.worker_memory,
         args.run,
+        parity_receipt_uri=args.parity_receipt,
     )
 
 
