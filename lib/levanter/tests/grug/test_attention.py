@@ -252,6 +252,8 @@ def test_splash_rotary_bfloat16_q_gradient_matches_named(cotangent_scale):
         return output, pullback(cotangent)[0].flatten_axes((H, G), H)
 
     spec = P(None, None, "model", None)
+    # Compare the BF16 rounding stages used by training on both TPU generations.
+    compiler_options = {"xla_allow_excess_precision": False}
     with jax.default_matmul_precision("default"):
         with jax.set_mesh(explicit):
             raw_args = tuple(
@@ -259,7 +261,7 @@ def test_splash_rotary_bfloat16_q_gradient_matches_named(cotangent_scale):
             ) + (
                 jax.device_put(ids, NamedSharding(explicit, P())),
             )
-            actual = jax.jit(native_vjp)(*raw_args)
+            actual = jax.jit(native_vjp, compiler_options=compiler_options)(*raw_args)
         with jax.set_mesh(auto), hax.axis_mapping(mapping):
             raw_args = tuple(jax.device_put(value, NamedSharding(auto, spec)) for value in (q, k, v, cotangent)) + (
                 jax.device_put(ids, NamedSharding(auto, P())),
@@ -271,7 +273,9 @@ def test_splash_rotary_bfloat16_q_gradient_matches_named(cotangent_scale):
                 hax.named(raw_args[3], (B, S, H, D)),
                 hax.named(raw_args[4], (B, S)),
             )
-            expected = hax.named_jit(named_vjp, axis_resources=mapping, out_axis_resources=mapping)(*named_args)
+            expected = hax.named_jit(
+                named_vjp, axis_resources=mapping, out_axis_resources=mapping, compiler_options=compiler_options
+            )(*named_args)
     for observed, reference in zip(actual, expected, strict=True):
         assert np.isfinite(np.asarray(observed, dtype=np.float32)).all()
         # Numerical equality permits the signed-zero differences of the inverse rotation.
