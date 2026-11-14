@@ -12,13 +12,19 @@ the Hugging Face layout that vLLM serves; ``catalog`` writes a patched catalog.
 
 import argparse
 import dataclasses
-import hashlib
+import gc
 import json
 import logging
 from pathlib import Path
 
 import draccus
+import equinox as eqx
+import jax
+import jax.numpy as jnp
 import yaml
+from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, _shard_hf_checkpoint
+from levanter.compat.hf_export import save_hf_shards
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.store.cache import LEDGER_FILE_NAME
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -26,15 +32,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.post_training.long_loop.serving import SNOWBALL_CONTEXT_LIMIT
-from experiments.post_training.long_loop.sft import (
-    TOKENIZER_URI,
-    fresh_sft_config,
-    read_json,
-    restore_frozen,
-    validate_handoff,
-)
-from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
-from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig
+from experiments.post_training.long_loop.sft import TOKENIZER_URI, fresh_sft_config, read_json, restore_frozen
+from experiments.post_training.long_loop.sft_runtime.model import GrugModelConfig, grugmoe_inference_state_dict
 from experiments.post_training.long_loop.sft_runtime.train import run_grug
 
 logger = logging.getLogger(__name__)
@@ -91,31 +90,51 @@ def train(arm: str, catalog: str, output: str, steps: int, replicas: int) -> Non
 
 
 def export(trained: str, step: int, output: str, source_revision: str) -> None:
-    """Export ``checkpoints/step-<step>`` of a trained arm to ``<output>/hf``."""
+    """Export ``checkpoints/step-<step>`` of a trained arm to ``<output>/hf`` with stacked expert tensors.
+
+    The long-loop exporter writes one tensor per expert, which its own serving
+    release reads. The evaluation launcher's vLLM release reads the layout of the
+    published SFT checkpoints, one stacked tensor per expert projection, and
+    rejects per-expert names, so this writes that layout.
+    """
     configure_coreweave_s3()
     checkpoint = prefix_join(trained, f"checkpoints/step-{step}")
     metadata = read_json(prefix_join(checkpoint, "metadata.json"))
-    model = read_json(prefix_join(trained, "consumed-config.json"))["model"]
-    config = ExportConfig(
-        checkpoint,
-        digest(metadata),
-        draccus.decode(GrugModelConfig, model),
-        prefix_join(output, "hf"),
-        source_revision,
-        max_position_embeddings=SNOWBALL_CONTEXT_LIMIT,
+    model_config = draccus.decode(GrugModelConfig, read_json(prefix_join(trained, "consumed-config.json"))["model"])
+    destination = prefix_join(output, "hf")
+    hf_config = model_config.to_hf_config(model_config.vocab_size).to_dict()
+    hf_config["max_position_embeddings"] = SNOWBALL_CONTEXT_LIMIT
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    with jax.set_mesh(mesh):
+        model = restore_frozen(checkpoint, digest(metadata), model_config, mesh)
+        model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, model)
+        state_dict = grugmoe_inference_state_dict(model)
+        # The state dict holds its own copies of every reshaped tensor; drop the restored tree.
+        del model
+        gc.collect()
+        shards, _ = _shard_hf_checkpoint(state_dict, max_shard_size=DEFAULT_MAX_SHARD_SIZE)
+        save_hf_shards(
+            shards,
+            lambda keys: {name: state_dict[name] for name in keys},
+            destination,
+            export_host_budget_bytes=1,
+            max_concurrent_shards=1,
+        )
+    payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
+    weight_map = {name: filename for filename, tensors in shards.items() for name in tensors}
+    root = StoragePath(destination)
+    (root / "config.json").write_text(json.dumps(hf_config, indent=2))
+    (root / "model.safetensors.index.json").write_text(
+        json.dumps({"metadata": {"total_size": payload_size}, "weight_map": weight_map})
     )
-    export_weights(config, restore_frozen, weights_kind="snowball_sft_frozen_router")
+    (root / "generation_config.json").write_text(json.dumps(GENERATION_CONFIG))
+    (root / "export-provenance.json").write_text(
+        json.dumps({"checkpoint": checkpoint, "metadata_digest": digest(metadata), "source_revision": source_revision})
+    )
     source_fs, source = filesystem_for(TOKENIZER_URI)
-    destination_fs, destination = filesystem_for(prefix_join(output, "hf"))
+    destination_fs, destination_path = filesystem_for(destination)
     for name in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja"):
-        destination_fs.pipe_file(prefix_join(destination, name), source_fs.cat_file(prefix_join(source, name)))
-    destination_fs.pipe_file(prefix_join(destination, "generation_config.json"), json.dumps(GENERATION_CONFIG).encode())
-    manifest = read_json(prefix_join(output, "hf/export-manifest.json"))
-    for shard in manifest["shards"]:
-        with destination_fs.open(prefix_join(destination, shard["filename"]), "rb") as stream:
-            if hashlib.file_digest(stream, "sha256").hexdigest() != shard["sha256"]:
-                raise ValueError(f"Export hash mismatch: {shard['filename']}")
-    validate_handoff(output)
+        destination_fs.pipe_file(prefix_join(destination_path, name), source_fs.cat_file(prefix_join(source, name)))
 
 
 def write_catalog(output: str, replacements: dict[str, str]) -> None:
