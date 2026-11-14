@@ -1,0 +1,23 @@
+name: grug-67b-a2b-datakit-sft-262k-2026-10-05
+# The 10/05 Datakit SFT HF export (Snowball ablation start), region-local in cw-rno2a.
+location: s3://marin-rno2a/marin/models/grug-datakit-sft-262k-20261005-ac60d940-r1
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+  disk: 500g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  # The terminus-2 window of the Qwen3.6-27B TMax pilot (32k), so the two models run the same harness.
+  max_model_len: 32768
+  reasoning_parser: grug
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

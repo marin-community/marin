@@ -1,0 +1,79 @@
+# The k=8 pilot policy below with the 20 tmux-quarantined tasks excluded (180 tasks), for the Snowball 10/05 run.
+# TMax-15K reserve pilot: the TBLite scoring policy (eval-campaign-09-25-unlabeled/harbor-configs/
+# ot-tblite-recovery.yaml) with four changes: the local 200-task shared-image dataset (written by
+# `python -m experiments.post_training.tmax_reserve.shared_image`), k=8 attempts, 64 concurrent trials, and
+# a whole-sandbox Daytona network policy that allows only iris.oa.dev once task setup is done. Terminus-2 calls
+# the model from the Harbor process, and the TMax verifier runs pytest only, so the agent needs no other egress.
+n_concurrent_trials: 64
+n_attempts: 8
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+  kwargs:
+    network_policy:
+      mode: domain_allow_list
+      value: iris.oa.dev
+    # Task setup (post_install.sh) runs with network, as the image build did; then the allow-list applies and
+    # pypi.org must be unreachable before the agent starts.
+    setup_network_policy:
+      mode: unrestricted
+    lockdown_probe: pypi.org:443
+agents:
+- name: terminus-2
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    model_info:
+      max_input_tokens: 32768
+datasets:
+- path: ../tasks/pilot-200-shared
+  # The 20 tasks with a TmuxBatchProtocolError in the Qwen3.6-27B k=8 pilot, quarantined until its cause is known.
+  exclude_task_names:
+  - '*task_000110_cca950c9'
+  - '*task_000388_4964b533'
+  - '*task_001119_d6ec668c'
+  - '*task_001369_589714f4'
+  - '*task_001816_7f941caa'
+  - '*task_002321_37620a38'
+  - '*task_002744_f0bfea11'
+  - '*task_003204_699866e1'
+  - '*task_003501_97cbfa48'
+  - '*task_003948_5b30d0e6'
+  - '*task_003978_c139acc8'
+  - '*task_004506_11e96840'
+  - '*task_004612_89ff8e44'
+  - '*task_004706_f8e2995a'
+  - '*task_004877_09c21fed'
+  - '*task_005310_229aff1c'
+  - '*task_005909_4d8203db'
+  - '*task_005952_97ea20e0'
+  - '*task_006002_5d4e20ec'
+  - '*task_007306_4c1f5e89'
+verifier:
+  override_timeout_sec: 300
