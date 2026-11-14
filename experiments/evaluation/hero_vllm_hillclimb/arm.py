@@ -250,6 +250,26 @@ CANDIDATE_ARGS = {
         ),
     ),
     "mbt8192": ("--max-num-batched-tokens", "8192"),
+    # FULL_AND_PIECEWISE: uniform decode batches replay one full CUDA graph (needs the ShortConv
+    # guard relaxed in the wheel: --label-overlay fg32prof95=FILE:SHA256); mixed batches stay piecewise.
+    "fg32prof95": (
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.95",
+        "--profiler-config",
+        json.dumps(PROFILER_CONFIG),
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    "fg128prof": (
+        "--max-num-seqs",
+        "128",
+        "--profiler-config",
+        json.dumps(PROFILER_CONFIG),
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
     "a2a-nvl1": ("--all2all-backend", "flashinfer_nvlink_one_sided"),
     "a2a-nvl2": ("--all2all-backend", "flashinfer_nvlink_two_sided"),
 }
@@ -439,6 +459,12 @@ def _parse_args() -> argparse.Namespace:
         "--overlay-wheel",
         help="FILE:SHA256 - replace the release's aarch64 wheel with the URL stored in FILE (Python overlay)",
     )
+    parser.add_argument(
+        "--label-overlay",
+        action="append",
+        default=[],
+        help="LABEL=FILE:SHA256 - run variants with this label on an overlay wheel (URL in FILE)",
+    )
     parser.add_argument("--tp2-overlay", help="FILE:SHA256 of the #119 overlay wheel URL for tp2 variants")
     parser.add_argument("--env", action="append", default=[], help="KEY=VALUE for every vLLM process")
     parser.add_argument(
@@ -601,6 +627,9 @@ def _variant_config(args, target: ServedTarget, name, item, geometry, iris_confi
         geometry = replace(geometry, tensor_parallel_size=2, data_parallel_size=target.gpus_per_host // 2)
         env = (*env, *TP2_ENV)
         flags = TP2_FLAGS
+    label_overlays = dict(entry.split("=", 1) for entry in args.label_overlay)
+    if label in label_overlays:
+        release = _overlay(release, label_overlays[label])
     if args.overlay_wheel:
         url_file, sha256 = args.overlay_wheel.rsplit(":", 1)
         url = Path(url_file).read_text().strip()
