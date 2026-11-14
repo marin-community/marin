@@ -22,6 +22,7 @@ class HarborTaskBinding(BaseModel):
     environment_resources: EnvironmentResourceOverrides = Field(default_factory=EnvironmentResourceOverrides)
     agent_mcp_servers: list[MCPServerConfig] | None = None
     verifier_environment: dict[str, str] | None = None
+    compaction_reserve_tokens: int | None = Field(default=None, gt=0, strict=True)
 
 
 def apply_task_binding(config: TrialConfig, binding: HarborTaskBinding | None) -> TrialConfig:
@@ -32,6 +33,19 @@ def apply_task_binding(config: TrialConfig, binding: HarborTaskBinding | None) -
     if binding.agent_mcp_servers is not None:
         configured = configured.model_copy(
             update={"agent": configured.agent.model_copy(update={"mcp_servers": binding.agent_mcp_servers})}
+        )
+    if binding.compaction_reserve_tokens is not None:
+        configured = configured.model_copy(
+            update={
+                "agent": configured.agent.model_copy(
+                    update={
+                        "kwargs": {
+                            **configured.agent.kwargs,
+                            "compaction_reserve_tokens": binding.compaction_reserve_tokens,
+                        }
+                    }
+                )
+            }
         )
     if binding.verifier_environment is not None:
         configured = configured.model_copy(
