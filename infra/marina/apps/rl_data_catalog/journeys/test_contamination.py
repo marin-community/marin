@@ -42,8 +42,8 @@ def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey
     check_view(page, rows, use="eval")
     expect(page.locator("#rows tr")).to_have_count(2)
     expect(page.locator(".duplicate-toggle")).to_have_count(0)
-    expect(page.locator('tr[data-source-id="Marin:eval"] .duplicate-note')).to_contain_text(
-        "97% of eval's tasks are in clean"
+    expect(page.locator('tr[data-source-id="Marin:eval"] .duplicate-note a')).to_have_attribute(
+        "href", "source.html#source_id=Marin%3Aclean"
     )
     page.locator("#use").select_option("all")
     check_view(page, rows)
