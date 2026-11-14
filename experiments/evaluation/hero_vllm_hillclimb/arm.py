@@ -199,7 +199,7 @@ TARGETS = {
 LEADER_ARGS = ("--api-server-count", "1")
 
 # Leader-only flag overrides per candidate label (API servers start only on the leader).
-LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4")}
+LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4"), "fg128api4": ("--api-server-count", "4")}
 
 MOE_CONFIG_DIR = "experiments/evaluation/hero_vllm_hillclimb/moe_configs"
 
@@ -280,6 +280,12 @@ CANDIDATE_ARGS = {
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
     "fg128moe": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    "fg128api4": (
         "--max-num-seqs",
         "128",
         "--compilation-config",
