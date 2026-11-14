@@ -14,10 +14,15 @@ from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.oracle_filter import OracleFilterReceipt
 from taskcompendium.pipeline.review import ChatReviewer
 
 from experiments.post_training.task_curation.admission_inventory import PANEL_SCHEMA
-from experiments.post_training.task_curation.difficulty_samples import relocated_panel, sample_oracle_state
+from experiments.post_training.task_curation.difficulty_samples import (
+    relocated_panel,
+    sample_oracle_state,
+    verify_population_filter,
+)
 from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.published_census import population_documents
@@ -82,6 +87,18 @@ def test_oracle_bearing_resample_leaves_pre_filter_queue_when_filter_evidence_is
         "resample_after_oracle_filter": False,
         "oracle_filter_receipt": receipt,
     }
+
+
+def test_partial_oracle_filter_cannot_certify_a_larger_retained_population(sample_panel, tmp_path):
+    inventory = SampleInventory.model_validate_json(StoragePath(sample_panel.evidence_url).read_text())
+    partial = OracleFilterReceipt(
+        recipe_identity=None, input_cohort_sha256="partial", input_rows=0, conversion_rejections=0, tasks={}
+    )
+    path = StoragePath(str(tmp_path / "partial-filter.json"))
+    path.write_text(partial.model_dump_json())
+    reference = ContentEvidenceReference(uri=str(path), sha256=file_sha256(path))
+    with pytest.raises(ValueError, match="does not cover the retained population"):
+        verify_population_filter(inventory, reference)
 
 
 def test_sample_review_keeps_full_population_identity_and_reuses_exact_panel_evidence(

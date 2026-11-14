@@ -17,8 +17,11 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import load_oracle_filter
 
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.published_census import population_rows
 from experiments.post_training.task_curation.sample_qc import panel_tasks
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory, SamplePanel
 
@@ -50,6 +53,26 @@ def sample_oracle_state(inventory: SampleInventory, receipt: ContentEvidenceRefe
         "resample_after_oracle_filter": pre_filter,
         "oracle_filter_receipt": receipt,
     }
+
+
+def verify_population_filter(inventory: SampleInventory, receipt: ContentEvidenceReference) -> None:
+    """Require passing filter proof for every byte-bound retained task and runtime."""
+    filtered = load_oracle_filter(receipt.uri)
+    if sum(entry.passed for entry in filtered.tasks.values()) < inventory.retained_tasks:
+        raise ValueError("Oracle filter receipt does not cover the retained population")
+    population = SourceTextPopulation.raw_load(inventory.input_artifact)
+    if (population.task_count, population.task_specs_sha256) != (inventory.retained_tasks, inventory.task_specs_sha256):
+        raise ValueError("Oracle-filter population differs from the retained census")
+    digest = hashlib.sha256()
+    seen = set()
+    for row in population_rows(population):
+        task = TaskSpec.model_validate_json(row["task_spec"])
+        if task.id in seen or not filtered.admits(task, json.loads(row["runtime"])):
+            raise ValueError(f"Retained task lacks unique passing oracle-filter evidence: {task.id}")
+        seen.add(task.id)
+        digest.update(row["task_spec"].encode())
+    if len(seen) != inventory.retained_tasks or digest.hexdigest() != inventory.scanned_task_specs_sha256:
+        raise ValueError("Oracle-filter proof differs from the complete retained population bytes")
 
 
 def relocated_panel(inventory: SampleInventory, path: str, root: StoragePath) -> SamplePanel:
@@ -95,6 +118,7 @@ def prepare_sample(
             inventory.task_specs_sha256,
         ) or file_sha256(StoragePath(filter_binding.receipt.uri)) != filter_binding.receipt.sha256:
             raise ValueError(f"Oracle filter binding differs from the frozen population: {declaration.id}")
+        verify_population_filter(inventory, filter_binding.receipt)
     oracle_state = sample_oracle_state(inventory, filter_receipt)
     root = StoragePath(output_root) / canonical_sha256(declaration.id)[:20]
     if root.exists():
