@@ -156,6 +156,7 @@ LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4")}
 # Candidate flag sets, selected with --sequence items of the form <release>:<label>. A flag here
 # replaces the same baseline flag (and its value) rather than being appended twice.
 CANDIDATE_ARGS = {
+    "mns48": ("--max-num-seqs", "48"),
     "mns64": ("--max-num-seqs", "64"),
     "mns64p": (
         "--max-num-seqs",
