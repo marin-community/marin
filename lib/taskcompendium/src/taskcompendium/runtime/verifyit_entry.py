@@ -22,7 +22,7 @@ def main() -> int:
             raise ValueError(f"Verifyit runtime file checksum mismatch: {name}")
     sys.path.insert(0, str(root))
     grade = importlib.import_module("verifyit.grade")
-    if Path(grade.__file__).resolve() != root / "verifyit/grade.py":
+    if grade.__file__ is None or Path(grade.__file__).resolve() != root / "verifyit/grade.py":
         raise ValueError("Verifyit imported outside the staged runtime")
     return grade.main()
 
