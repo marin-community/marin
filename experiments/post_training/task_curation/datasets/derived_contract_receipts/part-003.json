@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "4389a9ef461d0e4410c51baf7d20b29791808e37",
+  "path": "experiments/post_training/task_curation/datasets/derived_contract_receipts/part-003.json",
+  "sha256": "6f756bf60de2c27a0d1b6887481c111a66d34bd5ad885676e1ed9012bcd33c57"
+}

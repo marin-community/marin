@@ -367,7 +367,7 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
-            tags=("agentic", "multi-turn"),
+            tags=(),
             count=10000,
             notes=(
                 "Judge-only code review with a four-criterion rubric and no reference; the rubric "
@@ -389,7 +389,7 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
-            tags=("agentic", "multi-turn"),
+            tags=(),
             count=10000,
             notes=(
                 "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as "
@@ -410,7 +410,7 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
-            tags=("agentic", "multi-turn"),
+            tags=(),
             count=89066,
             notes=(
                 "Judge-only against a two-line safety principle, no reference. Kept as rubric-only "
@@ -454,7 +454,7 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
-            tags=("agentic", "multi-turn"),
+            tags=(),
             count=10000,
             notes=(
                 "Judge-only Stack Overflow answers, four-criterion rubric, no reference. Kept as "
@@ -475,7 +475,7 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
-            tags=("agentic", "multi-turn"),
+            tags=(),
             count=10000,
             notes=(
                 "Judge-only Super User answers, four-criterion rubric, no reference. Kept as rubric-"
@@ -496,7 +496,7 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
-            tags=("agentic", "multi-turn"),
+            tags=(),
             count=10000,
             notes=(
                 "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates "
@@ -517,7 +517,7 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
-            tags=("agentic", "multi-turn"),
+            tags=(),
             count=10000,
             notes=(
                 "Judge-only Unix & Linux answers, four-criterion rubric, no reference. Kept as rubric-"
@@ -538,7 +538,7 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="llm-judge-freeform",
-            tags=("agentic", "multi-turn"),
+            tags=(),
             count=10000,
             notes=(
                 "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept "
@@ -617,11 +617,7 @@ def published_reply(source: RlDataSource[CurationRecipe]) -> RlDataSource[Prebui
             upstream_url=upstream.url,
             build_path="TaskTrove MEDIUM v3/private QUICK import",
             quality_result=QUALITY_RESULTS[source.name],
-            tags=(
-                *(tag for tag in source.info.tags if tag not in {"agentic", "multi-turn"}),
-                "single-turn",
-                "reply-only",
-            ),
+            tags=source.info.tags,
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
             oversight=OversightEvidence(
                 level=OversightLevel.NONE,

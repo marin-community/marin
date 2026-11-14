@@ -38,6 +38,7 @@ from finestore.rl.curation import (
 )
 from marin.execution.lazy import ArtifactStep
 from pydantic import Field
+from taskcompendium.derived_contract import DerivedContractSummary
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.admission_binding import population_admission_blocker
@@ -176,6 +177,13 @@ class SourceInfo:
 
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
+
+    derived_contract: DerivedContractSummary | None = None
+    """The late-stage derived contract shape and grader types of the measured population.
+
+    Computed from the final TaskSpecs, never from declarations. ``None`` means the census has
+    not been bound for the current pin; declarations must not fill it in by hand.
+    """
 
     grading_environment: GradingEnvironmentEvidence | None = None
     integrity_contracts: IntegrityContractSummary | None = None
@@ -353,6 +361,18 @@ class RlDataSource[ConfigT: CatalogConfig]:
         return tuple(blockers)
 
     @property
+    def derived_turns(self) -> str:
+        """The population's derived turn shape for the Atlas, empty while the census is pending."""
+        summary = self.info.derived_contract
+        if summary is None:
+            return ""
+        if summary.single_turn_count == summary.task_count:
+            return "single-turn"
+        if summary.single_turn_count == 0:
+            return "multi-turn"
+        return "mixed"
+
+    @property
     def declaration(self) -> SourceDeclaration:
         """Project a source declaration into catalog metadata without executing it."""
         info, pipeline = self.info, self.pipeline
@@ -448,6 +468,23 @@ class RlDataSource[ConfigT: CatalogConfig]:
             oracle_validation=info.oracle_validation,
             oversight=info.oversight.level if info.oversight else OversightLevel.NONE,
             oversight_evidence=info.oversight,
+            derived_agentic=None if info.derived_contract is None else info.derived_contract.agentic_count > 0,
+            derived_turns=self.derived_turns,
+            derived_reply_only=(
+                None
+                if info.derived_contract is None
+                else info.derived_contract.reply_only_count == info.derived_contract.task_count
+            ),
+            derived_workspace_graded=(
+                None
+                if info.derived_contract is None
+                else info.derived_contract.workspace_graded_count == info.derived_contract.task_count
+            ),
+            grader_type=(info.derived_contract.grader_type.value if info.derived_contract is not None else ""),
+            grader_type_counts=dict(info.derived_contract.grader_type_counts) if info.derived_contract else {},
+            judge_rubric_counts=dict(info.derived_contract.judge_rubric_counts) if info.derived_contract else {},
+            judge_reference_count=(info.derived_contract.judge_reference_count if info.derived_contract else 0),
+            judge_no_reference_count=(info.derived_contract.judge_no_reference_count if info.derived_contract else 0),
             grading_environment=info.grading_environment,
             integrity_contracts=info.integrity_contracts,
             actor_census_input=info.actor_census_input,

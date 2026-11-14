@@ -204,7 +204,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="competitive-programming",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -263,7 +263,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="terminal-agent",
-                tags=("agentic", "multi-turn", "license:cc-by-4.0", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "license:cc-by-4.0", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=7,
                 daytona_count_basis=(
@@ -316,7 +316,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="terminal-agent",
-                tags=("agentic", "multi-turn", "language:bash", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:bash", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -481,7 +481,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=2,
                 daytona_count_basis=(
@@ -533,7 +533,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -585,7 +585,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -639,7 +639,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -690,7 +690,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -741,7 +741,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -793,7 +793,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -845,7 +845,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -897,7 +897,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -950,7 +950,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="python-tests",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "converted", "excluded"),
+                tags=("agentic", "language:python", "campaign-release", "converted", "excluded"),
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 daytona_snapshot_count=1,
                 daytona_count_basis=(
@@ -996,7 +996,7 @@ def sources() -> list[RlDataSource]:
                 origin=SourceOrigin.TASKTROVE,
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="swe-repo",
-                tags=("agentic", "multi-turn", "language:python", "campaign-release", "verified"),
+                tags=("agentic", "language:python", "campaign-release", "verified"),
                 task_format=TaskFormat.HARBOR,
                 count=swesmith_repaired.expected_rows,
                 dataset=swesmith_repaired.dataset,

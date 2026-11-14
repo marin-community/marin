@@ -260,7 +260,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="qa-short-answer",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=122357,
                 notes=(
                     "Exact gate then reference-based judge. Reference answers are real; needs the judge "
@@ -298,7 +298,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=150644,
                 notes=(
                     "Reference answer plus judge. Move the reference out of the criterion text into a "

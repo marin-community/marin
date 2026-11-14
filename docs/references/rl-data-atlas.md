@@ -172,6 +172,18 @@ remediation lineage; changed task bytes require new qualification. Package-lock
 graders run on LOCAL with separate compatibility evidence. A source without a measured actor verdict cannot enter
 new ingestion. The backend map records each role's demands and blockers. It includes the actor verdict, unique-snapshot count against the cap, failed requirements, measurement provenance and the operations link; Daytona has no separate main-table column.
 
+**Grader** is derived from each population's final TaskSpecs by the late-stage
+ingestion census, never from declarations: `LLM judge`, `Exact match`, `Math
+verify`, `Unit tests`, `Script`, `Reward model`, `None`, or `Mixed` when one
+source combines types. A source whose census has not been bound shows Pending.
+The source Evidence page carries the per-value task-count breakdown, and for
+judge-graded sources the judge profile: rubric kind (reference, checklist or
+labels), reference versus no-reference, and the exact-gate setting. The derived
+contract fields (`agentic`, turn shape, reply-only delivery, workspace-graded)
+follow the same census and replace hand-written shape tags; a declared shape tag
+that contradicts the derived shape fails ingestion, so the two can never
+disagree in the catalog.
+
 Examples is the admitted count after filtration; there is no separate oracle
 column. For a source with oracles it requires completed full-population oracle
 filtration, plus nop negative controls on workspace-graded tasks, after

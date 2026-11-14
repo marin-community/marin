@@ -250,7 +250,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="TaskTrove",
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=9437,
                 notes="Any schema-valid instance is accepted, and jsonschema does the grading.",
                 task_format=TaskFormat.TASKCOMPENDIUM,

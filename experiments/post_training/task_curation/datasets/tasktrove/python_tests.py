@@ -206,7 +206,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=509,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
@@ -228,7 +228,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=492,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "
@@ -250,7 +250,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python", "language:javascript"),
+            tags=("agentic", "language:python", "language:javascript"),
             count=487,
             notes=(
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
@@ -271,7 +271,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=4998,
             notes=(
                 "Self-contained pytest tasks. Empty and trivial submissions failed all 10 sampled "
@@ -292,7 +292,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=4843,
             notes=(
                 "Self-contained multi-file pytest tasks. In a 10-task sample, empty and trivial "
@@ -313,7 +313,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=500,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
@@ -334,7 +334,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=4991,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
@@ -355,7 +355,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=491,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. The standardized mode "
@@ -376,7 +376,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=4991,
             notes=(
                 "Self-contained pytest katas with shipped Python oracles. All 10 sampled oracles "
@@ -397,7 +397,7 @@ SOURCES = {
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="unit-test-gen",
-            tags=("agentic", "multi-turn", "language:python"),
+            tags=("agentic", "language:python"),
             count=500,
             notes=(
                 "Self-contained pytest tasks. In a 10-task sample, empty and trivial submissions "

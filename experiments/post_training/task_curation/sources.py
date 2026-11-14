@@ -16,6 +16,7 @@ from experiments.post_training.task_curation.datasets import (
 )
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
+from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
 from experiments.post_training.task_curation.datasets.evalchemy import financebench as eval_financebench
 from experiments.post_training.task_curation.datasets.evalchemy import harness as eval_harness
@@ -53,6 +54,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
+from experiments.post_training.task_curation.derived_contract_tags import bind_derived_contract_tags
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
@@ -157,11 +159,16 @@ def all_sources() -> dict[str, RlDataSource]:
         sources[source_id] = bind_oracle_admitted_release(sources[source_id], receipt)
     sources = {source_id: crosscode_python_repair.bind_source(source) for source_id, source in sources.items()}
     samples, full_content = sample_qc_receipts(), full_content_result_bindings()
-    return {
+    selected = {
         source_id: bind_selected_source_content(
             originals[source_id], source, samples.get(source_id), full_content.get(source_id)
         )
         for source_id, source in sources.items()
+    }
+    receipts = derived_contract_receipts()
+    return {
+        source_id: bind_derived_contract_tags(source, receipts.get(source.info.id))
+        for source_id, source in selected.items()
     }
 
 

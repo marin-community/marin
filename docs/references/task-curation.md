@@ -144,8 +144,8 @@ changes. Report the landed SHA to the coordinator. Never force-push or push to
 ## Pipeline overview
 
 The mandatory ingest order is conversion → exact within-source deduplication → lexical
-decontamination → resource calibration (agentic tasks only) and full-population oracle
-filtering → SAMPLE/FULL QA.
+decontamination → resource calibration (agentic tasks only) and full-population
+oracle filtering → SAMPLE/FULL QA → the late-stage derived contract census.
 QUICK also deduplicates its complete converted population.
 
 The driver runs each dataset's conversion graph, then binds the embedding graph
@@ -2927,6 +2927,51 @@ boundaries without executing graders or qualifying integrity contracts.
 `SOURCE_ENV_INCOMPATIBLE_WITH_GRADER` continues to require a failed grader trial's
 verdict and source-environment evidence in an `OracleTaskReceipt`; a static census cannot
 establish that failure.
+
+### Derived contract tags and grader types
+
+The last ingestion step derives each frozen population's contract shape from its final
+TaskSpecs, never from declarations. `derived_contract_census` scans the same frozen
+population and actor bindings the grading census measured, and for every task derives:
+
+- agentic versus non-agentic (the actorless predicate over the finished contract);
+- single-turn versus multi-turn (the conversation's prompt events);
+- reply-only delivery (the answer is requested as an assistant reply, not a workspace file);
+- workspace-graded (the grader provisions its own grading machine);
+- the `GraderType` value: `llm-judge`, `exact-match`, `math-verify`, `unit-tests`, `script`,
+  `reward-model` or `none`, with judge details (rubric kind, reference versus no-reference)
+  recorded for judge-graded tasks. An unmapped grader fails the census loudly; there is no
+  `unknown` value.
+
+A population with more than one grader type derives the source-level value `mixed` and
+carries a per-value task-count breakdown. Declared shape tags (`agentic`, `single-turn`,
+`multi-turn`, `reply-only`) may remain only where they agree with the derived shape; the
+binder fails the source when a declared shape tag contradicts it, so hand-written shape
+tags drift instead of silently disagreeing. Declared tags keep only what the contract
+cannot tell: license, family and upstream provenance.
+
+Run the census in each data region exactly like the grading census, reusing its frozen
+bindings, then stage the per-region `receipts.json` indexes into
+`datasets/derived_contract_receipts` and archive them with the
+[registry publication command](#updating-pinned-registry-receipts):
+
+```bash
+uv run iris --cluster marin job run --target-cluster cw-us-east-02a \
+  --cpu 8 --memory 32G --disk 64G --enable-extra-resources \
+  --sync-package marin-core --extra cpu --extra dedup \
+  --priority production --timeout 86400 --no-wait -- \
+  python -m experiments.post_training.task_curation.derived_contract_census \
+  --inputs grading --population-prefix s3://marin-us-east-02a/ \
+  --output-root s3://marin-us-east-02a/marin/rl-data/atlas/derived-contract/NEW_VERSION \
+  --workers 8 \
+  --upload-hf derived-contract-census/staging/east-NEW_VERSION.json
+```
+
+`bind_derived_contract_tags` runs as the final stage of `all_sources()`; it exposes the
+derived summary only while the measured population binding matches the configured pin, and
+projects the typed fields (`derived_agentic`, `derived_turns`, `derived_reply_only`,
+`derived_workspace_graded`, `grader_type`, `grader_type_counts`, judge rubric and reference
+counts) onto the catalog declaration the Atlas serves.
 
 Combined training receipts use disjoint duplicate-first accounting:
 `measured_tasks = retained_tasks + duplicate_dropped_tasks + dropped_tasks`.

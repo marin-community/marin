@@ -384,7 +384,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="reasoning-gym",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=14259,
                 notes="reasoning_gym library scoring is sound; remove the substring fallback at conversion.",
                 task_format=TaskFormat.TASKCOMPENDIUM,

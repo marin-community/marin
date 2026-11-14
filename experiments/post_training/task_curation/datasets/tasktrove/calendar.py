@@ -177,7 +177,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="tool-use",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=2699,
                 notes="Deterministic schedule check. Templated; dedupe against calendar-v3.",
             ),
@@ -194,7 +194,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="instruction-following",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=5673,
                 notes=(
                     "Deterministic overlap and constraint check. Synthetic and templated; dedupe against "

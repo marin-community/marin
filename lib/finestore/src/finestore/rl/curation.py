@@ -727,6 +727,32 @@ class SourceDeclaration(CatalogRecord):
     # The weakest review behind the admission, with the pointers that establish it.
     oversight: OversightLevel = OversightLevel.NONE
     oversight_evidence: OversightEvidence | None = None
+    derived_agentic: bool | None = None
+    """Whether the measured population's final contracts need an actor; ``None`` while pending."""
+
+    derived_turns: str = ""
+    """The population's turn shape: ``single-turn``, ``multi-turn``, ``mixed``, or empty while pending."""
+
+    derived_reply_only: bool | None = None
+    """Whether the final contracts request the answer as an assistant reply; ``None`` while pending."""
+
+    derived_workspace_graded: bool | None = None
+    """Whether the graders provision their own grading machine; ``None`` while pending."""
+
+    grader_type: str = ""
+    """The source-level grader type value; empty while the census is pending."""
+
+    grader_type_counts: dict[str, int] = Field(default_factory=dict)
+    """Per grader-type task counts; a single key is the uniform type, several keys mean ``mixed``."""
+
+    judge_rubric_counts: dict[str, int] = Field(default_factory=dict)
+    """Per rubric counts across the population's judge-graded tasks."""
+
+    judge_reference_count: int = 0
+    """Judge-graded tasks whose judge sees reference answers or exact-gates them."""
+
+    judge_no_reference_count: int = 0
+    """Judge-graded tasks graded without reference answers."""
     grading_environment: GradingEnvironmentEvidence | None = None
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None

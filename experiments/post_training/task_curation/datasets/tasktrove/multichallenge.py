@@ -97,7 +97,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 build_path="Task Trove",
                 origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
-                tags=("agentic", "multi-turn"),
+                tags=(),
                 count=1068,
                 notes=(
                     "Multi-turn with four factual or formatting criteria per task. The converter "
