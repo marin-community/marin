@@ -26,6 +26,8 @@ _TOP_K = 5
 _TIMEOUT = aiohttp.ClientTimeout(total=3 * 3600)
 # Attempts per load request when the connection drops before the stream completes.
 _STREAM_ATTEMPTS = 3
+# Hero's served context limit (max_position_embeddings).
+MAX_MODEL_TOKENS = 262144
 
 
 @dataclass(frozen=True)
@@ -289,23 +291,30 @@ async def peer_load_sweep(client: Client, cases: dict, config: ProbeConfig) -> d
 
 
 async def long_probes(client: Client, cases: dict, config: ProbeConfig) -> dict:
+    """Score long histories on engine 0; a length with no exact case scores a prefix of the longest.
+
+    Hero serves at most MAX_MODEL_TOKENS, and scoring generates one token, so a history at the limit
+    is scored without its last token (that position has no target anyway). Greedy decoding is skipped
+    when the history plus the greedy tokens would not fit.
+    """
+    by_length = {len(case["tokens"]): case for case in cases["long"]}
+    longest = max(cases["long"], key=lambda case: len(case["tokens"]))["tokens"]
     results = {}
-    for case in cases["long"]:
-        length = len(case["tokens"])
-        if length not in config.long_lengths:
-            continue
+    for length in config.long_lengths:
+        tokens = by_length[length]["tokens"] if length in by_length else longest[:length]
+        assert len(tokens) == length, (length, len(tokens))
+        tokens = tokens[: MAX_MODEL_TOKENS - 1]
+        case_id = f"long{length}"
         start = time.monotonic()
-        scored = await client.score(case["tokens"], rank=0)
+        scored = await client.score(tokens, rank=0)
         score_seconds = time.monotonic() - start
-        start = time.monotonic()
-        decoded = await client.greedy(case["tokens"], config.long_greedy_tokens, rank=0)
-        results[case["case_id"]] = {
-            "score": scored,
-            "greedy": decoded,
-            "score_seconds": score_seconds,
-            "greedy_seconds": time.monotonic() - start,
-        }
-        logger.info("long case %s scored in %.1fs", case["case_id"], score_seconds)
+        result = {"score": scored, "score_seconds": score_seconds, "scored_tokens": len(tokens)}
+        if len(tokens) + config.long_greedy_tokens <= MAX_MODEL_TOKENS:
+            start = time.monotonic()
+            result["greedy"] = await client.greedy(tokens, config.long_greedy_tokens, rank=0)
+            result["greedy_seconds"] = time.monotonic() - start
+        results[case_id] = result
+        logger.info("long case %s scored in %.1fs", case_id, score_seconds)
     return results
 
 
