@@ -10,6 +10,7 @@ import socket
 import ray
 import torch
 from loguru import logger
+from transformers import AutoConfig
 from rigging.secrets import SECRETS_DIR_ENV, require_secret
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import (
@@ -21,7 +22,7 @@ from ray.util.placement_group import (
 
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.config.callbacks import validate_hf_export_config
-from skyrl_train.config.utils import generation_context_limit
+from skyrl_train.config.utils import generation_context_limit, model_expert_count
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
 from skyrl_train.config.behavior_logprobs import configure_behavior_logprob_sampling
@@ -41,7 +42,12 @@ from skyrl_train.env_vars import (
 from skyrl_train.group_admission import resolve_group_advantage_invariant
 from skyrl_train.trajectory_selection import optimization_samples_per_prompt, trajectory_selector_from_config
 from skyrl_train.dynamic_sampling import resolve_dynamic_sampling_criteria
-from marinskyrl.runtime_options import reference_model_required
+from marinskyrl.runtime_options import (
+    reference_model_required,
+    AdvantageEstimator,
+    PolicyLossType,
+    OUTCOME_ADVANTAGE_ESTIMATORS,
+)
 from marinskyrl.rollout_grading import validate_nemotron_ultra_grading
 from marinskyrl.process_diagnostics import initialize_process_diagnostics
 from marinskyrl.distillation import (
@@ -50,7 +56,7 @@ from marinskyrl.distillation import (
     validate_generation_logprobs,
 )
 from marinskyrl.inference_placement import validate_expert_block_transport
-from marinskyrl.runtime_options import GDNBackend, R3Transport
+from marinskyrl.runtime_options import GDNBackend, R3Transport, BatchBuilder
 
 from .constants import DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS
 from .algorithm_registry import (
@@ -361,6 +367,11 @@ def validate_batch_sizes(cfg: DictConfig):
         f"train_batch_size {cfg.trainer.train_batch_size} should be divisible by policy_mini_batch_size {cfg.trainer.policy_mini_batch_size}"
     )
     optimization_group_size = optimization_samples_per_prompt(cfg)
+    if (
+        cfg.trainer.get("batch_builder", "driver") == BatchBuilder.WORKER
+        and cfg.trainer.train_batch_size * optimization_group_size % policy_dp_size
+    ):
+        raise ValueError("trainer.batch_builder=worker does not support rows requiring DP padding")
     policy_mini_batch_size_per_gpu = cfg.trainer.policy_mini_batch_size * optimization_group_size // policy_dp_size
     assert policy_mini_batch_size_per_gpu > 0, (
         f"Invalid policy_mini_batch_size_per_gpu: {policy_mini_batch_size_per_gpu}. "
@@ -446,7 +457,60 @@ def _iter_config_kwargs(node):
             yield (key,), value
 
 
+_OUTCOME_LOSSES = frozenset(
+    {
+        PolicyLossType.REGULAR,
+        PolicyLossType.DUAL_CLIP,
+        PolicyLossType.GSPO,
+        PolicyLossType.CISPO,
+        PolicyLossType.SAPO,
+        PolicyLossType.IMPORTANCE_SAMPLING,
+        PolicyLossType.BEHAVIOR_CLIP,
+    }
+)
+
+
+def require_worker_batch_config(cfg: DictConfig) -> None:
+    """Reject configuration settings unsupported by policy-worker assembly."""
+    algorithm = cfg.trainer.algorithm
+    shaping = parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
+    megatron = cfg.trainer.policy.megatron_config
+    expert_tensor_parallel = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
+    moe_etp = False
+    if expert_tensor_parallel > 1:
+        # Model registration imports utils while initializing the model package.
+        from skyrl_train.models import register_local_models
+
+        register_local_models()
+        model = cfg.trainer.policy.model
+        metadata = AutoConfig.from_pretrained(model.path, trust_remote_code=True, revision=model.get("revision"))
+        moe_etp = model_expert_count(metadata) is not None
+    supported_loss = (
+        algorithm.policy_loss_type in _OUTCOME_LOSSES and algorithm.advantage_estimator in OUTCOME_ADVANTAGE_ESTIMATORS
+    ) or (
+        algorithm.policy_loss_type == PolicyLossType.SFT and algorithm.advantage_estimator == AdvantageEstimator.UNIFORM
+    )
+    restrictions = [
+        ("DPO and reference-model objectives", reference_model_required(algorithm)),
+        ("the configured loss and estimator", not supported_loss),
+        ("colocated placement", cfg.trainer.placement.colocate_all),
+        ("distillation", algorithm.get("distillation") is not None),
+        ("trajectory selection", cfg.trainer.trajectory_selector.type is not None),
+        ("step-wise training", cfg.trainer.step_wise_training),
+        ("advantage batch normalization", algorithm.advantage_batch_normalize),
+        ("loop advantage credit", shaping.enabled and shaping.loop.advantage_penalty_per_token > 0),
+        ("marker-target reasoning penalties", shaping.enabled and shaping.reasoning_span.charges_tokens),
+        ("ETP greater than one", moe_etp),
+        ("dense batch dumping", cfg.trainer.dump_data_batch),
+    ]
+    for reason, unsupported in restrictions:
+        if unsupported:
+            raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
+
+
 def validate_cfg(cfg: DictConfig):
+    if BatchBuilder(cfg.trainer.get("batch_builder", "driver")) is BatchBuilder.WORKER:
+        require_worker_batch_config(cfg)
     validate_mismatch_probe_config(cfg)
     if cfg.trainer.strategy != "megatron":
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")

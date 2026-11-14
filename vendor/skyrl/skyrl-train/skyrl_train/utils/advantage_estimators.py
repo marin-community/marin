@@ -26,6 +26,7 @@ from skyrl_train.utils.algorithm_registry import (
 from skyrl_train.utils.policy_math import masked_whiten, right_pad_to_match
 from skyrl_train.group_admission import GroupAdvantageInvariant, GroupAdvantageKind
 from skyrl_train.training_batch import TrainingInputBatch
+from collections.abc import Sequence
 
 GRPO_FLAT_REWARD_STD_TOLERANCE = 1e-6
 
@@ -65,6 +66,29 @@ def batch_advantages(
         token_level_shaping=data.get("token_level_shaping"),
         group_advantage_invariant=invariant,
     )
+
+
+def outcome_advantages(
+    scores: torch.Tensor,
+    uids: Sequence[str],
+    algorithm: DictConfig,
+    *,
+    exclude_from_baseline: np.ndarray | None,
+    invariant: GroupAdvantageInvariant | None,
+) -> torch.Tensor:
+    """Compute global scalar outcome advantages with the configured estimator."""
+    advantages, _ = compute_advantages_and_returns(
+        token_level_rewards=scores.clone()[:, None],
+        response_mask=torch.ones((len(scores), 1), dtype=torch.int64, device=scores.device),
+        index=uids,
+        adv_estimator=algorithm.advantage_estimator,
+        config=algorithm,
+        gamma=algorithm.gamma,
+        grpo_norm_by_std=algorithm.grpo_norm_by_std,
+        exclude_from_baseline=exclude_from_baseline,
+        group_advantage_invariant=invariant,
+    )
+    return advantages[:, 0]
 
 
 @register_advantage_estimator(AdvantageEstimator.UNIFORM, group_contract=NoGroupAdvantage())
