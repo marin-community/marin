@@ -150,7 +150,7 @@ def count_native_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snapsh
             if task.get("execution_requirements") is not None:
                 document = tomllib.loads(native_task_toml(task).decode())
                 environment = EnvironmentConfig.model_validate(document.get("environment") or {})
-                execution_resource_shape(task, environment.model_dump())
+                execution_resource_shape(task, environment.model_dump(), "agent")
                 for role, field in (("agent", "agent_timeout_sec"), ("verifier", "verifier_timeout_sec")):
                     if (document.get(role) or {}).get("timeout_sec") != task["execution_requirements"][field]:
                         raise ValueError(f"{task_id}: {field} conflicts with native task.toml")
@@ -202,8 +202,7 @@ def count_lowered_spec_identities(tasks: Iterable[tuple[str, Mapping]]) -> Snaps
         for role, declared, shape in slots:
             if declared is None or shape is None:
                 continue
-            if role == "agent":
-                shape = execution_resource_shape(task, shape)
+            shape = execution_resource_shape(task, shape, role)
             requirements = EnvironmentRequirements.model_validate(declared)
             with tempfile.TemporaryDirectory() as tmp:
                 context = Path(tmp)

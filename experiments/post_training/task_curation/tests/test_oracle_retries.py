@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import tomlkit
 from finestore.rl.curation import ContentEvidenceReference
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
@@ -26,6 +27,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleExclusionReason,
     OracleFilterReceipt,
     OracleTrialReceipt,
+    ResourceCalibrationReceipt,
     load_oracle_filter,
 )
 from taskcompendium.runtime.resources import inline_resource
@@ -40,11 +42,17 @@ from experiments.post_training.task_curation.local_host_admission import (
 from experiments.post_training.task_curation.oracle_filter import (
     backend_code_files,
     calibrate_cohort,
+    collect_trials,
+    declared_native_requirements,
     filter_cohort,
     harbor_inspection,
     merge_retry_maps,
     native_requirements,
+    native_verifier_profile,
     retry_cohort,
+    row_runtime,
+    row_task,
+    source_runtime_binding,
     write_retry_plan,
     write_task_map,
 )
@@ -76,9 +84,46 @@ def retry_case(tmp_path, monkeypatch, request):
             "resources": task.resources.model_copy(
                 update={"oracle": (inline_resource("solution/solve.sh", b"true\n"),)}
             ),
-            **({"execution_requirements": None} if outcome in {"grown", "retry-grown"} else {}),
+            **(
+                {"execution_requirements": None}
+                if outcome
+                in {
+                    "grown",
+                    "retry-grown",
+                    "role-resources",
+                    "role-verifier-oom",
+                    "role-verifier-growth",
+                    "role-actor-growth",
+                    "role-recovery",
+                }
+                else {}
+            ),
         }
     )
+    if outcome in {"role-resources", "role-verifier-oom", "role-verifier-growth", "role-actor-growth", "role-recovery"}:
+        envelope["runtime"] = (
+            {"task_machine": {"cpus": 2}, "verifier_machine": {"memory_mb": 4096}}
+            if outcome in {"role-verifier-oom", "role-actor-growth"}
+            else {
+                role: {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
+                for role in ("task_machine", "verifier_machine")
+            }
+        )
+    if outcome == "role-verifier-growth":
+        envelope["runtime"] = {"task_machine": {"cpus": 2, "memory_mb": 4096}, "verifier_machine": {"storage_mb": 4096}}
+    if outcome == "role-recovery":
+        task = task.model_copy(
+            update={
+                "resources": task.resources.model_copy(
+                    update={
+                        "verifier": (
+                            *task.resources.verifier,
+                            inline_resource("task.toml", b"[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=720\n"),
+                        )
+                    }
+                )
+            }
+        )
     envelope["task"] = task.model_dump(mode="json")
     row["lowered_task_spec"] = json.dumps(envelope)
     cohort = tmp_path / "cohort.parquet"
@@ -91,10 +136,26 @@ def retry_case(tmp_path, monkeypatch, request):
     (native / "solution/solve.sh").write_text("true\n")
     (native / "task.toml").write_text(
         "[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=720\n"
-        if outcome in {"grown", "retry-grown"}
+        if outcome
+        in {
+            "grown",
+            "retry-grown",
+            "role-resources",
+            "role-verifier-oom",
+            "role-verifier-growth",
+            "role-actor-growth",
+            "role-recovery",
+        }
         else "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
         "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
     )
+    if outcome in {"role-resources", "role-verifier-oom", "role-verifier-growth", "role-actor-growth", "role-recovery"}:
+        (native / "task-spec.json").write_text(task.model_dump_json())
+        document = tomlkit.parse((native / "task.toml").read_text())
+        document["verifier"]["environment_mode"] = "separate"
+        if outcome == "role-recovery":
+            document["environment"] = {"cpus": 1, "memory_mb": 2048, "storage_mb": 2048}
+        (native / "task.toml").write_text(tomlkit.dumps(document))
     mapping = tmp_path / "original-map.json"
     write_task_map(cohort, native.parent, mapping)
     production_run = subprocess.run
@@ -114,9 +175,17 @@ def retry_case(tmp_path, monkeypatch, request):
             "environment_build": 600,
         }
         if "retry-run" in package.parts:
-            current = "pass" if outcome in {"legacy-unknown", "grown", "retry-grown", "host"} else outcome
+            current = (
+                "pass"
+                if outcome in {"legacy-unknown", "grown", "retry-grown", "host", "role-resources", "role-recovery"}
+                else outcome
+            )
             if outcome == "retry-grown" and len(calls) == 5:
                 current = "oom"
+            if outcome == "role-verifier-oom":
+                current = "oom"
+            if outcome in {"role-verifier-growth", "role-actor-growth"}:
+                current = "oom" if len(calls) == 4 else "pass"
         else:
             current = "unknown" if outcome == "legacy-unknown" else "infra"
             if outcome in {"grown", "retry-grown"} and len(calls) == 1:
@@ -154,6 +223,14 @@ def retry_case(tmp_path, monkeypatch, request):
         }
         (root / "result.json").write_text(json.dumps(result))
         (root / "config.json").write_text(json.dumps(result["config"]))
+        if outcome == "role-actor-growth" and current == "oom" and "retry-run" in package.parts:
+            (root / "agent/resource-usage.json").write_text(json.dumps({"oom_kills": 1}))
+        if (
+            outcome in {"role-verifier-oom", "role-verifier-growth"}
+            and current == "oom"
+            and "retry-run" in package.parts
+        ):
+            (root / "verifier/resource-usage.json").write_text(json.dumps({"oom_kills": 1}))
         if current not in {"unknown", "timeout"}:
             (root / "verifier/verdict.json").write_text(
                 json.dumps(
@@ -180,7 +257,36 @@ def retry_case(tmp_path, monkeypatch, request):
         if outcome == "host"
         else {}
     )
-    calibrate_cohort(cohort, mapping, initial, "local", environment, 1)
+    if outcome == "role-recovery":
+        for index in range(3):
+            attempt = initial / f"attempt-{index:02d}"
+            attempt.mkdir(parents=True)
+            config_path = attempt / "trial.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "task": {"path": str(native)},
+                        "agent": {"name": "oracle"},
+                        "environment": {"type": "local", "kwargs": {}},
+                        "trials_dir": str(attempt / "jobs"),
+                        "trial_name": "oracle",
+                    }
+                )
+            )
+            execute(["harbor", str(config_path)])
+        attempts = tuple(item for group in collect_trials(initial).values() for item in group)
+        old = json.loads(mapping.read_text())
+        old["task"]["source_task_checksum"] = old["task"]["task_checksum"]
+        old["task"]["calibration"] = ResourceCalibrationReceipt(
+            declared_requirements=None,
+            preserved_requirements=declared_native_requirements(native),
+            verifier=native_verifier_profile(native),
+            oracle_kind="original",
+            attempts=attempts,
+        ).model_dump(mode="json")
+        (initial / "task-map.json").write_text(json.dumps(old))
+    else:
+        calibrate_cohort(cohort, mapping, initial, "local", environment, 1)
     parent_map = initial / "task-map.json"
     document = json.loads(parent_map.read_text())
     for attempt in document["task"]["calibration"]["attempts"]:
@@ -551,6 +657,77 @@ def test_recollection_checks_parent_artifacts_and_distinct_phase_attempts(tmp_pa
         filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
 
 
+@pytest.mark.parametrize(
+    ("retry_case", "expected_passed"), [("role-resources", True), ("role-verifier-oom", False)], indirect=["retry_case"]
+)
+def test_source_roles_fix_actual_calibration_and_admitted_actor_budget(tmp_path, retry_case, expected_passed):
+    case = retry_case
+    frozen = tmp_path / "retry-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen)
+    destination = tmp_path / "retry-run"
+    retry_cohort(frozen / "plan.json", destination, 1)
+    combined = tmp_path / "combined-map.json"
+    merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    entry = receipt.tasks["task"]
+    initial = entry.infrastructure_retries[0].parent_calibration
+    assert len(entry.calibration.attempts) == 1
+    assert entry.passed is expected_passed
+    if expected_passed:
+        assert entry.exclusion_reason is None
+        assert all(attempt.execution_requirements.memory_mb == 4096 for attempt in initial.attempts)
+        admitted = row_task(pq.read_table(tmp_path / "filtered/tasks.parquet").to_pylist()[0])
+        assert admitted is not None
+        assert admitted.execution_requirements == ExecutionRequirements(
+            cpus=2, memory_mb=4096, storage_mb=10240, agent_timeout_sec=300, verifier_timeout_sec=60
+        )
+        source_runtime_binding(admitted, row_runtime(pq.read_table(case.cohort).to_pylist()[0]))
+    else:
+        assert entry.exclusion_reason is OracleExclusionReason.OOM
+        assert not entry.passed
+        assert entry.calibration.execution_requirements.memory_mb == 2048
+        assert entry.calibration.verifier.fixed == {"memory_mb": 4096}
+        assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 0
+
+
+@pytest.mark.parametrize("retry_case", ["role-recovery"], indirect=True)
+def test_approved_runtime_recovery_retains_unqualified_old_allocations_and_runs_exact_source_budget(
+    tmp_path, retry_case
+):
+    case = retry_case
+    original = case.parent_map.read_bytes()
+    row = pq.read_table(case.cohort).to_pylist()[0]
+    task = row_task(row)
+    assert task is not None
+    binding = source_runtime_binding(task, row_runtime(row))
+    assert binding is not None
+    count = len(case.calls)
+    with pytest.raises(ValueError, match="approved recovery transition"):
+        write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, tmp_path / "unapproved-plan")
+    assert len(case.calls) == count
+    frozen = tmp_path / "retry-plan"
+    write_retry_plan(
+        case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen, source_runtime_resource_recovery=binding
+    )
+    destination = tmp_path / "retry-run"
+    retry_cohort(frozen / "plan.json", destination, 1)
+    combined = tmp_path / "combined-map.json"
+    merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    entry = receipt.tasks["task"]
+    prior = entry.infrastructure_retries[0]
+    assert prior.source_runtime_resource_recovery == binding
+    assert all(attempt.execution_requirements.cpus == 1 for attempt in prior.parent_calibration.attempts)
+    assert all(attempt.execution_requirements.memory_mb == 2048 for attempt in prior.parent_calibration.attempts)
+    assert entry.calibration.execution_requirements == ExecutionRequirements(
+        cpus=2, memory_mb=4096, storage_mb=10240, agent_timeout_sec=900, verifier_timeout_sec=720
+    )
+    assert entry.calibration.verifier.fixed == {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
+    assert entry.passed and pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 1
+    assert case.parent_map.read_bytes() == original
+    assert OracleFilterReceipt.model_validate_json((tmp_path / "filtered/oracle-filter.json").read_text()) == receipt
+
+
 def test_collection_preserves_earlier_source_deadline_without_rewriting_final_results(tmp_path, retry_case):
     case = retry_case
     mapping = json.loads(case.parent_map.read_text())["task"]
@@ -607,3 +784,44 @@ def test_public_loader_rejects_retry_history_attached_to_foreign_task_or_package
             path.write_text(json.dumps(foreign))
             with pytest.raises(ValueError, match="changed the task or its native environment"):
                 load_oracle_filter(str(path))
+
+
+@pytest.mark.parametrize(
+    ("retry_case", "actor_memory", "verifier_memory"),
+    [
+        ("role-verifier-growth", [4096, 4096], [2048, 4096]),
+        ("role-actor-growth", [2048, 4096], [4096, 4096]),
+    ],
+    indirect=["retry_case"],
+)
+def test_only_the_failing_role_grows_missing_memory_and_publishes_both_allocations(
+    tmp_path, retry_case, actor_memory, verifier_memory
+):
+    case = retry_case
+    plan = tmp_path / "retry-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, plan)
+    destination = tmp_path / "retry-run"
+    retry_cohort(plan / "plan.json", destination, 1)
+    combined = tmp_path / "combined-map.json"
+    merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    entry = receipt.tasks["task"]
+    assert entry.passed
+    assert [attempt.execution_requirements.memory_mb for attempt in entry.calibration.attempts] == actor_memory
+    assert [
+        attempt.verifier_execution_requirements.memory_mb for attempt in entry.calibration.attempts
+    ] == verifier_memory
+    assert [attempt.verifier_execution_requirements.cpus for attempt in entry.calibration.attempts] == [1, 1]
+    admitted = row_task(pq.read_table(tmp_path / "filtered/tasks.parquet").to_pylist()[0])
+    assert admitted is not None
+    assert admitted.execution_requirements.memory_mb == 4096
+    assert admitted.verifier_execution_requirements == entry.calibration.attempts[-1].verifier_execution_requirements
+    assert load_oracle_filter(str(tmp_path / "filtered/oracle-filter.json")).admits(
+        admitted, row_runtime(pq.read_table(case.cohort).to_pylist()[0])
+    )
+    raw = json.loads(combined.read_text())
+    raw["task"]["calibration"]["attempts"][1]["verifier_execution_requirements"]["memory_mb"] = 8192
+    invalid = tmp_path / "invalid-map.json"
+    invalid.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match=r"Verifier allocation differs|unfailed verifier"):
+        filter_cohort(case.cohort, invalid, tmp_path, tmp_path / "invalid/tasks.parquet")

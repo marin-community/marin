@@ -493,9 +493,15 @@ def test_actor_capacity_preserves_independent_separate_grader_profile():
             "verifier_timeout_sec": 600,
         },
     }
+    task["verifier_execution_requirements"] = {
+        **task["execution_requirements"],
+        "cpus": 4,
+        "memory_mb": 8192,
+        "storage_mb": 20480,
+    }
     runtime = {
         "task_machine": {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240},
-        "verifier_machine": {"cpus": 4, "memory_mb": 8192, "storage_mb": 20480},
+        "verifier_machine": {"network": "deny"},
     }
     document = {"task": task, "runtime": runtime}
     checkers = {"docker": DockerMachineFactory().check_environment}
@@ -504,6 +510,17 @@ def test_actor_capacity_preserves_independent_separate_grader_profile():
     )
     assert mapped.resource_ranges["agent"]["memory_mb"] == (4096, 4096)
     assert mapped.resource_ranges["grader"]["memory_mb"] == (8192, 8192)
+
+    conflicting = {"task": task, "runtime": {**runtime, "verifier_machine": {"memory_mb": 16384}}}
+    with pytest.raises(ValueError, match="memory_mb conflicts"):
+        source_map(
+            "conflicting",
+            [conflicting],
+            capability_matrix(checkers),
+            checkers,
+            {},
+            {"agent": RUNTIME, "grader": RUNTIME},
+        )
 
 
 def test_production_matrix_records_local_runtime_and_startup_evidence():

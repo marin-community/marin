@@ -46,6 +46,7 @@ from taskcompendium.harbor.protected_runtime import (
     read_runtime_binding,
 )
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, read_source_runtime
+from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.models import (
     ExecutionRequirements,
     TaskSpec,
@@ -367,7 +368,7 @@ class TaskSpecTrial(Trial):
             or self._verifier_timeout_sec != self.shape.verifier_timeout_sec
         ):
             raise ValueError("TaskSpec trials do not accept timeout overrides or multipliers")
-        self.runtime = MachineRuntimeSpec(
+        runtime = MachineRuntimeSpec(
             backend="local",
             network=actor_network if actor_network is not None else NetworkPolicy.DENY,
             cpus=self.shape.cpus,
@@ -378,9 +379,40 @@ class TaskSpecTrial(Trial):
             startup_timeout=self._environment_build_timeout_sec,
             cleanup_timeout=self.config.trial_cleanup_grace_sec,
         )
-        self.verifier_runtime = self.runtime.model_copy(
-            update={"network": verifier_network if verifier_network is not None else NetworkPolicy.DENY}
+        self.runtime = runtime.model_copy(
+            update=self.source_runtime.resource_limits("task_machine") if self.source_runtime else {}
         )
+        configured_verifier = self.config.task.verifier_execution_requirements
+        verifier_shape = self.specification.verifier_execution_requirements
+        if configured_verifier is not None:
+            configured_verifier = ExecutionRequirements.model_validate(configured_verifier)
+            if verifier_shape is not None and verifier_shape != configured_verifier:
+                raise ValueError("Verifier transport differs from the published TaskSpec allocation")
+            verifier_shape = configured_verifier
+        if verifier_shape is None:
+            verifier_shape = INITIAL_REQUIREMENTS.model_copy(update={
+                **(self.source_runtime.resource_limits("verifier_machine") if self.source_runtime else {}),
+                "agent_timeout_sec": self.shape.agent_timeout_sec,
+                "verifier_timeout_sec": self.shape.verifier_timeout_sec,
+            })
+        if any(getattr(verifier_shape, name) != getattr(self.shape, name)
+               for name in ("agent_timeout_sec", "verifier_timeout_sec")):
+            raise ValueError("Verifier allocation differs from the canonical phase deadlines")
+        if self.source_runtime is not None and any(
+            getattr(verifier_shape, name) != value
+            for name, value in self.source_runtime.resource_limits("verifier_machine").items()
+        ):
+            raise ValueError("Verifier allocation overrides an original source declaration")
+        self.verifier_runtime = runtime.model_copy(update={
+            "cpus": verifier_shape.cpus,
+            "memory_mb": verifier_shape.memory_mb,
+            "storage_mb": verifier_shape.storage_mb,
+            "network": verifier_network if verifier_network is not None else NetworkPolicy.DENY,
+        })
+        self.verifier_shape = verifier_shape
+        self.config = self.config.model_copy(update={"task": self.config.task.model_copy(update={
+            "verifier_execution_requirements": verifier_shape.model_dump(mode="json")
+        })})
         self.limits = RolloutLimits(
             max_turns=None,
             max_total_tokens=None,
@@ -599,9 +631,9 @@ class TaskSpecTrial(Trial):
             source = RegistryImage(grader.environment.docker_image)
         spec = MachineSpec(
             source,
-            cpus=self.shape.cpus,
-            memory_mb=self.shape.memory_mb,
-            storage_mb=self.shape.storage_mb,
+            cpus=self.verifier_runtime.cpus,
+            memory_mb=self.verifier_runtime.memory_mb,
+            storage_mb=self.verifier_runtime.storage_mb,
             network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
         )
@@ -659,9 +691,9 @@ class TaskSpecTrial(Trial):
         )
         spec = MachineSpec(
             image,
-            cpus=self.shape.cpus,
-            memory_mb=self.shape.memory_mb,
-            storage_mb=self.shape.storage_mb,
+            cpus=self.verifier_runtime.cpus,
+            memory_mb=self.verifier_runtime.memory_mb,
+            storage_mb=self.verifier_runtime.storage_mb,
             network=self.verifier_runtime.network,
             startup_timeout=self._environment_build_timeout_sec,
             env=env,

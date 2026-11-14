@@ -360,6 +360,9 @@ class TaskConfig(BaseModel):
     download_dir: Path | None = None
     source: str | None = None
     source_runtime: dict[str, JsonValue] | None = None
+    verifier_execution_requirements: dict[str, JsonValue] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_task_source(self):

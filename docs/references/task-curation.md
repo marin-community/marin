@@ -1659,6 +1659,32 @@ For partially declared tasks, the phase records `initial_requirements` and start
 at the parent's final calibrated allocation. Declared and preserved source limits
 remain fixed; an earlier OOM increase is retained instead of starting over.
 
+Original runtime `task_machine` and `verifier_machine` resources are source
+declarations. Calibration merges actor CPU, memory and disk into preserved limits,
+and verifier resources into the independently fixed verifier profile. Only missing
+dimensions may grow. Recorded and admitted actor requirements match the actual
+actor allocation; a fixed verifier OOM cannot increase the actor's memory.
+Collection rejects maps that omitted those original declarations.
+
+Separate verifiers start missing capacity dimensions at the canonical calibration
+base, independently of actor declarations. A failing missing dimension grows only
+on the machine role that executed it; actorless original oracle commands use the
+verifier allocation. The phase deadlines remain one shared pair. New separate-role
+Trials record `verifier_execution_requirements` in the production config and
+receipt, and private TaskSpecs retain the same resolved allocation for subsequent
+execution. Missing historical role measurements remain unqualified; they are never
+inferred from an actor wrapper. Original raw runtime and source anchors stay fixed.
+The resource-only content-review projection excludes both allocation fields;
+complete task identities include both.
+
+An approved unscored old attempt that missed these fields may use
+`retry-plan --source-runtime-resource-recovery ORIGINAL_BINDING.json`. The
+`TaskSpecRuntimeBinding` binds the exact original task and runtime hashes, so each
+recovery plan covers one task. Its transition retains the old calibration as
+unqualified history and overlays only the missed explicit role resources. All
+other limits, original files, grading mode and prior phase hashes remain fixed.
+Ordinary retries without this field keep their existing strict invariants.
+
 A replacement LOCAL worker may supply `retry-plan --local-host HOST.json`.
 `LocalExecutionHostTransition` records exact `parent_kwargs`, replacement
 `current_kwargs`, and nonempty immutable URI/SHA-256 `scope_evidence`. Only
@@ -1842,9 +1868,13 @@ uv run python -m experiments.post_training.task_curation.task_spec_harbor \
 ~~~
 
 This writes an unchanged private `task-spec.json` payload and the task map.
-Rows with a runtime envelope also write `source-runtime.json`, preserving its
-original JSON values and binding their canonical hash before checksums
-are measured. Trial honors the declared actor and verifier network policies
+Rows with a `runtime` field also write `source-runtime.json`, preserving its
+original JSON values and recording their canonical hash in that file before
+packet checksums are measured. CPU, RAM and disk declared under `task_machine` and
+`verifier_machine` are allocated independently. Absent or null dimensions keep
+that role's current trial budgets; actor allocations do not fill missing
+verifier dimensions. Non-integer or contradictory source budgets are rejected
+before allocation. Trial honors the declared actor and verifier network policies
 independently; an actor-less oracle uses the verifier policy of its original
 grader environment. `network-policy.json` records the declared and effective
 policies with the source runtime hash. Missing roles remain undeclared. The

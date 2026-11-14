@@ -22,6 +22,7 @@ from taskcompendium.pipeline.oracle_filter import (
     OracleTrialReceipt,
     ResourceCalibrationReceipt,
     VerifierResourceProfile,
+    load_oracle_filter,
     next_trial_requirements,
     require_oracle_filter,
 )
@@ -295,3 +296,23 @@ def test_pre_oracle_host_failures_retry_without_reclassifying_source_failures(fa
             attempts=(trial,),
         )
         assert not ResourceCalibrationReceipt.model_validate_json(historical.model_dump_json()).passed
+
+
+def test_public_filter_load_rejects_omitted_measured_verifier_allocation(tmp_path):
+    current = task()
+    document = oracle_receipt([current]).model_dump(mode="json")
+    entry = document["tasks"][current.id]
+    entry["calibration"]["verifier"]["mode"] = "separate"
+    for trial in (entry["trials"][0], entry["calibration"]["attempts"][0]):
+        trial["result"]["config"]["task"] = {
+            "verifier_execution_requirements": {
+                **trial["execution_requirements"],
+                "memory_mb": trial["execution_requirements"]["memory_mb"] * 2,
+            }
+        }
+        trial["result_sha256"] = canonical_sha256(trial["result"])
+        trial.pop("verifier_execution_requirements", None)
+    path = tmp_path / "missing-verifier-allocation.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(ValueError, match="Verifier allocation differs from the actual production Trial config"):
+        load_oracle_filter(str(path))
