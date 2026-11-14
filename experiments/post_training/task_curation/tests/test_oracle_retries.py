@@ -367,6 +367,12 @@ def test_retry_replaces_dead_host_paths_only_inside_the_current_worker_scope(tmp
         "signature_policy": "/immutable/policy.json",
     }
     count = len(case.calls)
+    foreign = host.model_copy(update={"current_kwargs": {**host.current_kwargs, "cgroup_parent": "/dead/worker.scope"}})
+    foreign_plan = tmp_path / "foreign-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, foreign_plan, foreign)
+    with pytest.raises(ValueError, match="outside the current worker"):
+        retry_cohort(foreign_plan / "plan.json", tmp_path / "foreign-retry-run", 1)
+    assert len(case.calls) == count
     proof.write_text("changed scope evidence")
     with pytest.raises(ValueError, match="scope evidence changed"):
         retry_cohort(frozen / "plan.json", tmp_path / "another-retry-run", 1)
