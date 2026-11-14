@@ -15,10 +15,13 @@ from pathlib import Path
 
 import httpx
 import pytest
+import tomlkit
 from shellbox.backends.local.machine import LocalMachineFactory
-from shellbox.machine import Backend
+from shellbox.image import RegistryImage
+from shellbox.machine import Backend, UnsupportedMachineSpec
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.convert.answers import exact_answer_task
+from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -37,12 +40,14 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.submission import conversation_messages
 from verifyit.modes.grade_judge import BASE_URL_ENV
 
 from harbor.agents import taskcompendium as agents
+from harbor.environments import local as local_environments
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
@@ -72,11 +77,15 @@ class LockedRuntime:
 
 
 class FileMachine(LocalGradingMachine):
+    prepared_image = False
+
     async def upload(self, source, target):
         await super().upload(source, target)
         shutil.copystat(source, self.local(target))
 
     async def run(self, command):
+        if self.prepared_image and command.user not in (None, "0", "0:0"):
+            raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
         result = await super().run(command)
         if command.argv[:2] == ("tar", "-xf"):
             # Emulate the Linux guest's exact PAX metadata on the fake host filesystem.
@@ -108,6 +117,7 @@ class Machines:
         root = self.root / f"machine-{len(self.machines)}"
         (root / spec.workdir.lstrip("/")).mkdir(parents=True)
         machine = FileMachine(root=root, workdir=spec.workdir, env=dict(spec.env))
+        machine.prepared_image = isinstance(spec.source, RegistryImage)
         self.machines.append(machine)
         self.specifications.append(spec)
         return machine
@@ -129,8 +139,8 @@ def bind_factory(monkeypatch, machines, disk_root):
         machines.disk_pool = pool
         return machines
 
-    monkeypatch.setattr(adapter, "verified_local_disk_pool", qualify)
-    monkeypatch.setattr(adapter, "LocalMachineFactory", factory)
+    monkeypatch.setattr(local_environments, "verified_local_disk_pool", qualify)
+    monkeypatch.setattr(local_environments, "LocalMachineFactory", factory)
 
 
 def original_task(name):
@@ -295,19 +305,42 @@ async def test_tau_missing_original_lock_stops_before_candidate_or_machine(tmp_p
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: False)
     allocations = []
-    monkeypatch.setattr(adapter, "LocalMachineFactory", lambda **kwargs: allocations.append(kwargs))
+    monkeypatch.setattr(local_environments, "LocalMachineFactory", lambda **kwargs: allocations.append(kwargs))
     trial = await Trial.create(
         TrialConfig(
             task=TaskConfig(path=directory),
             trial_name="missing-lock",
             trials_dir=tmp_path / "trials",
-            agent=AgentConfig(name="task-spec-empty"),
+            agent=AgentConfig(name="nop"),
         )
     )
     result = await trial.run()
     assert result.exception_info.exception_type == "FileNotFoundError"
     assert task.grader.environment.packages_lock in result.exception_info.exception_message
     assert result.verifier_result is None
+    assert allocations == []
+
+
+@pytest.mark.parametrize("resources", [{"gpus": 1}, {"tpu": {"type": "v6e", "topology": "2x4"}}], ids=["gpu", "tpu"])
+@pytest.mark.asyncio
+async def test_task_spec_local_hardware_policy_rejects_before_allocation(tmp_path, monkeypatch, resources):
+    directory = tmp_path / "task"
+    write_harbor_task(original_task("language-mixing"), directory, INITIAL_REQUIREMENTS)
+    path = directory / "task.toml"
+    document = tomlkit.parse(path.read_text())
+    document["environment"].update(resources)
+    path.write_text(tomlkit.dumps(document))
+    allocations = []
+    monkeypatch.setattr(local_environments, "LocalMachineFactory", lambda **kwargs: allocations.append(kwargs))
+    with pytest.raises(ValueError, match="GPU and TPU allocations are unsupported"):
+        await Trial.create(
+            TrialConfig(
+                task=TaskConfig(path=directory),
+                trial_name="unsupported-hardware",
+                trials_dir=tmp_path / "trials",
+                agent=AgentConfig(name="nop"),
+            )
+        )
     assert allocations == []
 
 
@@ -344,11 +377,183 @@ async def test_environmentless_grader_runs_inside_declared_limits_without_actor(
     assert TaskSpec.model_validate_json(machines.machines[0].local("/tests/task-spec.json").read_text()) == task
 
 
-@pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize(
+    "name,model", [("financebench", "selected-judge"), ("financebench", None), ("language-mixing", "conflicting-judge")]
+)
 @pytest.mark.asyncio
-async def test_actor_files_and_private_grader_remain_in_their_declared_roles(tmp_path, monkeypatch, exit_code):
+async def test_judge_model_selection_respects_source_delegation(tmp_path, monkeypatch, name, model):
+    task = (
+        convert_finance(
+            RawRow(
+                "finance",
+                Source(dataset="PatronusAI/financebench", revision="fixture-pin", row="0", importer_revision="1"),
+                {"evidence_text": "Revenue was 42 dollars.", "question": "What was revenue?", "answer": "42 dollars"},
+            ),
+            ConversionContext(inputs={}, grader_environment=None),
+        )
+        if name == "financebench"
+        else original_task(name)
+    )
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    original = (directory / "task-spec.json").read_bytes()
+    response = tmp_path / "response.json"
+    if model == "selected-judge":
+        response.write_text(json.dumps([{"role": "assistant", "content": "42 dollars"}]))
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
+    with running_review_server() as server:
+        endpoint = f"http://127.0.0.1:{server.server_port}/v1"
+        server.judge_replies.append(JudgeReply("correct"))
+
+        async def relay_boundary(machine, stack, service_tasks, *, judge, candidate):
+            assert judge.model == model
+            machines.machines[-1].env[BASE_URL_ENV] = endpoint
+
+        monkeypatch.setattr(adapter, "start_model_relays", relay_boundary)
+        kwargs = {"model_endpoint": endpoint, "disk_root": str(tmp_path / "disks")}
+        if model is not None:
+            kwargs["model_name"] = model
+        trial = await Trial.create(
+            TrialConfig(
+                task=TaskConfig(path=directory),
+                trial_name="judge-model",
+                trials_dir=tmp_path / "trials",
+                agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
+                environment=EnvironmentConfig(kwargs=kwargs),
+            )
+        )
+        result = await trial.run()
+        if model == "selected-judge":
+            assert result.exception_info is None, result.exception_info
+            assert result.verifier_result.rewards == {"reward": 1.0}
+            assert server.requests[0]["model"] == model
+            assert len(machines.machines) == 1
+        else:
+            assert result.exception_info.exception_type == "ValueError"
+            assert result.verifier_result is None
+            assert server.requests == []
+            assert machines.machines == []
+            assert not response.exists()  # A missing model must fail before candidate execution.
+    assert (directory / "task-spec.json").read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_provider_outage_after_shell_turn_retains_history_without_scoring(tmp_path, monkeypatch):
+    task = exact_answer_task(
+        RawRow("outage", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Use the shell, then answer 42.",
+        answers=("42",),
+        ignore_case=False,
+    ).model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                capabilities=("shell", "filesystem"),
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                packages_lock="fixture-lock",
+                working_directory="/app",
+            )
+        }
+    )
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
+    monkeypatch.setattr("taskcompendium.runtime.environment.local_runtime", lambda path: LockedRuntime(tmp_path))
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 2:
+            return httpx.Response(503, json={"error": {"message": "provider unavailable", "type": "server_error"}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "shell-turn",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "candidate",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "shell-call",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "shell",
+                                        "arguments": json.dumps({"command": "printf 'partial observation\\n'"}),
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+            },
+        )
+
+    real_client = agents.AsyncOpenAI
+    monkeypatch.setattr(
+        agents,
+        "AsyncOpenAI",
+        lambda **kwargs: real_client(
+            **kwargs,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        ),
+    )
+    trial = await Trial.create(
+        TrialConfig(
+            task=TaskConfig(path=directory),
+            trial_name="provider-outage",
+            trials_dir=tmp_path / "trials",
+            agent=AgentConfig(
+                name="task-spec-chat",
+                model_name="openai/candidate",
+                kwargs={
+                    "api_base": "https://candidate.fixture/v1",
+                    "max_turns": 3,
+                    "max_tokens": 128,
+                },
+            ),
+            environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
+        )
+    )
+    result = await trial.run()
+    assert len(requests) == 2
+    assert result.exception_info.exception_type == "RolloutInterrupted"
+    assert result.verifier_result is None
+    assert not (trial.paths.verifier_dir / "verdict.json").exists()
+    trace = ConversationInput.model_validate_json((trial.paths.agent_dir / "model-input.json").read_text())
+    messages = conversation_messages(trace.events)
+    assert any(
+        message["role"] == "tool" and json.loads(message["content"])["stdout"] == "partial observation\n"
+        for message in messages
+    )
+    assert len(machines.machines) == 1
+    assert machines.machines[0].closed
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize("packaging", ["lock", "image"])
+@pytest.mark.asyncio
+async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
+    tmp_path, monkeypatch, exit_code, packaging
+):
     environment = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, packages_lock="fixture-lock", working_directory="/app"
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        working_directory="/app",
+        **(
+            {"docker_image": "offline.test/task@sha256:" + "a" * 64}
+            if packaging == "image"
+            else {"packages_lock": "fixture-lock"}
+        ),
     )
     script = (
         b"import json,pathlib,stat,sys\np=pathlib.Path(sys.argv[1])\n"
