@@ -854,6 +854,37 @@ not acquire a solve-rate bar. Use Iris H100 serving in `cw-rno2a`, with explicit
 target placement and compilation and CUDA graphs enabled. Record GPU-hours per
 model and input/output tokens; jobs have a three-day limit.
 
+The campaign launcher consumes a frozen `difficulty_samples` source queue and
+its SHA256. Resolve `GLM_BULK_TOKEN` and `HF_TOKEN` in the launch shell, then
+forward them as host-side secret files:
+
+```bash
+uv run iris --cluster marin job run --no-wait \
+  --job-name <new-run-name> --target-cluster cw-rno2a \
+  --enable-extra-resources --cpu 32 --memory 128GB --disk 1TB \
+  --timeout 259200 --container-profile container_profile_privileged \
+  --sync-package marin-core --extra cpu --extra dedup \
+  --secret GLM_BULK_TOKEN env:GLM_BULK_TOKEN --secret HF_TOKEN env:HF_TOKEN \
+  -- python -m experiments.post_training.task_curation.difficulty_campaign \
+  --solver hosted --sources <sources.json> --sources-sha256 <sha256> \
+  --output-root <new-s3-run-prefix> --local-root /tmp/<new-run-name> \
+  --workers 8 --attempts-per-task 3
+```
+
+Choose `small`, `large`, `hosted` or `snowball`. Local model serving requests
+2, 8 and 8 H100s for Small, Large and Snowball respectively; Hosted uses the
+production relay. Every prepared task preserves the original runtime packet.
+TaskSpec trial archives include `network-policy.json`, bound to that packet's
+hash, with declared and effective actor and grader policies recorded separately.
+SAFE tasks remain explicitly unmeasured until their Daytona factory and snapshot
+qualification are available. Missing original environment artifacts and
+unqualified judge routes also retain explicit reasons.
+
+Inspect `serving.json`, `prepared.json`, `trials/*/measurement.json` and
+`completion.json` in the new run prefix. A completed coordinator can still have
+pending or unmeasured sources. Each infrastructure retry receives a fresh trial
+directory. Keep existing run prefixes immutable.
+
 Typed `difficulty_measurements` live in a FineStore catalog or campaign archive.
 Load them into an installed Atlas after its schema migration:
 
