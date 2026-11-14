@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.difficulty_protocol import (
     TARGET_CLUSTER,
     serving_model,
 )
+from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.difficulty_serving_probe import probe_endpoint
@@ -245,6 +246,10 @@ def main() -> None:
         else []
     )
     settings = sampling_settings(args.solver, deviations)
+    provider_limits = ProviderLimits(
+        max_in_flight=4 if args.solver == Solver.HOSTED else args.workers,
+        attempts=6 if args.solver == Solver.HOSTED else 1,
+    )
     with solver_endpoint(args.solver, settings) as (endpoint, api_model, api_key, jobs):
         probe = probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
         judge_pin = PINS[Solver.HOSTED]
@@ -283,6 +288,8 @@ def main() -> None:
                     "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                 },
                 "sampling": request_parameters(settings),
+                "provider_limits": asdict(provider_limits),
+                "judge_provider_limits": {"max_in_flight": 1, "attempts": 6},
                 "judge": {
                     "model": SOLVER_MODELS[Solver.HOSTED],
                     "api_model": GLM_MODEL,
@@ -314,6 +321,7 @@ def main() -> None:
             "endpoint": endpoint,
             "api_model": api_model,
             "api_key_secret": "ATLAS_DIFFICULTY_CANDIDATE_TOKEN",
+            "provider_limits": asdict(provider_limits),
             "environment_options": options,
             "workers": args.workers,
             "gpu_count": pin.gpus,

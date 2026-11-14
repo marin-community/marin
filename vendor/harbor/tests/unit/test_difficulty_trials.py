@@ -30,6 +30,7 @@ from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
 from experiments.post_training.task_curation import difficulty_relay, difficulty_trials
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
+from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 
 
 @pytest.mark.parametrize("graded_reward,upstream_failure,with_judge", [
@@ -40,6 +41,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     infrastructure_first = upstream_failure in {"json", "html", "input_tokenize"}
     unserved = upstream_failure == "input_tokenize"
     native = upstream_failure in {"native", "input_tokenize"}
+    provider_wait = upstream_failure in {"json", "html"}
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
     blocker = "missing_environment_artifact: fixture/original/requirements.lock"
@@ -74,6 +76,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                                   temperature=0.7, top_p=0.95, top_k=20, min_p=0, repetition_penalty=1,
                                   presence_penalty=0, frequency_penalty=0, thinking="low", deviations=[]),
         endpoint="https://model.fixture/v1", api_model="glm-5.3", api_key_secret=None,
+        provider_limits=ProviderLimits(max_in_flight=2, attempts=2),
         environment_options={}, judge_endpoint="https://judge.fixture/v1",
         judge_api_key_secret="unused", workers=2, gpu_count=0, attempts_per_task=2, task_limit=None,
         judge_api_model="glm-5.3",
@@ -130,7 +133,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     async def physical_trial(configuration, authentication):
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
-        if native:
+        if configuration.agent.name == "terminus-2":
             llm = OpenAILLM(model_name="openai/fixture", api_key="fixture", api_base=configuration.agent.kwargs["api_base"], model_info=configuration.agent.kwargs["model_info"])
             assert completion_budget_from_count(prompt_tokens=40000, context_window=llm.get_model_context_limit(), max_output_tokens=llm.get_model_output_limit()) == 16384
         failed = infrastructure_first and not physical_attempts
@@ -157,7 +160,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                               headers={"Content-Type": "application/json"})
             with pytest.raises(HTTPError) as error:
                 urlopen(request, timeout=10)
-            assert error.value.code == (400 if unserved else 502)
+            assert error.value.code == (400 if unserved else 503)
         if not failed:
             (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": reward}))
         (directory / "network-policy.json").write_text(json.dumps({
@@ -182,17 +185,19 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
     assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
-        "pending", 0 if unserved else 1, 0 if unserved else int(graded_reward), 2 if unserved else 1)
+        "pending", 0 if unserved or provider_wait else 1, 0 if unserved or provider_wait else int(graded_reward), 2 if unserved or provider_wait else 1)
     assert blocker in measurement.reason
-    assert measurement.infrastructure_attempts == int(infrastructure_first and not unserved)
+    assert measurement.infrastructure_attempts == 0
     attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
     pending = {"blocked": blocker}
     if unserved:
         pending["scored"] = difficulty_trials.INPUT_BUDGET_REASON
+    elif provider_wait:
+        pending["scored"] = difficulty_trials.PROVIDER_WAIT_REASON
     assert attempts["pending_reasons"] == pending
-    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(infrastructure_first and not unserved)
-    assert len(candidate_requests) == int(infrastructure_first and not unserved)
-    if unserved:
+    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1
+    assert len(candidate_requests) == 2 * int(provider_wait)
+    if unserved or provider_wait:
         return
     if infrastructure_first:
         aggregate = next(output.glob("*/attempts.json"))

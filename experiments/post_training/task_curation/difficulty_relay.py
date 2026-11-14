@@ -7,6 +7,8 @@ import hashlib
 import json
 import logging
 import re
+import select
+import socket
 from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
@@ -19,6 +21,13 @@ import httpx
 from harbor.environments.model_relay import _upstream_error
 from rolloutengine.chat import chat_template_messages
 from transformers import AutoTokenizer
+
+from experiments.post_training.task_curation.difficulty_provider import (
+    RETRYABLE_STATUS,
+    ProviderGate,
+    ProviderLimits,
+    ProviderUnavailable,
+)
 
 LOGGER = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 600
@@ -45,6 +54,7 @@ def budget_relay(
     tokenizer_revision: str,
     parameters: dict,
     budget: RequestBudget | None,
+    provider_limits: ProviderLimits,
     receipts: Path,
 ):
     """Serve task-labelled, non-streaming chat and pinned CPU tokenization locally.
@@ -56,10 +66,15 @@ def budget_relay(
         raise ValueError("Difficulty tokenization requires an immutable Hugging Face revision")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model, revision=tokenizer_revision)
     numbers = Counter()
+    provider = ProviderGate(provider_limits)
     lock = Lock()
     with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=REQUEST_TIMEOUT) as upstream:
 
         class Handler(BaseHTTPRequestHandler):
+            def request_alive(self):
+                readable, _, _ = select.select([self.connection], [], [], 0)
+                return not readable or bool(self.connection.recv(1, socket.MSG_PEEK))
+
             def setup(self):
                 super().setup()
                 self.connection.settimeout(REQUEST_TIMEOUT)
@@ -147,15 +162,26 @@ def budget_relay(
                     status = 400
                 else:
                     try:
-                        response = upstream.post(endpoint.rstrip("/") + "/chat/completions", json=body)
+                        response = provider.response(upstream, endpoint, body, root, self.request_alive)
                         (root / "upstream-response.body").write_bytes(response.content)
                         (root / "upstream-response-status.json").write_text(json.dumps({"status": response.status_code}))
                         status = response.status_code
                         if response.is_success:
                             payload = response.json()
+                        elif status in RETRYABLE_STATUS:
+                            status, payload = 503, {
+                                "error": {
+                                    "code": "provider_wait",
+                                    "message": "Provider admission unavailable; no solver grade assigned",
+                                }
+                            }
                         else:
                             safe = _upstream_error(status, response.content)
                             status, payload = safe.status, json.loads(safe.body)
+                    except ProviderUnavailable:
+                        status, payload = 503, {
+                            "error": {"code": "provider_wait", "message": "Provider capacity wait expired"}
+                        }
                     except httpx.HTTPError as error:
                         # Preserve transport classification; source commands are never replayed here.
                         status, payload = 502, {

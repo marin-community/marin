@@ -846,7 +846,11 @@ presence alone does not indicate whether filtering is complete.
 
 Run tasks through production Harbor trials in their declared environments and
 grade each with its own grader. Select Daytona only for measured SAFE sources;
-use LOCAL/Iris otherwise. Keep provider waits separate from task attempts and
+use LOCAL/Iris otherwise. Hosted difficulty traffic admits at most four actor
+requests and one judge request per campaign, with admission and peak counts in
+the trusted host logs. Retry 429 and transient 5xx replies with jittered backoff,
+preserving each upstream reply and wait. Exhausted provider admission stays
+pending without a solver grade or infrastructure-attempt count. Keep provider waits separate from task attempts and
 preserve infrastructure-failed attempts for re-driving. Those attempts never
 enter the scored denominator. A completed measurement requires every sampled
 task to have a score and an archived attempt receipt. Pending observations do

@@ -47,6 +47,7 @@ from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_poli
 
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
+from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 from experiments.post_training.task_curation.difficulty_recovery import previous_campaign, recovered_source
 from experiments.post_training.task_curation.difficulty_relay import RequestBudget, budget_relay
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
@@ -57,6 +58,7 @@ JUDGE_TEMPERATURE = PROTOCOLS[PROTOCOL_ID].temperature
 INPUT_BUDGET_REASON = (
     "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned."
 )
+PROVIDER_WAIT_REASON = "Awaiting shared model provider capacity; provider waits are excluded from task attempts."
 
 
 @dataclass(frozen=True)
@@ -112,6 +114,7 @@ class CandidateRun(BaseModel):
     endpoint: str
     api_model: str
     api_key_secret: str | None
+    provider_limits: ProviderLimits
     environment_options: dict
     judge_endpoint: str
     judge_api_key_secret: str
@@ -267,16 +270,30 @@ def run_task(
         write_json_evidence(destination / f"{number:02d}" / "trial.json", raw_receipt)
         reward = scored_reward(result, trial)
         unserved = False
+        provider_wait = False
         route = f"/{root.name}-{key}-{number}"
-        requests = root.parent / "model-requests" / hashlib.sha256(route.encode()).hexdigest()
-        for response_path in requests.glob("*/response.json"):
-            response = json.loads(response_path.read_text())
-            error = response["body"].get("error")
-            if isinstance(error, dict) and error.get("code") == "input_budget_unserved":
-                unserved = True
+        for traffic in (root.parent / "model-requests", root.parent / "judge" / "model-requests"):
+            requests = traffic / hashlib.sha256(route.encode()).hexdigest()
+            for response_path in requests.glob("*/response.json"):
+                response = json.loads(response_path.read_text())
+                error = response["body"].get("error")
+                if isinstance(error, dict) and error.get("code") == "input_budget_unserved":
+                    unserved = True
+                if isinstance(error, dict) and error.get("code") == "provider_wait":
+                    provider_wait = True
+            for request in requests.glob("*"):
+                if (request / "response.json").exists():
+                    continue
+                if (request / "provider-queued.json").exists() and not (request / "provider-admitted.json").exists():
+                    provider_wait = True
+                if any((request / "provider-waits").glob("*.json")):
+                    provider_wait = True
         if unserved:
             reward = None
             pending_reason = INPUT_BUDGET_REASON
+        elif provider_wait:
+            reward = None
+            pending_reason = PROVIDER_WAIT_REASON
         if task.workload == "task_spec":
             binding = read_source_runtime(Path(task.path))
             policy = TaskNetworkPolicyReceipt.model_validate_json(
@@ -288,20 +305,20 @@ def run_task(
                 raise ValueError("Trial changed an original declared network policy")
         attempt = DifficultyAttempt(
             task_id=task.task_id,
-            status="pending" if unserved else ("scored" if reward is not None else "infrastructure"),
+            status="pending" if unserved or provider_wait else ("scored" if reward is not None else "infrastructure"),
             reward=reward,
         )
         write_json_evidence(
             destination / f"{number:02d}" / "attempt.json",
             {
                 **attempt.model_dump(mode="json"),
-                "reason": "input_budget_unserved" if unserved else None,
+                "reason": "input_budget_unserved" if unserved else ("provider_wait" if provider_wait else None),
                 **raw_receipt,
                 "judge_temperature": JUDGE_TEMPERATURE if task.judge_model is not None else None,
             },
         )
         attempts.append(attempt)
-        if reward is not None or unserved:
+        if reward is not None or unserved or provider_wait:
             break
     return TaskOutcome(attempts, pending_reason)
 
@@ -346,6 +363,7 @@ def main() -> None:
             budget=RequestBudget(
                 config.settings.context_tokens, config.settings.input_tokens, config.settings.output_tokens
             ),
+            provider_limits=config.provider_limits,
             receipts=args.local_root / "model-requests",
         ) as relay,
         (
@@ -357,6 +375,7 @@ def main() -> None:
                 tokenizer_revision=config.judge_identity.tokenizer_revision,
                 parameters={"temperature": JUDGE_TEMPERATURE},
                 budget=None,
+                provider_limits=ProviderLimits(max_in_flight=1, attempts=6),
                 receipts=judge_root / "model-requests",
             )
             if has_judge
