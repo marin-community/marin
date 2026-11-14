@@ -3,7 +3,7 @@ track: competitive-d512
 runs:
   seed0:
     seed: 0
-    variant: space/case-normalised byte rows on input embeddings
+    variant: spelling-normalised byte embeddings, 4-rung ladder
     flags:
     - --model-set
     - spelling_byte_embeds=true
