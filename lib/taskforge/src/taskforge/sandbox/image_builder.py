@@ -10,7 +10,8 @@ never shares a container with the model-authored Dockerfile.
 
 1. The build job runs a pinned ``bash`` image (Iris requires ``bash`` in the task image, so the
    kaniko image itself cannot be the task image). It fetches a sha256-checked ``crane``, exports
-   the pinned kaniko debug image's ``/kaniko`` with it, and runs kaniko on the context for
+   the pinned kaniko debug image's ``/kaniko`` with it, clears the bootstrap filesystem with
+   kaniko's ``--pre-cleanup``, and runs kaniko on the context for
    linux/amd64 with ``--no-push``, writing ``image.tar`` into ``$IRIS_OUTPUT_DIR``. kaniko needs no
    daemon, mounts or privileges, only the default capabilities and egress, which CoreWeave's
    DEFAULT profile has (buildah failed there on remount; GCP gVisor has no network and GCP DEFAULT
@@ -132,7 +133,7 @@ BUILD_SCRIPT = r"""
 set -euo pipefail
 trap 'exit "$BUILD_SETUP_FAILED_EXIT"' EXIT
 K=/kaniko
-mkdir -p "$K" /tmp/kroot /app/context "$IRIS_OUTPUT_DIR"
+mkdir -p "$K/context" /tmp/kroot "$IRIS_OUTPUT_DIR"
 wget -q -O /tmp/crane.tgz "$CRANE_URL"
 echo "$CRANE_SHA256  /tmp/crane.tgz" | sha256sum -c - > /dev/null
 tar xzf /tmp/crane.tgz -C /tmp crane
@@ -140,9 +141,11 @@ tar xzf /tmp/crane.tgz -C /tmp crane
 cp -a /tmp/kroot/kaniko/. "$K/"
 mkdir -p "$K/ssl/certs"
 cp /etc/ssl/certs/ca-certificates.crt "$K/ssl/certs/"
-tar xzf "/app/$CONTEXT_FILE" -C /app/context
-SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context dir:///app/context --dockerfile "/app/context/$DOCKERFILE" \
-  --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" --custom-platform linux/amd64
+tar xzf "/app/$CONTEXT_FILE" -C "$K/context"
+# /kaniko is excluded from cleanup; the source context must survive bootstrap removal.
+SSL_CERT_DIR="$K/ssl/certs" exec "$K/executor" --context "dir://$K/context" --dockerfile "$K/context/$DOCKERFILE" \
+  --pre-cleanup --destination "$DESTINATION" --no-push --tar-path "$IRIS_OUTPUT_DIR/image.tar" \
+  --custom-platform linux/amd64
 """
 
 
