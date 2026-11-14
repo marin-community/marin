@@ -13,6 +13,11 @@ reviewed SAMPLE/FULL campaigns and artifact outputs. Its
 [Current admission policy](../../../docs/references/task-curation.md#current-admission-policy)
 section states the current admission rules.
 
+Do not declare oversight levels, grader types or task-shape tags (agentic,
+multi-turn and similar) on a source. A late-stage ingestion step derives them from
+the final TaskSpecs and QA records, and a contradicting declaration fails
+ingestion. Declarations carry only license, family and upstream provenance tags.
+
 ## Pinned registry receipts
 
 Generated census, lexical, retention, deduplication and fingerprint-index JSON is

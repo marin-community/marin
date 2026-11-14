@@ -25,7 +25,7 @@ owns reusable source importers and the corpus publisher.
 
 ## Current admission policy
 
-These rules include the admission display policy for Atlas preview revision 16 (2026-11-14). When a
+These rules include the admission display policy for Atlas preview revision 17 (2026-11-14). When a
 later section of this reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
@@ -116,6 +116,34 @@ grading assessment are unchanged.
 - The Daytona SAFE/UNSAFE/N/A measurement is still required at ingestion for
   agentic sources, but the Atlas shows it on the Backends evidence page rather than
   as a main-table column.
+
+**Derived fields.** Ingestion never trusts hand-written shape or level labels.
+A late-stage step, after conversion, repairs and filtration, derives them from
+each population's final TaskSpecs and QA records:
+
+- *Grader type* is one of `llm-judge`, `exact-match`, `math-verify`,
+  `unit-tests`, `script`, `reward-model` or `none`, with `mixed` and a per-type
+  breakdown at source level. A grader that maps to none of these fails ingestion.
+- *Contract tags* (agentic or non-agentic, single- or multi-turn, reply-only
+  rewrite, workspace-graded) come from the TaskSpec. Declared tags keep only
+  license, family and upstream provenance.
+- *Oversight level* is FULL with a current-pin FULL binding or a SAMPLE panel
+  that covers the whole retained population, SAMPLE with a current-pin SAMPLE
+  receipt, and QUICK otherwise. Source declarations carry no level; historical
+  recipe-QA prose is kept as notes that cannot assert one.
+
+A declared value that contradicts a derived one fails ingestion. Atlas shows the
+derived oversight level once, identical to the main-table Quality, with a link to
+its receipt.
+
+**Atlas display.** Source cells show only the source name and fold toggle; origin,
+dataset links and overlap notes belong on Evidence. Backend fit is binary: a
+backend is Supported only when every present role is supported, and conditional
+or partial support counts as Unsupported with its blockers. N/A means the role
+does not exist. Curriculum places every task at its nearest subject and
+capability and offers five confidence levels as display filters (see
+[curriculum coverage](rl-data-atlas.md#curriculum-coverage)). Examples are pooled
+across sources, each with its Source.
 
 **Quality.** Result is GOOD when at least 90% of reviewed tasks are clean, BAD
 when at least 50% have issues, and SOME_ISSUES otherwise. QC never rejects a task

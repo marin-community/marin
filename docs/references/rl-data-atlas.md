@@ -2,7 +2,7 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
-This reference was synced with Atlas v9.3 preview revision 14 (2026-11-14); the
+This reference was synced with Atlas v9.3 preview revision 17 (2026-11-14); the
 admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
 Curation owns source declarations, admission decisions, executed controls and
 sampled GLM judgments. Atlas displays those records and their task packets.
@@ -867,7 +867,9 @@ children hidden by search, so its count equals the sum of these rows and its
 displayed children.
 These are population counts. Each node contributes up to ten sampled tasks per
 level; its example list can also include overlapping source and descendant samples. Opening an
-area loads its sampled examples below the map;
+area loads its sampled examples below the map, pooled across sources with a
+Source field on each example and an optional source filter; selecting a source is
+never required to see examples;
 **Read sampled examples** jumps to that list. Empty areas explain when no
 examples are available.
 
