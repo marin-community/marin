@@ -92,7 +92,7 @@ def shared_grader_script(contract: SharedIntegrityContract) -> bytes:
     """Launch the pinned controller with the image's protected interpreter."""
     return (
         "#!/bin/bash\nset -euo pipefail\n"
-        'control_python="/opt/taskcompendium-shared-bootstrap/python"\n'
+        f'control_python="{contract.protected_root}-bootstrap/python"\n'
         f'exec "$control_python" -I -S {contract.harness} grade --contract {contract.protected_root}/contract.json '
         "--verifyit /opt/taskcompendium-shared-bootstrap/verifyit\n"
     ).encode()

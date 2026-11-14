@@ -4,12 +4,14 @@
 """The SHARED controller preserves live dependencies while rejecting harness tampering."""
 
 import hashlib
+import io
 import json
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -18,8 +20,15 @@ import pytest
 from verifyit.spec import PytestSpec, render_spec
 
 from taskcompendium.harbor.shared_package import SharedPytestFormat, render_shared_pytest_spec
+from taskcompendium.harbor.shared_reference import (
+    REFERENCE_BUNDLE,
+    REFERENCE_INPUT,
+    FrozenSharedReference,
+    harden_shared_swe_reference,
+)
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.integrity import SharedDependencyState, SharedIntegrityContract
-from taskcompendium.runtime import shared_pytest
+from taskcompendium.runtime import shared_pytest, shared_reference
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux" or os.geteuid() != 0, reason="UID isolation requires Linux root")
 
@@ -33,12 +42,18 @@ class SharedRuntime:
     plugin: Path
 
     def grade(self) -> dict:
-        shared_pytest.grade(Path(self.contract.protected_root) / "contract.json", str(self.verifyit))
+        try:
+            shared_pytest.grade(Path(self.contract.protected_root) / "contract.json", str(self.verifyit))
+        except RuntimeError as error:
+            stderr = Path(self.contract.report_directory) / "verifyit.stderr"
+            if stderr.is_file():
+                raise RuntimeError(f"{error}\n{stderr.read_text()}") from error
+            raise
         return json.loads((Path(self.contract.report_directory) / "verdict.json").read_text())
 
 
 @pytest.fixture(params=["base"])
-def shared_runtime(request):
+def shared_runtime(request, monkeypatch):
     with tempfile.TemporaryDirectory(prefix="taskcompendium-shared-test-") as temporary:
         base = Path(temporary)
         base.chmod(0o755)
@@ -245,6 +260,50 @@ def shared_runtime(request):
             f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -c " + shlex.quote(verifyit_main) + ' "$@"\n'
         )
         verifyit.chmod(0o755)
+        if request.param == "frozen-reference":
+            files = {
+                "instruction.md": b"Keep the original clone and installation in the actor phase.\n",
+                "environment/Dockerfile": b"FROM unchanged-source-image\n",
+                "task.toml": b"[metadata]\n[environment]\n[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=600\n",
+                "solution/solve.sh": b"#!/bin/bash\n# original oracle bytes\n",
+            }
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+                for path in sorted(root.iterdir()):
+                    archive.add(path, arcname=path.name)
+            bundle = stream.getvalue()
+            reference = FrozenSharedReference(
+                original_files_sha256=canonical_sha256({k: v.hex() for k, v in files.items()}),
+                original_task_sha256="1" * 64,
+                original_runtime_sha256="2" * 64,
+                source_spec_sha256=canonical_sha256(asdict(spec)),
+                image_context_sha256=canonical_sha256(
+                    {k: v.hex() for k, v in files.items() if k.startswith("environment/")}
+                ),
+                source_cli_revision="a" * 40,
+                capture_trial_uri="fixture://trusted-original-control",
+                capture_trial_sha256="3" * 64,
+                bundle_sha256=hashlib.sha256(bundle).hexdigest(),
+                contract=contract,
+            )
+            harden_shared_swe_reference(
+                files,
+                spec=spec,
+                reference=reference,
+                bundle=bundle,
+                pytest_format=SharedPytestFormat.CURRENT,
+                host_init_timeout=259200,
+            )
+            workspace.rename(base / "captured-workspace")
+            root.rename(base / "captured-protected")
+            workspace.mkdir()
+            input_path.write_bytes(files[REFERENCE_INPUT])
+            bundle_path = base / "reference.tar.gz"
+            bundle_path.write_bytes(files[REFERENCE_BUNDLE])
+            monkeypatch.setenv("PATH", str(base) + ":" + os.environ["PATH"])
+            shared_reference.initialize(input_path, bundle_path)
+            assert list(workspace.iterdir()) == []
+            candidate.write_text("VALUE = 0\n")
         yield SharedRuntime(contract, site, verifyit, candidate, plugin_path)
 
 
@@ -259,6 +318,52 @@ def test_shared_grading_source_cli_rejects_broken_product_and_accepts_repair(sha
     verdict = runtime.grade()
     assert verdict["status"] == "scored", verdict
     assert verdict["reward"] == 1, verdict
+
+
+@pytest.mark.parametrize("shared_runtime", ["frozen-reference"], indirect=True)
+def test_frozen_reference_restores_grading_without_preparing_actor_workspace(shared_runtime):
+    runtime = shared_runtime
+    assert runtime.grade()["reward"] == 0
+    runtime.candidate.write_text("VALUE = 1\n")
+    assert runtime.grade()["reward"] == 1
+    assert os.stat(runtime.contract.protected_root).st_uid == 0
+    assert os.stat(runtime.contract.protected_root).st_mode & 0o007 == 0
+
+
+@pytest.mark.parametrize("shared_runtime", ["frozen-reference"], indirect=True)
+def test_frozen_reference_keeps_root_executables_protected_during_editable_console_install(shared_runtime):
+    runtime = shared_runtime
+    workspace = runtime.candidate.parent
+    source_python = Path(json.loads((Path(runtime.contract.protected_root) / "runtime.json").read_text())["sites"][0])
+    source_python = source_python.parents[2] / "bin/python"
+    (workspace / "setup.py").write_text(
+        "from setuptools import setup\n"
+        "setup(name='source-entrypoint-fixture',version='0.0',py_modules=['candidate'],"
+        "entry_points={'console_scripts':['source-fixture-cli=candidate:main']})\n"
+    )
+    environment = shared_pytest.clean_environment()
+    ready = subprocess.run(
+        [str(source_python), "-c", "import setuptools, pip, wheel"],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        user=runtime.contract.agent_uid,
+        group=runtime.contract.agent_uid,
+        extra_groups=[],
+    )
+    assert ready.returncode == 0, ready.stderr.decode()
+    result = subprocess.run(
+        [str(source_python), "-m", "pip", "install", "--no-build-isolation", "--no-deps", "-e", "."],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        user=runtime.contract.agent_uid,
+        group=runtime.contract.agent_uid,
+        extra_groups=[],
+    )
+    assert result.returncode != 0
+    assert not (source_python.parent / "source-fixture-cli").exists()
+    assert not os.stat(source_python.parent).st_mode & 0o022
 
 
 @pytest.mark.parametrize(
