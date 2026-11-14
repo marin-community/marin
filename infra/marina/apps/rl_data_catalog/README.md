@@ -52,17 +52,25 @@ Curriculum parents include an Other/unlisted row for subject-only matches and
 children hidden by search. Parent counts equal displayed children plus that
 remainder; the bounded task example sample does not reduce population counts.
 
-Header totals cover all live sources. Admitted examples show the final known
-admitted sum and source counts still pending filtration or excluded. Quality
-shows catalog-wide QUICK/SAMPLE/FULL totals; both cards label displayed counts
-separately as Shown after filters and duplicate folding.
+Every header count is in tasks: total population, admission (TRAIN plus EVAL),
+pending oracle filtration, exclusions and QUICK/SAMPLE/FULL quality populations.
+Releases with zero retained tasks contribute their canonical filtration receipt's
+original excluded input count; other releases contribute the current deduplicated
+population. Counts are source-specific task instances: the same contract in two
+sources can count twice. Shown, hidden QUICK-quality/BAD-result, filtered and
+folded-duplicate tasks form a mutually exclusive partition of the total. Each
+omitted group also reports its admitted subset. **Show everything** clears all
+filters, includes QUICK-quality/BAD-result sources and unfolds every duplicate
+group. **All Difficulty** is the default; selecting a model orders sources by
+that model's solve rate, highest first. Returning to All restores source-name order.
 
 Preview source counts can be supplied to `prepare_preview.py --source-counts` as
 version-1 observations. Each record binds the exact actor-census input and Use,
 the oracle inventory, the unique current static-blocker count and its audit,
 and policy ruling SHA `028c7dfb…e2f3953`. The API withholds counts on any input or
 Use change. No-oracle Examples equal retained minus the measured blocker union;
-EVAL counts remain measured-only and never enter admitted TRAIN totals. Oracle
+EVAL tasks enter total Atlas admission as evaluation data and remain excluded
+from TRAIN selection. Oracle
 sources stay Pending oracle filtration without final evidence. Missing static
 measurements remain explicit and do not become zero exclusions.
 

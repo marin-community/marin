@@ -25,12 +25,13 @@ owns reusable source importers and the corpus publisher.
 
 ## Current admission policy
 
-These rules were synced with Atlas v9.3 preview revision 14 (2026-11-14). When a
+These rules include the admission display policy for Atlas preview revision 15 (2026-11-14). When a
 later section of this reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
-has no separate oracle column. Its header shows
-`<N> admitted · <k> pending oracle filtration · <m> excluded`. A no-oracle source
+has no separate oracle column. Every header count is in tasks. Admission totals
+split TRAIN and EVAL, alongside tasks pending oracle filtration and tasks excluded.
+Quality totals count tasks by their source's QUICK/SAMPLE/FULL label. A no-oracle source
 shows its static-retained count (below). An oracle source shows Examples Pending
 until its current-pin admission receipt exists.
 
@@ -48,7 +49,10 @@ until its current-pin admission receipt exists.
   static blockers such as `tool_provider_required` or `shared_executor_required`.
   No per-task executability proof is required. This requirement is suspended and
   can be restored later. Every other gate still applies.
-- *Use=EVAL sources* are measured. Their tasks never count as admitted TRAIN tasks.
+- *Use=EVAL sources* are admitted to Atlas as evaluation data after applicable
+  filtration. Total admission is TRAIN plus EVAL. EVAL tasks remain excluded from
+  TRAIN selection; deduplication and lexical measurement still apply, with no
+  lexical remediation of EVAL overlap.
 
 **Non-agentic tasks.** A TaskSpec with no actor role, agent harness or agent
 workspace is non-agentic: the model answers and the task's grader checks the

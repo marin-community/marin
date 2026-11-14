@@ -119,10 +119,17 @@ Expand a group to inspect matching members, or enable **Show QUICK-quality and
 BAD-result sources**. Search and filters apply before grouping; a hidden canonical
 member cannot reappear through a group. Search names, datasets or tags, select a
 column heading to sort, and export filtered rows as CSV. Filters and sorting stay
-in the URL. The four totals show all live sources, admitted examples with pending-filtration
-and excluded source counts, catalog-wide quality counts and catalog freshness.
-Examples and Quality label displayed counts separately as **Shown**, after filters
-and duplicate folding; expanding a group changes Shown counts, not catalog totals. Source evidence pages include exact release
+in the URL. The header counts tasks throughout: population, admission (TRAIN plus
+EVAL), pending oracle filtration, exclusions and QUICK/SAMPLE/FULL quality
+populations, alongside catalog freshness. Releases with zero retained tasks count
+their canonical filtration receipt's original excluded input; other releases count
+the current deduplicated population. Counts are source-specific task instances:
+the same contract in two sources can count twice. **Shown** counts displayed tasks.
+Hidden QUICK-quality/BAD-result, filtered and folded-duplicate tasks partition the
+rest without overlap, with their admitted subsets. **Show everything** clears
+filters, includes QUICK-quality/BAD-result sources and expands every group.
+**All Difficulty** is the default; selecting a model orders sources by that model's
+solve rate, highest first. Returning to All restores source-name order. Source evidence pages include exact release
 pins, deduplication ledgers, lexical measurements, QC and archived assessment packets.
 
 **Use** comes from the registered converter's explicit TRAIN or EVAL policy. A
@@ -170,9 +177,10 @@ column. For a source with oracles it requires completed full-population oracle
 filtration, plus nop negative controls on workspace-graded tasks, after
 within-source duplicates and TRAIN lexical overlap have been removed. For a
 source without oracles it is the retained count minus tasks with typed static
-blockers; no per-task executability proof is required. Use=EVAL tasks never count
-as admitted TRAIN tasks. Without a current-pin admission receipt, Examples remains pending. Totals show the measured sum plus
-Pending when any contributing source lacks proof. Evidence and
+blockers; no per-task executability proof is required. Total Atlas admission
+includes TRAIN and EVAL tasks, with EVAL excluded from TRAIN selection. Without
+a current-pin admission receipt, Examples remains pending. Totals report known
+admitted tasks alongside tasks pending oracle filtration or other admission proof. Evidence and
 curriculum coverage separately show the retained converted population; content QA
 Results and sampled controls do not certify execution or admission. Source details include the raw converted count,
 duplicates dropped, and the exclusion manifest.
@@ -324,8 +332,9 @@ full-population oracle-filter receipt is recorded separately from this census.
 Sources with oracles keep their admitted counts pending until that receipt exists.
 The filtration ledger records typed static blockers against the current population.
 Under the pinned no-oracle policy ruling, no-oracle Examples are the current retained
-population minus unique typed static blockers. EVAL counts are measured-only and
-excluded from admitted TRAIN totals. The Evidence page records the policy and audit
+population minus unique typed static blockers. EVAL tasks enter total Atlas
+admission as evaluation data and remain excluded from TRAIN selection. EVAL
+overlap is lexically measured without remediation. The Evidence page records the policy and audit
 URI/SHA pairs. Count observations bind the full current actor-census input and Use;
 missing or stale static evidence remains unmeasured. Overlapping blocker reasons
 never count a task twice. This count policy does not change training selection.
