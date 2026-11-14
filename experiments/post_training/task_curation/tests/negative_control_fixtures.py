@@ -8,7 +8,6 @@ import io
 import json
 import tarfile
 from copy import deepcopy
-from pathlib import Path
 
 import zstandard
 from finestore.rl.curation import ContentEvidenceReference

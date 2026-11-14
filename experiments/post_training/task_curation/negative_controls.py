@@ -13,7 +13,7 @@ from finestore.rl.curation import ContentEvidenceReference
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements
-from taskcompendium.pipeline.oracle_filter import OracleNegativeControlReceipt, OracleTrialReceipt, NativeVerifierGrade
+from taskcompendium.pipeline.oracle_filter import NativeVerifierGrade, OracleNegativeControlReceipt, OracleTrialReceipt
 
 from experiments.post_training.task_curation.archive_evidence import verified_archive_members
 from experiments.post_training.task_curation.harbor_inspection import harbor_inspection

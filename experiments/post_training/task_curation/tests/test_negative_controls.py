@@ -13,11 +13,11 @@ from finestore.rl.curation import ContentEvidenceReference
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
+    NegativeControlApplicability,
+    OracleExclusionReason,
+    OracleFilterReceipt,
     OracleNegativeControlReceipt,
     OracleTaskReceipt,
-    OracleFilterReceipt,
-    OracleExclusionReason,
-    NegativeControlApplicability,
 )
 
 from experiments.post_training.task_curation.negative_controls import (
@@ -28,6 +28,12 @@ from experiments.post_training.task_curation.negative_controls import (
 FIXTURES = Path(__file__).parent / "fixtures/negative_controls"
 
 
+def retained_archive(tmp_path, name):
+    path = tmp_path / f"{name}.tar.zst"
+    path.write_bytes(gzip.decompress((FIXTURES / f"{name}.tar.zst.gz").read_bytes()))
+    return path
+
+
 @pytest.mark.parametrize(
     ("name", "conclusive", "passed", "annotation"),
     [
@@ -36,9 +42,11 @@ FIXTURES = Path(__file__).parent / "fixtures/negative_controls"
         ("patsy", True, True, None),
     ],
 )
-def test_actual_nop_archives_retain_native_identity_scores_and_source_errors(name, conclusive, passed, annotation):
+def test_actual_nop_archives_retain_native_identity_scores_and_source_errors(
+    tmp_path, name, conclusive, passed, annotation
+):
     index = json.loads((FIXTURES / "index.json").read_text())[name]
-    archive = FIXTURES / f"{name}.tar.zst"
+    archive = retained_archive(tmp_path, name)
     before = archive.read_bytes()
     assert hashlib.sha256(before).hexdigest() == index["archive_sha256"]
     task = TaskSpec.model_validate_json(gzip.decompress((FIXTURES / f"{name}.task-spec.json.gz").read_bytes()))
@@ -73,7 +81,7 @@ def test_actual_original_pass_and_physical_nop_round_trip_through_wire4_admissio
     runtime = json.loads((FIXTURES / f"{name}.runtime.json").read_text())
     assert task.execution_requirements is not None
     control = negative_control_from_archive(
-        ContentEvidenceReference(uri=str(FIXTURES / f"{name}.tar.zst"), sha256=index["archive_sha256"]),
+        ContentEvidenceReference(uri=str(retained_archive(tmp_path, name)), sha256=index["archive_sha256"]),
         index["control_member"],
         source_task_sha256=anchors["source_task_sha256"],
         source_task_checksum=anchors["source_task_checksum"],
@@ -105,7 +113,7 @@ def test_actual_original_pass_and_physical_nop_round_trip_through_wire4_admissio
     )
     foreign = reloaded.model_dump(mode="json")
     foreign["tasks"][task.id]["negative_control"]["consumed_task_checksum"] = "foreign"
-    with pytest.raises(ValueError, match="consumed native package|consumed task contract"):
+    with pytest.raises(ValueError, match=r"consumed native package|consumed task contract"):
         OracleFilterReceipt.model_validate(foreign)
     foreign = reloaded.model_dump(mode="json")
     foreign["tasks"][task.id]["negative_control_applicability"] = "answer_graded_not_applicable"
@@ -125,10 +133,10 @@ def test_actual_original_pass_and_physical_nop_round_trip_through_wire4_admissio
         ("killed", None),
     ],
 )
-def test_actual_deadlines_source_errors_and_native_signals_preserve_physical_outcomes(name, annotation):
+def test_actual_deadlines_source_errors_and_native_signals_preserve_physical_outcomes(tmp_path, name, annotation):
     index = json.loads((FIXTURES / "exceptions-index.json").read_text())[name]
     receipt = negative_control_from_archive(
-        ContentEvidenceReference(uri=str(FIXTURES / f"{name}.tar.zst"), sha256=index["archive_sha256"]),
+        ContentEvidenceReference(uri=str(retained_archive(tmp_path, name)), sha256=index["archive_sha256"]),
         index["control_member"],
         source_task_sha256="a" * 64,
         source_task_checksum="b" * 64,
@@ -147,14 +155,14 @@ def test_actual_deadlines_source_errors_and_native_signals_preserve_physical_out
 
 
 @pytest.mark.parametrize("index", range(4))
-def test_actual_signal_redrive_preserves_both_archives_and_permits_only_one_repeat(index):
+def test_actual_signal_redrive_preserves_both_archives_and_permits_only_one_repeat(tmp_path, index):
     item = json.loads((FIXTURES / "redrives-index.json").read_text())[index]
     requirements = ExecutionRequirements(
         cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=900, verifier_timeout_sec=600
     )
     parent = negative_control_from_archive(
         ContentEvidenceReference(
-            uri=str(FIXTURES / f"redrive-{index}-parent.tar.zst"), sha256=item["parent_archive"]["sha256"]
+            uri=str(retained_archive(tmp_path, f"redrive-{index}-parent")), sha256=item["parent_archive"]["sha256"]
         ),
         item["control_member"],
         source_task_sha256="a" * 64,
@@ -164,7 +172,7 @@ def test_actual_signal_redrive_preserves_both_archives_and_permits_only_one_repe
     assert parent.annotation is None and parent.signal_exit_code == item["signal"]
     repeat = negative_control_from_archive(
         ContentEvidenceReference(
-            uri=str(FIXTURES / f"redrive-{index}-repeat.tar.zst"), sha256=item["repeat_archive"]["sha256"]
+            uri=str(retained_archive(tmp_path, f"redrive-{index}-repeat")), sha256=item["repeat_archive"]["sha256"]
         ),
         item["control_member"],
         source_task_sha256="a" * 64,
@@ -184,10 +192,10 @@ def test_actual_signal_redrive_preserves_both_archives_and_permits_only_one_repe
         OracleNegativeControlReceipt.model_validate(document)
 
 
-def test_actual_zero_test_setup_failure_remains_pending_despite_zero_shell_exit():
+def test_actual_zero_test_setup_failure_remains_pending_despite_zero_shell_exit(tmp_path):
     index = json.loads((FIXTURES / "setup-failed-index.json").read_text())
     receipt = negative_control_from_archive(
-        ContentEvidenceReference(uri=str(FIXTURES / "setup-failed.tar.zst"), sha256=index["archive_sha256"]),
+        ContentEvidenceReference(uri=str(retained_archive(tmp_path, "setup-failed")), sha256=index["archive_sha256"]),
         index["control_member"],
         source_task_sha256="a" * 64,
         source_task_checksum="b" * 64,
