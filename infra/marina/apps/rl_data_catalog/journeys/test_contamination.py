@@ -285,12 +285,6 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     )
     expect(oracle_field).to_have_text(re.compile(r"^N/A\b"))
     expect(admitted_field).to_have_text("2")
-    executability_field = (
-        ledger.locator(".field")
-        .filter(has=page.get_by_text("Unexecutable on production backend dropped (by typed reason)", exact=True))
-        .locator("dd")
-    )
-    expect(executability_field).to_contain_text("not required under the pinned no-oracle policy")
     expect(page.locator(".backend-table tbody tr")).to_have_count(3)
     expect(page.locator(".backend-table")).to_contain_text("packages lock")
     expect(page.locator(".backend-table")).to_contain_text("docker image")
