@@ -585,6 +585,19 @@ def source_environment_incompatibility(
     )
 
 
+def oracle_failure_reason(
+    trial: OracleTrialReceipt, incompatibility: SourceEnvironmentIncompatibility | None
+) -> OracleExclusionReason:
+    """Preserve the measured final source outcome after any approved infrastructure phase."""
+    if incompatibility is not None:
+        return OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
+    if trial.failure_signal not in {FailureSignal.INFRASTRUCTURE, FailureSignal.NON_RESOURCE}:
+        return OracleExclusionReason(f"resource_calibration:{trial.failure_signal.value}")
+    if not trial.scored:
+        return OracleExclusionReason.INFRASTRUCTURE
+    return OracleExclusionReason.ORACLE_FAILED
+
+
 class OracleTaskReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     outcome: Literal["trial"] = "trial"
@@ -707,8 +720,12 @@ class OracleTaskReceipt(BaseModel):
                 raise ValueError("Infrastructure retry repeats a prior attempt")
             seen_paths.update(paths)
             seen_results.update(results)
-        if not self.calibration.passed and self.exclusion_reason is not OracleExclusionReason.INFRASTRUCTURE:
-            raise ValueError("An unresolved infrastructure retry must remain unscored")
+        if not self.calibration.passed:
+            expected_reason = oracle_failure_reason(
+                self.calibration.attempts[-1], self.source_environment_incompatibility
+            )
+            if self.exclusion_reason is not expected_reason:
+                raise ValueError("Retry exclusion differs from its measured final source outcome")
         return self
 
     @property

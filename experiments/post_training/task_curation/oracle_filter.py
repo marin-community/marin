@@ -52,6 +52,7 @@ from taskcompendium.pipeline.oracle_filter import (
     SourcePytestEnvironment,
     VerifierResourceProfile,
     next_trial_requirements,
+    oracle_failure_reason,
     pre_oracle_host_unavailable,
     require_infrastructure_retry_parent,
     source_environment_incompatibility,
@@ -532,24 +533,14 @@ def filter_cohort(
                     .get("command", "")
                 )
                 incompatibility = source_environment_incompatibility(calibration.attempts[-1], source_setup)
-                if history and not calibration.passed:
-                    incompatibility = None
                 final = calibration.attempts[-1]
                 control = controls.get(task.id)
                 if calibration.passed or (
                     not oracle and control is not None and control.passed and control.trial == final
                 ):
                     reason = None
-                elif history:
-                    reason = OracleExclusionReason.INFRASTRUCTURE
-                elif incompatibility is not None:
-                    reason = OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
-                elif final.failure_signal not in {FailureSignal.INFRASTRUCTURE, FailureSignal.NON_RESOURCE}:
-                    reason = OracleExclusionReason(f"resource_calibration:{final.failure_signal.value}")
-                elif not final.scored:
-                    reason = OracleExclusionReason.INFRASTRUCTURE
                 else:
-                    reason = OracleExclusionReason.ORACLE_FAILED
+                    reason = oracle_failure_reason(final, incompatibility)
                 if reason is None and not trial_network_qualified(task, row_runtime(row), final):
                     reason = OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED
                 if (
