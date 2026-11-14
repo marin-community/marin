@@ -59,9 +59,12 @@ class RuntimePolicy(StrEnum):
     LOSS_CURVE = "loss_curve"
 
 
-# Only observed source-runtime stalls receive the approved loss-phase workaround.
-LOSS_CURVE_RECOVERY_ARMS = frozenset((size, mask) for size in (512, 768, 1024) for mask in (Mask.FULL, Mask.ASSISTANT))
-CALIBRATION_RECOVERY_ARMS = LOSS_CURVE_RECOVERY_ARMS - {(1024, Mask.ASSISTANT)}
+# d1024 keeps the joint setting until its requested uniform-runtime pilot passes.
+LOSS_CURVE_RUNTIME = {
+    512: RuntimePolicy.SYNCHRONOUS_COLLECTIVES,
+    768: RuntimePolicy.SYNCHRONOUS_COLLECTIVES,
+    1024: RuntimePolicy.SYNCHRONOUS,
+}
 WANDB_NAME_LIMIT = 128
 
 
@@ -137,7 +140,18 @@ def budget_steps(size: int, budget: float) -> int:
 
 def calibration_cells() -> tuple[Cell, ...]:
     return tuple(
-        Cell(d, mask, 0, 20, (20,), "calibration-recovery" if (d, mask) in CALIBRATION_RECOVERY_ARMS else "calibration")
+        Cell(
+            d,
+            mask,
+            0,
+            20,
+            (20,),
+            (
+                "calibration-serial-collectives"
+                if d in (512, 768)
+                else ("calibration-recovery" if mask == Mask.FULL else "calibration")
+            ),
+        )
         for d in SIZES
         for mask in Mask
     )
@@ -203,9 +217,7 @@ def tracking_name(cell_name: str) -> str:
 
 def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE) -> SFTSpec:
     if runtime == RuntimePolicy.LOSS_CURVE:
-        runtime = (
-            RuntimePolicy.SYNCHRONOUS if (cell.size, cell.mask) in LOSS_CURVE_RECOVERY_ARMS else RuntimePolicy.SOURCE
-        )
+        runtime = LOSS_CURVE_RUNTIME[cell.size]
     synchronous = runtime in (RuntimePolicy.SYNCHRONOUS, RuntimePolicy.SYNCHRONOUS_COLLECTIVES)
     e1 = recipe()
     receipt = model_receipt(cell.size)
