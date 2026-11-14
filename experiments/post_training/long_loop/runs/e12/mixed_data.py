@@ -89,10 +89,15 @@ class E12DataConfig(LmDataConfig):
             if hashlib.sha256(payload).hexdigest() != self.retention_manifest_sha256:
                 raise ValueError("Frozen retention manifest changed")
             records = json.loads(payload)
-            groups = {}
-            for row in records:
-                groups.setdefault(tuple(row["tags"]), []).append(row)
-            result = [(FrozenRetentionDataset(self.retention_root, rows), list(tags)) for tags, rows in groups.items()]
+            # Singleton subsets keep global row order/batching while yielding paired row CE.
+            # Original tags still aggregate each source; recompute macro over those tags only.
+            result = [
+                (
+                    FrozenRetentionDataset(self.retention_root, [row]),
+                    [*row["tags"], f"retention-row/{ordinal:03d}"],
+                )
+                for ordinal, row in enumerate(records)
+            ]
         else:
             result = list(super().tagged_eval_sets(Pos))
         for label, path in (("validation", self.repair_validation_cache), ("test", self.repair_test_cache)):

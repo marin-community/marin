@@ -51,7 +51,7 @@ def test_frozen_fields_and_checksum(tmp_path):
         retention_manifest_sha256=hashlib.sha256(payload).hexdigest(),
     )
     sets = config.tagged_eval_sets(Axis("position", 8))
-    assert len(sets) == 1 and sets[0][1] == ["unit"]
+    assert len(sets) == 1 and sets[0][1] == ["unit", "retention-row/000"]
     (tmp_path / "row.npz").write_bytes(raw + b"changed")
     with pytest.raises(ValueError, match="checksum"):
         asyncio.run(dataset.get_batch([0]))
