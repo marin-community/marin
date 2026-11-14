@@ -1,5 +1,5 @@
 name: long-loop/round1
-marin_revision: 6e24f53e5fe6d2e863c463a649a43c861f7097b6
+marin_revision: bb854930beacc66455622173ffd5f1b9dee3a03c
 datasets:
   sft:
     path: sft-data.yaml
