@@ -197,6 +197,35 @@ def previous_tracks(entry: dict) -> tuple[Track, ...] | None:
     return (Track(track),) if track in tracks else None
 
 
+class TrackSource(StrEnum):
+    """Where an idea's Tracks came from, in order of precedence."""
+
+    NAMED = "named"
+    """A ``Track:`` line in the comment, or a ``Track:`` mention in the approver's instructions."""
+    INFERRED = "inferred"
+    """The session's reading of the approved text, which asks for a Track in words (``new-idea --track``)."""
+    RERUN = "rerun"
+    """A rerun of a registered idea that names none: its last attempt's Tracks (``previous_tracks``)."""
+    DEFAULT = "default"
+    """Nothing names one: ``speedrun``."""
+
+
+def resolve_tracks(
+    named: tuple[Track, ...], named_explicitly: bool, inferred: str | None, previous: tuple[Track, ...] | None
+) -> tuple[tuple[Track, ...], TrackSource]:
+    """An idea's Tracks and their source: a named Track wins, then the session's inference, then a rerun's last
+    attempt, then the default. Refuses an inference that contradicts a named Track."""
+    if named_explicitly:
+        if inferred is not None:
+            raise SystemExit(f"refusing: the approved text names its Track ({', '.join(named)}); drop --track")
+        return named, TrackSource.NAMED
+    if inferred is not None:
+        return (tuple(LADDER_RUNGS) if inferred.lower() == LADDER else (parse_track(inferred),)), TrackSource.INFERRED
+    if previous is not None:
+        return previous, TrackSource.RERUN
+    return named, TrackSource.DEFAULT
+
+
 def experiment_id(registry_id: str, track: Track, ladder: bool) -> str:
     """The id of an idea's spec and runs on ``track``: the registry id, plus the rung tag on a ladder."""
     return f"{registry_id}{LADDER_RUNGS[track]}" if ladder else registry_id
