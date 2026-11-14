@@ -25,11 +25,14 @@ from daytona import (
     AsyncSandbox,
     CreateSandboxFromSnapshotParams,
     DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
 )
+from daytona_api_client_async import SandboxState
 
 from shellbox.backends.daytona.process import DaytonaProcessSession
 from shellbox.backends.daytona.provider import (
+    PENDING_SANDBOX_IP_MESSAGE,
     PROVIDER_REQUEST_TIMEOUT,
     ProviderWaitPolicy,
     cancel_provider_waits,
@@ -50,6 +53,7 @@ from shellbox.machine import (
     ExecutionRequirements,
     ExitReason,
     MachineSpec,
+    MachineTerminated,
     NetworkPolicy,
     ProcessScope,
     Result,
@@ -59,6 +63,20 @@ from shellbox.machine import (
 from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+TERMINAL_SANDBOX_STATES = frozenset(
+    {
+        SandboxState.STOPPED,
+        SandboxState.STOPPING,
+        SandboxState.DESTROYED,
+        SandboxState.DESTROYING,
+        SandboxState.ERROR,
+        SandboxState.BUILD_FAILED,
+        SandboxState.ARCHIVED,
+        SandboxState.ARCHIVING,
+        SandboxState.PAUSED,
+        SandboxState.PAUSING,
+    }
+)
 logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
@@ -186,9 +204,21 @@ class DaytonaMachine:
 
     async def _control_exec(self, command: str, *, cwd: str = CONTROL_CWD, timeout: float | None = None):
         timeout = self.provider_wait_policy.control_timeout(timeout)
-        return await self._provider_request(
-            "sandbox.control", partial(self.sandbox.process.exec, command, cwd=cwd, timeout=timeout)
-        )
+
+        async def execute():
+            try:
+                return await self.sandbox.process.exec(command, cwd=cwd, timeout=timeout)
+            except DaytonaError as error:
+                if error.status_code != 400 or PENDING_SANDBOX_IP_MESSAGE not in str(error).lower():
+                    raise
+                await self.sandbox.refresh_data(request_timeout=PROVIDER_REQUEST_TIMEOUT)
+                if self.sandbox.state in TERMINAL_SANDBOX_STATES:
+                    raise MachineTerminated(
+                        f"Daytona sandbox {self.sandbox.id} cannot execute controls in state {self.sandbox.state.value}"
+                    ) from error
+                raise
+
+        return await self._provider_request("sandbox.control", execute)
 
     async def _user_argv(self, argv: tuple[str, ...], user: str | None) -> tuple[str, ...]:
         if user in (None, "root", "0"):
@@ -670,6 +700,7 @@ class DaytonaMachineFactory:
                         os_user="root",
                         env_vars=spec.env,
                         **network,
+                        auto_stop_interval=0,
                         ttl_minutes=self.ttl_minutes,
                     ),
                     timeout=timeout,

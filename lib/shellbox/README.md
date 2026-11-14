@@ -55,6 +55,10 @@ raises an error.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.
+Daytona disables the provider's inactivity auto-stop while retaining the wall-clock
+TTL and caller-owned teardown. If a container-IP control failure reveals a stopped,
+paused, archived, failed or destroyed sandbox, the command raises `MachineTerminated`.
+Pending startup continues to use provider recovery.
 
 ```python
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
