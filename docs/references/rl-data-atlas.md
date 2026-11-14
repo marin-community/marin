@@ -294,6 +294,10 @@ oracle solutions; it does not establish calibration, execution or admission.
 Missing and stale rows leave oracle filtering pending. No full-population
 oracle-filter receipt is currently attached to the catalog, so admitted counts
 remain pending even where the no-oracle census is complete.
+The filtration ledger separately records tasks dropped because their whole
+contract cannot execute on a production backend, grouped by typed reason. Until
+pin-bound per-task executability receipts are attached, this step and admitted
+counts remain Pending. Backend requirement fit alone does not establish execution.
 
 After the package release, load the complete catalog with the
 [catalog loader](#updating-atlas), using the explicit preview app ID above.

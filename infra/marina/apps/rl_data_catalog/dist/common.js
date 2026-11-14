@@ -173,7 +173,8 @@ function filtrationRows(source) {
     ['Within-source duplicates removed', receipt?.duplicate_dropped_tasks ?? dedup?.within_source_duplicates],
     ['Lexically contaminated tasks removed', pendingRemediation ? `Pending: remediation for ${lexical.contaminated_tasks} measured overlapping input tasks is not verified at the current pin` : receipt?.dropped_tasks ?? (zeroDrops ? 0 : 'Not measured')],
     ['Retained converted population', dedup?.unique_count],
-    ['Admitted after all filtration', 'Pending: post-oracle admission is not measured'],
+    ['Unexecutable on production backend dropped (by typed reason)', 'Pending: no pin-bound per-task production-executability receipt is recorded'],
+    ['Admitted after all filtration', 'Pending: full-population filtration and production executability are not established'],
   ];
 }
 
