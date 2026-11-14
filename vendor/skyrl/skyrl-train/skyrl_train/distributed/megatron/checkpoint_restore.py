@@ -21,10 +21,10 @@ def load_optimizer_checkpoint(optimizer: MegatronOptimizer, state_dict: dict) ->
     if not optimizer.is_stub_optimizer:
         config = optimizer.config
         if (
-            config is not None
-            and config.optimizer_cpu_offload
+            config.optimizer_cpu_offload
+            and config.optimizer_offload_fraction > 0
             and config.use_distributed_optimizer
-            and config.optimizer.lower() in ("adam", "adamw")
+            and config.optimizer == "adam"
         ):
             _restore_omitted_adam_steps(state_dict)
     optimizer.load_state_dict(state_dict)
@@ -51,8 +51,8 @@ def _restore_omitted_adam_steps(state: dict) -> None:
             raise ValueError("CPU-offloaded Adam bucket restore requires one saved step shared by all parameter groups")
         step = steps.pop()
         for parameter_state in missing:
-            # MCore 0.18 omits this scalar from reshardable buckets, but its
-            # Torch Adam loader copies it with the moments. Group metadata is saved.
+            # MCore does not save bucket steps. Supply the key its HDO loader needs;
+            # restore_offloaded_optimizer_state then reapplies the saved counter.
             parameter_state["step"] = torch.tensor(step, dtype=torch.float32)
 
 

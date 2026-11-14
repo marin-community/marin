@@ -101,12 +101,14 @@ as the numerical reference.
 
 ## Restore CPU-offloaded Adam checkpoints
 
-Megatron 0.18 `dp_reshardable` checkpoints save scalar Adam/AdamW step counters
-in optimizer-group metadata. When a loaded bucket has no counter, SkyRL recovers
-it from that saved metadata before loading the optimizer. Existing bucket
-counters are kept. Bucket entries have no saved parameter-group identifier, so
-recovery requires a step shared by all saved groups. Missing or conflicting
-metadata fails when recovery is needed; the trainer's iteration is never used.
+CPU-offloaded Megatron 0.18 `dp_reshardable` checkpoints save the Adam/AdamW step
+in optimizer-group metadata. Bucket counters are not saved; counters present
+after reading a checkpoint come from the receiving worker's local state.
+SkyRL fills missing counter keys before Megatron copies the bucket state.
+The existing post-load repair then sets counter values from the saved metadata.
+Bucket entries have no saved group identifier, so recovery requires one step
+shared by all saved groups. Missing or conflicting metadata fails when recovery
+is needed; the trainer's iteration is never used.
 
 ## CI checks
 
