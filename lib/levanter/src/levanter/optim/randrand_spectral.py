@@ -203,6 +203,9 @@ def randrand(param_labels, config, spectral=SpectralSettings(), *, total_steps=r
             g = raw_g
             if ms is not None:
                 g = jax.lax.cond(ms.enabled, lambda x: spectral_filter(x, ms, spectral.regularization), lambda x: x, g)
+            # Keep the reference Adam arithmetic inline to leave the previously
+            # evaluated paired core untouched. Independent notebook replay tests
+            # guard both variants against changes to moment/epsilon semantics.
             beta1, beta2 = getattr(config, f"{label}_betas")
             mu = beta1 * mu + (1 - beta1) * g
             nu = beta2 * nu + (1 - beta2) * jnp.square(g)

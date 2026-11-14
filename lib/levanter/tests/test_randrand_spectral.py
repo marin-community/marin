@@ -16,10 +16,11 @@ from levanter.optim import randrand_spectral as spectral
 from levanter.optim.randrand_muon_hybrid import MuonBlendConfig, randrand_muon_hybrid
 
 
-def _reference_banks(data, config):
+def _reference_probe_keys(config):
     # Replay the *observed* notebook probes at each independently sampled bank.
-    # Framework PRNG streams differ. Match probes, but leave QR/SVD/filter/Adam
-    # arithmetic under test; the fixture was exported from unchanged notebook cells.
+    # Framework PRNG streams differ. Recorded probes isolate SVD/filter/Adam
+    # arithmetic; the separate raw-second-moment test checks generated probes
+    # and sketch accumulation. The fixture uses unchanged notebook optimizer cells.
     keys = []
     key = jax.random.PRNGKey(config.basis_seed)
     for _ in range(3):
@@ -47,7 +48,7 @@ def test_spectral_notebook_trajectory_bank_handovers_and_blend(monkeypatch):
         basis_every=200,
         basis_ema_beta=0.98,
     )
-    keys = _reference_banks(data, config)
+    keys = _reference_probe_keys(config)
 
     def shared_bank(key, rows, columns, width):
         matches = [
