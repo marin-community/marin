@@ -157,6 +157,7 @@ LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4")}
 # replaces the same baseline flag (and its value) rather than being appended twice.
 CANDIDATE_ARGS = {
     "mns48": ("--max-num-seqs", "48"),
+    "mns128gmu95": ("--max-num-seqs", "128", "--gpu-memory-utilization", "0.95"),
     "mns64": ("--max-num-seqs", "64"),
     "mns64p": (
         "--max-num-seqs",
