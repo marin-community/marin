@@ -12,6 +12,8 @@ from experiments.post_training.task_curation.datasets import (
     unconverted,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
+from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.skyrl import code as skyrl_code
@@ -63,6 +65,8 @@ def all_sources() -> dict[str, RlDataSource]:
         *tasktrove_instructions.sources(),
         *tasktrove_multichallenge.sources(),
         *tasktrove_puzzles.sources(),
+        *lean_proofs.sources(),
+        *lean_numina.sources(),
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
