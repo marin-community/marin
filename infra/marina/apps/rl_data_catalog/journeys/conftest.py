@@ -243,14 +243,14 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
             connection.execute(
                 text(
                     "INSERT INTO curriculum_sources VALUES "
-                    "('counts','Marin:curriculum','{\"display_name\":\"Count fixture\"}'::jsonb,'fixture',"
+                    "('counts','Marin:clean','{\"display_name\":\"Count fixture\"}'::jsonb,'fixture',"
                     "CAST(:alignment AS JSONB))"
                 ),
                 {
                     "alignment": json.dumps(
                         {
                             "basis": "matched",
-                            "source_id": "Marin:curriculum",
+                            "source_id": "Marin:clean",
                             "intended_use": "train",
                             "task_count": 7112,
                             "input_rows": None,
@@ -262,13 +262,13 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 connection.execute(
                     text(
                         "INSERT INTO curriculum_statistics VALUES "
-                        "('counts','Marin:curriculum','placement',:subject,:node,:count)"
+                        "('counts','Marin:clean','placement',:subject,:node,:count)"
                     ),
                     {"subject": subject, "node": node, "count": count},
                 )
             for task_id, capability, similarity in [("earth-only", "climate", 0.6), ("climate-example", "climate", 0.9)]:
                 detail = {
-                    "source_id": "Marin:curriculum",
+                    "source_id": "Marin:clean",
                     "task_id": task_id,
                     "source_key": "fixture",
                     "task_hash": task_id,
@@ -296,14 +296,14 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 connection.execute(
                     text(
                         "INSERT INTO curriculum_tasks VALUES "
-                        "('counts','Marin:curriculum',:task,:task,'ready','Earth observation',CAST(:detail AS JSONB))"
+                        "('counts','Marin:clean',:task,:task,'ready','Earth observation',CAST(:detail AS JSONB))"
                     ),
                     {"task": task_id, "detail": json.dumps(detail)},
                 )
                 connection.execute(
                     text(
                         "INSERT INTO curriculum_matches VALUES "
-                        "('counts','Marin:curriculum',:task,'D05',:capability,'subject_domain',0.9,:similarity)"
+                        "('counts','Marin:clean',:task,'D05',:capability,'subject_domain',0.9,:similarity)"
                     ),
                     {"task": task_id, "capability": capability, "similarity": similarity},
                 )
@@ -314,9 +314,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 )
             for metric, count in [("denominator", 7112), ("assigned", 30), ("subject_only", 7082)]:
                 connection.execute(
-                    text(
-                        "INSERT INTO curriculum_statistics VALUES " "('counts','Marin:curriculum',:metric,'','',:count)"
-                    ),
+                    text("INSERT INTO curriculum_statistics VALUES " "('counts','Marin:clean',:metric,'','',:count)"),
                     {"metric": metric, "count": count},
                 )
         yield

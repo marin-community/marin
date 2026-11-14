@@ -14,6 +14,46 @@ from infra.marina.apps.rl_data_catalog.release_browser import TABLE_BOUNDS, chec
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("width", [1440, 390])
+def test_partial_overlap_notes_preserve_both_directions_and_open_evidence(
+    journey: Journey, theme: str, width: int
+) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    payload = page.evaluate("async()=> (await fetch('api/sources')).json()")
+    rows = [row for row in payload["sources"] if row["id"] in {"Marin:clean", "Marin:eval"}]
+    for row in rows:
+        row.update(duplicate_group=None, quality="SAMPLE", result="GOOD", partial_overlaps=[])
+        if row["id"] == "Marin:clean":
+            row["partial_overlaps"] = [
+                {
+                    "other_id": "Marin:eval",
+                    "other_display_name": "eval",
+                    "contained_fraction": 0.23,
+                    "reverse_fraction": 0.04,
+                }
+            ]
+    page.route("**/api/sources", lambda route: route.fulfill(json={**payload, "sources": rows}))
+    page.reload()
+    expect(page.locator("#rows tr")).to_have_count(2)
+    row = page.locator('tr[data-source-id="Marin:clean"]')
+    expect(row.locator(".duplicate-note")).to_contain_text("23% of clean's tasks are in eval")
+    expect(row.locator(".duplicate-note")).to_contain_text("4% of eval's tasks are in clean")
+    expect(page.locator(".duplicate-toggle")).to_have_count(0)
+    row.locator(".source-name").click()
+    expect(page.locator("#detail-fields")).to_contain_text("23% of clean's tasks are in eval")
+    expect(page.locator("#detail-fields")).to_contain_text("4% of eval's tasks are in clean")
+    page.locator("#close-details").click()
+    assert page.locator(".source-table").evaluate(TABLE_BOUNDS) == []
+    row.locator(".duplicate-note a").first.click()
+    expect(page).to_have_url(re.compile(r"/source\.html#source_id=Marin%3Aeval$"))
+    expect(page.locator("#title")).to_have_text("eval")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390])
 def test_column_drag_keyboard_persistence_and_reset_preserve_table_geometry(
     journey: Journey, theme: str, width: int
 ) -> None:
@@ -570,6 +610,12 @@ def test_curriculum_parents_equal_displayed_children_and_remainder(journey: Jour
     earth.get_by_role("button", name="Other/unlisted (subject only)", exact=True).click()
     expect(page.locator("#area-summary")).to_contain_text("7,078 task instances")
     expect(page.locator("#area-sources")).to_contain_text("7,078")
+    with page.expect_navigation():
+        page.get_by_role("link", name="Source evidence ↗", exact=True).click()
+    expect(page.locator("#title")).to_have_text("clean")
+    page.go_back()
+    expect(page.locator(".domain-card")).to_have_count(2)
+    earth.get_by_role("button", name="Other/unlisted (subject only)", exact=True).click()
     expect(page.locator("#task-list .task-row")).to_have_count(1)
     expect(page.locator("#task-list")).to_contain_text("earth-only")
     page.locator("#task-list .task-row").click()
@@ -649,7 +695,7 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
     expect(page.locator("#metric-quality")).to_have_text("20 / 60 / 30")
     expect(page.locator("#metric-quality-shown")).to_have_text("Shown 0 / 60 / 0")
     expect(page.locator("#task-reconciliation")).to_have_text(
-        "20 tasks hidden (QUICK/BAD); 10 admitted · 30 tasks folded (likely duplicates); 20 admitted"
+        "20 tasks hidden (QUICK/BAD); 10 admitted · 30 tasks folded (duplicates/subsets); 20 admitted"
     )
     expect(page.locator("#metric-examples-shown")).to_have_text(
         "Shown 30 tasks admitted (TRAIN 30 · EVAL 0) · 20 tasks pending oracle filtration · 10 tasks excluded"

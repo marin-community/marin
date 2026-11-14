@@ -258,7 +258,7 @@ async function showTasks(area, outcome = 'all', sourceId = '') {
         const select = button(source.name || source.source_id, 'text-button', () => {
           showTasks(area, outcome, source.source_id);
         });
-        const evidence = node('a', 'Source evidence ↗'); evidence.href = `evidence.html#source_id=${encodeURIComponent(source.source_id)}`;
+        const evidence = node('a', 'Source evidence ↗'); evidence.href = `source.html#source_id=${encodeURIComponent(source.source_id)}`;
         row.append(select, node('b', number.format(source.count)), evidence); $('area-sources').append(row);
       }
     } catch (error) { if (request === state.taskRequest) $('area-summary').textContent = `Source breakdown could not be loaded. ${error.message}`; }

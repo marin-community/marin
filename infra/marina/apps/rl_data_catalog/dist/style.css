@@ -209,7 +209,7 @@ a.secondary:hover { text-decoration: none; }
 .duplicate-toggle { display: inline-block; margin-right: 6px; padding: 2px 4px; font-size: 16px; }
 .duplicate-member td { background: #fafcfa; }
 .duplicate-member td:first-child { padding-left: 34px; border-left: 3px solid #d8e6dc; }
-.duplicate-note { color: #6b7f72; }
+.duplicate-note { color: #6b7f72; max-width: 420px; white-space: normal; overflow-wrap: anywhere; }
 
 @media (prefers-color-scheme: dark) {
   :root { color-scheme: dark; color: #d9e5dd; background: #151d19; --muted: #a1b3a7; --line: #34493b; --green: #7dd5a8; }

@@ -114,7 +114,7 @@ for its sample; the Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
 
-The default view hides QUICK and BAD entries and folds advisory duplicate groups.
+The default view hides QUICK and BAD entries and folds measured duplicate/subset groups.
 Expand a group to inspect matching members, or enable **Show QUICK-quality and
 BAD-result sources**. Search and filters apply before grouping; a hidden canonical
 member cannot reappear through a group. Search names, datasets or tags, select a
@@ -721,6 +721,13 @@ the catalog and backend map. Pass the scan's reviewed output to the loader's
 `--source-identities` option. `/sources` returns a compact fingerprint summary
 and group membership; `/source-fingerprint?source_id=...` returns its bounded
 sample, and `/source-duplicates` returns review provenance, opinions and groups.
+
+The display folds B under A only when measured B→A containment is at least 95%.
+The larger retained source is canonical; equal sizes prefer FULL over SAMPLE over
+QUICK, then source ID. Every folded member has a direct qualifying measurement
+against its canonical source. Partial overlaps remain visible as directional
+notes with evidence links, and never chain into a folded group. These display
+groups do not authorize cross-source task deletion.
 
 ## Curriculum coverage
 

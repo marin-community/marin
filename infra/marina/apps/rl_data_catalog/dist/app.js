@@ -131,7 +131,22 @@ function render() {
   const hidden = state.sources.length - state.sources.filter(row => $('show-all').checked || shownByDefault(row)).length;
   const folded = rows.length - displayed.length;
   $('visible-count').textContent = `${number.format(displayed.length)} displayed sources` +
-    (folded ? ` · ${number.format(folded)} likely duplicates folded` : '') + (hidden ? ` · ${number.format(hidden)} QUICK or BAD hidden` : '');
+    (folded ? ` · ${number.format(folded)} duplicate/subset members folded` : '') + (hidden ? ` · ${number.format(hidden)} QUICK or BAD hidden` : '');
+}
+const containmentPercent = new Intl.NumberFormat('en-US', {style: 'percent', maximumFractionDigits: 1});
+function containmentNote(row, otherId, otherName, fraction, reverse = null) {
+  const note = node('span', undefined, 'source-subtitle duplicate-note');
+  const link = () => { const anchor = node('a', otherName); anchor.href = evidenceLink({id: otherId}); return anchor; };
+  note.append(fraction == null ? 'Unmeasured containment with ' : `${containmentPercent.format(fraction)} of ${row.display_name}'s tasks are in `, link());
+  if (reverse != null) note.append(` · ${containmentPercent.format(reverse)} of `, link(), `'s tasks are in ${row.display_name}`);
+  return note;
+}
+function partialOverlapNotes(row) {
+  return (row.partial_overlaps || []).map(pair => containmentNote(row, pair.other_id, pair.other_display_name, pair.contained_fraction, pair.reverse_fraction));
+}
+function partialOverlapDetails(row) {
+  if (!row.partial_overlaps?.length) return null;
+  const content = node('div'); content.append(...partialOverlapNotes(row)); return content;
 }
 function sourceRow(row, others, canonical) {
     const tr = node('tr', undefined, canonical ? 'duplicate-member' : ''); tr.dataset.sourceId = row.id;
@@ -142,16 +157,17 @@ function sourceRow(row, others, canonical) {
     if (datasets) name.append(datasets);
     if (canonical) {
       const reference = state.sources.find(item => item.id === row.duplicate_group.canonical_source_id);
-      name.append(node('span', `${sourceOverlap(row) == null ? "Unmeasured overlap" : `${Math.round(100 * sourceOverlap(row))}% overlap · ${sourceOverlap(row) === 1 ? "duplicate" : "partial overlap"}`} with ${reference.display_name}`, 'source-subtitle duplicate-note'));
+      name.append(containmentNote(row, reference.id, reference.display_name, sourceOverlap(row)));
     } else if (others.length) {
       const groupId = row.duplicate_group.group_id, expanded = expandedGroups.has(groupId);
       const toggle = node('button', expanded ? '▾' : '▸', 'text-button duplicate-toggle');
-      toggle.title = `${others.length} likely duplicate member${others.length === 1 ? '' : 's'}`;
-      toggle.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} likely duplicates for ${row.display_name}`);
+      toggle.title = `${others.length} duplicate/subset member${others.length === 1 ? '' : 's'}`;
+      toggle.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} duplicates/subsets for ${row.display_name}`);
       toggle.setAttribute('aria-expanded', String(expanded));
       toggle.addEventListener('click', () => { expanded ? expandedGroups.delete(groupId) : expandedGroups.add(groupId); update(); });
       name.prepend(toggle);
     }
+    name.append(...partialOverlapNotes(row));
     const examples = node('td', row.filtration.example_count == null ? (row.filtration.state === 'pending_oracle' ? 'Pending oracle filtration' : 'Pending') : number.format(row.filtration.example_count), 'num');
     examples.title = row.filtration.reason;
     const filtration = node('td', undefined, 'filtration-cell'); filtration.append(filtrationChip(row.filtration));
@@ -187,6 +203,7 @@ function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
   $('detail-difficulty-bars').replaceChildren(AtlasDifficulty.comparison(row.difficulty));
   const controls = row.curation?.verification;
+  const canonical = row.duplicate_group && state.sources.find(source => source.id === row.duplicate_group.canonical_source_id);
   const fields = [
     ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
     ['Content review', row.quality_review_status],
@@ -198,7 +215,9 @@ function details(row) {
     ['Last updated', row.updated_at ? day(row.updated_at) : null], ['Input rows', row.task_count], ['Source ID', row.id],
     ['Dataset revision', row.dataset_revision], ['Pipeline', row.pipeline?.name], ['Curation', row.curation?.status],
     ['Control status', controls?.status], ['Control counts', controls?.counts],
-    ['Duplicate group', row.duplicate_group && `${row.duplicate_group.group_id}; canonical ${row.duplicate_group.canonical_source_id}; overlap ${sourceOverlap(row) == null ? "unknown" : `${Math.round(100 * sourceOverlap(row))}%`}`],
+    ['Duplicate group', row.duplicate_group && `${row.duplicate_group.group_id}; canonical ${row.duplicate_group.canonical_source_id}`],
+    ['Measured containment', canonical && canonical.id !== row.id ? containmentNote(row, canonical.id, canonical.display_name, sourceOverlap(row)) : null],
+    ['Partial overlaps (not folded)', partialOverlapDetails(row)],
     ['Grading boundary required', gradingChips(row)], ['Grading census', row.grading_environment],
     ['Backend fit by role', backendDetails(row)],
     ['Lexical measurement method', row.lexical_contamination && `${row.lexical_contamination.ngram_length}-gram overlap`],
@@ -258,7 +277,7 @@ function metrics(displayed, rows) {
   const hidden = state.sources.filter(row => !$('show-all').checked && !shownByDefault(row));
   const filtered = state.sources.filter(row => !hidden.includes(row) && !matchesFilters(row));
   const folded = rows.filter(row => !displayed.includes(row));
-  const reasons = [[hidden, 'hidden (QUICK/BAD)'], [filtered, 'filtered'], [folded, 'folded (likely duplicates)']];
+  const reasons = [[hidden, 'hidden (QUICK/BAD)'], [filtered, 'filtered'], [folded, 'folded (duplicates/subsets)']];
   $('task-reconciliation').textContent = reasons.filter(([items]) => items.length).map(([items, reason]) => {
     const count = taskCounts(items);
     return `${number.format(count.population)} tasks ${reason}; ${number.format(count.admitted)} admitted`;
