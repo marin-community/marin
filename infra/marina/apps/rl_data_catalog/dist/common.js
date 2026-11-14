@@ -182,7 +182,8 @@ function filtrationRows(source) {
   const zeroDrops = (source.contamination_status === 'NO ISSUES' && lexical?.contaminated_tasks === 0) || source.contamination_status === 'MEASURED, EVAL';
   return [
     ['Filtration', admission && filtrationChip(admission)],
-    ['Current admission state', source.status],
+    ['Current admission state', admission?.state === 'excluded' ? 'Excluded' : 'Pending qualified current-pin receipt'],
+    ['Recorded source status', source.status],
     ['Raw converted input measured for retention', measured ? lexical?.measured_tasks : dedup?.raw_count],
     ['Original population before oracle filtration', output?.original_count],
     ['Original oracle-bearing tasks', oracle?.oracle_tasks ?? 'Not measured'],
