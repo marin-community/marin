@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Select training inventories from admitted curation artifacts and EvalLite from converted corpora."""
+"""Select training and evaluation task sets from admitted curation artifacts."""
 
 import hashlib
 import json

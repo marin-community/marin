@@ -62,15 +62,15 @@ from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     curation_embedding_pipeline,
 )
-from experiments.post_training.task_curation.inventory import (
+from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
+from experiments.post_training.task_curation.pipeline import CampaignMachines
+from experiments.post_training.task_curation.selection import (
     SELECTION_INPUT_PREFIX,
     EvalLiteRecipe,
     SelectionRecipe,
     eval_lite_step,
     task_selection_step,
 )
-from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
-from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM

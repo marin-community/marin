@@ -13,10 +13,9 @@ The recipe names the source IDs, assigns them to selection families, sets
 family quotas and pins the complete heldout inputs in retained storage.
 The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
-See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
-selection recipe and the training/evaluation handoff.
-See [task selection](../../../docs/references/task-curation.md#final-task-selection)
-for the recipe and resume commands.
+See [task selection](../../../docs/references/task-curation.md#final-task-selection) for the recipe and
+resume commands, and [train on a Snowball selection](../../../docs/references/task-curation.md#train-on-a-snowball-selection)
+for the handoff to [Snowball RL experiments](../../../docs/recipes/snowball-rl.md).
 
 ## EvalLite
 

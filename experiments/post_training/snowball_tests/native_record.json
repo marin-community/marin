@@ -1,0 +1,56 @@
+{
+  "receipt": {
+    "result": {
+      "state": "succeeded",
+      "iris_job_id": "/test-user/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-coordinator-c6f8a606/checkpoints-snowball-rl-control-learning-medium-648b5687f0-r0-2026.11.11.1-6388601f29d7",
+      "started_at": "2026-11-07T07:11:19.776000+00:00",
+      "finished_at": "2026-11-07T08:51:35.243000+00:00",
+      "provenance": {
+        "tree_hash": "d0f9f6291e",
+        "base_commit": "648b5687f0",
+        "dirty": false
+      }
+    }
+  },
+  "metrics": {
+    "async/performance/buffer_wait_fraction": 0.6871916473290957,
+    "attempt_id": "6388601f29d7",
+    "generate/max_num_tokens": 8192,
+    "generate/min_num_tokens": 35,
+    "generate/outcome/graded": 405.0,
+    "generate/outcome/infra_error": 0.0,
+    "generate/outcome/invalid_task": 0.0,
+    "generate/outcome/rollout_failure": 0.0,
+    "generate/outcome/submission_failure": 107.0,
+    "generate/outcome/unavailable": 0.0,
+    "policy/mismatch/staleness0/finite_fraction": 1.0,
+    "policy/mismatch/staleness0/kl_k3": 0.0009485326690179541,
+    "policy/mismatch/staleness0/log_ratio_abs_max": 4.886509418487549,
+    "policy/mismatch/staleness0/selected_tokens": 1569640.0,
+    "policy/raw_grad_norm": 0.14081741869449615,
+    "step": 25,
+    "timing/grading/mean": 0.9661201651124429,
+    "timing/setup/mean": 0.11210894467967591,
+    "timing/step_wall/unaccounted": 0.00019866880029439926,
+    "trainer/global_step": 25,
+    "loss/avg_raw_advantages_abs": 0.17298416793346405,
+    "policy/policy_loss": 0.036096494673984125,
+    "policy/final_loss": 0.036096494673984125
+  },
+  "answer": {
+    "task_id": "evalchemy-math500-e0e801c17c28fe6a983b1ff184d743c77a8ecd05dca96300d5ba2147b026d4fe",
+    "verification": {
+      "status": "verified",
+      "reason": null,
+      "score": 1.0,
+      "passed": null,
+      "score_min": 0.0,
+      "score_max": 1.0,
+      "diagnostics": {}
+    },
+    "exception_type": null,
+    "response_token_ids": [
+      128002
+    ]
+  }
+}

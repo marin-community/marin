@@ -135,13 +135,13 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin \
 
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
 The implementation is
-[`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
+[`selection.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/selection.py).
 It depends on the recipe's admitted source artifacts and a list of pinned heldout
 inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
-For the current task-to-training recipe, see the [quick RL loop](../recipes/quick-rl-loop.md).
+For the current task-to-training recipe, see the [Snowball RL experiments](../recipes/snowball-rl.md).
 
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:
@@ -280,6 +280,25 @@ any recipe change takes a new version.
 
 Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
 `--run`. Use a separate `--artifact-root` for an independent rebuild.
+
+### Train on a Snowball selection
+
+To change the Snowball training tasks, copy `recipes/snowball-100k.json` under a new
+name or version and run a FULL [campaign](#run-a-campaign) with `--selection` set to
+that recipe. Repeat `--source` for each recipe source, using its invocation name from
+[`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py):
+recipe ID `MarinSkyRL:eurus2_code` is `--source eurus2_code`. To select again from a
+finished campaign, pass its `corpus.json` with `--corpus` as shown in
+[Final task selection](#final-task-selection). Check the source and family counts in
+`summary.json` before training.
+
+Train with `snowball_rl --preset data-short --tasks NAME@VERSION`, then data-medium
+(see [Snowball RL experiments](../recipes/snowball-rl.md#change-one-input)). The launcher
+reads `rl-data/task-selection/NAME/VERSION` under `s3://marin-us-east-02a/marin`, the
+driver's default `--artifact-root`. It refuses selections that contain AI-judged tasks,
+and data presets require the default selection's heldout input. Snowball presets do not
+evaluate the selection's `validation.parquet`; held-out comparisons use the
+[EvalLite](../recipes/snowball-rl.md#tasks-and-evaluation).
 
 ## Dataset-owned invocation
 

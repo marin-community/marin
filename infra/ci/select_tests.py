@@ -89,6 +89,28 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
+MARIN_NATIVE_CONFIG_TESTS = {
+    "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/curriculum_rl/test_launch.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+    ),
+    "tests/rl/test_skyrl.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+        "vendor/skyrl/marinskyrl/checkpoint_paths.py",
+        "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
+    ),
+    "experiments/post_training/snowball_tests/test_snowball_rl.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+    ),
+    "experiments/post_training/snowball_tests/test_snowball_rl_gate.py": (
+        "vendor/skyrl/cloud/iris/",
+        "vendor/skyrl/skyrl-train/skyrl_train/config/",
+    ),
+}
+
 # uv package names and pytest paths for each workspace scope.
 UV_PACKAGE: dict[str, str] = {
     "rigging": "marin-rigging",
@@ -765,18 +787,16 @@ def classify(
     native_changed: set[str] = set()
     experiment_asset_areas: set[str] = set()
 
-    launch_census = "tests/rl/test_rl_launch_documents.py"
-    if (repo_root / launch_census).is_file() and any(
-        path.startswith(("vendor/skyrl/", "lib/skyrlrecipe/")) for path in changed_files
-    ):
-        direct_tests["marin"].append(launch_census)
-
     for filepath in changed_files:
         if filepath in broad_triggers:
             broad = True
             continue
 
         forced.update(scope for scope, inputs in EXTERNAL_TEST_INPUTS.items() if filepath in inputs)
+
+        for owner, prefixes in MARIN_NATIVE_CONFIG_TESTS.items():
+            if filepath.startswith(prefixes) and (repo_root / owner).exists():
+                direct_tests["marin"].append(owner)
 
         # A native crate's rust/ tree is not on any import root, so this branch
         # runs before source-root handling. The change is invisible to the Python

@@ -59,6 +59,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `add-pallas-kernel` | Kernel implementation, reference parity, and requested tuning | Uses profiling evidence; does not own production deployment |
 | `change-grug` | Grug variants and promotion into the base template | Launch-only operation and hero cutovers have separate workflows |
 | `launch-rl` | RL artifact recipe, role geometry, validation, and submission | Iris owns execution mechanics; hero management owns production lifecycle |
+| `run-snowball-rl` | Choosing, running, and reading Snowball RL presets and their gate verdicts | New RL launch files and role geometry belong to `launch-rl`; Iris owns job operations |
 | `write-pipeline` | General artifact graph construction and work/workflow placement | Dataset registration and RL recipes use their domain skills |
 | `upload-hf-model` | Model-weight publication with required model-card and license content | Dataset uploads and Hub downloads are outside its scope |
 

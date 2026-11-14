@@ -9,12 +9,17 @@ import pytest
 from marin.rl.skyrl import SkyRLSpec, skyrl_cpu_command
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 
+from experiments.post_training import snowball_rl_presets as snowball
+from experiments.post_training.skyrl_test_support import current_control_pins
 from tests.rl.launch_document_census import render_launch_census
 
 
 # A cold SkyRL environment sync and the full batch of compositions share this deadline.
 @pytest.mark.timeout(540)
-def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, monkeypatch) -> None:
+def test_rl_launch_documents_load_with_the_vendored_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(snowball, "SELECTION_ROOT", str(tmp_path / "selections"))
+    monkeypatch.setattr(snowball, "artifact_prefix", lambda cluster: str(tmp_path / "artifacts"))
+    current_control_pins(monkeypatch)
     producers = set()
     validate = SkyRLSpec.__post_init__
 
