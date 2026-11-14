@@ -163,15 +163,40 @@ function renderMap() {
   function branch(area, includeAll = false) {
     if (query && !includeAll && !matching(area)) return null;
     const section = node('section', '', `map-branch ${area.kind}`);
+    section.dataset.nodeId = area.node_id;
     section.append(areaRow(area));
     const descendants = children.get(key(area)) || [];
     if ((showSkills || query) && descendants.length) {
       const nested = node('div', '', 'map-children');
       const includeChildren = includeAll || (query && `${area.name} ${area.description}`.toLowerCase().includes(query));
-      for (const child of descendants) { const item = branch(child, includeChildren); if (item) nested.append(item); }
+      appendChildren(area, nested, includeChildren);
       section.append(nested);
     }
     return section;
+  }
+  function appendChildren(area, container, includeAll) {
+    const descendants = children.get(key(area)) || [];
+    let displayedCount = 0, childCount = 0, displayed = 0;
+    for (const child of descendants) {
+      const count = counts.get(key(child)) || 0;
+      childCount += count;
+      const item = branch(child, includeAll);
+      if (item) { container.append(item); displayedCount += count; displayed++; }
+    }
+    // Domain membership uses a broader cutoff than capability placement.
+    // Search can also hide children; keep both differences visible in the sum.
+    const count = counts.get(key(area)) || 0;
+    const subjectOnly = count - childCount;
+    const hidden = childCount - displayedCount;
+    const remainder = count - displayedCount;
+    if (remainder > 0) {
+      const row = node('div', '', 'map-area map-remainder');
+      const reason = hidden ? 'subject only or hidden by search' : 'subject only';
+      row.append(node('span', `Other/unlisted (${reason})`, 'map-area-name'), node('span', number.format(remainder), 'map-area-count'));
+      row.title = `${number.format(subjectOnly)} subject matches without a capability match; ${number.format(hidden)} in subcategories hidden by search. Counts use the same selected coverage population.`;
+      container.append(row);
+    }
+    return displayed;
   }
   const cards = [];
   let topics = 0;
@@ -187,7 +212,7 @@ function renderMap() {
     const descendants = children.get(key(area)) || [];
     const body = node('div', '', 'map-topics');
     const includeAll = !!query && `${area.name} ${area.description}`.toLowerCase().includes(query);
-    for (const child of descendants) { const item = branch(child, includeAll); if (item) { body.append(item); topics++; } }
+    topics += appendChildren(area, body, includeAll);
     card.append(header, node('p', `${descendants.length} ${area.kind === 'subject' ? 'topics' : 'skills'}`, 'domain-subtitle'));
     if (focused) card.append(button('Read sampled examples', 'domain-examples text-button', () => openTasks(area)));
     card.append(body);

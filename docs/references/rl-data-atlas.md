@@ -717,7 +717,10 @@ Alternative subject and capability matches remain available in sampled task deta
 
 Counts shade each area on a logarithmic scale; zeros stay visible to expose gaps.
 Domain counts include tasks that match the subject but fall outside the
-capability cutoff. Topic and skill counts require a capability match. Opening an
+capability cutoff. Topic and skill counts require a capability match. Each parent
+shows an **Other/unlisted** row for subject-only matches and any children hidden
+by search, so its count equals the sum of displayed children and that remainder.
+These are population counts; the ten-example area sample does not limit them. Opening an
 area loads its sampled examples below the map;
 **Read sampled examples** jumps to that list. Empty areas explain when no
 examples are available.

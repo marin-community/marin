@@ -23,6 +23,8 @@
 .map-topics { display: grid; gap: 5px; padding: 0 8px 8px; }
 .map-branch { min-width: 0; }
 .map-area { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 43px; border-radius: 4px; padding: 5px 9px; }
+.map-remainder { background: var(--bg); color: var(--muted); border: 1px dashed var(--line); }
+.map-remainder .map-area-name { font-style: italic; }
 .map-area-name, .map-area-count { border: 0; background: none; color: inherit; padding: 4px 0; line-height: 1.45; }
 .map-area-name { text-align: left; font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
 .map-area-name:hover { text-decoration: underline; }

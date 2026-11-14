@@ -435,3 +435,53 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     expect(page.locator("#title")).to_have_text("sample-complete")
     expect(page.locator("#labels .level")).to_have_text("Quality SAMPLE")
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_curriculum_parents_equal_displayed_children_and_remainder(journey: Journey, theme: str, width: int) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.get_by_role("link", name="By curriculum", exact=True).click()
+    expect(page.locator(".domain-card")).to_have_count(2)
+    earth = page.locator('[data-subject="D05"]')
+    expect(earth.locator(".domain-count")).to_have_text("7,088")
+    expect(earth.locator(".map-remainder .map-area-count")).to_have_text("7,078")
+
+    def assert_partition() -> None:
+        assert (
+            page.locator("#curriculum-map").evaluate(
+                """map => {
+                const count = element => Number(element.textContent.replaceAll(',', ''));
+                const failures = [];
+                const check = (parent, children) => {
+                    const sum = [...children.children].reduce((total, child) => total + count(
+                        child.matches('.map-remainder') ? child.querySelector('.map-area-count') :
+                            child.querySelector(':scope > .map-area > .map-area-count')), 0);
+                    if (count(parent) !== sum) failures.push([parent.textContent, sum]);
+                };
+                for (const card of map.querySelectorAll('.domain-card'))
+                    check(card.querySelector('.domain-count'), card.querySelector('.map-topics'));
+                for (const branch of map.querySelectorAll('.map-branch')) {
+                    const children = branch.querySelector(':scope > .map-children');
+                    if (children) check(branch.querySelector(':scope > .map-area > .map-area-count'), children);
+                }
+                return failures;
+            }"""
+            )
+            == []
+        )
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    assert_partition()
+    page.locator("#search").fill("Addition")
+    expect(page.locator(".domain-card")).to_have_count(1)
+    expect(page.locator(".map-topics > .map-remainder .map-area-count")).to_have_text("12")
+    assert_partition()
+    page.locator("#search").fill("")
+    page.locator("#domain").select_option("D01")
+    expect(page.locator(".domain-card")).to_have_count(1)
+    expect(page.locator(".map-topics > .map-remainder .map-area-count")).to_have_text("4")
+    assert_partition()

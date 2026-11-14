@@ -47,3 +47,7 @@ Excluded status. This path preserves excluded sources in the catalog; it never
 admits them. All positive-output admission checks remain in force. Sources without
 qualified current admission proof show IN PROGRESS and Examples Pending, with
 pre-filtration counts and receipt hashes in Evidence.
+
+Curriculum parents include an Other/unlisted row for subject-only matches and
+children hidden by search. Parent counts equal displayed children plus that
+remainder; the bounded task example sample does not reduce population counts.

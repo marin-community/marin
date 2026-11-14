@@ -178,6 +178,83 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                             "value": measurement.model_dump_json(),
                         },
                     )
+        with engine.begin() as connection:
+            nodes = [
+                ("D05", "subject:D05", None, "subject", "Earth, Atmospheric, Ocean & Environmental Sciences", 7088),
+                ("D05", "earth", "subject:D05", "group", "Earth, atmospheric, ocean, and environmental sciences", 10),
+                ("D05", "climate", "earth", "capability", "Climate models", 10),
+                ("D01", "subject:D01", None, "subject", "Mathematics & Statistics", 24),
+                ("D01", "arithmetic", "subject:D01", "group", "Arithmetic", 12),
+                ("D01", "add", "arithmetic", "capability", "Addition", 12),
+                ("D01", "geometry", "subject:D01", "group", "Geometry", 8),
+                ("D01", "angle", "geometry", "capability", "Angles", 8),
+            ]
+            manifest = {
+                "created_at": "2026-11-14T00:00:00Z",
+                "population": "converted",
+                "sample_size": None,
+                "curriculum_key": "fixture",
+                "lineage": {},
+                "coverage": {
+                    "subject_distance": 0.45,
+                    "capability_distance": 0.25,
+                    "sample_task_count": 0,
+                    "source_sample_size": 100,
+                    "area_sample_size": 10,
+                },
+                "nodes": [
+                    {
+                        "subject_id": subject,
+                        "node_id": node,
+                        "parent_id": parent,
+                        "kind": kind,
+                        "name": name,
+                        "description": name,
+                    }
+                    for subject, node, parent, kind, name, _ in nodes
+                ],
+            }
+            connection.execute(
+                text(
+                    "INSERT INTO curriculum_loads (load_id,release_id,release_uri,manifest) "
+                    "VALUES ('counts','counts','fixture',CAST(:manifest AS JSONB))"
+                ),
+                {"manifest": json.dumps(manifest)},
+            )
+            connection.execute(text("UPDATE curriculum_current SET load_id='counts' WHERE name='latest'"))
+            connection.execute(
+                text(
+                    "INSERT INTO curriculum_sources VALUES "
+                    "('counts','Marin:curriculum','{\"display_name\":\"Count fixture\"}'::jsonb,'fixture',"
+                    "CAST(:alignment AS JSONB))"
+                ),
+                {
+                    "alignment": json.dumps(
+                        {
+                            "basis": "matched",
+                            "source_id": "Marin:curriculum",
+                            "intended_use": "train",
+                            "task_count": 7112,
+                            "input_rows": None,
+                        }
+                    )
+                },
+            )
+            for subject, node, _, _, _, count in nodes:
+                connection.execute(
+                    text(
+                        "INSERT INTO curriculum_statistics VALUES "
+                        "('counts','Marin:curriculum','placement',:subject,:node,:count)"
+                    ),
+                    {"subject": subject, "node": node, "count": count},
+                )
+            for metric, count in [("denominator", 7112), ("assigned", 30), ("subject_only", 7082)]:
+                connection.execute(
+                    text(
+                        "INSERT INTO curriculum_statistics VALUES " "('counts','Marin:curriculum',:metric,'','',:count)"
+                    ),
+                    {"metric": metric, "count": count},
+                )
         yield
     finally:
         engine.dispose()
