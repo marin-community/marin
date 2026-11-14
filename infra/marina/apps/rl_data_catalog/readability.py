@@ -7,7 +7,7 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from playwright.sync_api import Page, expect
 
@@ -57,7 +57,8 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
         view = {
             "theme": theme,
             "width": width,
-            "page": page.url.split("/")[-1].split("#")[0],
+            "page": urlsplit(page.url).path.rsplit("/", 1)[-1] or "index.html",
+            "url": page.url,
             "state": state,
             "measurement_count": len(result["measurements"]),
             "findings": result["findings"],
@@ -118,7 +119,7 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
         spacing.evaluate("e=>e.remove()")
         page.evaluate(
             """() => Array.from(document.querySelectorAll('body *'))
-            .filter(e=>e.checkVisibility() && (!(e instanceof SVGElement) || e.matches('svg')))
+            .filter(e=>!(e instanceof SVGElement) || e.matches('svg'))
             .map(e=>[e,parseFloat(getComputedStyle(e).fontSize)]).forEach(([e,size])=>{
                 e.dataset.readabilitySize=e.style.fontSize; e.style.fontSize=(size*2)+'px';})"""
         )

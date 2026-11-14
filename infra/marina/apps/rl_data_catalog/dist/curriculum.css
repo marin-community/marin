@@ -17,7 +17,7 @@
 .domain-header h2 { font-size: max(var(--type-min), 15px); line-height: 1.4; margin: 0; min-width: 0; }
 .domain-title { border: 0; background: none; text-align: left; padding: 0; color: var(--muted); font-weight: 600; line-height: 1.4; }
 .domain-title:hover { text-decoration: underline; }
-.domain-count { border: 0; background: var(--soft); border-radius: 4px; padding: 5px 7px; font-size: max(var(--type-min), 12px); font-weight: 600; color: var(--green); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.domain-count { border: 1px solid var(--line); background: var(--soft); border-radius: 4px; padding: 5px 7px; font-size: max(var(--type-min), 12px); font-weight: 600; color: var(--green); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .domain-count:hover { background: var(--soft); }
 .domain-subtitle { font-size: max(var(--type-min), 12px); color: var(--muted); margin: 7px 14px 13px; }
 .map-topics { display: grid; gap: 5px; padding: 0 8px 8px; }
@@ -110,3 +110,5 @@
   .domain-header { flex-wrap: wrap; }
   .domain-count { white-space: normal; overflow-wrap: anywhere; }
 }
+
+.area-source a { display: inline-flex; align-items: center; min-height: var(--control-size); }
