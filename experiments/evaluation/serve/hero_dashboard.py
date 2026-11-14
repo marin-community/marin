@@ -12,7 +12,7 @@ Example::
 
     PARALLEL_API_KEY=... uv run python -m experiments.evaluation.serve.hero_dashboard \\
       --weights s3://marin-us-east-02a/marin/exports/... --model-id hero-sft-step400407 \\
-      --name hero-sft-step400407-dashboard --nodes 16 --max-model-len 65536 \\
+      --name hero-sft-step400407-bf16 --nodes 4 --max-model-len 262144 --quantization none \\
       --tokenizer marin-community/marin-tokenizer-tools --tokenizer-revision <commit> \\
       --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
 """
@@ -70,6 +70,9 @@ MAX_NUM_BATCHED_TOKENS = 2048
 GPU_MEMORY_UTILIZATION = 0.90
 # The worker is pickled by value from __main__, and a protobuf enum wrapper cannot be pickled; keep the int.
 DASHBOARD_ACCESS = EndpointAccess.ENDPOINT_ACCESS_LINK
+# Iris has no unlimited retry budget; the int32 maximum of the field never runs out. Worker loss and
+# preemption draw on this budget, and a retried task restarts the whole gang.
+INFRA_RETRIES = 2**31 - 1
 # PIECEWISE graphs around attention, KV-cache updates and ShortConv; MoE stays inside the captured graph.
 COMPILATION_CONFIG = {
     "mode": 3,
@@ -96,7 +99,10 @@ class Quantization(StrEnum):
 
 @dataclass(frozen=True)
 class HeroDashboardConfig:
-    """One Hero dashboard deployment: weights, tokenizer, served name, endpoint, gang size and lifetime."""
+    """One Hero dashboard deployment: weights, tokenizer, served name, endpoint, gang size and lifetime.
+
+    A ``lifetime_hours`` of None serves until the job is cancelled.
+    """
 
     weights: str
     model_id: str
@@ -105,7 +111,7 @@ class HeroDashboardConfig:
     max_model_len: int
     tokenizer: str
     tokenizer_revision: str
-    lifetime_hours: float
+    lifetime_hours: float | None
     quantization: Quantization
 
     @property
@@ -165,7 +171,7 @@ def _smoke_test(server_url: str, model_id: str) -> dict:
 
 
 def serve(config: HeroDashboardConfig) -> None:
-    """Run one task of the serving gang; task 0 also serves the dashboard until the lifetime ends."""
+    """Run one task of the serving gang; task 0 also serves the dashboard until the lifetime ends or the job stops."""
     configure_logging()
     configure_coreweave_s3()
     info = get_job_info()
@@ -267,8 +273,8 @@ def _serve_dashboard(config: HeroDashboardConfig, environment: VllmEnvironment, 
             web_search is not None,
             VLLM_GPU_RELEASE.release_tag,
         )
-        deadline = time.monotonic() + config.lifetime_hours * 3600
-        while time.monotonic() < deadline:
+        deadline = None if config.lifetime_hours is None else time.monotonic() + config.lifetime_hours * 3600
+        while deadline is None or time.monotonic() < deadline:
             environment.check_alive()
             time.sleep(30)
 
@@ -301,7 +307,7 @@ _PRIORITIES = {
     required=True,
     help="Online weight quantization; fp8 needs no separate export.",
 )
-@click.option("--lifetime-hours", type=float, default=24.0, show_default=True)
+@click.option("--lifetime-hours", type=float, help="Serve this long, then exit; omit to serve until cancelled.")
 @click.option("--cluster", default="marin", show_default=True)
 @click.option("--target-cluster", default="cw-us-east-08a", show_default=True)
 @click.option("--priority", type=click.Choice(sorted(_PRIORITIES)), default="interactive", show_default=True)
@@ -322,7 +328,7 @@ def main(
     tokenizer: str,
     tokenizer_revision: str,
     quantization: str,
-    lifetime_hours: float,
+    lifetime_hours: float | None,
     cluster: str,
     target_cluster: str,
     priority: str,
@@ -355,6 +361,9 @@ def main(
     )
     coscheduling = resolve_coscheduling(resources, nodes)
     secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources}
+    task_timeout = None
+    if lifetime_hours is not None:
+        task_timeout = Duration.from_seconds(lifetime_hours * 3600 + STARTUP_TIMEOUT_SECONDS)
     click.echo(f"config: {config}")
     click.echo(
         f"export schema: {hf_config.get('grugmoe_artifact_schema_version')}; vLLM: {VLLM_GPU_RELEASE.release_tag}"
@@ -382,8 +391,8 @@ def main(
                 replicas=nodes,
                 ports=["http", "dp_rpc"],
                 max_retries_failure=0,
-                max_retries_preemption=2,
-                timeout=Duration.from_seconds(lifetime_hours * 3600 + STARTUP_TIMEOUT_SECONDS),
+                max_retries_preemption=INFRA_RETRIES,
+                timeout=task_timeout,
                 priority_band=_PRIORITIES[priority],
             )
             click.echo(f"job: {job.job_id}")
