@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hosted fixed-slot Snowball generation followed by public training route replay.
+"""Device-resident fixed-slot Snowball generation followed by public training route replay.
 
 Equal-length causal prompts, contiguous positions, no EOS compaction, packed
 segments or shared physical pages. Every serving capture is retained, including
@@ -9,7 +9,7 @@ the final sampled token's extra unsampled output row. This diagnostic does not
 promise numerical parity between different arithmetic backends.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import equinox as eqx
 import haliax as hax
@@ -64,6 +64,51 @@ def _decode(model, cache, tokens, info, positions):
 @eqx.filter_jit
 def _sample(logits: jax.Array, key: jax.Array) -> jax.Array:
     return jax.random.categorical(key, logits.astype(jnp.float32), axis=-1).astype(jnp.int32)
+
+
+@eqx.filter_jit
+def _continuation(model, cache, next_logits, info, sampling_key, *, prompt_length, generated_tokens):
+    batch_size = next_logits.shape[0]
+
+    def step(carry, index):
+        cache, next_logits = carry
+        sampled = _sample(next_logits, jax.random.fold_in(sampling_key, index))
+        position = prompt_length + index
+        page_indices = info.page_indices.array
+        physical_pages = jnp.take_along_axis(
+            page_indices, jnp.full((batch_size, 1), position // info.page_size, dtype=jnp.int32), axis=1
+        )[:, 0]
+        batch = replace(
+            info,
+            seq_lens=hax.named(jnp.full((batch_size,), position + 1, dtype=jnp.int32), "seq"),
+            new_token_dests=hax.named(physical_pages * info.page_size + position % info.page_size, "position"),
+        )
+        logits, cache, capture = _decode(
+            model,
+            cache,
+            hax.named(sampled, "position"),
+            batch,
+            hax.named(jnp.full((batch_size,), position, dtype=jnp.int32), "position"),
+        )
+        return (cache, logits.array), (sampled, logits.array, capture)
+
+    # Haliax adds the scan axis to NamedArrays inside the returned batch_info;
+    # raw lax.scan would reconstruct them with the wrong rank/axis metadata.
+    _, outputs = hax.scan(step, hax.Axis("generation_step", generated_tokens))(
+        (cache, next_logits), jnp.arange(generated_tokens, dtype=jnp.int32)
+    )
+    return outputs
+
+
+def _capture_step(captures: SnowballDecodeRouteCaptureBatch, step: int) -> SnowballDecodeRouteCaptureBatch:
+    """Unstack completed host evidence without issuing new device operations."""
+
+    def take(value):
+        if isinstance(value, hax.NamedArray):
+            return hax.NamedArray(value.array[step], value.axes[1:])
+        return value[step]
+
+    return hax.tree_util.tree_map(take, captures)
 
 
 @eqx.filter_jit
@@ -160,35 +205,37 @@ def generate_with_route_captures(
     logits, cache, capture = _decode(
         model, cache, hax.named(jnp.asarray(prompt_ids.reshape(-1)), "position"), info, positions
     )
-    # Complete arrays before slicing: Explicit device indexing can otherwise
-    # remove a sharded token dimension from a logically batched value.
-    logits_host = np.asarray(logits.array).reshape(batch_size, prompt_length, model.Vocab.size)
-    output_rows = [logits_host]
-    captures = [jax.device_get(capture)]
-    generated = []
-    next_logits = logits_host[:, -1]
-    for step in range(generated_tokens):
-        sampled = np.asarray(_sample(jnp.asarray(next_logits), jax.random.fold_in(sampling_key, step)))
-        generated.append(sampled)
-        position = prompt_length + step
-        info = _page_batch(page_map, page_size, start=position, count=1)
-        logits, cache, capture = _decode(
-            model,
-            cache,
-            hax.named(jnp.asarray(sampled), "position"),
-            info,
-            hax.named(jnp.full((batch_size,), position, dtype=jnp.int32), "position"),
-        )
-        next_logits = np.asarray(logits.array).reshape(batch_size, model.Vocab.size)
-        output_rows.append(next_logits[:, None, :])
-        captures.append(jax.device_get(capture))
-    sampled_ids = np.stack(generated, axis=1)
+    # Preserve the decode output sharding when selecting each slot's final
+    # prompt row; Explicit meshes cannot infer this rank-reducing gather.
+    next_logits = (
+        logits.array.reshape(batch_size, prompt_length, model.Vocab.size)
+        .at[:, -1, :]
+        .get(out_sharding=logits.array.sharding)
+    )
+    sampled, output_logits, output_captures = _continuation(
+        model,
+        cache,
+        next_logits,
+        _page_batch(page_map, page_size, start=prompt_length, count=1),
+        sampling_key,
+        prompt_length=prompt_length,
+        generated_tokens=generated_tokens,
+    )
+    # Complete the whole continuation before host aggregation, including all
+    # actual serving metadata and the final sampled token's unsampled row.
+    prefill_logits, prefill_capture, sampled, output_logits, output_captures = jax.device_get(
+        (logits.array, capture, sampled, output_logits, output_captures)
+    )
+    sampled_ids = sampled.T
     tokens = np.concatenate((prompt_ids, sampled_ids), axis=1)
-    retained = tuple(captures)
+    retained = (prefill_capture, *(_capture_step(output_captures, step) for step in range(generated_tokens)))
+    serving_logits = np.concatenate(
+        (prefill_logits.reshape(batch_size, prompt_length, model.Vocab.size), output_logits.transpose(1, 0, 2)), axis=1
+    )
     return SnowballGeneratedRoutes(
         tokens=hax.named(jnp.asarray(tokens), ("batch", "position")),
         sampled_token_ids=sampled_ids,
-        serving_logits=np.concatenate(output_rows, axis=1),
+        serving_logits=serving_logits,
         serving_captures=retained,
         teacher_capture=_teacher_capture(tokens, retained, prompt_length),
         prompt_length=prompt_length,
