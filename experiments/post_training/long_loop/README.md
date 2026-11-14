@@ -377,3 +377,16 @@ CUDA graphs stay enabled. Cold tuning work may increase. The requested flags
 and accelerator environment are recorded in `consumed-config.json`; the run
 spec and that receipt are archived. This setting does not change the RL or
 final policy-evaluation runtime.
+
+For an RL-only recovery after SFTSpec finishes, pin `adopted_sft` and
+`adopted_handoff` to the committed SFT selection and exported checkpoint. The
+adoption verifier checks the native zero-based final step against completed
+updates, the exact consumed config, model/tokenizer lineage and payload inventory.
+It uses SFTSpec's consumed model defaults rather than the legacy Grug recipe.
+
+If RunAI object streaming fails during engine startup, set
+`rl.config.generator.model_loading: stage_local` in a freshly pinned run spec.
+The existing staging path materializes the same checkpoint once per node before
+Ray startup and vLLM loads local safetensors. Reserve enough node-local disk for
+the full checkpoint; the policy's source URI and identity remain in the consumed
+config. This changes weight loading only; compilation and CUDA graphs stay enabled.
