@@ -56,7 +56,7 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
                 }
             )
             if missing:
-                reason = "original_packages_lock_unavailable:" + ",".join(missing)
+                reason = "missing_environment_artifact:" + ",".join(missing)
         directory = root / canonical_sha256(source.declaration.id)[:20] / canonical_sha256(task.id)[:20]
         if reason is None:
             if native:
