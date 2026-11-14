@@ -1,6 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -15,6 +18,12 @@ from levanter.grug.attention import (
     reference_attention,
     token_validity_from_attention_mask,
 )
+
+
+from levanter.layers.attention import AttentionMask as NamedAttentionMask
+from levanter.layers.attention import _tpu_splash_attention as named_splash_attention
+from levanter.layers.rotary import DefaultRotaryEmbeddings, DefaultRotaryEmbeddingsConfig
+from levanter.layers.rotary_native import RotaryConfig, apply_rotary
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -168,6 +177,89 @@ def test_real_tpu_splash_attention_gradients_match_reference():
         expected = jax.jit(jax.grad(lambda q, k, v: objective(q, k, v, "reference"), argnums=(0, 1, 2)))(q, k, v)
     for observed, reference in zip(actual, expected, strict=True):
         np.testing.assert_allclose(observed, reference, atol=1e-3, rtol=1e-3)
+
+
+@pytest.mark.tpu
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("cotangent_scale", [1.0, 1e-6])
+def test_splash_rotary_bfloat16_q_gradient_matches_named(cotangent_scale):
+    if jax.default_backend() != "tpu":
+        pytest.skip("Splash attention requires a TPU backend.")
+    devices = np.asarray(jax.devices()).reshape(1, -1)
+    explicit = jax.sharding.Mesh(devices, ("data", "model"), axis_types=(AxisType.Explicit, AxisType.Explicit))
+    auto = jax.sharding.Mesh(devices, ("data", "model"), axis_types=(AxisType.Auto, AxisType.Auto))
+    batch, sequence, heads, width = 1, 128, 32, 128
+    B, S, K, H, G, D = (
+        hax.Axis(name, size)
+        for name, size in (
+            ("batch", batch),
+            ("position", sequence),
+            ("key_position", sequence),
+            ("kv_head", heads),
+            ("q_heads_per_group", 1),
+            ("head_size", width),
+        )
+    )
+    shape = (batch, sequence, heads, width)
+    qkey, kkey, vkey, ckey = jax.random.split(jax.random.PRNGKey(141), 4)
+    q, k, v = (jax.random.normal(key, shape).astype(jnp.bfloat16) for key in (qkey, kkey, vkey))
+    cotangent = (jax.random.normal(ckey, shape) * jnp.float32(cotangent_scale)).astype(jnp.bfloat16)
+    ids = jnp.broadcast_to(jnp.arange(sequence, dtype=jnp.int32) // 64, (batch, sequence))
+    mapping = {"batch": "data", "kv_head": "model"}
+
+    def native_vjp(q, k, v, cotangent, ids):
+        positions = jnp.broadcast_to(jnp.arange(sequence, dtype=jnp.int32), (batch, sequence))
+        k = apply_rotary(k, positions, RotaryConfig())
+        mask = AttentionMask.causal().with_segment_ids(ids)
+
+        def endpoint(q):
+            q = apply_rotary(q, positions, RotaryConfig())
+            return attention(q, k, v, mask, implementation="tpu_splash")
+
+        output, pullback = jax.vjp(endpoint, q)
+        return output, pullback(cotangent)[0]
+
+    def named_vjp(q, k, v, cotangent, ids):
+        rotary = DefaultRotaryEmbeddings(D, DefaultRotaryEmbeddingsConfig())
+        k = rotary(k, hax.arange(S)).astype(k.dtype).rearrange((B, H, S, D)).rename({"position": "key_position"})
+        v = v.rearrange((B, H, S, D)).rename({"position": "key_position"})
+        mask = NamedAttentionMask.causal().with_segment_ids(ids)
+
+        def endpoint(q):
+            q = rotary(q, hax.arange(S)).astype(q.dtype).rearrange((B, H, G, S, D))
+            output = named_splash_attention(
+                S, K, D, q, k, v, mask, attention_dtype=q.dtype, scaling_factor=1.0 / math.sqrt(width)
+            )
+            return output.rearrange((B, S, H, G, D)).flatten_axes((H, G), H)
+
+        output, pullback = jax.vjp(endpoint, q)
+        return output, pullback(cotangent)[0].flatten_axes((H, G), H)
+
+    spec = P(None, None, "model", None)
+    with jax.default_matmul_precision("default"):
+        with jax.set_mesh(explicit):
+            raw_args = tuple(
+                jax.device_put(value, NamedSharding(explicit, spec)) for value in (q, k, v, cotangent)
+            ) + (
+                jax.device_put(ids, NamedSharding(explicit, P())),
+            )
+            actual = jax.jit(native_vjp)(*raw_args)
+        with jax.set_mesh(auto), hax.axis_mapping(mapping):
+            raw_args = tuple(jax.device_put(value, NamedSharding(auto, spec)) for value in (q, k, v, cotangent)) + (
+                jax.device_put(ids, NamedSharding(auto, P())),
+            )
+            named_args = (
+                hax.named(raw_args[0].reshape(batch, sequence, heads, 1, width), (B, S, H, G, D)),
+                hax.named(raw_args[1], (B, S, H, D)),
+                hax.named(raw_args[2], (B, S, H, D)),
+                hax.named(raw_args[3], (B, S, H, D)),
+                hax.named(raw_args[4], (B, S)),
+            )
+            expected = hax.named_jit(named_vjp, axis_resources=mapping, out_axis_resources=mapping)(*named_args)
+    for observed, reference in zip(actual, expected, strict=True):
+        assert np.isfinite(np.asarray(observed, dtype=np.float32)).all()
+        # Numerical equality permits the signed-zero differences of the inverse rotation.
+        np.testing.assert_array_equal(observed, reference.array)
 
 
 def test_token_validity_uses_padding_ids_without_excluding_packed_boundaries():

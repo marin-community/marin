@@ -439,8 +439,9 @@ class NativeLlamaModel(eqx.Module):
         return self.norm(hidden)
 
     def embed_tokens(self, tokens: Int[Array, "B S"], *, sharding: NativeLlamaSharding) -> Float[Array, "B S D"]:
-        weight = reshard(self.token_embeddings, sharding.column_compute)
-        hidden = weight.at[tokens].get(out_sharding=sharding.residual)
+        # Gather from the stored shards so the pullback can accumulate repeated token IDs
+        # without first replicating the weight over FSDP.
+        hidden = self.token_embeddings.at[tokens].get(out_sharding=sharding.residual)
         return self.embedding_norm(hidden) if self.embedding_norm is not None else hidden
 
     def get_lm_head(self) -> Float[Array, "V D"]:
