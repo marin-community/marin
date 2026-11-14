@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -23,7 +24,9 @@ from taskcompendium.harbor.shared_package import SharedPytestFormat, render_shar
 from taskcompendium.harbor.shared_reference import (
     REFERENCE_BUNDLE,
     REFERENCE_INPUT,
+    ActorEnvironment,
     FrozenSharedReference,
+    actor_environment_for,
     harden_shared_swe_reference,
 )
 from taskcompendium.identity import canonical_sha256
@@ -40,6 +43,7 @@ class SharedRuntime:
     verifyit: Path
     candidate: Path
     plugin: Path
+    actor: ActorEnvironment | None = None
 
     def grade(self) -> dict:
         try:
@@ -260,7 +264,9 @@ def shared_runtime(request, monkeypatch):
             f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -c " + shlex.quote(verifyit_main) + ' "$@"\n'
         )
         verifyit.chmod(0o755)
+        actor = None
         if request.param == "frozen-reference":
+            actor = actor_environment_for(contract, prefix=str(base / "agent-prefix"))
             files = {
                 "instruction.md": b"Keep the original clone and installation in the actor phase.\n",
                 "environment/Dockerfile": b"FROM unchanged-source-image\n",
@@ -285,6 +291,7 @@ def shared_runtime(request, monkeypatch):
                 capture_trial_sha256="3" * 64,
                 bundle_sha256=hashlib.sha256(bundle).hexdigest(),
                 contract=contract,
+                actor_environment=actor,
             )
             harden_shared_swe_reference(
                 files,
@@ -304,7 +311,7 @@ def shared_runtime(request, monkeypatch):
             shared_reference.initialize(input_path, bundle_path)
             assert list(workspace.iterdir()) == []
             candidate.write_text("VALUE = 0\n")
-        yield SharedRuntime(contract, site, verifyit, candidate, plugin_path)
+        yield SharedRuntime(contract, site, verifyit, candidate, plugin_path, actor)
 
 
 @pytest.mark.parametrize("shared_runtime", ["source-pinned-cli"], indirect=True)
@@ -314,7 +321,7 @@ def test_shared_grading_source_cli_rejects_broken_product_and_accepts_repair(sha
     verdict = runtime.grade()
     assert verdict["status"] == "scored", verdict
     assert verdict["reward"] == 0, verdict
-    runtime.candidate.write_text("VALUE = 1\n")
+    write_observable(runtime.candidate, "VALUE = 1\n")
     verdict = runtime.grade()
     assert verdict["status"] == "scored", verdict
     assert verdict["reward"] == 1, verdict
@@ -324,10 +331,98 @@ def test_shared_grading_source_cli_rejects_broken_product_and_accepts_repair(sha
 def test_frozen_reference_restores_grading_without_preparing_actor_workspace(shared_runtime):
     runtime = shared_runtime
     assert runtime.grade()["reward"] == 0
-    runtime.candidate.write_text("VALUE = 1\n")
+    write_observable(runtime.candidate, "VALUE = 1\n")
     assert runtime.grade()["reward"] == 1
     assert os.stat(runtime.contract.protected_root).st_uid == 0
     assert os.stat(runtime.contract.protected_root).st_mode & 0o007 == 0
+
+
+def agent_command(runtime, code: str) -> subprocess.CompletedProcess:
+    agent = runtime.contract.agent_uid
+    return subprocess.run([sys.executable, "-c", code], user=agent, group=agent, capture_output=True, text=True)
+
+
+def write_observable(path: Path, text: str) -> None:
+    """Write product text and advance mtime so a same-second pyc cannot shadow it at grading."""
+    path.write_text(text)
+    stamped = time.time() + 5
+    os.utime(path, (stamped, stamped))
+
+
+@pytest.mark.parametrize("shared_runtime", ["frozen-reference"], indirect=True)
+def test_frozen_reference_materializes_declared_actor_environment(shared_runtime):
+    runtime = shared_runtime
+    actor = runtime.actor
+    venv = Path(actor.python)
+    info = os.stat(actor.prefix)
+    assert info.st_uid == actor.uid == runtime.contract.agent_uid
+    assert info.st_gid == actor.gid
+    assert info.st_mode & 0o777 == actor.directory_mode
+    assert (venv / "bin" / "pip").read_text() == actor.pip_shim
+    actor_python = venv / "bin" / "python"
+    source_python = (
+        Path(json.loads((Path(runtime.contract.protected_root) / "runtime.json").read_text())["sites"][0]).parents[2]
+        / "bin/python"
+    )
+    assert (
+        hashlib.sha256(actor_python.read_bytes()).hexdigest() == hashlib.sha256(source_python.read_bytes()).hexdigest()
+    )
+    probe = json.loads(
+        subprocess.check_output(
+            [str(actor_python), "-I", "-c", "import json,sys;print(json.dumps({'prefix':sys.prefix,'path':sys.path}))"],
+            text=True,
+        )
+    )
+    assert probe["prefix"] == str(venv)
+    runtime_data = json.loads((Path(runtime.contract.protected_root) / "runtime.json").read_text())
+    for site in runtime_data["sites"]:
+        assert site in probe["path"]
+    actor_sites = json.loads(
+        subprocess.check_output(
+            [
+                str(actor_python),
+                "-I",
+                "-c",
+                "import json,sysconfig;"
+                "print(json.dumps(sorted({sysconfig.get_path('purelib'),sysconfig.get_path('platlib')})))",
+            ],
+            text=True,
+        )
+    )
+    for site in actor_sites:
+        assert site in runtime_data["sites"]
+
+
+@pytest.mark.parametrize("shared_runtime", ["frozen-reference"], indirect=True)
+def test_agent_installs_land_in_declared_environment_not_root_sites(shared_runtime):
+    runtime = shared_runtime
+    actor = runtime.actor
+    # Repaired: the agent-owned bin accepts writes, so task-time console entrypoints can land there.
+    repaired = agent_command(runtime, f"open({str(Path(actor.python) / 'bin' / 'probe')!r}, 'w').write('')")
+    assert repaired.returncode == 0, repaired.stderr
+    # Broken: the root-owned source task python stays protected — the sealed Errno 13 world.
+    source_python = Path(runtime.site).parents[2] / "bin/python"
+    broken = agent_command(runtime, f"open({str(source_python.parents[1] / 'bin' / 'probe')!r}, 'w').write('')")
+    assert broken.returncode != 0
+    assert "Permission denied" in broken.stderr
+    assert not os.stat(source_python.parents[1] / "bin").st_mode & 0o022
+
+
+@pytest.mark.parametrize("shared_runtime", ["frozen-reference"], indirect=True)
+def test_grading_observes_agent_environment_installs(shared_runtime):
+    runtime = shared_runtime
+    actor_python = Path(runtime.actor.python) / "bin" / "python"
+    site = subprocess.check_output(
+        [str(actor_python), "-I", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"], text=True
+    ).strip()
+    install = Path(site) / "actor_install.py"
+    write = agent_command(runtime, f"open({str(install)!r}, 'w').write('VALUE = 1\\n')")
+    assert write.returncode == 0, write.stderr
+    verdict = runtime.grade()
+    diff = json.loads((Path(runtime.contract.report_directory) / "site-packages-diff.json").read_text())
+    assert diff[str(install)]["after"] == hashlib.sha256(b"VALUE = 1\n").hexdigest()
+    assert verdict["status"] == "scored", verdict
+    assert verdict["reward"] == 0
 
 
 @pytest.mark.parametrize("shared_runtime", ["frozen-reference"], indirect=True)
@@ -461,7 +556,7 @@ def test_shared_grading_keeps_standard_site_builtins_available_to_product(shared
     verdict = runtime.grade()
     assert verdict["status"] == "scored", verdict
     assert verdict["reward"] == 0
-    runtime.candidate.write_text(runtime.candidate.read_text().replace("VALUE = 0", "VALUE = 1"))
+    write_observable(runtime.candidate, runtime.candidate.read_text().replace("VALUE = 0", "VALUE = 1"))
     verdict = runtime.grade()
     assert verdict["status"] == "scored", verdict
     assert verdict["reward"] == 1
@@ -530,7 +625,7 @@ def test_shared_grading_restores_source_plugin_and_config_semantics(shared_runti
         (plugin.parent / "__init__.py").write_text("raise RuntimeError('agent package initializer')\n")
         (plugin.parent.with_suffix(".py")).write_text("raise RuntimeError('agent plugin shadow')\n")
     assert runtime.grade()["reward"] == 0
-    (workspace / "candidate.py").write_text("VALUE = 1\n")
+    write_observable(workspace / "candidate.py", "VALUE = 1\n")
     verdict = runtime.grade()
     assert verdict["status"] == "scored", verdict
     assert verdict["reward"] == 1

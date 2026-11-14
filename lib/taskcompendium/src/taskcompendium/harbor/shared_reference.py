@@ -5,15 +5,14 @@
 
 import hashlib
 import io
-import json
 import shlex
 import tarfile
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, Self, cast
 
 import tomlkit
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from tomlkit.items import Table
 from verifyit.spec import PytestSpec
 
@@ -30,6 +29,95 @@ from taskcompendium.runtime import shared_pytest, shared_reference
 REFERENCE_INPUT = "setup_files/taskcompendium-frozen-reference.json"
 REFERENCE_BUNDLE = "setup_files/taskcompendium-frozen-reference.tar.gz"
 REFERENCE_INITIALIZER = "setup_files/taskcompendium-frozen-reference.py"
+
+ACTOR_PREFIX = "/opt/taskcompendium-agent"
+DEFAULT_SOURCE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+class ActorEnvironment(BaseModel):
+    """The declared agent-owned task Python environment; the spec is the whole truth."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: Literal[1] = 1
+    prefix: str = Field(min_length=1)
+    python: str = Field(min_length=1)
+    bin: str = Field(min_length=1)
+    uid: int = Field(ge=0)
+    gid: int = Field(ge=0)
+    group: str = Field(min_length=1)
+    venv_flags: tuple[str, ...]
+    directory_mode: int
+    file_mode: int
+    executable_mode: int
+    pip_shim: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    declared_changes: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_complete(self) -> Self:
+        if self.bin != f"{self.python}/bin":
+            raise ValueError("The actor executable directory must be the environment's bin")
+        if not self.python.startswith(self.prefix + "/"):
+            raise ValueError("The actor Python environment must live inside its prefix")
+        if not self.path.startswith(self.bin + ":"):
+            raise ValueError("The actor bin must be the first PATH entry")
+        if "--copies" not in self.venv_flags or "--without-pip" not in self.venv_flags:
+            raise ValueError("The actor environment must copy the exact source interpreter without vendored pip")
+        if "--system-site-packages" in self.venv_flags:
+            raise ValueError("The captured baseline must be exposed through the declared source-baseline path file")
+        if not self.pip_shim.startswith("#!/bin/sh\nexec "):
+            raise ValueError("The actor pip must be a declared shim over the source pip module")
+        if not self.declared_changes:
+            raise ValueError("The actor environment must declare every difference from the original")
+        return self
+
+
+def actor_environment_for(
+    contract: SharedIntegrityContract, *, prefix: str = ACTOR_PREFIX, source_path: str = DEFAULT_SOURCE_PATH
+) -> ActorEnvironment:
+    """Declare the approved repair environment: exact interpreter, read-only baseline, agent-owned installs."""
+    python = f"{prefix}/python"
+    bin_directory = f"{python}/bin"
+    path = f"{bin_directory}:{source_path}"
+    return ActorEnvironment(
+        prefix=prefix,
+        python=python,
+        bin=bin_directory,
+        uid=contract.agent_uid,
+        gid=contract.agent_uid,
+        group="taskcompendium-agent",
+        venv_flags=("--copies", "--without-pip"),
+        directory_mode=0o755,
+        file_mode=0o644,
+        executable_mode=0o755,
+        pip_shim=f'#!/bin/sh\nexec {bin_directory}/python -m pip "$@"\n',
+        path=path,
+        declared_changes=(
+            f"The agent runs as UID {contract.agent_uid} instead of root",
+            f"An agent-owned Python environment at {python} copies the exact source interpreter and exposes the "
+            "captured baseline site directories read-only through a declared source-baseline path file; "
+            "no package is upgraded",
+            f"A pip shim at {bin_directory}/pip executes the source pip module from the captured baseline against "
+            "the agent environment, so task-time installs and console entrypoints land in agent-owned space",
+            f"The agent environment PATH is {path}",
+            f"{contract.workspace} is owned by UID {contract.agent_uid} and stays empty at handoff",
+            "The source image site-packages stay root-owned and unmodified; task-time dependency changes live only "
+            "in the agent environment",
+            f"The grading runtime under {contract.protected_root} stays root-owned and frozen",
+        ),
+    )
+
+
+def shared_actor_preamble(actor: ActorEnvironment) -> str:
+    """Render the agent-facing card so the published instruction declares the environment."""
+    return (
+        f"Agent environment (declared v{actor.version}): you run as UID {actor.uid} ({actor.group}) and own "
+        f"{actor.prefix}. python and pip resolve to {actor.bin} first (PATH: {actor.path}). The captured baseline "
+        f"packages are exposed read-only and unchanged; your installs land in {actor.python}. "
+        "This environment replaces the original root-owned task installation; every other part of the original "
+        "task is unchanged.\n\n"
+    )
 
 
 class FrozenSharedReference(BaseModel):
@@ -48,6 +136,17 @@ class FrozenSharedReference(BaseModel):
     capture_trial_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     bundle_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     contract: SharedIntegrityContract
+    actor_environment: ActorEnvironment
+
+    @model_validator(mode="after")
+    def validate_environment(self) -> Self:
+        if self.actor_environment.uid != self.contract.agent_uid:
+            raise ValueError("The actor environment belongs to another agent identity")
+        actor = Path(self.actor_environment.prefix)
+        protected = Path(self.contract.protected_root)
+        if actor.is_relative_to(protected) or protected.is_relative_to(actor):
+            raise ValueError("The actor prefix and the protected grading root must be disjoint")
+        return self
 
 
 def harden_shared_swe_reference(
@@ -102,6 +201,8 @@ def harden_shared_swe_reference(
     environment = cast(Table, config["environment"])
     if environment.get("setup") is not None:
         raise ValueError("Reference mode cannot reorder an existing source initialization command")
+    source_environment = dict(environment.get("env", {}))
+    actor = actor_environment_for(contract, source_path=source_environment.get("PATH") or DEFAULT_SOURCE_PATH)
     files[REFERENCE_INPUT] = reference.model_dump_json().encode()
     files[REFERENCE_BUNDLE] = bundle
     files[REFERENCE_INITIALIZER] = Path(shared_reference.__file__).read_bytes()
@@ -122,14 +223,18 @@ def harden_shared_swe_reference(
         ),
         "timeout_sec": host_init_timeout,
     }
+    environment["env"] = {**source_environment, "PATH": actor.path}
     cast(Table, config["agent"])["user"] = str(contract.agent_uid)
     verifier = cast(Table, config["verifier"])
     verifier["user"] = "root"
     verifier["restart_environment"] = False
     metadata = cast(Table, config["metadata"])
     metadata["integrity_contract"] = contract.model_dump(mode="json", exclude_none=True)
-    metadata["execution_policy"] = "shared_frozen_reference_v1"
+    metadata["actor_environment"] = actor.model_dump(mode="json", exclude_none=True)
+    metadata["execution_policy"] = "shared_actor_environment_v1"
     files["task.toml"] = tomlkit.dumps(config).encode()
-    files["instruction.md"] = shared_preamble(contract).encode() + files["instruction.md"]
+    files["instruction.md"] = (shared_preamble(contract) + shared_actor_preamble(actor)).encode() + files[
+        "instruction.md"
+    ]
     files["tests/test.sh"] = shared_grader_script(contract)
     return contract
