@@ -173,14 +173,16 @@ def _run(*args: str) -> bytes:
     return result.stdout
 
 
-def _same_image_payload(source: dict[str, Any], prepared: dict[str, Any]) -> bool:
-    return source["config"]["digest"] == prepared["config"]["digest"] and [
-        layer["digest"] for layer in source["layers"]
-    ] == [layer["digest"] for layer in prepared["layers"]]
+def _layer_digests(manifest: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(layer["digest"] for layer in manifest["layers"])
+
+
+def _configuration_json(configuration: dict[str, Any]) -> str:
+    return json.dumps(configuration, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def _registry_manifest_chain(
-    repository: str, digest: str, prepared: dict[str, Any], authfile: Path | None
+    repository: str, digest: str, configuration_digest: str, layers: tuple[str, ...], authfile: Path | None
 ) -> tuple[bytes, ...] | None:
     _digest_hex(digest)
     args = ["skopeo", "inspect", "--raw"]
@@ -191,12 +193,14 @@ def _registry_manifest_chain(
         raise ValueError("Registry manifest differs from the source pin")
     manifest = json.loads(raw)
     if "manifests" not in manifest:
-        return (raw,) if _same_image_payload(manifest, prepared) else None
+        if manifest["config"]["digest"] == configuration_digest and _layer_digests(manifest) == layers:
+            return (raw,)
+        return None
     for descriptor in manifest["manifests"]:
         platform = descriptor.get("platform", {})
         if platform.get("os") not in (None, "linux") or platform.get("architecture") not in (None, "amd64"):
             continue
-        chain = _registry_manifest_chain(repository, descriptor["digest"], prepared, authfile)
+        chain = _registry_manifest_chain(repository, descriptor["digest"], configuration_digest, layers, authfile)
         if chain is not None:
             return (raw, *chain)
     return None
@@ -211,7 +215,11 @@ def _require_registry_binding(layout: Path, binding: _RegistryBinding, source_di
             raise ValueError("Cached registry manifest chain differs from its source index")
     original = _oci_json_blob(layout, binding.source_manifests[-1])
     prepared = _oci_json_blob(layout, binding.prepared_manifest_digest)
-    if not _same_image_payload(original, prepared):
+    original_configuration = _oci_json_blob(layout, original["config"]["digest"])
+    prepared_configuration = _oci_json_blob(layout, prepared["config"]["digest"])
+    if _configuration_json(original_configuration) != _configuration_json(prepared_configuration) or _layer_digests(
+        original
+    ) != _layer_digests(prepared):
         raise ValueError("Cached registry image payload differs from its source manifest")
     _manifest_digest(layout, expected=binding.prepared_manifest_digest)
 
@@ -293,22 +301,38 @@ def prepare_image(
         if isinstance(source, RegistryImage):
             _run(*skopeo_args, source_ref, f"oci:{layout}:{OCI_TAG}")
         digest = _manifest_digest(layout)
-        source_manifests: tuple[bytes, ...] = ()
+        source_blobs: tuple[bytes, ...] = ()
         binding = None
-        if (
-            isinstance(source, RegistryImage)
-            and pinned_digest is not None
-            and policy is None
-            and pinned_digest != digest
-        ):
+        if isinstance(source, RegistryImage) and pinned_digest is not None and pinned_digest != digest:
             repository = source.reference.rsplit("@", 1)[0]
-            chain = _registry_manifest_chain(repository, pinned_digest, _oci_json_blob(layout, digest), authfile)
+            config_args = [
+                "skopeo",
+                "--override-os",
+                "linux",
+                "--override-arch",
+                "amd64",
+                "inspect",
+                "--raw",
+                "--config",
+            ]
+            if authfile is not None:
+                config_args.extend(("--authfile", str(authfile)))
+            source_configuration = _run(*config_args, source_ref)
+            prepared = _oci_json_blob(layout, digest)
+            if _configuration_json(json.loads(source_configuration)) != _configuration_json(
+                _oci_json_blob(layout, prepared["config"]["digest"])
+            ):
+                raise ValueError("Prepared image configuration differs from its pinned registry source")
+            configuration_digest = f"sha256:{hashlib.sha256(source_configuration).hexdigest()}"
+            chain = _registry_manifest_chain(
+                repository, pinned_digest, configuration_digest, _layer_digests(prepared), authfile
+            )
             if chain is None:
                 raise ValueError("Prepared image payload differs from its pinned registry source")
-            source_manifests = chain
+            source_blobs = (*chain, source_configuration)
             binding = _RegistryBinding(
                 prepared_manifest_digest=digest,
-                source_manifests=tuple(f"sha256:{hashlib.sha256(raw).hexdigest()}" for raw in source_manifests),
+                source_manifests=tuple(f"sha256:{hashlib.sha256(raw).hexdigest()}" for raw in chain),
             )
         destination = cache / digest.replace(":", "-")
         if not destination.exists():
@@ -320,7 +344,7 @@ def prepare_image(
         _manifest_digest(destination, expected=digest)
         if binding is not None:
             assert pinned_digest is not None
-            for raw in source_manifests:
+            for raw in source_blobs:
                 blob_digest = hashlib.sha256(raw).hexdigest()
                 pending = Path(temporary) / blob_digest
                 pending.write_bytes(raw)

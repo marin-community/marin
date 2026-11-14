@@ -28,6 +28,7 @@ class RegistryFixture:
     source: RegistryImage
     image: PreparedImage
     manifests: dict[str, bytes]
+    source_configuration: bytes
 
 
 @pytest.fixture
@@ -52,6 +53,11 @@ def converted_registry_image(layered_oci_image, monkeypatch):
     image = replace(image, manifest_digest=f"sha256:{digest}")
     manifest["mediaType"] = "application/vnd.docker.distribution.manifest.v2+json"
     manifest["config"]["mediaType"] = "application/vnd.docker.container.image.v1+json"
+    configuration = json.loads((blobs / manifest["config"]["digest"].removeprefix("sha256:")).read_bytes())
+    source_configuration = json.dumps(configuration, indent=2, sort_keys=True).encode()
+    manifest["config"].update(
+        digest=f"sha256:{hashlib.sha256(source_configuration).hexdigest()}", size=len(source_configuration)
+    )
     for layer in manifest["layers"]:
         layer["mediaType"] = "application/vnd.docker.image.rootfs.diff.tar.gzip"
     original = json.dumps(manifest).encode()
@@ -60,13 +66,16 @@ def converted_registry_image(layered_oci_image, monkeypatch):
 
     def image_tool(args, **_kwargs):
         if "inspect" in args:
-            return subprocess.CompletedProcess(args, 0, stdout=manifests[args[-1].rsplit("@", 1)[1]], stderr=b"")
+            output = source_configuration if "--config" in args else manifests[args[-1].rsplit("@", 1)[1]]
+            return subprocess.CompletedProcess(args, 0, stdout=output, stderr=b"")
         destination = Path(args[-1].removeprefix("oci:").removesuffix(":image"))
         shutil.copytree(image.layout, destination)
         return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(subprocess, "run", image_tool)
-    return RegistryFixture(RegistryImage(f"registry.invalid/task@{original_digest}"), image, manifests)
+    return RegistryFixture(
+        RegistryImage(f"registry.invalid/task@{original_digest}"), image, manifests, source_configuration
+    )
 
 
 @pytest.mark.parametrize("working_directory,expected", [("/task workspace", "/task workspace"), ("", "/")])
@@ -119,6 +128,7 @@ def layered_oci_image(oci_image):
             "Entrypoint": ["/bin/service", "--foreground"],
             "Cmd": ["--port", "8000"],
             "User": "0:0",
+            "AttachStdin": False,
         },
     )
 
@@ -273,7 +283,7 @@ def test_converted_manifest_reloads_in_a_new_process_without_image_tools(tmp_pat
     assert json.loads(stdout) == [fixture.image.manifest_digest, fixture.source.reference, "/data"]
 
 
-@pytest.mark.parametrize("tampering", ["source_manifest", "source_binding", "config", "tag"])
+@pytest.mark.parametrize("tampering", ["source_manifest", "source_binding", "source_config", "config", "tag"])
 def test_converted_registry_binding_rejects_corruption(tmp_path, converted_registry_image, tampering):
     fixture = converted_registry_image
     cache = tmp_path / "cache"
@@ -286,6 +296,11 @@ def test_converted_registry_binding_rejects_corruption(tmp_path, converted_regis
         binding = json.loads(path.read_bytes())
         binding["source_manifests"][0] = f"sha256:{'0' * 64}"
         path.write_text(json.dumps(binding))
+    elif tampering == "source_config":
+        original_manifest = json.loads(fixture.manifests[fixture.source.reference.rsplit("@", 1)[1]])
+        (prepared.layout / "blobs/sha256" / original_manifest["config"]["digest"].removeprefix("sha256:")).write_bytes(
+            b"changed"
+        )
     elif tampering == "config":
         manifest = json.loads(
             (prepared.layout / "blobs/sha256" / prepared.manifest_digest.removeprefix("sha256:")).read_bytes()
@@ -328,6 +343,10 @@ def test_registry_binding_cannot_select_an_unrelated_valid_image(tmp_path, conve
     shutil.copytree(unrelated.layout, destination)
     original = fixture.source.reference.rsplit("@", 1)[1]
     (destination / "blobs/sha256" / original.removeprefix("sha256:")).write_bytes(fixture.manifests[original])
+    original_manifest = json.loads(fixture.manifests[original])
+    (destination / "blobs/sha256" / original_manifest["config"]["digest"].removeprefix("sha256:")).write_bytes(
+        fixture.source_configuration
+    )
     binding_path = cache / "registry" / f"{original.removeprefix('sha256:')}.json"
     binding = json.loads(binding_path.read_bytes())
     binding["prepared_manifest_digest"] = unrelated.manifest_digest
@@ -336,7 +355,7 @@ def test_registry_binding_cannot_select_an_unrelated_valid_image(tmp_path, conve
         ImageCache(cache).prepare(fixture.source)
 
 
-@pytest.mark.parametrize("mismatch", ["source_digest", "layer_order"])
+@pytest.mark.parametrize("mismatch", ["source_digest", "layer_order", "configuration_value", "configuration_type"])
 def test_registry_conversion_requires_the_pinned_source_payload(tmp_path, converted_registry_image, mismatch):
     fixture = converted_registry_image
     if mismatch == "source_digest":
@@ -345,7 +364,18 @@ def test_registry_conversion_requires_the_pinned_source_payload(tmp_path, conver
         image = fixture.image
         blobs = image.layout / "blobs/sha256"
         manifest = json.loads((blobs / image.manifest_digest.removeprefix("sha256:")).read_bytes())
-        manifest["layers"].reverse()
+        if mismatch == "layer_order":
+            manifest["layers"].reverse()
+        else:
+            configuration = json.loads((blobs / manifest["config"]["digest"].removeprefix("sha256:")).read_bytes())
+            if mismatch == "configuration_value":
+                configuration["config"]["WorkingDir"] = "/different"
+            else:
+                configuration["config"]["AttachStdin"] = 0
+            raw = json.dumps(configuration).encode()
+            digest = hashlib.sha256(raw).hexdigest()
+            (blobs / digest).write_bytes(raw)
+            manifest["config"].update(digest=f"sha256:{digest}", size=len(raw))
         raw = json.dumps(manifest).encode()
         digest = hashlib.sha256(raw).hexdigest()
         (blobs / digest).write_bytes(raw)
