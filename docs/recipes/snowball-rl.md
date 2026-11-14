@@ -17,6 +17,7 @@ Datakit SFT weights and tokenizer, GPU layout, evaluation schedule and measureme
 | startup latency | speed-medium, which reports startup |
 | asynchronous grading, admission or loop performance | speed-long |
 | release training | train-long |
+| release training with agentic checkpoint evaluation | train-long-harbor |
 
 ## The loop
 
@@ -164,6 +165,15 @@ by task ID and count as scored only after successful verification without an exc
 Equal-family mean averages answers per task, tasks per family, then families. Slices use family, AAII
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
 
+Train-long-harbor adds 30 pinned BFCL, 30 SWE-bench Verified and 30 OpenThoughts-TBLite trials
+on Daytona at each evaluation. Set `DAYTONA_EVAL_API_KEY` before submission. Checkpoint choice
+requires at least 99% native coverage and 90% in each Harbor cohort; `eval/all` pools native and
+Harbor scored rewards. Per-cohort metrics are `eval/harbor/<cohort>/*`; trial artifacts live under
+`exports/inline_harbor/`. A Harbor error stops training; rerunning the same command resumes from
+the latest checkpoint. `best_checkpoint.json` records the selected checkpoint; HF export uses
+the latest checkpoint. This runtime evaluates the current training weights; the separate
+[offline evaluation launcher](../explanations/evaluation.md) evaluates an exported model.
+
 ## Gaps
 
 | gap | implication and follow-up |
@@ -172,3 +182,4 @@ category and agentic status. Task selection versions are immutable; follow the E
 | mismatch-is-agreement | mismatch measures policy agreement; exactness claims need an explicit zero-mismatch bound |
 | AAII coverage; no-agentic-tasks | scientific reasoning, coding, General and a single-turn Agents stand-in; multi-turn tools and long context need separate qualification |
 | no-image-sandbox | image-only tasks need a sandbox backend |
+| harbor-on-daytona | train-long-harbor needs the eval account, sandbox capacity and agentic runtime qualification |

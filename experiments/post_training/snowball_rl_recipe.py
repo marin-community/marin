@@ -205,7 +205,8 @@ def run_step(preset: presets.Preset, spec: SkyRLSpec, *, wandb_entity: str | Non
             coordinator_timeout_hours=RUN_TIMEOUT_HOURS,
             job_timeout_seconds=RUN_TIMEOUT_HOURS * 3600,
             wandb_entity=wandb_entity or DEFAULT_WANDB_ENTITY,
-            required_env_vars=(("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)),
+            required_env_vars=(("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",))
+            + ((preset.harbor.daytona_api_key_env,) if preset.harbor is not None else ()),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         ),
         export_hf=preset.publishes,
