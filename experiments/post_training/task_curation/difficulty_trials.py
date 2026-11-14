@@ -297,25 +297,36 @@ def run_task(
         route = f"/{root.name}-{key}-{number}"
         for traffic in (root.parent / "model-requests", root.parent / "judge" / "model-requests"):
             requests = traffic / hashlib.sha256(route.encode()).hexdigest()
-            for response_path in requests.glob("*/response.json"):
+            route_served = False
+            unserved_seen = False
+            wait_seen = False
+            failed_seen = False
+            for request in requests.glob("*"):
+                response_path = request / "response.json"
+                if not response_path.exists():
+                    failed_seen = True
+                    if (request / "provider-queued.json").exists() and not (request / "provider-admitted.json").exists():
+                        wait_seen = True
+                    if any((request / "provider-waits").glob("*.json")):
+                        wait_seen = True
+                    continue
                 response = json.loads(response_path.read_text())
                 if response["status"] != 200:
-                    model_request_failed = True
-                elif traffic == root.parent / "model-requests":
-                    candidate_served = True
-                error = response["body"].get("error")
-                if isinstance(error, dict) and error.get("code") == "input_budget_unserved":
-                    unserved = True
-                if isinstance(error, dict) and error.get("code") == "provider_wait":
-                    provider_wait = True
-            for request in requests.glob("*"):
-                if (request / "response.json").exists():
+                    failed_seen = True
+                    error = response["body"].get("error")
+                    if isinstance(error, dict) and error.get("code") == "input_budget_unserved":
+                        unserved_seen = True
+                    if isinstance(error, dict) and error.get("code") == "provider_wait":
+                        wait_seen = True
                     continue
-                model_request_failed = True
-                if (request / "provider-queued.json").exists() and not (request / "provider-admitted.json").exists():
-                    provider_wait = True
-                if any((request / "provider-waits").glob("*.json")):
-                    provider_wait = True
+                # A successful request recovers earlier transport failures, waits and
+                # budget rejections on the same route; the task was served and graded.
+                route_served = True
+                if traffic == root.parent / "model-requests":
+                    candidate_served = True
+            unserved = unserved or (unserved_seen and not route_served)
+            provider_wait = provider_wait or (wait_seen and not route_served)
+            model_request_failed = model_request_failed or (failed_seen and not route_served)
         if result.exception_info is not None and not candidate_served:
             model_request_failed = True
         if unserved:

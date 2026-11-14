@@ -366,3 +366,116 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
             difficulty_trials.main()
         assert not list((tmp_path / "changed-judge").glob("*/measurement.json"))
         assert len(physical_attempts) == 2 + int(infrastructure_first)
+
+
+def test_recovered_transport_retry_preserves_the_valid_grade(tmp_path, monkeypatch):
+    runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
+    runtime_sha256 = canonical_sha256(runtime)
+    sample = DifficultySample(
+        source_id="fixture:recovered", release={"repo": "fixture", "revision": "pin", "url": "https://fixture.invalid/pin"},
+        converter_version="fixture", converter_revision="a" * 40, population_count=1,
+        task_specs_sha256="b" * 64, drop_manifest={"uri": "fixture:drop", "sha256": "c" * 64},
+        seed=0, pre_oracle_filter=False, resample_after_oracle_filter=False,
+        tasks=[{"task_id": "scored", "task_sha256": "d" * 64}],
+    )
+    source = PreparedSource(
+        sample=sample, sample_receipt={"uri": "fixture:sample", "sha256": "e" * 64},
+        tasks=[PreparedTask(task_id="scored", runtime_sha256=runtime_sha256, path=str(tmp_path / "source-task"),
+                            workload="task_spec", backend="local", reason=None, judge_model=None)],
+    )
+    directory = tmp_path / "source-task"
+    directory.mkdir()
+    (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
+        task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
+    ).model_dump_json())
+    config = difficulty_trials.CandidateRun(
+        solver=Solver.HOSTED,
+        identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
+                                tokenizer=SOLVER_MODELS[Solver.HOSTED], tokenizer_revision="a" * 40,
+                                chat_template_sha256="f" * 64,
+                                serving_receipt={"uri": "fixture:serving", "sha256": "0" * 64}),
+        settings=SamplingSettings(context_tokens=65536, input_tokens=49152, output_tokens=16384,
+                                  temperature=0.7, top_p=0.95, top_k=20, min_p=0, repetition_penalty=1,
+                                  presence_penalty=0, frequency_penalty=0, thinking="low", deviations=[]),
+        endpoint="https://model.fixture/v1", api_model="glm-5.3", api_key_secret=None,
+        provider_limits=ProviderLimits(max_in_flight=2, attempts=2),
+        environment_options={}, judge_endpoint="https://judge.fixture/v1",
+        judge_api_key_secret="unused", workers=2, gpu_count=0, attempts_per_task=2, task_limit=None,
+        judge_api_model="glm-5.3",
+        judge_identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
+                                      tokenizer=SOLVER_MODELS[Solver.HOSTED], tokenizer_revision="a" * 40,
+                                      chat_template_sha256="f" * 64,
+                                      serving_receipt={"uri": "fixture:serving", "sha256": "0" * 64}),
+    )
+    source_path = tmp_path / "sources.json"
+    source_path.write_text(json.dumps([source.model_dump(mode="json")]))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(config.model_dump_json())
+    output = tmp_path / "output" / "trials"
+
+    candidate_requests = []
+    real_client = httpx.Client
+
+    def model_response(request):
+        body = json.loads(request.content)
+        candidate_requests.append(body)
+        if len(candidate_requests) <= 2:
+            # Both provider admission attempts of the first request fail transiently.
+            return httpx.Response(503, json={"error": {"message": "Transient serving failure"}})
+        return httpx.Response(200, json={"usage": {"prompt_tokens": 100, "completion_tokens": 200}})
+
+    class Tokenizer:
+        def apply_chat_template(self, *args, **kwargs):
+            return [1]
+
+    monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
+    monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs: real_client(
+        **kwargs, transport=httpx.MockTransport(model_response)))
+    monkeypatch.setattr(difficulty_trials, "require_secret", lambda name: "fixture-host-key")
+
+    async def physical_trial(configuration, authentication):
+        # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
+        # The trial's first model request is transiently rejected and its retry succeeds through the relay.
+        endpoint = configuration.agent.kwargs["api_base"]
+        request = Request(endpoint + "/chat/completions", method="POST",
+                          data=json.dumps({"messages": [{"role": "user", "content": "Original task"}]}).encode(),
+                          headers={"Content-Type": "application/json"})
+        with pytest.raises(HTTPError) as error:
+            urlopen(request, timeout=10)
+        assert error.value.code == 503
+        with urlopen(request, timeout=10) as response:
+            assert response.status == 200
+        trial_directory = configuration.trials_dir / configuration.trial_name
+        agent = trial_directory / "agent"
+        verifier = trial_directory / "verifier"
+        agent.mkdir(parents=True)
+        verifier.mkdir()
+        (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": 1.0}))
+        (trial_directory / "network-policy.json").write_text(json.dumps({
+            "source_runtime_sha256": runtime_sha256, "actor_declared": "allow", "verifier_declared": "allow",
+            "actor_required": True, "actor_effective": "allow", "verifier_effective": "allow",
+        }))
+        payload = {"exception_info": None, "verifier_result": {"rewards": {"reward": 1.0}}}
+        (trial_directory / "result.json").write_text(json.dumps(payload))
+        result = SimpleNamespace(finished_at=datetime.now(UTC), completion="completed", exception_info=None,
+                                 verifier_result=SimpleNamespace(rewards={"reward": 1.0}),
+                                 model_dump=lambda **kwargs: payload)
+        trial = SimpleNamespace(paths=SimpleNamespace(trial_dir=trial_directory, agent_dir=agent, verifier_dir=verifier))
+        return trial, result
+
+    monkeypatch.setattr(difficulty_trials, "execute_trial", physical_trial)
+    monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
+                                     "--output-root", str(output), "--local-root", str(tmp_path / "local")])
+    difficulty_trials.main()
+
+    rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
+    (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
+    # The wait was recovered by the successful retry, so the valid grade is preserved and counted.
+    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("measured", 1, 1, 0)
+    assert measurement.infrastructure_attempts == 0
+    attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
+    assert [(attempt["task_id"], attempt["status"], attempt["reward"]) for attempt in attempts["attempts"]] == [
+        ("scored", "scored", 1.0),
+    ]
+    assert attempts["pending_reasons"] == {}
+    assert len(candidate_requests) == 3
