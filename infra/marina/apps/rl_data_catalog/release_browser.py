@@ -181,6 +181,78 @@ def source_sweep(page: Page, root: str, sources: list[dict[str, Any]], shots: Pa
     return results
 
 
+EVIDENCE_BOUNDS = """() => {
+ const failures=[];
+ for(const field of document.querySelectorAll('.field')){
+  const label=field.querySelector('dt').getBoundingClientRect(),value=field.querySelector('dd').getBoundingClientRect();
+  if(label.right>value.left+1)failures.push({field:field.textContent,overlap:true});
+ }
+ for(const table of document.querySelectorAll('table'))for(const row of table.tBodies[0]?.rows||[]){
+  const cells=[...row.cells];
+  for(let i=0;i<cells.length-1;i++)if(cells[i].getBoundingClientRect().right>cells[i+1].getBoundingClientRect().left+1)
+   failures.push({table:table.textContent,overlap:true});
+ }
+ if(document.documentElement.scrollWidth>innerWidth)failures.push({pageOverflow:true});
+ return failures;
+}"""
+
+
+def check_evidence(page: Page) -> None:
+    failures = page.evaluate(EVIDENCE_BOUNDS)
+    if failures:
+        raise ValueError(f"Evidence overlap at {page.url}: {failures}")
+
+
+def evidence_sweep(page: Page, root: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Exercise source/backend evidence for every observed admission/QA/actor state."""
+    cases = {}
+    for row in sources:
+        key = (
+            row["quality"],
+            row["result"],
+            row["result_provisional"],
+            row["filtration"]["state"],
+            row["daytona"]["state"],
+            bool(row["daytona"].get("exempt")),
+            row["intended_use"],
+            (row["backend_capabilities"] or {}).get("basis"),
+            bool(row.get("quality_result_waiver")),
+            bool(row.get("quality_review_status")),
+            tuple(model["status"] for model in row["difficulty"]["models"]),
+        )
+        cases.setdefault(key, row)
+    results = []
+    for theme, width in LAYOUTS:
+        page.emulate_media(color_scheme=theme)
+        page.set_viewport_size({"width": width, "height": 1000})
+        for row in cases.values():
+            for view in ("source", "backends"):
+                page.goto(root + view + ".html#" + urlencode({"source_id": row["id"]}))
+                expect(page.locator("#title")).to_have_text(row["display_name"])
+                expect(
+                    page.locator("#sections .assessment-card")
+                    if view == "source"
+                    else page.locator("#daytona-evidence .field")
+                ).not_to_have_count(0)
+                check_evidence(page)
+                if view == "backends":
+                    safety = row["daytona"]
+                    verdict = (
+                        "—"
+                        if safety.get("exempt")
+                        else {"na": "N/A", "unmeasured": "Pending census", "safe": "SAFE", "unsafe": "UNSAFE"}[
+                            safety["state"]
+                        ]
+                    )
+                    fields = page.locator("#daytona-evidence .field")
+                    expect(
+                        fields.filter(has=page.get_by_text("Actor verdict", exact=True)).locator("dd")
+                    ).to_contain_text(verdict)
+                    expect(page.get_by_role("link", name="How to make it safe: Daytona operations ↗")).to_have_count(1)
+                results.append({"source_id": row["id"], "view": view, "theme": theme, "width": width})
+    return results
+
+
 def check_map(page: Page) -> dict[str, Any]:
     expect(page.locator("#provenance")).to_contain_text('"release_id"')
     expect(page.locator("#curriculum-map")).not_to_have_attribute("aria-busy", "true")

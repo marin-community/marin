@@ -86,7 +86,12 @@ from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
-from infra.marina.apps.rl_data_catalog.release_evidence import catalog_state, verify_preservation
+from infra.marina.apps.rl_data_catalog.release_evidence import (
+    catalog_state,
+    projected_duplicate_inventory,
+    stored_duplicate_groups,
+    verify_preservation,
+)
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.app import create_api, migrate
 from infra.marina.apps.rl_data_catalog.server.quality import result
@@ -2006,6 +2011,10 @@ def test_frozen_catalog_projects_measured_math_folds_and_directional_notes(catal
         assert detail["partial_overlaps"] == notes
         assert detail["duplicate_group"] == rows["agentica-org:deepscaler"]["duplicate_group"]
         duplicates = client.get("/source-duplicates").json()
+        stale = {"sources": [{**row, "duplicate_group": stored, "partial_overlaps": []} for row in rows.values()]}
+        projected = projected_duplicate_inventory(stale, catalog_query, template["load_id"])
+        assert projected["sources"] == list(rows.values())
+        assert stored_duplicate_groups(catalog_query, template["load_id"]) == duplicates["stored_groups"]
         assert duplicates["stored_groups"] == [stored | {"advisory": True}]
         assert {g["group_id"] for g in duplicates["groups"]} == {
             row["duplicate_group"]["group_id"] for row in rows.values() if row["duplicate_group"] is not None

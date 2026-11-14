@@ -170,3 +170,11 @@ groups, identity survey records and pair reviews. Recomputing display groups fro
 those records must preserve their archived bytes. A filtered-out canonical source
 leaves its eligible group members unfolded; the checker rejects sibling folding
 without the canonical representative.
+
+The real-data evidence sweep selects a source for each observed combination of
+Quality, Result, provisional status, filtration state, actor safety, Use and
+backend measurement basis, review waiver/progress and difficulty measurement states. It opens both Evidence and Backends at all four
+layouts, checking field/table bounds and the Daytona verdict and operations link.
+Hosted verification also compares recomputed duplicate groups and directional
+notes against the input-bound projection and checks that stored groups remain
+accessible as archived evidence.

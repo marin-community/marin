@@ -9,6 +9,10 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from taskcompendium.source_fingerprints import DuplicateReview
+
+from .server.app import canonical_duplicate_group, canonical_duplicate_review
+from .server.duplicate_folding import SourceStanding, fold_groups, partial_overlap_notes
 from .server.filtration import filtration
 from .server.source_counts import SourceCounts
 
@@ -74,6 +78,51 @@ def projected_sources(data: dict[str, Any], counts: SourceCounts) -> dict[str, A
         raise ValueError("The catalog contains duplicate source IDs")
     task_totals(rows)
     return {**data, "sources": rows}
+
+
+DUPLICATE_REVIEW_BATCH = 100
+
+
+def projected_duplicate_inventory(data: dict[str, Any], query: SqlQuery, load_id: str) -> dict[str, Any]:
+    """Recompute display groups from frozen reviews and current displayed standings."""
+    reviews = []
+    offset = 0
+    while True:
+        rows = query(
+            "SELECT review FROM atlas_duplicate_reviews WHERE load_id=:load_id "
+            "ORDER BY left_source,right_source LIMIT :limit OFFSET :offset",
+            {"load_id": load_id, "limit": DUPLICATE_REVIEW_BATCH, "offset": offset},
+        )["rows"]
+        reviews.extend(DuplicateReview.model_validate(canonical_duplicate_review(row["review"])) for row in rows)
+        if len(rows) < DUPLICATE_REVIEW_BATCH:
+            break
+        offset += len(rows)
+    standings = {
+        row["id"]: SourceStanding(row["within_source_dedup"]["unique_count"], row["quality"]) for row in data["sources"]
+    }
+    reviews = [
+        review for review in reviews if review.similarity.left in standings and review.similarity.right in standings
+    ]
+    groups = fold_groups(reviews, standings)
+    by_source = {member.source_id: group.model_dump(mode="json") for group in groups for member in group.members}
+    notes = partial_overlap_notes(reviews, groups)
+    return {
+        **data,
+        "sources": [
+            {**row, "duplicate_group": by_source.get(row["id"]), "partial_overlaps": notes.get(row["id"], [])}
+            for row in data["sources"]
+        ],
+    }
+
+
+def stored_duplicate_groups(query: SqlQuery, load_id: str) -> list[dict[str, Any]]:
+    rows = query(
+        "SELECT DISTINCT duplicate_group FROM atlas_sources " "WHERE load_id=:load_id AND duplicate_group IS NOT NULL",
+        {"load_id": load_id},
+    )["rows"]
+    return sorted(
+        (canonical_duplicate_group(row["duplicate_group"]) for row in rows), key=lambda group: group["group_id"]
+    )
 
 
 def catalog_state(query: SqlQuery) -> dict[str, Any]:

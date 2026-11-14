@@ -34,12 +34,14 @@ from .prepare_preview import (
     RELOCATED_SERVER_FILES,
     oracle_inventory_payload,
 )
-from .release_browser import curriculum_sweep, source_sweep
+from .release_browser import curriculum_sweep, evidence_sweep, source_sweep
 from .release_evidence import (
     SqlQuery,
     catalog_state,
     json_sha256,
+    projected_duplicate_inventory,
     projected_sources,
+    stored_duplicate_groups,
     verify_preservation,
 )
 from .release_receipts import (
@@ -221,11 +223,33 @@ class CatalogReader:
 
 
 def browser_checks(
-    reader: CatalogReader, root: str, expected: dict[str, Any], shots: Path, *, local: bool
+    reader: CatalogReader,
+    root: str,
+    expected: dict[str, Any],
+    shots: Path,
+    *,
+    local: bool,
+    stored_groups: list[dict[str, Any]],
 ) -> dict[str, Any]:
     releases = reader.get("api/curriculum/releases")["releases"]
     inventory = reader.get("measurements/oracle-inventory.json")
     errors: list[str] = []
+    if not local:
+        survey = reader.get("api/source-duplicates")
+        expected_groups = {
+            row["duplicate_group"]["group_id"]: row["duplicate_group"]
+            for row in expected["sources"]
+            if row["duplicate_group"]
+        }
+        if sorted(survey["groups"], key=lambda group: group["group_id"]) != sorted(
+            expected_groups.values(), key=lambda group: group["group_id"]
+        ):
+            raise ValueError("Hosted duplicate groups differ from the frozen-review projection")
+        expected_notes = {row["id"]: row["partial_overlaps"] for row in expected["sources"] if row["partial_overlaps"]}
+        if survey["partial_overlaps"] != expected_notes:
+            raise ValueError("Hosted partial-overlap notes differ from their directional measurements")
+        if sorted(survey["stored_groups"], key=lambda group: group["group_id"]) != stored_groups:
+            raise ValueError("Hosted duplicate API omitted or changed archived stored groups")
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         try:
@@ -236,6 +260,14 @@ def browser_checks(
                 path = parsed.path[len(urlsplit(root).path) :]
                 if path.startswith("api/"):
                     data = reader.get(path + ("?" + parsed.query if parsed.query else ""))
+                    if local and path == "api/source":
+                        row = next(item for item in expected["sources"] if item["id"] == data["declaration"]["id"])
+                        data = {
+                            **data,
+                            "duplicate_group": row["duplicate_group"],
+                            "partial_overlaps": row["partial_overlaps"],
+                            "daytona_snapshot_limit": expected["daytona_snapshot_limit"],
+                        }
                     if path == "api/sources":
                         if local:
                             data = expected
@@ -255,11 +287,13 @@ def browser_checks(
             page.on("pageerror", lambda error: errors.append(str(error)))
             sources = source_sweep(page, root, expected["sources"], shots)
             curriculum = curriculum_sweep(page, root, releases, shots)
+            evidence = evidence_sweep(page, root, expected["sources"])
             if errors:
                 raise ValueError(f"Browser JavaScript errors: {errors}")
             return {
                 "source_views": sources,
                 "curriculum_views": curriculum,
+                "evidence_views": evidence,
                 "api_response_sha256": {key: json_sha256(value) for key, value in reader.cache.items()},
                 "inventory_sha256": json_sha256(inventory),
                 "errors": errors,
@@ -362,7 +396,9 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         before = catalog_state(query)
         actual = reader.get("api/sources")
         if package or args.refresh_snapshot:
-            expected = projected_sources(actual, counts)
+            expected = projected_duplicate_inventory(
+                projected_sources(actual, counts), query, before["selected"]["load_id"]
+            )
         else:
             if baseline is None:
                 raise ValueError("Hosted checks require a preflight baseline")
@@ -371,6 +407,7 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         receipt.production_version = args.production_version
         receipt.preview_base_version = details["current_version"]
         receipt.expected_sources = expected
+        stored_groups = stored_duplicate_groups(query, before["selected"]["load_id"])
         if baseline:
             verify_preservation(baseline.evidence_before, before, refresh_snapshot=args.refresh_snapshot)
             provenance = reader.get("bundled-model-provenance.json")
@@ -382,12 +419,16 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             )
             with static_preview(package / "dist") as root:
                 receipt.gate = "browser-sweep"
-                receipt.browser = browser_checks(reader, root, expected, artifacts / "screenshots", local=True)
+                receipt.browser = browser_checks(
+                    reader, root, expected, artifacts / "screenshots", local=True, stored_groups=stored_groups
+                )
         else:
             if baseline is None:
                 raise ValueError("Hosted checks require a preflight baseline")
             receipt.gate = "hosted-browser-sweep"
-            receipt.browser = browser_checks(reader, reader.root, expected, artifacts / "screenshots", local=False)
+            receipt.browser = browser_checks(
+                reader, reader.root, expected, artifacts / "screenshots", local=False, stored_groups=stored_groups
+            )
             if receipt.browser["inventory_sha256"] != baseline.browser["inventory_sha256"]:
                 raise ValueError("Hosted oracle inventory differs from the preflight input")
         after = catalog_state(query)

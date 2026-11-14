@@ -9,7 +9,7 @@ import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
-from infra.marina.apps.rl_data_catalog.release_browser import TABLE_BOUNDS, check_view
+from infra.marina.apps.rl_data_catalog.release_browser import TABLE_BOUNDS, check_evidence, check_view, evidence_sweep
 
 
 def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey) -> None:
@@ -169,6 +169,11 @@ def test_release_checker_accepts_real_catalog_and_rejects_corrupted_rendered_tot
     page.locator("#metric-sources").evaluate("e=>e.textContent='0 / 0'")
     with pytest.raises(AssertionError):
         check_view(page, sources, include_hidden=True, expanded=True)
+    root = page.url.split("#")[0]
+    evidence_sweep(page, root, [row for row in sources if row["id"] in {"Marin:clean", "Marin:eval"}])
+    page.locator(".field dd").first.evaluate("e=>e.style.transform='translateX(-100px)'")
+    with pytest.raises(ValueError, match="Evidence overlap"):
+        check_evidence(page)
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
