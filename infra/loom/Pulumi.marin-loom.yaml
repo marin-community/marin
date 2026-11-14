@@ -300,6 +300,28 @@ config:
         - marin-community/marin
       allowedTools: []
       mcpAccess: *builtinMcpAccess
+    logbook-advisory:
+      agent: claude
+      description: Assess whether a merged Marin contribution warrants a logbook update
+      model: claude-opus-5-5
+      effort: low
+      protocol: acp
+      mode: default
+      class: automation
+      strict: true
+      envClear: true
+      idleArchiveSeconds: 60
+      maxConcurrent: 4
+      turnBudget: 4
+      prelude: none
+      instructionsFile: profiles/logbook-advisory/AGENTS.md
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: *claudeOauthToken
+      restricted: true
+      allowedTools:
+        - loom/channels/write@v1
+      mcpAccess:
+        mode: none
     codehealth-refinement:
       agent: codex
       description: Refine agentic-lint from persisted review and lint activity
@@ -513,6 +535,12 @@ config:
       workflowRef: marin-community/marin/.github/workflows/marin-canary-hero-gb200.yaml@refs/heads/main
       profile: *githubAutomationProfile
       serviceTag: *githubAutomationProfile
+      ref: refs/heads/main
+    - name: logbook-advisory
+      repositoryId: *marinRepositoryId
+      workflowRef: marin-community/marin/.github/workflows/ops-logbook-advisory.yaml@refs/heads/main
+      profile: logbook-advisory
+      serviceTag: logbook-advisory
       ref: refs/heads/main
     - name: pr-review
       repositoryId: *marinRepositoryId
