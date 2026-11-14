@@ -43,4 +43,3 @@ def preserved_phase_failure(tmp_path, original, trial, *, archive_root, changed=
         archive_member=member,
         archive_root=archive_root,
     )
-
