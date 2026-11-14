@@ -45,7 +45,8 @@ from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_poli
 
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
-from experiments.post_training.task_curation.difficulty_relay import budget_relay
+from experiments.post_training.task_curation.difficulty_relay import RequestBudget, budget_relay
+from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 
 LOGGER = logging.getLogger(__name__)
 ATTEMPT_TIMEOUT = 259200
@@ -68,7 +69,6 @@ class CandidateRun(BaseModel):
     endpoint: str
     api_model: str
     api_key_secret: str | None
-    request_parameters: dict
     environment_options: dict
     judge_endpoint: str
     judge_api_key_secret: str
@@ -154,18 +154,14 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
         local = root / key / f"{number:02d}"
         local.mkdir(parents=True, exist_ok=False)
         endpoint = f"{base_url}/{root.name}-{key}-{number}/v1"
-        parameters = config.request_parameters
+        parameters = request_parameters(config.settings)
         common = {"api_base": endpoint}
         if task.workload == "task_spec":
             kwargs = {
                 **common,
                 "max_turns": 50,
                 "max_tokens": config.settings.output_tokens,
-                "context_window": config.settings.context_tokens,
-                "max_input_tokens": config.settings.input_tokens,
                 "request_parameters": parameters,
-                "tokenizer_model": config.identity.tokenizer,
-                "tokenizer_revision": config.identity.tokenizer_revision,
             }
             agent_name = "task-spec-chat"
         else:
@@ -220,7 +216,7 @@ def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path
         }
         write_json_evidence(destination / f"{number:02d}" / "trial.json", raw_receipt)
         reward = scored_reward(result, trial)
-        unserved = (trial.paths.agent_dir / "candidate-budget-rejection.json").exists()
+        unserved = False
         route = f"/{root.name}-{key}-{number}"
         requests = root.parent / "model-requests" / hashlib.sha256(route.encode()).hexdigest()
         for response_path in requests.glob("*/response.json"):
@@ -283,7 +279,10 @@ def main() -> None:
             api_key=key,
             tokenizer_model=config.identity.tokenizer,
             tokenizer_revision=config.identity.tokenizer_revision,
-            parameters=config.request_parameters,
+            parameters=request_parameters(config.settings),
+            budget=RequestBudget(
+                config.settings.context_tokens, config.settings.input_tokens, config.settings.output_tokens
+            ),
             receipts=args.local_root / "model-requests",
         ) as relay,
     ):

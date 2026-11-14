@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SOLVER_THINKING, Solver
+from finestore.rl.difficulty import PROTOCOL_ID, SOLVER_MODELS, SamplingSettings, Solver
 from huggingface_hub import hf_hub_download
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
@@ -34,10 +34,10 @@ from experiments.post_training.task_curation.difficulty_protocol import (
     GLM_RELAY_JOB,
     PINS,
     TARGET_CLUSTER,
-    request_parameters,
     serving_model,
 )
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
+from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.difficulty_serving_probe import probe_endpoint
 
 LOGGER = logging.getLogger(__name__)
@@ -99,11 +99,11 @@ def worker_limits(root: Path) -> dict:
 
 
 @contextmanager
-def solver_endpoint(solver: Solver):
+def solver_endpoint(solver: Solver, settings: SamplingSettings):
     if solver == Solver.HOSTED:
         yield resolve_glm_base_url(GLM_RELAY_JOB), GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), []
         return
-    definition = serving_model(solver)
+    definition = serving_model(solver, settings.context_tokens)
     hardware = AcceleratorChoice(
         Platform.GPU, gpu_type="H100", gpu_count=PINS[solver].gpus, target_cluster=TARGET_CLUSTER
     )
@@ -130,7 +130,7 @@ def solver_endpoint(solver: Solver):
     )
     with remote_inference(config) as session:
         ready = session.ready_direct_session()
-        if ready.effective_serving is None or ready.effective_serving.max_model_len < 65536:
+        if ready.effective_serving is None or ready.effective_serving.max_model_len < settings.context_tokens:
             raise ValueError("Running inference does not confirm the required context window")
         endpoint = ready.model.endpoint
         yield endpoint.base_url, endpoint.model, endpoint.api_key or "EMPTY", [str(job.job_id) for job in session.jobs]
@@ -225,8 +225,14 @@ def main() -> None:
             "worker_limits": json.loads((args.local_root / "worker-cgroup.json").read_text()),
         },
     )
-    with solver_endpoint(args.solver) as (endpoint, api_model, api_key, jobs):
-        probe = probe_endpoint(args.solver, endpoint, api_model, api_key)
+    deviations = (
+        ["Hosted weight revision is opaque; tokenizer uses the production config pin. Server fingerprint is archived."]
+        if args.solver == Solver.HOSTED
+        else []
+    )
+    settings = sampling_settings(args.solver, deviations)
+    with solver_endpoint(args.solver, settings) as (endpoint, api_model, api_key, jobs):
+        probe = probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
         completion = probe["tools_thinking_probe"]["completion"]
         revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
         receipt = write_json_evidence(
@@ -238,7 +244,9 @@ def main() -> None:
                 "requested_revision": pin.revision,
                 "tokenizer_revision": pin.revision,
                 "chat_template_sha256": pin.template_sha256,
-                "model_definition": None if args.solver == Solver.HOSTED else asdict(serving_model(args.solver)),
+                "model_definition": (
+                    None if args.solver == Solver.HOSTED else asdict(serving_model(args.solver, settings.context_tokens))
+                ),
                 "serving_jobs": jobs,
                 "placement": {
                     "root_target_cluster": TARGET_CLUSTER,
@@ -246,39 +254,12 @@ def main() -> None:
                     "model_cache_root": MODEL_CACHE_ROOT,
                     "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                 },
-                "sampling": request_parameters(args.solver),
+                "sampling": request_parameters(settings),
                 "compilation_and_cuda_graphs_requested": True,
                 "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
                 **probe,
             },
         )
-        deviations = (
-            [
-                "Hosted weight revision is opaque; tokenizer uses the production config pin. "
-                "Server fingerprint is archived."
-            ]
-            if args.solver == Solver.HOSTED
-            else []
-        )
-        protocol = PROTOCOLS[PROTOCOL_ID]
-        settings = dict(
-            zip(
-                (
-                    "context_tokens",
-                    "input_tokens",
-                    "output_tokens",
-                    "top_p",
-                    "top_k",
-                    "min_p",
-                    "repetition_penalty",
-                    "presence_penalty",
-                    "frequency_penalty",
-                ),
-                protocol.sampling,
-                strict=True,
-            )
-        )
-        settings.update(temperature=protocol.temperature, thinking=SOLVER_THINKING[args.solver], deviations=deviations)
         config = {
             "solver": args.solver,
             "identity": {
@@ -289,11 +270,10 @@ def main() -> None:
                 "chat_template_sha256": pin.template_sha256,
                 "serving_receipt": receipt.model_dump(mode="json"),
             },
-            "settings": settings,
+            "settings": settings.model_dump(mode="json"),
             "endpoint": endpoint,
             "api_model": api_model,
             "api_key_secret": "ATLAS_DIFFICULTY_CANDIDATE_TOKEN",
-            "request_parameters": request_parameters(args.solver),
             "environment_options": options,
             "workers": args.workers,
             "gpu_count": pin.gpus,

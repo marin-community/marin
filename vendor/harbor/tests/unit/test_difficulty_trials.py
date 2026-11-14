@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 import httpx
 import pytest
 from finestore.reader import ReadView
+from harbor.llms.vllm_tokenization import tokenize_url
 from finestore.rl.difficulty import (
     MEASUREMENTS,
     SOLVER_MODELS,
@@ -29,9 +30,10 @@ from experiments.post_training.task_curation import difficulty_relay, difficulty
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 
 
-@pytest.mark.parametrize("upstream_failure", [None, "json", "html"])
+@pytest.mark.parametrize("upstream_failure", [None, "json", "html", "input_tokenize"])
 def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure):
     infrastructure_first = upstream_failure is not None
+    unserved = upstream_failure == "input_tokenize"
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
     blocker = "missing_environment_artifact: fixture/original/requirements.lock"
@@ -46,7 +48,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         sample=sample, sample_receipt={"uri": "fixture:sample", "sha256": "e" * 64},
         tasks=[
             PreparedTask(task_id="scored", runtime_sha256=runtime_sha256, path=str(tmp_path / "source-task"),
-                         workload="task_spec", backend="local", reason=None, judge_model=None),
+                         workload="native" if unserved else "task_spec", backend="local", reason=None, judge_model=None),
             PreparedTask(task_id="blocked", runtime_sha256=runtime_sha256, path=None,
                          workload="task_spec", backend="local", reason=blocker, judge_model=None),
         ],
@@ -66,7 +68,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                                   temperature=0.7, top_p=0.95, top_k=20, min_p=0, repetition_penalty=1,
                                   presence_penalty=0, frequency_penalty=0, thinking="low", deviations=[]),
         endpoint="https://model.fixture/v1", api_model="glm-5.3", api_key_secret=None,
-        request_parameters={}, environment_options={}, judge_endpoint="https://judge.fixture/v1",
+        environment_options={}, judge_endpoint="https://judge.fixture/v1",
         judge_api_key_secret="unused", workers=2, gpu_count=0, attempts_per_task=2, task_limit=None,
     )
     source_path = tmp_path / "sources.json"
@@ -86,7 +88,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     class Tokenizer:
         def apply_chat_template(self, *args, **kwargs):
-            return [1]
+            return [1] * (49153 if unserved else 1)
 
     monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
     monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs: real_client(
@@ -105,13 +107,17 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         verifier.mkdir()
         if failed:
             endpoint = configuration.agent.kwargs["api_base"]
-            request = Request(endpoint + "/chat/completions", method="POST",
+            request = Request(tokenize_url(endpoint) if unserved else endpoint + "/chat/completions", method="POST",
                               data=json.dumps({"messages": [{"role": "user", "content": "Original task"}]}).encode(),
                               headers={"Content-Type": "application/json"})
             with pytest.raises(HTTPError) as error:
                 urlopen(request, timeout=10)
-            assert error.value.code == 502
-            assert isinstance(json.loads(error.value.read())["error"], str)
+            assert error.value.code == (400 if unserved else 502)
+            response_error = json.loads(error.value.read())["error"]
+            if unserved:
+                assert response_error["code"] == "input_budget_unserved"
+            else:
+                assert isinstance(response_error, str)
         if not failed:
             (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": 1.0}))
         (directory / "network-policy.json").write_text(json.dumps({
@@ -135,10 +141,14 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
-    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("pending", 1, 1, 1)
-    assert measurement.reason == blocker
-    assert measurement.infrastructure_attempts == int(infrastructure_first)
+    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
+        "pending", 0 if unserved else 1, 0 if unserved else 1, 2 if unserved else 1)
+    assert blocker in measurement.reason
+    assert measurement.infrastructure_attempts == int(infrastructure_first and not unserved)
     attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
-    assert attempts["pending_reasons"] == {"blocked": blocker}
-    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(infrastructure_first)
-    assert len(candidate_requests) == int(infrastructure_first)
+    pending = {"blocked": blocker}
+    if unserved:
+        pending["scored"] = difficulty_trials.INPUT_BUDGET_REASON
+    assert attempts["pending_reasons"] == pending
+    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(infrastructure_first and not unserved)
+    assert len(candidate_requests) == int(infrastructure_first and not unserved)

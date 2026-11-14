@@ -4,13 +4,11 @@
 """Frozen Atlas difficulty solver identities and per-request policy."""
 
 from dataclasses import dataclass
-from typing import Any
 
-from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, Solver
+from finestore.rl.difficulty import SOLVER_MODELS, Solver
 from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
 from marin.external_dependencies import VLLM_GPU_RELEASE
 
-CONTEXT_TOKENS = int(PROTOCOLS[PROTOCOL_ID].sampling[0])
 TARGET_CLUSTER = "cw-rno2a"
 GLM_RELAY_JOB = "/muchanem/glm53-relay-rno2a-g-20261027T0414Z"
 
@@ -46,30 +44,14 @@ PINS = {
 }
 
 
-def request_parameters(solver: Solver) -> dict[str, Any]:
-    extra: dict[str, Any] = {"top_k": 20, "min_p": 0.0, "repetition_penalty": 1.0}
-    if solver in {Solver.SMALL, Solver.LARGE}:
-        extra["chat_template_kwargs"] = {"enable_thinking": solver == Solver.LARGE}
-    parameters = {
-        "temperature": 0.7,
-        "top_p": 0.95,
-        "presence_penalty": 0.0,
-        "frequency_penalty": 0.0,
-        "extra_body": extra,
-    }
-    if solver == Solver.HOSTED:
-        parameters["reasoning_effort"] = "low"
-    return parameters
-
-
-def serving_model(solver: Solver) -> ModelConfig:
+def serving_model(solver: Solver, context_tokens: int) -> ModelConfig:
     if solver == Solver.HOSTED:
         raise ValueError("Hosted uses the existing production GLM relay")
     pin = PINS[solver]
     model = SOLVER_MODELS[solver]
     serve = ServeConfig(
         tensor_parallel_size=pin.gpus,
-        max_model_len=CONTEXT_TOKENS,
+        max_model_len=context_tokens,
         max_num_batched_tokens=4096,
         max_num_seqs=32,
         tool_call_parser="qwen3_coder" if solver == Solver.SMALL else "qwen3_xml",
