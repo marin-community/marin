@@ -3023,8 +3023,8 @@ request on stdin with `trial` (the production `TrialConfig`), `source`
 (`NegativeControlSource`), a fresh `output_root`, and `native_setup`. The Trial's
 `trials_dir` must be `output_root/trials`, and `output_root` must not exist.
 The request models are defined in
-[`TrialConfig`](../../vendor/harbor/src/harbor/models/trial/config.py) and
-[`NegativeControlSource` / `NativeInstructionSetup`](../../lib/taskcompendium/src/taskcompendium/harbor/negative_control.py).
+[`TrialConfig`](https://github.com/marin-community/marin/blob/main/vendor/harbor/src/harbor/models/trial/config.py) and
+[`NegativeControlSource` / `NativeInstructionSetup`](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/harbor/negative_control.py).
 The caller acquires the LOCAL physical-host slot described above and
 archives/uploads the complete output directory; the writer performs no source
 commands outside the Trial and accepts no actor or budget overrides.

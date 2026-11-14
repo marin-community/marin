@@ -250,7 +250,7 @@ def manifest_readback(credential: RegistryCredential, repository: str, tag: str)
                 token = payload.get("token") or payload["access_token"]
                 if not isinstance(token, str) or not token:
                     raise ValueError("Registry token response must contain a nonempty token")
-                client.auth = None
+                client.auth = httpx.Auth()
                 client.headers["Authorization"] = f"Bearer {token}"
                 by_tag = client.get(f"{base}/manifests/{tag}")
             by_tag.raise_for_status()
