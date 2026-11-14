@@ -406,7 +406,7 @@ def filter_cohort(
                 if attempt.get("prior_phase_failure") is None:
                     continue
                 evidence = PriorPhaseFailureReceipt.model_validate(attempt["prior_phase_failure"])
-                key = evidence.raw_result_sha256
+                key = evidence.result_sha256
                 if key in prior_failures and prior_failures[key] != evidence:
                     raise ValueError("Conflicting earlier phase evidence for the same production Trial")
                 prior_failures[key] = evidence

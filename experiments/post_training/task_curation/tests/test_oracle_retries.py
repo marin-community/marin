@@ -25,6 +25,7 @@ from taskcompendium.pipeline.oracle_filter import (
     LocalExecutionHostTransition,
     OracleExclusionReason,
     OracleFilterReceipt,
+    OracleTrialReceipt,
 )
 from taskcompendium.runtime.resources import inline_resource
 
@@ -46,8 +47,10 @@ from experiments.post_training.task_curation.oracle_filter import (
     write_retry_plan,
     write_task_map,
 )
+from experiments.post_training.task_curation.prior_phase_failures import bind_prior_phase_failures
 
 from .prebuilt_fixtures import prebuilt_task
+from .prior_phase_fixtures import preserved_phase_failure
 
 
 @dataclass
@@ -494,3 +497,37 @@ def test_recollection_checks_parent_artifacts_and_distinct_phase_attempts(tmp_pa
         ValueError, match=r"retry input changed|repeats a prior attempt|backend configuration|attempt context differs"
     ):
         filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+
+
+def test_collection_preserves_earlier_source_deadline_without_rewriting_final_results(tmp_path, retry_case):
+    case = retry_case
+    mapping = json.loads(case.parent_map.read_text())["task"]
+    trial = OracleTrialReceipt.model_validate(mapping["calibration"]["attempts"][-1])
+    raw_path = Path(trial.path)
+    raw_bytes = raw_path.read_bytes()
+    original_calls = len(case.calls)
+    trial_dir = raw_path.parent
+    archive_case = {
+        "config": trial.result["config"],
+        "archive_member": f"{trial_dir.name}/exception.txt",
+        "exception_text": (
+            "Traceback (most recent call last):\n"
+            '  File "/app/vendor/harbor/src/harbor/trial/trial.py", line 788, in _await_phase\n'
+            "    raise timeout_error from None\n"
+            "harbor.trial.errors.AgentTimeoutError: Agent execution timed out after "
+            f"{trial.execution_requirements.agent_timeout_sec} seconds\n"
+        ),
+    }
+    proof = preserved_phase_failure(tmp_path, archive_case, trial, archive_root=str(trial_dir.parent))
+    bound = tmp_path / "deadline-bound-map.json"
+    bind_prior_phase_failures(case.parent_map, {trial.result_sha256: proof}, bound)
+    receipt = filter_cohort(case.cohort, bound, tmp_path, tmp_path / "filtered/tasks.parquet")
+    entry = receipt.tasks["task"]
+    assert entry.exclusion_reason is OracleExclusionReason.AGENT_TIMEOUT
+    assert not entry.passed
+    assert entry.calibration.attempts[-1].prior_phase_failure == proof
+    assert entry.calibration.attempts[-1].result == trial.result
+    assert raw_path.read_bytes() == raw_bytes
+    assert len(case.calls) == original_calls
+    assert pq.read_table(tmp_path / "filtered/tasks.parquet").num_rows == 0
+    assert OracleFilterReceipt.model_validate_json((tmp_path / "filtered/oracle-filter.json").read_text()) == receipt
