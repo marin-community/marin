@@ -33,27 +33,31 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _ASSIGNED_STATES: frozenset[int] = ACTIVE_TASK_STATES - EXECUTING_TASK_STATES
-# Terminal states that require a worker-directed stop (timeout, cosched
-# failure, unschedulable, failed). KILLED and PREEMPTED are excluded: each is
-# handled by its own explicit branch above.
-_TERMINAL_EXPECTED_STATES: frozenset[int] = TERMINAL_TASK_STATES - {
-    job_pb2.TASK_STATE_KILLED,
-    job_pb2.TASK_STATE_PREEMPTED,
+_STOP_REASON_BY_STATE: dict[int, worker_pb2.Worker.StopReason] = {
+    job_pb2.TASK_STATE_KILLED: worker_pb2.Worker.STOP_REASON_CANCELLED,
+    job_pb2.TASK_STATE_PREEMPTED: worker_pb2.Worker.STOP_REASON_PREEMPTED,
+    # A controller-induced FAILED on a worker-bound attempt is an execution timeout.
+    job_pb2.TASK_STATE_FAILED: worker_pb2.Worker.STOP_REASON_TASK_TIMEOUT,
 }
 
 
-def _holds_preemption_victim(row: "ReconcileRow") -> bool:
-    """Whether this row is a preemption victim still occupying its worker.
+def _stop_reason(row: "ReconcileRow") -> worker_pb2.Worker.StopReason | None:
+    """Why the worker must stop this attempt, or ``None`` if the controller has not ended it.
 
-    The scheduler commits a preemptor ASSIGNED onto the worker its victim frees
-    before the victim's process is actually gone; the victim's attempt is
-    PREEMPTED but not yet finalized, so it stays worker-bound (reconcile rows are
-    the live, ``finished_at_ms IS NULL`` attempts). Covers both the budget-exhausted
-    victim (task PREEMPTED) and the retry/coscheduled-requeue victim (task rolled
-    back to PENDING) — both leave the attempt in PREEMPTED. It is the one signal
-    that a device is held by a process the preemptor must not race.
+    Reconcile rows are worker-bound attempts with ``finished_at_ms`` NULL: the
+    worker has not confirmed that the process is gone, so the attempt still
+    holds its capacity. The decision comes from the attempt's own state, because
+    the task state can describe a newer attempt (retry) or a rollback to PENDING.
+    A 'run' would be a no-op for an attempt the worker already holds; only 'stop'
+    produces the terminal observation that finalizes the attempt.
     """
-    return row.attempt_state == job_pb2.TASK_STATE_PREEMPTED
+    if row.attempt_state in TERMINAL_TASK_STATES:
+        return _STOP_REASON_BY_STATE.get(row.attempt_state, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED)
+    if row.superseded:
+        return worker_pb2.Worker.STOP_REASON_SUPERSEDED
+    if row.task_state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_PREEMPTED):
+        return _STOP_REASON_BY_STATE[row.task_state]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +76,8 @@ class ReconcileRow:
     attempt_state: int
     job_id: JobName
     attempt_uid: AttemptUid
-    # The task state belongs to the newer attempt when this is true.
-    superseded: bool = False
+    # The task has a newer attempt, so ``task_state`` does not describe this one.
+    superseded: bool
 
 
 @dataclass(frozen=True)
@@ -138,21 +142,20 @@ def _reconcile_worker(
 ) -> WorkerReconcilePlan:
     desired: list[worker_pb2.Worker.DesiredAttempt] = []
 
-    # A preemptor is committed ASSIGNED onto the worker its victim frees before
-    # the victim's process is actually gone. While a preemption victim still
-    # occupies this worker, withhold the ASSIGNED run-intents so the worker does
-    # not start the preemptor against the live victim (libtpu fixed-port crash
-    # loop). The victim's terminal observation stamps ``finished_at_ms``, which
-    # drops it from the next reconcile snapshot and lets the run-intent through —
-    # a hold of, in the healthy case, a single reconcile cycle.
-    hold_assigned_dispatch = any(_holds_preemption_victim(row) for row in rows)
+    # The scheduler can commit a task ASSIGNED onto a worker before the process
+    # it replaces is gone: a preemptor onto its victim's worker, or a retry onto
+    # the worker of its own old attempt. While such an attempt still occupies
+    # this worker, withhold the ASSIGNED run-intents so the worker does not start
+    # a process against a live one (libtpu fixed-port crash loop). The terminal
+    # observation stamps ``finished_at_ms``, which drops the old attempt from the
+    # next snapshot — in the healthy case, a hold of one reconcile cycle.
+    hold_assigned_dispatch = any(row.superseded or row.attempt_state == job_pb2.TASK_STATE_PREEMPTED for row in rows)
 
     for row in rows:
-        wire_task_id = row.task_id.to_wire()
-        if row.superseded:
-            desired.append(_superseded_attempt_intent(row))
-            continue
-        if row.task_state in _ASSIGNED_STATES:
+        stop_reason = _stop_reason(row)
+        if stop_reason is not None:
+            desired.append(worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, stop=stop_reason))
+        elif row.task_state in _ASSIGNED_STATES:
             if hold_assigned_dispatch:
                 continue
             spec = job_specs.get(row.job_id)
@@ -162,7 +165,7 @@ def _reconcile_worker(
                 continue
             req = job_pb2.RunTaskRequest()
             req.CopyFrom(spec)
-            req.task_id = wire_task_id
+            req.task_id = row.task_id.to_wire()
             req.attempt_id = row.attempt_id
             req.attempt_uid = row.attempt_uid
             desired.append(
@@ -171,81 +174,14 @@ def _reconcile_worker(
                     run=worker_pb2.Worker.AttemptSpec(request=req),
                 )
             )
-        elif row.task_state in EXECUTING_TASK_STATES:
+        elif row.task_state in EXECUTING_TASK_STATES or row.task_state in TERMINAL_TASK_STATES:
+            # Executing, or stranded: the task is terminal but its attempt is
+            # not. Poll without a spec so the worker reports its real status, or
+            # MISSING if it has forgotten the attempt, which finalizes it.
             desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    run=worker_pb2.Worker.AttemptSpec(),
-                )
+                worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, run=worker_pb2.Worker.AttemptSpec())
             )
-        elif row.task_state == job_pb2.TASK_STATE_KILLED:
-            desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
-                )
-            )
-        elif row.task_state == job_pb2.TASK_STATE_PREEMPTED:
-            desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
-                )
-            )
-        elif row.task_state in _TERMINAL_EXPECTED_STATES:
-            if row.attempt_state in TERMINAL_TASK_STATES:
-                # Controller-induced terminal whose attempt is itself terminal:
-                # execution timeout (-> FAILED) or coscheduled-sibling cascade
-                # (-> COSCHED_FAILED) moved the task terminal while the worker
-                # may still be running the process. A 'run' is a no-op for an
-                # attempt the worker already holds, so it would never stop the
-                # process nor finalize the attempt (the worker keeps reporting
-                # RUNNING, which does not stamp finished_at_ms). Send 'stop' so
-                # the worker tears the process down; its resulting terminal
-                # observation finalizes the attempt and releases capacity.
-                stop_reason = (
-                    worker_pb2.Worker.STOP_REASON_TASK_TIMEOUT
-                    if row.task_state == job_pb2.TASK_STATE_FAILED
-                    else worker_pb2.Worker.STOP_REASON_JOB_TERMINATED
-                )
-                desired.append(
-                    worker_pb2.Worker.DesiredAttempt(
-                        attempt_uid=row.attempt_uid,
-                        stop=stop_reason,
-                    )
-                )
-            else:
-                # Stranded attempt: the task is terminal but the attempt itself
-                # is not finalized and the worker may have lost the spec. Re-poll
-                # so the worker re-reports its real terminal status, or — if the
-                # worker has forgotten the attempt — the daemon synthesizes
-                # MISSING, which the controller treats as terminal and stamps.
-                desired.append(
-                    worker_pb2.Worker.DesiredAttempt(
-                        attempt_uid=row.attempt_uid,
-                        run=worker_pb2.Worker.AttemptSpec(),
-                    )
-                )
-        elif row.task_state == job_pb2.TASK_STATE_PENDING and row.attempt_state in TERMINAL_TASK_STATES:
-            # The task rolled back to PENDING for retry — preemption with budget,
-            # or a coscheduled-sibling requeue (the sibling's own attempt is left
-            # unfinished) — but current_attempt_id still points at the old
-            # worker-bound attempt, which is already terminal (PREEMPTED). Its
-            # chips stay reserved until that attempt is finalized. Omitting it (as
-            # an unrecognised state) is the leak: the worker zombie-kills the
-            # attempt and reports it terminal, but ``filter_observations_to_plan``
-            # drops the observation because the attempt isn't in the plan, so the
-            # controller never stamps finished_at_ms and the slot leaks forever.
-            # Emit 'stop' so the attempt stays in the plan; the worker tears the
-            # process down and its terminal observation finalizes the attempt and
-            # releases capacity (the reserved-until-heartbeats contract).
-            desired.append(
-                worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid=row.attempt_uid,
-                    stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
-                )
-            )
-        # Unrecognised states are omitted from desired.
+        # A PENDING task with a live attempt is not planned for.
 
     return WorkerReconcilePlan(
         worker_id=worker_id,
@@ -255,19 +191,6 @@ def _reconcile_worker(
         ),
         attempts=tuple(rows),
     )
-
-
-def _superseded_attempt_intent(row: ReconcileRow) -> worker_pb2.Worker.DesiredAttempt:
-    """Build a stop or status probe from the old attempt's state."""
-    if row.attempt_state not in TERMINAL_TASK_STATES:
-        return worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, run=worker_pb2.Worker.AttemptSpec())
-    if row.attempt_state == job_pb2.TASK_STATE_PREEMPTED:
-        stop_reason = worker_pb2.Worker.STOP_REASON_PREEMPTED
-    elif row.attempt_state == job_pb2.TASK_STATE_KILLED:
-        stop_reason = worker_pb2.Worker.STOP_REASON_CANCELLED
-    else:
-        stop_reason = worker_pb2.Worker.STOP_REASON_JOB_TERMINATED
-    return worker_pb2.Worker.DesiredAttempt(attempt_uid=row.attempt_uid, stop=stop_reason)
 
 
 # ---------------------------------------------------------------------------
