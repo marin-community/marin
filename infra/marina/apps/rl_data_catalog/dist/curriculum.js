@@ -306,7 +306,7 @@ window.addEventListener('popstate', () => { readLocation(); loadCoverage(); });
 async function start() {
   const data = await json('api/curriculum/releases');
   for (const release of data.releases.filter(item => !item.selected)) {
-    const option = node('option', 'Pre-remediation population (evidence)');
+    const option = node('option', 'Previous population (evidence)');
     option.value = release.release_id; $('release').append(option);
   }
   readLocation();
