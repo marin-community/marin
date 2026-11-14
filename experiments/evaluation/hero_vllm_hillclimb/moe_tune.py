@@ -36,6 +36,7 @@ CLUSTER = "cw-us-east-08a"
 # Gathered tokens per decode step: 16 ranks x the captured batch sizes up to 128.
 EP16_MS = "16,32,64,128,256,384,512,768,1024,1536,2048"
 LOCAL_RESULT = "/tmp/moe_tune.json"
+LOCAL_LOG = "/tmp/moe_tune.log"
 
 
 def run_tune(release: str, output_uri: str, kernel_args: tuple[str, ...]) -> None:
@@ -52,7 +53,12 @@ def run_tune(release: str, output_uri: str, kernel_args: tuple[str, ...]) -> Non
         LOCAL_RESULT,
         *kernel_args,
     ]
-    subprocess.run(command, env={**os.environ, **launcher.env()}, check=True)
+    with open(LOCAL_LOG, "wb") as log:
+        result = subprocess.run(command, env={**os.environ, **launcher.env()}, stdout=log, stderr=subprocess.STDOUT)
+    with open(LOCAL_LOG, "rb") as source, open_url(f"{output_uri}/moe_tune.log", "wb") as target:
+        shutil.copyfileobj(source, target)
+    if result.returncode != 0:
+        raise RuntimeError(f"tuner exited {result.returncode}; log at {output_uri}/moe_tune.log")
     with open(LOCAL_RESULT, "rb") as source, open_url(f"{output_uri}/moe_tune.json", "wb") as target:
         shutil.copyfileobj(source, target)
 
