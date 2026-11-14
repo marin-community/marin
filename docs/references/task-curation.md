@@ -1700,7 +1700,11 @@ and `--host-worker-id "$IRIS_TASK_ID"`, to `calibrate` or `retry`. All participa
 workers must use the same pinned control root and limit. Atomic conditional-object
 slots coordinate private pod namespaces by the Iris physical node name; the kernel
 boot ID must match the host contract. Admission waits before starting Harbor and
-holds a slot through its subprocess, including teardown. Each attempt records
+holds a slot through its subprocess, including teardown. Release requires a
+successful process exit and exactly one persisted production Trial with a
+completion manifest, emitted only after resource cleanup. Missing completion or
+abnormal termination retains the claim. Source negatives and deadlines retain
+their outcomes and can release a clean host. Each attempt records
 `host-admission.json`. Source machine arguments and execution limits do not change.
 
 Held claims never expire or get stolen. A crashed worker can leave a claim held;

@@ -829,10 +829,14 @@ def calibrated_task(
                 stderr=subprocess.STDOUT,
                 check=True,
             )
-        trials = [trial for group in collect_trials(attempt / "jobs").values() for trial in group]
-        if len(trials) != 1:
-            raise ValueError(f"Expected exactly one persisted production trial for {task.id}")
-        trial = trials[0]
+            trials = [trial for group in collect_trials(attempt / "jobs").values() for trial in group]
+            if len(trials) != 1:
+                raise ValueError(f"Expected exactly one persisted production trial for {task.id}")
+            trial = trials[0]
+            if slot is not None:
+                if trial.result.get("completion") is None:
+                    raise RuntimeError(f"LOCAL resource cleanup is unconfirmed; host claim retained: {task.id}")
+                slot.release()
         if retry_context is not None:
             trial = trial.model_copy(update={"infrastructure_retry": retry_context})
         attempts.append(trial)

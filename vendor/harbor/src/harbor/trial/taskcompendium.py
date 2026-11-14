@@ -151,6 +151,27 @@ class _MeasuredMachine:
         await self.machine.close()
 
 
+class _CleanupTrackedMachine:
+    """Keep failed or interrupted nested teardown visible to Trial finalization."""
+
+    def __init__(self, machine: Machine, trial: "TaskSpecTrial"):
+        self.machine, self.trial = machine, trial
+        trial._open_machines.add(self)
+
+    async def run(self, command: Command):
+        return await self.machine.run(command)
+
+    async def upload(self, source: Path, target: str) -> None:
+        await self.machine.upload(source, target)
+
+    async def download(self, source: str, target: Path) -> None:
+        await self.machine.download(source, target)
+
+    async def close(self) -> None:
+        await self.machine.close()
+        self.trial._open_machines.discard(self)
+
+
 class _NetworkFactory:
     def __init__(
         self, factory: MachineFactory, trial: "TaskSpecTrial", role: Literal["task_machine", "verifier_machine"]
@@ -165,7 +186,11 @@ class _NetworkFactory:
         self.factory.check_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:
-        machine = await self.factory.create(spec)
+        try:
+            machine = _CleanupTrackedMachine(await self.factory.create(spec), self.trial)
+        except BaseException:
+            self.trial._environment_cleanup_failed = True
+            raise
         try:
             field = "actor_effective" if self.role == "task_machine" else "verifier_effective"
             self.trial.network_policy = self.trial.network_policy.model_copy(update={field: spec.network})
@@ -294,6 +319,8 @@ class TaskSpecTrial(Trial):
         if not isinstance(self.agent, TaskSpecAgent):
             raise ValueError("Use a harbor.agents.taskcompendium agent for a TaskSpec payload")
         self._owned = AsyncExitStack()
+        self._open_machines: set[_CleanupTrackedMachine] = set()
+        self._local_resources_qualified = False
         self.machine: _MeasuredMachine | None = None
         self.verdicts: list[bytes] = []
         self.attempt = empty_attempt(self.specification)
@@ -407,6 +434,7 @@ class TaskSpecTrial(Trial):
             timeout_sec=self._environment_build_timeout_sec,
             timeout_error=EnvironmentStartTimeoutError("TaskSpec disk qualification timed out"),
         )
+        self._local_resources_qualified = True
         self.factory = local_machine_factory(**kwargs)
         if self.factory.cgroup_parent is None:
             raise ValueError("Declared TaskSpec CPU and memory require cgroup enforcement")
@@ -703,4 +731,6 @@ class TaskSpecTrial(Trial):
 
     async def _stop_agent_environment(self) -> None:
         await self._owned.aclose()
+        if self._open_machines or not self._local_resources_qualified:
+            raise RuntimeServiceError("TaskSpec machine cleanup is unconfirmed")
         self._is_agent_environment_stopped = True
