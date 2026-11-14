@@ -70,6 +70,91 @@ curriculum matrix in worker memory and scores batches exactly. A curriculum edit
 reuses task vectors. Atlas imports precomputed counts and samples; the full task
 release and vectors stay in object storage.
 
+For a retained-population coverage backfill, `curriculum_backfill prepare`
+accepts a JSON list of `FrozenCoverageSource` records. Freeze each current
+declaration, exact population receipt and hash, TaskSpec column and directory,
+Use, and any complete exclusion manifest and hash. Also freeze
+`task_spec_scan_sha256`: SHA-256 of exact stored JSON cell bytes concatenated in
+lexicographically sorted Parquet-path and physical row order. Preparation checks
+that digest before publishing and rechecks raw inputs and exclusions before
+per-source or whole-corpus reuse. The expected scan digest is part of the frozen
+input and source key. Historical `task_specs_sha256` remains separate: some
+producers hash their original iteration order before sorting rows for storage.
+Do not equate those conventions or replace a frozen expectation with a new scan.
+Preparation preserves task identities, accounts for every exclusion, and writes
+only public semantic inputs.
+The adopted input name includes the frozen selection key so changed source
+lineage forks assignments even when instruction text and vectors are reused.
+Run preparation beside the private inputs; its output root may stage public
+inputs in the embedding worker's region. The existing embedding graph accepts
+that prepared input artifact and retains its normal vector cache and release format.
+
+```bash
+uv run python -m experiments.post_training.task_curation.curriculum_backfill prepare \
+  --selection FROZEN_SELECTION.json --output-root PUBLIC_INPUT_ROOT --workers 8
+uv run python -m experiments.post_training.task_curation.curriculum_backfill embed \
+  --corpus PUBLIC_INPUT_ROOT/corpus.json --artifact-root ARTIFACT_ROOT \
+  --cache-root VECTOR_CACHE_ROOT --stage descriptions --device cpu \
+  --workers 2 --worker-memory 64g --run
+```
+
+Then run `task_embeddings` and `curriculum_embeddings` with one CUDA worker
+inside a batch GPU job, followed by `coverage` on CPU workers. Use the same
+corpus, artifact root and cache for every stage. The final receipt binds the
+release and coverage hashes, source/task counts and embedding specification.
+Changed selections require a new output root; interrupted source attempts are
+preserved and completed source projections can be reused. Coverage measures
+converted populations and supplies no training admission or quality review.
+Size the enclosing job for its worker memory and coordinator. With an in-process
+worker pool, the shuffle samples the shared process RSS; an 8 GB worker budget
+below that baseline forces two-way spill merges even when the enclosing job has
+free memory. Choose the budget from measured reducer payloads and preserve the
+shuffle's existing memory-safety model.
+
+Harrier uses PyTorch SDPA with Flash, memory-efficient and math attention enabled.
+cuDNN attention is excluded because its execution-plan selection can fail on
+padded GB200 batches. Model/tokenizer pins, BF16 precision, pooling and cache
+keys stay the same. Record cross-device vector agreement against the reference
+cache before extending a CPU-produced population on GPU.
+The `harrier_parity` entry point checks a frozen 2,048-key reference bundle and
+writes a receipt before accepting the backend. Every vector must have cosine
+similarity at least 0.999 to its CPU BF16 reference, and both primary area
+assignments must agree for at least 99.5% of sampled tasks. A failed gate stops
+the run; preserve its receipt rather than changing the thresholds. CUDA execution
+requires `embed --parity-receipt IMMUTABLE_RECEIPT_URI`. The entry point checks
+acceptance, the exact embedding specification, and the running GPU, Torch and
+CUDA versions before executing the graph. The final coverage receipt records
+the parity receipt URI and byte hash. A CPU coverage pass can supply the same
+receipt to retain the accepted backend provenance without claiming to run on GPU.
+
+For a regional move, copy public Parquet and cache objects without clobbering,
+then verify sizes and checksums. Preserve source manifests and source keys;
+write new regional pointer records instead of rewriting historical records.
+A regional corpus can supply `prepared_descriptions` and
+`prepared_curriculum_embeddings` so the graph adopts those completed stages.
+Their adoption names include the immutable producer-record hash, so changed
+instruction or anchor content forks dependent outputs. Anchor adoption also
+requires the catalog, anchor records, hierarchy and embedding specification to
+match the requested `TASK_CURRICULUM`. All referenced runtime paths must point
+into the destination region.
+FineStore HEADs, manifests and table metadata also contain absolute paths;
+copying the cache bytes alone leaves reads pointed at the original region and
+prevents registering the relocated table for writes. After verifying the copy,
+FineStore's `fork_relocated_archive` admin operation creates a fresh regional archive manifest over the
+copied immutable shards. It preserves row-commit bounds and sequences, writes
+canonical table metadata under the new root, and accepts explicit prior roots
+for caches that have moved more than once. Keep the historical cache and failed
+attempts intact and use the fresh root for subsequent vector writes.
+
+```bash
+uv run python -m finestore.admin fork-relocated \
+  --original-root ORIGINAL_CACHE --copied-root VERIFIED_REGIONAL_COPY \
+  --output-root NEW_WRITABLE_CACHE --reference-root PRIOR_REGIONAL_ROOT
+```
+
+Repeat `--reference-root` for additional historical roots; omit it for a cache
+that has not previously moved. Existing output archives are rejected.
+
 | Part | Implementation and data models |
 |---|---|
 | Source selection and graph execution | [driver.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/driver.py), [pipeline.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/pipeline.py), [TaskSpec](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/models.py) |
@@ -821,7 +906,9 @@ Changing the contract or preamble requires a new dataset version and renewed QA.
 The maintained Python SWE lowering is `harbor_payload` or `harbor_record` with
 `shared_policy=SharedGradingPolicy(dependency_state=SharedDependencyState.AGENT_MUTABLE)`.
 It moves the exact initial repository/dependency setup into Harbor's pre-agent
-setup and uses common actor images. Publish the resulting native package, copy
+setup and uses common actor images. Source `setup_files/` resources retain their
+bytes and file modes in the native package, including tasks with declared build
+contexts; Harbor uploads them before running that setup. Publish the resulting native package, copy
 its metadata integrity contract into the TaskSpec, then run full-population
 Harbor ORACLE filtering and SAMPLE/FULL QA.
 
