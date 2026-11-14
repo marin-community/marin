@@ -30,7 +30,6 @@ def inspect_state(page: Page, *, focus: bool = False) -> dict[str, Any]:
         visited = set()
         for _ in range(page.locator(CONTROLS).count() + 2):
             page.keyboard.press("Tab")
-            page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
             identity = page.evaluate(
                 """selector => {const e=document.activeElement;
                 return e === document.body ? null : Array.from(document.querySelectorAll(selector)).indexOf(e);}""",
@@ -42,6 +41,9 @@ def inspect_state(page: Page, *, focus: bool = False) -> dict[str, Any]:
                 break
             visited.add(identity)
             focused = page.evaluate(AUDIT, {"mode": "focus"})
+            if any(row["rule"] == "focus-obscured" for row in focused["findings"]):
+                page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))")
+                focused = page.evaluate(AUDIT, {"mode": "focus"})
             for key in ("findings", "measurements"):
                 result[key].extend(focused[key])
     return result
