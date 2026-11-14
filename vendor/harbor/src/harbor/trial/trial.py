@@ -1290,6 +1290,8 @@ class Trial(ABC):
     def _init_agent_environment(self) -> None:
         if self.config.task.source_runtime is not None:
             raise ValueError("Configured source runtime requires a TaskSpec workload")
+        if self.config.task.verifier_execution_requirements is not None:
+            raise ValueError("Configured verifier allocation requires a TaskSpec workload")
         session_id = self.config.trial_name
         attempt_index = self._attempt_index
         if attempt_index is not None:

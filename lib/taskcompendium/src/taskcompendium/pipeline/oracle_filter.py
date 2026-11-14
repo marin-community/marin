@@ -116,6 +116,9 @@ class OracleTrialReceipt(BaseModel):
     oracle_exit_code: int | None
     result_sha256: str
     execution_requirements: ExecutionRequirements
+    verifier_execution_requirements: ExecutionRequirements | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     resource_usage: ResourceUsage = Field(default_factory=ResourceUsage)
     verifier_resource_usage: ResourceUsage = Field(default_factory=ResourceUsage)
     failure_log: str = ""
@@ -134,6 +137,16 @@ class OracleTrialReceipt(BaseModel):
         ):
             raise ValueError("Native grade belongs to another production Trial")
         config = self.result.get("config", {})
+        verifier_allocation = self.verifier_execution_requirements
+        configured_verifier = config.get("task", {}).get("verifier_execution_requirements")
+        if verifier_allocation is not None:
+            if configured_verifier != verifier_allocation.model_dump(mode="json"):
+                raise ValueError("Verifier allocation differs from the actual production Trial config")
+            if any(
+                getattr(verifier_allocation, name) != getattr(self.execution_requirements, name)
+                for name in ("agent_timeout_sec", "verifier_timeout_sec")
+            ):
+                raise ValueError("Actor and verifier allocations disagree on phase deadlines")
         environment = config.get("environment", {})
         if any(environment.get(name) == "ignore" for name in ("cpu_enforcement_policy", "memory_enforcement_policy")):
             raise ValueError("Oracle calibration cannot ignore task-declared resource limits")
@@ -262,6 +275,73 @@ def next_trial_requirements(
     return next_requirements(trial.execution_requirements, signal, trial.resource_usage, fixed)
 
 
+def initial_verifier_requirements(
+    actor: ExecutionRequirements, verifier: VerifierResourceProfile
+) -> ExecutionRequirements:
+    """Resolve the separate grader from canonical defaults and only its own declarations."""
+    if verifier.mode is GradingEnvironmentMode.SHARED:
+        return actor
+    return ExecutionRequirements.model_validate(
+        {
+            **INITIAL_REQUIREMENTS.model_dump(),
+            **verifier.fixed,
+            "agent_timeout_sec": actor.agent_timeout_sec,
+            "verifier_timeout_sec": actor.verifier_timeout_sec,
+        }
+    )
+
+
+def next_trial_allocations(
+    trial: OracleTrialReceipt, preserved: dict[ResourceDimension, float], verifier: VerifierResourceProfile
+) -> tuple[ExecutionRequirements, ExecutionRequirements | None] | None:
+    """Grow only the failing role, retaining one canonical pair of phase deadlines."""
+    actor = trial.execution_requirements
+    grader = trial.verifier_execution_requirements
+    if grader is None:
+        updated = next_trial_requirements(trial, preserved, verifier)
+        return None if updated is None else (updated, None)
+    signal = trial.failure_signal
+    actorless_oracle = trial.network_policy is not None and not trial.network_policy.actor_required
+    verifier_failed = actorless_oracle or (
+        not trial.resource_usage.oom_kills
+        and signal is not FailureSignal.AGENT_TIMEOUT
+        and (
+            trial.verifier_resource_usage.oom_kills
+            or signal is FailureSignal.VERIFIER_TIMEOUT
+            or (trial.result.get("verifier") or trial.result.get("verifier_execution") or {}).get("started_at")
+            is not None
+        )
+    )
+    if verifier.mode is GradingEnvironmentMode.SEPARATE and verifier_failed:
+        fixed = frozenset(verifier.fixed) | frozenset(
+            dimension
+            for dimension in preserved
+            if dimension in {ResourceDimension.AGENT_TIMEOUT, ResourceDimension.VERIFIER_TIMEOUT}
+        )
+        usage = trial.resource_usage if actorless_oracle else trial.verifier_resource_usage
+        updated = next_requirements(grader, signal, usage, fixed)
+        if updated is None:
+            return None
+        actor = actor.model_copy(
+            update={
+                "agent_timeout_sec": updated.agent_timeout_sec,
+                "verifier_timeout_sec": updated.verifier_timeout_sec,
+            }
+        )
+        return actor, updated
+    updated = next_requirements(actor, signal, trial.resource_usage, frozenset(preserved))
+    if updated is None:
+        return None
+    if verifier.mode is GradingEnvironmentMode.SHARED:
+        return updated, updated
+    return updated, grader.model_copy(
+        update={
+            "agent_timeout_sec": updated.agent_timeout_sec,
+            "verifier_timeout_sec": updated.verifier_timeout_sec,
+        }
+    )
+
+
 class ResourceCalibrationReceipt(BaseModel):
     """Every production attempt, including calibration-only solutions kept out of admission proof."""
 
@@ -294,10 +374,27 @@ class ResourceCalibrationReceipt(BaseModel):
                 getattr(self.initial_requirements, name) != value for name, value in self.preserved_requirements.items()
             ):
                 raise ValueError("A resumed shape cannot change a preserved source limit")
+        fixed_actor = self.preserved_requirements
+        if self.declared_requirements is not None:
+            fixed_actor = {**fixed_actor, **self.declared_requirements.model_dump()}
+        first = self.attempts[0]
+        expected_verifier = None
+        if first.verifier_execution_requirements is not None:
+            expected_verifier = (
+                first.verifier_execution_requirements
+                if first.infrastructure_retry is not None
+                else initial_verifier_requirements(expected, self.verifier)
+            )
         infrastructure_retries = 0
         for index, trial in enumerate(self.attempts):
             if trial.execution_requirements != expected:
                 raise ValueError("Calibration changed an unfailed resource or a task-declared limit")
+            if trial.verifier_execution_requirements != expected_verifier:
+                raise ValueError("Calibration changed an unfailed verifier resource or a fixed source limit")
+            if expected_verifier is not None and any(
+                getattr(expected_verifier, name) != value for name, value in self.verifier.fixed.items()
+            ):
+                raise ValueError("Calibration changed a fixed verifier declaration")
             checksum = trial.result["task_checksum"]
             if trial.passed(checksum) and index != len(self.attempts) - 1:
                 raise ValueError("Calibration continued after a passing oracle")
@@ -313,13 +410,16 @@ class ResourceCalibrationReceipt(BaseModel):
                     raise ValueError("Calibration infrastructure retry budget is incomplete")
                 continue
             infrastructure_retries = 0
-            if self.declared_requirements is None and index != len(self.attempts) - 1:
-                expected = next_trial_requirements(trial, self.preserved_requirements, self.verifier)
-                if expected is None:
+            if index != len(self.attempts) - 1:
+                updated = next_trial_allocations(trial, fixed_actor, self.verifier)
+                if updated is None:
                     raise ValueError("Calibration continued after a non-resource failure or exhausted cap")
+                expected, expected_verifier = updated
         final = self.attempts[-1]
-        if self.declared_requirements is None and not final.passed(final.result["task_checksum"]):
-            if next_trial_requirements(final, self.preserved_requirements, self.verifier) is not None:
+        if (self.declared_requirements is None or expected_verifier is not None) and not final.passed(
+            final.result["task_checksum"]
+        ):
+            if next_trial_allocations(final, fixed_actor, self.verifier) is not None:
                 raise ValueError("Resource calibration stopped before a pass or the applicable cap")
         return self
 
@@ -717,6 +817,11 @@ class OracleTaskReceipt(BaseModel):
                 expected_start, expected_preserved, expected_verifier = recovered_source_runtime_requirements(
                     previous, transition.source_runtime_resource_recovery
                 )
+            expected_verifier_start = previous.attempts[-1].verifier_execution_requirements
+            if transition.source_runtime_resource_recovery is not None:
+                expected_verifier_start = initial_verifier_requirements(expected_start, expected_verifier)
+            if current.attempts[0].verifier_execution_requirements != expected_verifier_start:
+                raise ValueError("Infrastructure retry did not resume its exact approved verifier allocation")
             if start != expected_start:
                 raise ValueError("Infrastructure retry did not resume its exact approved allocation")
             if (
@@ -847,6 +952,8 @@ class OracleFilterReceipt(BaseModel):
             raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         if task.execution_requirements != entry.calibration.execution_requirements:
             raise ValueError(f"Task execution requirements differ from calibration: {task.id}")
+        if task.verifier_execution_requirements != entry.calibration.attempts[-1].verifier_execution_requirements:
+            raise ValueError(f"Task verifier execution requirements differ from calibration: {task.id}")
         return entry.passed and trial_network_qualified(task, runtime, entry.calibration.attempts[-1])
 
     @property

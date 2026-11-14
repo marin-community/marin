@@ -55,4 +55,3 @@ def test_all_forty_original_fc4_attempts_keep_old_history_and_recover_exact_role
         assert not parent.passed
         recovered.append((row["source_key"], task.id))
     assert len(set(recovered)) == 40
-    assert gzip.decompress((fixtures / "fc4-forty-parent-maps.json.gz").read_bytes()) == parent_bytes

@@ -265,7 +265,7 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
 
 def review_payload(task: TaskSpec) -> dict[str, Any]:
     """Expose bounded readable fixture evidence without duplicating encoded bytes."""
-    payload = task.model_dump(mode="json", exclude={"execution_requirements"})
+    payload = task.model_dump(mode="json", exclude={"execution_requirements", "verifier_execution_requirements"})
     remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
     previews = []
     resources = [

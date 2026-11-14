@@ -51,7 +51,8 @@ from taskcompendium.pipeline.oracle_filter import (
     ResourceCalibrationReceipt,
     SourcePytestEnvironment,
     VerifierResourceProfile,
-    next_trial_requirements,
+    initial_verifier_requirements,
+    next_trial_allocations,
     oracle_failure_reason,
     pre_oracle_host_unavailable,
     recovered_source_runtime_requirements,
@@ -127,6 +128,15 @@ def native_verifier_profile(path: Path, source_runtime: TaskSpecRuntimeBinding |
         for name in ("cpus", "memory_mb", "storage_mb")
         if environment.get(name) is not None
     }
+    specification = path / TASK_SPEC_FILE
+    if specification.is_file():
+        declared = TaskSpec.model_validate_json(specification.read_text()).verifier_execution_requirements
+        if declared is not None:
+            for name in ("cpus", "memory_mb", "storage_mb"):
+                value = getattr(declared, name)
+                if name in fixed and fixed[name] != value:
+                    raise ValueError(f"Published verifier {name} conflicts with its original grader declaration")
+                fixed[ResourceDimension(name)] = value
     for name, value in source_runtime.resource_limits("verifier_machine").items() if source_runtime else ():
         dimension = ResourceDimension(name)
         if dimension in fixed and fixed[dimension] != value:
@@ -205,6 +215,11 @@ def receipt_from_trial(
         oracle_exit_code=int(exit_path.read_text()) if exit_path.exists() else None,
         result_sha256=canonical_sha256(document),
         execution_requirements=native_requirements(native),
+        verifier_execution_requirements=(
+            ExecutionRequirements.model_validate(document["config"]["task"]["verifier_execution_requirements"])
+            if document["config"].get("task", {}).get("verifier_execution_requirements") is not None
+            else None
+        ),
         native_grade=native_grade,
         resource_usage=(
             ResourceUsage.model_validate_json(usage_path.read_text()) if usage_path.exists() else ResourceUsage()
@@ -535,7 +550,19 @@ def filter_cohort(
                 requirements = calibration.execution_requirements
                 if task.execution_requirements is not None and task.execution_requirements != requirements:
                     raise ValueError(f"Calibration overrides task specification: {task.id}")
-                task = task.model_copy(update={"execution_requirements": requirements})
+                verifier_requirements = calibration.attempts[-1].verifier_execution_requirements
+                if (original / TASK_SPEC_FILE).is_file() and verifier_requirements is None:
+                    raise ValueError(f"Separate-role allocation is unqualified without verifier evidence: {task.id}")
+                task = task.model_copy(
+                    update={
+                        "execution_requirements": requirements,
+                        **(
+                            {"verifier_execution_requirements": verifier_requirements}
+                            if verifier_requirements is not None
+                            else {}
+                        ),
+                    }
+                )
                 final_package = Path(calibration.attempts[-1].result["config"]["task"]["path"])
                 native_config = inline_resource("task.toml", (final_package / "task.toml").read_bytes())
                 task = task.model_copy(
@@ -709,6 +736,7 @@ def calibrated_task(
     initial_requirements: ExecutionRequirements | None = None,
     source_runtime: dict | None = None,
     host_admission: LocalHostAdmission | None = None,
+    initial_verifier_execution_requirements: ExecutionRequirements | None = None,
 ) -> dict:
     """Run the production Trial path once per shape, creating a fresh task package each time."""
     original = Path(mapping["task_path"])
@@ -747,6 +775,15 @@ def calibrated_task(
     )
     if declared is not None and native_requirements(original) != declared:
         raise ValueError(f"Harbor package differs from declared execution requirements: {task.id}")
+    verifier_shape = (
+        (
+            initial_verifier_execution_requirements
+            or task.verifier_execution_requirements
+            or initial_verifier_requirements(shape, verifier)
+        )
+        if (original / TASK_SPEC_FILE).is_file()
+        else None
+    )
     attempts = []
     infrastructure_attempts = 0
     host_backoff = ExponentialBackoff(initial=1, maximum=120, factor=2, jitter=0.5)
@@ -780,6 +817,9 @@ def calibrated_task(
             "task": {
                 "path": str(package),
                 **({"source_runtime": configured_runtime.model_dump(mode="json")} if configured_runtime else {}),
+                **(
+                    {"verifier_execution_requirements": verifier_shape.model_dump(mode="json")} if verifier_shape else {}
+                ),
             },
             "agent": {"name": "oracle", "kwargs": {"resource_usage_filename": "resource-usage.json"}},
             "environment": {"type": environment, "kwargs": environment_kwargs},
@@ -848,12 +888,12 @@ def calibrated_task(
                 continue
             break
         infrastructure_attempts = 0
-        if trial.passed(trial.result["task_checksum"]) or declared is not None:
+        if trial.passed(trial.result["task_checksum"]) or (declared is not None and verifier_shape is None):
             break
-        updated = next_trial_requirements(trial, preserved, verifier)
+        updated = next_trial_allocations(trial, preserved, verifier)
         if updated is None:
             break
-        shape = updated
+        shape, verifier_shape = updated
     calibration = ResourceCalibrationReceipt(
         declared_requirements=declared,
         preserved_requirements=preserved,
@@ -886,6 +926,7 @@ def calibrate_cohort(
     prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
     initial_requirements: dict[str, ExecutionRequirements] | None = None,
     host_admission: LocalHostAdmission | None = None,
+    initial_verifier_execution_requirements: dict[str, ExecutionRequirements | None] | None = None,
 ) -> None:
     """Fold calibration into full-population oracle filtering; collect the same trials afterward."""
     mappings = json.loads(task_map.read_text())
@@ -927,6 +968,9 @@ def calibrate_cohort(
                 initial_requirements=None if initial_requirements is None else initial_requirements[task.id],
                 source_runtime=runtimes[task.id],
                 host_admission=host_admission,
+                initial_verifier_execution_requirements=(
+                    initial_verifier_execution_requirements[task.id] if initial_verifier_execution_requirements else None
+                ),
             )
             for task in tasks
         }
@@ -1025,6 +1069,14 @@ def write_retry_plan(
                 native = Path(mapping["task_path"])
                 source_binding = source_runtime_binding(task, row_runtime(row))
                 recovery = source_runtime_resource_recovery
+                if (
+                    (native / TASK_SPEC_FILE).is_file()
+                    and recovery is None
+                    and calibration.attempts[-1].verifier_execution_requirements is None
+                ):
+                    raise ValueError(
+                        f"Legacy separate verifier allocation requires an approved recovery transition: {task.id}"
+                    )
                 if recovery is not None:
                     recovery.require_task(task)
                     if recovery != source_binding:
@@ -1142,7 +1194,14 @@ def retry_cohort(
     if parents.keys() != plan.approvals.keys():
         raise ValueError("Retry plan does not cover its exact parent partition")
     transitions = {}
+    verifier_starts = {}
     for task_id, parent in parents.items():
+        calibration = ResourceCalibrationReceipt.model_validate(parent["calibration"])
+        if plan.source_runtime_resource_recovery is not None:
+            actor, _, profile = recovered_source_runtime_requirements(calibration, plan.source_runtime_resource_recovery)
+            verifier_starts[task_id] = initial_verifier_requirements(actor, profile)
+        else:
+            verifier_starts[task_id] = calibration.attempts[-1].verifier_execution_requirements
         native = Path(parent["task_path"])
         checksum = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
         if checksum != parent.get("source_task_checksum", parent["task_checksum"]):
@@ -1182,6 +1241,7 @@ def retry_cohort(
         retry_contexts=contexts,
         prepare_attempt=prepare_attempt,
         host_admission=host_admission,
+        initial_verifier_execution_requirements=verifier_starts,
         initial_requirements={
             task_id: (
                 recovered_source_runtime_requirements(

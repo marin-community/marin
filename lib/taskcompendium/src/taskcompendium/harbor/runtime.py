@@ -49,7 +49,11 @@ class TaskSpecRuntimeBinding(BaseModel):
         if self.task_sha256 != canonical_sha256(task.model_dump(mode="json")):
             raise ValueError("Source runtime belongs to another TaskSpec")
         declared = declared_execution_limits(task)
-        verifier: dict[str, int | float] = {}
+        verifier: dict[str, int | float] = (
+            {name: getattr(task.verifier_execution_requirements, name) for name in RESOURCE_FIELDS}
+            if task.verifier_execution_requirements is not None
+            else {}
+        )
         for resource in source_task_configurations(task):
             configuration = tomllib.loads(resource_bytes(resource).decode())
             environment = (configuration.get("verifier") or {}).get("environment") or {}

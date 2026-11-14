@@ -953,6 +953,9 @@ class TaskSpec(BaseModel):
     context: ConversationInput
     environment_requirements: EnvironmentRequirements
     execution_requirements: ExecutionRequirements | None = None
+    verifier_execution_requirements: ExecutionRequirements | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     final_tools: tuple[FunctionDefinition, ...] = ()
     interaction_tools: tuple[FunctionDefinition, ...] = ()
     tool_bindings: dict[str, ShellToolBinding] = Field(default_factory=dict)
@@ -970,6 +973,12 @@ class TaskSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_specification(self) -> "TaskSpec":
+        if self.verifier_execution_requirements is not None:
+            if self.execution_requirements is None or any(
+                getattr(self.verifier_execution_requirements, name) != getattr(self.execution_requirements, name)
+                for name in ("agent_timeout_sec", "verifier_timeout_sec")
+            ):
+                raise ValueError("Actor and verifier allocations must share the same phase deadlines")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id:

@@ -1666,6 +1666,17 @@ dimensions may grow. Recorded and admitted actor requirements match the actual
 actor allocation; a fixed verifier OOM cannot increase the actor's memory.
 Collection rejects maps that omitted those original declarations.
 
+Separate verifiers start missing capacity dimensions at the canonical calibration
+base, independently of actor declarations. A failing missing dimension grows only
+on the machine role that executed it; actorless original oracle commands use the
+verifier allocation. The phase deadlines remain one shared pair. New separate-role
+Trials record `verifier_execution_requirements` in the production config and
+receipt, and private TaskSpecs retain the same resolved allocation for subsequent
+execution. Missing historical role measurements remain unqualified; they are never
+inferred from an actor wrapper. Original raw runtime and source anchors stay fixed.
+The resource-only content-review projection excludes both allocation fields;
+complete task identities include both.
+
 An approved unscored old attempt that missed these fields may use
 `retry-plan --source-runtime-resource-recovery ORIGINAL_BINDING.json`. The
 `TaskSpecRuntimeBinding` binds the exact original task and runtime hashes, so each

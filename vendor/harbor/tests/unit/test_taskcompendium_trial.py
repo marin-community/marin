@@ -166,14 +166,17 @@ def original_task(name):
         ({"task_machine": {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240},
           "verifier_machine": {"cpus": 3, "memory_mb": 6144, "storage_mb": 20480}},
          [(2, 4096, 10240), (3, 6144, 20480)]),
-        ({"task_machine": {"cpus": 2, "memory_mb": None}, "verifier_machine": {"storage_mb": 4096}},
-         [(2, 2048, 2048), (1, 2048, 4096)]),
+        ({"task_machine": {"cpus": 2, "memory_mb": 4096}, "verifier_machine": {"storage_mb": 4096}},
+         [(2, 4096, 2048), (1, 2048, 4096)]),
+        ({"task_machine": {"cpus": 2, "memory_mb": 4096}, "verifier_machine": {"storage_mb": 4096}},
+         [(2, 4096, 2048), (1, 4096, 4096)]),
     ],
 )
 @pytest.mark.asyncio
+@pytest.mark.parametrize("published", [False, True])
 @pytest.mark.parametrize("grader_kind", ["script", "verifyit"])
 async def test_source_budgets_reach_actor_and_verifier_allocations_independently(
-    tmp_path, monkeypatch, runtime, expected, grader_kind
+    tmp_path, monkeypatch, runtime, expected, grader_kind, published
 ):
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
@@ -196,14 +199,24 @@ async def test_source_budgets_reach_actor_and_verifier_allocations_independently
         )
         task = task.model_copy(update={"grader": reference.grader})
     directory = tmp_path / "task"
-    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    actor_shape = INITIAL_REQUIREMENTS.model_copy(update={
+        name: value for name, value in runtime["task_machine"].items() if value is not None
+    })
+    verifier_shape = INITIAL_REQUIREMENTS.model_copy(update=dict(zip(("cpus", "memory_mb", "storage_mb"), expected[1])))
+    if published:
+        task = task.model_copy(update={
+            "execution_requirements": actor_shape, "verifier_execution_requirements": verifier_shape
+        })
+    write_harbor_task(task, directory, actor_shape)
     write_source_runtime(task, runtime, directory)
     response = tmp_path / "response.json"
     response.write_text(json.dumps([{"role": "assistant", "content": "42"}]))
     machines = Machines(tmp_path / "sandboxes")
     bind_factory(monkeypatch, machines, tmp_path / "disks")
     trial = await Trial.create(TrialConfig(
-        task=TaskConfig(path=directory), trial_name="role-budgets", trials_dir=tmp_path / "trials",
+        task=TaskConfig(path=directory, verifier_execution_requirements=(
+            verifier_shape.model_dump(mode="json") if not published else None
+        )), trial_name="role-budgets", trials_dir=tmp_path / "trials",
         environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
         agent=AgentConfig(name="task-spec-response", kwargs={"response_path": str(response)}),
     ))
@@ -211,6 +224,7 @@ async def test_source_budgets_reach_actor_and_verifier_allocations_independently
     assert result.exception_info is None, result.exception_info
     assert result.verifier_result.rewards == {"reward": 1.0}
     assert [(spec.cpus, spec.memory_mb, spec.storage_mb) for spec in machines.specifications] == expected
+    assert result.config.task.verifier_execution_requirements == verifier_shape.model_dump(mode="json")
     assert all(machine.closed for machine in machines.machines)
 
 
@@ -316,7 +330,9 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
         })
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
-    runtime = {"task_machine": {"network": "deny"}, "verifier_machine": {"network": "allow"}}
+    runtime = {"task_machine": {"network": "deny"}, "verifier_machine": {
+        "network": "allow", "cpus": 3, "memory_mb": 6144, "storage_mb": 10240
+    }}
     binding = TaskSpecRuntimeBinding(task_sha256=canonical_sha256(task.model_dump(mode="json")),
         runtime_sha256=canonical_sha256(runtime), runtime=runtime)
     if not runtime_in_config:
@@ -354,6 +370,7 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     assert {path.relative_to(directory): path.read_bytes() for path in directory.rglob("*") if path.is_file()} == original_files
     assert command_deadlines == [INITIAL_REQUIREMENTS.agent_timeout_sec]
     assert all(spec.network is NetworkPolicy.ALLOW for spec in machines.specifications)
+    assert all((spec.cpus, spec.memory_mb, spec.storage_mb) == (3, 6144, 10240) for spec in machines.specifications)
     network = TaskNetworkPolicyReceipt.model_validate_json((trial.paths.trial_dir / "network-policy.json").read_text())
     assert network.actor_effective is None
     assert not network.actor_required

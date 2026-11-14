@@ -83,20 +83,31 @@ def retry_case(tmp_path, monkeypatch, request):
             ),
             **(
                 {"execution_requirements": None}
-                if outcome in {"grown", "retry-grown", "role-resources", "role-verifier-oom", "role-recovery"}
+                if outcome
+                in {
+                    "grown",
+                    "retry-grown",
+                    "role-resources",
+                    "role-verifier-oom",
+                    "role-verifier-growth",
+                    "role-actor-growth",
+                    "role-recovery",
+                }
                 else {}
             ),
         }
     )
-    if outcome in {"role-resources", "role-verifier-oom", "role-recovery"}:
+    if outcome in {"role-resources", "role-verifier-oom", "role-verifier-growth", "role-actor-growth", "role-recovery"}:
         envelope["runtime"] = (
             {"task_machine": {"cpus": 2}, "verifier_machine": {"memory_mb": 4096}}
-            if outcome == "role-verifier-oom"
+            if outcome in {"role-verifier-oom", "role-actor-growth"}
             else {
                 role: {"cpus": 2, "memory_mb": 4096, "storage_mb": 10240}
                 for role in ("task_machine", "verifier_machine")
             }
         )
+    if outcome == "role-verifier-growth":
+        envelope["runtime"] = {"task_machine": {"cpus": 2, "memory_mb": 4096}, "verifier_machine": {"storage_mb": 4096}}
     if outcome == "role-recovery":
         task = task.model_copy(
             update={
@@ -122,11 +133,20 @@ def retry_case(tmp_path, monkeypatch, request):
     (native / "solution/solve.sh").write_text("true\n")
     (native / "task.toml").write_text(
         "[agent]\ntimeout_sec=900\n[verifier]\ntimeout_sec=720\n"
-        if outcome in {"grown", "retry-grown", "role-resources", "role-verifier-oom", "role-recovery"}
+        if outcome
+        in {
+            "grown",
+            "retry-grown",
+            "role-resources",
+            "role-verifier-oom",
+            "role-verifier-growth",
+            "role-actor-growth",
+            "role-recovery",
+        }
         else "[environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n"
         "[agent]\ntimeout_sec=300\n[verifier]\ntimeout_sec=60\n"
     )
-    if outcome in {"role-resources", "role-verifier-oom", "role-recovery"}:
+    if outcome in {"role-resources", "role-verifier-oom", "role-verifier-growth", "role-actor-growth", "role-recovery"}:
         (native / "task-spec.json").write_text(task.model_dump_json())
         document = tomlkit.parse((native / "task.toml").read_text())
         document["verifier"]["environment_mode"] = "separate"
@@ -161,6 +181,8 @@ def retry_case(tmp_path, monkeypatch, request):
                 current = "oom"
             if outcome == "role-verifier-oom":
                 current = "oom"
+            if outcome in {"role-verifier-growth", "role-actor-growth"}:
+                current = "oom" if len(calls) == 4 else "pass"
         else:
             current = "unknown" if outcome == "legacy-unknown" else "infra"
             if outcome in {"grown", "retry-grown"} and len(calls) == 1:
@@ -198,7 +220,13 @@ def retry_case(tmp_path, monkeypatch, request):
         }
         (root / "result.json").write_text(json.dumps(result))
         (root / "config.json").write_text(json.dumps(result["config"]))
-        if outcome == "role-verifier-oom" and "retry-run" in package.parts:
+        if outcome == "role-actor-growth" and current == "oom" and "retry-run" in package.parts:
+            (root / "agent/resource-usage.json").write_text(json.dumps({"oom_kills": 1}))
+        if (
+            outcome in {"role-verifier-oom", "role-verifier-growth"}
+            and current == "oom"
+            and "retry-run" in package.parts
+        ):
             (root / "verifier/resource-usage.json").write_text(json.dumps({"oom_kills": 1}))
         if current not in {"unknown", "timeout"}:
             (root / "verifier/verdict.json").write_text(
@@ -722,3 +750,44 @@ def test_public_loader_rejects_retry_history_attached_to_foreign_task_or_package
             path.write_text(json.dumps(foreign))
             with pytest.raises(ValueError, match="changed the task or its native environment"):
                 load_oracle_filter(str(path))
+
+
+@pytest.mark.parametrize(
+    ("retry_case", "actor_memory", "verifier_memory"),
+    [
+        ("role-verifier-growth", [4096, 4096], [2048, 4096]),
+        ("role-actor-growth", [2048, 4096], [4096, 4096]),
+    ],
+    indirect=["retry_case"],
+)
+def test_only_the_failing_role_grows_missing_memory_and_publishes_both_allocations(
+    tmp_path, retry_case, actor_memory, verifier_memory
+):
+    case = retry_case
+    plan = tmp_path / "retry-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, plan)
+    destination = tmp_path / "retry-run"
+    retry_cohort(plan / "plan.json", destination, 1)
+    combined = tmp_path / "combined-map.json"
+    merge_retry_maps(case.parent_map, [destination / "task-map.json"], combined)
+    receipt = filter_cohort(case.cohort, combined, tmp_path, tmp_path / "filtered/tasks.parquet")
+    entry = receipt.tasks["task"]
+    assert entry.passed
+    assert [attempt.execution_requirements.memory_mb for attempt in entry.calibration.attempts] == actor_memory
+    assert [
+        attempt.verifier_execution_requirements.memory_mb for attempt in entry.calibration.attempts
+    ] == verifier_memory
+    assert [attempt.verifier_execution_requirements.cpus for attempt in entry.calibration.attempts] == [1, 1]
+    admitted = row_task(pq.read_table(tmp_path / "filtered/tasks.parquet").to_pylist()[0])
+    assert admitted is not None
+    assert admitted.execution_requirements.memory_mb == 4096
+    assert admitted.verifier_execution_requirements == entry.calibration.attempts[-1].verifier_execution_requirements
+    assert load_oracle_filter(str(tmp_path / "filtered/oracle-filter.json")).admits(
+        admitted, row_runtime(pq.read_table(case.cohort).to_pylist()[0])
+    )
+    raw = json.loads(combined.read_text())
+    raw["task"]["calibration"]["attempts"][1]["verifier_execution_requirements"]["memory_mb"] = 8192
+    invalid = tmp_path / "invalid-map.json"
+    invalid.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match=r"Verifier allocation differs|unfailed verifier"):
+        filter_cohort(case.cohort, invalid, tmp_path, tmp_path / "invalid/tasks.parquet")
