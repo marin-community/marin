@@ -26,10 +26,10 @@ from experiments.post_training.task_curation.source_fingerprints import (
 from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     cache_population,
+    read_hash_population,
     read_locator_manifest,
-    read_population,
 )
-from experiments.post_training.task_curation.task_neighbors import SAMPLE_SIZE
+from experiments.post_training.task_curation.task_neighbors import SAMPLE_SIZE, SHINGLE_CACHE_BYTES
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,10 @@ def scan(
     labels: list[dict],
     receipts: Path,
     sample_size: int = SAMPLE_SIZE,
+    *,
+    shingle_cache_bytes: int = SHINGLE_CACHE_BYTES,
 ) -> SourceIdentitySurvey:
+    """Measure shortlisted pairs with a separate shingle cache budget per population."""
     fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
     ordered = scan_pairs(survey, changed, top_k, labels)
     expected = {(row["left"], row["right"]): DuplicateLabel(row["expected"]) for row in labels}
@@ -97,7 +100,11 @@ def scan(
                     del populations[source_id]
             for source_id in (pair.left, pair.right):
                 if source_id not in populations:
-                    populations[source_id] = read_population(population_paths[source_id], fingerprints[source_id].inputs)
+                    populations[source_id] = read_hash_population(
+                        population_paths[source_id],
+                        fingerprints[source_id].inputs,
+                        shingle_cache_bytes=shingle_cache_bytes,
+                    )
             for review in review_pairs([pair], populations, acknowledgements, responses, sample_size):
                 reviews.append(review)
                 output.write(review.model_dump_json() + "\n")
@@ -147,6 +154,7 @@ def main() -> None:
         default=Path("experiments/post_training/task_curation/source_population_locators.json"),
     )
     review.add_argument("--sample-size", type=int, default=SAMPLE_SIZE)
+    review.add_argument("--shingle-cache-bytes", type=int, default=SHINGLE_CACHE_BYTES)
     review.add_argument("--labels", type=Path)
     review.add_argument("--acknowledgements", type=Path)
     review.add_argument("--require-acknowledged", action="store_true")
@@ -156,6 +164,8 @@ def main() -> None:
     else:
         if args.top_k <= 0:
             raise ValueError("Candidate count must be positive")
+        if args.shingle_cache_bytes < 0:
+            raise ValueError("Shingle cache size must be nonnegative")
         source = canonical_identity_survey(json.loads(args.fingerprints.read_text()))
         acknowledgements = json.loads(args.acknowledgements.read_text()) if args.acknowledgements else {}
         labels = json.loads(args.labels.read_text()) if args.labels else []
@@ -189,6 +199,7 @@ def main() -> None:
             labels,
             args.output.with_suffix(".receipts.jsonl"),
             args.sample_size,
+            shingle_cache_bytes=args.shingle_cache_bytes,
         )
     args.output.write_text(result.model_dump_json(indent=2) + "\n")
     if args.command == "scan" and args.require_acknowledged:

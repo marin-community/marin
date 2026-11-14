@@ -730,9 +730,14 @@ The pinned `source_population_locators.json` registry resolves historical opaque
 input names by file SHA-256 without changing their fingerprint or acknowledgement
 identities. It also selects SHA-verified regional content caches prepared next to
 their raw data. Unknown or out-of-region inputs fail preflight. CI selects pairs
-first, caches only those sources, and loads two populations at a time.
+first, downloads only their population caches, and loads two populations at a time.
 The scan verifies each input SHA-256 and population count before matching.
-CI uses `cw-us-east-02a`, 16 CPUs, 64 GB RAM and a three-day Iris timeout.
+It reads hashes first to resolve exact matches or disjoint task states, then
+loads normalized task text for the remaining comparisons.
+`source_duplicates scan --shingle-cache-bytes` bounds the candidate-shingle cache
+per population, with a 512 MiB default. CI allocates 4 GiB per population within
+its existing 64G memory request.
+CI uses `cw-us-east-08a`, 16 CPUs, 64 GB RAM and a three-day Iris timeout.
 The hosted GitHub job can wait six hours; its expiry leaves the Iris job running
 under its own deadline.
 Measured receipts are written to `.receipts.jsonl` and `.receipts.neighbors/`.

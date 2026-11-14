@@ -76,7 +76,7 @@ jobs:
               sha256sum --check atlas-overlap-inputs/sha256.txt
               uv run --no-sync python -m experiments.post_training.task_curation.source_duplicates scan \
               --fingerprints atlas-overlap-inputs/fingerprints.json --changed-sources atlas-overlap-inputs/changed.json \
-              --top-k 3 \
+              --top-k 3 --shingle-cache-bytes 4294967296 \
               --acknowledgements experiments/post_training/task_curation/source_duplicate_acknowledgements.json \
               --require-acknowledged --output "$IRIS_OUTPUT_DIR/review.json"'
       - uses: actions/upload-artifact@v4
