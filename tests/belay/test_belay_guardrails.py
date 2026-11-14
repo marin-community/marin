@@ -90,6 +90,7 @@ from experiments.belay.submit import (
     LADDER_RUNGS,
     HeroMfuResult,
     IrisJob,
+    TrackSource,
     check_ladder_launch,
     check_launch,
     experiment_id,
@@ -102,6 +103,7 @@ from experiments.belay.submit import (
     parse_spec,
     previous_tracks,
     registry_of,
+    resolve_tracks,
     run_id,
     run_suffix,
     submit_run,
@@ -1051,3 +1053,15 @@ def test_a_relaunched_ladder_is_not_held_by_its_crashed_attempts_trials() -> Non
     assert [t["id"] for t in ladder_rungs_left(trials, relaunch[2])] == ["t032"]
     relaunch[3]["loss"] = [2.27]
     assert ladder_rungs_left(trials, relaunch[3]) == []
+
+
+def test_an_ideas_track_is_named_then_inferred_then_its_reruns_then_speedrun() -> None:
+    speedrun, ladder = (Track.SPEEDRUN,), tuple(LADDER_RUNGS)
+    assert resolve_tracks((Track.MOE_D768,), True, None, ladder) == ((Track.MOE_D768,), TrackSource.NAMED)
+    with pytest.raises(SystemExit, match="names its Track"):
+        resolve_tracks((Track.MOE_D768,), True, "ladder", None)
+    assert resolve_tracks(speedrun, False, "ladder", speedrun) == (ladder, TrackSource.INFERRED)
+    assert resolve_tracks(speedrun, False, None, ladder) == (ladder, TrackSource.RERUN)
+    assert resolve_tracks(speedrun, False, None, None) == (speedrun, TrackSource.DEFAULT)
+    with pytest.raises(SystemExit, match="not one of"):
+        resolve_tracks(speedrun, False, "the-ladder", None)

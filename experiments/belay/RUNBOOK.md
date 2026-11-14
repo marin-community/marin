@@ -45,6 +45,9 @@ A human then decides what happens. Never work around a refusal.
    - **If it prints `posted escalation: Idea #<N> was already tested as X####`:** the idea has prior trials with a
      recorded result (a crashed run's trial does not count) and goes to a maintainer. Stop working on this idea. It runs again only when a maintainer re-queues it with the note
      "retest on current recipe".
+   - **If it prints `No Track: line names a Track`** and the comment or the maintainer note asks for one in words
+     ("run its 4-rung ladder" is `ladder`), rerun with `--track <that Track>` and quote the words in `--defaults`.
+     When nothing asks for another Track, keep `speedrun`.
    - **If it refuses because of the Track** (unknown or `hero-mfu`): run the escalate command it prints, then stop
      working on this idea. A missing Track is `speedrun`, except on a rerun of an idea with a registry entry: it
      repeats its last attempt's Track (`new-idea` prints `reruns on <Track>`).

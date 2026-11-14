@@ -182,6 +182,7 @@ from experiments.belay.submit import (
     IrisJob,
     RunSpec,
     Stage,
+    TrackSource,
     check_ladder_launch,
     check_launch,
     check_variant,
@@ -202,6 +203,7 @@ from experiments.belay.submit import (
     refuse_over_cap,
     refuse_reused_names,
     registry_of,
+    resolve_tracks,
     run_id,
     run_name,
     run_suffix,
@@ -426,6 +428,12 @@ def print_idea_brief(idea: Idea, tracks: tuple[Track, ...], defaulted: bool) -> 
         label = track_label(track, defaulted)
         print(f"{label}: {baseline.description}; judged on {baseline.metric}, noise {baseline.noise}.")
     print()
+    if defaulted:
+        print(
+            'No Track: line names a Track. If the comment or the maintainer note asks for one in words ("run its '
+            '4-rung ladder" is ladder, "against the basic MoE at d768" is moe-d768), rerun this command with '
+            "--track <that Track> and quote those words in --defaults. If it is unclear, keep speedrun.\n"
+        )
     if (idea.note or "").startswith(MAINTAINER_NOTE):
         print(f"MAINTAINER NOTE (follow it; it settles the checks it addresses):\n{idea.note}\n")
     print(
@@ -557,11 +565,13 @@ def new_idea(
     defaults: str | None,
     *,
     named_entry: str | None = None,
+    inferred_track: str | None = None,
     dry_run: bool,
 ) -> None:
     """Register an approved idea, commit its run spec, post the plan and launch it; resumes where it stopped. A
     ladder idea gets one spec and trial per rung, launched together. ``named_entry`` is an existing registry entry
-    the approved text names (an idea that takes a recorded one further, such as up the ladder)."""
+    the approved text names (an idea that takes a recorded one further, such as up the ladder). ``inferred_track`` is
+    the Track the session reads from approved text that asks for one in words but has no ``Track:`` line."""
     repo = repo_root()
     branch = require_week_branch(repo, datetime.date.today())
     require_registry_checkout()
@@ -572,14 +582,16 @@ def new_idea(
     idea, hidden = approved_idea(idea)
     if hidden:
         print(f"note: the comment had text a reviewer would not see: {', '.join(hidden)}")
-    tracks, defaulted = idea_tracks(idea)
+    named_tracks, text_defaulted = idea_tracks(idea)
     registry_id = idea.registry_id or (entry_for_intake(idea.url) if idea.url else None) or named(idea, named_entry)
-    if defaulted and registry_id is not None:  # a rerun that names no Track repeats its last attempt's
-        previous = previous_tracks(load_entry(registry_id))
-        if previous is not None:
-            tracks, defaulted = previous, False
-            label = LADDER if len(previous) > 1 else previous[0]
-            print(f"{registry_id} ran before; no Track named, so it reruns on {label}")
+    previous = previous_tracks(load_entry(registry_id)) if text_defaulted and registry_id is not None else None
+    tracks, source = resolve_tracks(named_tracks, not text_defaulted, inferred_track, previous)
+    defaulted = source is TrackSource.DEFAULT
+    label = LADDER if len(tracks) > 1 else tracks[0]
+    if source is TrackSource.RERUN:
+        print(f"{registry_id} ran before; no Track named, so it reruns on {label}")
+    if source is TrackSource.INFERRED:
+        print(f"Track: {label}, inferred by the session from the approved text (it has no Track: line)")
     ladder = len(tracks) > 1
     for track in tracks:
         if track is Track.CUSTOM:
@@ -632,6 +644,8 @@ def new_idea(
     defaults_text = defaults + (f" (hidden text removed from the comment: {', '.join(hidden)})" if hidden else "")
     if defaulted:
         defaults_text = f"track speedrun (no Track: line); {defaults_text}"
+    if source is TrackSource.INFERRED:
+        defaults_text = f"track {label} inferred from the approved text; {defaults_text}"
     if ladder:  # all rungs or none: a rung launched alone would leave the idea planned with the rest never started
         waiting = [t for t in tracks if not spec_launched(repo, experiment_id(registry_id, t, ladder))]
         check_ladder_launch(waiting, iris_jobs(), state.node_cap, idea.node_grant, registry_id)
@@ -2065,6 +2079,10 @@ def main(argv: list[str]) -> None:
     p.add_argument("--opt-set", action="append", default=[])
     p.add_argument("--model-set", action="append", default=[])
     p.add_argument("--registry-id", help="an existing entry the approved text names (such as a ladder of X####)")
+    p.add_argument(
+        "--track",
+        help="the Track the approved text asks for in words, with no Track: line (ladder, moe-d768, ...)",
+    )
     p = command("launch")
     p.add_argument("registry_id")
     p.add_argument("--run", required=True, help="the run's key in experiments/belay/runs/X####.yaml")
@@ -2146,6 +2164,7 @@ def main(argv: list[str]) -> None:
             settings,
             args.defaults,
             named_entry=args.registry_id,
+            inferred_track=args.track,
             dry_run=args.dry_run,
         )
     elif args.command == "launch":
