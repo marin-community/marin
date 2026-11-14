@@ -1733,6 +1733,27 @@ LOCAL reclamation opens only an existing released lease, preserving a live
 guardian's lock even after its lease pathname is unlinked during cleanup.
 Calibration validates and deduplicates Harbor's selected-result copy and physical
 attempt result before consuming the physical verdict, oracle exit and resource receipts.
+A cleanup cancellation can replace a previously observed source deadline in the final
+Trial result. Preserve that deadline with `OracleTrialReceipt.prior_phase_failure`:
+`phase`, `timeout_sec`, canonical `result_sha256`, immutable archive/exception
+references, and the exact `archive_member` and `archive_root`. The exception URI is
+`archive.uri#archive_member`; its digest hashes the member bytes. The collector
+checks archive and member hashes, the physical Trial URI, exact archived config,
+the Harbor timeout traceback and the original source-declared phase budget.
+Write the evidence as a JSON list of `PriorPhaseFailureReceipt` objects, then bind
+it to a new map:
+
+```bash
+uv run python -m experiments.post_training.task_curation.oracle_filter bind-phase-failures \
+  --task-map original-map.json --evidence phase-failures.json --output bound-map.json
+```
+
+Production result JSON and old map bytes remain unchanged. Such a trial
+remains a source-deadline exclusion and cannot receive an infrastructure replay.
+Absent evidence is omitted from serialization so historical retry hashes remain
+unchanged. A persisted `lifecycle-result.json` is collected only when that Trial
+has no selected `result.json`.
+
 Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.
 This explicit wall-clock bound selects Daytona's JOB provider-wait policy;
 standalone Harbor trials without it keep PHASE behavior. Safe provider retries

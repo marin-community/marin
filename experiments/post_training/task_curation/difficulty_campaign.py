@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from finestore.rl.difficulty import PROTOCOL_ID, SOLVER_MODELS, SamplingSettings, Solver
+from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SamplingSettings, Solver
 from huggingface_hub import hf_hub_download
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
@@ -219,9 +219,13 @@ def main() -> None:
         if {source.declaration.id for source in sources} != set(args.source_id):
             raise ValueError("Requested source is absent from the frozen selection")
     pin = PINS[args.solver]
-    template = Path(hf_hub_download(SOLVER_MODELS[args.solver], "chat_template.jinja", revision=pin.revision))
-    if hashlib.sha256(template.read_bytes()).hexdigest() != pin.template_sha256:
-        raise ValueError("Pinned chat template differs from the resolved model identity")
+    for selected_solver in {args.solver, Solver.HOSTED}:
+        selected_pin = PINS[selected_solver]
+        template = Path(
+            hf_hub_download(SOLVER_MODELS[selected_solver], "chat_template.jinja", revision=selected_pin.revision)
+        )
+        if hashlib.sha256(template.read_bytes()).hexdigest() != selected_pin.template_sha256:
+            raise ValueError("Pinned chat template differs from the resolved model identity")
     args.local_root.mkdir(parents=True)
     options = worker_limits(args.local_root)
     if args.registry_auth_secret is not None:
@@ -249,6 +253,20 @@ def main() -> None:
     settings = sampling_settings(args.solver, deviations)
     with solver_endpoint(args.solver, settings) as (endpoint, api_model, api_key, jobs):
         probe = probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
+        judge_pin = PINS[Solver.HOSTED]
+        judge_endpoint = resolve_glm_base_url(GLM_RELAY_JOB)
+        judge_probe = (
+            probe
+            if args.solver == Solver.HOSTED
+            else probe_endpoint(
+                Solver.HOSTED,
+                judge_endpoint,
+                GLM_MODEL,
+                require_secret(GLM_BULK_TOKEN_ENV),
+                sampling_settings(Solver.HOSTED, []),
+            )
+        )
+        judge_revision = f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}"
         completion = probe["tools_thinking_probe"]["completion"]
         revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
         receipt = write_json_evidence(
@@ -271,6 +289,18 @@ def main() -> None:
                     "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                 },
                 "sampling": request_parameters(settings),
+                "judge": {
+                    "model": SOLVER_MODELS[Solver.HOSTED],
+                    "api_model": GLM_MODEL,
+                    "revision": judge_revision,
+                    "tokenizer": SOLVER_MODELS[Solver.HOSTED],
+                    "tokenizer_revision": judge_pin.revision,
+                    "chat_template_sha256": judge_pin.template_sha256,
+                    "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
+                    "token_budget": "original source request; production service enforces its served context",
+                    "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
+                    "serving_probe": judge_probe,
+                },
                 "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
                 "compilation_and_cuda_graphs_requested": True,
                 "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
@@ -296,8 +326,17 @@ def main() -> None:
             "gpu_count": pin.gpus,
             "attempts_per_task": args.attempts_per_task,
             "task_limit": args.task_limit,
-            "judge_endpoint": resolve_glm_base_url(GLM_RELAY_JOB),
+            "judge_endpoint": judge_endpoint,
             "judge_api_key_secret": GLM_BULK_TOKEN_ENV,
+            "judge_api_model": GLM_MODEL,
+            "judge_identity": {
+                "model": SOLVER_MODELS[Solver.HOSTED],
+                "revision": judge_revision,
+                "tokenizer": SOLVER_MODELS[Solver.HOSTED],
+                "tokenizer_revision": judge_pin.revision,
+                "chat_template_sha256": judge_pin.template_sha256,
+                "serving_receipt": receipt.model_dump(mode="json"),
+            },
         }
         config_path = args.local_root / "candidate.json"
         config_path.write_text(json.dumps(config) + "\n")

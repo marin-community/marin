@@ -70,6 +70,19 @@ class NativeVerifierGrade(BaseModel):
     task_checksum: str
 
 
+class PriorPhaseFailureReceipt(BaseModel):
+    """An archived source deadline observed before a later cleanup failure."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    phase: Literal["agent", "verifier"]
+    timeout_sec: float = Field(gt=0, allow_inf_nan=False)
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    archive: ContentEvidenceReference
+    exception: ContentEvidenceReference
+    archive_member: str
+    archive_root: str
+
+
 def pre_oracle_host_unavailable(result: dict[str, Any], verdict: dict | None, oracle_exit_code: int | None) -> bool:
     """Recognize frozen host failures that occurred before the original command."""
     config = result.get("config", {})
@@ -127,6 +140,7 @@ class OracleTrialReceipt(BaseModel):
     source_environment: SourcePytestEnvironment | None = None
     network_policy: TaskNetworkPolicyReceipt | None = None
     native_grade: NativeVerifierGrade | None = None
+    prior_phase_failure: PriorPhaseFailureReceipt | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_result_hash(self):
@@ -137,6 +151,13 @@ class OracleTrialReceipt(BaseModel):
             or self.native_grade.task_checksum != self.result.get("task_checksum")
         ):
             raise ValueError("Native grade belongs to another production Trial")
+        if self.prior_phase_failure is not None and self.prior_phase_failure.result_sha256 != self.result_sha256:
+            raise ValueError("Earlier phase failure belongs to another production Trial result")
+        if self.prior_phase_failure is not None and (
+            (self.result.get("agent_info") or {}).get("name") != "oracle"
+            or self.result.get("config", {}).get("agent", {}).get("name") != "oracle"
+        ):
+            raise ValueError("Earlier source phase evidence requires an original oracle Trial")
         config = self.result.get("config", {})
         verifier_allocation = self.verifier_execution_requirements
         configured_verifier = config.get("task", {}).get("verifier_execution_requirements")
@@ -172,6 +193,12 @@ class OracleTrialReceipt(BaseModel):
 
     @property
     def failure_signal(self) -> FailureSignal:
+        if self.prior_phase_failure is not None:
+            return (
+                FailureSignal.AGENT_TIMEOUT
+                if self.prior_phase_failure.phase == "agent"
+                else FailureSignal.VERIFIER_TIMEOUT
+            )
         usage = self.resource_usage.model_copy(
             update={"oom_kills": self.resource_usage.oom_kills + self.verifier_resource_usage.oom_kills}
         )
@@ -222,6 +249,7 @@ class OracleTrialReceipt(BaseModel):
             and result.get("config", {}).get("agent", {}).get("name") == "oracle"
             and result.get("config", {}).get("environment", {}).get("type") in {"local", "daytona"}
             and result.get("exception_info") is None
+            and self.prior_phase_failure is None
             and result.get("finished_at") is not None
             and result.get("completion") is not None
             and self.oracle_exit_code is not None
@@ -392,6 +420,15 @@ class ResourceCalibrationReceipt(BaseModel):
             )
         infrastructure_retries = 0
         for index, trial in enumerate(self.attempts):
+            prior_failure = trial.prior_phase_failure
+            if prior_failure is not None:
+                original = (
+                    self.declared_requirements.model_dump()
+                    if self.declared_requirements is not None
+                    else self.preserved_requirements
+                )
+                if original.get(ResourceDimension(f"{prior_failure.phase}_timeout_sec")) != prior_failure.timeout_sec:
+                    raise ValueError("Earlier phase failure must match the original source-declared deadline")
             if trial.execution_requirements != expected:
                 raise ValueError("Calibration changed an unfailed resource or a task-declared limit")
             if trial.verifier_execution_requirements != expected_verifier:
@@ -583,6 +620,8 @@ def require_infrastructure_retry_parent(
     )
     if final.scored or recorded_grade:
         raise ValueError("Infrastructure retry approval cannot replace a scored source result")
+    if any(attempt.prior_phase_failure is not None for attempt in calibration.attempts):
+        raise ValueError("Infrastructure retry cannot replay an observed source-declared phase deadline")
     if approval.parent_result_sha256 != final.result_sha256:
         raise ValueError("Infrastructure approval belongs to another parent attempt")
 
