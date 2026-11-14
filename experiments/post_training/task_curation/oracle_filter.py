@@ -144,7 +144,9 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
         and file != path / "task.toml"
         and not (oracle_kind == "calibration_only" and file.relative_to(path).parts[0] == "solution")
     }
-    return canonical_sha256({"task": document, "files": files})
+    return canonical_sha256(
+        {"task": document, "files": files, "grading_environment_mode": native_verifier_profile(path).mode.value}
+    )
 
 
 def receipt_from_trial(

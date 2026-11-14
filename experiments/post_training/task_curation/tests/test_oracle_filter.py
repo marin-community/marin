@@ -34,6 +34,7 @@ from experiments.post_training.task_curation.oracle_filter import (
     HARBOR_PROJECT,
     calibrate_cohort,
     calibrated_task,
+    calibration_package_identity,
     collect_trials,
     filter_cohort,
     harbor_inspection,
@@ -591,3 +592,35 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
             retained, receipt, None if canonical and not task_spec_package else envelope["runtime"]
         )
         assert len(entry.calibration.attempts) == 2
+
+
+@pytest.mark.parametrize("role", ["actor", "verifier"])
+def test_capacity_only_environment_tables_preserve_original_package_identity(tmp_path, role):
+    original = tmp_path / "original"
+    staged = tmp_path / "staged"
+    for package in (original, staged):
+        package.mkdir()
+        (package / "instruction.md").write_text("Run the original source task.")
+        (package / "task.toml").write_text(
+            '[metadata]\nsource="smartie"\n'
+            + ('[verifier]\nenvironment_mode="separate"\n' if role == "verifier" else "")
+        )
+    expected = calibration_package_identity(original, "original")
+    section = "environment" if role == "actor" else "verifier.environment"
+    with (staged / "task.toml").open("a") as output:
+        output.write(f"[{section}]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n")
+    assert calibration_package_identity(staged, "original") == expected
+    with (staged / "task.toml").open("a") as output:
+        output.write('docker_image="changed-source-image"\n')
+    assert calibration_package_identity(staged, "original") != expected
+
+
+def test_capacity_only_verifier_table_cannot_hide_a_shared_to_separate_grader_change(tmp_path):
+    original = tmp_path / "original"
+    staged = tmp_path / "staged"
+    for package in (original, staged):
+        package.mkdir()
+        (package / "task.toml").write_text('[metadata]\nsource="smartie"\n')
+    with (staged / "task.toml").open("a") as output:
+        output.write("[verifier.environment]\ncpus=1\nmemory_mb=2048\nstorage_mb=2048\n")
+    assert calibration_package_identity(original, "original") != calibration_package_identity(staged, "original")
