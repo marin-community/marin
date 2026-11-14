@@ -23,7 +23,8 @@ from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.runner import EvaluationBatch, wait_and_report
 from rigging.config_discovery import find_project_root
 
-from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
+from experiments.evaluation.curated import load_evaluations
+from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import (
     DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
@@ -37,9 +38,9 @@ from experiments.evaluation.policy_finalization import load_policy_finalization
 logger = logging.getLogger(__name__)
 
 
-def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
+def _resolve_evaluations(evals_arg: str) -> tuple[EvaluationDefinition, ...]:
     try:
-        return resolve_eval_keys(evals_arg)
+        return resolve_evaluations(evals_arg)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
 
@@ -164,13 +165,13 @@ def cli() -> None:
     "--evals",
     "evals_arg",
     default=None,
-    help="Suite name (e.g. 'smoke') or comma-separated eval keys; defaults to smoke.",
+    help="Suite or comma-separated eval keys; selects document entries with --evaluation-config. Defaults to smoke.",
 )
 @click.option(
-    "--evalchemy-config",
+    "--evaluation-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
-    help="Portable Evalchemy YAML or JSON. Repeatable and additive with --evals and --harbor-config.",
+    help="Benchmark selection document. Repeat to combine entries; --evals selects entries from the combined documents.",
 )
 @click.option(
     "--harbor-config",
@@ -205,7 +206,9 @@ def cli() -> None:
     show_default=True,
     help="Maximum concurrent evaluators sharing inference.",
 )
-@click.option("--seed", type=int, default=None, help="Override the Evalchemy sampling seed for this launch.")
+@click.option(
+    "--seed", type=int, default=None, help="Run seed for curated evaluations. Default: 0, or unseeded on TPU vLLM."
+)
 @click.option(
     "--version",
     "version",
@@ -248,7 +251,7 @@ def cli() -> None:
 @click.option(
     "--policy-finalization-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Frozen judge and SOTOPIA cohort configuration; enabled by the policy campaign launcher.",
+    help="Frozen judge configuration; enabled by the policy campaign launcher.",
 )
 def launch(
     model: str | None,
@@ -258,7 +261,7 @@ def launch(
     judge_accelerator: str | None,
     policy_finalization_config: Path | None,
     evals_arg: str | None,
-    evalchemy_config: tuple[Path, ...],
+    evaluation_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
     retry_unscored_harbor_trials: bool,
     platform: str | None,
@@ -281,13 +284,15 @@ def launch(
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
-    evalchemy_definitions = [
-        EvalchemyDefinition(
-            name=canonical_served_name(path.stem),
-            config_path=path,
-        )
-        for path in evalchemy_config
-    ]
+    configured = [entry for path in evaluation_config for entry in load_evaluations(path)]
+    if evaluation_config and evals_arg:
+        names = {name.strip() for name in evals_arg.split(",") if name.strip()}
+        unknown = names - {entry.name for entry in configured}
+        if unknown:
+            raise click.BadParameter(
+                f"Unknown configured evaluations: {', '.join(sorted(unknown))}", param_hint="--evals"
+            )
+        configured = [entry for entry in configured if entry.name in names]
     harbor_definitions = [
         HarborDefinition(
             name=canonical_served_name(path.stem),
@@ -295,16 +300,14 @@ def launch(
         )
         for path in harbor_config
     ]
-    evals = (
-        _resolve_eval_keys(evals_arg)
-        if evals_arg is not None
-        else (() if evalchemy_definitions or harbor_definitions else _resolve_eval_keys("smoke"))
-    )
+    evals = tuple(configured) + tuple(harbor_definitions)
+    if not evaluation_config and evals_arg is not None:
+        evals += _resolve_evaluations(evals_arg)
+    if not evals:
+        evals = _resolve_evaluations("smoke")
     spec = LaunchSpec(
         model=selected_model,
         evals=evals,
-        evalchemy_definitions=tuple(evalchemy_definitions),
-        harbor_definitions=tuple(harbor_definitions),
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
@@ -330,7 +333,7 @@ def launch(
         if resume_results_path is not None:
             param_hint = "--resume-results-path"
         else:
-            param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
+            param_hint = "--evaluation-config/--harbor-config" if evaluation_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
     if dry_run:
         _print_plan(spec, batch)

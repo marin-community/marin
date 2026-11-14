@@ -12,6 +12,7 @@ import httpx
 from harbor_config.errors import ErrorCategory, error_category
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.factory import AgentFactory
 from harbor.environments import local, model_relay
 from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import (
@@ -102,6 +103,20 @@ class BackgroundServerAgent(PartialAnswerAgent):
         await environment.exec("kill $(cat server.pid)")
 
 
+@pytest.fixture(autouse=True)
+def allow_trial_agents(monkeypatch):
+    agents = AgentFactory._AGENT_MAP | {
+        f"test-{agent.__name__}": agent
+        for agent in (
+            PartialAnswerAgent,
+            WaitingAgent,
+            JudgeProbeAgent,
+            BackgroundServerAgent,
+        )
+    }
+    monkeypatch.setattr(AgentFactory, "_AGENT_MAP", agents)
+
+
 class ProcessTaskFactory:
     def check_environment(self, requirements, spec) -> None:
         pass
@@ -142,7 +157,7 @@ def trial_config(
         trial_name=name,
         trials_dir=root / "trials",
         agent=AgentConfig(
-            import_path=f"tests.unit.test_trial_service_lifetime:{agent}"
+            name=f"test-{agent}"
         ),
         environment=EnvironmentConfig(
             type="local",
@@ -192,7 +207,7 @@ async def test_actual_grader_can_probe_prior_successful_background_service(
     monkeypatch.setattr(local, "LocalMachineFactory", lambda **kwargs: factory)
     config = trial_config(tmp_path, "background", guest_root=tmp_path / "guest")
     config.agent = AgentConfig(
-        import_path="tests.unit.test_trial_service_lifetime:BackgroundServerAgent",
+        name="test-BackgroundServerAgent",
         override_timeout_sec=1 if timeout else 5,
         env={"HTTP_PORT": str(port), "WAIT_FOR_TIMEOUT": "1" if timeout else "0"},
     )
@@ -245,7 +260,7 @@ async def test_verifier_judge_is_unavailable_to_candidate_but_available_to_actua
     )
     config = trial_config(tmp_path, "verifier-only", guest_root=tmp_path / "guest")
     config.agent = AgentConfig(
-        import_path="tests.unit.test_trial_service_lifetime:JudgeProbeAgent",
+        name="test-JudgeProbeAgent",
         override_timeout_sec=10,
     )
     config.environment.kwargs = {

@@ -14,6 +14,21 @@ The selection defines the 100k training allocation. The launcher defaults to
 128 prompt groups per update, four samples per group, a 24,576-token context
 and an 8,192-token response limit.
 
+## Serving profile
+
+Evaluation samples at temperature 0.6 and top-p 0.95 with seed 20261020.
+Training rollouts sample at temperature 1.0 and top-p 1.0. The seed alone does
+not make batched serving repeat exactly.
+
+Add `--reproducible-serving` to use batch-invariant arithmetic, TRITON_ATTN,
+prefix caching and greedy evaluation. This profile limits each serving
+rank to one sequence and admits eight concurrent tasks in training and
+evaluation. Exact evaluation repeats are qualified only for this profile.
+Training throughput for this profile is unmeasured. Use a fresh
+run version when switching profiles, and do not compare evaluation scores
+across profiles. See the
+[serving reproducibility record](https://github.com/marin-community/marin/issues/11007).
+
 ## Make or update tasks
 
 Declare new tasks through the
@@ -123,3 +138,7 @@ panel fixed and change one recipe choice at a time. Reuse the published data for
 training-only changes; produce a new selection version when changing tasks or
 sampling. Update this page and the checked-in recipe when adopting a better
 configuration, and keep trial results in the experiment issue or report.
+
+Default-profile runs whose recorded configuration has evaluation temperature
+0.0 evaluated greedily without a seed. Do not compare their evaluation scores
+with runs that sampled at 0.6.

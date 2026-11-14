@@ -348,6 +348,7 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
                 assert leaf.sharding.mesh == mesh
 
     checkpoint = discover_latest_checkpoint(str(tmp_path / "checkpoints"))
+    assert checkpoint is not None
     restored_config = dataclasses.replace(trainer_config, load_checkpoint=True, load_checkpoint_path=checkpoint)
     with (
         current_tracker(NoopTracker()),
@@ -384,3 +385,19 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
         )
         assert loaded.Vocab.size == 32
         assert evaluator.evaluate(loaded).micro_avg_loss == after_loss
+
+        batch = next(iter(trainer.data_loader(dataset)))
+        uninterrupted = trainer.train_step(info.state, batch)
+        resumed = trainer.train_step(restored, batch)
+        np.testing.assert_allclose(resumed.loss, uninterrupted.loss, atol=1e-5, rtol=1e-4)
+        assert int(resumed.state.step) == int(uninterrupted.state.step) == 2
+        assert int(resumed.state.opt_state[0].count) == int(uninterrupted.state.opt_state[0].count) == 2
+        np.testing.assert_array_equal(resumed.state.training_key, uninterrupted.state.training_key)
+        for actual, expected in zip(
+            jax.tree.leaves(eqx.filter(resumed.state, eqx.is_array)),
+            jax.tree.leaves(eqx.filter(uninterrupted.state, eqx.is_array)),
+            strict=True,
+        ):
+            assert actual.sharding == expected.sharding
+            assert actual.dtype == expected.dtype
+            np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-4)

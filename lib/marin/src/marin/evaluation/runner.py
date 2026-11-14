@@ -20,9 +20,8 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import SecretSpec
 from rigging.timing import retry_with_backoff
 
-from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.eval_env import EVAL_RUNTIME_ENV_KEYS, EVALUATION_REQUEST_TIMEOUT_SECONDS, env_vars_from_keys
 from marin.evaluation.eval_stats import DEFAULT_MIN_COVERAGE
-from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.evaluation.model_config import ModelConfig
@@ -52,6 +51,7 @@ from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.config import RemoteInferenceConfig
 from marin.inference.iris import (
     InferenceBackendState,
+    InferenceStartupPhase,
     RemoteInferenceSession,
     RemoteInferenceStartupError,
     remote_inference,
@@ -634,13 +634,13 @@ def run_evaluation_steps(
             (
                 float(
                     evaluation.identity.eval_ref.evalchemy.extra_model_args.get(
-                        "timeout", EVALCHEMY_REQUEST_TIMEOUT_SECONDS
+                        "timeout", EVALUATION_REQUEST_TIMEOUT_SECONDS
                     )
                 )
                 for evaluation in batch.evaluations
                 if evaluation.identity.eval_ref.evalchemy is not None
             ),
-            default=EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
+            default=EVALUATION_REQUEST_TIMEOUT_SECONDS,
         ),
     )
     with ExitStack() as stack:
@@ -698,6 +698,7 @@ def _inference_session(stack: ExitStack, config: RemoteInferenceConfig) -> Remot
     return retry_with_backoff(
         lambda: stack.enter_context(remote_inference(config)),
         retryable=lambda error: isinstance(error, RemoteInferenceStartupError)
+        and error.phase is InferenceStartupPhase.SERVING
         and isinstance(error.__cause__, TimeoutError),
         max_attempts=config.iris.max_retries_failure + 1,
         operation="evaluation inference startup",

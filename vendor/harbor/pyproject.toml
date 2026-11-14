@@ -52,6 +52,7 @@ tinker = ["tinker>=0.14.0", "tinker-cookbook>=0.1.0"]
 [dependency-groups]
 test = [
     "harbor[shellsim]",
+    "marin-taskcompendium",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",
@@ -66,7 +67,7 @@ requires = ["uv_build>=0.8.4,<0.9.0"]
 build-backend = "uv_build"
 
 [tool.uv]
-constraint-dependencies = ["nltk>=3.10.4", "oauthlib>=4.0.0"]
+constraint-dependencies = ["nltk>=3.10.4", "oauthlib>=4.0.1"]
 # Mini-SWE's unused default model declares LiteLLM; our model uses OpenAI directly.
 exclude-dependencies = ["litellm"]
 default-groups = []
@@ -81,6 +82,8 @@ marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
 marin-shellbox = { path = "../../lib/shellbox", editable = true }
 marin-finelog = { path = "../../lib/finelog", editable = true }
+marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
+marin-verifyit = { path = "../../lib/verifyit", editable = true }
 
 [tool.pytest.ini_options]
 timeout = 60

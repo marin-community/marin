@@ -117,7 +117,7 @@ def load_hf_checkpoint(
     *,
     axis_mapping: ResourceMapping,
     tokenizer,
-    compute_dtype: jnp.dtype,
+    compute_dtype: jnp.dtype | None,
     compute_axis_mapping: ResourceMapping | None = None,
     batch_axis_name: str = "batch",
     cache_ttl_days: int = _DEFAULT_HF_CACHE_TTL_DAYS,

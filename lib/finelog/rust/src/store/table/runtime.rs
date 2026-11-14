@@ -109,7 +109,9 @@ pub struct TableRuntime {
     /// How this table's specification transition is failing, carried across
     /// maintenance ticks.
     pub(super) migration_block: Mutex<MigrationBlock>,
-    pub(super) last_object_gc: Mutex<Option<Instant>>,
+    /// When the current object-collection interval began: the last collection,
+    /// or the first backlogged visit of a table that has not collected yet.
+    pub(super) object_gc_interval_start: Mutex<Option<Instant>>,
     pub(super) last_orphan_sweep: Mutex<Option<Instant>>,
     /// Latched stop flag the dispatched work checks at the top of each loop
     /// iteration.
@@ -238,7 +240,7 @@ impl TableRuntime {
             layout_tracker: LayoutTracker::default(),
             index_skips: Mutex::new(BackfillSkips::default()),
             migration_block: Mutex::new(MigrationBlock::default()),
-            last_object_gc: Mutex::new(None),
+            object_gc_interval_start: Mutex::new(None),
             last_orphan_sweep: Mutex::new(None),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),

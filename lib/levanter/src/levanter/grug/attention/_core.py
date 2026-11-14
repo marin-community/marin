@@ -13,7 +13,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding, PartitionSpec, auto_axes
+from jax.sharding import NamedSharding, PartitionSpec, auto_axes, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -65,7 +65,8 @@ class AttentionMask(eqx.Module):
     sliding_window: int | None = eqx.field(default=None, static=True)
     # Optional precomputed FA4/CuTe per-token metadata (lower_bounds, valid), both [B, S] int32/bool.
     # When set, ``gpu_fa4_cute_attention`` and the AMD Triton flash kernels use these directly instead of
-    # rebuilding from ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
+    # rebuilding from ``segment_ids``/``sliding_window``, and ``materialize_mask`` (reference attention) also keeps
+    # only keys at or after each query's lower bound. This lets a caller compute the metadata once outside a
     # ``lax.scan`` and select a per-layer sliding window (a static field the scan body cannot vary).
     # Build them with ``fa4_cute_segment_bounds`` from segment IDs that each form one contiguous run: the AMD
     # kernels need nondecreasing bounds at most each token's position (invalid tokens counting as their own
@@ -116,7 +117,7 @@ class AttentionMask(eqx.Module):
 
         Shapes:
           - If `segment_ids` is unset, returns `(q_len, k_len)` (broadcastable across batch).
-          - If `segment_ids` is set with per-batch IDs, returns `(batch, q_len, k_len)`.
+          - If `segment_ids` is set with per-batch IDs, or `fa4_bounds` is set, returns `(batch, q_len, k_len)`.
         """
         mask = None
 
@@ -149,6 +150,15 @@ class AttentionMask(eqx.Module):
                 allowed = q_seg[:, :, None] == k_seg[:, None, :]
             else:
                 raise ValueError(f"segment_ids must be 1D or 2D, got ndim={q_seg.ndim}")
+            mask = allowed if mask is None else jnp.logical_and(mask, allowed)
+
+        if self.fa4_bounds is not None:
+            # Inclusive per-query key lower bounds; they carry a per-layer window and document starts.
+            # Padding queries hold a kernel tile-skip hint (up to a ``seq_len`` sentinel) rather than a
+            # bound, which would mask the whole row, so they keep only the other mask terms.
+            lower_bounds, valid = self.fa4_bounds
+            lower_bounds = jnp.where(valid, lower_bounds, 0)
+            allowed = jnp.arange(k_len)[None, None, :] >= lower_bounds[:, :, None]
             mask = allowed if mask is None else jnp.logical_and(mask, allowed)
 
         return mask
@@ -425,15 +435,10 @@ def _tpu_splash_attention(
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
-
-    # Sparse mask metadata must describe the same local heads and query blocks as Q.
+    # The kernel carries global mask metadata, including query positions; slice it with Q.
     kernel_sharding = NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2]))
     kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
-    splash_kernel = jax.tree.map(
-        lambda value, spec: jax.reshard(jnp.asarray(value), NamedSharding(mesh, spec)),
-        splash_kernel,
-        kernel_specs,
-    )
+    splash_kernel = reshard(splash_kernel, kernel_specs)
 
     @functools.partial(
         shard_map,

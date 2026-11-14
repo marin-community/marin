@@ -5,7 +5,7 @@ import dataclasses
 import functools
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 import equinox as eqx
@@ -32,6 +32,7 @@ from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_conf
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
 from levanter.models.llama_native_lm import NativeLlamaLmConfig, native_llama_sharding
 from levanter.main.model_init import ModelInitContext, build_model, prepare_model_init_context, load_model_from_source
@@ -39,6 +40,7 @@ from levanter.model_loading import native_evaluation_axis_mapping
 from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from jax.sharding import PartitionSpec as P
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import ExplicitTrainingLayout, Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
@@ -115,6 +117,27 @@ def _restore_lm_model_from_partial_checkpoint(
     return eqx.combine(checkpointed_trainables, source_model)
 
 
+def preserve_hf_runtime_settings(reloaded: LmConfig, requested: LmConfig) -> LmConfig:
+    """Reapply the requested Snowball runtime settings after an HF config reload.
+
+    HF metadata supplies architecture fields. Keep the requested runtime settings,
+    reference checkpoint, and tokenizer.
+    """
+    if not isinstance(requested, SnowballConfig):
+        return reloaded
+    if not isinstance(reloaded, SnowballConfig):
+        raise ValueError("HF reload changed the Snowball model type")
+    return replace(
+        reloaded,
+        router_dot_fp32=requested.router_dot_fp32,
+        moe_implementation=requested.moe_implementation,
+        moe_capacity_factor=requested.moe_capacity_factor,
+        fp32_activations=requested.fp32_activations,
+        reference_checkpoint=requested.reference_checkpoint,
+        tokenizer=requested.tokenizer,
+    )
+
+
 def _load_lm_model_from_configured_source(
     *,
     config: TrainLmConfig,
@@ -135,8 +158,7 @@ def _load_lm_model_from_configured_source(
                 parameter_axis_mapping=parameter_axis_mapping,
                 compute_axis_mapping=trainer.compute_axis_mapping,
                 batch_axis_name=config.trainer.batch_axis_name,
-                compute_dtype=trainer.mp.compute_dtype,
-                cast_to_param=trainer.mp.cast_to_param,
+                mp=trainer.mp,
                 hf_ref=config.initialize_from_hf,
                 checkpoint_path=source,
             )
@@ -152,9 +174,11 @@ def _load_lm_model_from_configured_source(
         assert converter is not None
         model = converter.load_pretrained(
             config.model.model_type,
-            config=config.model if not config.use_hf_model_config else None,
+            # main already resolved HF architecture and reapplied runtime-only settings.
+            # Passing None here would reload a second time and discard those settings.
+            config=config.model,
             axis_mapping=parameter_axis_mapping,
-            dtype=trainer.mp.compute_dtype,
+            dtype=hf_load_dtype(trainer.mp),
         )
         model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
     elif (
@@ -199,6 +223,9 @@ def main(config: TrainLmConfig):
         if config.log_entropy or config.eval_harness is not None:
             raise ValueError("llama_native optional entropy/harness callbacks are not yet supported")
         config = dataclasses.replace(config, trainer=dataclasses.replace(config.trainer, use_explicit_mesh_axes=True))
+    if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
+        if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
+            raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
     tokenizer = config.data.the_tokenizer
 
     # The three weight-init sources are mutually exclusive: HF conversion, native full-state restore, and
@@ -249,7 +276,10 @@ def main(config: TrainLmConfig):
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
             # NB: gross mutability
-            config.model = converter.config_from_hf_config(converter.default_hf_config)
+            config.model = preserve_hf_runtime_settings(
+                converter.config_from_hf_config(converter.default_hf_config),
+                config.model,
+            )
     elif isinstance(config.model, HFCompatConfig):
         converter = config.model.hf_checkpoint_converter()
         converter = converter.replaced(tokenizer=tokenizer)
@@ -458,7 +488,7 @@ def main(config: TrainLmConfig):
                 trainer.device_mesh,
                 compute_axis_mapping,
                 max_eval_examples_per_ds,
-                mp=config.trainer.mp,
+                mp=trainer.mp,
                 checkpoint_path=checkpoint_path,
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
