@@ -59,13 +59,15 @@ changes through merges. Remove inherited CI workflows before the first push
 and reconcile workflows again after upstream merges; archive CI is opt-in.
 Never mirror-push the repository or merge the experimental source tree into
 the index branch. After publishing the initial notebook, open a PR to logbooks
-`main` that adds the task's own `index/<issue-number>-<topic>.md` file. Follow the
+`main` that adds `index/<issue-number>-<topic>.md`, using the notebook's
+parent directory name. Include the current status and a commit-pinned notebook
+link. Follow the
 [logbooks index procedure](https://github.com/marin-community/marin-logbooks/blob/main/WORKFLOW.md#maintain-the-index).
 
-Keep the record current when a measured result changes the conclusion or next
-step, the work ends, or the contribution links change. Include a short
-finding and a commit-pinned notebook link. Keep detailed evidence in the notebook
-and the coordinating issue.
+Update the same file through a PR when the work produces a material finding,
+changes direction, ends, or gains or loses a contribution link. Summarize the
+finding or decision when one is available. Keep detailed evidence in the
+notebook and the coordinating issue.
 
 ## Keep three levels of detail
 
