@@ -85,6 +85,7 @@ BACKEND_CODE_FILES = {
     "pyproject.toml",
     "experiments/post_training/task_curation/oracle_filter.py",
     "experiments/post_training/task_curation/local_host_admission.py",
+    "experiments/post_training/task_curation/prior_phase_failures.py",
 }
 FAILURE_LOG_BYTES = 64 * 1024
 CALIBRATION_ATTEMPT_TIMEOUT = 72 * 60 * 60

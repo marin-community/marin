@@ -64,7 +64,10 @@ def phase_evidence(tmp_path, original, trial, *, changed=None):
         exception = b"RuntimeError: Machine is closed\n"
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for name, data in ((member, exception), (str(Path(member).with_name("config.json")), json.dumps(config).encode())):
+        for name, data in (
+            (member, exception),
+            (str(Path(member).with_name("config.json")), json.dumps(config).encode()),
+        ):
             item = tarfile.TarInfo(name)
             item.size = len(data)
             archive.addfile(item, io.BytesIO(data))
@@ -97,8 +100,10 @@ def test_observed_original_deadline_survives_cleanup_and_cannot_be_replayed(tmp_
     assert not calibration.passed and not actual.scored
     assert task_map.read_bytes() == old_bytes
     approval = InfrastructureRetryApproval(
-        classification="our_infrastructure", parent_result_sha256=trial.result_sha256,
-        failure_signature="cleanup cancellation", decision_ref="fixture-decision",
+        classification="our_infrastructure",
+        parent_result_sha256=trial.result_sha256,
+        failure_signature="cleanup cancellation",
+        decision_ref="fixture-decision",
     )
     with pytest.raises(ValueError, match="cannot replay an observed source-declared phase deadline"):
         require_infrastructure_retry_parent(calibration, approval)
