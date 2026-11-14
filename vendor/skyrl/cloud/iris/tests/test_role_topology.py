@@ -13,8 +13,8 @@ from omegaconf import OmegaConf
 from ray.cluster_utils import Cluster
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from cloud.iris.launch_config import load_launch_config
-from cloud.iris.role_topology import LOCALITY_GROUP_LABEL, derive_role_topology
+from cloud.iris.launch_config import derive_launch_topology, load_launch_config
+from cloud.iris.role_topology import LOCALITY_GROUP_LABEL
 from cloud.iris.skyrl_entrypoint import run_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from skyrl_train.entrypoints.main_base import BasePPOExp, create_ray_wrapped_inference_engines_from_config
@@ -49,7 +49,7 @@ def launch_config(tmp_path, *, nodes=48, policy_nodes=16, engines=2, dp=64, widt
 )
 def test_launch_plan_keeps_whole_models_local_and_counts_host_padding(tmp_path, geometry, hosts, roles):
     config = load_launch_config(launch_config(tmp_path, **geometry))
-    topology = derive_role_topology(OmegaConf.to_container(config, resolve=True))
+    topology = derive_launch_topology(OmegaConf.to_container(config, resolve=True)).role_topology
     assert topology.locality.group_sizes == hosts
     assert topology.locality.role_groups == roles
 
@@ -62,11 +62,13 @@ def test_single_domain_mode_rejects_a_trainer_that_needs_multiple_racks(tmp_path
 
 @pytest.mark.slow
 @pytest.mark.timeout(180)
-@pytest.mark.parametrize("locality,dp", [(True, 1), (False, 1), (True, 4)])
+@pytest.mark.parametrize("locality,dp", [(True, 1), (False, 1), (True, 8)])
 def test_production_factories_constrain_workers_and_preserve_default_placement(tmp_path, monkeypatch, locality, dp):
     monkeypatch.setenv("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
     path = launch_config(
-        tmp_path, nodes=2, policy_nodes=1, engines=1 if dp > 1 else 2, dp=dp, width=8, variant="H100", locality=locality
+        tmp_path, nodes=(16 + (dp + 3) // 4) if locality else 2,
+        policy_nodes=16 if locality else 1, engines=1 if dp > 1 else 2, dp=dp,
+        width=4 if locality else 8, variant="GB200" if locality else "H100", locality=locality,
     )
     model = tmp_path / "model"
     model.mkdir()
@@ -77,25 +79,29 @@ def test_production_factories_constrain_workers_and_preserve_default_placement(t
     raw["inputs"]["model"]["tokenizer_uri"] = str(model)
     raw["skyrl"]["generator"]["enforce_eager"] = False
     path.write_text(yaml.safe_dump(raw))
-    topology = derive_role_topology(OmegaConf.to_container(load_launch_config(path), resolve=True))
+    topology = derive_launch_topology(OmegaConf.to_container(load_launch_config(path), resolve=True)).role_topology
     captured = []
     monkeypatch.setattr("skyrl_train.entrypoints.main_base.run", captured.append)
     run_config(path)
     [config] = captured
+    if locality:
+        # Scale the simulated trainer to one host, keeping the production group selectors.
+        config.trainer.placement.policy_num_nodes = 1
 
     cluster = Cluster()
     try:
         # Start the inference group first, so unconstrained policy placement
         # would take its capacity. CPU Ray nodes simulate the group capacity.
-        engine_nodes = 2 if dp > 1 else 1
-        for _ in range(engine_nodes):
+        engine_nodes = 2 if dp > 4 else 1
+        for index in range(engine_nodes):
             cluster.add_node(
-                num_cpus=8, num_gpus=2 if dp > 1 else 8,
-                labels=topology.node_labels(1) if locality else {},
+                num_cpus=8, num_gpus=4 if dp > 4 else 8,
+                labels=topology.node_labels(16 + index) if locality else {},
                 object_store_memory=80 * 1024**2, include_dashboard=False,
             )
         cluster.add_node(
-            num_cpus=8, num_gpus=8, labels=topology.node_labels(0) if locality else {},
+            num_cpus=8, num_gpus=4 if locality else 8,
+            labels=topology.node_labels(0) if locality else {},
             object_store_memory=80 * 1024**2, include_dashboard=False,
         )
         ray.init(address=cluster.address)
@@ -138,7 +144,7 @@ def test_production_factories_constrain_workers_and_preserve_default_placement(t
         policy_actors = []
         if locality:
             handles = [BackendWorker.options(
-                num_gpus=4,
+                num_gpus=2,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=policy_pg, placement_group_bundle_index=0,
                 ),

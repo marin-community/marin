@@ -5,6 +5,11 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
+
+
+class RoleTopologyMode(StrEnum):
+    NVLINK_DOMAIN = "nvlink.domain"
 
 
 @dataclass(frozen=True)

@@ -70,7 +70,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         gpu_variant="GB200" if groups else "H100",
         gpus_per_node=4 if groups else 8,
         num_nodes=sum(groups) if groups else 2,
-        role_topology=RoleTopology(("policy",), LocalityPlan(groups, (0,)), True) if groups else None,
+        role_topology=RoleTopology(("policy",), LocalityPlan(groups, (0,))) if groups else None,
         cpu=32,
         memory="512GB",
         disk="512GB",

@@ -121,40 +121,20 @@ option does not establish exact batch invariance; see the
 
 ## Keep each model group within one NVLink domain
 
-Set `role_topology="nvlink.domain"` on `IrisSkyRLExecution`, or
-`iris.role_topology: nvlink.domain` in a resolved launch document, to keep the
-trainer and each inference engine within one NVLink domain. This mode assumes
-each eight-GPU H100 host is one NVLink domain. On NVL72, a domain is one rack
-of four-GPU hosts.
-
-This option supports separate trainer and local vLLM inference GPUs, with
-tensor and pipeline parallelism of one (TP=PP=1), and expert parallelism equal
-to data parallelism (EP=DP). A reference model may share the trainer's
-GPUs. Other independent local roles and colocated trainer/inference launches
-are outside this mode. Omitting the option keeps existing placement behavior.
-
-Iris admits the whole job together, with task groups sized for the models.
-A 32-GPU trainer and a 64-GPU engine use 24 four-GPU hosts in groups of eight
-and sixteen. A 64-GPU trainer and two 64-GPU engines use three groups of
-sixteen hosts. Place the trainer first, then put each engine in the first group
-with enough free GPUs, creating a new group when needed. Round each group up
-to whole hosts when setting the allocation.
-
-Each trainer or engine must fit one domain: at most 64 GPUs on NVL72 or eight
-on H100. CoreWeave guarantees 16 schedulable four-GPU hosts per NVL72 rack.
-This mode keeps the RL trainer within one rack; multi-rack trainers
-need a separate placement policy. NVL72 launches require an Iris controller
-that supports `CoschedulingConfig.group_sizes`.
-
-Each Ray node carries its Iris group label. Ray reserves the trainer's GPUs
-first, then restricts every model's placement group to its assigned Iris group.
-Startup trusts Iris's placement guarantee. Iris attempt status exposes the
-assigned Node's topology labels for diagnostics. Use separate probes to check
-physical connectivity.
-
-On NVL72, explicit groups do not retain the default sliced layout's soft
-preference for nearby racks on InfiniBand. This option does not select or
-qualify the transport between trainer and inference domains.
+On NVL72, set `IrisSkyRLExecution.role_topology` to
+`RoleTopologyMode.NVLINK_DOMAIN` (from `skyrlrecipe.locality`), or use
+`iris.role_topology: nvlink.domain` in a launch document, to keep the trainer
+within one rack and each vLLM engine within one rack. A rack is one NVLink
+domain with 64 schedulable GPUs; each trainer or engine must fit. Groups may
+share a rack when capacity permits. This mode uses separate trainer and
+inference GPUs, with tensor and pipeline parallelism of one (TP=PP=1) and
+expert parallelism equal to data parallelism (EP=DP); a reference model may
+share trainer GPUs. For example, a 32-GPU trainer and a 64-GPU engine request 24 four-GPU
+hosts in groups of eight and sixteen. Iris admits the job together; Ray
+confines each role to its group. This requires an Iris controller with
+`CoschedulingConfig.group_sizes`. Explicit groups lose the default preference
+for nearby racks on InfiniBand. Cross-rack transport between trainer and
+inference still needs validation. Omitting the option keeps existing placement.
 
 ## Expert-block weight sync placement
 

@@ -9,8 +9,7 @@ from typing import Callable, cast
 
 from omegaconf import DictConfig, OmegaConf, open_dict
 
-from cloud.iris.launch_config import load_launch_config
-from cloud.iris.role_topology import derive_role_topology
+from cloud.iris.launch_config import derive_launch_topology, load_launch_config
 from cloud.iris.rl_config_translation import registered_rl_entrypoint_module
 
 
@@ -24,7 +23,7 @@ def run_config(config_path: Path) -> None:
             config.skyrl.runtime = {
                 "checkpoint_path": str(config.skyrl.trainer.resume_path or config.inputs.model.uri),
             }
-    topology = derive_role_topology(OmegaConf.to_container(config, resolve=True))
+    topology = derive_launch_topology(OmegaConf.to_container(config, resolve=True)).role_topology
     if topology is not None:
         with open_dict(config.skyrl):
             if "runtime" not in config.skyrl:

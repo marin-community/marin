@@ -20,13 +20,13 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
-from iris.cluster.platforms.k8s.coreweave_topology import SCHEDULABLE_RACK_NODES, is_rack_based
+from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from skyrlrecipe.locality import plan_locality_groups
+from skyrlrecipe.locality import RoleTopologyMode, plan_locality_groups
 
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
@@ -459,7 +459,7 @@ class IrisSkyRLExecution:
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
-    role_topology: str | None = None
+    role_topology: RoleTopologyMode | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -856,6 +856,8 @@ def _launch_config_yaml(
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
     if execution.role_topology is not None:
+        if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
+            raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
         plan = spec.topology.role_plan
         engine_gpus = (
             plan.inference_engine_tensor_parallel_size
@@ -865,7 +867,7 @@ def _launch_config_yaml(
         locality = plan_locality_groups(
             [plan.policy_num_nodes * plan.policy_num_gpus_per_node] + [engine_gpus] * plan.num_inference_engines,
             gpus_per_node=spec.topology.gpus_per_node,
-            max_nodes_per_domain=SCHEDULABLE_RACK_NODES if is_rack_based(spec.topology.gpu_variant) else 1,
+            max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
         )
         if spec.topology.num_nodes != locality.num_nodes:
             raise ValueError(
@@ -896,7 +898,7 @@ def _launch_config_yaml(
             "cluster_config": execution.cluster_config,
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
             "wandb_entity": execution.wandb_entity,
-            "role_topology": execution.role_topology,
+            "role_topology": execution.role_topology.value if execution.role_topology is not None else None,
             "allocation": {
                 "num_nodes": spec.topology.num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,

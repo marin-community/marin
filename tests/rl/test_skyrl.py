@@ -40,6 +40,7 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
+from skyrlrecipe.locality import RoleTopologyMode
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -379,7 +380,7 @@ def test_nvlink_launch_requires_extra_hosts_when_each_group_rounds_up():
         _spec(),
         topology=SkyRLTopology(num_nodes=plan.num_nodes, gpus_per_node=4, gpu_variant="GB200", role_plan=plan),
     )
-    execution = dataclasses.replace(_execution(), role_topology="nvlink.domain")
+    execution = dataclasses.replace(_execution(), role_topology=RoleTopologyMode.NVLINK_DOMAIN)
     step = skyrl_step(spec, execution)
     with pytest.raises(ValueError, match="needs 34 hosts"):
         step.build_config(

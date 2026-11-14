@@ -5,11 +5,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
-from skyrlrecipe.locality import LocalityPlan, plan_locality_groups
+from skyrlrecipe.locality import LocalityPlan, RoleTopologyMode, plan_locality_groups
 
-from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_policy_export_role_plan, derive_role_plan
+from cloud.iris.role_plan import ModelRoleKind, RoleExecution, SkyRLRolePlan
 
-NVLINK_ROLE_TOPOLOGY = "nvlink.domain"
 LOCALITY_GROUP_LABEL = "iris.locality_group"
 
 
@@ -17,7 +16,6 @@ LOCALITY_GROUP_LABEL = "iris.locality_group"
 class RoleTopology:
     roles: tuple[str, ...]
     locality: LocalityPlan
-    rack_based: bool
 
     @property
     def num_nodes(self) -> int:
@@ -30,24 +28,18 @@ class RoleTopology:
         return {LOCALITY_GROUP_LABEL: str(self.locality.group_for_rank(rank))}
 
 
-def derive_role_topology(config: Mapping[str, Any]) -> RoleTopology | None:
+def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> RoleTopology | None:
     requested = config["iris"].get("role_topology")
     if requested is None:
         return None
-    if requested != NVLINK_ROLE_TOPOLOGY:
+    if requested != RoleTopologyMode.NVLINK_DOMAIN:
         raise ValueError(f"Unsupported Iris role topology: {requested}")
     allocation = config["iris"]["allocation"]
     width, variant = allocation["gpus_per_node"], allocation["gpu_variant"]
-    rack_based = is_rack_based(variant)
-    if rack_based and width == NVL72_GPUS_PER_NODE:
-        domain_nodes = SCHEDULABLE_RACK_NODES
-    elif variant.upper().startswith("H100") and width == 8:
-        domain_nodes = 1
-    else:
-        raise ValueError("NVLink role placement requires four-GPU NVL72 hosts or eight-GPU H100 hosts")
+    if not is_rack_based(variant) or width != NVL72_GPUS_PER_NODE:
+        raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
 
     exporting = config["run"]["mode"] == "checkpoint_export"
-    plan = derive_policy_export_role_plan(config["skyrl"]) if exporting else derive_role_plan(config["skyrl"])
     policy = plan.claim("policy")
     roles = ["policy"]
     requirements = [policy.num_nodes * policy.gpus_per_node]
@@ -69,5 +61,5 @@ def derive_role_topology(config: Mapping[str, Any]) -> RoleTopology | None:
             raise ValueError("NVLink role placement requires vLLM TP1/PP1 EP=DP inference engines")
         roles.extend(f"inference_{index}" for index in range(rollout.replicas))
         requirements.extend([rollout.data_parallel_size] * rollout.replicas)
-    locality = plan_locality_groups(requirements, gpus_per_node=width, max_nodes_per_domain=domain_nodes)
-    return RoleTopology(tuple(roles), locality, rack_based)
+    locality = plan_locality_groups(requirements, gpus_per_node=width, max_nodes_per_domain=SCHEDULABLE_RACK_NODES)
+    return RoleTopology(tuple(roles), locality)

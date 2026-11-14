@@ -98,17 +98,14 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import (
-    RoleTopology,
-    derive_role_topology,
-)
+from cloud.iris.role_topology import RoleTopology
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
     resolve_ray_spill_target,
     validate_ray_spill_dir,
 )
-from cloud.iris.launch_config import RunMode, hugging_face_models, load_launch_config
+from cloud.iris.launch_config import RunMode, derive_launch_topology, hugging_face_models, load_launch_config
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -2189,7 +2186,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
-        role_topology=derive_role_topology(_container(config)),
+        role_topology=derive_launch_topology(_container(config)).role_topology,
         ray_labels={},
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
