@@ -689,6 +689,10 @@ an explicit reason and no solve rate.
 Full credit (`reward == 1`) counts as solved. A scored partial-credit answer
 counts in the denominator without counting as solved. A missing or failed
 grader remains unscored until it can be re-driven.
+`finestore.rl.difficulty.measurement_from_attempts` owns this counting rule,
+rejects duplicate scored attempts, and computes the Wilson interval. Protocol
+validation is bound to the immutable entry in `PROTOCOLS`; adding a protocol
+does not change the settings accepted for earlier observations.
 
 `atlas-difficulty-v3` uses Qwen3-Coder-30B-A3B-Instruct with thinking off,
 Qwen3.5-122B-A10B with thinking on, production hosted GLM-5.3 with low reasoning
@@ -718,6 +722,15 @@ samples carry `pre_oracle_filter=true` and
 retained population when filtering completes; preserve the earlier receipt and
 observations. A changed release pin or converter makes its prior results
 historical automatically.
+
+For a post-filter sample, pass `--oracle-filters <bindings.json>` to
+`experiments.post_training.task_curation.difficulty_samples`. Each source-keyed
+binding contains `population_count`, `task_specs_sha256`, and `receipt`
+(`uri` and `sha256`) for its completed `OracleFilterReceipt`. The sampler checks
+the binding against the retained census and checks each selected task and
+runtime against passing filter evidence. It stores that receipt, clears the
+pre-filter flags and leaves the source out of the resampling queue. Oracle
+presence alone does not indicate whether filtering is complete.
 
 Run tasks through production Harbor trials in their declared environments and
 grade each with its own grader. Select Daytona only for measured SAFE sources;

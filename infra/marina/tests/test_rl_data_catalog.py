@@ -41,7 +41,14 @@ from finestore.rl.curation import (
     SourceOrigin,
     register_catalog,
 )
-from finestore.rl.difficulty import MEASUREMENTS, DifficultyMeasurement, Solver, register_difficulty
+from finestore.rl.difficulty import (
+    MEASUREMENTS,
+    DifficultyAttempt,
+    DifficultyMeasurement,
+    Solver,
+    measurement_from_attempts,
+    register_difficulty,
+)
 from finestore.store import DataStore
 from marina.applets import (
     AppletServices,
@@ -1413,6 +1420,9 @@ def test_difficulty_archive_load_and_source_pin_change_preserve_history(
         model = source["difficulty"]["models"][0]
         assert (model["n"], model["solved"], model["solve_rate"]) == (3, 1, 1 / 3)
         assert model["infrastructure_attempts"] == 2
+        assert "tasks" not in model["sample"]
+        detail = client.get("/source", params={"source_id": declaration.id}).json()
+        assert detail["difficulty"]["models"][0] == model
         assert model["sample"]["pre_oracle_filter"] and model["sample"]["resample_after_oracle_filter"]
         assert [row["solver"] for row in source["difficulty"]["models"]] == [solver.value for solver in Solver]
         assert all(row["solve_rate"] is None and row["reason"] for row in source["difficulty"]["models"][1:])
@@ -1431,6 +1441,42 @@ def test_difficulty_archive_load_and_source_pin_change_preserve_history(
     altered = measurement.model_copy(update={"gpu_hours": 2})
     with pytest.raises(ValueError, match="different evidence"):
         load_measurements([altered], catalog_query)
+
+
+def test_difficulty_counting_excludes_infrastructure_and_keeps_partial_credit():
+    declaration = with_declaration_admission_census(contamination_declarations()[0][1])
+    measurement = difficulty_measurement(declaration, Solver.SMALL)
+    attempts = [
+        DifficultyAttempt(task_id="0", status="infrastructure", reward=None),
+        DifficultyAttempt(task_id="0", status="scored", reward=1.0),
+        DifficultyAttempt(task_id="1", status="scored", reward=0.4),
+    ]
+    partial = measurement_from_attempts(measurement, attempts)
+    assert (partial.status, partial.n, partial.solved, partial.pending_tasks, partial.infrastructure_attempts) == (
+        "pending",
+        2,
+        1,
+        1,
+        1,
+    )
+    complete = measurement_from_attempts(
+        measurement, [*attempts, DifficultyAttempt(task_id="2", status="scored", reward=0)]
+    )
+    assert (complete.status, complete.n, complete.solved, complete.pending_tasks) == ("measured", 3, 1, 0)
+    assert complete.wilson_95.low == pytest.approx(0.06149194472039621)
+    assert complete.wilson_95.high == pytest.approx(0.7923403991979522)
+    with pytest.raises(ValueError, match="count a task twice"):
+        measurement_from_attempts(measurement, [*attempts, attempts[1]])
+
+
+def test_historical_protocol_retains_its_original_sampling_contract():
+    declaration = with_declaration_admission_census(contamination_declarations()[0][1])
+    payload = difficulty_measurement(declaration, Solver.SMALL).model_dump(mode="json")
+    payload["settings"]["temperature"] = 0.6
+    with pytest.raises(ValueError, match="temperature differs"):
+        DifficultyMeasurement.model_validate(payload)
+    payload["protocol_id"] = "atlas-difficulty-v2-65k16k"
+    assert DifficultyMeasurement.model_validate(payload).settings.temperature == 0.6
 
 
 def test_frozen_backend_survey_digest_survives_canonical_source_projection(tmp_path):

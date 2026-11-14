@@ -445,7 +445,7 @@ def create_api(services: AppletServices) -> FastAPI:
             load = loaded_catalog(connection)
             coverage = source_coverage(connection).get(canonical_source_id(source_id))
             difficulty = difficulty_summary(
-                source["declaration"], difficulty_records(connection).get(canonical_source_id(source_id), [])
+                source["declaration"], difficulty_records(connection, source_id).get(canonical_source_id(source_id), [])
             )
         declaration = source["declaration"]
         review = summaries.get("admitted")

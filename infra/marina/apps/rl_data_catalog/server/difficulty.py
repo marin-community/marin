@@ -7,24 +7,29 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from finestore.rl.difficulty import PROTOCOL_ID, DifficultyMeasurement, MeasurementStatus, Solver
+from finestore.rl.difficulty import PROTOCOL_ID, DifficultyObservation, MeasurementStatus, Solver
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from .source_identity import canonical_source_id
+from .source_identity import canonical_source_id, original_source_id
 
 
-def difficulty_records(connection: Connection) -> dict[str, list[DifficultyMeasurement]]:
-    records: dict[str, list[DifficultyMeasurement]] = {}
-    for payload in connection.execute(text("SELECT measurement FROM atlas_difficulty")).scalars():
-        record = DifficultyMeasurement.model_validate(payload)
+def difficulty_records(connection: Connection, source_id: str | None = None) -> dict[str, list[DifficultyObservation]]:
+    records: dict[str, list[DifficultyObservation]] = {}
+    query = "SELECT measurement #- '{sample,tasks}' FROM atlas_difficulty"
+    parameters = {}
+    if source_id is not None:
+        query += " WHERE source_id IN (:source, :original)"
+        parameters = {"source": canonical_source_id(source_id), "original": original_source_id(source_id)}
+    for payload in connection.execute(text(query), parameters).scalars():
+        record = DifficultyObservation.model_validate(payload)
         records.setdefault(canonical_source_id(record.source_id), []).append(record)
     return records
 
 
-def difficulty_summary(declaration: dict[str, Any], records: Iterable[DifficultyMeasurement]) -> dict[str, Any]:
+def difficulty_summary(declaration: dict[str, Any], records: Iterable[DifficultyObservation]) -> dict[str, Any]:
     """Choose the latest observation per solver for this exact release and converter."""
-    current: dict[Solver, DifficultyMeasurement] = {}
+    current: dict[Solver, DifficultyObservation] = {}
     historical = []
     population = declaration.get("actor_census_input")
     for record in sorted(

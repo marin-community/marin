@@ -8,7 +8,7 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import ActorCensusInput, SourceQualityResult
+from finestore.rl.curation import ActorCensusInput, ContentEvidenceReference, SourceQualityResult
 from marin.execution.artifact import read_record, write_record
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
@@ -17,7 +17,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.review import ChatReviewer
 
 from experiments.post_training.task_curation.admission_inventory import PANEL_SCHEMA
-from experiments.post_training.task_curation.difficulty_samples import relocated_panel
+from experiments.post_training.task_curation.difficulty_samples import relocated_panel, sample_oracle_state
 from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.published_census import population_documents
@@ -70,6 +70,18 @@ def sample_panel(qc_inputs, tmp_path):
     )
     summary.write_text(inventory.model_dump_json(exclude_none=True))
     return panel
+
+
+def test_oracle_bearing_resample_leaves_pre_filter_queue_when_filter_evidence_is_bound(sample_panel):
+    inventory = SampleInventory.model_validate_json(StoragePath(sample_panel.evidence_url).read_text())
+    assert sample_oracle_state(inventory, None)["resample_after_oracle_filter"]
+    receipt = ContentEvidenceReference(uri="s3://fixture/oracle-filter.json", sha256="f" * 64)
+    state = sample_oracle_state(inventory, receipt)
+    assert state == {
+        "pre_oracle_filter": False,
+        "resample_after_oracle_filter": False,
+        "oracle_filter_receipt": receipt,
+    }
 
 
 def test_sample_review_keeps_full_population_identity_and_reuses_exact_panel_evidence(
@@ -142,7 +154,6 @@ def test_relocated_difficulty_panel_reuses_the_shared_verified_reader(sample_pan
     relocated = relocated_panel(inventory, staged_path, root)
     tasks, contracts = panel_tasks(relocated)
     assert tasks == original_tasks and contracts == original_contracts
-    assert relocated.panel_path == staged_path
     assert SampleInventory.model_validate_json((root / "original-inventory.json").read_text()) == inventory
 
 

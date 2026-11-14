@@ -17,6 +17,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.oracle_filter import load_oracle_filter
 
 from experiments.post_training.task_curation.sample_qc import panel_tasks
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory, SamplePanel
@@ -35,6 +36,22 @@ class DifficultySource(BaseModel):
     backend: str
 
 
+class OracleFilterBinding(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    population_count: int
+    task_specs_sha256: str
+    receipt: ContentEvidenceReference
+
+
+def sample_oracle_state(inventory: SampleInventory, receipt: ContentEvidenceReference | None) -> dict:
+    pre_filter = inventory.oracle_tasks > 0 and receipt is None
+    return {
+        "pre_oracle_filter": pre_filter,
+        "resample_after_oracle_filter": pre_filter,
+        "oracle_filter_receipt": receipt,
+    }
+
+
 def relocated_panel(inventory: SampleInventory, path: str, root: StoragePath) -> SamplePanel:
     """Retain the original census and bind its unchanged panel bytes to their staged path."""
     (root / "original-inventory.json").write_text(inventory.model_dump_json(indent=2) + "\n")
@@ -44,9 +61,13 @@ def relocated_panel(inventory: SampleInventory, path: str, root: StoragePath) ->
 
 
 def prepare_sample(
-    declaration: SourceDeclaration, inventory: SampleInventory, output_root: str, resume_root: str | None
+    declaration: SourceDeclaration,
+    inventory: SampleInventory,
+    output_root: str,
+    resume_root: str | None,
+    oracle_filters: dict[str, OracleFilterBinding] | None = None,
 ) -> DifficultySource:
-    """Check an existing seeded selection and preserve its pre-oracle-filter status."""
+    """Prepare a difficulty source from a verified SAMPLE QC panel."""
     binding = declaration.actor_census_input
     assert declaration.pipeline is not None
     if binding is None or (
@@ -66,6 +87,15 @@ def prepare_sample(
     ):
         raise ValueError(f"Panel inventory differs from the current pinned population: {declaration.id}")
     panel = inventory.qc_panel()
+    filter_binding = (oracle_filters or {}).get(declaration.id)
+    filter_receipt = filter_binding.receipt if filter_binding else None
+    if filter_binding is not None:
+        if (filter_binding.population_count, filter_binding.task_specs_sha256) != (
+            inventory.retained_tasks,
+            inventory.task_specs_sha256,
+        ) or file_sha256(StoragePath(filter_binding.receipt.uri)) != filter_binding.receipt.sha256:
+            raise ValueError(f"Oracle filter binding differs from the frozen population: {declaration.id}")
+    oracle_state = sample_oracle_state(inventory, filter_receipt)
     root = StoragePath(output_root) / canonical_sha256(declaration.id)[:20]
     if root.exists():
         raise FileExistsError(f"Select a new difficulty sample version: {root}")
@@ -81,6 +111,7 @@ def prepare_sample(
                 source.sample.task_specs_sha256,
                 source.panel.panel_sha256,
                 source.sample.pre_oracle_filter,
+                source.sample.oracle_filter_receipt,
             ) != (
                 declaration.current_release,
                 declaration.pipeline.version,
@@ -88,7 +119,8 @@ def prepare_sample(
                 inventory.retained_tasks,
                 inventory.task_specs_sha256,
                 panel.panel_sha256,
-                inventory.oracle_tasks > 0,
+                oracle_state["pre_oracle_filter"],
+                filter_receipt,
             ):
                 raise ValueError(f"Earlier difficulty sample belongs to another population: {declaration.id}")
             if (
@@ -109,6 +141,16 @@ def prepare_sample(
             (root / "source.json").write_text(result.model_dump_json(indent=2) + "\n")
             return result
     tasks, contracts = panel_tasks(panel)
+    if filter_receipt is not None:
+        filtered = load_oracle_filter(filter_receipt.uri)
+        for task, contract in zip(tasks, contracts, strict=True):
+            entry = filtered.tasks.get(task.id)
+            if (
+                entry is None
+                or not entry.passed
+                or (entry.task_sha256, entry.runtime_sha256) != (contract["task_sha256"], contract["runtime_sha256"])
+            ):
+                raise ValueError(f"Selected task lacks matching passing oracle-filter evidence: {task.id}")
     receipt = root / "sample.json"
     drop_manifest = StoragePath(declaration.within_source_dedup.drop_manifest_uri)
     sample = DifficultySample(
@@ -121,8 +163,7 @@ def prepare_sample(
         drop_manifest=ContentEvidenceReference(uri=str(drop_manifest), sha256=file_sha256(drop_manifest)),
         seed=panel.sample_seed,
         tasks=[SampleTask(task_id=contract["task_id"], task_sha256=contract["task_sha256"]) for contract in contracts],
-        pre_oracle_filter=inventory.oracle_tasks > 0,
-        resample_after_oracle_filter=inventory.oracle_tasks > 0,
+        **oracle_state,
     )
     payload = (sample.model_dump_json(indent=2) + "\n").encode()
     # Preserve the original seed-zero panel bytes; no resampling or task conversion occurs here.
@@ -164,6 +205,9 @@ def main() -> None:
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--resume-root")
+    parser.add_argument(
+        "--oracle-filters", help="JSON source-to-binding map for completed filter receipts and populations"
+    )
     args = parser.parse_args()
     configure_coreweave_s3()
     output = StoragePath(args.output_root)
@@ -181,7 +225,17 @@ def main() -> None:
     ]
     if len({row.id for row in declarations}) != len(declarations):
         raise ValueError("Difficulty sources must be unique")
-    prepare = partial(prepare_sample, output_root=args.output_root, resume_root=args.resume_root)
+    oracle_filters = (
+        {
+            key: OracleFilterBinding.model_validate(value)
+            for key, value in json.loads(StoragePath(args.oracle_filters).read_text()).items()
+        }
+        if args.oracle_filters
+        else {}
+    )
+    prepare = partial(
+        prepare_sample, output_root=args.output_root, resume_root=args.resume_root, oracle_filters=oracle_filters
+    )
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [pool.submit(prepare, declaration, inventory[declaration.id]) for declaration in declarations]
         sources = sorted((future.result() for future in futures), key=lambda item: item.declaration.id)
