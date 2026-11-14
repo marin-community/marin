@@ -46,20 +46,14 @@ SUPPORT_ORDER = (Support.SUPPORTED, Support.PARTIAL, Support.UNSUPPORTED)
 APPLICABLE_ORDER = (FitSupport.SUPPORTED, FitSupport.PARTIAL, FitSupport.UNSUPPORTED)
 RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")
 
-ENVIRONMENT_KIND_BACKENDS = {
-    Requirement.HOST_IMAGE: frozenset({"local"}),
-    Requirement.PACKAGE_SPEC: frozenset({"shellsim", "local"}),
-    Requirement.DOCKER_IMAGE: frozenset({"docker", "gvisor", "qemu", "daytona", "iris", "local"}),
-}
-"""Backends whose maintained validators accept each converted environment kind.
-
-A role whose environment resolves to a kind the backend cannot host is not a
-candidate there: that is ``not_applicable``, not an execution failure.
-"""
-
 
 def environment_kind(source) -> Requirement:
-    """The environment kind a converted role resolves to, named by its machine source."""
+    """The environment kind a converted role resolves to, named by its machine source.
+
+    The matrix cell keyed by this requirement records each validator's acceptance of a
+    minimal probe of the kind, so backend applicability is read from the same measured
+    cells and cannot drift from the validators.
+    """
     if isinstance(source, HostImage):
         return Requirement.HOST_IMAGE
     if isinstance(source, PackageSpec):
@@ -192,10 +186,11 @@ def source_map(
                         low, high = ranges[role].get(name, (value, value))
                         ranges[role][name] = (min(low, value), max(high, value))
         for backend, check in checkers.items():
-            applicable: list[Support] = []
+            outcomes: list[FitSupport] = []
             for role in ("agent", "grader"):
                 if role not in demands:
                     role_counts[backend][role][FitSupport.ROLE_ABSENT] += 1
+                    outcomes.append(FitSupport.ROLE_ABSENT)
                     continue
                 if role in failures:
                     error = failures[role]
@@ -203,7 +198,7 @@ def source_map(
                     for capability in error.capabilities:
                         blockers[backend][f"{role}:{capability}"] += 1
                     errors[backend][str(error)] += 1
-                    applicable.append(Support.UNSUPPORTED)
+                    outcomes.append(FitSupport.UNSUPPORTED)
                     continue
                 declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
                 shape = runtime.get("task_machine" if role == "agent" else "verifier_machine")
@@ -214,12 +209,13 @@ def source_map(
                 except UnsupportedMachineSpec as error:
                     role_counts[backend][role][FitSupport.UNSUPPORTED] += 1
                     errors[backend][f"{role}: {error}"] += 1
-                    applicable.append(Support.UNSUPPORTED)
+                    outcomes.append(FitSupport.UNSUPPORTED)
                     continue
                 kind = environment_kind(spec.source)
-                if backend not in ENVIRONMENT_KIND_BACKENDS[kind]:
+                if cells[backend, kind].support == Support.UNSUPPORTED:
                     role_counts[backend][role][FitSupport.NOT_APPLICABLE] += 1
                     exclusions[backend][f"{role}:{kind.value}"] += 1
+                    outcomes.append(FitSupport.NOT_APPLICABLE)
                     continue
                 if backend == "local":
                     spec = replace(spec, memory_mb=None)
@@ -233,14 +229,8 @@ def source_map(
                     status = Support.UNSUPPORTED
                     errors[backend][f"{role}: {error}"] += 1
                 role_counts[backend][role][FitSupport(status.value)] += 1
-                applicable.append(status)
-            if not demands:
-                outcome = FitSupport.ROLE_ABSENT
-            elif applicable:
-                outcome = FitSupport(max(applicable, key=APPLICABLE_ORDER.index).value)
-            else:
-                outcome = FitSupport.NOT_APPLICABLE
-            task_counts[backend][outcome] += 1
+                outcomes.append(FitSupport(status.value))
+            task_counts[backend][combined_fit(outcomes)] += 1
     if not count:
         raise ValueError(f"Converted-spec census is empty: {source_id}")
     return BackendSourceMap(
