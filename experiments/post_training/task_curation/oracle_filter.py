@@ -54,6 +54,7 @@ from taskcompendium.pipeline.oracle_filter import (
     next_trial_requirements,
     oracle_failure_reason,
     pre_oracle_host_unavailable,
+    recovered_source_runtime_requirements,
     require_infrastructure_retry_parent,
     source_environment_incompatibility,
     trial_network_qualified,
@@ -89,12 +90,22 @@ FAILURE_LOG_BYTES = 64 * 1024
 CALIBRATION_ATTEMPT_TIMEOUT = 72 * 60 * 60
 
 
-def declared_native_requirements(path: Path) -> dict[ResourceDimension, float]:
+def declared_native_requirements(
+    path: Path, source_runtime: TaskSpecRuntimeBinding | None = None
+) -> dict[ResourceDimension, float]:
     if (path / TASK_SPEC_FILE).is_file():
         task = TaskSpec.model_validate_json((path / TASK_SPEC_FILE).read_text())
-        return {ResourceDimension(name): value for name, value in declared_execution_limits(task).items()}
-    document = tomllib.loads((path / "task.toml").read_text())
-    return {ResourceDimension(name): value for name, value in native_execution_limits(document).declared.items()}
+        declared = declared_execution_limits(task)
+        if source_runtime is not None:
+            source_runtime.require_task(task)
+    else:
+        document = tomllib.loads((path / "task.toml").read_text())
+        declared = native_execution_limits(document).declared
+    for name, value in source_runtime.resource_limits("task_machine").items() if source_runtime else ():
+        if name in declared and declared[name] != value:
+            raise ValueError(f"Source runtime actor {name} conflicts with the original task declaration")
+        declared[name] = value
+    return {ResourceDimension(name): value for name, value in declared.items()}
 
 
 def native_requirements(path: Path) -> ExecutionRequirements:
@@ -107,18 +118,34 @@ def native_requirements(path: Path) -> ExecutionRequirements:
     )
 
 
-def native_verifier_profile(path: Path) -> VerifierResourceProfile:
+def native_verifier_profile(path: Path, source_runtime: TaskSpecRuntimeBinding | None = None) -> VerifierResourceProfile:
     verifier = tomllib.loads((path / "task.toml").read_text()).get("verifier", {})
     mode = verifier.get("environment_mode") or ("separate" if "environment" in verifier else "shared")
     environment = verifier.get("environment", {})
-    return VerifierResourceProfile(
-        mode=GradingEnvironmentMode(mode),
-        fixed={
-            ResourceDimension(name): environment[name]
-            for name in ("cpus", "memory_mb", "storage_mb")
-            if environment.get(name) is not None
-        },
+    fixed = {
+        ResourceDimension(name): environment[name]
+        for name in ("cpus", "memory_mb", "storage_mb")
+        if environment.get(name) is not None
+    }
+    for name, value in source_runtime.resource_limits("verifier_machine").items() if source_runtime else ():
+        dimension = ResourceDimension(name)
+        if dimension in fixed and fixed[dimension] != value:
+            raise ValueError(f"Source runtime verifier {name} conflicts with the original grader declaration")
+        fixed[dimension] = value
+    return VerifierResourceProfile(mode=GradingEnvironmentMode(mode), fixed=fixed)
+
+
+def source_runtime_binding(task: TaskSpec, runtime: dict | None) -> TaskSpecRuntimeBinding | None:
+    """Validate original role declarations once against their exact frozen TaskSpec."""
+    if runtime is None:
+        return None
+    binding = TaskSpecRuntimeBinding(
+        task_sha256=canonical_sha256(task.model_dump(mode="json")),
+        runtime_sha256=canonical_sha256(runtime),
+        runtime=runtime,
     )
+    binding.require_task(task)
+    return binding
 
 
 def calibration_package_identity(path: Path, oracle_kind: str) -> str:
@@ -342,6 +369,7 @@ def require_retry_provenance(
             or plan.parent_map_path != str(parent_path)
             or plan.parent_map_sha256 != transition.parent_map_sha256
             or plan.local_host != transition.local_host
+            or plan.source_runtime_resource_recovery != transition.source_runtime_resource_recovery
         ):
             raise ValueError(f"Infrastructure retry plan changed: {task_id}")
         parent = parent_document[task_id]
@@ -452,6 +480,7 @@ def filter_cohort(
                     entries[task.id] = entry
                     excluded.append(row)
                     continue
+                source_binding = source_runtime_binding(task, row_runtime(row))
                 original_row = row
                 task_trials = []
                 checksum = ""
@@ -476,8 +505,8 @@ def filter_cohort(
                     if "calibration" in mapping
                     else ResourceCalibrationReceipt(
                         declared_requirements=task.execution_requirements,
-                        preserved_requirements=declared_native_requirements(Path(mapping["task_path"])),
-                        verifier=native_verifier_profile(Path(mapping["task_path"])),
+                        preserved_requirements=declared_native_requirements(Path(mapping["task_path"]), source_binding),
+                        verifier=native_verifier_profile(Path(mapping["task_path"]), source_binding),
                         oracle_kind="original" if oracle else "calibration_only",
                         attempts=tuple(task_trials),
                     )
@@ -485,9 +514,9 @@ def filter_cohort(
                 original = Path(mapping["task_path"])
                 if original_packages[str(original)]["task_checksum"] != mapping.get("source_task_checksum", checksum):
                     raise ValueError(f"Source package changed after Harbor export: {task.id}")
-                if calibration.preserved_requirements != declared_native_requirements(original):
+                if calibration.preserved_requirements != declared_native_requirements(original, source_binding):
                     raise ValueError(f"Calibration changed source-declared limits: {task.id}")
-                if calibration.verifier != native_verifier_profile(original):
+                if calibration.verifier != native_verifier_profile(original, source_binding):
                     raise ValueError(f"Calibration changed the declared verifier resource profile: {task.id}")
                 package_identity = calibration_package_identity(original, calibration.oracle_kind)
                 history = tuple(
@@ -683,15 +712,14 @@ def calibrated_task(
     original = Path(mapping["task_path"])
     if host_admission is not None and environment != "local":
         raise ValueError("Physical-host admission applies only to LOCAL trials")
-    configured_runtime = None
-    if source_runtime is not None and (original / TASK_SPEC_FILE).is_file():
-        configured_runtime = TaskSpecRuntimeBinding(
-            task_sha256=canonical_sha256(task.model_dump(mode="json")),
-            runtime_sha256=canonical_sha256(source_runtime),
-            runtime=source_runtime,
-        )
-        if configured_runtime.runtime_sha256 != mapping.get("runtime_sha256"):
-            raise ValueError(f"Configured runtime changed after Harbor export: {task.id}")
+    source_binding = source_runtime_binding(task, source_runtime) or read_source_runtime(original)
+    if source_binding is not None:
+        source_binding.require_task(task)
+    if (original / TASK_SPEC_FILE).is_file() and mapping.get("runtime_sha256") is not None and source_binding is None:
+        raise ValueError(f"Original frozen source runtime is required before execution: {task.id}")
+    configured_runtime = source_binding if (original / TASK_SPEC_FILE).is_file() else None
+    if source_binding is not None and source_binding.runtime_sha256 != mapping.get("runtime_sha256"):
+        raise ValueError(f"Configured runtime changed after Harbor export: {task.id}")
     for label, read_binding in (
         ("OracleCommand", read_oracle_command),
         ("Protected", read_runtime_binding),
@@ -708,8 +736,8 @@ def calibrated_task(
     if native["task_checksum"] != source_checksum:
         raise ValueError(f"Task changed after Harbor export: {task.id}")
     declared = task.execution_requirements
-    preserved = declared_native_requirements(original)
-    verifier = native_verifier_profile(original)
+    preserved = declared_native_requirements(original, source_binding)
+    verifier = native_verifier_profile(original, source_binding)
     shape = (
         declared
         or initial_requirements
@@ -733,7 +761,7 @@ def calibrated_task(
             document = tomlkit.parse((package / "task.toml").read_text())
             for name in ("cpus", "memory_mb", "storage_mb"):
                 if (package / TASK_SPEC_FILE).is_file():
-                    document["environment"][name] = shape.model_dump()[name]
+                    document.setdefault("environment", {})[name] = shape.model_dump()[name]
                 else:
                     document.setdefault("environment", {}).setdefault(name, shape.model_dump()[name])
                 if "environment" in document.get("verifier", {}):
@@ -947,6 +975,7 @@ def write_retry_plan(
     backend_fix_path: Path,
     output: Path,
     local_host: LocalExecutionHostTransition | None = None,
+    source_runtime_resource_recovery: TaskSpecRuntimeBinding | None = None,
 ) -> None:
     """Freeze only explicitly approved infrastructure cases; never change their native packages."""
     if output.exists():
@@ -959,6 +988,8 @@ def write_retry_plan(
     }
     if not approvals:
         raise ValueError("An infrastructure retry requires explicit per-task approvals")
+    if source_runtime_resource_recovery is not None and len(approvals) != 1:
+        raise ValueError("A source runtime recovery plan must bind one exact original task")
     mappings = json.loads(task_map.read_text())
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
     schema = pq.read_schema(paths[0])
@@ -986,6 +1017,19 @@ def write_retry_plan(
                 if not has_oracle_solution(task) or task.execution_requirements != calibration.declared_requirements:
                     raise ValueError(f"Retry changed the original oracle or its declared execution limits: {task.id}")
                 native = Path(mapping["task_path"])
+                source_binding = source_runtime_binding(task, row_runtime(row))
+                recovery = source_runtime_resource_recovery
+                if recovery is not None:
+                    recovery.require_task(task)
+                    if recovery != source_binding:
+                        raise ValueError(f"Recovery differs from the original frozen runtime: {task.id}")
+                    _, preserved, verifier = recovered_source_runtime_requirements(calibration, recovery)
+                else:
+                    preserved, verifier = calibration.preserved_requirements, calibration.verifier
+                if preserved != declared_native_requirements(
+                    native, source_binding
+                ) or verifier != native_verifier_profile(native, source_binding):
+                    raise ValueError(f"Source role resources require an approved recovery transition: {task.id}")
                 setup = (
                     tomllib.loads((native / "task.toml").read_text())
                     .get("environment", {})
@@ -1045,6 +1089,7 @@ def write_retry_plan(
         environment_kwargs=environment_kwargs,
         approvals=approvals,
         local_host=local_host,
+        source_runtime_resource_recovery=source_runtime_resource_recovery,
     )
     (output / "plan.json").write_text(plan.model_dump_json(indent=2) + "\n")
 
@@ -1110,6 +1155,7 @@ def retry_cohort(
             backend_fix=plan.backend_fix,
             approval=plan.approvals[task_id],
             local_host=plan.local_host,
+            source_runtime_resource_recovery=plan.source_runtime_resource_recovery,
         )
     phase = destination / "phase"
     contexts = {
@@ -1131,7 +1177,14 @@ def retry_cohort(
         prepare_attempt=prepare_attempt,
         host_admission=host_admission,
         initial_requirements={
-            task_id: ResourceCalibrationReceipt.model_validate(parent["calibration"]).execution_requirements
+            task_id: (
+                recovered_source_runtime_requirements(
+                    ResourceCalibrationReceipt.model_validate(parent["calibration"]),
+                    plan.source_runtime_resource_recovery,
+                )[0]
+                if plan.source_runtime_resource_recovery is not None
+                else ResourceCalibrationReceipt.model_validate(parent["calibration"]).execution_requirements
+            )
             for task_id, parent in parents.items()
         },
     )
@@ -1208,6 +1261,7 @@ def main() -> None:
     plan.add_argument("--approvals", type=Path, required=True)
     plan.add_argument("--backend-fix", type=Path, required=True)
     plan.add_argument("--local-host", type=Path, help="approved physical LOCAL host transition JSON")
+    plan.add_argument("--source-runtime-resource-recovery", type=Path, help="exact approved original runtime binding")
     plan.add_argument("--output-dir", type=Path, required=True)
     retry = commands.add_parser("retry")
     retry.add_argument("--plan", type=Path, required=True)
@@ -1244,6 +1298,11 @@ def main() -> None:
             args.backend_fix,
             args.output_dir,
             LocalExecutionHostTransition.model_validate_json(args.local_host.read_text()) if args.local_host else None,
+            (
+                TaskSpecRuntimeBinding.model_validate_json(args.source_runtime_resource_recovery.read_text())
+                if args.source_runtime_resource_recovery
+                else None
+            ),
         )
         return
     if args.command == "retry":

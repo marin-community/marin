@@ -1652,6 +1652,21 @@ For partially declared tasks, the phase records `initial_requirements` and start
 at the parent's final calibrated allocation. Declared and preserved source limits
 remain fixed; an earlier OOM increase is retained instead of starting over.
 
+Original runtime `task_machine` and `verifier_machine` resources are source
+declarations. Calibration merges actor CPU, memory and disk into preserved limits,
+and verifier resources into the independently fixed verifier profile. Only missing
+dimensions may grow. Recorded and admitted actor requirements match the actual
+actor allocation; a fixed verifier OOM cannot increase the actor's memory.
+Collection rejects maps that omitted those original declarations.
+
+An approved unscored old attempt that missed these fields may use
+`retry-plan --source-runtime-resource-recovery ORIGINAL_BINDING.json`. The
+`TaskSpecRuntimeBinding` binds the exact original task and runtime hashes, so each
+recovery plan covers one task. Its transition retains the old calibration as
+unqualified history and overlays only the missed explicit role resources. All
+other limits, original files, grading mode and prior phase hashes remain fixed.
+Ordinary retries without this field keep their existing strict invariants.
+
 A replacement LOCAL worker may supply `retry-plan --local-host HOST.json`.
 `LocalExecutionHostTransition` records exact `parent_kwargs`, replacement
 `current_kwargs`, and nonempty immutable URI/SHA-256 `scope_evidence`. Only

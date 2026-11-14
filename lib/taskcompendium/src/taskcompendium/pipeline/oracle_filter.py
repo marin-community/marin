@@ -409,6 +409,36 @@ class LocalExecutionHostTransition(BaseModel):
         return self
 
 
+def recovered_source_runtime_requirements(
+    parent: ResourceCalibrationReceipt, binding: TaskSpecRuntimeBinding
+) -> tuple[ExecutionRequirements, dict[ResourceDimension, float], VerifierResourceProfile]:
+    """Recover only explicit original role budgets missed by unqualified old attempts."""
+    actor = {ResourceDimension(name): value for name, value in binding.resource_limits("task_machine").items()}
+    grader = {ResourceDimension(name): value for name, value in binding.resource_limits("verifier_machine").items()}
+    if not actor and not grader:
+        raise ValueError("Source runtime recovery requires explicit original role resources")
+    for attempt in parent.attempts:
+        recorded_grade = (
+            attempt.result.get("exception_info") is None
+            and attempt.result.get("finished_at") is not None
+            and bool((attempt.result.get("verifier_result") or {}).get("rewards"))
+        )
+        if attempt.scored or recorded_grade:
+            raise ValueError("Source runtime recovery cannot replay a scored old attempt")
+    for name, value in actor.items():
+        if parent.declared_requirements is not None and getattr(parent.declared_requirements, name.value) != value:
+            raise ValueError("Source runtime recovery cannot change a declared actor limit")
+        if name in parent.preserved_requirements and parent.preserved_requirements[name] != value:
+            raise ValueError("Source runtime recovery cannot change a preserved actor declaration")
+    for name, value in grader.items():
+        if name in parent.verifier.fixed and parent.verifier.fixed[name] != value:
+            raise ValueError("Source runtime recovery cannot change a preserved verifier declaration")
+    preserved = {**parent.preserved_requirements, **actor}
+    verifier = parent.verifier.model_copy(update={"fixed": {**parent.verifier.fixed, **grader}})
+    shape = parent.execution_requirements.model_copy(update={name.value: value for name, value in actor.items()})
+    return shape, preserved, verifier
+
+
 class InfrastructureRetryPlan(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     cohort_path: str
@@ -422,6 +452,15 @@ class InfrastructureRetryPlan(BaseModel):
     environment_kwargs: dict
     approvals: dict[str, InfrastructureRetryApproval] = Field(min_length=1)
     local_host: LocalExecutionHostTransition | None = Field(default=None, exclude_if=lambda value: value is None)
+    source_runtime_resource_recovery: TaskSpecRuntimeBinding | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def validate_recovery_partition(self):
+        if self.source_runtime_resource_recovery is not None and len(self.approvals) != 1:
+            raise ValueError("A source runtime recovery plan must bind one exact original task")
+        return self
 
 
 def require_infrastructure_retry_parent(
@@ -464,10 +503,18 @@ class InfrastructureRetryTransition(BaseModel):
     backend_fix: BackendFixIdentity
     approval: InfrastructureRetryApproval
     local_host: LocalExecutionHostTransition | None = Field(default=None, exclude_if=lambda value: value is None)
+    source_runtime_resource_recovery: TaskSpecRuntimeBinding | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def validate_parent_failure(self):
         require_infrastructure_retry_parent(self.parent_calibration, self.approval)
+        recovery = self.source_runtime_resource_recovery
+        if recovery is not None:
+            if recovery.task_sha256 != self.task_sha256 or recovery.runtime_sha256 != self.runtime_sha256:
+                raise ValueError("Source runtime recovery belongs to another frozen task or runtime")
+            recovered_source_runtime_requirements(self.parent_calibration, recovery)
         return self
 
 
@@ -668,12 +715,19 @@ class OracleTaskReceipt(BaseModel):
                     {**INITIAL_REQUIREMENTS.model_dump(), **current.preserved_requirements}
                 )
             )
-            if start != previous.execution_requirements:
-                raise ValueError("Infrastructure retry did not resume the parent's final calibrated shape")
+            expected_start = previous.execution_requirements
+            expected_preserved = previous.preserved_requirements
+            expected_verifier = previous.verifier
+            if transition.source_runtime_resource_recovery is not None:
+                expected_start, expected_preserved, expected_verifier = recovered_source_runtime_requirements(
+                    previous, transition.source_runtime_resource_recovery
+                )
+            if start != expected_start:
+                raise ValueError("Infrastructure retry did not resume its exact approved allocation")
             if (
                 previous.declared_requirements != current.declared_requirements
-                or previous.preserved_requirements != current.preserved_requirements
-                or previous.verifier != current.verifier
+                or expected_preserved != current.preserved_requirements
+                or expected_verifier != current.verifier
                 or previous.oracle_kind != current.oracle_kind
             ):
                 raise ValueError("Infrastructure retry changed declared limits or the verifier environment")
