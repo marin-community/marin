@@ -11,7 +11,7 @@ from copy import deepcopy
 
 import zstandard
 from finestore.rl.curation import ContentEvidenceReference
-from taskcompendium.pipeline.oracle_filter import NegativeControlApplicability, OracleTaskReceipt
+from taskcompendium.pipeline.oracle_filter import NegativeControlApplicability, OracleExclusionReason, OracleTaskReceipt
 
 from experiments.post_training.task_curation.negative_controls import negative_control_from_archive
 from experiments.post_training.task_curation.oracle_filter import filter_cohort
@@ -25,6 +25,7 @@ def filter_with_negative_controls(cohort, task_map, jobs, output, *args, **kwarg
     for task_id, entry in receipt.tasks.items():
         if not isinstance(entry, OracleTaskReceipt) or (
             entry.negative_control_applicability is not NegativeControlApplicability.WORKSPACE
+            or entry.exclusion_reason is not OracleExclusionReason.NEGATIVE_CONTROL_PENDING
         ):
             continue
         source = entry.calibration.attempts[-1]

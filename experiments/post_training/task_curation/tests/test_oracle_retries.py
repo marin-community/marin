@@ -410,6 +410,9 @@ def test_retry_resumes_grown_allocation_and_preserves_partial_source_limits(tmp_
     archived = tmp_path / "filtered/oracle-filter.json"
     assert load_oracle_filter(str(archived)) == receipt
     unanchored = json.loads(archived.read_text())
+    unanchored["version"] = 3
+    unanchored["tasks"]["task"].pop("negative_control")
+    unanchored["tasks"]["task"].pop("negative_control_applicability")
     unanchored["tasks"]["task"].pop("source_task_sha256")
     unanchored["tasks"]["task"].pop("source_task_checksum")
     legacy_path = tmp_path / "unanchored-partial.json"
@@ -595,6 +598,9 @@ def test_public_loader_rejects_retry_history_attached_to_foreign_task_or_package
         document = receipt.model_dump(mode="json")
         entry = document["tasks"]["task"]
         if not anchored:
+            document["version"] = 3
+            entry.pop("negative_control", None)
+            entry.pop("negative_control_applicability", None)
             entry.pop("source_task_sha256", None)
             entry.pop("source_task_checksum", None)
         baseline = tmp_path / f"anchored-{anchored}.json"
