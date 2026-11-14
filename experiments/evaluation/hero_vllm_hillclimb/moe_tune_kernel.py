@@ -14,6 +14,7 @@ Usage: python moe_tune_kernel.py OUT.json --experts 384 --local-experts 24 --top
 """
 
 import argparse
+import functools
 import itertools
 import json
 import time
@@ -52,12 +53,24 @@ def _inputs(args, m: int, device: torch.device):
     return x, topk_weights, topk_ids.to(torch.int32), expert_map
 
 
+def _clear_config_cache() -> None:
+    """Drop vLLM's cached config lookup so override_config takes effect for every candidate."""
+    function = fused_moe_module.try_get_optimal_moe_config
+    cleared = False
+    while function is not None:
+        if isinstance(function, functools._lru_cache_wrapper):
+            function.cache_clear()
+            cleared = True
+        function = getattr(function, "__wrapped__", None)
+    assert cleared, "try_get_optimal_moe_config has no lru_cache to clear"
+
+
 def _time(args, weights, inputs, config) -> float:
     w1, w2 = weights
     x, topk_weights, topk_ids, expert_map = inputs
 
     def run():
-        fused_moe_module.try_get_optimal_moe_config.cache_clear()
+        _clear_config_cache()
         with override_config(config):
             return fused_moe_module.fused_experts_op(
                 x,
