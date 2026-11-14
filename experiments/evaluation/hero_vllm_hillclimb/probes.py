@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 _RANK_HEADER = "X-data-parallel-rank"
 _TOP_K = 5
 _TIMEOUT = aiohttp.ClientTimeout(total=3 * 3600)
+# Attempts per load request when the connection drops before the stream completes.
+_STREAM_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -64,7 +66,9 @@ class Client:
     session: aiohttp.ClientSession = field(init=False)
 
     async def __aenter__(self) -> "Client":
-        self.session = aiohttp.ClientSession(timeout=_TIMEOUT, connector=aiohttp.TCPConnector(limit=0))
+        # A fresh connection per request: reusing a pooled connection that the server's keep-alive
+        # timer is closing raised ServerDisconnectedError mid-sweep on long (4K-token) streams.
+        self.session = aiohttp.ClientSession(timeout=_TIMEOUT, connector=aiohttp.TCPConnector(limit=0, force_close=True))
         return self
 
     async def __aexit__(self, *exc) -> None:
@@ -294,7 +298,14 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig, on_progre
                     "seed": index,
                     "ignore_eos": True,
                 }
-                await _stream_request(client, body, records[index])
+                for attempt in range(_STREAM_ATTEMPTS):
+                    try:
+                        await _stream_request(client, body, records[index])
+                        break
+                    except (aiohttp.ServerDisconnectedError, aiohttp.ClientOSError):
+                        records[index] = {"retries": attempt + 1}
+                        if attempt + 1 == _STREAM_ATTEMPTS:
+                            raise
 
         start = time.monotonic()
         cpu: dict = {}
@@ -368,6 +379,7 @@ def _summarize(records: list[dict], *, concurrency: int, window: tuple[float, fl
     summary = {
         "concurrency": concurrency,
         "requests": len(records),
+        "retried_requests": sum(1 for r in records if r.get("retries")),
         "output_tokens": sum(r.get("tokens", 0) for r in records),
         "ttft_p50": _quantile(ttft, 0.5),
         "ttft_p90": _quantile(ttft, 0.9),
