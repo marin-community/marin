@@ -1146,8 +1146,7 @@ def _build_pod_manifest(
                 raise PodManifestError("Locality groups require a task ordinal")
             for group_index, group_size in enumerate(run_req.coscheduling.group_sizes):
                 if pod_index < group_size:
-                    # Explicit role hashes keep otherwise identical groups in separate
-                    # PodSets. TAS indexes Pods within each PodSet, not the whole job.
+                    # Role hashes separate otherwise identical PodSets. TAS indexes Pods within each set.
                     metadata["annotations"][_KUEUE_ROLE_HASH] = f"iris-group-{group_index}"
                     break
                 pod_index -= group_size

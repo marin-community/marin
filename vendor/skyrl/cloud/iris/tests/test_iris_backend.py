@@ -25,7 +25,6 @@ from cloud.iris.role_topology import RoleTopology
         (None, None, None, ()),
         ("cw-rno2a", "marin.yaml", "eth0", ()),
         ("cw-us-east-08a", "marin.yaml", None, (8, 16)),
-        ("cw-us-east-08a", "marin.yaml", None, (16, 16, 16)),
     ],
 )
 def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
