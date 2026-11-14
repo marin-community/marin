@@ -447,13 +447,19 @@ def test_prebuilt_admission_requires_exact_successful_oracle_filter(tmp_path, mo
         serialized = spec.model_dump_json()
         pq.write_table(
             pa.Table.from_pylist(
-                [{"task_spec": serialized, "task_sha256": hashlib.sha256(serialized.encode()).hexdigest()}]
+                [
+                    {
+                        "task_spec": serialized,
+                        "task_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+                        "runtime": json.dumps(envelope["runtime"]),
+                    }
+                ]
             ),
             cohort,
         )
     receipt = oracle_receipt([spec], failed=frozenset({spec.id}) if state == "failed" else frozenset())
     entry = receipt.tasks[spec.id]
-    runtime_sha256 = canonical_sha256(envelope["runtime"]) if encoding is prebuilt.PrebuiltEncoding.LOWERED else None
+    runtime_sha256 = canonical_sha256(envelope["runtime"])
     receipt.tasks[spec.id] = entry.model_copy(
         update={
             "runtime_sha256": runtime_sha256,
