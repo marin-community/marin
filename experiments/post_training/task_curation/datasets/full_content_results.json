@@ -203,5 +203,43 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/final-content/2026.11.13.1/safety.json",
       "sha256": "9a361175a42ffb4fa51dcecfc7c34a352d4a0118a6149aa314e3a1f575a9dd5a"
     }
+  },
+  "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2": {
+    "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
+    "input": {
+      "dataset_id": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-python-v2-dc0ebee3-taskcompendium-20261112",
+      "dataset_revision": "a953f93bc830704525ff2cce0b296dd262009662",
+      "converter_version": "2026.11.12.1",
+      "converter_revision": "5411f877ffec19b7e93f48bcc54ed70ea91267365c44ce78ddb279bf17e29ed5",
+      "measured_tasks": 500,
+      "task_specs_sha256": "dafe1c08f29eb599bac3398496313e94be634f9fe2bbd3f7947d334ffd20e8bb",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/actor-census/b5d2abe06afc8a793318/2026.11.12.4/.artifact.json"
+    },
+    "contract_index": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/contracts/b5d2abe06afc8a793318/2026.11.12.2/attempts/b2c2c6288d954dd6b8e2202199ea8113/contracts.parquet",
+      "sha256": "0578127a8cde8ec2e47c8151ccd746f2e4a429506ea89d6617cc1219a2d3fe04"
+    },
+    "review_receipt": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/shard-reviews/2026.11.13.3/b5d2abe06afc8a793318/attempts/d12f64237dda4c6bb85e3a450313d098/.artifact.json",
+      "sha256": "c121d20728f74a2bd47b674bd5c53f3d008e46799df57d3a82ffb6b4c8aa392e"
+    },
+    "records": {
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/full-qc/shard-reviews/2026.11.13.3/b5d2abe06afc8a793318/attempts/d12f64237dda4c6bb85e3a450313d098/reviews.parquet",
+      "sha256": "5c28a8972fe4d0615264c5bfdd57fb1583d80a7b6193605a9d41b26e8250e603"
+    },
+    "result": {
+      "reviewed": 500,
+      "issue_count": 8,
+      "issues": [],
+      "repair_recommendation": "Inspect all task-level issue evidence and qualify repairs with renewed QA.",
+      "unavailable_count": 0,
+      "uncertain_count": 0,
+      "sample_count": 500,
+      "issue_rate": 0.016,
+      "verdict": "good"
+    },
+    "coverage_complete": true,
+    "finalization": "complete",
+    "waiver": null
   }
 }

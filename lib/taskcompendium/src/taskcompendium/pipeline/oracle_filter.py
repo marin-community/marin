@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.grading_environment import GradingEnvironmentMode
-from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
@@ -261,18 +261,7 @@ def trial_network_qualified(task: TaskSpec, runtime: dict | None, trial: OracleT
         if runtime is not None
         else None
     )
-    actor = binding.network("task_machine") if binding else None
-    verifier = binding.network("verifier_machine") if binding else None
-    observed = trial.network_policy
-    if observed is None:
-        return actor is None and verifier is None
-    return (
-        observed.source_runtime_sha256 == (binding.runtime_sha256 if binding else None)
-        and observed.actor_declared == actor
-        and observed.verifier_declared == verifier
-        and (actor is None or not observed.actor_required or observed.actor_effective == actor)
-        and (verifier is None or observed.verifier_effective == verifier)
-    )
+    return network_policy_qualified(binding, trial.network_policy)
 
 
 class VerifierResourceProfile(BaseModel):
@@ -643,6 +632,8 @@ class OracleTaskReceipt(BaseModel):
     task_sha256: str
     runtime_sha256: str | None = None
     harbor_task_checksum: str
+    source_task_sha256: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    source_task_checksum: str | None = Field(default=None, exclude_if=lambda value: value is None)
     has_oracle: bool
     trials: tuple[OracleTrialReceipt, ...]
     calibration: ResourceCalibrationReceipt
@@ -677,6 +668,10 @@ class OracleTaskReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_infrastructure_retry_chain(self):
+        if (self.source_task_sha256 is None) != (self.source_task_checksum is None):
+            raise ValueError("Original source task and package anchors must be supplied together")
+        source_task_sha256 = self.source_task_sha256 or self.task_sha256
+        source_task_checksum = self.source_task_checksum or self.harbor_task_checksum
         history = self.infrastructure_retries
         if not history:
             if self.calibration.initial_requirements is not None:
@@ -690,9 +685,9 @@ class OracleTaskReceipt(BaseModel):
         backend = phases[0].attempts[0].result["config"]["environment"]
         for index, transition in enumerate(history):
             if (
-                transition.task_sha256 != history[0].task_sha256
+                transition.task_sha256 != source_task_sha256
                 or transition.runtime_sha256 != self.runtime_sha256
-                or transition.source_task_checksum != history[0].source_task_checksum
+                or transition.source_task_checksum != source_task_checksum
             ):
                 raise ValueError("Infrastructure retry changed the task or its native environment")
             if transition.parent_history_sha256 != canonical_sha256(

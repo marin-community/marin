@@ -59,6 +59,21 @@ class TaskNetworkPolicyReceipt(BaseModel):
     verifier_effective: NetworkPolicy | None
 
 
+def network_policy_qualified(binding: TaskSpecRuntimeBinding | None, observed: TaskNetworkPolicyReceipt | None) -> bool:
+    """Match observed role policies to the preserved declaration and actual actor plan."""
+    actor = binding.network("task_machine") if binding else None
+    verifier = binding.network("verifier_machine") if binding else None
+    if observed is None:
+        return actor is None and verifier is None
+    return (
+        observed.source_runtime_sha256 == (binding.runtime_sha256 if binding else None)
+        and observed.actor_declared == actor
+        and observed.verifier_declared == verifier
+        and (actor is None or not observed.actor_required or observed.actor_effective == actor)
+        and (verifier is None or observed.verifier_effective == verifier)
+    )
+
+
 def write_source_runtime(task: TaskSpec, runtime: dict, directory: Path) -> None:
     """Preserve the complete original runtime before measuring a packet's checksum."""
     binding = TaskSpecRuntimeBinding(

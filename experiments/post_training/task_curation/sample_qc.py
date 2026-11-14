@@ -48,8 +48,8 @@ from experiments.post_training.task_curation.sample_qc_artifacts import (
 LOGGER = logging.getLogger(__name__)
 
 
-def panel_tasks(panel: SamplePanel) -> tuple[list[TaskSpec], list[dict]]:
-    """Check source and panel bytes before constructing exact task/runtime contracts."""
+def panel_task_runtimes(panel: SamplePanel) -> tuple[list[TaskSpec], list[dict]]:
+    """Check source and panel bytes before returning unchanged tasks and runtime packets."""
     if SampleInventory.model_validate_json(StoragePath(panel.evidence_url).read_text()).qc_panel() != panel:
         raise ValueError("Sample panel differs from its complete-population census")
     population = SourceTextPopulation.raw_load(panel.input_artifact)
@@ -81,7 +81,13 @@ def panel_tasks(panel: SamplePanel) -> tuple[list[TaskSpec], list[dict]]:
         raise ValueError("Sample panel must contain every distinct selected task exactly once")
     if [task.id for task in tasks] != [row["task_id"] for row in rows]:
         raise ValueError("Sample panel IDs differ from their task contracts")
-    return tasks, [task_contract(task, json.loads(row["runtime"])) for task, row in zip(tasks, rows, strict=True)]
+    return tasks, [json.loads(row["runtime"]) for row in rows]
+
+
+def panel_tasks(panel: SamplePanel) -> tuple[list[TaskSpec], list[dict]]:
+    """Check source and panel bytes before constructing exact task/runtime contracts."""
+    tasks, runtimes = panel_task_runtimes(panel)
+    return tasks, [task_contract(task, runtime) for task, runtime in zip(tasks, runtimes, strict=True)]
 
 
 def review_panel(panel: SamplePanel, reviewer: Reviewer, output_root: str) -> SampleQCReview:
