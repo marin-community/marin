@@ -106,11 +106,7 @@ def source_map(
         runtime = {
             slot: {
                 **runtime_defaults[role].model_dump(mode="json"),
-                **(
-                    execution_resource_shape(task, published_runtime.get(slot))
-                    if role == "agent"
-                    else (published_runtime.get(slot) or {})
-                ),
+                **execution_resource_shape(task, published_runtime.get(slot), role),
             }
             for role, slot in (("agent", "task_machine"), ("grader", "verifier_machine"))
         }

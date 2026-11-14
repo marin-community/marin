@@ -194,10 +194,10 @@ def environment_demands(environment: EnvironmentRequirements) -> set[Requirement
     return demands
 
 
-def execution_resource_shape(task: Mapping, shape: Mapping | None) -> dict:
+def execution_resource_shape(task: Mapping, shape: Mapping | None, role: Literal["agent", "grader"]) -> dict:
     """Apply task capacity, rejecting conflicting published allocations."""
     values = dict(shape or {})
-    declared = task.get("execution_requirements")
+    declared = task.get("execution_requirements" if role == "agent" else "verifier_execution_requirements")
     if declared is None:
         return values
     requirements = ExecutionRequirements.model_validate(declared)
@@ -263,9 +263,8 @@ def task_demands(document: Mapping) -> tuple[dict[str, set[Requirement]], dict[s
             demands.add(Requirement.FILE_MTIME)
         if not demands and role not in failures:
             continue
-        if role == "agent":
-            shape = execution_resource_shape(task, shape)
-        if task.get("execution_requirements") is not None:
+        shape = execution_resource_shape(task, shape, role)
+        if task.get("execution_requirements") is not None or task.get("verifier_execution_requirements") is not None:
             demands.add(Requirement.COMMAND_TIMEOUT)
         if shape is not None:
             if "network" in shape:

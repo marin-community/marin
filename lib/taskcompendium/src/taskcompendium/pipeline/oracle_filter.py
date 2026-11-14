@@ -452,7 +452,7 @@ class ResourceCalibrationReceipt(BaseModel):
                     raise ValueError("Calibration infrastructure retry budget is incomplete")
                 continue
             infrastructure_retries = 0
-            if index != len(self.attempts) - 1:
+            if index != len(self.attempts) - 1 and (self.declared_requirements is None or expected_verifier is not None):
                 updated = next_trial_allocations(trial, fixed_actor, self.verifier)
                 if updated is None:
                     raise ValueError("Calibration continued after a non-resource failure or exhausted cap")
