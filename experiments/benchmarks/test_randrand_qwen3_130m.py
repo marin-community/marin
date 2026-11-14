@@ -106,7 +106,7 @@ def test_training_saves_final_off_interval_validation_and_checkpoint(tmp_path, r
     )
     train_main(config)
     metrics = json.loads((tmp_path / "eval_results.json").read_text())
-    if recipe == Recipe.RANDRAND_MUON_HYBRID:
+    if recipe in (Recipe.RANDRAND_MUON_HYBRID, Recipe.SPECTRAL_RANDRAND_MUON_HYBRID):
         assert 0 < metrics["optim/switch/blend"] <= 1
         assert np.isfinite(metrics["optim/switch/cosine_ema"])
     assert np.isfinite(metrics["train/loss"])

@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Levanter binding for paired full-Adam-then-split RandRAND.
+"""Levanter binding for paired and spectral RandRAND.
 
 Matrix axes are flattened as (Out, In), preserving a whole attention projection.
 Only leading axes outside Linear.In/Out (e.g. the scanned layer axis) are split.
@@ -10,8 +10,9 @@ All other parameters use AdamW; embedding and output-head routes are explicit.
 
 import dataclasses
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
+from enum import StrEnum
 
 import haliax as hax
 import jax
@@ -20,6 +21,12 @@ import optax
 from levanter.optim.config import OptimizerConfig
 
 from levanter.optim import randrand_core as rr
+from levanter.optim import randrand_spectral as spectral_rr
+
+
+class RandRANDVariant(StrEnum):
+    PAIRED = "paired"
+    SPECTRAL = "spectral"
 
 
 class NamedRandRANDState(NamedTuple):
@@ -129,16 +136,18 @@ def _unpack(arrays, template, layouts, treedef):
     return treedef.unflatten(rebuilt)
 
 
-def named_randrand(config, *, total_steps, schedule):
+def named_randrand(config, *, total_steps, schedule, spectral=None):
     """Wrap the plain-array optimizer without losing Haliax parameter axes."""
 
     def optimizer_for_layouts(layouts):
         labels = tuple(layout.kind for layout in layouts for _ in range(layout.batch_size))
+        if spectral is not None:
+            return spectral_rr.randrand(labels, config, spectral, total_steps=total_steps, schedule=schedule)
         return rr.randrand(labels, config, total_steps=total_steps, schedule=schedule)
 
     def name_state(raw, params, layouts, treedef):
         # Preserve parameter axes on the large Adam buffers so Levanter's FSDP
-        # mapping shards them just like the weights. Gram/basis state is replicated.
+        # mapping shards them just like the weights. Gram/sketch/basis state is replicated.
         return NamedRandRANDState(
             raw.count,
             _unpack(raw.first, params, layouts, treedef),
@@ -208,6 +217,8 @@ class RandRANDConfig(OptimizerConfig):
     pair_k: int = rr.PAIRED_K
     max_grad_norm: float = rr.GRAD_CLIP
     basis_seed: int = 42
+    variant: RandRANDVariant = RandRANDVariant.PAIRED
+    spectral: spectral_rr.SpectralSettings = field(default_factory=spectral_rr.SpectralSettings)
 
     def algorithm_config(self):
         """Translate explicit route controls without applying inherited WD masks."""
@@ -218,9 +229,17 @@ class RandRANDConfig(OptimizerConfig):
         values = {name: getattr(self, name) for name in direct}
         return rr.RandRANDConfig(**values, matrix_lr=self.learning_rate, matrix_weight_decay=self.weight_decay)
 
+    def spectral_settings(self):
+        if self.variant == RandRANDVariant.SPECTRAL:
+            return self.spectral
+        if self.variant == RandRANDVariant.PAIRED:
+            return None
+        raise ValueError(f"Unknown RandRAND variant: {self.variant}")
+
     def build(self, num_train_steps):
         return named_randrand(
             self.algorithm_config(),
+            spectral=self.spectral_settings(),
             total_steps=num_train_steps,
             schedule=self.lr_scheduler(num_train_steps, override_lr=1.0),
         )

@@ -18,7 +18,8 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import OptimizerConfig
 from levanter.checkpoint import save_checkpoint, load_checkpoint
 
-from levanter.optim.randrand import RandRANDConfig, parameter_layout, _pack, _unpack
+from levanter.optim.randrand import RandRANDConfig, RandRANDVariant, parameter_layout, _pack, _unpack
+from levanter.optim.randrand_spectral import SpectralSettings
 from levanter.optim.randrand_muon_hybrid import RandRANDMuonHybridConfig, MuonBlendConfig
 
 
@@ -57,11 +58,21 @@ def test_axis_roundtrip_and_full_attention_projections(scan_layers):
 
 
 @pytest.mark.parametrize("hybrid", [False, True])
-def test_configured_qwen_updates_resume_from_native_checkpoint(tmp_path, hybrid):
+@pytest.mark.parametrize("variant", list(RandRANDVariant))
+def test_configured_qwen_updates_resume_from_native_checkpoint(tmp_path, hybrid, variant):
     constructor = RandRANDMuonHybridConfig if hybrid else RandRANDConfig
     extra = dict(switch=MuonBlendConfig(min_step=2, threshold=1.0, ramp=4)) if hybrid else {}
     config = constructor(
-        **extra, rank=2, rank_sketch=3, pair_k=1, min_dim_for_deflation=1, randrand_warmup=2, basis_every=2, warmup=2
+        **extra,
+        variant=variant,
+        spectral=SpectralSettings(probe_every=2),
+        rank=2,
+        rank_sketch=3,
+        pair_k=1,
+        min_dim_for_deflation=1,
+        randrand_warmup=2,
+        basis_every=2,
+        warmup=2,
     )
     assert draccus.decode(OptimizerConfig, draccus.encode(config, OptimizerConfig)) == config
     model = tiny_model()
@@ -100,14 +111,24 @@ def test_configured_qwen_updates_resume_from_native_checkpoint(tmp_path, hybrid)
 
 @pytest.mark.multidevice
 @pytest.mark.parametrize("hybrid", [False, True])
-def test_named_jit_shards_adam_buffers_and_preserves_updates(hybrid):
+@pytest.mark.parametrize("variant", list(RandRANDVariant))
+def test_named_jit_shards_adam_buffers_and_preserves_updates(hybrid, variant):
     if len(jax.devices()) < 2:
         pytest.skip("Run with two CPU devices or multiple accelerators for the sharding check")
     mesh = jax.sharding.Mesh(np.asarray(jax.devices()[:2]), ("data",))
     constructor = RandRANDMuonHybridConfig if hybrid else RandRANDConfig
     extra = dict(switch=MuonBlendConfig(min_step=1, threshold=1.0, ramp=2)) if hybrid else {}
     config = constructor(
-        **extra, rank=2, rank_sketch=3, pair_k=1, min_dim_for_deflation=1, randrand_warmup=2, basis_every=2, warmup=2
+        **extra,
+        variant=variant,
+        spectral=SpectralSettings(probe_every=2),
+        rank=2,
+        rank_sketch=3,
+        pair_k=1,
+        min_dim_for_deflation=1,
+        randrand_warmup=2,
+        basis_every=2,
+        warmup=2,
     )
     params = eqx.filter(tiny_model(), eqx.is_inexact_array)
     tx = config.build(10)

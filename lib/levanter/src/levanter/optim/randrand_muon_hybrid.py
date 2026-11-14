@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import optax
 
 from levanter.optim import randrand_core as rr
+from levanter.optim import randrand_spectral as spectral_rr
 from levanter.optim.config import OptimizerConfig
 from levanter.optim.randrand import NamedRandRANDState, RandRANDConfig, _pack, _unpack, parameter_layout
 
@@ -76,7 +77,9 @@ def muonh_direction(matrix, steps=5):
     return x.T if transposed else x
 
 
-def randrand_muon_hybrid(labels, config, switch=MuonBlendConfig(), *, total_steps=rr.TOTAL_STEPS, schedule=None):
+def randrand_muon_hybrid(
+    labels, config, switch=MuonBlendConfig(), *, total_steps=rr.TOTAL_STEPS, schedule=None, spectral=None
+):
     """Build the plain-array transform; clipping and scheduling happen once."""
     flat_labels, tree = jax.tree_util.tree_flatten(labels)
     matrix_indices = tuple(i for i, label in enumerate(flat_labels) if label == "matrix")
@@ -91,7 +94,12 @@ def randrand_muon_hybrid(labels, config, switch=MuonBlendConfig(), *, total_step
                 count, total_steps=total_steps, warmup_steps=config.warmup_steps, min_lr_ratio=config.min_lr_ratio
             )
 
-    base = rr.randrand(labels, replace(config, max_grad_norm=None), total_steps=total_steps, schedule=schedule)
+    unclipped = replace(config, max_grad_norm=None)
+    base = (
+        rr.randrand(labels, unclipped, total_steps=total_steps, schedule=schedule)
+        if spectral is None
+        else spectral_rr.randrand(labels, unclipped, spectral, total_steps=total_steps, schedule=schedule)
+    )
 
     def flatten(values):
         leaves, structure = jax.tree_util.tree_flatten(values)
@@ -208,12 +216,14 @@ def _pack_matrix_buffers(buffers, layouts):
     )
 
 
-def named_hybrid(config, switch, *, total_steps, schedule):
+def named_hybrid(config, switch, *, total_steps, schedule, spectral=None):
     """Preserve parameter axes on Adam, Muon momentum and previous-update buffers."""
 
     def transform(layouts):
         labels = tuple(layout.kind for layout in layouts for _ in range(layout.batch_size))
-        return randrand_muon_hybrid(labels, config, switch, total_steps=total_steps, schedule=schedule)
+        return randrand_muon_hybrid(
+            labels, config, switch, total_steps=total_steps, schedule=schedule, spectral=spectral
+        )
 
     def name(raw, params, layouts, tree):
         rr_state = NamedRandRANDState(
@@ -274,6 +284,7 @@ class RandRANDMuonHybridConfig(RandRANDConfig):
         return named_hybrid(
             self.algorithm_config(),
             self.switch,
+            spectral=self.spectral_settings(),
             total_steps=num_train_steps,
             schedule=self.lr_scheduler(num_train_steps, override_lr=1.0),
         )

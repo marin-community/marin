@@ -791,3 +791,98 @@ trainer:
 ::: levanter.models.gpt2.Gpt2Config
 
 ::: levanter.models.llama.LlamaConfig
+
+#### Spectral RandRAND/MuonH blend
+
+`--recipe spectral_randrand_muon_hybrid` adds a fourth recipe. It uses the
+same hybrid-normalized model, model/data seed 42, [adaptive blend controller](#randrandmuonh-adaptive-blend),
+MuonH candidate, clipping, schedule, training budget and evaluation path as
+`randrand_muon_hybrid`. The three earlier recipes keep their optimizer behavior.
+The new recipe selects `optimizer.type: randrand_muon_hybrid` with
+`variant: spectral`; `type: randrand` with `variant: spectral` also supports
+the spectral optimizer without blending.
+
+| Route | Algorithm | Peak LR | Betas | WD |
+|---|---|---|---|---|
+| Body matrices | Spectral RandRAND candidate | 0.0045 | (0.95, 0.99) | 0.0303 |
+| Body matrices | MuonH candidate | 0.015 relative step | Momentum 0.95, Nesterov | 0 |
+| Embedding | AdamW | 0.2 | (0.9, 0.98) | 0 |
+| Vectors, including output RMSNorm gains | AdamW | 0.03 | (0.9, 0.98) | 0 |
+| Head | AdamW | 0.006 | (0.9, 0.98) | 0 |
+
+The spectral settings are rank 64, sketch width 256 (capped at the smaller
+matrix dimension, without oversampling), EMA beta 0.98, first basis refresh
+before update 201, and refresh interval 200. The active and standby banks each contain independent left/right orthonormal
+probes and matching sketches. Both banks accumulate raw clipped-gradient
+covariance sketches every step:
+`Y_L = beta*Y_L + (1-beta)*G*(G.T*Omega_L)` and
+`Y_R = beta*Y_R + (1-beta)*G.T*(G*Omega_R)`. These sketches have neither
+bias correction nor dimension normalization. No full Gram matrix is stored.
+
+Each sketch SVD retains `r = min(64, sketch_width)` left singular vectors and singular
+values scaled by `sqrt(side_dimension / sketch_width)`. These are sketch-based
+estimates, not exact covariance eigenpairs. For each side, let those vectors be
+v_i and decreasing estimates be lambda_i, with r retained values. Define
+`mu = max(1e-6 * lambda_1, float32.tiny)` and
+`s_i = ((lambda_r + mu)/(lambda_i + mu))**0.25` for i < r. The filter is
+`P = I + sum_i (s_i - 1)*v_i*v_i.T`; the last retained vector sets the cutoff
+and is not attenuated. Apply `P_L*G*P_R` before updating Adam's moments, then
+apply the same filters to Adam's direction. Once a nonzero basis is available, use `effective_lr = 5 * scheduled_matrix_lr`
+and `W_new = (1 - effective_lr * 0.0303) * W - effective_lr * filtered_direction`.
+The WD coefficient itself is unchanged; the decay subtraction grows by 5, not 25. There is one Adam
+moment pair; paired selection and low-rank correction are not used.
+
+Every fifth basis refresh, use the warm standby sketch for the new bases,
+promote that bank to active, and redraw and clear only the retired bank. The
+first such handover precedes update 1001. Both banks then receive that update's
+raw gradient. Adam moments persist across refreshes and handovers. Checkpoints
+include both banks, bases, spectra, refresh counters and the explicit RNG key.
+Optimizer contractions request highest FP32 precision. Framework RNG streams
+and accelerator SVD arithmetic can differ; equal seeds do not imply equal probes.
+
+The variant is explicit in optimizer YAML:
+
+```yaml
+optimizer:
+  type: randrand_muon_hybrid
+  variant: spectral
+  learning_rate: 0.0045
+  matrix_betas: [0.95, 0.99]
+  weight_decay: 0.0303
+  embed_lr: 0.2
+  vector_lr: 0.03
+  head_lr: 0.006
+  rank: 64
+  rank_sketch: 256
+  randrand_warmup: 200
+  basis_every: 200
+  basis_ema_beta: 0.98
+  spectral:
+    probe_every: 5
+    regularization: 1e-6
+```
+
+The recipe supplies these settings automatically. `pair_k`,
+`low_rank_correction`, `correction_scale`, and `max_gram_dim` are paired-variant
+controls and do not affect the spectral variant. Other shared settings and the
+switch defaults remain as documented in [the adaptive blend](#randrandmuonh-adaptive-blend); embedding, head and vectors stay
+AdamW throughout.
+
+Run with `--recipe spectral_randrand_muon_hybrid --eval-every 200` and the
+cache, output and `--run` arguments in [the evaluation instructions](#qwen3-130m-evaluation-recipes). The local reference run
+`20261112_065847_624170` recorded cross-entropy 3.27194103 at update 4800 and
+3.27137539 at update 4959 on the notebook's fixed 32-batch validation subset.
+Its final logged blend coefficient was 0.7706; this is an observed result,
+not a configured constant: weights are `(1-a)*W_RandRAND + a*W_MuonH`, so
+0.7706 weights the MuonH candidate. This coefficient is not an update-norm fraction. These are single-run PyTorch results, not Marin
+Paloma BPB. Compare with a fresh MuonH baseline using the same caches and
+`randrand_muonh_baseline.yaml`, and report final BPB, timing and memory.
+
+The independent numerical fixture executes `randrand_spectral_muonh_best_config_qwen3_130m_training.ipynb`'s optimizer
+cells without changing their arithmetic, records their probes, and replays
+2,002 updates across two bank handovers and the blend transition. Provenance
+is in `lib/levanter/tests/data/randrand/spectral_switch_reference.json`, including
+source and fixture SHA-256 hashes, cell indices, reference PyTorch version and
+the reduced matrix shapes used for replay.
+The private source notebook is not bundled; the runtime and replay tests have
+no Torch dependency. Full accelerator training remains the evaluation target.

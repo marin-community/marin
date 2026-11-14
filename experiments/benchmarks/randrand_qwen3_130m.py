@@ -20,7 +20,7 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.main.train_lm import main as train_main
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import OptimizerConfig
-from levanter.optim.randrand import RandRANDConfig
+from levanter.optim.randrand import RandRANDConfig, RandRANDVariant
 from levanter.optim.randrand_muon_hybrid import RandRANDMuonHybridConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -30,6 +30,7 @@ class Recipe(StrEnum):
     PR6301 = "pr6301"
     HYBRID = "hybrid"
     RANDRAND_MUON_HYBRID = "randrand_muon_hybrid"
+    SPECTRAL_RANDRAND_MUON_HYBRID = "spectral_randrand_muon_hybrid"
 
 
 def optimizer_config(recipe: Recipe) -> RandRANDConfig:
@@ -38,6 +39,22 @@ def optimizer_config(recipe: Recipe) -> RandRANDConfig:
         return RandRANDConfig(learning_rate=0.006, embed_lr=0.6, vector_lr=0.006)
     if recipe == Recipe.RANDRAND_MUON_HYBRID:
         return RandRANDMuonHybridConfig()
+    if recipe == Recipe.SPECTRAL_RANDRAND_MUON_HYBRID:
+        return RandRANDMuonHybridConfig(
+            variant=RandRANDVariant.SPECTRAL,
+            learning_rate=0.0045,
+            matrix_betas=(0.95, 0.99),
+            matrix_eps=1e-8,
+            weight_decay=0.0303,
+            embed_lr=0.2,
+            vector_lr=0.03,
+            head_lr=0.006,
+            rank=64,
+            rank_sketch=256,
+            randrand_warmup=200,
+            basis_every=200,
+            basis_ema_beta=0.98,
+        )
     return RandRANDConfig()
 
 
@@ -98,7 +115,7 @@ def build_config(
         hf_save_path=None,
         trainer=TrainerConfig(
             id=run_id,
-            seed=42 if recipe == Recipe.RANDRAND_MUON_HYBRID else 0,
+            seed=42 if recipe in (Recipe.RANDRAND_MUON_HYBRID, Recipe.SPECTRAL_RANDRAND_MUON_HYBRID) else 0,
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=128,
             num_train_steps=4959,
@@ -119,7 +136,7 @@ def main() -> None:
         type=Recipe,
         choices=list(Recipe),
         required=True,
-        help="Recipe AND corresponding best-run optimizer settings: pr6301, hybrid, or randrand_muon_hybrid",
+        help="Recipe and its corresponding best-run optimizer settings",
     )
     parser.add_argument("--train-cache", required=True)
     parser.add_argument("--c4-cache", required=True)

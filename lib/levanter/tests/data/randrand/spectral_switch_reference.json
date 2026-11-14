@@ -1,0 +1,45 @@
+{
+  "notebook_sha256": "4405bf574f056fa0c607ceb8aae28a3049723e248636bb9972b848c31c6c9f1a",
+  "source_cells": [
+    10,
+    13
+  ],
+  "source_notebook": "randrand_spectral_muonh_best_config_qwen3_130m_training.ipynb",
+  "torch_version": "2.2.2",
+  "fixture_sha256": {
+    "spectral_switch_reference_0.npz": "9d03b29ad57c7a67cf0426156de7ca4190faaeb4e499d3293b4390fd5467c6ee",
+    "spectral_switch_reference_1.npz": "5295ab397dced258d635ab0f30daace81152c80fb0ba38b55e051a93e741b82b",
+    "spectral_switch_reference_2.npz": "0a456af9365b1298521d160d8f7e58e2044ccc683152f0e88f25e92b3c40a386"
+  },
+  "updates": 2002,
+  "probe_draws": 12,
+  "final_blend": 0.8000000172872636,
+  "reference_method": "Unmodified optimizer cells; record native orthonormal probes for JAX replay.",
+  "shapes": [
+    [
+      6,
+      4
+    ],
+    [
+      4,
+      6
+    ],
+    [
+      4,
+      4
+    ],
+    [
+      5,
+      4
+    ],
+    [
+      4
+    ],
+    [
+      5,
+      4
+    ]
+  ],
+  "rank": 3,
+  "rank_sketch": 4
+}
