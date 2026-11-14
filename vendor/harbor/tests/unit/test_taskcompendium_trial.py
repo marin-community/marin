@@ -882,7 +882,7 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
                     "max_turns": 3,
                     "max_tokens": 128,
                     "context_window": 65536, "max_input_tokens": 49152,
-                    "request_parameters": {}, "tokenizer_model": "fixture/candidate",
+                    "request_parameters": {"temperature": 0.7}, "tokenizer_model": "fixture/candidate",
                     "tokenizer_revision": ("0" if failure == "input_budget" else "f") * 40,
                 },
             ),

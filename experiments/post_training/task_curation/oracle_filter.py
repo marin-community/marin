@@ -526,6 +526,16 @@ def filter_cohort(
                     reason = OracleExclusionReason.ORACLE_FAILED
                 if reason is None and not trial_network_qualified(task, row_runtime(row), final):
                     reason = OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED
+                if (
+                    not oracle
+                    and reason in {None, OracleExclusionReason.ORACLE_FAILED}
+                    and not (control is not None and control.passed and control.trial == final)
+                ):
+                    reason = (
+                        OracleExclusionReason.EXECUTABILITY_PROOF_MISSING
+                        if control is None
+                        else OracleExclusionReason.EXECUTABILITY_RUN_FAILED
+                    )
                 entry = OracleTaskReceipt(
                     task_sha256=canonical_sha256(task.model_dump(mode="json")),
                     runtime_sha256=row_runtime_hash(row),
@@ -538,17 +548,6 @@ def filter_cohort(
                     source_environment_incompatibility=incompatibility,
                     infrastructure_retries=history,
                 )
-                if not oracle and not entry.passed and reason is not OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED:
-                    reason = (
-                        OracleExclusionReason.INFRASTRUCTURE
-                        if final.failure_signal is FailureSignal.INFRASTRUCTURE
-                        else (
-                            OracleExclusionReason.EXECUTABILITY_PROOF_MISSING
-                            if control is None
-                            else OracleExclusionReason.EXECUTABILITY_RUN_FAILED
-                        )
-                    )
-                    entry = entry.model_copy(update={"exclusion_reason": reason})
                 entries[task.id] = entry
                 if entry.passed:
                     kept.append(row)
