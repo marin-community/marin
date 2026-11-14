@@ -220,6 +220,7 @@ async function render(data, sourceId) {
 
 }
 const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
+window.addEventListener('hashchange', () => location.reload());
 if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';
 else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json'), json('measurements/oracle-inventory.json')])
   .then(([data, progress, inventory]) => render({...data, content_progress: boundProgress(data.declaration, progress), oracle_inventory: boundOracleInventory(data.declaration, inventory)}, sourceId)).catch(error => {

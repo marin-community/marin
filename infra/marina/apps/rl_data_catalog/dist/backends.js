@@ -44,6 +44,7 @@ async function render(sourceId) {
   }
 }
 const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
+window.addEventListener('hashchange', () => location.reload());
 if (!sourceId) { $('title').textContent = 'Backend evidence'; $('message').textContent = 'Open Backends from a source in the Atlas.'; }
 else render(sourceId).catch(error => {
   $('title').textContent = 'Backend evidence'; $('message').textContent = error.message; $('message').classList.add('error');
