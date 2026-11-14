@@ -96,10 +96,14 @@ else
   run_check vllm "$python" -c "import quack.activation, torch, vllm; import vllm._C_stable_libtorch, vllm.cumem_allocator; from skyrl_train.models.grug_moe import GRUG_MOE_ARCHITECTURE; from vllm.model_executor.models import ModelRegistry; assert GRUG_MOE_ARCHITECTURE in ModelRegistry.get_supported_archs(); print('[rl-iris] frozen runtime ready:', torch.__version__, vllm.__version__)"
 fi
 
+check_status=0
 for index in "${!check_pids[@]}"; do
   if ! wait "${check_pids[$index]}"; then
     cat "${check_logs[$index]}" >&2
-    exit 1
+    check_status=1
   fi
 done
+if ((check_status)); then
+  exit 1
+fi
 cat "${check_logs[@]}"

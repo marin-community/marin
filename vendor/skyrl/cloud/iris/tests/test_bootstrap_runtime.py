@@ -246,26 +246,25 @@ def test_parallel_bootstrap_waits_for_every_check_and_reports_failure(tmp_path):
     site_packages = next((environment / "lib").glob("python*/site-packages"))
     barrier = tmp_path / "imports-ready"
     os.mkfifo(barrier)
-    completed = tmp_path / "megatron-completed"
     transformer_engine = site_packages / "transformer_engine/common/__init__.py"
     transformer_engine.write_text(
         transformer_engine.read_text()
         + f"import select\nwith open({str(barrier)!r}, 'rb', buffering=0) as gate:\n"
         + "    assert select.select([gate], [], [], 8)[0], 'concurrent import never started'\n"
         + "    assert gate.read(1) == b'r'\n"
-        + f"Path({str(completed)!r}).touch()\n"
+        + "raise RuntimeError('megatron import failed')\n"
     )
     _write_module(
         site_packages,
-        "memray.py",
+        "flash_attn.py",
         f"with open({str(barrier)!r}, 'wb', buffering=0) as gate:\n    gate.write(b'r')\n"
-        + "raise RuntimeError('memray import failed')\n",
+        + "raise RuntimeError('flash-attention import failed')\n",
     )
     descriptor = os.open(barrier, os.O_RDWR | os.O_NONBLOCK)
     try:
         result = _run_bootstrap(environment, process_environment, "megatron")
     finally:
         os.close(descriptor)
-    assert completed.is_file(), result.stderr
     assert result.returncode != 0, result.stderr
-    assert "memray import failed" in result.stderr
+    assert "flash-attention import failed" in result.stderr
+    assert "megatron import failed" in result.stderr
