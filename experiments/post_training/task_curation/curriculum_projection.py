@@ -14,7 +14,7 @@ from functools import partial
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from finestore.rl.curation import SourceDeclaration
+from finestore.rl.curation import LexicalUse, SourceDeclaration
 from fray.types import ResourceConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply, run
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +32,7 @@ from zephyr.dataset import Dataset
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.catalog_identity import canonical_declaration
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION, SemanticArtifact
+from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
 from infra.marina.apps.rl_data_catalog.role_projection import (
@@ -40,7 +41,6 @@ from infra.marina.apps.rl_data_catalog.role_projection import (
     manifest_bytes,
     manifest_documents,
 )
-from infra.marina.apps.rl_data_catalog.server.quality import intended_use
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 LOGGER = logging.getLogger(__name__)
@@ -74,6 +74,7 @@ class ProjectionInputs(BaseModel):
     archive: CurriculumManifests
     archive_verification: ManifestReference
     live_inventory: ManifestReference
+    source_uses: ManifestReference
     retirements: ManifestReference
     catalog_git_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     replacements: list[SourceReplacement] = Field(default_factory=list)
@@ -101,6 +102,8 @@ def projection_selection(
     inventory: list[SourceDeclaration],
     retired: frozenset[str],
     rebindings: tuple[TaskRebinding, ...],
+    *,
+    source_uses: list[LexicalInputUse],
 ) -> ProjectionSelection:
     """Require the exact non-retired population and explicit proof for changed task inputs."""
     normalized = [canonical_declaration(row) for row in inventory]
@@ -114,13 +117,24 @@ def projection_selection(
         raise ValueError("Live inventory must equal the archived population minus retired sources")
     if replacements.keys() - current.keys() or len(replacements) != len(rebindings):
         raise ValueError("Rebindings must identify distinct live sources")
+    uses = {row.source_id: row for row in source_uses}
+    if set(uses) != set(current) or len(uses) != len(source_uses):
+        raise ValueError("Registered Use bindings must cover every live source exactly once")
     sources, changes = [], {}
     for identifier, declaration in current.items():
         old = old_inventory[identifier].model_dump(mode="json")
         new = declaration.model_dump(mode="json")
         changed = sorted(key for key in old.keys() | new.keys() if old.get(key) != new.get(key))
         source = old_sources[identifier]
-        if source.basis != "matched" or source.intended_use != intended_use(new):
+        binding = uses[identifier]
+        if declaration.pipeline is None or (
+            binding.dataset_id,
+            binding.dataset_revision,
+            binding.converter_revision,
+        ) != (declaration.dataset_id, declaration.dataset_revision, declaration.pipeline.version):
+            raise ValueError(f"Registered Use belongs to a different converter or dataset pin: {identifier}")
+        expected_use = "train" if binding.use is LexicalUse.TRAIN else "eval"
+        if source.basis != "matched" or source.intended_use != expected_use:
             raise ValueError(f"Projection changes a source's population or intended use: {identifier}")
         if identifier in replacements:
             replacement = replacements[identifier]
@@ -339,7 +353,8 @@ def project_curriculum(
     )
     old_sources = {row.source_id: row for row in archive.sources}
     rebindings = tuple(task_rebinding(old_sources[row.source_id], row) for row in inputs.replacements)
-    selected = projection_selection(archive, inventory, retired, rebindings)
+    source_uses = [LexicalInputUse.model_validate(row) for row in json.loads(manifest_bytes(inputs.source_uses))]
+    selected = projection_selection(archive, inventory, retired, rebindings, source_uses=source_uses)
     files = runtime.context.execute(
         Dataset.from_list(list(enumerate(archive.paths))).map(
             partial(

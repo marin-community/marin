@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import SourceDeclaration, SourceOrigin, source_identifier
+from finestore.rl.curation import LexicalUse, SourceDeclaration, SourceOrigin, source_identifier
 from finestore.schema import arrow_schema
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
@@ -28,6 +28,7 @@ from experiments.post_training.task_curation.curriculum_projection import (
     task_rebinding,
 )
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
+from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from infra.marina.apps.rl_data_catalog.role_projection import CurriculumManifests, ManifestReference
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -63,6 +64,19 @@ def declaration(identifier, revision="1"):
         daytona_execution_failures=0,
         daytona_count_basis="Fixture contains no actor environment.",
     )
+
+
+def use_bindings(declarations):
+    return [
+        LexicalInputUse(
+            source_id=row.id,
+            dataset_id=row.dataset_id,
+            dataset_revision=row.dataset_revision,
+            converter_revision=row.pipeline.version,
+            use=LexicalUse.TRAIN,
+        )
+        for row in declarations
+    ]
 
 
 def reference(path):
@@ -115,6 +129,7 @@ def public_source(root, declaration, *, public="same-public-instruction", task_h
 @pytest.fixture
 def archived(tmp_path):
     declarations = [declaration(identifier) for identifier in ("Marin:kept", "Marin:rebound", "Marin:retired")]
+    declarations[0] = declarations[0].model_copy(update={"is_benchmark": True})
     prepared = [public_source(tmp_path / f"source-{index}", row) for index, row in enumerate(declarations)]
     rows = []
     for _, public in prepared:
@@ -271,6 +286,7 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
         public_inputs=reference(tmp_path / "repaired/public-inputs.json"),
     )
     current = [declarations[0].model_copy(update={"notes": "New content review"}), changed]
+    (tmp_path / "uses.json").write_text(json.dumps([row.model_dump(mode="json") for row in use_bindings(current)]))
     (tmp_path / "live.json").write_text(json.dumps([row.model_dump(mode="json") for row in current]))
     (tmp_path / "retirements.json").write_text(
         json.dumps({"entries": [{"id": declarations[2].id, "disposition": "retired_admission_check"}]})
@@ -291,6 +307,7 @@ def test_projection_rebinds_only_provenance_and_rebuilds_selected_samples(tmp_pa
         archive=manifests,
         archive_verification=reference(tmp_path / "verification.json"),
         live_inventory=reference(tmp_path / "live.json"),
+        source_uses=reference(tmp_path / "uses.json"),
         retirements=reference(tmp_path / "retirements.json"),
         catalog_git_revision="a" * 40,
         replacements=[replacement],
@@ -328,7 +345,13 @@ def test_changed_pin_requires_rebinding_and_changed_public_content_rejects_reuse
     archive, declarations, _, _ = archived
     changed = declaration("Marin:rebound", "2")
     with pytest.raises(ValueError, match="without a verified public-input rebind"):
-        projection_selection(archive, [declarations[0], changed], frozenset({declarations[2].id}), ())
+        projection_selection(
+            archive,
+            [declarations[0], changed],
+            frozenset({declarations[2].id}),
+            (),
+            source_uses=use_bindings([declarations[0], changed]),
+        )
     public_source(tmp_path / "changed-public", changed, public="changed instructions", task_hash="new-task")
     replacement = SourceReplacement(
         source_id=changed.id,
@@ -343,4 +366,18 @@ def test_projection_cannot_silently_drop_a_live_source_or_restore_a_retired_sour
     archive, declarations, _, _ = archived
     for inventory in ([declarations[0]], declarations):
         with pytest.raises(ValueError, match="minus retired sources"):
-            projection_selection(archive, inventory, frozenset({declarations[2].id}), ())
+            projection_selection(
+                archive, inventory, frozenset({declarations[2].id}), (), source_uses=use_bindings(inventory)
+            )
+
+
+@pytest.mark.parametrize("changed", ["pin", "use"])
+def test_registered_use_must_match_the_current_pin_and_archived_role(archived, changed):
+    archive, declarations, _, _ = archived
+    inventory = declarations[:2]
+    bindings = use_bindings(inventory)
+    bindings[0] = bindings[0].model_copy(
+        update={"dataset_revision": "different"} if changed == "pin" else {"use": LexicalUse.EVAL}
+    )
+    with pytest.raises(ValueError, match=r"different converter or dataset pin|population or intended use"):
+        projection_selection(archive, inventory, frozenset({declarations[2].id}), (), source_uses=bindings)

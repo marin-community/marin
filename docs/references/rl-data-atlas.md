@@ -671,9 +671,12 @@ that selection instead of relabelling the archived manifests or changing their p
 `experiments.post_training.task_curation.curriculum_projection` produces this
 separate pair from existing scored assignments. Its immutable inputs manifest
 binds the archived release, coverage and verification receipt, the exact current
-declarations and retirement ledger, and any replacement public-input manifests.
+declarations, registered converter Use bindings and retirement ledger, and any
+replacement public-input manifests.
 It requires the live source set to equal the archived set minus retired sources.
-QC metadata updates are recorded separately from task-producing inputs. Changed
+Registered converter Use is authoritative; a benchmark marker does not override
+an explicit TRAIN Use. QC metadata updates are recorded separately from
+task-producing inputs. Changed
 pins require a complete task-ID and public-input comparison; only an exact match
 permits reusing scores while rebinding TaskSpec hashes and source keys.
 
