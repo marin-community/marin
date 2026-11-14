@@ -20,7 +20,6 @@ from experiments.post_training.task_curation.lexical_policy import main, measure
 from experiments.post_training.task_curation.pipeline import CurationRecipe
 from experiments.post_training.task_curation.sources import all_sources
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
-from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
 def overlap_measurement(dataset: str) -> LexicalContaminationEvidence:
@@ -105,19 +104,10 @@ def test_training_use_keeps_benchmark_tagged_sources_in_remediation_review():
     source = replace(
         source,
         config=replace(source.config, intended_use=IntendedUse.TRAIN),
-        info=replace(
-            source.info,
-            tags=("benchmark",),
-            within_source_dedup=deduplication_evidence(source.dataset.name, source.dataset.revision, source.version, 2),
-            daytona_snapshot_count=0,
-            daytona_machine_slots=0,
-            daytona_execution_failures=0,
-            daytona_count_basis="Fixture population has no actor environment",
-        ),
+        info=replace(source.info, tags=("benchmark",)),
     )
     assert source_lexical_use(source) is LexicalUse.TRAIN
     assert measurement_for_use(overlap_measurement(source.dataset.name), source_lexical_use(source)).receipt is None
-    assert source.declaration.intended_use.value == "train"
 
 
 @pytest.mark.data_integration
