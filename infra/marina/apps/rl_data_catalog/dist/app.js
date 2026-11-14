@@ -237,15 +237,18 @@ function details(row) {
   $('detail-links').replaceChildren(...links); $('details').showModal();
 }
 function metrics(displayed) {
-  const total = collapsed(state.sources).map(entry => entry.row);
   const samples = rows => {
-    const measured = rows.filter(row => row.filtration.admitted_count != null);
-    const count = number.format(measured.reduce((sum, row) => sum + row.filtration.admitted_count, 0));
-    return measured.length === rows.length ? count : measured.length ? `${count} + Pending` : 'Pending';
+    const admitted = rows.reduce((sum, row) => sum + (row.filtration.admitted_count ?? 0), 0);
+    const pending = rows.filter(row => row.filtration.admitted_count == null).length;
+    const excluded = rows.filter(row => row.filtration.state === 'excluded').length;
+    return `${number.format(admitted)} admitted · ${number.format(pending)} pending filtration · ${number.format(excluded)} excluded`;
   };
-  $('metric-sources').textContent = `${number.format(total.length)} / ${number.format(displayed.length)}`;
-  $('metric-examples').textContent = `${samples(total)} / ${samples(displayed)}`;
-  $('metric-quality').textContent = ['QUICK', 'SAMPLE', 'FULL'].map(level => number.format(displayed.filter(row => row.quality === level).length)).join(' / ');
+  const qualityCounts = rows => ['QUICK', 'SAMPLE', 'FULL'].map(level => number.format(rows.filter(row => row.quality === level).length)).join(' / ');
+  $('metric-sources').textContent = `${number.format(state.sources.length)} / ${number.format(displayed.length)}`;
+  $('metric-examples').textContent = samples(state.sources);
+  $('metric-examples-shown').textContent = `Shown ${samples(displayed)}`;
+  $('metric-quality').textContent = qualityCounts(state.sources);
+  $('metric-quality-shown').textContent = `Shown ${qualityCounts(displayed)}`;
   $('metric-date').textContent = day(state.syncedAt);
 }
 async function load() {

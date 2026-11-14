@@ -485,3 +485,40 @@ def test_curriculum_parents_equal_displayed_children_and_remainder(journey: Jour
     expect(page.locator(".domain-card")).to_have_count(1)
     expect(page.locator(".map-topics > .map-remainder .map-area-count")).to_have_text("4")
     assert_partition()
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journey, theme: str, width: int) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    sources = page.evaluate("async () => (await (await fetch('api/sources')).json()).sources")
+    quality = [sum(source["quality"] == level for source in sources) for level in ("QUICK", "SAMPLE", "FULL")]
+    assert quality[0] > 0
+    totals = " / ".join(str(count) for count in quality)
+    expect(page.locator("#metric-examples")).to_have_text("0 admitted · 24 pending filtration · 1 excluded")
+    expect(page.locator("#metric-quality")).to_have_text(totals)
+    expect(page.locator("#metric-quality-shown")).to_contain_text("Shown 0 /")
+    page.locator("#show-all").check()
+    expect(page.locator("#metric-examples-shown")).to_have_text("Shown 0 admitted · 24 pending filtration · 1 excluded")
+    expect(page.locator("#metric-quality-shown")).to_have_text(f"Shown {totals}")
+    page.locator("#search").fill("filtered-zero")
+    expect(page.locator("#rows tr")).to_have_count(1)
+    expect(page.locator("#metric-sources")).to_have_text("25 / 1")
+    expect(page.locator("#metric-examples")).to_have_text("0 admitted · 24 pending filtration · 1 excluded")
+    expect(page.locator("#metric-examples-shown")).to_have_text("Shown 0 admitted · 0 pending filtration · 1 excluded")
+    expect(page.locator("#metric-quality")).to_have_text(totals)
+    assert page.locator(".metrics > div").evaluate_all(
+        """cards => cards.every((card, i) => {
+            const box = card.getBoundingClientRect(), next = cards[i + 1]?.getBoundingClientRect();
+            if (next && Math.abs(box.top - next.top) < 1 && box.right > next.left + 1) return false;
+            return [...card.children].every(child => {
+                const bounds = child.getBoundingClientRect();
+                return bounds.left >= box.left && bounds.right <= box.right && child.scrollWidth <= child.clientWidth;
+            });
+        })"""
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

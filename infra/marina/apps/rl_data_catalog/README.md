@@ -51,3 +51,8 @@ pre-filtration counts and receipt hashes in Evidence.
 Curriculum parents include an Other/unlisted row for subject-only matches and
 children hidden by search. Parent counts equal displayed children plus that
 remainder; the bounded task example sample does not reduce population counts.
+
+Header totals cover all live sources. Admitted examples show the final known
+admitted sum and source counts still pending filtration or excluded. Quality
+shows catalog-wide QUICK/SAMPLE/FULL totals; both cards label displayed counts
+separately as Shown after filters and duplicate folding.

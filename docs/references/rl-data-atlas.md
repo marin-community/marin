@@ -114,8 +114,10 @@ Expand a group to inspect matching members, or enable **Show QUICK-quality and
 BAD-result sources**. Search and filters apply before grouping; a hidden canonical
 member cannot reappear through a group. Search names, datasets or tags, select a
 column heading to sort, and export filtered rows as CSV. Filters and sorting stay
-in the URL. The four totals show canonical groups, unique examples, displayed
-quality counts and catalog freshness. Source evidence pages include exact release
+in the URL. The four totals show all live sources, admitted examples with pending-filtration
+and excluded source counts, catalog-wide quality counts and catalog freshness.
+Examples and Quality label displayed counts separately as **Shown**, after filters
+and duplicate folding; expanding a group changes Shown counts, not catalog totals. Source evidence pages include exact release
 pins, deduplication ledgers, lexical measurements, QC and archived assessment packets.
 
 **Use** comes from the registered converter's explicit TRAIN or EVAL policy. A
