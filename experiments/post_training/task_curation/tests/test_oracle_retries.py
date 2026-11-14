@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ExecutionRequirements, TaskSpec
 from taskcompendium.pipeline.oracle_filter import BackendFixIdentity, OracleExclusionReason
 from taskcompendium.runtime.resources import inline_resource
 
@@ -227,6 +227,28 @@ def test_changed_retry_inputs_do_not_dispatch_any_new_provider_attempt(tmp_path,
     with pytest.raises(ValueError, match=r"changed|differ"):
         retry_cohort(frozen / "plan.json", tmp_path / "retry-run", 1)
     assert len(case.calls) == 3
+
+
+def test_retry_capacity_rejection_preserves_parent_without_dispatching_trial(tmp_path, retry_case):
+    case = retry_case
+    parent_bytes = case.parent_map.read_bytes()
+    native_bytes = (case.native / "task.toml").read_bytes()
+    parent_attempt_count = len(case.calls)
+    frozen = tmp_path / "retry-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen)
+
+    def reject_capacity(package: Path, shape: ExecutionRequirements) -> None:
+        assert native_requirements(package) == shape
+        raise RuntimeError("snapshot capacity unavailable")
+
+    destination = tmp_path / "retry-run"
+    with pytest.raises(RuntimeError, match="snapshot capacity unavailable"):
+        retry_cohort(frozen / "plan.json", destination, 1, prepare_attempt=reject_capacity)
+    assert case.parent_map.read_bytes() == parent_bytes
+    assert (case.native / "task.toml").read_bytes() == native_bytes
+    assert len(case.calls) == parent_attempt_count
+    assert not list(destination.rglob("result.json"))
+    assert not (destination / "task-map.json").exists()
 
 
 def test_retry_requires_approval_for_the_actual_parent_result(tmp_path, retry_case):

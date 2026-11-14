@@ -1732,6 +1732,15 @@ write the same three map fields explicitly for each oracle TaskSpec:
 task_name, task_checksum and task_sha256. Lowered envelopes also include
 runtime_sha256, binding the deployment shape and settings.
 
+Programmatic callers of `calibrate_cohort` and `retry_cohort` may supply
+`prepare_attempt(package: Path, shape: ExecutionRequirements) -> None` to check
+backend capacity for each staged attempt before Trial allocation. The hook sees
+the final native resource limits, including increases after resource failures.
+The hook must preserve task and package inputs. Callers must check shared
+snapshot counts atomically when using concurrent trials.
+A preparation exception propagates without creating an oracle verdict; retain
+the affected task as pending infrastructure work and retry in a fresh run.
+
 Converted TaskSpecs without native Harbor packages use the TaskSpec trial workload.
 Prepare a frozen, retained cohort with:
 

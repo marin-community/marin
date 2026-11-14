@@ -416,6 +416,7 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         config = json.loads(Path(args[-1]).read_text())
         package = Path(config["task"]["path"])
         shape = native_requirements(package)
+        assert json.loads((package.parent / "prepared.json").read_text()) == shape.model_dump()
         shapes.append(shape)
         if task_spec_package:
             assert TaskSpec.model_validate_json((package / "task-spec.json").read_text()) == task
@@ -452,8 +453,26 @@ def test_population_calibration_doubles_missing_limits_but_preserves_swe_declara
         return subprocess.CompletedProcess(args, 0)
 
     monkeypatch.setattr(subprocess, "run", execute)
+
+    def prepare_attempt(package: Path, shape: ExecutionRequirements) -> None:
+        assert native_requirements(package) == shape
+        (package.parent / "prepared.json").write_text(shape.model_dump_json())
+
+    if task_spec_package:
+
+        def reject_capacity(package: Path, shape: ExecutionRequirements) -> None:
+            assert native_requirements(package) == shape
+            raise RuntimeError("snapshot capacity unavailable")
+
+        blocked = tmp_path / "blocked"
+        with pytest.raises(RuntimeError, match="snapshot capacity unavailable"):
+            calibrate_cohort(cohort, mapping, blocked, "local", {}, 1, prepare_attempt=reject_capacity)
+        assert not list(blocked.rglob("result.json"))
+        assert not (blocked / "task-map.json").exists()
+        assert shapes == []
+
     run = tmp_path / "calibrated"
-    calibrate_cohort(cohort, mapping, run, "local", {}, 1)
+    calibrate_cohort(cohort, mapping, run, "local", {}, 1, prepare_attempt=prepare_attempt)
     output = tmp_path / "filtered/tasks.parquet"
     receipt = filter_cohort(cohort, run / "task-map.json", run, output)
     entry = receipt.tasks[task.id]
