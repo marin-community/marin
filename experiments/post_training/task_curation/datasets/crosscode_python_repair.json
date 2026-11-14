@@ -1,0 +1,84 @@
+{
+  "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
+  "repo": "open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2",
+  "revision": "80dff00099e5613961ca360009669a9bf487a43f",
+  "task_count": 500,
+  "actor_receipt": {
+    "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
+    "input": {
+      "dataset_id": "open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2",
+      "dataset_revision": "80dff00099e5613961ca360009669a9bf487a43f",
+      "converter_version": "2026.11.14.crosspy-encoding-repair-v2",
+      "converter_revision": "a761031790559facaeb249e9ff824793b12b18b0",
+      "measured_tasks": 500,
+      "task_specs_sha256": "b72917562d4a97171d64cb0d873b3cac4fdaace8952c1736b70cccf37be3d193",
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.56-crosspy-encoding-candidate/publication/actor-v2/.artifact.json"
+    },
+    "measurement": {
+      "dataset_id": "open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2",
+      "dataset_revision": "80dff00099e5613961ca360009669a9bf487a43f",
+      "daytona_snapshot_count": 1,
+      "daytona_machine_slots": 500,
+      "daytona_execution_failures": 0,
+      "daytona_count_basis": "Complete 500-TaskSpec census from open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2@80dff00099e5613961ca360009669a9bf487a43f; native Harbor task.toml or published runtime allocations; actor only on Daytona, grader roles separate; no provider calls; s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.56-crosspy-encoding-candidate/publication/population",
+      "daytona_unsafe_reasons": [],
+      "daytona_unsafe_details": {},
+      "daytona_unsafe_counts": {},
+      "daytona_roles": {
+        "agent": {
+          "daytona": {
+            "machine_slots": 500,
+            "failures": {}
+          }
+        },
+        "grader": {
+          "daytona": {
+            "machine_slots": 500,
+            "failures": {}
+          }
+        }
+      }
+    },
+    "integrity_contracts": {
+      "groups": [
+        {
+          "id": null,
+          "version": null,
+          "dependency_state": null,
+          "native_family": null,
+          "harness_policy_sha256": null,
+          "present": false,
+          "count": 500
+        }
+      ],
+      "distinct_groups": 1,
+      "absent_contract_tasks": 500,
+      "required_shared_tasks": 0,
+      "shared_missing_contract_tasks": 0,
+      "example": null,
+      "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.56-crosspy-encoding-candidate/publication/actor-v2/integrity-contracts.json",
+      "dataset_id": "open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2",
+      "dataset_revision": "80dff00099e5613961ca360009669a9bf487a43f",
+      "task_specs_sha256": "b72917562d4a97171d64cb0d873b3cac4fdaace8952c1736b70cccf37be3d193"
+    }
+  },
+  "version": "2026.11.14.crosspy-encoding-repair-v2",
+  "within_source_dedup": {
+    "raw_count": 500,
+    "unique_count": 500,
+    "within_source_duplicates": 0,
+    "source_dataset_id": "open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2",
+    "source_revision": "80dff00099e5613961ca360009669a9bf487a43f",
+    "converter_revision": "a761031790559facaeb249e9ff824793b12b18b0",
+    "converter_version": "2026.11.14.crosspy-encoding-repair-v2",
+    "drop_manifest_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.56-crosspy-encoding-candidate/sample-staging-v1/additional-drops.parquet",
+    "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.56-crosspy-encoding-candidate/sample-staging-v1/candidate-retention.json"
+  },
+  "repair_provenance": "https://huggingface.co/datasets/open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2/blob/80dff00099e5613961ca360009669a9bf487a43f/candidate-lineage.json",
+  "task_specs_sha256": "b72917562d4a97171d64cb0d873b3cac4fdaace8952c1736b70cccf37be3d193",
+  "original_release": {
+    "repo": "open-athena/task-trove-laion-exp-rpt-crosscodeeval-python-v2-dc0ebee3-taskcompendium-20261112",
+    "revision": "a953f93bc830704525ff2cce0b296dd262009662",
+    "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-exp-rpt-crosscodeeval-python-v2-dc0ebee3-taskcompendium-20261112/tree/a953f93bc830704525ff2cce0b296dd262009662"
+  }
+}

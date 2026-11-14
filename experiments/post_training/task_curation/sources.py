@@ -9,6 +9,7 @@ from pathlib import Path
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.datasets import (
     campaign_releases,
+    crosscode_python_repair,
     native_releases,
     structure_closure,
     thoughtcrime,
@@ -154,6 +155,7 @@ def all_sources() -> dict[str, RlDataSource]:
         sources[source_id] = bind_oracle_filtered_release(sources[source_id], receipt)
     for source_id, receipt in admitted.items():
         sources[source_id] = bind_oracle_admitted_release(sources[source_id], receipt)
+    sources = {source_id: crosscode_python_repair.bind_source(source) for source_id, source in sources.items()}
     samples, full_content = sample_qc_receipts(), full_content_result_bindings()
     return {
         source_id: bind_selected_source_content(
