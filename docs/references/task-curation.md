@@ -1673,7 +1673,7 @@ quality result covering the whole filtered population. Content evidence for the
 original pin remains archival. Unresolved infrastructure failures in original
 oracle trials or negative controls prevent release qualification.
 
-Every admitted agentic TaskSpec must declare `execution_requirements`: `cpus`,
+Every oracle-bearing agentic TaskSpec admitted through an execution receipt must declare `execution_requirements`: `cpus`,
 `memory_mb`, `storage_mb`, `agent_timeout_sec` and `verifier_timeout_sec`.
 Sizes use MiB and deadlines use seconds. Conversion may leave this field absent;
 SAMPLE and FULL admission of an agentic task require it and a population-complete
@@ -2016,6 +2016,48 @@ diagnostic evidence. Use automatic `executability_proof_missing` only when no
 production mapping or measured outcome exists. Both paths exclude the task. While
 the no-oracle requirement is suspended, a task without an oracle is excluded only
 by a typed static blocker, never by `executability_proof_missing`.
+
+#### Static retention for sources without oracles
+
+Wire version 5 records static retention under an explicit
+`NoOracleExecutabilityPolicy` with
+`executability_proof_required_for_no_oracle=false`. Its `decision` is the
+URI/SHA-256 supplied by the source's approved suspension ruling.
+`NoOracleSourceContext` binds the current source ID, dataset pin, converter identity,
+TaskSpec-population digest, complete cohort SHA-256 and Use. The complete population
+must contain no original oracle; mixed or unknown oracle presence cannot use this
+route. Old receipts and an absent policy retain their existing admission rules.
+
+`StaticRetainedTaskReceipt` records `outcome=static_retained` and
+`executability=unmeasured`. It carries the unchanged TaskSpec/runtime identities,
+cohort and policy hashes, and the actual original Harbor checksum for a native
+package. It contains no Trial, calibrated shape, model run or nop verdict. Typed
+mechanical entries preserve static exclusions, with one primary reason per task.
+The diagnostic ledger retains all overlapping reasons without summing them as
+unique exclusions. Use=EVAL records population and static-retention counts while
+executability remains unmeasured; these tasks cannot enter TRAIN admission.
+
+Create evidence from the frozen source, without running source commands:
+
+```bash
+uv run python -m experiments.post_training.task_curation.static_retention \
+  --cohort ORIGINAL_TASKS.parquet --cohort-evidence COHORT_URI_AND_SHA.json \
+  --source-context CURRENT_SOURCE_CONTEXT.json --output-dir NEW_STATIC_EVIDENCE
+```
+
+The output contains `oracle-filter.json`, unchanged retained rows in
+`tasks.parquet`, `static-exclusions.json` and `static-retention.json`. Supply
+`--recipe-identity` when the source recipe processor consumes the receipt.
+`load_oracle_filter` and `require_oracle_filter` require an independently configured
+`source_context` for static retention. Consumers reconstruct their expected context
+from current source configuration, independently of the receipt, and compare the
+two. Native consumers also supply the checksum read by Harbor from the original
+package, independently of its recorded checksum. The prebuilt consumer derives these
+bindings from its configured pin, current input census and downloaded cohort.
+Source metadata carries optional `no_oracle_executability_policy` and
+`no_oracle_static_retention` fields; absent fields remain omitted from serialized
+catalog records. Static evidence leaves grading-boundary, integrity, content,
+deduplication, lexical and overlap checks in force.
 
 For both SAMPLE and FULL, run the production Harbor Trial with the restored
 ORACLE agent over the complete oracle-bearing population. The filter retains exactly

@@ -19,6 +19,8 @@ from finestore.rl.curation import (
     IndependentQC,
     IntegrityContractSummary,
     LexicalContaminationEvidence,
+    NoOracleExecutabilityPolicy,
+    NoOracleStaticRetentionEvidence,
     OracleFiltrationEvidence,
     OracleValidation,
     OversightEvidence,
@@ -180,6 +182,12 @@ class SourceInfo:
     actor_census_input: ActorCensusInput | None = None
     converted_examples: ConvertedExamples | None = None
     oracle_filtration: Annotated[OracleFiltrationEvidence | None, Field(exclude_if=lambda value: value is None)] = None
+    no_oracle_executability_policy: Annotated[
+        NoOracleExecutabilityPolicy | None, Field(exclude_if=lambda value: value is None)
+    ] = None
+    no_oracle_static_retention: Annotated[
+        NoOracleStaticRetentionEvidence | None, Field(exclude_if=lambda value: value is None)
+    ] = None
     within_source_dedup: WithinSourceDedupEvidence | None = None
     lexical_contamination: LexicalContaminationEvidence | None = None
     daytona_machine_slots: int | None = None
@@ -445,6 +453,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
             actor_census_input=info.actor_census_input,
             converted_examples=info.converted_examples,
             oracle_filtration=info.oracle_filtration,
+            no_oracle_executability_policy=info.no_oracle_executability_policy,
+            no_oracle_static_retention=info.no_oracle_static_retention,
             lexical_contamination=info.lexical_contamination,
             daytona_machine_slots=info.daytona_machine_slots,
             daytona_roles=info.daytona_roles,

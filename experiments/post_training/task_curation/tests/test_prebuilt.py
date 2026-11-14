@@ -11,7 +11,15 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.curation import DaytonaSafety, DaytonaUnsafeReason, OversightEvidence, OversightLevel
+from finestore.rl.curation import (
+    ContentEvidenceReference,
+    DaytonaSafety,
+    DaytonaUnsafeReason,
+    NoOracleExecutabilityPolicy,
+    NoOracleStaticRetentionEvidence,
+    OversightEvidence,
+    OversightLevel,
+)
 from marin.execution.lazy import StepContext, run
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import verifyit_package
@@ -27,6 +35,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.oracle_filter import OracleExclusionReason
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation import prebuilt
@@ -35,6 +44,7 @@ from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.driver import _write_corpus
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from experiments.post_training.task_curation.static_retention import collect_static_retention
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -43,6 +53,115 @@ from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
 from .prebuilt_fixtures import prebuilt_task
 
 IMAGE = "ubuntu:24.04@sha256:" + "a" * 64
+
+
+@pytest.mark.parametrize("foreign_converter", [False, True])
+def test_static_prebuilt_consumer_preserves_tasks_and_rejects_a_foreign_source_context(
+    tmp_path, monkeypatch, foreign_converter
+):
+    task = TaskSpec.model_validate(json.loads(prebuilt_task("static")["lowered_task_spec"])["task"])
+    task = task.model_copy(update={"execution_requirements": None})
+    serialized = task.model_dump_json()
+    cohort = tmp_path / "published.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "task_spec": serialized,
+                    "task_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+                    "runtime": None,
+                }
+            ]
+        ),
+        cohort,
+    )
+    source = with_admission_census(
+        RlDataSource(
+            config=_cohort(1),
+            pipeline=prebuilt.import_taskcompendium_prebuilt,
+            info=SourceInfo(
+                id="Marin:static",
+                origin=SourceOrigin.MARIN,
+                upstream_dataset="static",
+                upstream_name="static",
+                build_path="test",
+                task_format=TaskFormat.TASKCOMPENDIUM,
+                daytona_snapshot_count=0,
+                daytona_machine_slots=0,
+                daytona_execution_failures=0,
+                daytona_count_basis="Synthetic fixture has no provider executions.",
+                within_source_dedup=deduplication_evidence("open-athena/repo", "a" * 40, "2026.11.12.1"),
+                lexical_contamination=decontamination_evidence("open-athena/repo", "a" * 40, 1),
+                oversight=OversightEvidence(level=OversightLevel.FULL, verification="Fixture grading contract checked."),
+            ),
+        )
+    )
+    policy = NoOracleExecutabilityPolicy(
+        version=1,
+        executability_proof_required_for_no_oracle=False,
+        decision=ContentEvidenceReference(uri="s3://fixtures/no-oracle-ruling.md", sha256="c" * 64),
+    )
+    digest = hashlib.sha256(cohort.read_bytes()).hexdigest()
+    cohort_evidence = ContentEvidenceReference(uri=str(cohort), sha256=digest)
+    context = NoOracleSourceContext(
+        source_id=source.info.id,
+        source_release=source.current_release,
+        input_cohort_sha256=digest,
+        current_input=source.info.actor_census_input,
+        intended_use=source.intended_use,
+        policy=policy,
+    )
+    output = tmp_path / "static-receipt"
+    collect_static_retention(cohort, context, cohort_evidence, output)
+    filter_path = output / "oracle-filter.json"
+    static = NoOracleStaticRetentionEvidence(
+        source_id=source.info.id,
+        source_release=source.current_release,
+        current_input=context.current_input,
+        intended_use=source.intended_use,
+        retained_cohort=cohort_evidence,
+        retained_count=1,
+        static_retained_count=1,
+        exclusion_counts={},
+        policy_sha256=policy.sha256,
+        oracle_filter=ContentEvidenceReference(
+            uri=str(filter_path), sha256=hashlib.sha256(filter_path.read_bytes()).hexdigest()
+        ),
+    )
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            no_oracle_executability_policy=policy,
+            no_oracle_static_retention=static,
+        ),
+    )
+    assert source.declaration.no_oracle_static_retention == static
+    if foreign_converter:
+        source = replace(
+            source,
+            info=replace(
+                source.info,
+                actor_census_input=context.current_input.model_copy(update={"converter_revision": "foreign-converter"}),
+            ),
+        )
+    monkeypatch.setattr(
+        prebuilt,
+        "hf_hub_download",
+        lambda **kwargs: str(cohort if kwargs["filename"] == prebuilt.TASKS_FILENAME else filter_path),
+    )
+    monkeypatch.setattr("rigging.filesystem.cluster_config.region_from_metadata", lambda: None)
+    step = prebuilt.import_taskcompendium_prebuilt(source, PipelineOptions(SourceProcessingMode.FULL, CampaignRuntime()))
+    destination = tmp_path / "admitted"
+    invocation = step.build_config(StepContext.for_run(str(destination), str(tmp_path)))
+    if foreign_converter:
+        with pytest.raises(ValueError, match="independently bound current source context"):
+            step.run(invocation)
+        return
+    assert step.run(invocation).status == "completed"
+    assert pq.read_table(destination / "normalize/part-00000.parquet")["task_json"].to_pylist() == [serialized]
+    manifest = json.loads((destination / "manifest.json").read_text())
+    assert manifest["oracle_filter"]["tasks"][task.id]["executability"] == "unmeasured"
 
 
 def _write(tmp_path, rows: list[dict]):

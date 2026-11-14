@@ -118,6 +118,7 @@ from taskcompendium.pipeline.stages import (
     prepare_source,
     skip_source_review,
 )
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext
 from taskcompendium.pipeline.transforms import admit_converted_row
 
 SOURCE_PIPELINE_REVISION = "20"
@@ -159,6 +160,7 @@ class SourcePipelineConfig:
     machines: GradingMachines | None
     judge_connection: JudgeConnection | None = None
     oracle_filter: OracleFilterReceipt | None = None
+    no_oracle_source_context: NoOracleSourceContext | None = None
     lexical_contamination: LexicalContaminationEvidence | None = None
 
 
@@ -229,7 +231,11 @@ def _raw_dataset(
 
 
 def _admit_conversion(
-    converted: ConvertedRow, *, recipe: SourceRecipe, oracle_filter: OracleFilterReceipt
+    converted: ConvertedRow,
+    *,
+    recipe: SourceRecipe,
+    oracle_filter: OracleFilterReceipt,
+    source_context: NoOracleSourceContext | None = None,
 ) -> dict[str, Any]:
     if isinstance(converted.result, NormalizedTask) and (issue := shared_integrity_issue(converted.result.task)):
         converted = replace(
@@ -241,7 +247,9 @@ def _admit_conversion(
             ),
         )
     result = admit_converted_row(converted, recipe)
-    if isinstance(converted.result, NormalizedTask) and not require_oracle_filter(converted.result.task, oracle_filter):
+    if isinstance(converted.result, NormalizedTask) and not require_oracle_filter(
+        converted.result.task, oracle_filter, source_context=source_context
+    ):
         entry = oracle_filter.tasks[converted.raw.id]
         result["audit"]["decision"] = Decision(
             task_id=converted.raw.id,
@@ -259,12 +267,18 @@ def conversion_stage(rows: Dataset, recipe: SourceRecipe) -> Dataset[ConvertedRo
 
 
 def _preqa_record(
-    converted: ConvertedRow, *, recipe: SourceRecipe, oracle_filter: OracleFilterReceipt
+    converted: ConvertedRow,
+    *,
+    recipe: SourceRecipe,
+    oracle_filter: OracleFilterReceipt,
+    source_context: NoOracleSourceContext | None = None,
 ) -> dict[str, Any]:
     return {
         "locator": converted.raw.source.row,
         "data": converted.original_data,
-        "normalized": _admit_conversion(converted, recipe=recipe, oracle_filter=oracle_filter),
+        "normalized": _admit_conversion(
+            converted, recipe=recipe, oracle_filter=oracle_filter, source_context=source_context
+        ),
     }
 
 
@@ -381,7 +395,11 @@ def row_admission(row: dict[str, Any], verification: SourceVerificationStatus) -
 
 
 def _admit(
-    row: dict[str, Any], *, verification: SourceVerificationStatus, oracle_filter: OracleFilterReceipt | None = None
+    row: dict[str, Any],
+    *,
+    verification: SourceVerificationStatus,
+    oracle_filter: OracleFilterReceipt | None = None,
+    source_context: NoOracleSourceContext | None = None,
 ) -> dict[str, Any]:
     if row["task_json"] is not None:
         task = TaskSpec.model_validate_json(row["task_json"])
@@ -391,7 +409,7 @@ def _admit(
                 "filter_status": Disposition.REJECT.value,
                 "filter_reasons": [*(row["filter_reasons"] or []), issue],
             }
-        elif not require_oracle_filter(task, oracle_filter):
+        elif not require_oracle_filter(task, oracle_filter, source_context=source_context):
             assert oracle_filter is not None
             entry = oracle_filter.tasks[task.id]
             row = {
@@ -495,7 +513,14 @@ def _sample_panel(run: _SourceRun) -> _Panel:
         sample = execute_phase(
             run.context,
             run.population.rows()
-            .map(partial(_preqa_record, recipe=run.recipe, oracle_filter=oracle_filter))
+            .map(
+                partial(
+                    _preqa_record,
+                    recipe=run.recipe,
+                    oracle_filter=oracle_filter,
+                    source_context=run.config.no_oracle_source_context,
+                )
+            )
             .reduce(
                 partial(sample_raw_rows, size=policy.sample_size, seed=policy.seed),
                 partial(merge_raw_samples, size=policy.sample_size, seed=policy.seed),
@@ -559,7 +584,12 @@ def _expand_full(run: _SourceRun, panel: _Panel) -> StoragePath:
             num_output_shards=_population_shard_count(panel.sample.population_count, MAX_PREPARATION_SHARDS),
             context=run.context,
             normalized_rows=run.population.rows().map(
-                partial(_admit_conversion, recipe=run.recipe, oracle_filter=oracle_filter)
+                partial(
+                    _admit_conversion,
+                    recipe=run.recipe,
+                    oracle_filter=oracle_filter,
+                    source_context=run.config.no_oracle_source_context,
+                )
             ),
             telemetry=phase,
         )
@@ -644,10 +674,14 @@ def _write_download_manifest(run: _SourceRun, population_count: int) -> None:
 
 
 def _export_row(
-    row: dict[str, Any], *, verification: SourceVerificationStatus, oracle_filter: OracleFilterReceipt | None = None
+    row: dict[str, Any],
+    *,
+    verification: SourceVerificationStatus,
+    oracle_filter: OracleFilterReceipt | None = None,
+    source_context: NoOracleSourceContext | None = None,
 ) -> dict[str, Any]:
     """Admit one checked audit row and carry its raw identity in place of the raw payload no view publishes."""
-    admitted = _admit(row, verification=verification, oracle_filter=oracle_filter)
+    admitted = _admit(row, verification=verification, oracle_filter=oracle_filter, source_context=source_context)
     raw = json.loads(admitted.pop("raw_json"))
     return {**admitted, **{name: raw[name] for name, _ in IDENTITY_FIELDS[1:]}}
 
@@ -659,10 +693,13 @@ class _CheckedAudit:
     path: str
     verification: SourceVerificationStatus
     oracle_filter: OracleFilterReceipt | None
+    source_context: NoOracleSourceContext | None = None
 
     def export_rows(self) -> Iterator[dict[str, Any]]:
         for row in load_parquet(self.path):
-            yield _export_row(row, verification=self.verification, oracle_filter=self.oracle_filter)
+            yield _export_row(
+                row, verification=self.verification, oracle_filter=self.oracle_filter, source_context=self.source_context
+            )
 
 
 @dataclass(frozen=True)
@@ -734,7 +771,8 @@ def _export_sidecars(
     output = run.output
     audits = sorted(str(path) for path in (checked / AUDIT_INPUT_PATTERN).glob())
     inputs: list[_CheckedAudit | _UnprocessedLocators] = [
-        _CheckedAudit(path, verification, run.config.oracle_filter) for path in audits
+        _CheckedAudit(path, verification, run.config.oracle_filter, run.config.no_oracle_source_context)
+        for path in audits
     ]
     if not expanded and not panel.census:
         assert run.population is not None
@@ -821,6 +859,9 @@ def _write_manifest(
         "source": recipe.name,
         "intended_use": recipe.intended_use.value,
         "oracle_filter": config.oracle_filter.model_dump(mode="json") if config.oracle_filter else None,
+        "no_oracle_source_context": (
+            config.no_oracle_source_context.model_dump(mode="json") if config.no_oracle_source_context else None
+        ),
         "lexical_contamination": (
             config.lexical_contamination.model_dump(mode="json") if config.lexical_contamination else None
         ),

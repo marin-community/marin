@@ -5,18 +5,17 @@
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.adapter import declared_execution_limits, unsupported_harbor_contract, write_harbor_task
+from taskcompendium.harbor.native_package import write_native_task
 from taskcompendium.harbor.runtime import write_source_runtime
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, NoGrader, judge_spec
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
-from taskcompendium.runtime.staging import resource_files
 
 from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
@@ -67,16 +66,7 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
         if reason is None:
             if native:
                 validate_native_package(task)
-                directory.mkdir(parents=True, exist_ok=False)
-                for file in resource_files((*task.resources.verifier, *task.resources.oracle), ""):
-                    target = directory / file.path.removeprefix("/")
-                    if target.exists() and target.read_bytes() != file.data:
-                        raise ValueError(f"Native source roles disagree on resource bytes: {file.path}")
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(file.data)
-                    target.chmod(file.mode)
-                    if file.mtime_ns is not None:
-                        os.utime(target, ns=(file.mtime_ns, file.mtime_ns))
+                write_native_task(task, directory)
             else:
                 shape = ExecutionRequirements.model_validate(
                     {

@@ -3,12 +3,13 @@
 
 """Typed curation catalog records shared by campaign writers and Atlas readers."""
 
+import hashlib
 import json
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, get_args, get_origin
+from typing import Any, Literal, get_args, get_origin
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -160,6 +161,30 @@ class ContentEvidenceReference(CatalogRecord):
 
     uri: str = Field(min_length=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class NoOracleExecutabilityPolicy(CatalogRecord):
+    """Versioned ruling that records static retention without an execution claim."""
+
+    version: Literal[1]
+    executability_proof_required_for_no_oracle: Literal[False]
+    decision: ContentEvidenceReference
+
+    @property
+    def sha256(self) -> str:
+        payload = json.dumps(
+            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        )
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+
+class NoOracleStaticBlocker(StrEnum):
+    TOOL_PROVIDER_REQUIRED = "tool_provider_required"
+    SHARED_EXECUTOR_REQUIRED = "shared_executor_required"
+    UNPINNED_ENVIRONMENT = "unpinned_environment"
+    ENVIRONMENT_CONTRACT_UNRESOLVED = "environment_contract_unresolved"
+    BACKEND_CONTRACT_UNSUPPORTED = "backend_contract_unsupported"
+    SOURCE_ENV_INCOMPATIBLE_WITH_GRADER = "SOURCE_ENV_INCOMPATIBLE_WITH_GRADER"
 
 
 class OracleFiltrationEvidence(CatalogRecord):
@@ -617,6 +642,34 @@ class ActorCensusInput(CatalogRecord):
     evidence_url: str
 
 
+class NoOracleStaticRetentionEvidence(CatalogRecord):
+    """Complete no-oracle population, with one typed exclusion per blocked task."""
+
+    source_id: str
+    source_release: DatasetRelease
+    current_input: ActorCensusInput
+    intended_use: SourceUse
+    retained_cohort: ContentEvidenceReference
+    retained_count: int = Field(ge=0)
+    static_retained_count: int = Field(ge=0)
+    exclusion_counts: dict[NoOracleStaticBlocker, int]
+    oracle_filter: ContentEvidenceReference
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _static_partition(self):
+        if any(value <= 0 for value in self.exclusion_counts.values()) or (
+            self.retained_count != self.static_retained_count + sum(self.exclusion_counts.values())
+        ):
+            raise ValueError("Static retention must partition unique retained tasks exactly once")
+        if (self.current_input.dataset_id, self.current_input.dataset_revision) != (
+            self.source_release.repo,
+            self.source_release.revision,
+        ):
+            raise ValueError("Static retention source pin differs from its converted input")
+        return self
+
+
 class WithinSourceDedupEvidence(CatalogRecord):
     """Exact converted-population census and its mechanical exclusion ledger."""
 
@@ -678,6 +731,12 @@ class SourceDeclaration(CatalogRecord):
     actor_census_input: ActorCensusInput | None = None
     converted_examples: ConvertedExamples | None = None
     oracle_filtration: OracleFiltrationEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
+    no_oracle_executability_policy: NoOracleExecutabilityPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    no_oracle_static_retention: NoOracleStaticRetentionEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     lexical_contamination: LexicalContaminationEvidence | None = None
     daytona_machine_slots: int | None = None
     daytona_roles: dict[str, dict[str, RoleExecutionEvidence]] | None = None
@@ -707,6 +766,17 @@ class SourceDeclaration(CatalogRecord):
             if filtration.admitted_count == 0 and self.status == "Available":
                 raise ValueError("A source filtered to zero cannot remain admitted")
         census = self.actor_census_input
+        static = self.no_oracle_static_retention
+        if static is not None and (
+            self.no_oracle_executability_policy is None
+            or static.source_id != self.id
+            or static.source_release != self.current_release
+            or static.current_input != census
+            or static.intended_use != self.intended_use
+            or static.retained_count != self.task_count
+            or static.policy_sha256 != self.no_oracle_executability_policy.sha256
+        ):
+            raise ValueError("No-oracle static retention differs from the current source population or Use")
         if census is not None and (
             self.pipeline is None
             or (census.dataset_id, census.dataset_revision, census.converter_version)

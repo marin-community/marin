@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
 
-from finestore.rl.curation import ContentEvidenceReference
+from finestore.rl.curation import ContentEvidenceReference, NoOracleExecutabilityPolicy, NoOracleStaticBlocker, SourceUse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
@@ -27,7 +27,14 @@ from taskcompendium.harbor.negative_control import (
 )
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExecutionRequirements, ScriptGrader, TaskSpec, VerifyitGrader, decode_json_value
+from taskcompendium.models import (
+    ExecutionRequirements,
+    NoGrader,
+    ScriptGrader,
+    TaskSpec,
+    VerifyitGrader,
+    decode_json_value,
+)
 from taskcompendium.pipeline.fingerprints import recipe_code_identity
 from taskcompendium.pipeline.legacy_roles import LegacyRoleQualificationReceipt
 from taskcompendium.pipeline.models import SourceRecipe
@@ -40,6 +47,7 @@ from taskcompendium.pipeline.resource_calibration import (
     next_requirements,
 )
 from taskcompendium.pipeline.sources import source_files_identity
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext, StaticRetainedTaskReceipt
 from taskcompendium.runtime.oracle import oracle_actor_required
 from taskcompendium.runtime.resources import has_oracle_solution
 
@@ -1383,25 +1391,49 @@ class NegativeControlPolicy(BaseModel):
 
 class OracleFilterReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    version: Literal[2, 3, 4] = 4
+    version: Literal[2, 3, 4, 5] = 4
     negative_control_policy: NegativeControlPolicy | None = Field(default=None, exclude_if=lambda value: value is None)
+    no_oracle_executability_policy: NoOracleExecutabilityPolicy | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    no_oracle_source: NoOracleSourceContext | None = Field(default=None, exclude_if=lambda value: value is None)
     recipe_identity: str | None
     input_cohort_sha256: str
     input_rows: int = Field(ge=0)
     conversion_rejections: int = Field(ge=0)
-    tasks: dict[str, OracleTaskReceipt | MechanicalOracleTaskReceipt]
+    tasks: dict[str, OracleTaskReceipt | MechanicalOracleTaskReceipt | StaticRetainedTaskReceipt]
 
     @model_validator(mode="after")
     def validate_population(self):
-        if self.version == 4 and self.negative_control_policy is None:
+        static = self.no_oracle_source
+        if static is not None and (
+            self.version != 5
+            or self.no_oracle_executability_policy != static.policy
+            or static.input_cohort_sha256 != self.input_cohort_sha256
+            or static.current_input.measured_tasks != self.input_rows
+            or any(entry.has_oracle for entry in self.tasks.values())
+            or self.conversion_rejections
+        ):
+            raise ValueError("Static retention requires wire5, explicit policy and the complete no-oracle source")
+        if self.version in {4, 5} and static is None and self.negative_control_policy is None:
             raise ValueError("Oracle filter wire version 4 requires an explicit global negative-control policy")
         if len(self.tasks) + self.conversion_rejections != self.input_rows:
             raise ValueError("Oracle filter receipt does not cover the full input population")
         for task_id, entry in self.tasks.items():
-            if isinstance(entry, MechanicalOracleTaskReceipt):
-                if self.version not in {3, 4}:
-                    raise ValueError("Mechanical outcomes require oracle filter wire version 3 or 4")
+            if isinstance(entry, StaticRetainedTaskReceipt):
+                if static is None or (
+                    entry.input_cohort_sha256 != self.input_cohort_sha256 or entry.policy_sha256 != static.policy.sha256
+                ):
+                    raise ValueError(f"Static retention lacks its explicit source policy or cohort: {task_id}")
                 continue
+            if isinstance(entry, MechanicalOracleTaskReceipt):
+                if self.version not in {3, 4, 5}:
+                    raise ValueError("Mechanical outcomes require oracle filter wire version 3 or 4")
+                if static is not None:
+                    NoOracleStaticBlocker(entry.exclusion_reason.value)
+                continue
+            if static is not None:
+                raise ValueError("Static no-oracle receipts cannot contain fabricated or calibration-only Trials")
             if entry.native_success_policy is not None and (
                 entry.native_success_policy.input_cohort_sha256 != self.input_cohort_sha256
             ):
@@ -1410,7 +1442,7 @@ class OracleFilterReceipt(BaseModel):
                 entry.legacy_role_qualification.input_cohort_sha256 != self.input_cohort_sha256
             ):
                 raise ValueError(f"Legacy role qualification belongs to another frozen cohort: {task_id}")
-            if self.version == 4 and entry.has_oracle and entry.negative_control_applicability is None:
+            if self.version in {4, 5} and entry.has_oracle and entry.negative_control_applicability is None:
                 raise ValueError(f"New oracle admission requires source-bound negative-control applicability: {task_id}")
             if self.version == 2:
                 continue
@@ -1426,8 +1458,15 @@ class OracleFilterReceipt(BaseModel):
                 raise ValueError(f"Oracle admission trial differs from final calibration: {task_id}")
         return self
 
-    def admits(self, task: TaskSpec, runtime: dict | None = None) -> bool:
-        if self.version != 4:
+    def admits(
+        self,
+        task: TaskSpec,
+        runtime: dict | None = None,
+        *,
+        source_context: NoOracleSourceContext | None = None,
+        native_task_checksum: str | None = None,
+    ) -> bool:
+        if self.version not in {4, 5}:
             raise ValueError("New admission requires oracle filter wire version 4; versions 2/3 are archival evidence")
         if task.id not in self.tasks:
             raise ValueError(f"Oracle filter receipt omits task {task.id}")
@@ -1438,6 +1477,20 @@ class OracleFilterReceipt(BaseModel):
             raise ValueError(f"Runtime changed after oracle filtering: {task.id}")
         if entry.has_oracle != has_oracle_solution(task):
             raise ValueError(f"Oracle presence changed after filtering: {task.id}")
+        if isinstance(entry, StaticRetainedTaskReceipt):
+            if source_context is None or source_context != self.no_oracle_source:
+                raise ValueError(f"Static retention requires independently bound current source context: {task.id}")
+            native = isinstance(task.grader, NoGrader) and "harbor" in task.tags
+            if (
+                (native and native_task_checksum is None)
+                or entry.native_task_checksum != native_task_checksum
+                or (not native and entry.native_task_checksum is not None)
+            ):
+                raise ValueError(f"Static retention differs from the original native package: {task.id}")
+            return (
+                source_context.intended_use is SourceUse.TRAIN
+                and assess_grading_environment(task).status is GradingEnvironmentStatus.MATCHED
+            )
         if isinstance(entry, MechanicalOracleTaskReceipt):
             return False
         if is_nonagentic_task(task):
@@ -1472,15 +1525,27 @@ class OracleFilterReceipt(BaseModel):
         if not self.tasks or self.conversion_rejections or any(not entry.passed for entry in self.tasks.values()):
             return None
         entries = [entry for entry in self.tasks.values() if isinstance(entry, OracleTaskReceipt)]
+        if len(entries) != len(self.tasks):
+            return None
         shape = entries[0].calibration.execution_requirements
         return shape if all(entry.calibration.execution_requirements == shape for entry in entries) else None
 
 
-def load_oracle_filter(path: str) -> OracleFilterReceipt:
-    return OracleFilterReceipt.model_validate(decode_json_value(StoragePath(path).read_text()))
+def load_oracle_filter(path: str, *, source_context: NoOracleSourceContext | None = None) -> OracleFilterReceipt:
+    receipt = OracleFilterReceipt.model_validate(decode_json_value(StoragePath(path).read_text()))
+    if receipt.no_oracle_source is not None and source_context != receipt.no_oracle_source:
+        raise ValueError("Static retention load requires independently bound current source context")
+    return receipt
 
 
-def require_oracle_filter(task: TaskSpec, receipt: OracleFilterReceipt | None, runtime: dict | None = None) -> bool:
+def require_oracle_filter(
+    task: TaskSpec,
+    receipt: OracleFilterReceipt | None,
+    runtime: dict | None = None,
+    *,
+    source_context: NoOracleSourceContext | None = None,
+    native_task_checksum: str | None = None,
+) -> bool:
     """Validate task identity before returning its recorded qualification outcome.
 
     The full TaskSpec hash, oracle presence and calibrated execution requirements
@@ -1499,4 +1564,4 @@ def require_oracle_filter(task: TaskSpec, receipt: OracleFilterReceipt | None, r
         if not is_nonagentic_task(task) and task.execution_requirements is None:
             raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         raise ValueError(f"SAMPLE/FULL admission requires a full-population Harbor oracle filter receipt: {task.id}")
-    return receipt.admits(task, runtime)
+    return receipt.admits(task, runtime, source_context=source_context, native_task_checksum=native_task_checksum)

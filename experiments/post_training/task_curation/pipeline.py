@@ -75,6 +75,7 @@ from taskcompendium.pipeline.source_quality import SOURCE_QUALITY_REVISION, Sour
 from taskcompendium.pipeline.source_verification import SOURCE_VERIFICATION_REVISION, SourceVerificationPolicy
 from taskcompendium.pipeline.sources import conversion_shards, source_files_identity, staged_files
 from taskcompendium.pipeline.stages import AuditExecution, ReviewConfig, ReviewMode
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext
 from taskcompendium.runtime.local import LOCK_FILE, LocalGraderMachines
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -391,7 +392,11 @@ def _pipeline_config(
 
 
 def _source_config(
-    settings: RecipeSettings, mode: SourceProcessingMode, controls: Controls | None
+    settings: RecipeSettings,
+    mode: SourceProcessingMode,
+    controls: Controls | None,
+    *,
+    source_context: NoOracleSourceContext | None = None,
 ) -> SourcePipelineConfig:
     review = settings.config.review if settings.config is not None else settings.review
     decontamination = (
@@ -406,8 +411,9 @@ def _source_config(
             settings.config,
             mode=mode,
             lexical_contamination=decontamination,
+            no_oracle_source_context=source_context,
             oracle_filter=(
-                load_oracle_filter(settings.oracle_filter_receipt)
+                load_oracle_filter(settings.oracle_filter_receipt, source_context=source_context)
                 if settings.oracle_filter_receipt
                 else settings.config.oracle_filter
             ),
@@ -431,7 +437,12 @@ def _source_config(
     return replace(
         config,
         lexical_contamination=decontamination,
-        oracle_filter=load_oracle_filter(settings.oracle_filter_receipt) if settings.oracle_filter_receipt else None,
+        no_oracle_source_context=source_context,
+        oracle_filter=(
+            load_oracle_filter(settings.oracle_filter_receipt, source_context=source_context)
+            if settings.oracle_filter_receipt
+            else None
+        ),
     )
 
 
@@ -475,7 +486,28 @@ def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions)
         return _quick_step(recipe, options)
     if options.recipe_settings is None:
         raise ValueError(f"Source processing requires recipe settings: {source.name}")
-    config = _source_config(options.recipe_settings, options.mode, recipe.controls)
+    static = source.info.no_oracle_static_retention
+    source_context = None
+    if static is not None:
+        policy = source.info.no_oracle_executability_policy
+        if (
+            policy is None
+            or static.policy_sha256 != policy.sha256
+            or static.source_id != source.info.id
+            or static.source_release != source.current_release
+            or static.current_input != source.info.actor_census_input
+            or static.intended_use != source.intended_use
+        ):
+            raise ValueError("Static retention source metadata differs from the configured input")
+        source_context = NoOracleSourceContext(
+            source_id=source.info.id,
+            source_release=source.current_release,
+            input_cohort_sha256=static.retained_cohort.sha256,
+            current_input=static.current_input,
+            intended_use=source.intended_use,
+            policy=policy,
+        )
+    config = _source_config(options.recipe_settings, options.mode, recipe.controls, source_context=source_context)
     if config.lexical_contamination is None:
         config = replace(config, lexical_contamination=source.info.lexical_contamination)
     dataset = source.dataset

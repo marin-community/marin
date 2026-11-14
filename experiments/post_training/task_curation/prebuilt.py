@@ -27,7 +27,13 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import LexicalContaminationEvidence
+from finestore.rl.curation import (
+    ActorCensusInput,
+    DatasetRelease,
+    LexicalContaminationEvidence,
+    NoOracleExecutabilityPolicy,
+    SourceUse,
+)
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -47,12 +53,14 @@ from taskcompendium.pipeline.deduplication import DROP_SCHEMA, unique_task_indic
 from taskcompendium.pipeline.models import IntendedUse, SourceStatus
 from taskcompendium.pipeline.oracle_filter import load_oracle_filter, require_oracle_filter
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
+from taskcompendium.pipeline.static_retention import NoOracleSourceContext
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
+from experiments.post_training.task_curation.harbor_inspection import native_task_checksums
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 
 PREBUILT_ADMISSION_VERSION = "2026.11.13.4"
@@ -223,6 +231,9 @@ class PrebuiltImport:
     task_format: TaskFormat
     encoding: PrebuiltEncoding
     lexical_contamination: LexicalContaminationEvidence | None
+    no_oracle_policy: NoOracleExecutabilityPolicy | None = None
+    current_input: ActorCensusInput | None = None
+    source_id: str = ""
 
 
 def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
@@ -358,7 +369,17 @@ def prebuilt_artifact(
             raise ValueError(f"Decontamination receipt does not cover the published cohort: {source.name}")
 
     def build_config(context) -> PrebuiltImport:
-        return PrebuiltImport(context.output_path, config, options.mode, task_format, encoding, evidence)
+        return PrebuiltImport(
+            context.output_path,
+            config,
+            options.mode,
+            task_format,
+            encoding,
+            evidence,
+            source.info.no_oracle_executability_policy,
+            source.info.actor_census_input,
+            source.info.id,
+        )
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
         if not quick:
@@ -374,6 +395,34 @@ def prebuilt_artifact(
         tasks = []
         grading: Counter[str] = Counter()
         oracle_filter = None
+        source_context = None
+        if invocation.no_oracle_policy is not None:
+            if invocation.current_input is None:
+                raise ValueError("No-oracle static admission requires the independent current input census")
+            source_context = NoOracleSourceContext(
+                source_id=invocation.source_id,
+                source_release=DatasetRelease(
+                    repo=invocation.cohort.repo,
+                    revision=invocation.cohort.revision,
+                    url=f"https://huggingface.co/datasets/{invocation.cohort.repo}/tree/{invocation.cohort.revision}",
+                ),
+                current_input=invocation.current_input,
+                intended_use=SourceUse(invocation.cohort.intended_use.value),
+                input_cohort_sha256=file_sha256(StoragePath(str(local))),
+                policy=invocation.no_oracle_policy,
+            )
+        native_checksums = (
+            native_task_checksums(
+                (
+                    TaskSpec.model_validate_json(row["task_spec"])
+                    if invocation.encoding is PrebuiltEncoding.CANONICAL
+                    else TaskSpec.model_validate(json.loads(row["lowered_task_spec"])["task"])
+                )
+                for row in table.to_pylist()
+            )
+            if source_context is not None
+            else {}
+        )
         for row in table.to_pylist():
             if invocation.encoding is PrebuiltEncoding.CANONICAL:
                 serialized = row["task_spec"]
@@ -397,7 +446,7 @@ def prebuilt_artifact(
                     revision=invocation.cohort.revision,
                     filename=ORACLE_FILTER_FILENAME,
                 )
-                oracle_filter = load_oracle_filter(receipt_path)
+                oracle_filter = load_oracle_filter(receipt_path, source_context=source_context)
                 with (
                     Path(receipt_path).open("rb") as source_file,
                     (destination / ORACLE_FILTER_FILENAME).open("wb") as output_file,
@@ -411,6 +460,8 @@ def prebuilt_artifact(
                     if invocation.encoding is PrebuiltEncoding.LOWERED
                     else (json.loads(row["runtime"]) if row.get("runtime") is not None else None)
                 ),
+                source_context=source_context,
+                native_task_checksum=native_checksums.get(task.id),
             ):
                 raise ValueError(
                     "Published cohort includes a failed oracle task or lacks no-oracle executability qualification: "
