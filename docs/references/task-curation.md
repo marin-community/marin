@@ -1503,7 +1503,9 @@ bytes, with the pinned revision and canonical callable identity of its declared
 `Controls.golden`. The command runs inside production
 Harbor Trial. An actor-less task uses a separate machine of its original grader
 environment in the grader workspace; it keeps the original agent budgets and
-deadline and closes before verification. The captured answer becomes the final
+deadline and closes before verification. The delivery adapter creates the declared
+answer file's parent directory before running the original command in its source
+working directory. The captured answer becomes the final
 assistant text with the original conversation preserved, using the canonical
 UTF-8 replacement policy. Trial artifacts retain the untouched `answer.bin`
 bytes, actual source exit and resource usage. This control
