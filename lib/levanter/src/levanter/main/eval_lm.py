@@ -19,8 +19,7 @@ import levanter.config
 import levanter.tracker
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.loader import DataLoader
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.datasets import LmDataConfig, NamedLmDataset
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint, native_evaluation_axis_mapping
 from levanter.models.llama_native_lm import NativeLlamaLmConfig
@@ -58,7 +57,9 @@ def main(config: EvalLmConfig):
             raise ValueError("llama_native evaluation does not yet support quantization")
         if config.log_entropy or config.log_top2_gap:
             raise ValueError("llama_native optional logits analyses are not yet supported")
-        config = replace(config, trainer=replace(config.trainer, use_explicit_mesh_axes=True))
+        config = replace(
+            config, trainer=replace(config.trainer, use_explicit_mesh_axes=config.model.requires_explicit_mesh_axes)
+        )
     levanter.trainer.initialize(config)
     tokenizer = config.data.the_tokenizer
 
@@ -68,7 +69,7 @@ def main(config: EvalLmConfig):
     if config.eval_on_train:
         datasets_dict = config.data.train_sets(Pos, key=jax.random.PRNGKey(0))
         # need tagged eval sets for the evaluator
-        datasets = [(ds, [name]) for name, ds in datasets_dict.items()]
+        datasets = [(NamedLmDataset(ds, Pos), [name]) for name, ds in datasets_dict.items()]
     else:
         datasets = config.data.tagged_eval_sets(Pos)
 
@@ -107,11 +108,7 @@ def main(config: EvalLmConfig):
 
         mp: jmp.Policy = config.trainer.mp
 
-        def eval_loss_fn(model: LmHeadModel, batch: LmExample | GrugLmExample) -> LossFnOutput:
-            if native and isinstance(batch, GrugLmExample):
-                batch = named_lm_example_from_grug(
-                    batch, model.Pos.resize(batch.tokens.shape[-1]), batch_axis=config.trainer.batch_axis_name
-                )
+        def eval_loss_fn(model: LmHeadModel, batch: LmExample) -> LossFnOutput:
             model = inference_mode(model, True)
             model = mp.cast_to_compute(model)
             per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array

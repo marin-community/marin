@@ -37,7 +37,6 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.llama_native_lm import NativeLlamaLmConfig, native_llama_sharding
 from levanter.main.model_init import ModelInitContext, build_model, prepare_model_init_context, load_model_from_source
 from levanter.model_loading import native_evaluation_axis_mapping
-from levanter.data.text.examples import GrugLmExample, named_lm_example_from_grug
 from jax.sharding import PartitionSpec as P
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.models.snowball import SnowballConfig
@@ -222,7 +221,12 @@ def main(config: TrainLmConfig):
             raise ValueError("llama_native HF export is not yet supported by this entrypoint")
         if config.log_entropy or config.eval_harness is not None:
             raise ValueError("llama_native optional entropy/harness callbacks are not yet supported")
-        config = dataclasses.replace(config, trainer=dataclasses.replace(config.trainer, use_explicit_mesh_axes=True))
+        config = dataclasses.replace(
+            config,
+            trainer=dataclasses.replace(
+                config.trainer, use_explicit_mesh_axes=config.model.requires_explicit_mesh_axes
+            ),
+        )
     if isinstance(config.model, SnowballConfig) and config.model.router_dot_fp32:
         if config.trainer.field_dtype_overrides.get("router_bias") != jnp.dtype("float32"):
             raise ValueError("FP32 router dot requires trainer.field_dtype_overrides to map router_bias to float32")
@@ -299,11 +303,7 @@ def main(config: TrainLmConfig):
         explicit_layout = ExplicitTrainingLayout(config.trainer.device_mesh, P(sharding.batch, None))
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: LmHeadModel, example: LmExample | GrugLmExample, *, key=None):
-        if native and isinstance(example, GrugLmExample):
-            example = named_lm_example_from_grug(
-                example, model.Pos.resize(example.tokens.shape[-1]), batch_axis=config.trainer.batch_axis_name
-            )
+    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
         return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
@@ -364,7 +364,8 @@ def main(config: TrainLmConfig):
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
         # tokens: gpt-2 has 50257, for example. So we round up.
         vocab_size = len(tokenizer)
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
+        vocab_mapping = {"vocab": sharding.model_axis} if native else parameter_axis_mapping
+        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), vocab_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
