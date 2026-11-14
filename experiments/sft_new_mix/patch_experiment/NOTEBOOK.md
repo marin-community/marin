@@ -150,3 +150,52 @@ is at full strength by step 100.
   `12f0ceff06`, the last commit with the Evalchemy route. The six benchmark configs are unchanged.
 - The eval stack's vLLM release rejects per-expert tensors (`Unexpected GrugMoE weight
   'model.layers.2.mlp.experts.72.down_proj.weight'`); `patch_arm.py export` now writes stacked tensors.
+
+## 2026-11-14: all arms trained to step 222 and evaluated
+
+| Arm | Training job | Step 222 committed | Wall time | Failures / preemptions |
+|---|---|---|---|---|
+| `control` | `/dml/sft-patch-11188-control-cw-rno2a-r4` | 05:55 UTC | 8 h 49 min | 0 / 0 |
+| `cap32k-giveup` | `/dml/sft-patch-11188-cap32k-giveup-cw-rno2a-r4` | 14:40 UTC | 8 h 33 min | 0 / 0 |
+| `cap32k` | `/dml/sft-patch-11188-cap32k-cw-rno2a-r4` | 16:26 UTC | 8 h 27 min | 0 / 0 |
+
+Exports: `runs/<arm>/serve-step222/hf` (stacked-expert layout, Reno GPU node, about 15 minutes each).
+Evaluation run groups: `sft11188-<arm>-s222` on Reno, launcher at main `12f0ceff06`, campaign Evalchemy configs.
+
+**Primary readout** (temperature 0.7, 73,664-token cap; scan script from gist `5ce8d65b840d6a7c273977fde8b9a1cf`):
+
+| Step 222 | AIME24 acc | AIME24 >= 100k chars | AIME24 no box | OlympiadBench acc | OlympiadBench >= 100k chars | OlympiadBench no box |
+|---|---|---|---|---|---|---|
+| control | 71.3% | 33.3% | 24.3% | 22.3% | 48.3% | 24.7% |
+| cap32k-giveup | 71.3% | 40.0% | 24.3% | 25.0% | 51.7% | 29.0% |
+| cap32k | 77.0% | 32.0% | 19.7% | 22.4% | 51.8% | 21.7% |
+| pass threshold | | <= 16.7% | lower | | <= 24.2% | lower |
+
+**Guards:**
+
+| Step 222 | MATH-500 | GSM8K 0-shot | HumanEval+ | IFBench strict prompt |
+|---|---|---|---|---|
+| control | 95.0% | 81.2% | 68.3% | 19.7% |
+| cap32k-giveup | 93.8% | 82.5% | 66.5% | 21.7% |
+| cap32k | 95.8% | 84.1% | 62.8% | 19.7% |
+
+**Pairwise test** (|d| > 1.96 x combined standard error, `compare.py`): no long-output or no-answer
+difference is decisive for either arm, and no guard is decisively worse. The only decisive difference is
+cap32k AIME24 accuracy, +5.7 points against a 3.9-point bar; OlympiadBench accuracy for the same arm is
++0.3.
+
+**Conclusion.** Neither patch passes the primary rule. Removing documents whose reasoning exceeds 32,000
+tokens from `math_v3`, competitive coding and OpenThoughts4, with or without give-up endings, does not reduce
+runaway reasoning in a 222-step cold-start SFT; the long-output share stays at the control's level on both
+benchmarks. The patches cost nothing measurable on the guards.
+
+**Limits.** One seed per arm, so run-to-run noise is estimated only from the fresh-versus-published control
+pair (3.7 and 5.0 points on the long-output share). 222 of 4,750 steps; the habit is flat across the
+published repro steps 222 to 2048, but a late effect cannot be excluded. The filter left about 8% of
+training positions in long-reasoning documents from untouched sources (`science_v2/vendor`, `math_v2/high`,
+`math_proofs_v2`, `math_v4`, multilingual math), about a third of the control's exposure. Generation used
+the eval stack's served defaults for temperature on MATH-500 and the guards.
+
+**Next decision.** A null at two-thirds removal does not show that long reasoning is irrelevant. The
+cheapest discriminating follow-up is a cap on every reasoning source, or a decoding-side length penalty,
+before changing the production mix. The cap32k AIME24 gain needs a second seed before it is treated as real.
