@@ -7,8 +7,8 @@ A loaded model is sharded according to ``axis_mapping`` and ready to run under a
 device mesh. There are two cases, one per loader:
 
 - :func:`load_levanter_checkpoint` — a path containing ``step-*`` checkpoint dirs (or a
-  single resolved checkpoint dir): the latest checkpoint is discovered, loaded on CPU to keep
-  peak device memory low, then sharded.
+  single resolved checkpoint dir). Named models load on CPU before sharding; native models
+  restore directly into their explicit mesh placement after checking checkpoint metadata.
 - :func:`load_hf_checkpoint` — a HuggingFace repo id, ``hf://`` URL, or object-store path: the
   config's HF converter loads and converts the weights. A bare repo id is first mirrored once
   to a region-local TTL cache under a distributed lock, so repeated loads of the same model
@@ -17,6 +17,7 @@ device mesh. There are two cases, one per loader:
 
 from __future__ import annotations
 
+from functools import partial
 from typing import cast
 
 import equinox as eqx
@@ -25,17 +26,36 @@ import jax
 import jax.numpy as jnp
 from haliax import Axis
 from haliax.partitioning import ResourceMapping
+from jax.sharding import Mesh
 
-from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint
+from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint, resolve_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.model_cache import resolve_cached_model_path
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.llama_native_lm import NativeLlamaLmConfig, native_llama_sharding
 from levanter.utils.jax_utils import use_cpu_device
 
 # Sub-path under the region-local TTL bucket mirrored HuggingFace snapshots are written to.
 _HF_CACHE_PREFIX = "hf-models"
 # Days a mirrored HuggingFace snapshot is kept before the bucket lifecycle deletes it.
 _DEFAULT_HF_CACHE_TTL_DAYS = 30
+
+
+def native_evaluation_axis_mapping(
+    model_config: NativeLlamaLmConfig,
+    parameter_axis_mapping: ResourceMapping,
+    compute_axis_mapping: ResourceMapping,
+    mesh: Mesh,
+    batch_axis_name: str,
+) -> ResourceMapping:
+    """Validate native placement and normalize batch axes for named evaluation."""
+    sharding = native_llama_sharding(parameter_axis_mapping, compute_axis_mapping, batch_axis_name)
+    model_config.validate_sharding(sharding, mesh)
+    # Named loss slices and rolls need canonical replicated placement on unit axes.
+    return {
+        **compute_axis_mapping,
+        batch_axis_name: tuple(axis for axis in sharding.batch_axes if mesh.shape[axis] > 1),
+    }
 
 
 def load_levanter_checkpoint(
@@ -45,14 +65,20 @@ def load_levanter_checkpoint(
     Vocab: Axis,
     axis_mapping: ResourceMapping,
     key: jax.Array,
+    compute_axis_mapping: ResourceMapping | None = None,
+    batch_axis_name: str = "batch",
 ) -> LmHeadModel:
     """Load and shard an ``LmHeadModel`` from a local Levanter checkpoint.
 
     Must be called under an active device mesh (e.g. ``trainer.use_device_mesh()``). When
     *checkpoint* is a run directory, the latest ``step-*`` checkpoint under it is loaded; when
     it already names a concrete checkpoint dir it is loaded directly (so checkpoints without a
-    ``metadata.json`` discovery marker still load). The weights are loaded on CPU to keep peak
-    device memory low, then sharded.
+    ``metadata.json`` discovery marker still load). Named weights are loaded on CPU before
+    sharding. Native metadata supplies the complete vocabulary and validates the configured
+    architecture. Metadata-free native checkpoints trust the caller's original model
+    configuration and complete Vocab; architecture and activation identity cannot be
+    verified from same-shaped weights alone. Present metadata is validated even when
+    its step or timestamp cannot be used for discovery; unreadable metadata raises.
 
     Args:
         model_config: Model configuration used to build the model template.
@@ -61,7 +87,23 @@ def load_levanter_checkpoint(
         Vocab: Vocabulary axis used to build the model template.
         axis_mapping: Resource mapping the model is sharded with.
         key: PRNG key for building the model template.
+        compute_axis_mapping: Native computation roles, distinct from parameter storage.
+        batch_axis_name: Named batch axis in the computation mapping.
     """
+    if isinstance(model_config, NativeLlamaLmConfig):
+        if compute_axis_mapping is None:
+            raise ValueError("Loading llama_native requires compute_axis_mapping")
+        sharding = native_llama_sharding(axis_mapping, compute_axis_mapping, batch_axis_name)
+        resolved = resolve_checkpoint(checkpoint)
+        source_vocab = model_config.checkpoint_vocab_size(resolved.metadata)
+        if source_vocab is not None and Vocab.size > source_vocab:
+            raise ValueError("Tokenizer vocabulary exceeds the native checkpoint vocabulary")
+        Vocab = Vocab.resize(source_vocab) if source_vocab is not None else Vocab
+        mesh = jax.sharding.get_mesh()
+        model_config.validate_sharding(sharding, mesh, Vocab.size)
+        model = eqx.filter_eval_shape(model_config.build, Vocab, key=key, sharding=sharding)
+        return load_checkpoint(model, resolved.path, subpath="model", mesh=mesh)
+
     resolved = discover_latest_checkpoint(checkpoint) or checkpoint
     with use_cpu_device():
         model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
@@ -75,7 +117,9 @@ def load_hf_checkpoint(
     *,
     axis_mapping: ResourceMapping,
     tokenizer,
-    compute_dtype: jnp.dtype,
+    compute_dtype: jnp.dtype | None,
+    compute_axis_mapping: ResourceMapping | None = None,
+    batch_axis_name: str = "batch",
     cache_ttl_days: int = _DEFAULT_HF_CACHE_TTL_DAYS,
 ) -> LmHeadModel:
     """Load and shard an ``LmHeadModel`` from a HuggingFace checkpoint.
@@ -90,7 +134,10 @@ def load_hf_checkpoint(
             snapshot.
         axis_mapping: Resource mapping the model is sharded with.
         tokenizer: Tokenizer the HuggingFace converter is bound to.
-        compute_dtype: dtype the HuggingFace weights are loaded in.
+        compute_dtype: Named-model load dtype. Native masters are loaded in FP32 and cast
+            to computation precision by the evaluation caller.
+        compute_axis_mapping: Native computation roles, distinct from parameter storage.
+        batch_axis_name: Named batch axis in the computation mapping.
         cache_ttl_days: TTL for the region-local mirror of a HuggingFace repo id. ``<= 0``
             disables mirroring (the repo loads directly from HuggingFace). Ignored for
             ``hf://`` and object-store paths.
@@ -100,6 +147,26 @@ def load_hf_checkpoint(
 
     resolved = resolve_cached_model_path(checkpoint, cache_ttl_days=cache_ttl_days, cache_prefix=_HF_CACHE_PREFIX)
     ref = RepoRef.from_string(resolved)
+    if isinstance(model_config, NativeLlamaLmConfig):
+        if compute_axis_mapping is None:
+            raise ValueError("Loading llama_native requires compute_axis_mapping")
+        sharding = native_llama_sharding(axis_mapping, compute_axis_mapping, batch_axis_name)
+        converter = model_config.hf_checkpoint_converter(str(ref), tokenizer=tokenizer)
+        hf_config = converter.default_hf_config
+        model_config.validate_hf_config(hf_config)
+        if len(tokenizer) > hf_config.vocab_size:
+            raise ValueError("Tokenizer vocabulary exceeds the native HF checkpoint vocabulary")
+        model_config.validate_sharding(sharding, jax.sharding.get_mesh(), hf_config.vocab_size)
+        model = converter.load_pretrained(
+            model_config.model_type,
+            ref=ref,
+            config=model_config,
+            axis_mapping=axis_mapping,
+            dtype=jnp.float32,
+            model_init=partial(model_config.build, key=jax.random.PRNGKey(0), sharding=sharding),
+        )
+        return cast(LmHeadModel, model)
+
     converter: HFCheckpointConverter = model_config.hf_checkpoint_converter().replaced(
         reference_checkpoint=ref, tokenizer=tokenizer
     )

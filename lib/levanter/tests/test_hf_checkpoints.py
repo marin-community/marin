@@ -26,13 +26,13 @@ import transformers
 from huggingface_hub.utils import LocalEntryNotFoundError
 from chex import assert_trees_all_close, assert_trees_all_equal
 from haliax import Axis
-from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict
+from haliax.state_dict import ModuleWithStateDictSerialization, to_torch_compatible_state_dict, with_prefix
 from iris.cluster.platforms.types import find_free_port
 from iris.cluster.types import Entrypoint
 from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV, MultiGpuHook
 from jax.experimental import multihost_utils
 from jax.random import PRNGKey
-from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
 from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
@@ -711,3 +711,50 @@ def test_save_pretrained_writes_transformers4_and_5_rope_keys(tmp_path):
         "high_freq_factor": 4.0,
         "original_max_position_embeddings": 8192,
     }
+
+
+class NonpersistentBufferWrapper(BasicModelWrapper):
+    def to_state_dict(self, prefix=None):
+        state = super().to_state_dict(prefix)
+        state.pop(with_prefix(prefix, "a_bool_buffer"))
+        return state
+
+    def from_state_dict(self, state_dict, prefix=None):
+        # A nonpersistent buffer is reconstructed by the caller's initializer.
+        missing = jax.ShapeDtypeStruct(self.a_bool_buffer.shape, self.a_bool_buffer.dtype)
+        restored = BasicModelWrapper.from_state_dict(replace(self, a_bool_buffer=None), state_dict, prefix)
+        return replace(restored, a_bool_buffer=missing)
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_local_hf_loading_reconstructs_missing_buffers_with_placed_constructor(
+    tmp_path, local_gpt2_tokenizer_path, explicit
+):
+    config = Gpt2Config(num_layers=1, num_heads=1, hidden_dim=16, max_seq_len=8, use_flash_attention=False)
+    converter = hf_checkpoints.HFCheckpointConverter(
+        Gpt2Config, HfConfigClass=HfGpt2Config, tokenizer=local_gpt2_tokenizer_path
+    )
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]), ("data",), axis_types=(AxisType.Explicit if explicit else AxisType.Auto,)
+    )
+
+    def constructor(vocab):
+        base = BasicModelWrapper.init(vocab, config, key=PRNGKey(0))
+        model = NonpersistentBufferWrapper(base.model, base.an_int_param, base.a_bool_buffer, base.a_float_param)
+        if explicit:
+            model = replace(model, a_bool_buffer=jax.sharding.reshard(model.a_bool_buffer, P()))
+        return model
+
+    with use_test_mesh(mesh=mesh):
+        original = constructor(Axis("vocab", 32))
+        converter.save_pretrained(original, str(tmp_path), save_tokenizer=False, save_reference_code=False)
+        restored = converter.load_pretrained(
+            NonpersistentBufferWrapper,
+            ref=RepoRef(str(tmp_path)),
+            config=config,
+            axis_mapping={},
+            model_init=constructor,
+        )
+        assert_trees_all_equal(restored, original)
+        assert restored.a_bool_buffer.sharding.is_equivalent_to(original.a_bool_buffer.sharding, 1)
+        assert restored.Vocab.size == 32

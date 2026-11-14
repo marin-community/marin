@@ -61,3 +61,26 @@ Llama is probably the most modern and well-structured example, so it is a good r
 ---
 
 If you find any friction points or helpful patterns, update this playbook and/or Port-Models.md!
+
+## Explicit-array Llama
+
+`model.type: llama_native` selects the array-backed Llama implementation in
+`levanter.main.train_lm` and `levanter.main.eval_lm`. The default `llama` model
+continues to use named arrays. Native Llama keeps the `LmHeadModel` input and
+loss interface and stores parameters in output-first Hugging Face layouts.
+
+The entrypoints create an explicit mesh and resolve parameter storage from
+`mesh.param_mapping.embed` and tensor parallelism from
+`mesh.compute_mapping.mlp`. Batch sharding follows the configured batch axis.
+Native Llama requires scanned layers, a replicated sequence dimension and
+compatible head, MLP and vocabulary dimensions. Its portable attention path
+uses the current Grug reference implementation; selecting Splash opts into
+that backend. Context parallelism is unsupported.
+
+The initial route supports unquantized training, HF weight initialization,
+full-state Levanter checkpoints and tagged heldout evaluation. Quantization,
+adapters, HF export and optional entropy/harness callbacks are rejected by
+the training entrypoint. Native checkpoints include model architecture and
+vocabulary metadata; restore validates those fields before constructing the
+explicitly sharded template. Metadata-free weight loading relies on the
+caller's complete vocabulary and architecture configuration.
