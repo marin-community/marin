@@ -377,7 +377,10 @@ class ResourceCalibrationReceipt(BaseModel):
                 raise ValueError("A resumed shape cannot change a preserved source limit")
         fixed_actor = self.preserved_requirements
         if self.declared_requirements is not None:
-            fixed_actor = {**fixed_actor, **self.declared_requirements.model_dump()}
+            fixed_actor = {
+                **fixed_actor,
+                **{ResourceDimension(name): value for name, value in self.declared_requirements.model_dump().items()},
+            }
         first = self.attempts[0]
         expected_verifier = None
         if first.verifier_execution_requirements is not None:
