@@ -303,7 +303,8 @@ def test_retry_requires_approval_for_the_actual_parent_result(tmp_path, retry_ca
     assert len(case.calls) == 3
 
 
-def test_retry_holds_shared_host_slot_during_the_actual_harbor_subprocess(tmp_path, monkeypatch, retry_case):
+@pytest.mark.parametrize("cleanup", ["confirmed", "negative", "deadline", "missing", "killed"])
+def test_retry_holds_shared_host_slot_until_production_cleanup_is_confirmed(tmp_path, monkeypatch, retry_case, cleanup):
     case = retry_case
 
     def storage(path):
@@ -325,19 +326,55 @@ def test_retry_holds_shared_host_slot_during_the_actual_harbor_subprocess(tmp_pa
             record = HostSlotRecord.model_validate_json(control.data)
             assert record.status is SlotStatus.HELD
             assert (record.worker_id, record.task_id) == ("worker-1", "task")
-        return runner(args, **kwargs)
+        completed = runner(args, **kwargs)
+        if "harbor" in args:
+            config = json.loads(Path(args[args.index("--config") + 1]).read_text())
+            result_path = Path(config["trials_dir"]) / "oracle/result.json"
+            result = json.loads(result_path.read_text())
+            if cleanup == "missing":
+                result["completion"] = None
+            if cleanup == "negative":
+                result["verifier_result"]["rewards"] = {"reward": 0}
+                verdict = result_path.parent / "verifier/verdict.json"
+                verdict.write_text(json.dumps({"status": "scored", "reward": 0}))
+            if cleanup == "deadline":
+                result["exception_info"] = {
+                    "exception_type": "AgentTimeoutError",
+                    "exception_message": "Original source deadline",
+                    "exception_traceback": "",
+                    "occurred_at": result["finished_at"],
+                }
+                result["verifier_result"] = None
+                (result_path.parent / "verifier/verdict.json").unlink()
+            result_path.write_text(json.dumps(result))
+            if cleanup == "killed":
+                raise subprocess.CalledProcessError(-9, args)
+        return completed
 
     monkeypatch.setattr(subprocess, "run", process_boundary)
     frozen = tmp_path / "retry-plan"
     write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen)
     destination = tmp_path / "retry-run"
-    retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+    if cleanup == "killed":
+        with pytest.raises(subprocess.CalledProcessError):
+            retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+    else:
+        retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+        mapping = json.loads((destination / "task-map.json").read_text())["task"]
+        result = mapping["calibration"]["attempts"][-1]["result"]
+        if cleanup == "negative":
+            assert result["verifier_result"]["rewards"] == {"reward": 0}
+        if cleanup == "deadline":
+            assert result["exception_info"]["exception_type"] == "AgentTimeoutError"
     observations = list(destination.rglob("host-admission.json"))
     assert len(observations) == 1
     assert json.loads(observations[0].read_text())["node_id"] == "node-1"
     next_claim = admission.try_claim("next-task")
-    assert next_claim is not None
-    next_claim.release()
+    if cleanup in {"missing", "killed"}:
+        assert next_claim is None
+    else:
+        assert next_claim is not None
+        next_claim.release()
 
 
 @pytest.mark.parametrize(

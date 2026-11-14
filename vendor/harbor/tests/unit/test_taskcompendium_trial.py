@@ -896,12 +896,14 @@ async def test_unserved_candidate_requests_retain_history_without_scoring(tmp_pa
 @pytest.mark.parametrize("exit_code", [0, 1])
 @pytest.mark.parametrize("packaging", ["lock", "image"])
 @pytest.mark.parametrize(
-    "actor_network,verifier_network",
-    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY), (NetworkPolicy.DENY, NetworkPolicy.ALLOW)],
+    "actor_network,verifier_network,cleanup_failure",
+    [(NetworkPolicy.ALLOW, NetworkPolicy.DENY, False),
+     (NetworkPolicy.DENY, NetworkPolicy.ALLOW, False),
+     (NetworkPolicy.ALLOW, NetworkPolicy.DENY, True)],
 )
 @pytest.mark.asyncio
 async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
-    tmp_path, monkeypatch, exit_code, packaging, actor_network, verifier_network
+    tmp_path, monkeypatch, exit_code, packaging, actor_network, verifier_network, cleanup_failure
 ):
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS,
@@ -951,6 +953,15 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
     bind_factory(monkeypatch, machines, tmp_path / "disks")
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
     monkeypatch.setattr("taskcompendium.runtime.environment.local_runtime", lambda path: LockedRuntime(tmp_path))
+    if cleanup_failure:
+        close = FileMachine.close
+
+        async def provider_close(machine):
+            if machine.root.name == "machine-1":
+                raise RuntimeError("Local disk guardian cleanup failed")
+            await close(machine)
+
+        monkeypatch.setattr(FileMachine, "close", provider_close)
     trial = await Trial.create(
         TrialConfig(
             task=TaskConfig(path=directory),
@@ -961,6 +972,14 @@ async def test_actor_files_and_private_grader_remain_in_their_declared_roles(
         )
     )
     result = await trial.run()
+    if cleanup_failure:
+        assert result.completion is None
+        persisted = json.loads(trial.paths.result_path.read_text())
+        assert persisted["completion"] is None
+        assert machines.machines[0].closed
+        assert not machines.machines[1].closed
+        return
+    assert result.completion is not None
     if exit_code:
         assert result.exception_info.exception_type == "VerifierRuntimeError"
         assert result.verifier_result is None
