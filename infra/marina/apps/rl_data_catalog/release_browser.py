@@ -227,8 +227,8 @@ def check_evidence(page: Page) -> None:
         raise ValueError(f"Evidence overlap at {page.url}: {failures}")
 
 
-def evidence_sweep(page: Page, root: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Exercise source/backend evidence for every observed admission/QA/actor state."""
+def evidence_cases(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Select each observed admission, quality and execution presentation."""
     cases = {}
     for row in sources:
         key = (
@@ -245,11 +245,16 @@ def evidence_sweep(page: Page, root: str, sources: list[dict[str, Any]]) -> list
             tuple(model["status"] for model in row["difficulty"]["models"]),
         )
         cases.setdefault(key, row)
+    return list(cases.values())
+
+
+def evidence_sweep(page: Page, root: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Exercise source/backend evidence for every observed admission/QA/actor state."""
     results = []
     for theme, width in LAYOUTS:
         page.emulate_media(color_scheme=theme)
         page.set_viewport_size({"width": width, "height": 1000})
-        for row in cases.values():
+        for row in evidence_cases(sources):
             for view in ("source", "backends"):
                 page.goto(root + view + ".html#" + urlencode({"source_id": row["id"]}))
                 expect(page.locator("#title")).to_have_text(row["display_name"])

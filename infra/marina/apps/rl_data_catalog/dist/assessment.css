@@ -2,26 +2,24 @@
 .assessment-page { max-width: 1200px; padding-bottom: 60px; }
 .assessment-page h1 { overflow-wrap: anywhere; }
 .assessment-page p { line-height: 1.7; }
-.assessment-page pre { max-height: 65vh; overflow: auto; font: 12px/1.65 ui-monospace, monospace; background: #eef2ee; padding: 16px; border-radius: 5px; }
+.assessment-page pre { max-height: 65vh; overflow: auto; font: max(var(--type-min), 12px)/1.65 ui-monospace, monospace; background: var(--soft); padding: 16px; border-radius: 5px; }
 .assessment-page details { margin: 14px 0; }
 .assessment-page summary { overflow-wrap: anywhere; }
-.assessment-note { font-size: 13px; color: var(--muted); margin: 0 0 22px; }
-.assessment-card { border: 1px solid var(--line); border-radius: 7px; background: #fff; padding: 18px 22px; margin: 16px 0; font-size: 13px; }
-.assessment-card h2 { font-size: 17px; margin-top: 0; }
+.assessment-note { font-size: max(var(--type-min), 13px); color: var(--muted); margin: 0 0 22px; }
+.assessment-card { border: 1px solid var(--line); border-radius: 7px; background: var(--surface); padding: 18px 22px; margin: 16px 0; font-size: max(var(--type-min), 13px); }
+.assessment-card h2 { font-size: max(var(--type-min), 17px); margin-top: 0; }
 .assessment-card > div { padding-top: 12px; }
 #reviews { margin-top: 20px; }
-#reviews p { border-bottom: 1px solid var(--line); padding: 10px 0; margin: 0; font-size: 13px; overflow-wrap: anywhere; }
-#selected { font-size: 13px; }
+#reviews p { border-bottom: 1px solid var(--line); padding: 10px 0; margin: 0; font-size: max(var(--type-min), 14px); overflow-wrap: anywhere; }
+#selected { font-size: max(var(--type-min), 13px); }
 @media (max-width: 650px) { .assessment-card { padding: 16px; } }
 .evidence-labels { max-width: 100%; overflow-x: auto; display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
-.evidence-labels .chip { flex-shrink: 0; font-size: 12px; padding: 6px 9px; }
+.evidence-labels .chip { flex-shrink: 0; font-size: max(var(--type-min), 12px); padding: 6px 9px; }
 .card-intro { color: var(--muted); margin: -4px 0 6px; }
-.pointer code { font-size: 11.5px; overflow-wrap: anywhere; }
+.pointer code { font-size: max(var(--type-min), 12px); overflow-wrap: anywhere; }
 .field dd code { overflow-wrap: anywhere; white-space: pre-wrap; }
 
-@media (prefers-color-scheme: dark) {
-  .assessment-card { background: #1d2922; }
-  .assessment-page pre { background: #24352a; }
-}
 
 .assessment-page { overflow-wrap: anywhere; }
+
+.evidence-labels .chip { white-space: normal; max-width: 100%; overflow-wrap: anywhere; }

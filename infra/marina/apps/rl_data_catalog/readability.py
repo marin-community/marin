@@ -1,0 +1,250 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Rendered WCAG/house readability checks shared by installed journeys and release checks."""
+
+import json
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
+
+from playwright.sync_api import Page, expect
+
+from .release_browser import LAYOUTS as RELEASE_LAYOUTS
+from .release_browser import evidence_cases
+
+AUDIT = Path(__file__).with_suffix(".js").read_text()
+CONTROLS = 'a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex="-1"])'
+LAYOUTS = (*RELEASE_LAYOUTS, ("light", 320), ("dark", 320))
+
+
+def inspect_state(page: Page, *, focus: bool = False) -> dict[str, Any]:
+    """Measure every rendered text node, including content below the fold."""
+    result = page.evaluate(AUDIT, {})
+    if focus:
+        # Tab, rather than programmatic focus, so :focus-visible and browser scrolling are real.
+        page.evaluate(
+            "() => {document.body.tabIndex=-1; document.body.focus(); document.body.removeAttribute('tabindex');}"
+        )
+        visited = set()
+        for _ in range(page.locator(CONTROLS).count() + 2):
+            page.keyboard.press("Tab")
+            identity = page.evaluate(
+                """selector => {const e=document.activeElement;
+                return e === document.body ? null : Array.from(document.querySelectorAll(selector)).indexOf(e);}""",
+                CONTROLS,
+            )
+            if identity is None:
+                continue
+            if identity in visited:
+                break
+            visited.add(identity)
+            focused = page.evaluate(AUDIT, {"mode": "focus"})
+            for key in ("findings", "measurements"):
+                result[key].extend(focused[key])
+    return result
+
+
+def readability_layout(page: Page, root: str, shots: Path, theme: str, width: int) -> list[dict[str, Any]]:
+    """Capture content and interaction states at one viewport and system theme."""
+    views = []
+    page.emulate_media(color_scheme=theme, reduced_motion="reduce")
+    page.set_viewport_size({"width": width, "height": 1000})
+    prefix = f"{theme}-{width}"
+
+    def record(state: str, result: dict[str, Any], *, screenshot: bool = False) -> None:
+        view = {
+            "theme": theme,
+            "width": width,
+            "page": page.url.split("/")[-1].split("#")[0],
+            "state": state,
+            "measurement_count": len(result["measurements"]),
+            "findings": result["findings"],
+        }
+        views.append(view)
+        with (shots / "states.jsonl").open("a") as stream:
+            stream.write(json.dumps(view) + "\n")
+        if screenshot:
+            page.evaluate(
+                '() => {window.scrollTo(0,0); document.querySelectorAll(".table-scroller").forEach(e=>e.scrollLeft=0);}'
+            )
+            page.screenshot(
+                path=str(shots / f"{prefix}-{state}.png"),
+                full_page=page.evaluate("document.documentElement.scrollHeight < 30000"),
+            )
+        print(f'readability {prefix} {state}: {len(view["findings"])} findings', flush=True)
+
+    def capture(state: str, *, focus: bool = False, screenshot: bool = True) -> None:
+        record(state, inspect_state(page, focus=focus), screenshot=screenshot)
+        if not focus:
+            return
+        # Pointer pseudo states are grouped by rendered style and element classes. Each
+        # visible node is still measured in every full content pass above.
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("DOM.enable")
+        cdp.send("CSS.enable")
+        selectors = page.evaluate(
+            """controls => {
+            const seen = new Set(), selectors = [];
+            for (const e of document.querySelectorAll(controls)) {
+                if (!e.checkVisibility() || e.closest('.sr-only,[hidden]') || e.matches(':disabled')) continue;
+                const s=getComputedStyle(e), key=[e.tagName,e.getAttribute('class'),
+                    e.parentElement.getAttribute('class'),s.color,s.backgroundColor,s.borderColor].join('|');
+                if (seen.has(key)) continue;
+                seen.add(key); e.dataset.readabilityTarget=String(selectors.length);
+                selectors.push('[data-readability-target="'+selectors.length+'"]');
+            }
+            return selectors;
+        }""",
+            CONTROLS,
+        )
+        document = cdp.send("DOM.getDocument")["root"]["nodeId"]
+        for selector in selectors:
+            node_id = cdp.send("DOM.querySelector", {"nodeId": document, "selector": selector})["nodeId"]
+            for pseudo in [["hover"], ["hover", "active"]]:
+                cdp.send("CSS.forcePseudoState", {"nodeId": node_id, "forcedPseudoClasses": pseudo})
+                record(state + "-" + "-".join(pseudo) + "-" + str(node_id), page.evaluate(AUDIT, {"target": selector}))
+            cdp.send("CSS.forcePseudoState", {"nodeId": node_id, "forcedPseudoClasses": []})
+        cdp.detach()
+        spacing = page.add_style_tag(
+            content="""
+            * {line-height:1.5 !important; letter-spacing:.12em !important; word-spacing:.16em !important;}
+            p {margin-bottom:2em !important;}
+        """
+        )
+        page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+        record(state + "-text-spacing", page.evaluate(AUDIT, {}), screenshot=True)
+        spacing.evaluate("e=>e.remove()")
+        page.evaluate(
+            """() => Array.from(document.querySelectorAll('body *'))
+            .filter(e=>e.checkVisibility() && (!(e instanceof SVGElement) || e.matches('svg')))
+            .map(e=>[e,parseFloat(getComputedStyle(e).fontSize)]).forEach(([e,size])=>{
+                e.dataset.readabilitySize=e.style.fontSize; e.style.fontSize=(size*2)+'px';})"""
+        )
+        page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+        record(state + "-text-200", page.evaluate(AUDIT, {}), screenshot=True)
+        page.evaluate(
+            """() => document.querySelectorAll('[data-readability-size]').forEach(e=>{
+            e.style.fontSize=e.dataset.readabilitySize; delete e.dataset.readabilitySize;})"""
+        )
+
+    def visit(path: str, ready: str) -> None:
+        page.goto("about:blank")
+        page.goto(root + path)
+        expect(page.locator(ready).first).to_be_visible(timeout=60000)
+        page.evaluate("() => document.fonts.ready")
+
+    visit("", "#rows tr")
+    root = page.url.split("#")[0].split("?")[0]
+    sources = page.evaluate("async() => (await (await fetch('api/sources')).json()).sources")
+    capture("sources", focus=True)
+    # Exercise every filter value; captures include selected/empty states.
+    for field in ["#use", "#quality", "#result", "#grader", "#difficulty-model"]:
+        if not page.locator(field).count():
+            continue
+        values = page.locator(field + " option").evaluate_all("es => es.map(e=>e.value)")
+        for value in values:
+            page.locator(field).select_option(value)
+            capture("filter-" + field[1:] + "-" + (value or "all"), screenshot=False)
+        page.locator(field).select_option(values[0])
+    for toggle in page.locator(".duplicate-toggle").all():
+        toggle.click()
+    capture("expanded-groups")
+    if page.locator(".source-name").count():
+        page.locator(".source-name").first.click()
+        expect(page.locator("dialog[open]")).to_be_visible()
+        capture("source-dialog", focus=True)
+        page.keyboard.press("Escape")
+    for details in page.locator(".data-notes details,details.data-notes").all():
+        details.evaluate("e => e.open = true")
+    capture("source-notes")
+    page.locator("#search").fill("__readability_no_match__")
+    capture("source-empty")
+    source = next((s for s in sources if (s.get("assessment") or {}).get("pipeline_key")), sources[0])
+    for path, ready, label in [
+        ("source.html#" + urlencode({"source_id": source["id"]}), "#message", "evidence"),
+        ("backends.html#" + urlencode({"source_id": source["id"]}), "#message", "backends"),
+        ("assessment.html?" + urlencode({"source": source["id"]}), "#message", "assessment"),
+        ("archive.html", "#message", "archive"),
+        ("guide.html", ".guide-body", "guide"),
+    ]:
+        visit(path, ready)
+        if label in {"assessment", "archive", "evidence", "backends"}:
+            expect(page.locator("#message")).not_to_be_empty(timeout=60000)
+            expect(page.locator("#message")).not_to_contain_text("Loading", timeout=60000)
+        page.locator("details").evaluate_all("es => es.forEach(e => e.open = true)")
+        capture(label, focus=True)
+        if label == "guide":
+            for count in page.locator("button.count:not(:disabled)").all():
+                count.click()
+                capture("guide-leaf-" + str(count.get_attribute("data-leaf")), screenshot=False)
+        if label == "archive" and page.locator("#reviews a").count():
+            page.locator("#reviews a").first.click()
+            expect(page.locator("#selected")).not_to_be_empty()
+            capture("archive-record")
+    for index, candidate in enumerate(evidence_cases(sources)):
+        if candidate["id"] == source["id"]:
+            continue
+        for view in ("source", "backends"):
+            visit(view + ".html#" + urlencode({"source_id": candidate["id"]}), "#title")
+            expect(page.locator("#title")).to_have_text(candidate["display_name"], timeout=60000)
+            page.locator("details").evaluate_all("es => es.forEach(e=>e.open=true)")
+            capture(view + "-state-" + str(index), screenshot=False)
+    visit("curriculum.html", ".domain-card")
+    capture("curriculum", focus=True)
+    for option in page.locator("#confidence option").all():
+        page.locator("#confidence").select_option(option.get_attribute("value") or "")
+        capture("confidence-" + (option.get_attribute("value") or "default"), screenshot=False)
+    page.locator(".data-notes").evaluate("e => e.open = true")
+    page.locator(".data-notes details").evaluate_all("es => es.forEach(e => e.open = true)")
+    capture("curriculum-notes")
+    # Every domain exposes its nested heatmap nodes, source breakdown and pooled examples.
+    domains = page.locator("#domain option").evaluate_all("es=>es.map(e=>e.value).filter(Boolean)")
+    opened_task = False
+    for domain in domains:
+        page.locator("#domain").select_option(domain)
+        expect(page.locator("#task-list")).not_to_have_attribute("aria-busy", "true", timeout=60000)
+        page.locator("#source-breakdown").evaluate("e => e.open = true")
+        capture("area-" + domain, screenshot=not opened_task)
+        if not opened_task and page.locator(".task-row").count():
+            page.locator(".task-row").first.click()
+            expect(page.locator("#task-detail")).to_be_visible()
+            page.locator("#task-detail details").evaluate_all("es=>es.forEach(e=>e.open=true)")
+            capture("public-instructions", focus=True)
+            page.keyboard.press("Escape")
+            opened_task = True
+    page.locator("#search").fill("__readability_no_match__")
+    capture("curriculum-empty")
+    # Real error rendering, with only the network boundary intercepted.
+    page.route(
+        "**/api/curriculum?**",
+        lambda route: route.fulfill(status=503, json={"detail": "Readability audit error state"}),
+    )
+    page.goto(root + "curriculum.html")
+    expect(page.locator("#message")).not_to_contain_text("Loading", timeout=60000)
+    capture("curriculum-error")
+    page.unroute("**/api/curriculum?**")
+    return views
+
+
+def readability_sweep(
+    page: Page, root: str, shots: Path, *, layouts: Sequence[tuple[str, int]] = LAYOUTS
+) -> dict[str, Any]:
+    """Walk all page families and the interactive states that change rendered paint."""
+    shots.mkdir(parents=True, exist_ok=True)
+    views = []
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    for theme, width in layouts:
+        views.extend(readability_layout(page, root, shots, theme, width))
+    report = {
+        "standard": "WCAG 2.2 AA + Atlas house rules",
+        "views": views,
+        "violations": sum(len(v["findings"]) for v in views),
+        "errors": errors,
+    }
+    (shots / "readability.json").write_text(json.dumps(report, indent=2) + "\n")
+    if errors:
+        raise ValueError(f"Browser errors during readability sweep: {errors}")
+    return report

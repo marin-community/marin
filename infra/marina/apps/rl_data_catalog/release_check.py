@@ -34,6 +34,7 @@ from .prepare_preview import (
     RELOCATED_SERVER_FILES,
     oracle_inventory_payload,
 )
+from .readability import readability_sweep
 from .release_browser import curriculum_sweep, evidence_sweep, source_sweep
 from .release_evidence import (
     SqlQuery,
@@ -311,9 +312,15 @@ def browser_checks(
             sources = source_sweep(page, root, expected["sources"], shots)
             curriculum = curriculum_sweep(page, root, releases, shots)
             evidence = evidence_sweep(page, root, expected["sources"])
+            readability = readability_sweep(page, root, shots / "readability")
+            if readability["violations"]:
+                raise ValueError(
+                    f"{readability['violations']} readability violations; see {shots}/readability/readability.json"
+                )
             if errors:
                 raise ValueError(f"Browser JavaScript errors: {errors}")
             return {
+                "readability": {"violations": readability["violations"], "views": len(readability["views"])},
                 "source_views": sources,
                 "curriculum_views": curriculum,
                 "evidence_views": evidence,

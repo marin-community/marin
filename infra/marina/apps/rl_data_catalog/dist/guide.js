@@ -120,6 +120,44 @@ function selectLeaf(key) {
   if (key) $('leaf-list').scrollIntoView({behavior: 'smooth', block: 'nearest'});
 }
 
+// Reuse the diagram's labels and live count bindings in a reflowing reading order.
+// Fixed SVG coordinates cannot accommodate enlarged or widely spaced text.
+const flowScroller = document.querySelector('.flow-scroller');
+const flow = document.querySelector('.flow');
+const flowText = node('div', undefined, 'flow-text');
+function flowLabel(original) {
+  if (original.nodeType === Node.TEXT_NODE) return document.createTextNode(original.textContent);
+  const copy = node('span');
+  for (const attribute of original.attributes) {
+    if (attribute.name.startsWith('data-')) copy.setAttribute(attribute.name, attribute.value);
+  }
+  copy.append(...Array.from(original.childNodes, flowLabel));
+  return copy;
+}
+for (const group of flow.querySelectorAll(':scope > .node, :scope > .pill')) {
+  const leaf = group.dataset.leaf;
+  const card = node(leaf ? 'button' : 'article', undefined, 'flow-card');
+  if (leaf) { card.type = 'button'; card.dataset.leaf = leaf; }
+  for (const text of group.querySelectorAll(':scope > text')) {
+    const line = node('p');
+    for (const attribute of text.attributes) {
+      if (attribute.name.startsWith('data-')) line.setAttribute(attribute.name, attribute.value);
+    }
+    line.append(...Array.from(text.childNodes, flowLabel)); card.append(line);
+  }
+  flowText.append(card);
+}
+const flowSize = node('span', undefined, 'flow-size');
+flowSize.setAttribute('aria-hidden', 'true');
+flowScroller.append(flowText, flowSize);
+const flowObserver = new ResizeObserver(() => {
+  const textSize = parseFloat(getComputedStyle(flow).fontSize);
+  const spacing = parseFloat(getComputedStyle(flow).letterSpacing) || 0;
+  flowScroller.classList.toggle('linear', textSize * (1000 / 14) > flowScroller.clientWidth - 24 || spacing > .5);
+});
+flowObserver.observe(flowScroller);
+flowObserver.observe(flowSize);
+
 for (const item of document.querySelectorAll('[data-leaf]')) {
   item.addEventListener('click', () => selectLeaf(item.dataset.leaf));
   if (item.getAttribute('role') === 'button') {

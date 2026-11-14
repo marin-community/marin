@@ -816,7 +816,7 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
     page.unroute("**/api/sources")
     page.locator(".atlas-tabs").get_by_role("link", name="Getting started", exact=True).click()
-    count = page.locator('button[data-leaf="sample"]')
+    count = page.locator('button.count[data-leaf="sample"]')
     expect(count).to_have_text(re.compile(r"^\d+$"))
     count.click()
     table = page.locator(".leaf-sources")

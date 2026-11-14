@@ -468,3 +468,74 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
         yield
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def readability_catalog(lexical_catalog: None, marina_database: DatabaseSpec) -> Iterator[None]:
+    """Include frozen review packets and an archive in the readability walk."""
+    engine = engine_for(marina_database, applet_schema(APP_ID))
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE atlas_sources SET assessment_key='readability' WHERE load_id='lexical' AND id='Marin:clean'")
+        )
+        connection.execute(
+            text(
+                """
+            INSERT INTO atlas_assessments VALUES ('lexical','readability','Marin:clean','sample',
+                '{"model": "fixture","revision": "pinned"}','Assess instruction clarity.',
+                '{"status": "complete","verification": null,"admission_counts": {"admitted": 1,"excluded": 1}}',
+                'https://example.org/curation.json','[]')
+        """
+            )
+        )
+        for cohort, verdict in [("admitted", "good"), ("excluded", "bad")]:
+            connection.execute(
+                text("INSERT INTO atlas_populations VALUES ('lexical','readability',:cohort,1,1)"), {"cohort": cohort}
+            )
+            connection.execute(
+                text(
+                    """
+                INSERT INTO atlas_items VALUES ('lexical','readability',:task,:cohort,'reviewed',:verdict,
+                    'The instructions are complete; check the reference evidence.', '["instruction"]',
+                    'https://example.org/packet.json',true,'[]',NULL)
+            """
+                ),
+                {"task": cohort, "cohort": cohort, "verdict": verdict},
+            )
+            connection.execute(
+                text(
+                    """
+                INSERT INTO atlas_packets VALUES ('lexical','readability',:task,
+                    '{"instructions": "Describe the Earth atmosphere.",
+                      "repair_recommendation": "Clarify the requested output."}')
+            """
+                ),
+                {"task": cohort},
+            )
+        connection.execute(
+            text(
+                """
+            INSERT INTO catalog_reviews VALUES ('readability','Marin:clean',
+                '{"quality": "good","reviews": [],"repair_recommendation": "Keep instructions explicit."}',NOW())
+        """
+            )
+        )
+        connection.execute(
+            text(
+                """
+            INSERT INTO review_artifacts VALUES ('readability','trace.txt','Stored readability evidence','fixture')
+        """
+            )
+        )
+    try:
+        yield
+    finally:
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE atlas_sources SET assessment_key=NULL WHERE load_id='lexical' AND id='Marin:clean'")
+            )
+            for table in ["atlas_packets", "atlas_items", "atlas_populations", "atlas_assessments"]:
+                connection.execute(text(f"DELETE FROM {table} WHERE load_id='lexical' AND pipeline_key='readability'"))
+            connection.execute(text("DELETE FROM review_artifacts WHERE review_id='readability'"))
+            connection.execute(text("DELETE FROM catalog_reviews WHERE id='readability'"))
+        engine.dispose()

@@ -119,3 +119,58 @@ role and applicable task to be supported. Conditional survey support and
 unsupported environment kinds display Unsupported with typed reasons and exact
 per-role affected counts. N/A is reserved for an absent role. Counts from agent
 and grader roles can overlap and must not be added into a unique-task union.
+
+## Contrast and readability
+
+Atlas follows [WCAG 2.2 AA text contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
+(4.5:1, or 3:1 for large text). Its house rule requires **7:1 for all text**,
+including instructions, muted text, table cells, badges, placeholders and SVG
+labels, following [enhanced contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-enhanced.html).
+Disabled controls may be exempt but must remain visibly disabled. State labels
+must convey their meaning in words; links in prose are underlined.
+
+Use the semantic custom properties in `dist/style.css` for every page. The system
+color-scheme preference selects the palette; there is no separate theme toggle.
+Do not add page-local color literals or change counts to address presentation.
+These ratios use the WCAG relative-luminance formula without rounding thresholds:
+
+| Token pair | Light colors | Ratio | Dark colors | Ratio |
+| --- | --- | ---: | --- | ---: |
+| `ink` / `surface` | `#15291d` / `#ffffff` | 15.36 | `#ecf5ef` / `#17231b` | 14.60 |
+| `ink` / `soft` (instructions) | `#15291d` / `#eef4ef` | 13.77 | `#ecf5ef` / `#213326` | 12.05 |
+| `muted` / `soft` | `#34483a` / `#eef4ef` | 8.82 | `#c4d5c9` / `#213326` | 8.75 |
+| `green` / `soft` | `#064b32` / `#eef4ef` | 9.14 | `#b4ebca` / `#213326` | 10.01 |
+| `good-text` / `good-fill` | `#064b32` / `#e2f0e5` | 8.65 | `#b4ebca` / `#1b3525` | 9.91 |
+| `warning-text` / `warning-fill` | `#593b06` / `#fff5d9` | 9.41 | `#f5dfa9` / `#392e14` | 10.17 |
+| `bad-text` / `bad-fill` | `#722a20` / `#ffede8` | 8.96 | `#ffd0c6` / `#3d211b` | 10.54 |
+| `ink` / darkest heat cell | `#15291d` / `#91c4a2` | 7.77 | `#ecf5ef` / `#2b5035` | 8.20 |
+| `line` / darkest heat cell | `#405d48` / `#91c4a2` | 3.69 | `#91ac9a` / `#2b5035` | 3.72 |
+
+The five heat intensities use theme-specific fills and visible numeric counts.
+Control boundaries, resize handles, chart marks and focus indicators need
+[3:1 non-text contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html).
+Every keyboard target needs a visible ring at least 2 CSS px thick, contrasting
+with both its fill and its surroundings, with no obscuring overlay. Atlas uses
+3 px rings and follows the [focus appearance](https://www.w3.org/WAI/WCAG22/Understanding/focus-appearance.html)
+house rule. Targets need [24 × 24 px or the spacing exception](https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html);
+primary mobile controls need 44 × 44 px.
+
+Text must resize to 200% and [reflow at 320 CSS px](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html).
+Only data tables may scroll horizontally within their own containers. The guide
+uses the diagram's same labels and live counts in a linear reading order when
+its diagram cannot fit or text spacing increases. Allow the WCAG
+[text-spacing overrides](https://www.w3.org/WAI/WCAG22/Understanding/text-spacing.html):
+1.5 line height, 2em paragraph spacing, .12em letter spacing and .16em word
+spacing. Body/prose needs at least 14 px on desktop, 16 px at widths ≤480 px,
+line height ≥1.4, and roughly 80 characters per line. No text may be below 12 px;
+the shared palette currently uses a stricter 14/16 px floor throughout.
+
+`journeys/test_readability.py` and the release check use `readability.py` /
+`readability.js`. They composite computed colors and opacity over actual ancestor
+surfaces, including SVG node fills; unsupported background paint fails closed.
+Reports include each selector, rule, measured value and threshold, grouped by
+page, state, viewport and theme. Keep native menus/tooltips and browser-private
+visited rendering in the visual review; the browser does not expose their paint
+through DOM computed styles. Hover and active styles are checked through Chromium
+pseudo states; keyboard focus is checked by tabbing. Both installed fixtures and
+the input-bound release data must pass, followed by screenshot review.

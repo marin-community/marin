@@ -241,3 +241,39 @@ instance index. A stricter subject-only view filters the full subject sample poo
 so samples are not lost merely because they were capability matches at a broader
 level. The canonical checker exercises all exported levels and task partitions
 at each layout, including the original cutoffs and historical populations.
+
+## Readability release gate
+
+The installed `test_rendered_contrast_readability_and_reflow` journey and the
+input-bound `browser_checks` both run the shared readability sweep. Any violation
+blocks release. It covers the source table, curriculum, source evidence, backends, assessments,
+archive and guide, plus source/evidence presentation states, filters and folded groups, curriculum domains/confidence levels, public instructions from a stored task example in each layout, source breakdowns, archive records, empty/error states, hover,
+active and keyboard focus. Layouts are 1440, 390 and 320 CSS px in both themes;
+page and dialog checks also apply 200% text size and WCAG text-spacing overrides.
+
+The [style standard and measured palette](README.md#contrast-and-readability)
+require 7:1 for all text, 3:1 for meaningful boundaries/graphics, visible 2 px or
+larger focus rings, underlined prose links, 24 px targets (44 px mobile primary
+controls), 14/16 px body text and 320 px reflow. Keep tables in their own
+horizontal scrollers. Review screenshots for clipped text and overlap, including
+the guide's linear diagram and public-instruction dialogs. Native select popups,
+title tooltips and visited-link paint require visual review because their paint
+is not exposed by DOM computed styles.
+
+Run the focused gate while editing:
+
+```bash
+uv run marina journey rl_data_catalog -k 'rendered_contrast or checker_measures' --shots /tmp/atlas-readability
+```
+
+The focused command uses the installed app and disposable Postgres fixtures.
+Then run the full journey suite before `atlas-push`. The release checker repeats
+the gate against its pinned catalog projection and selected curriculum release
+through the existing `CatalogReader`; see the preflight commands above for
+`--source-counts`, `--oracle-inventory` and `--baseline`. Retain `readability/readability.json`,
+its incremental `states.jsonl`, and the adjacent screenshots with the release
+receipt. For the focused command these live under
+`/tmp/atlas-readability/rl_data_catalog/readability/`. Release runs store them under
+the receipt artifacts directory: `journeys/rl_data_catalog/readability/` for the
+fixture walk and `screenshots/readability/` for the frozen-input walk. Failed runs retain their completed states for diagnosis. Do not waive a
+failure by removing a layout, lowering a threshold or filtering a selector.

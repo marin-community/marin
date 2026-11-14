@@ -147,8 +147,8 @@ function renderCoverage() {
 function shade(element, count, maximum) {
   if (!count) { element.classList.add('zero'); return; }
   const intensity = Math.log1p(count) / Math.log1p(Math.max(1, maximum));
-  element.style.backgroundColor = `hsl(148 28% ${94 - intensity * 62}%)`;
-  element.style.color = intensity > .87 ? '#fff' : '#000';
+  element.style.backgroundColor = `var(--heat-${Math.max(1, Math.ceil(intensity * 5))})`;
+  element.style.color = 'var(--ink)';
 }
 
 function renderMap() {
