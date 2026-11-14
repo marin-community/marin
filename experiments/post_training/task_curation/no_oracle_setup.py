@@ -12,25 +12,19 @@ import base64
 import shlex
 import subprocess
 import tempfile
-import tomllib
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from taskcompendium.models import TaskSpec
 
-from experiments.post_training.task_curation.calibforge_fixtures import SETUP_ROOT, setup_script_name
+from experiments.post_training.task_curation.calibforge_fixtures import SETUP_ROOT
 from experiments.post_training.task_curation.environment_fidelity import DEFAULT_WORKDIR
-from experiments.post_training.task_curation.lowered_envelope import LoweredSpec
 from experiments.post_training.task_curation.no_oracle_liveness import DETAIL_LIMIT
 from experiments.post_training.task_curation.no_oracle_preservation import (
     FileExpectation,
     _compare_workspace,
-    _native_dockerfile,
-    copied_destinations,
-    native_workdir,
     workspace_expectations,
 )
 from experiments.post_training.task_curation.task_tars import open_task_tar
@@ -231,82 +225,3 @@ def execute_lowered_setup(
     if result.workspace_stdout is None:
         return result
     return _setup_comparison(task.id, expectations, result.workspace_stdout)
-
-
-@dataclass(frozen=True)
-class RebuiltMetadata:
-    image: str
-    workdir: str
-    setup_script: str
-
-
-def _rebuilt_metadata(rebuilt_payload: bytes) -> RebuiltMetadata:
-    """The image, workdir and setup script a rebuilt task declares."""
-    with open_task_tar(rebuilt_payload) as archive:
-        member = next((item for item in archive.getmembers() if item.name == "task.toml"), None)
-        if member is None:
-            raise ValueError("rebuilt task has no task.toml")
-        document = tomllib.loads(archive.extractfile(member).read().decode(errors="replace"))
-    environment = document.get("environment") or {}
-    setup = environment.get("setup") or {}
-    command = str(setup.get("command") or "")
-    script = setup_script_name(command)
-    workdir = environment.get("workdir") or DEFAULT_WORKDIR
-    return RebuiltMetadata(environment["docker_image"], workdir, script)
-
-
-def _native_destinations(native_payload: bytes, workdir: str) -> tuple[str, ...]:
-    """Absolute destinations the native recipe writes, resolved against its own workdir."""
-    dockerfile = _native_dockerfile(native_payload)
-    if dockerfile is None:
-        return (workdir,)
-    return copied_destinations(dockerfile, native_workdir(dockerfile))
-
-
-def _execute_setups(
-    native: dict[str, bytes],
-    rebuilt: dict[str, bytes],
-    workers: int,
-    *,
-    stub_apt: bool = False,
-    dns: tuple[str, ...] = (),
-) -> list[SetupExecution]:
-    def run(task_id: str) -> SetupExecution:
-        try:
-            metadata = _rebuilt_metadata(rebuilt[task_id])
-        except ValueError as error:
-            # A missing rebuilt[task_id] is a cohort-join bug and propagates;
-            # only an unusable rebuilt tar is a task-level refusal.
-            return SetupExecution(task_id=task_id, outcome=SetupOutcome.INVALID_TASK, detail=str(error))
-        return execute_setup_in_docker(
-            task_id,
-            native[task_id],
-            rebuilt[task_id],
-            image=metadata.image,
-            workdir=metadata.workdir,
-            setup_script=metadata.setup_script,
-            destinations=_native_destinations(native[task_id], metadata.workdir),
-            stub_apt=stub_apt,
-            dns=dns,
-        )
-
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(run, sorted(native)))
-
-
-def _execute_lowered(
-    lowered: dict[str, LoweredSpec], native: dict[str, bytes], workers: int, *, dns: tuple[str, ...] = ()
-) -> list[SetupExecution]:
-    def run(task_id: str) -> SetupExecution:
-        expectations = workspace_expectations(native[task_id])
-        requirements = lowered[task_id].task.environment_requirements
-        workdir = requirements.working_directory or DEFAULT_WORKDIR
-        return execute_lowered_setup(
-            lowered[task_id].task,
-            expectations,
-            destinations=_native_destinations(native[task_id], workdir),
-            dns=dns,
-        )
-
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(run, sorted(lowered)))
