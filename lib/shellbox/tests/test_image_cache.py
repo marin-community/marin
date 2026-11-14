@@ -274,6 +274,43 @@ def test_converted_registry_image_evicted_layout_is_copied_again(tmp_path, conve
     assert prepared_image_workdir(restored) == "/data"
 
 
+@pytest.mark.parametrize(
+    "repository,index_pin", [("registry.invalid/task", False), ("registry.invalid:5443/group/task", True)]
+)
+def test_tagged_digest_pin_preserves_source_and_reloads_offline(
+    tmp_path, converted_registry_image, monkeypatch, repository, index_pin
+):
+    fixture = converted_registry_image
+    digest = fixture.source.reference.rsplit("@", 1)[1]
+    if index_pin:
+        raw = json.dumps(
+            {"schemaVersion": 2, "manifests": [{"digest": digest, "platform": {"os": "linux", "architecture": "amd64"}}]}
+        ).encode()
+        digest = f"sha256:{hashlib.sha256(raw).hexdigest()}"
+        fixture.manifests[digest] = raw
+    source = RegistryImage(f"{repository}:release@{digest}")
+    image_tool = subprocess.run
+
+    def registry(args, **kwargs):
+        for argument in args:
+            if argument.startswith("docker://") and argument.rsplit("@", 1)[0] != f"docker://{repository}":
+                return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"Unsupported registry reference")
+        return image_tool(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", registry)
+    cache = tmp_path / "cache"
+    prepared = ImageCache(cache).prepare(source)
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("A verified tagged digest must reload without registry access")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    reloaded = ImageCache(cache).prepare(source)
+    assert reloaded.source == prepared.source == source
+    assert reloaded.manifest_digest == prepared.manifest_digest == fixture.image.manifest_digest
+    assert prepared_image_workdir(reloaded) == "/data"
+
+
 def test_converted_manifest_reloads_in_a_new_process_without_image_tools(tmp_path, converted_registry_image):
     fixture = converted_registry_image
     cache = tmp_path / "cache"
