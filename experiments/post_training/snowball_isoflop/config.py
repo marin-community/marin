@@ -140,7 +140,22 @@ def budget_steps(size: int, budget: float) -> int:
 
 
 def calibration_cells() -> tuple[Cell, ...]:
-    return tuple(Cell(d, mask, 0, 20, (20,), "calibration-serial-collectives") for d in SIZES for mask in Mask)
+    return tuple(
+        Cell(
+            d,
+            mask,
+            0,
+            20,
+            (20,),
+            (
+                "calibration-serial-collectives-r2"
+                if d == 1024 and mask == Mask.ASSISTANT
+                else "calibration-serial-collectives"
+            ),
+        )
+        for d in SIZES
+        for mask in Mask
+    )
 
 
 def primary_cells() -> tuple[Cell, ...]:
