@@ -20,22 +20,25 @@ import tomlkit
 from finestore.rl.curation import ContentEvidenceReference
 from iris.cluster.client.bundle import collect_workspace_files
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.backends.local.cgroup import check_cgroup_parent, delegated_cgroup_parent
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.harbor.adapter import TASK_SPEC_FILE, declared_execution_limits
 from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.harbor.oracle import read_oracle_command
 from taskcompendium.harbor.protected_runtime import read_runtime_binding
-from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, read_source_runtime
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, read_source_runtime
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec, decode_json_value
 from taskcompendium.pipeline.oracle_filter import (
+    LOCAL_EXECUTION_HOST_FIELDS,
     BackendFixIdentity,
     ExecutabilityRunReceipt,
     InfrastructureRetryApproval,
     InfrastructureRetryContext,
     InfrastructureRetryPlan,
     InfrastructureRetryTransition,
+    LocalExecutionHostTransition,
     MechanicalOracleTaskReceipt,
     NativeVerifierGrade,
     OracleExclusionReason,
@@ -112,6 +115,9 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
     for environment in (document.get("environment", {}), document.get("verifier", {}).get("environment", {})):
         for name in ("cpus", "memory_mb", "storage_mb"):
             environment.pop(name, None)
+    for owner in (document, document.get("verifier", {})):
+        if owner.get("environment") == {}:
+            owner.pop("environment")
     for phase in ("agent", "verifier"):
         if phase in document:
             document[phase].pop("timeout_sec", None)
@@ -321,11 +327,18 @@ def require_retry_provenance(
             or plan.approvals[task_id] != transition.approval
             or plan.parent_map_path != str(parent_path)
             or plan.parent_map_sha256 != transition.parent_map_sha256
+            or plan.local_host != transition.local_host
         ):
             raise ValueError(f"Infrastructure retry plan changed: {task_id}")
         parent = parent_document[task_id]
         if canonical_sha256(parent) != transition.parent_mapping_sha256:
             raise ValueError(f"Infrastructure parent mapping changed: {task_id}")
+        if (
+            parent["task_sha256"] != transition.task_sha256
+            or parent.get("runtime_sha256") != transition.runtime_sha256
+            or parent.get("source_task_checksum", parent["task_checksum"]) != transition.source_task_checksum
+        ):
+            raise ValueError(f"Infrastructure source identity changed: {task_id}")
         if ResourceCalibrationReceipt.model_validate(parent["calibration"]) != transition.parent_calibration:
             raise ValueError(f"Infrastructure parent attempts changed: {task_id}")
 
@@ -658,9 +671,20 @@ def calibrated_task(
     calibration_solutions: Path | None,
     retry_context: InfrastructureRetryContext | None = None,
     prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
+    initial_requirements: ExecutionRequirements | None = None,
+    source_runtime: dict | None = None,
 ) -> dict:
     """Run the production Trial path once per shape, creating a fresh task package each time."""
     original = Path(mapping["task_path"])
+    configured_runtime = None
+    if source_runtime is not None and (original / TASK_SPEC_FILE).is_file():
+        configured_runtime = TaskSpecRuntimeBinding(
+            task_sha256=canonical_sha256(task.model_dump(mode="json")),
+            runtime_sha256=canonical_sha256(source_runtime),
+            runtime=source_runtime,
+        )
+        if configured_runtime.runtime_sha256 != mapping.get("runtime_sha256"):
+            raise ValueError(f"Configured runtime changed after Harbor export: {task.id}")
     for label, read_binding in (
         ("OracleCommand", read_oracle_command),
         ("Protected", read_runtime_binding),
@@ -673,12 +697,17 @@ def calibrated_task(
         if binding.runtime_sha256 != mapping.get("runtime_sha256"):
             raise ValueError(f"{label} runtime changed after Harbor export: {task.id}")
     native = harbor_inspection("tasks", [str(original)])[str(original)]
-    if native["task_checksum"] != mapping["task_checksum"]:
+    source_checksum = mapping.get("source_task_checksum", mapping["task_checksum"])
+    if native["task_checksum"] != source_checksum:
         raise ValueError(f"Task changed after Harbor export: {task.id}")
     declared = task.execution_requirements
     preserved = declared_native_requirements(original)
     verifier = native_verifier_profile(original)
-    shape = declared or ExecutionRequirements.model_validate({**INITIAL_REQUIREMENTS.model_dump(), **preserved})
+    shape = (
+        declared
+        or initial_requirements
+        or ExecutionRequirements.model_validate({**INITIAL_REQUIREMENTS.model_dump(), **preserved})
+    )
     if declared is not None and native_requirements(original) != declared:
         raise ValueError(f"Harbor package differs from declared execution requirements: {task.id}")
     attempts = []
@@ -710,7 +739,10 @@ def calibrated_task(
         if prepare_attempt is not None:
             prepare_attempt(package, shape)
         config = {
-            "task": {"path": str(package)},
+            "task": {
+                "path": str(package),
+                **({"source_runtime": configured_runtime.model_dump(mode="json")} if configured_runtime else {}),
+            },
             "agent": {"name": "oracle", "kwargs": {"resource_usage_filename": "resource-usage.json"}},
             "environment": {"type": environment, "kwargs": environment_kwargs},
             "trials_dir": str(attempt / "jobs"),
@@ -762,6 +794,7 @@ def calibrated_task(
     calibration = ResourceCalibrationReceipt(
         declared_requirements=declared,
         preserved_requirements=preserved,
+        initial_requirements=initial_requirements,
         verifier=verifier,
         oracle_kind="original" if has_oracle_solution(task) else "calibration_only",
         attempts=tuple(attempts),
@@ -771,7 +804,7 @@ def calibrated_task(
         **mapping,
         "task_name": final["task_name"],
         "task_checksum": final["task_checksum"],
-        "source_task_checksum": mapping["task_checksum"],
+        "source_task_checksum": source_checksum,
         "calibration": calibration.model_dump(mode="json"),
     }
     (destination / canonical_sha256(task.id) / "task-map.json").write_text(json.dumps({task.id: result}, indent=2))
@@ -788,10 +821,12 @@ def calibrate_cohort(
     calibration_solutions: Path | None = None,
     retry_contexts: dict[str, InfrastructureRetryContext] | None = None,
     prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
+    initial_requirements: dict[str, ExecutionRequirements] | None = None,
 ) -> None:
     """Fold calibration into full-population oracle filtering; collect the same trials afterward."""
     mappings = json.loads(task_map.read_text())
     tasks = []
+    runtimes = {}
     paths = sorted(cohort.glob("*.parquet")) if cohort.is_dir() else [cohort]
     for path in paths:
         for batch in pq.ParquetFile(path).iter_batches(batch_size=32):
@@ -805,10 +840,13 @@ def calibrate_cohort(
                 if mapping.get("runtime_sha256") != row_runtime_hash(row):
                     raise ValueError(f"Runtime changed after Harbor export: {task.id}")
                 tasks.append(task)
+                runtimes[task.id] = row_runtime(row)
     if len({task.id for task in tasks}) != len(tasks) or set(mappings) != {task.id for task in tasks}:
         raise ValueError("Calibration task map must cover exactly the full converted population")
     if retry_contexts is not None and retry_contexts.keys() != mappings.keys():
         raise ValueError("Infrastructure phase context must cover exactly the approved partition")
+    if initial_requirements is not None and (retry_contexts is None or initial_requirements.keys() != mappings.keys()):
+        raise ValueError("Resumed allocations must cover the approved retry partition")
     destination.mkdir(parents=True, exist_ok=False)
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {
@@ -822,6 +860,8 @@ def calibrate_cohort(
                 calibration_solutions,
                 None if retry_contexts is None else retry_contexts[task.id],
                 prepare_attempt,
+                initial_requirements=None if initial_requirements is None else initial_requirements[task.id],
+                source_runtime=runtimes[task.id],
             )
             for task in tasks
         }
@@ -869,7 +909,14 @@ def require_backend_fix(identity: BackendFixIdentity) -> None:
         raise ValueError("Runtime source files differ from the pinned backend fix")
 
 
-def write_retry_plan(cohort: Path, task_map: Path, approvals_path: Path, backend_fix_path: Path, output: Path) -> None:
+def write_retry_plan(
+    cohort: Path,
+    task_map: Path,
+    approvals_path: Path,
+    backend_fix_path: Path,
+    output: Path,
+    local_host: LocalExecutionHostTransition | None = None,
+) -> None:
     """Freeze only explicitly approved infrastructure cases; never change their native packages."""
     if output.exists():
         raise FileExistsError(output)
@@ -918,8 +965,19 @@ def write_retry_plan(cohort: Path, task_map: Path, approvals_path: Path, backend
                     raise ValueError(f"Source/grader incompatibility is not our infrastructure: {task.id}")
                 expected_checksum = mapping.get("source_task_checksum", mapping["task_checksum"])
                 measured = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
-                if measured != expected_checksum or measured != mapping["task_checksum"]:
+                if measured != expected_checksum:
                     raise ValueError(f"Retry native files or environment changed: {task.id}")
+                final = calibration.attempts[-1]
+                if canonical_sha256(json.loads(Path(final.path).read_text())) != final.result_sha256:
+                    raise ValueError(f"Retry parent result changed: {task.id}")
+                final_package = Path(final.result["config"]["task"]["path"])
+                final_checksum = harbor_inspection("tasks", [str(final_package)])[str(final_package)]["task_checksum"]
+                if final_checksum != final.result["task_checksum"]:
+                    raise ValueError(f"Retry parent package changed: {task.id}")
+                if calibration_package_identity(final_package, "original") != calibration_package_identity(
+                    native, "original"
+                ):
+                    raise ValueError(f"Retry parent changed source files or grader: {task.id}")
                 config = calibration.attempts[-1].result["config"]["environment"]
                 current = (config["type"], config.get("kwargs", {}))
                 if environment is not None and current != (environment, environment_kwargs):
@@ -929,6 +987,17 @@ def write_retry_plan(cohort: Path, task_map: Path, approvals_path: Path, backend
                 selected[task.id] = mapping
     if set(selected) != set(approvals):
         raise ValueError("Retry approvals must identify exactly the frozen task partition")
+    assert environment_kwargs is not None
+    if local_host is not None:
+        if environment != "local":
+            raise ValueError("Physical LOCAL host transitions require the LOCAL backend")
+        physical = {key: value for key, value in environment_kwargs.items() if key in LOCAL_EXECUTION_HOST_FIELDS}
+        if physical != local_host.parent_kwargs:
+            raise ValueError("Physical host transition belongs to another parent worker")
+        environment_kwargs = {
+            **{key: value for key, value in environment_kwargs.items() if key not in LOCAL_EXECUTION_HOST_FIELDS},
+            **local_host.current_kwargs,
+        }
     output.mkdir(parents=True, exist_ok=False)
     frozen_cohort, frozen_map = output / "cohort.parquet", output / "parent-map.json"
     pq.write_table(pa.Table.from_pylist(rows, schema=schema), frozen_cohort)
@@ -944,8 +1013,25 @@ def write_retry_plan(cohort: Path, task_map: Path, approvals_path: Path, backend
         environment=environment,
         environment_kwargs=environment_kwargs,
         approvals=approvals,
+        local_host=local_host,
     )
     (output / "plan.json").write_text(plan.model_dump_json(indent=2) + "\n")
+
+
+def require_current_local_host(transition: LocalExecutionHostTransition) -> None:
+    """Verify immutable provenance and current worker containment before retry dispatch."""
+    for evidence in transition.scope_evidence:
+        if file_sha256(StoragePath(evidence.uri)) != evidence.sha256:
+            raise ValueError("LOCAL worker scope evidence changed after approval")
+    cgroup = transition.current_kwargs["cgroup_parent"]
+    assert cgroup is not None
+    current = Path(cgroup).resolve()
+    delegated = delegated_cgroup_parent()
+    if delegated is None or not current.is_relative_to(delegated):
+        raise ValueError("Replacement cgroup is outside the current worker's own delegated scope")
+    check_cgroup_parent(current)
+    if not {"cpu", "memory"}.issubset((current / "cgroup.controllers").read_text().split()):
+        raise ValueError("Replacement LOCAL scope does not delegate CPU and memory controllers")
 
 
 def retry_cohort(
@@ -959,6 +1045,8 @@ def retry_cohort(
         raise FileExistsError(destination)
     plan = InfrastructureRetryPlan.model_validate_json(plan_path.read_text())
     require_backend_fix(plan.backend_fix)
+    if plan.local_host is not None:
+        require_current_local_host(plan.local_host)
     cohort, parent_map = Path(plan.cohort_path), Path(plan.parent_map_path)
     for path, expected in (
         (cohort, plan.cohort_sha256),
@@ -974,7 +1062,7 @@ def retry_cohort(
     for task_id, parent in parents.items():
         native = Path(parent["task_path"])
         checksum = harbor_inspection("tasks", [str(native)])[str(native)]["task_checksum"]
-        if checksum != parent["task_checksum"] or checksum != parent.get("source_task_checksum", checksum):
+        if checksum != parent.get("source_task_checksum", parent["task_checksum"]):
             raise ValueError(f"Retry native task changed after approval: {task_id}")
         transitions[task_id] = InfrastructureRetryTransition(
             task_sha256=parent["task_sha256"],
@@ -989,6 +1077,7 @@ def retry_cohort(
             parent_calibration=ResourceCalibrationReceipt.model_validate(parent["calibration"]),
             backend_fix=plan.backend_fix,
             approval=plan.approvals[task_id],
+            local_host=plan.local_host,
         )
     phase = destination / "phase"
     contexts = {
@@ -1008,6 +1097,10 @@ def retry_cohort(
         concurrency,
         retry_contexts=contexts,
         prepare_attempt=prepare_attempt,
+        initial_requirements={
+            task_id: ResourceCalibrationReceipt.model_validate(parent["calibration"]).execution_requirements
+            for task_id, parent in parents.items()
+        },
     )
     require_backend_fix(plan.backend_fix)
     current = json.loads((phase / "task-map.json").read_text())
@@ -1074,6 +1167,7 @@ def main() -> None:
     plan.add_argument("--task-map", type=Path, required=True)
     plan.add_argument("--approvals", type=Path, required=True)
     plan.add_argument("--backend-fix", type=Path, required=True)
+    plan.add_argument("--local-host", type=Path, help="approved physical LOCAL host transition JSON")
     plan.add_argument("--output-dir", type=Path, required=True)
     retry = commands.add_parser("retry")
     retry.add_argument("--plan", type=Path, required=True)
@@ -1088,7 +1182,14 @@ def main() -> None:
         write_backend_fix(args.revision, args.output)
         return
     if args.command == "retry-plan":
-        write_retry_plan(args.cohort, args.task_map, args.approvals, args.backend_fix, args.output_dir)
+        write_retry_plan(
+            args.cohort,
+            args.task_map,
+            args.approvals,
+            args.backend_fix,
+            args.output_dir,
+            LocalExecutionHostTransition.model_validate_json(args.local_host.read_text()) if args.local_host else None,
+        )
         return
     if args.command == "retry":
         retry_cohort(args.plan, args.output_dir, args.concurrency)

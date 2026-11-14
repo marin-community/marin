@@ -29,7 +29,8 @@ from taskcompendium.harbor.protected_runtime import (
     RuntimeRole,
     write_runtime_binding,
 )
-from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, write_source_runtime
+from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, write_source_runtime
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.importers.evalchemy.financebench import convert_finance
 from taskcompendium.models import (
@@ -169,8 +170,9 @@ def declared_oracle(task):
      ("42", 1.0, 0, False, "/custom-grader", None), ("42", 1.0, 0, False, None, b"42\n")],
 )
 @pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_in_config", [False, True])
 async def test_actorless_original_command_runs_in_grader_environment_and_preserves_answer(
-    tmp_path, monkeypatch, answer, reward, exit_code, timed_out, custom_workspace, worker_input
+    tmp_path, monkeypatch, answer, reward, exit_code, timed_out, custom_workspace, worker_input, runtime_in_config
 ):
     task = exact_answer_task(
         RawRow("original-command", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
@@ -210,8 +212,12 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     directory = tmp_path / "task"
     write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
     runtime = {"task_machine": {"network": "deny"}, "verifier_machine": {"network": "allow"}}
-    write_source_runtime(task, runtime, directory)
+    binding = TaskSpecRuntimeBinding(task_sha256=canonical_sha256(task.model_dump(mode="json")),
+        runtime_sha256=canonical_sha256(runtime), runtime=runtime)
+    if not runtime_in_config:
+        write_source_runtime(task, runtime, directory)
     write_oracle_command(task, runtime, declared_oracle, directory, source_revision="a" * 40)
+    original_files = {path.relative_to(directory): path.read_bytes() for path in directory.rglob("*") if path.is_file()}
     machines = Machines(tmp_path / "sandboxes")
     bind_factory(monkeypatch, machines, tmp_path / "disks")
     monkeypatch.setattr(adapter.StoragePath, "exists", lambda path: True)
@@ -229,7 +235,7 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
     monkeypatch.setattr(FileMachine, "run", source_boundary)
     trial = await Trial.create(
         TrialConfig(
-            task=TaskConfig(path=directory),
+            task=TaskConfig(path=directory, source_runtime=binding.model_dump(mode="json") if runtime_in_config else None),
             trial_name="original-command",
             trials_dir=tmp_path / "trials",
             agent=AgentConfig(name="oracle"),
@@ -237,6 +243,7 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
         )
     )
     result = await trial.run()
+    assert {path.relative_to(directory): path.read_bytes() for path in directory.rglob("*") if path.is_file()} == original_files
     assert command_deadlines == [INITIAL_REQUIREMENTS.agent_timeout_sec]
     assert all(spec.network is NetworkPolicy.ALLOW for spec in machines.specifications)
     network = TaskNetworkPolicyReceipt.model_validate_json((trial.paths.trial_dir / "network-policy.json").read_text())
@@ -268,8 +275,9 @@ async def test_actorless_original_command_runs_in_grader_environment_and_preserv
 
 @pytest.mark.parametrize("actor_required", [False, True])
 @pytest.mark.parametrize("changed_field", ["task_sha256", "runtime_sha256"])
+@pytest.mark.parametrize("runtime_in_config", [False, True])
 @pytest.mark.asyncio
-async def test_changed_original_command_binding_allocates_no_machine(tmp_path, monkeypatch, actor_required, changed_field):
+async def test_changed_original_command_binding_allocates_no_machine(tmp_path, monkeypatch, actor_required, changed_field, runtime_in_config):
     task = exact_answer_task(
         RawRow("bound-command", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
         prompt="Return 42.", answers=("42",), ignore_case=False,
@@ -287,7 +295,9 @@ async def test_changed_original_command_binding_allocates_no_machine(tmp_path, m
         task, {}, declared_oracle, directory, source_revision="a" * 40,
     )
     binding = json.loads((directory / ORACLE_COMMAND_FILE).read_text())
-    write_source_runtime(task, {}, directory)
+    runtime_binding = TaskSpecRuntimeBinding(task_sha256=canonical_sha256(task.model_dump(mode="json")), runtime_sha256=canonical_sha256({}), runtime={})
+    if not runtime_in_config:
+        write_source_runtime(task, {}, directory)
     binding[changed_field] = "0" * 64
     (directory / ORACLE_COMMAND_FILE).write_text(json.dumps(binding))
     machines = Machines(tmp_path / "sandboxes")
@@ -295,7 +305,7 @@ async def test_changed_original_command_binding_allocates_no_machine(tmp_path, m
     with pytest.raises(ValueError, match="belongs to another TaskSpec|differs from the preserved source runtime"):
         await Trial.create(
             TrialConfig(
-                task=TaskConfig(path=directory), trial_name="changed-command", trials_dir=tmp_path / "trials",
+                task=TaskConfig(path=directory, source_runtime=runtime_binding.model_dump(mode="json") if runtime_in_config else None), trial_name="changed-command", trials_dir=tmp_path / "trials",
                 agent=AgentConfig(name="oracle"),
                 environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
             )
