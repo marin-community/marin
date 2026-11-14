@@ -95,7 +95,8 @@ def archive_model_traffic(
                     continue
                 stream.add(folder, arcname=folder.name)
                 for response_path in folder.glob("*/response.json"):
-                    usage = json.loads(response_path.read_text())["body"].get("usage") or {}
+                    response = json.loads(response_path.read_text())
+                    usage = response.get("upstream_usage") or response["body"].get("usage") or {}
                     input_tokens += usage.get("prompt_tokens", 0)
                     output_tokens += usage.get("completion_tokens", 0)
     copy(str(archive), str(destination), no_clobber=True)
@@ -141,7 +142,8 @@ def preserved_model_traffic(root: Path, output: StoragePath):
         copy(str(archive), str(destination), no_clobber=True)
         input_tokens = output_tokens = responses_with_usage = 0
         for path in requests.glob("*/*/response.json"):
-            usage = json.loads(path.read_text())["body"].get("usage") or {}
+            response = json.loads(path.read_text())
+            usage = response.get("upstream_usage") or response["body"].get("usage") or {}
             responses_with_usage += bool(usage)
             input_tokens += usage.get("prompt_tokens", 0)
             output_tokens += usage.get("completion_tokens", 0)
@@ -271,11 +273,17 @@ def run_task(
         reward = scored_reward(result, trial)
         unserved = False
         provider_wait = False
+        model_request_failed = False
+        candidate_served = False
         route = f"/{root.name}-{key}-{number}"
         for traffic in (root.parent / "model-requests", root.parent / "judge" / "model-requests"):
             requests = traffic / hashlib.sha256(route.encode()).hexdigest()
             for response_path in requests.glob("*/response.json"):
                 response = json.loads(response_path.read_text())
+                if response["status"] != 200:
+                    model_request_failed = True
+                elif traffic == root.parent / "model-requests":
+                    candidate_served = True
                 error = response["body"].get("error")
                 if isinstance(error, dict) and error.get("code") == "input_budget_unserved":
                     unserved = True
@@ -284,16 +292,21 @@ def run_task(
             for request in requests.glob("*"):
                 if (request / "response.json").exists():
                     continue
+                model_request_failed = True
                 if (request / "provider-queued.json").exists() and not (request / "provider-admitted.json").exists():
                     provider_wait = True
                 if any((request / "provider-waits").glob("*.json")):
                     provider_wait = True
+        if result.exception_info is not None and not candidate_served:
+            model_request_failed = True
         if unserved:
             reward = None
             pending_reason = INPUT_BUDGET_REASON
         elif provider_wait:
             reward = None
             pending_reason = PROVIDER_WAIT_REASON
+        elif model_request_failed:
+            reward = None
         if task.workload == "task_spec":
             binding = read_source_runtime(Path(task.path))
             policy = TaskNetworkPolicyReceipt.model_validate_json(

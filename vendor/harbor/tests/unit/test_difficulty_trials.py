@@ -35,10 +35,11 @@ from experiments.post_training.task_curation.difficulty_provider import Provider
 
 @pytest.mark.parametrize("graded_reward,upstream_failure,with_judge", [
     *[(reward, failure, judge) for reward in (0.0, 1.0) for failure in (None, "json") for judge in (False, True)],
+    (0.0, "nonretryable", False), (1.0, "nonretryable", False),
     (1.0, "html", False), (1.0, "input_tokenize", False), (1.0, "native", False),
 ])
 def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, graded_reward, upstream_failure, with_judge):
-    infrastructure_first = upstream_failure in {"json", "html", "input_tokenize"}
+    infrastructure_first = upstream_failure in {"json", "html", "input_tokenize", "nonretryable"}
     unserved = upstream_failure == "input_tokenize"
     native = upstream_failure in {"native", "input_tokenize"}
     provider_wait = upstream_failure in {"json", "html"}
@@ -115,6 +116,8 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
             judge_requests.append(body)
             return httpx.Response(200, json={"usage": {"prompt_tokens": 1, "completion_tokens": 20000}})
         candidate_requests.append(body)
+        if upstream_failure == "nonretryable":
+            return httpx.Response(401, json={"error": {"message": "Credential rejected"}})
         if upstream_failure == "json":
             return httpx.Response(503, json={"error": {"message": "Transient serving failure"}})
         return httpx.Response(502, text="<html>Temporary gateway failure</html>")
@@ -135,6 +138,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         # Replace the machine/model boundary; the CLI still dispatches, archives and counts real receipts.
         if configuration.agent.name == "terminus-2":
             llm = OpenAILLM(model_name="openai/fixture", api_key="fixture", api_base=configuration.agent.kwargs["api_base"], model_info=configuration.agent.kwargs["model_info"])
+            assert llm.get_model_context_limit() == 65536
             assert completion_budget_from_count(prompt_tokens=40000, context_window=llm.get_model_context_limit(), max_output_tokens=llm.get_model_output_limit()) == 16384
         failed = infrastructure_first and not physical_attempts
         reward = 1.0 if continuing else graded_reward
@@ -160,19 +164,21 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                               headers={"Content-Type": "application/json"})
             with pytest.raises(HTTPError) as error:
                 urlopen(request, timeout=10)
-            assert error.value.code == (400 if unserved else 503)
-        if not failed:
-            (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": reward}))
+            assert error.value.code == (400 if unserved else (401 if upstream_failure == "nonretryable" else 503))
+        # A source may grade empty output zero even though its model request was never served.
+        verdict_reward = 0.0 if failed and not unserved else reward
+        if not unserved:
+            (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": verdict_reward}))
         (directory / "network-policy.json").write_text(json.dumps({
             "source_runtime_sha256": runtime_sha256, "actor_declared": "allow", "verifier_declared": "allow",
-            "actor_required": True, "actor_effective": "allow", "verifier_effective": None if failed else "allow",
+            "actor_required": True, "actor_effective": "allow", "verifier_effective": None if unserved else "allow",
         }))
-        payload = {"exception_info": {"exception_type": "RolloutInterrupted"} if failed else None,
-                   "verifier_result": None if failed else {"rewards": {"reward": reward}}}
+        payload = {"exception_info": {"exception_type": "AgentTimeoutError"} if failed else None,
+                   "verifier_result": None if unserved else {"rewards": {"reward": verdict_reward}}}
         (directory / "result.json").write_text(json.dumps(payload))
-        result = SimpleNamespace(finished_at=datetime.now(UTC), completion=None if failed else "completed",
-                                 exception_info=SimpleNamespace(exception_type="RolloutInterrupted") if failed else None,
-                                 verifier_result=None if failed else SimpleNamespace(rewards={"reward": reward}),
+        result = SimpleNamespace(finished_at=datetime.now(UTC), completion=None if unserved else "completed",
+                                 exception_info=SimpleNamespace(exception_type="AgentTimeoutError") if failed else None,
+                                 verifier_result=None if unserved else SimpleNamespace(rewards={"reward": verdict_reward}),
                                  model_dump=lambda **kwargs: payload)
         trial = SimpleNamespace(paths=SimpleNamespace(trial_dir=directory, agent_dir=agent, verifier_dir=verifier))
         return trial, result
@@ -187,7 +193,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
         "pending", 0 if unserved or provider_wait else 1, 0 if unserved or provider_wait else int(graded_reward), 2 if unserved or provider_wait else 1)
     assert blocker in measurement.reason
-    assert measurement.infrastructure_attempts == 0
+    assert measurement.infrastructure_attempts == int(upstream_failure == "nonretryable")
     attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
     pending = {"blocked": blocker}
     if unserved:
@@ -195,8 +201,8 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     elif provider_wait:
         pending["scored"] = difficulty_trials.PROVIDER_WAIT_REASON
     assert attempts["pending_reasons"] == pending
-    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1
-    assert len(candidate_requests) == 2 * int(provider_wait)
+    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(upstream_failure == "nonretryable")
+    assert len(candidate_requests) == (2 if provider_wait else int(upstream_failure == "nonretryable"))
     if unserved or provider_wait:
         return
     if infrastructure_first:

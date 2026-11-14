@@ -187,7 +187,6 @@ def budget_relay(
                         status, payload = 502, {
                             "error": {"type": type(error).__name__, "message": "Upstream model transport failed"}
                         }
-                (root / "response.json").write_text(json.dumps({"status": status, "body": payload}) + "\n")
                 usage = payload.get("usage")
                 if (
                     budget is not None
@@ -205,6 +204,9 @@ def budget_relay(
                             "message": "Server usage exceeds the protocol budget or is missing",
                         }
                     }
+                (root / "response.json").write_text(
+                    json.dumps({"status": status, "body": payload, "upstream_usage": usage}) + "\n"
+                )
                 self.respond(status, payload)
 
         server = ReceiptHTTPServer(("127.0.0.1", 0), Handler)
