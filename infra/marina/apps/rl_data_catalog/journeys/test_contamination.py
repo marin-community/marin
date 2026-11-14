@@ -9,7 +9,73 @@ import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
-from infra.marina.apps.rl_data_catalog.release_browser import check_view
+from infra.marina.apps.rl_data_catalog.release_browser import TABLE_BOUNDS, check_view
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_column_drag_keyboard_persistence_and_reset_preserve_table_geometry(
+    journey: Journey, theme: str, width: int
+) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 1000})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.locator("#show-everything").click()
+    expect(page.locator("#rows tr")).to_have_count(25)
+    header = page.locator("#headers th").first
+    before = header.evaluate("e=>e.getBoundingClientRect().width")
+    rows = page.locator("#rows tr").evaluate_all("rows=>rows.map(r=>r.dataset.sourceId)")
+    handle = page.get_by_role("separator", name="Resize Source column", exact=True)
+    handle.scroll_into_view_if_needed()
+    page.locator(".table-scroller").evaluate(
+        "e=>{const h=e.querySelector('.column-resize-handle').getBoundingClientRect();"
+        "e.scrollLeft+=h.left-e.getBoundingClientRect().left-e.clientWidth/2;}"
+    )
+    box = handle.bounding_box()
+    assert box is not None
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 + 80, box["y"] + box["height"] / 2)
+    page.mouse.up()
+    changed = header.evaluate("e=>e.getBoundingClientRect().width")
+    assert abs(changed - before - 80) < 2
+    expect(header).to_have_attribute("aria-sort", "ascending")
+    assert page.locator("#rows tr").evaluate_all("rows=>rows.map(r=>r.dataset.sourceId)") == rows
+    page.reload()
+    expect(page.locator("#rows tr")).to_have_count(25)
+    assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - changed) < 2
+    handle.press("ArrowLeft")
+    assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - changed + 16) < 2
+    for right in (False, True):
+        page.locator(".table-scroller").evaluate("(e,r)=>e.scrollLeft=r?e.scrollWidth:0", right)
+        assert page.locator(".source-table").evaluate(TABLE_BOUNDS) == []
+        assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+    page.locator("#reset-column-widths").click()
+    page.reload()
+    expect(page.locator("#rows tr")).to_have_count(25)
+    assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - before) < 2
+
+
+def test_column_resizing_works_when_viewer_storage_is_unavailable(journey: Journey) -> None:
+    browser = journey.page.context.browser
+    assert browser is not None
+    with browser.new_context(viewport={"width": 390, "height": 1000}) as context:
+        context.add_init_script(
+            "Object.defineProperty(window,'localStorage',{get(){throw new DOMException('Denied','SecurityError')}})"
+        )
+        page = context.new_page()
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+        expect(page.locator("#rows tr").first).to_be_visible()
+        handle = page.get_by_role("separator", name="Resize Source column", exact=True)
+        initial = int(handle.get_attribute("aria-valuenow"))
+        handle.press("ArrowRight")
+        expect(handle).to_have_attribute("aria-valuenow", str(initial + 16))
+        page.locator("#reset-column-widths").click()
+        assert not errors
+        assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
 
 
 def test_release_checker_accepts_real_catalog_and_rejects_corrupted_rendered_totals(journey: Journey) -> None:
@@ -410,7 +476,7 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     journey.shoot(f"backends-{theme}-{width}")
     page.evaluate("location.hash = 'source_id=Marin%3Aeval'")
     expect(page.locator("#title")).to_have_text("eval")
-    expect(page.locator("#daytona-evidence")).to_contain_text("N/A")
+    expect(page.locator("#daytona-evidence")).to_contain_text("Pending census")
     local = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name="LOCAL", exact=True))
     expect(local.locator("td").nth(2)).to_have_text("N/A (no role): 3")
     expect(local.locator("td").nth(3)).to_have_text("supported: 3")
@@ -497,9 +563,33 @@ def test_curriculum_parents_equal_displayed_children_and_remainder(journey: Jour
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
     assert_partition()
+    earth.get_by_role("button", name="Other/unlisted (subject only)", exact=True).click()
+    expect(page.locator("#area-summary")).to_contain_text("7,078 task instances")
+    expect(page.locator("#area-sources")).to_contain_text("7,078")
+    expect(page.locator("#task-list .task-row")).to_have_count(1)
+    expect(page.locator("#task-list")).to_contain_text("earth-only")
+    page.locator("#task-list .task-row").click()
+    expect(page.locator("#detail-task-id")).to_have_text("earth-only")
+    page.locator("#close-detail").click()
+    page.locator("#close-tasks").click()
+    page.locator("#domain").select_option("D05")
+    expect(page.locator('[data-node-id="earth"] > .map-area .map-area-name')).to_have_text(
+        "Capability groups for Earth, Atmospheric, Ocean & Environmental Sciences"
+    )
+    empty = page.locator('[data-node-id="weather"]')
+    expect(empty.locator(".map-area-count")).to_have_text("0")
+    expect(empty.locator(".map-area")).to_have_class(re.compile(r"zero"))
+    empty.get_by_role("button", name="Weather prediction", exact=True).click()
+    expect(page.locator("#area-summary")).to_contain_text("0 task instances")
+    expect(page.locator("#task-list .task-row")).to_have_count(0)
+    expect(page.locator("#task-message")).to_contain_text("No task examples")
+    page.locator("#area-sort").select_option("count")
+    assert_partition()
+    page.locator("#domain").select_option("")
     page.locator("#search").fill("Addition")
     expect(page.locator(".domain-card")).to_have_count(1)
-    expect(page.locator(".map-topics > .map-remainder .map-area-count")).to_have_text("12")
+    expect(page.locator(".map-topics > .map-remainder:not(.map-search-hidden) .map-area-count")).to_have_text("4")
+    expect(page.locator(".map-search-hidden .map-area-count")).to_have_text("8")
     assert_partition()
     page.locator("#search").fill("")
     page.locator("#domain").select_option("D01")

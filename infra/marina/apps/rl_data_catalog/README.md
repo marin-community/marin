@@ -4,7 +4,7 @@ Follow the canonical [release procedure](RELEASE.md) and its `release_check`
 entry point for every preview release.
 
 Enum chips carry the entire state label. Never put text below a Quality, Result,
-Contamination, Filtration or Daytona chip. Put numeric issue rates and lexical overlap counts
+Contamination or Filtration chip. Put numeric issue rates and lexical overlap counts
 in their own columns, using an em dash for missing measurements. Keep review
 progress, reviewed/retained counts and lower bounds on the source Evidence page.
 
@@ -33,6 +33,22 @@ Use the shared chip colors, with light and dark theme rules; a remediation warni
 also has a strong border. Phone layouts keep all columns reachable through
 contained horizontal scrolling, with the table header aligned to its body.
 Do not rely on color alone to convey a state.
+
+Drag a source-table header edge to resize a column. Focus its separator and use
+arrow keys for keyboard resizing; Shift increases the step, Home uses the minimum,
+and End uses the maximum. Widths persist in viewer-local storage when available.
+Use **Reset column widths** to return to automatic sizing.
+
+The main table's **Backends** link and tooltip carry the actor Daytona verdict,
+snapshot count and cap, failed execution requirements, measurement provenance and
+operations link. Daytona measurements remain in the catalog; they have no separate
+main-table column.
+
+Curriculum nodes include empty capabilities and clickable subject-only remainders.
+Each node opens its exact instance count, complete source breakdown and sampled
+examples with the existing task evidence. Sort sibling areas by name or task count.
+Taxonomy groups that repeat their subject's name display as “Capability groups
+for …”; archived IDs and labels remain unchanged.
 
 Run the installed-app browser regressions with:
 

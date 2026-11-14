@@ -741,6 +741,18 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert first["examples"]["sample_task_count"] == 4
         default = client.get("/curriculum", params={"subject_id": "D01"}).json()
         assert default["scope_summary"] == {"subject_members": 300, "capability_matches": 200}
+        area_params = {"subject_id": "D01", "node_id": "subject:D01", "scope": "unlisted"}
+        unlisted = client.get("/curriculum/area", params=area_params).json()
+        assert unlisted["count"] == 100
+        assert [(row["source_id"], row["count"]) for row in unlisted["sources"]] == [("Marin:a", 100)]
+        assert [
+            (row["source_id"], row["task_id"])
+            for row in client.get("/curriculum/tasks", params=area_params).json()["tasks"]
+        ] == [("Marin:a", "two")]
+        complete_area = client.get("/curriculum/area", params={"subject_id": "D01", "node_id": "arithmetic"}).json()
+        assert complete_area["count"] == 200
+        assert sum(row["count"] for row in complete_area["sources"]) == 200
+        assert client.get("/curriculum/area", params={**area_params, "source_id": "Marin:b"}).json()["count"] == 0
         source_view = client.get("/curriculum", params={"source_id": "Marin:a"}).json()
         assert source_view["totals"]["denominator"] == 300
         assert {(row["node_id"], row["count"]) for row in source_view["area_counts"]} == {
@@ -771,6 +783,16 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert client.get("/curriculum/task", params={"source_id": "Marin:a", "task_id": "one"}).json()["task"][
             "task_preview"
         ]
+        # A task may match a capability elsewhere while remaining subject-only here.
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO curriculum_matches VALUES "
+                    "('first','Marin:a','two','D02','other','subject_domain',0.9,0.9)"
+                )
+            )
+        local_remainder = client.get("/curriculum/tasks", params=area_params).json()["tasks"]
+        assert [(row["task_id"], row["outcome"]) for row in local_remainder] == [("two", "subject_only")]
         manifest = json.loads(path.read_text())
         coverage = json.loads(coverage_path.read_text())
         path.write_text(json.dumps({**manifest, "release_id": "bad", "task_count": 401}))

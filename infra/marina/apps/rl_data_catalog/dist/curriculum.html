@@ -20,6 +20,7 @@
     <label><span>Domain</span><select id="domain"><option value="">All domains</option></select></label>
     <label><span>Source</span><select id="source"><option value="">All sources</option></select></label>
     <label><span>Use</span><select id="use"><option value="all">All uses</option><option value="train">Training</option><option value="eval">Evaluation</option></select></label>
+    <label><span>Sort areas</span><select id="area-sort"><option value="name">Name</option><option value="count">Task count</option></select></label>
     <button id="reset-view" class="text-button" type="button">Clear filters</button>
   </form>
   <section class="catalog">
@@ -31,10 +32,11 @@
   <div id="outcomes" class="outcome-bar" aria-label="Browse examples by matching outcome"></div>
   <section id="task-panel" class="catalog task-panel" hidden>
     <div class="catalog-top"><div><h2 id="task-heading">Sampled examples</h2><p id="task-scope"></p></div><button id="close-tasks" class="text-button">Close examples</button></div>
+    <p id="area-summary" class="scope-note" role="status"></p><div id="area-sources" aria-label="Complete source breakdown"></div>
     <div id="task-list" class="task-list"></div><p id="task-message" class="status-line" role="status" aria-live="polite"></p><button id="more-tasks" class="secondary" hidden>Load more</button>
   </section>
   <details class="data-notes"><summary>About counts and matching</summary>
-    <p>Counts cover converted examples before curation admission, including repeated instances. Domain counts include broad subject matches; topic and skill counts require a capability match. Other/unlisted shows subject-only matches and any subcategories hidden by search, so every parent equals its displayed children plus that remainder. Empty areas remain visible.</p>
+    <p>Counts cover converted examples before curation admission, including repeated instances. Domain counts include broad subject matches; topic and skill counts require a capability match. Other/unlisted opens subject-only matches with their complete source breakdown and sampled evidence. Search-hidden subcategories have a separate show-all control, so every parent equals its displayed children plus that remainder. Empty areas remain visible.</p>
     <p><strong id="mapped-count">—</strong> have a curriculum match. <strong id="capability-count">—</strong> have a capability match; <span id="broad-count"></span>.</p>
     <p id="sample-note"></p><p id="role-note" hidden></p><p id="source-ledger" hidden></p>
     <details><summary>Release record</summary><pre id="provenance"></pre></details>

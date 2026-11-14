@@ -6,6 +6,7 @@
 import base64
 import binascii
 import json
+import re
 from dataclasses import asdict, dataclass
 from typing import Annotated, Any, Literal
 
@@ -33,17 +34,18 @@ def coverage_query(
     return CoverageQuery(intended_use, canonical_source_id(source_id), release)
 
 
-def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
-    row = (
-        connection.execute(
-            text(
-                """
+RELEASE_SQL = """
         SELECT l.* FROM curriculum_loads l JOIN curriculum_current c
             ON l.load_id=c.load_id OR l.load_id=c.previous_load_id
         WHERE c.name='latest' AND ((:release='' AND l.load_id=c.load_id) OR l.release_id=:release)
         ORDER BY l.loaded_at DESC LIMIT 1
     """
-            ),
+
+
+def loaded_release(connection: Connection, release_id: str) -> dict[str, Any]:
+    row = (
+        connection.execute(
+            text(RELEASE_SQL),
             {"release": release_id},
         )
         .mappings()
@@ -146,8 +148,152 @@ SAMPLE_SQL = (
     FROM selected_tasks t LEFT JOIN curriculum_matches m USING (load_id, source_id, task_id)
     GROUP BY t.source_id, t.task_id, t.content_hash, t.description_status
 )
+
 """
 )
+
+
+def display_hierarchy(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Distinguish taxonomy wrappers from their subjects without changing archived IDs."""
+    subjects = {node["subject_id"]: node["name"] for node in nodes if node["kind"] == "subject"}
+
+    def normalized(name: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", name.casefold().replace("&", "and"))
+
+    result = []
+    for node in nodes:
+        subject = subjects[node["subject_id"]]
+        name = node["name"]
+        if node["kind"] != "subject" and normalized(name) == normalized(subject):
+            name = (
+                f"Capability groups for {subject}"
+                if node["kind"] == "group"
+                else f"General {subject} (no specific capability)"
+            )
+        result.append({**node, "name": name})
+    return result
+
+
+def child_ids(metadata: dict[str, Any], subject_id: str, node_id: str) -> list[str]:
+    nodes = metadata["manifest"]["nodes"]
+    if not any(node["subject_id"] == subject_id and node["node_id"] == node_id for node in nodes):
+        raise HTTPException(404, "Unknown curriculum area")
+    return [node["node_id"] for node in nodes if node["subject_id"] == subject_id and node["parent_id"] == node_id]
+
+
+AREA_SQL = (
+    SOURCES_SQL
+    + """
+                SELECT s.source_id,s.declaration->>'display_name' AS name,
+                    s.alignment->>'intended_use' AS intended_use,
+                    CAST(SUM(CASE WHEN c.node_id=:node_id THEN c.instances
+                        WHEN :scope='unlisted' THEN -c.instances ELSE 0 END) AS BIGINT) AS count
+                FROM selected_sources s JOIN curriculum_statistics c USING(load_id,source_id)
+                WHERE c.metric='placement' AND c.subject_id=:subject_id
+                    AND (c.node_id=:node_id OR (:scope='unlisted' AND c.node_id=ANY(CAST(:children AS TEXT[]))))
+                GROUP BY s.source_id,s.declaration->>'display_name',s.alignment->>'intended_use'
+                HAVING SUM(CASE WHEN c.node_id=:node_id THEN c.instances
+                    WHEN :scope='unlisted' THEN -c.instances ELSE 0 END)>0
+                ORDER BY count DESC,s.source_id
+                """
+)
+
+
+def area_parameters(
+    metadata: dict[str, Any], filters: CoverageQuery, subject_id: str, node_id: str, scope: str
+) -> dict[str, Any]:
+    return {
+        **asdict(filters),
+        "original_source_id": original_source_id(filters.source_id),
+        "load_id": metadata["load_id"],
+        "subject_id": subject_id,
+        "node_id": node_id,
+        "children": child_ids(metadata, subject_id, node_id),
+        "scope": scope,
+    }
+
+
+def area_response(metadata: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+    sources = [{**row, "source_id": canonical_source_id(row["source_id"])} for row in rows]
+    return {"release_id": metadata["release_id"], "count": sum(row["count"] for row in sources), "sources": sources}
+
+
+TASKS_SQL = (
+    SAMPLE_SQL
+    + """
+                , eligible AS (
+                SELECT t.source_id,t.task_id,t.content_hash,d.detail->>'task_preview' AS task_preview,
+                    t.description_status,CASE WHEN :scope='unlisted' THEN 'subject_only' ELSE s.outcome END AS outcome,
+                    ROW_NUMBER() OVER (PARTITION BY t.source_id ORDER BY t.task_id) AS sample_rank
+                FROM selected_tasks t JOIN states s USING (source_id,task_id,content_hash)
+                JOIN curriculum_tasks d USING (load_id,source_id,task_id)
+                WHERE (:node_id='' OR EXISTS (SELECT 1 FROM placements p
+                    WHERE p.source_id=t.source_id AND p.task_id=t.task_id
+                        AND p.subject_id=:subject_id AND p.node_id=:node_id))
+                    AND (:outcome='all' OR s.outcome=:outcome)
+                    AND (:scope='all' OR NOT EXISTS (SELECT 1 FROM placements p
+                        WHERE p.source_id=t.source_id AND p.task_id=t.task_id
+                            AND p.subject_id=:subject_id AND p.node_id=ANY(CAST(:children AS TEXT[]))))
+                )
+                SELECT * FROM eligible
+                WHERE (sample_rank,source_id,task_id)>(:after_rank,:after_source,:after_task)
+                ORDER BY sample_rank,source_id,task_id LIMIT :limit
+            """
+)
+
+
+def task_parameters(
+    metadata: dict[str, Any],
+    filters: CoverageQuery,
+    subject_id: str,
+    node_id: str,
+    scope: str,
+    outcome: str,
+    cursor: str,
+    limit: int,
+) -> dict[str, Any]:
+    after_rank, after_source, after_task = 0, "", ""
+    if cursor:
+        try:
+            after_rank, after_source, after_task = json.loads(base64.urlsafe_b64decode(cursor).decode())
+        except (ValueError, TypeError, UnicodeError, binascii.Error) as error:
+            raise HTTPException(400, "Invalid task cursor") from error
+        if not isinstance(after_rank, int) or not isinstance(after_source, str) or not isinstance(after_task, str):
+            raise HTTPException(400, "Invalid task cursor")
+    children = child_ids(metadata, subject_id, node_id) if node_id else []
+    if scope == "unlisted" and not node_id:
+        raise HTTPException(400, "An unlisted selection requires a curriculum area")
+    params = {
+        **asdict(filters),
+        "original_source_id": original_source_id(filters.source_id),
+        "load_id": metadata["load_id"],
+        "subject_id": subject_id,
+        "node_id": node_id,
+        "scope": scope,
+        "children": children,
+        "outcome": outcome,
+        "after_rank": after_rank,
+        "after_source": after_source,
+        "after_task": after_task,
+        "limit": limit + 1,
+        "subject_similarity": 1 - metadata["manifest"]["coverage"]["subject_distance"],
+        "capability_similarity": 1 - metadata["manifest"]["coverage"]["capability_distance"],
+    }
+    return params
+
+
+def task_response(metadata: dict[str, Any], rows: list[dict[str, Any]], limit: int) -> dict[str, Any]:
+    next_cursor = ""
+    if len(rows) > limit:
+        last = rows[limit - 1]
+        next_cursor = base64.urlsafe_b64encode(
+            json.dumps([last["sample_rank"], last["source_id"], last["task_id"]]).encode()
+        ).decode()
+    return {
+        "release_id": metadata["release_id"],
+        "tasks": [{**row, "source_id": canonical_source_id(row["source_id"])} for row in rows[:limit]],
+        "next_cursor": next_cursor,
+    }
 
 
 def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
@@ -269,81 +415,40 @@ def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
             },
             "area_counts": area_counts,
             "sources": sources,
-            "hierarchy": manifest["nodes"],
+            "hierarchy": display_hierarchy(manifest["nodes"]),
             "lineage": manifest["lineage"],
             "scope_summary": scope_summary,
             "role_projection": manifest.get("role_projection"),
         }
+
+    @api.get("/curriculum/area")
+    def area(
+        filters: Annotated[CoverageQuery, Depends(coverage_query)],
+        subject_id: str,
+        node_id: str,
+        scope: Literal["all", "unlisted"] = "all",
+    ) -> dict[str, Any]:
+        with engine.connect() as connection:
+            metadata = loaded_release(connection, filters.release)
+            params = area_parameters(metadata, filters, subject_id, node_id, scope)
+            rows = [dict(row) for row in connection.execute(text(AREA_SQL), params).mappings()]
+        return area_response(metadata, rows)
 
     @api.get("/curriculum/tasks")
     def tasks(
         filters: Annotated[CoverageQuery, Depends(coverage_query)],
         subject_id: str = "",
         node_id: str = "",
+        scope: Literal["all", "unlisted"] = "all",
         outcome: Literal["all", "assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped"] = "all",
         cursor: str = "",
         limit: int = Query(50, ge=1, le=100),
     ) -> dict[str, Any]:
-        after_rank, after_source, after_task = 0, "", ""
-        if cursor:
-            try:
-                after_rank, after_source, after_task = json.loads(base64.urlsafe_b64decode(cursor).decode())
-            except (ValueError, TypeError, UnicodeError, binascii.Error) as error:
-                raise HTTPException(400, "Invalid task cursor") from error
-            if not isinstance(after_rank, int) or not isinstance(after_source, str) or not isinstance(after_task, str):
-                raise HTTPException(400, "Invalid task cursor")
         with engine.connect() as connection:
             metadata = loaded_release(connection, filters.release)
-            params = {
-                **asdict(filters),
-                "original_source_id": original_source_id(filters.source_id),
-                "load_id": metadata["load_id"],
-                "subject_id": subject_id,
-                "node_id": node_id,
-                "outcome": outcome,
-                "after_rank": after_rank,
-                "after_source": after_source,
-                "after_task": after_task,
-                "limit": limit + 1,
-                "subject_similarity": 1 - metadata["manifest"]["coverage"]["subject_distance"],
-                "capability_similarity": 1 - metadata["manifest"]["coverage"]["capability_distance"],
-            }
-            rows = [
-                dict(row)
-                for row in connection.execute(
-                    text(
-                        SAMPLE_SQL
-                        + """
-                , eligible AS (
-                SELECT t.source_id,t.task_id,t.content_hash,d.detail->>'task_preview' AS task_preview,
-                    t.description_status,s.outcome,
-                    ROW_NUMBER() OVER (PARTITION BY t.source_id ORDER BY t.task_id) AS sample_rank
-                FROM selected_tasks t JOIN states s USING (source_id,task_id,content_hash)
-                JOIN curriculum_tasks d USING (load_id,source_id,task_id)
-                WHERE (:node_id='' OR EXISTS (SELECT 1 FROM placements p
-                    WHERE p.source_id=t.source_id AND p.task_id=t.task_id
-                        AND p.subject_id=:subject_id AND p.node_id=:node_id))
-                    AND (:outcome='all' OR s.outcome=:outcome)
-                )
-                SELECT * FROM eligible
-                WHERE (sample_rank,source_id,task_id)>(:after_rank,:after_source,:after_task)
-                ORDER BY sample_rank,source_id,task_id LIMIT :limit
-            """
-                    ),
-                    params,
-                ).mappings()
-            ]
-        next_cursor = ""
-        if len(rows) > limit:
-            last = rows[limit - 1]
-            next_cursor = base64.urlsafe_b64encode(
-                json.dumps([last["sample_rank"], last["source_id"], last["task_id"]]).encode()
-            ).decode()
-        return {
-            "release_id": metadata["release_id"],
-            "tasks": [{**row, "source_id": canonical_source_id(row["source_id"])} for row in rows[:limit]],
-            "next_cursor": next_cursor,
-        }
+            params = task_parameters(metadata, filters, subject_id, node_id, scope, outcome, cursor, limit)
+            rows = [dict(row) for row in connection.execute(text(TASKS_SQL), params).mappings()]
+        return task_response(metadata, rows, limit)
 
     @api.get("/curriculum/task")
     def task(source_id: str, task_id: str, release: str = "") -> dict[str, Any]:

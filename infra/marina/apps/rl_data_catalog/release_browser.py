@@ -170,6 +170,9 @@ def source_sweep(page: Page, root: str, sources: list[dict[str, Any]], shots: Pa
         everything = check_view(page, sources, include_hidden=True, expanded=True)
         page.reload()
         check_view(page, sources, include_hidden=True, expanded=True)
+        page.get_by_role("separator", name="Resize Source column", exact=True).press("ArrowRight")
+        check_view(page, sources, include_hidden=True, expanded=True)
+        page.locator("#reset-column-widths").click()
         page.locator(".table-scroller").evaluate("e=>e.scrollLeft=0")
         page.screenshot(path=str(shots / f"everything-{theme}-{width}.png"))
         results.append(
@@ -200,12 +203,35 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
                 results.append({"theme": theme, "width": width, "release": release["release_id"], "use": use, **result})
         page.goto(root + "curriculum.html")
         check_map(page)
+        coverage = page.evaluate("async()=> (await fetch('api/curriculum')).json()")
+        subjects = {node["subject_id"]: node["name"] for node in coverage["hierarchy"] if node["kind"] == "subject"}
+
+        def normalize(label: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", label.casefold().replace("&", "and"))
+
+        assert all(
+            node["kind"] == "subject" or normalize(node["name"]) != normalize(subjects[node["subject_id"]])
+            for node in coverage["hierarchy"]
+        )
         domains = page.locator("#domain option").evaluate_all("opts=>opts.map(o=>o.value).filter(Boolean)")
         for domain in domains:
             page.locator("#domain").select_option(domain)
             expect(page.locator(".domain-card")).to_have_count(1)
             expect(page.locator(".domain-card")).to_have_attribute("data-subject", domain)
             results.append({"theme": theme, "width": width, "domain": domain, **check_map(page)})
+            expected_nodes = {
+                node["node_id"]
+                for node in coverage["hierarchy"]
+                if node["subject_id"] == domain and node["kind"] != "subject"
+            }
+            rendered_nodes = set(page.locator(".map-branch").evaluate_all("nodes=>nodes.map(n=>n.dataset.nodeId)"))
+            assert rendered_nodes == expected_nodes, "A taxonomy node (including an empty capability) is unreachable"
+            count = integers(page.locator(".domain-count").inner_text())[0]
+            expect(page.locator("#area-summary")).to_contain_text(f"{count:,} task instances")
+            breakdown = page.locator("#area-sources b").all_inner_texts()
+            assert sum(integers(value)[0] for value in breakdown) == count
+            expect(page.locator("#task-message")).to_contain_text(re.compile("sampled examples|No task examples"))
+
             page.locator("#search").fill("__release_check_unmatched_search__")
             check_map(page)
             page.locator("#search").fill("")

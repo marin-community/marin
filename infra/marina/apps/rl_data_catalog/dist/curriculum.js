@@ -138,6 +138,8 @@ function renderMap() {
     children.get(parent).push(area);
   }
   const query = $('search').value.trim().toLowerCase();
+  for (const siblings of children.values()) siblings.sort((a, b) => $('area-sort').value === 'count' ?
+    (counts.get(key(b)) || 0) - (counts.get(key(a)) || 0) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
   const matches = new Map();
   function matching(area) {
     if (!matches.has(key(area))) matches.set(key(area), !query || `${area.name} ${area.description}`.toLowerCase().includes(query) || (children.get(key(area)) || []).some(matching));
@@ -188,12 +190,18 @@ function renderMap() {
     const count = counts.get(key(area)) || 0;
     const subjectOnly = count - childCount;
     const hidden = childCount - displayedCount;
-    const remainder = count - displayedCount;
-    if (remainder > 0) {
+    if (subjectOnly > 0) {
       const row = node('div', '', 'map-area map-remainder');
-      const reason = hidden ? 'subject only or hidden by search' : 'subject only';
-      row.append(node('span', `Other/unlisted (${reason})`, 'map-area-name'), node('span', number.format(remainder), 'map-area-count'));
-      row.title = `${number.format(subjectOnly)} subject matches without a capability match; ${number.format(hidden)} in subcategories hidden by search. Counts use the same selected coverage population.`;
+      const unlisted = {...area, name: 'Other/unlisted (subject only)', scope: 'unlisted'};
+      const action = () => openTasks(unlisted);
+      row.append(button(unlisted.name, 'map-area-name', action), button(number.format(subjectOnly), 'map-area-count', action));
+      row.title = 'subject-only: matched this subject but no specific capability';
+      container.append(row);
+    }
+    if (hidden > 0) {
+      const row = node('div', '', 'map-area map-remainder map-search-hidden');
+      const action = () => { $('search').value = ''; renderCoverage(); };
+      row.append(button('Hidden by search (show all)', 'map-area-name', action), button(number.format(hidden), 'map-area-count', action));
       container.append(row);
     }
     return displayed;
@@ -230,14 +238,31 @@ function openTasks(area, outcome = 'all') {
   return loading;
 }
 
-async function showTasks(area, outcome = 'all') {
+async function showTasks(area, outcome = 'all', sourceId = '') {
   state.taskQuery = new URLSearchParams(state.data.filters); state.taskQuery.set('release', state.data.release_id);
-  if (area) { state.taskQuery.set('node_id', area.node_id); state.taskQuery.set('subject_id', area.subject_id); }
+  if (area) { state.taskQuery.set('node_id', area.node_id); state.taskQuery.set('subject_id', area.subject_id); state.taskQuery.set('scope', area.scope || 'all'); }
+  if (sourceId) state.taskQuery.set('source_id', sourceId);
   state.taskQuery.set('outcome', outcome);
-  state.next = ''; $('task-list').replaceChildren(); $('task-panel').hidden = false;
+  const request = ++state.taskRequest;
+  state.next = ''; $('area-sources').replaceChildren(); $('area-summary').textContent = ''; $('task-list').replaceChildren(); $('task-panel').hidden = false;
   $('task-heading').textContent = area?.name || (outcome === 'all' ? 'Sampled examples' : outcomes[outcome]);
-  $('task-scope').textContent = `${$('source').selectedOptions[0].textContent} · sampled examples`;
-  await loadTasks();
+  $('task-scope').textContent = `${sourceId || $('source').selectedOptions[0].textContent} · sampled examples`;
+  if (area) {
+    try {
+      const details = await json(`api/curriculum/area?${state.taskQuery}`);
+      if (request !== state.taskRequest) return;
+      $('area-summary').textContent = `${number.format(details.count)} task instances · complete source breakdown. Task examples below are sampled.`;
+      for (const source of details.sources) {
+        const row = node('div', '', 'area-source');
+        const select = button(source.name || source.source_id, 'text-button', () => {
+          showTasks(area, outcome, source.source_id);
+        });
+        const evidence = node('a', 'Source evidence ↗'); evidence.href = `evidence.html#source_id=${encodeURIComponent(source.source_id)}`;
+        row.append(select, node('b', number.format(source.count)), evidence); $('area-sources').append(row);
+      }
+    } catch (error) { if (request === state.taskRequest) $('area-summary').textContent = `Source breakdown could not be loaded. ${error.message}`; }
+  }
+  if (request === state.taskRequest) await loadTasks();
 }
 async function loadTasks() {
   const request = ++state.taskRequest;
@@ -320,6 +345,7 @@ $('domain').addEventListener('change', () => navigate($('domain').value ? state.
 $('search').addEventListener('input', () => {
   ++state.taskRequest; $('task-panel').hidden = true; renderCoverage();
 });
+$('area-sort').addEventListener('change', renderMap);
 $('more-tasks').addEventListener('click', loadTasks);
 $('close-tasks').addEventListener('click', () => { ++state.taskRequest; $('task-panel').hidden = true; });
 $('close-detail').addEventListener('click', () => $('task-detail').close());

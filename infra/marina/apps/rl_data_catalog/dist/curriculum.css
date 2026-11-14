@@ -97,3 +97,8 @@
   .domain-count:hover { background: #34593f; }
   .outcome-button { border-color: var(--line); }
 }
+
+.area-source { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 12px; align-items: center; padding: 10px 20px; font-size: 12px; border-top: 1px solid var(--line); }
+.area-source button { text-align: left; overflow-wrap: anywhere; }
+.area-source b { font-variant-numeric: tabular-nums; }
+@media (max-width:650px) { .area-source { grid-template-columns: minmax(0,1fr) auto; } .area-source a { grid-column: 1 / -1; } }

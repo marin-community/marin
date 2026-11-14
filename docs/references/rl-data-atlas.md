@@ -96,7 +96,7 @@ tooltip and Evidence, and leave Examples Pending. A pre-filtration converted cou
 content review or backend fit never supplies an admitted count. The Filtration
 ledger links the canonical filter, private output and validation receipts with
 their SHA-256 hashes and records exclusions by typed reason. The table also lists training/evaluation use,
-Quality, Result, lexical contamination, actor-only Daytona verdict and leading
+Quality, Result, lexical contamination, backend evidence and leading
 curriculum area. The levels define required content-review scope: QUICK converts
 without content review, SAMPLE requires a complete review of the selected sample,
 and FULL requires a review of the whole retained population. An explicitly accepted
@@ -163,14 +163,14 @@ Enum chips have no subtitle text. Issue rate and Overlap have numeric columns; a
 Result from incomplete content review carries a provisional variant within its
 chip unless an explicit whole-source waiver finalizes it. Review progress and lower bounds appear only on the source Evidence page.
 
-**Daytona safe** measures the actor only: SAFE requires at most ten snapshot
+**Daytona safety**, shown in the Backends tooltip and evidence page, measures the actor only: SAFE requires at most ten snapshot
 identities and no refused actor requirements. Sources without an actor show N/A;
 grandfathered blends still using the legacy internal format show a dash. Retained
 TaskCompendium releases use their new actor measurements. A verified byte-identical
 subset may retain an admitted original's qualification through its recorded
 remediation lineage; changed task bytes require new qualification. Package-lock
 graders run on LOCAL with separate compatibility evidence. A source without a measured actor verdict cannot enter
-new ingestion. The backend map records each role's demands and blockers.
+new ingestion. The backend map records each role's demands and blockers. It includes the actor verdict, unique-snapshot count against the cap, failed requirements, measurement provenance and the operations link; Daytona has no separate main-table column.
 
 Examples is the admitted count after filtration; there is no separate oracle
 column. For a source with oracles it requires completed full-population oracle
@@ -735,6 +735,19 @@ evidence through their SHA-bound provenance receipts. Select a count to read sam
 examples, then open an example for its public instruction preview, embedding
 text, cosine similarity to curriculum anchors and alternative matches.
 Long instruction previews record the original character count and truncation.
+Every node, including empty capabilities and Other/unlisted (subject only), opens
+its exact count and complete per-source breakdown alongside sampled task evidence.
+The task list is a bounded review sample, not the complete instance index.
+Other/unlisted means “matched this subject but no specific capability”. Search-hidden
+children have a separate show-all control. Parent counts equal their children,
+including zeros, plus the subject-only remainder. Sort sibling areas by name or
+count. Two archived taxonomy group wrappers repeat their subject names; their
+display labels use “Capability groups for …” while archived taxonomy IDs remain
+unchanged.
+
+Drag source-table header edges to resize columns, or focus a separator and use
+arrow keys (Shift for larger steps), Home or End. Widths persist per viewer when
+local storage is available. **Reset column widths** restores automatic sizing.
 
 Displayed cosine scores are similarities; distance is `1 - similarity`.
 The export uses fixed maximum distances of 0.45 for subjects and 0.25 for

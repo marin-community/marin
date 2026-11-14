@@ -200,6 +200,7 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 ("D05", "subject:D05", None, "subject", "Earth, Atmospheric, Ocean & Environmental Sciences", 7088),
                 ("D05", "earth", "subject:D05", "group", "Earth, atmospheric, ocean, and environmental sciences", 10),
                 ("D05", "climate", "earth", "capability", "Climate models", 10),
+                ("D05", "weather", "earth", "capability", "Weather prediction", 0),
                 ("D01", "subject:D01", None, "subject", "Mathematics & Statistics", 24),
                 ("D01", "arithmetic", "subject:D01", "group", "Arithmetic", 12),
                 ("D01", "add", "arithmetic", "capability", "Addition", 12),
@@ -264,6 +265,52 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                         "('counts','Marin:curriculum','placement',:subject,:node,:count)"
                     ),
                     {"subject": subject, "node": node, "count": count},
+                )
+            for task_id, capability, similarity in [("earth-only", "climate", 0.6), ("climate-example", "climate", 0.9)]:
+                detail = {
+                    "source_id": "Marin:curriculum",
+                    "task_id": task_id,
+                    "source_key": "fixture",
+                    "task_hash": task_id,
+                    "content_hash": task_id,
+                    "intended_use": "train",
+                    "population": "converted",
+                    "description": "Earth observation",
+                    "reason": "",
+                    "task_preview": "Describe the Earth's atmosphere.",
+                    "preview_truncated": False,
+                    "instruction_characters": 32,
+                    "matches": {
+                        "subjects": [
+                            {
+                                "subject_id": "D05",
+                                "membership_similarity": 0.9,
+                                "candidates": [
+                                    {"subject_id": "D05", "capability_id": capability, "similarity": similarity}
+                                ],
+                            }
+                        ],
+                        "capabilities": [],
+                    },
+                }
+                connection.execute(
+                    text(
+                        "INSERT INTO curriculum_tasks VALUES "
+                        "('counts','Marin:curriculum',:task,:task,'ready','Earth observation',CAST(:detail AS JSONB))"
+                    ),
+                    {"task": task_id, "detail": json.dumps(detail)},
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO curriculum_matches VALUES "
+                        "('counts','Marin:curriculum',:task,'D05',:capability,'subject_domain',0.9,:similarity)"
+                    ),
+                    {"task": task_id, "capability": capability, "similarity": similarity},
+                )
+            for ancestor in ["climate", "earth", "subject:D05"]:
+                connection.execute(
+                    text("INSERT INTO curriculum_ancestors VALUES ('counts','D05','climate',:ancestor)"),
+                    {"ancestor": ancestor},
                 )
             for metric, count in [("denominator", 7112), ("assigned", 30), ("subject_only", 7082)]:
                 connection.execute(

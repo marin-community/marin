@@ -32,6 +32,16 @@ IMPORT_RELOCATIONS = {
     "from taskcompendium.source_fingerprints import ": "from .bundled.source_fingerprints import ",
 }
 
+RELOCATED_SERVER_FILES = (
+    "server/app.py",
+    "server/curriculum.py",
+    "server/quality.py",
+    "server/contamination.py",
+    "server/difficulty.py",
+    "server/filtration.py",
+    "server/source_counts.py",
+)
+
 
 def oracle_inventory_payload(raw: bytes) -> dict[str, Any]:
     """Translate a full-population SAMPLE inventory ledger into pinned browser observations."""
@@ -115,15 +125,7 @@ def prepare_preview(
                 "transformation": "Unchanged" if packaged == raw else "Relocated curation model import",
             }
         )
-    for relative in (
-        "server/app.py",
-        "server/curriculum.py",
-        "server/quality.py",
-        "server/contamination.py",
-        "server/difficulty.py",
-        "server/filtration.py",
-        "server/source_counts.py",
-    ):
+    for relative in RELOCATED_SERVER_FILES:
         path = output / relative
         content = path.read_text()
         for before, after in IMPORT_RELOCATIONS.items():

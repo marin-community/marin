@@ -26,9 +26,17 @@ import requests
 from marina.client import applet_query, bearer_token, marina_request, marina_token_provider
 from playwright.sync_api import Route, sync_playwright
 
-from .prepare_preview import APP_SOURCE, IMPORT_RELOCATIONS, PREVIEW_APP_ID, PRODUCTION_APP_ID, oracle_inventory_payload
+from .prepare_preview import (
+    APP_SOURCE,
+    IMPORT_RELOCATIONS,
+    PREVIEW_APP_ID,
+    PRODUCTION_APP_ID,
+    RELOCATED_SERVER_FILES,
+    oracle_inventory_payload,
+)
 from .release_browser import curriculum_sweep, source_sweep
 from .release_evidence import (
+    SqlQuery,
     catalog_state,
     json_sha256,
     projected_sources,
@@ -41,6 +49,17 @@ from .release_receipts import (
     ReleaseInputs,
     ReleaseReceipt,
     ReleaseTarget,
+)
+from .server.curriculum import (
+    AREA_SQL,
+    RELEASE_SQL,
+    TASKS_SQL,
+    CoverageQuery,
+    area_parameters,
+    area_response,
+    display_hierarchy,
+    task_parameters,
+    task_response,
 )
 from .server.source_counts import SourceCounts
 
@@ -111,20 +130,19 @@ def check_package(package: Path, head: str, count_raw: bytes, inventory_raw: byt
     packaged_counts = ast.literal_eval(assignment.value)
     if SourceCounts.model_validate_json(packaged_counts) != SourceCounts.model_validate_json(count_raw):
         raise ValueError("Packaged count observations differ from their explicit inputs")
-    for relative in (
-        "dist/app.js",
-        "dist/common.js",
-        "dist/index.html",
-        "dist/style.css",
-        "dist/curriculum.js",
-        "server/app.py",
-        "server/filtration.py",
-    ):
-        expected = (ROOT / APP_SOURCE / relative).read_text()
-        if relative.startswith("server/"):
+    for tracked in git("ls-files", str(APP_SOURCE)).splitlines():
+        relative = str(Path(tracked).relative_to(APP_SOURCE))
+        if "tests" in Path(relative).parts or relative in {
+            "applet.toml",
+            "server/count_evidence.py",
+            "dist/measurements/oracle-inventory.json",
+        }:
+            continue
+        expected = (ROOT / tracked).read_bytes()
+        if relative in RELOCATED_SERVER_FILES:
             for before, after in IMPORT_RELOCATIONS.items():
-                expected = expected.replace(before, after)
-        if (package / relative).read_text() != expected:
+                expected = expected.replace(before.encode(), after.encode())
+        if (package / relative).read_bytes() != expected:
             raise ValueError(f"Package source differs from the checked landed cut: {relative}")
     return metadata
 
@@ -150,20 +168,55 @@ def static_preview(dist: Path) -> Iterator[str]:
 class CatalogReader:
     """Cache immutable-revision API responses during one pointer-checked browser sweep."""
 
-    def __init__(self, root: str, session: requests.Session) -> None:
+    def __init__(self, root: str, session: requests.Session, query: SqlQuery | None = None) -> None:
+        self.query = query
         self.root = root
         self.session = session
         self.provider = marina_token_provider()
         self.cache: dict[str, Any] = {}
+        self.releases: dict[str, Any] = {}
 
     def get(self, path: str) -> Any:
         url = urlsplit(path)
         query = urlencode(sorted((key, value) for key, value in parse_qsl(url.query) if value))
         key = url.path + ("?" + query if query else "")
         if key not in self.cache:
-            self.cache[key] = marina_request(
-                self.root, "GET", "/" + key, session=self.session, token_provider=self.provider
-            )
+            params = dict(parse_qsl(url.query))
+            if self.query is not None and url.path in {"api/curriculum/area", "api/curriculum/tasks"}:
+                release = params.get("release", "")
+                if release not in self.releases:
+                    self.releases[release] = self.query(RELEASE_SQL, {"release": release})["rows"][0]
+                metadata = self.releases[release]
+                filters = CoverageQuery(
+                    params.get("intended_use", "all"), params.get("source_id", ""), params.get("release", "")
+                )
+                subject, node, scope = (
+                    params.get("subject_id", ""),
+                    params.get("node_id", ""),
+                    params.get("scope", "all"),
+                )
+                if url.path == "api/curriculum/area":
+                    rows = self.query(AREA_SQL, area_parameters(metadata, filters, subject, node, scope))["rows"]
+                    data = area_response(metadata, rows)
+                else:
+                    limit = int(params.get("limit", "50"))
+                    bound = task_parameters(
+                        metadata,
+                        filters,
+                        subject,
+                        node,
+                        scope,
+                        params.get("outcome", "all"),
+                        params.get("cursor", ""),
+                        limit,
+                    )
+                    data = task_response(metadata, self.query(TASKS_SQL, bound)["rows"], limit)
+            else:
+                data = marina_request(self.root, "GET", "/" + key, session=self.session, token_provider=self.provider)
+                if self.query is not None and url.path == "api/curriculum":
+                    assert isinstance(data, dict)
+                    data = {**data, "hierarchy": display_hierarchy(data["hierarchy"])}
+            self.cache[key] = data
         return self.cache[key]
 
 
@@ -302,8 +355,10 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             raise ValueError("The preview app is no longer private")
         revision = args.revision or details["current_version"]
         provider = marina_token_provider()
-        reader = CatalogReader(f"{args.app_origin.rstrip('/')}/a/{PREVIEW_APP_ID}/v/{revision}/", session)
         query = applet_query(args.service_url, PREVIEW_APP_ID, session=session, token_provider=provider)
+        reader = CatalogReader(
+            f"{args.app_origin.rstrip('/')}/a/{PREVIEW_APP_ID}/v/{revision}/", session, query if package else None
+        )
         before = catalog_state(query)
         actual = reader.get("api/sources")
         if package or args.refresh_snapshot:
