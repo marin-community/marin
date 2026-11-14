@@ -5,12 +5,13 @@
 
 from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import DifficultySample
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PreparedTask(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     task_id: str
+    runtime_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     path: str | None
     workload: str
     backend: str

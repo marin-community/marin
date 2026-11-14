@@ -12,6 +12,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.adapter import declared_execution_limits, unsupported_harbor_contract, write_harbor_task
+from taskcompendium.harbor.runtime import write_source_runtime
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, NoGrader, judge_spec
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
@@ -20,14 +21,16 @@ from taskcompendium.runtime.staging import resource_files
 from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
+from experiments.post_training.task_curation.full_qc_inputs import task_contract
 from experiments.post_training.task_curation.prebuilt import validate_native_package
-from experiments.post_training.task_curation.sample_qc import panel_tasks
+from experiments.post_training.task_curation.sample_qc import panel_task_runtimes
 
 
 def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
-    tasks, contracts = panel_tasks(source.panel)
+    tasks, runtimes = panel_task_runtimes(source.panel)
     prepared = []
-    for task, contract in zip(tasks, contracts, strict=True):
+    for task, runtime in zip(tasks, runtimes, strict=True):
+        contract = task_contract(task, runtime)
         if task.id not in {selected.task_id for selected in source.sample.tasks}:
             raise ValueError("Prepared task is outside the frozen difficulty selection")
         selected = next(item for item in source.sample.tasks if item.task_id == task.id)
@@ -79,9 +82,11 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
                     }
                 )
                 write_harbor_task(task, directory, shape)
+            write_source_runtime(task, runtime, directory)
         prepared.append(
             PreparedTask(
                 task_id=task.id,
+                runtime_sha256=contract["runtime_sha256"],
                 path=str(directory) if reason is None else None,
                 workload="native" if native else "task_spec",
                 backend=source.backend,
