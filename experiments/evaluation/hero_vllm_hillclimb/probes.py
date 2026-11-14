@@ -536,6 +536,40 @@ async def long_load(client: Client, cases: dict, config: ProbeConfig) -> dict:
     return results
 
 
+async def first_requests(client: Client, cases: dict, config: ProbeConfig) -> dict:
+    """Latency of the first requests after server-ready against the same requests repeated.
+
+    Serving-time kernel compilation shows up as extra latency on the first request that reaches a
+    new kernel variant: a greedy decode with top-2 log-probs, prompt scoring with top-5 log-probs, and
+    a burst of short prompts arriving while another request decodes (a mixed prefill/decode batch).
+    """
+    prompts = [case["tokens"] for case in cases["load"]]
+    greedy = {"prompt": prompts[0], "max_tokens": 16, "temperature": 0.0, "logprobs": 2, "ignore_eos": True}
+
+    async def burst() -> float:
+        background = asyncio.create_task(
+            client.completion({"prompt": prompts[1], "max_tokens": 256, "temperature": 0.0, "ignore_eos": True})
+        )
+        await asyncio.sleep(1.0)
+        started = time.monotonic()
+        await asyncio.gather(
+            *(client.completion({"prompt": prompts[2 + i], "max_tokens": 1, "temperature": 0.0}) for i in range(7))
+        )
+        elapsed = time.monotonic() - started
+        await background
+        return elapsed
+
+    results = {}
+    for label in ("first", "repeat"):
+        results[label] = {
+            "greedy_logprobs2_seconds": await _timed(client.completion(greedy)),
+            "score_seconds": await _timed(client.score(prompts[0])),
+            "mixed_burst_seconds": await burst(),
+        }
+    logger.info("first requests: %s", results)
+    return results
+
+
 async def _post_root(client: Client, path: str) -> float:
     """POST an admin endpoint at the server root; return the call's wall time."""
     started = time.monotonic()

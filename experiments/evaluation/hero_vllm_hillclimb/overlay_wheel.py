@@ -33,8 +33,14 @@ def main() -> None:
         names = source.namelist()
         record_name = next(name for name in names if name.endswith(".dist-info/RECORD"))
         for path in args.paths:
-            assert source.read(path) == (args.expect_base_dir / path).read_bytes(), f"{path} differs from base"
+            if path in names:
+                assert source.read(path) == (args.expect_base_dir / path).read_bytes(), f"{path} differs from base"
+            else:
+                assert not (args.expect_base_dir / path).exists(), f"{path} exists in the base tree but not the wheel"
         with zipfile.ZipFile(args.output, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            added = [path for path in args.paths if path not in names]
+            for path in added:
+                target.writestr(path, replacements[path])
             for info in source.infolist():
                 if info.filename == record_name:
                     continue
@@ -50,6 +56,7 @@ def main() -> None:
                     data = replacements[path]
                     line = f"{path},{_record_hash(data)},{len(data)}"
                 record_lines.append(line)
+            record_lines += [f"{path},{_record_hash(replacements[path])},{len(replacements[path])}" for path in added]
             target.writestr(source.getinfo(record_name), "\n".join(record_lines) + "\n")
     digest = hashlib.sha256(args.output.read_bytes()).hexdigest()
     print(f"{args.output} sha256={digest}")

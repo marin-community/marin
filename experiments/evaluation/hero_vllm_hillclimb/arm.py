@@ -55,6 +55,7 @@ from experiments.evaluation.hero_vllm_hillclimb.probes import (
     LoadConfig,
     ProbeConfig,
     decode_consistency,
+    first_requests,
     gate_probes,
     load_sweep,
     long_load,
@@ -284,6 +285,8 @@ CANDIDATE_ARGS = {
         json.dumps(BASE_COMPILATION | {"cudagraph_capture_sizes": BASELINE_CAPTURE_SIZES}),
     ),
     "mns128": ("--max-num-seqs", "128"),
+    # Same flags as mns128; run on the jit-prewarm overlay wheel (serving-time JIT fixes).
+    "mns128jit": ("--max-num-seqs", "128"),
     "mns256": ("--max-num-seqs", "256"),
     "mns128api4": ("--max-num-seqs", "128"),
     "mns128prof": ("--max-num-seqs", "128", "--profiler-config", json.dumps(PROFILER_CONFIG)),
@@ -492,6 +495,7 @@ _PHASES = {
     "longprof": long_repeats_profiled,
     "d1": peer_load_sweep,
     "longload": long_load,
+    "first": first_requests,
 }
 
 
