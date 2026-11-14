@@ -7,7 +7,7 @@ import argparse
 import json
 import logging
 from collections import Counter
-from dataclasses import asdict, replace
+from dataclasses import replace
 from uuid import uuid4
 
 from iris.client.client import iris_ctx
@@ -31,6 +31,7 @@ from experiments.post_training.task_curation.full_qc_review import (
     assemble_shards,
     load_inputs,
     review_shard,
+    shard_contract_matches,
 )
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 
@@ -79,11 +80,15 @@ def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
             previous = read_shard(pointer)
             if previous.worker_jobs and all(job.startswith(completed_prefixes) for job in previous.worker_jobs):
                 if (
-                    previous.inputs != inputs
-                    or canonical_sha256(previous.reviewer) != canonical_sha256({"mode": "chat", **source_spec.identity})
-                    or canonical_sha256(previous.rubric) != canonical_sha256(asdict(REVIEW_RUBRIC))
-                    or (previous.shard_index, previous.shard_count, previous.batch_offset)
-                    != (args.shard_index, args.shard_count, row.batch_offset)
+                    canonical_sha256(previous.reviewer) != canonical_sha256({"mode": "chat", **source_spec.identity})
+                    or previous.shard_index != args.shard_index
+                    or not shard_contract_matches(
+                        previous,
+                        inputs,
+                        REVIEW_RUBRIC,
+                        shard_count=args.shard_count,
+                        batch_offset=row.batch_offset,
+                    )
                 ):
                     raise ValueError("Completed shard differs from the requested source, reviewer or assignment")
                 logger.info("Reusing completed primary shard: %s", previous.path)
