@@ -19,6 +19,7 @@ import dataclasses
 import json
 import logging
 import shutil
+import socket
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -56,6 +57,7 @@ from experiments.evaluation.hero_vllm_hillclimb.probes import (
     gate_probes,
     load_sweep,
     long_probes,
+    profile_points,
 )
 
 logger = logging.getLogger(__name__)
@@ -153,6 +155,18 @@ LEADER_ARGS = ("--api-server-count", "1")
 # Leader-only flag overrides per candidate label (API servers start only on the leader).
 LEADER_OVERRIDES = {"mns128api4": ("--api-server-count", "4")}
 
+# Local torch-profiler trace directory on every host; traces are uploaded after the server exits.
+PROFILE_DIR = "/tmp/hero-vllm-profile"
+# Bounded decode-step traces: no Python stacks or shapes, no blocking key_averages table on stop.
+PROFILER_CONFIG = {
+    "profiler": "torch",
+    "torch_profiler_dir": PROFILE_DIR,
+    "torch_profiler_with_stack": False,
+    "torch_profiler_dump_cuda_time_total": False,
+    "ignore_frontend": True,
+    "max_iterations": 20,
+}
+
 # Candidate flag sets, selected with --sequence items of the form <release>:<label>. A flag here
 # replaces the same baseline flag (and its value) rather than being appended twice.
 CANDIDATE_ARGS = {
@@ -168,6 +182,7 @@ CANDIDATE_ARGS = {
     "mns128": ("--max-num-seqs", "128"),
     "mns256": ("--max-num-seqs", "256"),
     "mns128api4": ("--max-num-seqs", "128"),
+    "mns128prof": ("--max-num-seqs", "128", "--profiler-config", json.dumps(PROFILER_CONFIG)),
     # Inductor still fuses combo kernels but picks them without timing benchmarks (compile determinism test).
     "bckoff": (
         "--compilation-config",
@@ -219,7 +234,7 @@ def _copy_native_logs(log_dir: str, output_uri: str) -> None:
                 shutil.copyfileobj(source, target)
 
 
-_PHASES = {"gates": gate_probes, "long": long_probes, "load": load_sweep}
+_PHASES = {"gates": gate_probes, "long": long_probes, "load": load_sweep, "profile": profile_points}
 
 
 async def _run_probes(base_url: str, config: ArmConfig, cases: dict) -> None:
@@ -251,6 +266,22 @@ async def _run_probes(base_url: str, config: ArmConfig, cases: dict) -> None:
             _write_json(uri, results | {"seconds": time.time() - started})
     if failures:
         raise RuntimeError(f"probe phases failed: {failures}")
+
+
+def _upload_profiles(output_uri: str) -> None:
+    """Copy this host's torch-profiler traces to the run directory and clear them for the next variant."""
+    root = Path(PROFILE_DIR)
+    if not root.exists():
+        return
+    host = socket.gethostname()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            with (
+                path.open("rb") as source,
+                open_url(f"{output_uri}/profile/{host}/{path.relative_to(root)}", "wb") as target,
+            ):
+                shutil.copyfileobj(source, target)
+    shutil.rmtree(root)
 
 
 def _assert_cuda_graphs(log_dir: str) -> None:
@@ -323,6 +354,7 @@ def run_arm(config: ArmConfig, instance: int = 0) -> str | None:
                         _copy_native_logs(server.log_dir, config.output_uri)
             else:
                 wait_for_iris_vllm_shutdown(launch, environment.check_alive)
+        _upload_profiles(config.output_uri)
         if not launch.is_leader:
             notify_iris_vllm_stopped(launch)
     return error
@@ -344,6 +376,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument("--waves", type=int, default=3)
     parser.add_argument("--long-lengths", default="4096,32768,65536")
+    parser.add_argument("--profile-per-engine", default="1,32,128", help="Sequences per engine for the profile phase")
     parser.add_argument("--vllm-arg", action="append", default=[], help="Extra vLLM flag; repeat per token")
     parser.add_argument("--drop-arg", action="append", default=[], help="Remove a baseline flag and its value")
     parser.add_argument(
@@ -549,6 +582,7 @@ def _variant_config(args, name, item, geometry, iris_config) -> ArmConfig:
             ),
             long_lengths=tuple(int(n) for n in args.long_lengths.split(",")),
             data_parallel_size=geometry.global_data_parallel_size,
+            profile_per_engine=tuple(int(n) for n in args.profile_per_engine.split(",")),
         ),
         env=env,
         leader_args=LEADER_OVERRIDES.get(label, LEADER_ARGS),

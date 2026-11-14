@@ -8,6 +8,7 @@ a fixed data-parallel engine carry vLLM's ``X-data-parallel-rank`` header.
 """
 
 import asyncio
+import itertools
 import json
 import logging
 import time
@@ -44,6 +45,7 @@ class ProbeConfig:
     filler_per_rank: int = 8
     filler_tokens: int = 2048
     data_parallel_size: int = 16
+    profile_per_engine: tuple[int, ...] = (1, 32, 128)
 
 
 def _top(entry: dict | None) -> list[list]:
@@ -227,9 +229,11 @@ async def long_probes(client: Client, cases: dict, config: ProbeConfig) -> dict:
     return results
 
 
-async def _stream_request(client: Client, body: dict, record: dict) -> None:
+async def _stream_request(client: Client, body: dict, record: dict, rank: int | None = None) -> None:
     record["submit"] = time.monotonic()
-    stamps = []
+    stamps: list = []
+    # Callers that cancel the stream still see the stamps collected so far.
+    record["stamps"] = stamps
     async with client.session.post(
         f"{client.base_url}/completions",
         json={
@@ -238,6 +242,7 @@ async def _stream_request(client: Client, body: dict, record: dict) -> None:
             "stream": True,
             "stream_options": {"include_usage": True, "continuous_usage_stats": True},
         },
+        headers={_RANK_HEADER: str(rank)} if rank is not None else {},
     ) as response:
         if response.status != 200:
             raise RuntimeError(f"stream failed {response.status}: {(await response.text())[:2000]}")
@@ -320,6 +325,107 @@ async def load_sweep(client: Client, cases: dict, config: ProbeConfig, on_progre
         if on_progress is not None:
             on_progress(results)
         logger.info("C%d: %s", concurrency, {k: v for k, v in results[f"c{concurrency}"].items() if k != "requests"})
+    return results
+
+
+async def _post_root(client: Client, path: str) -> float:
+    """POST an admin endpoint at the server root; return the call's wall time."""
+    started = time.monotonic()
+    async with client.session.post(f"{client.base_url.removesuffix('/v1')}/{path}") as response:
+        if response.status != 200:
+            raise RuntimeError(f"{path} failed {response.status}: {(await response.text())[:2000]}")
+    return time.monotonic() - started
+
+
+def _gaps_in(records: list[dict], start: float, end: float) -> list[float]:
+    """Per-request inter-token gaps (seconds per token) whose both ends fall inside [start, end]."""
+    gaps = []
+    for record in records:
+        stamps = record.get("stamps") or []
+        for (t0, _), (t1, n1) in itertools.pairwise(stamps):
+            if start <= t0 and t1 <= end:
+                gaps.append((t1 - t0) / n1)
+    return gaps
+
+
+def _gap_summary(gaps: list[float]) -> dict:
+    return {
+        "n": len(gaps),
+        "itl_p50": _quantile(gaps, 0.5),
+        "itl_p10": _quantile(gaps, 0.1),
+        "itl_p90": _quantile(gaps, 0.9),
+        "itl_mean": sum(gaps) / len(gaps) if gaps else None,
+    }
+
+
+async def profile_points(client: Client, cases: dict, config: ProbeConfig) -> dict:
+    """Pure-decode steps at a fixed number of sequences per engine, with a torch-profiler window.
+
+    For each point, every engine gets exactly ``per_engine`` streaming requests (pinned by the
+    rank header, all admitted at once, so the window has no prefill). Inter-token latency is
+    measured in three windows on the same requests: before, during and after /start_profile ..
+    /stop_profile, which shows how much the profiler perturbs the step. The server must run with
+    --profiler-config (torch, max_iterations bounds the traced steps).
+    """
+    prompts = [case["tokens"] for case in cases["load"]]
+    ranks = list(range(config.data_parallel_size))
+    results = {}
+    for per_engine in config.profile_per_engine:
+        records: list[dict] = []
+        tasks = []
+        for rank in ranks:
+            for index in range(per_engine):
+                record: dict = {"rank": rank}
+                records.append(record)
+                body = {
+                    "prompt": prompts[(rank * per_engine + index) % len(prompts)],
+                    "max_tokens": config.load.max_tokens,
+                    "temperature": config.load.temperature,
+                    "seed": rank * 1000 + index,
+                    "ignore_eos": True,
+                }
+                tasks.append(asyncio.create_task(_stream_request(client, body, record, rank)))
+        running = await _wait_engines_busy(client, ranks)
+        deadline = time.monotonic() + 120.0
+        while any(running.get(str(rank), 0) < per_engine for rank in ranks):
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"engines did not reach {per_engine} running: {running}")
+            await asyncio.sleep(1.0)
+            running = _running_by_engine(await client.metrics_text())
+        await asyncio.sleep(10.0)
+        before_start = time.monotonic()
+        await asyncio.sleep(10.0)
+        profile_start = time.monotonic()
+        start_call = await _post_root(client, "start_profile")
+        await asyncio.sleep(8.0)
+        profile_end = time.monotonic()
+        stop_call = await _post_root(client, "stop_profile")
+        after_start = time.monotonic()
+        await asyncio.sleep(10.0)
+        after_end = time.monotonic()
+        running_end = _running_by_engine(await client.metrics_text())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        finished = sum(1 for record in records if "end" in record)
+        results[f"e{per_engine}"] = {
+            "per_engine": per_engine,
+            "requests": len(records),
+            "finished_before_cancel": finished,
+            "running_at_start": running,
+            "running_at_end": running_end,
+            "before": _gap_summary(_gaps_in(records, before_start, profile_start)),
+            "profiled": _gap_summary(_gaps_in(records, profile_start, profile_end)),
+            "after": _gap_summary(_gaps_in(records, after_start, after_end)),
+            "start_profile_seconds": start_call,
+            "stop_profile_seconds": stop_call,
+            "windows": [before_start, profile_start, profile_end, after_start, after_end],
+        }
+        logger.info(
+            "profile e%d: %s", per_engine, {k: results[f"e{per_engine}"][k] for k in ("before", "profiled", "after")}
+        )
+        # Let the aborted requests drain before the next point.
+        await asyncio.sleep(10.0)
     return results
 
 
