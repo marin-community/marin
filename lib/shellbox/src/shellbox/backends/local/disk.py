@@ -133,6 +133,22 @@ class LocalDisk:
             raise RuntimeError(f"Local disk guardian failed; allocation retained for startup recovery: {detail}")
 
 
+def reclaim_inactive_disks(root: Path) -> None:
+    """Reclaim existing released leases without recreating a guardian's unlinked lease."""
+    for directory in root.glob("sandbox-*"):
+        try:
+            lease_file = (directory / "lease").open("r+")
+        except FileNotFoundError:
+            continue
+        with lease_file as lease:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                continue
+            if directory.exists():
+                disk_lifecycle.reclaim(directory)
+
+
 class LocalDiskPool:
     """A host capability: construction verifies mount, overlay, ENOSPC and cleanup.
 
@@ -161,31 +177,17 @@ class LocalDiskPool:
             raise UnsupportedMachineSpec("LOCAL disk root must be in a private/slave pod mount namespace")
         with (self.root / "pool.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            self._reclaim()
+            reclaim_inactive_disks(self.root)
         try:
             self._probe()
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             raise UnsupportedMachineSpec(f"LOCAL disk enforcement host probe failed: {error}") from error
 
-    def _reclaim(self) -> None:
-        for directory in self.root.glob("sandbox-*"):
-            try:
-                lease_file = (directory / "lease").open("a")
-            except FileNotFoundError:
-                continue  # A live guardian finished removing its allocation.
-            with lease_file as lease:
-                try:
-                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    continue
-                if directory.exists():
-                    disk_lifecycle.reclaim(directory)
-
     def create(self, storage_mb: int) -> LocalDisk:
         """Allocate exactly storage_mb MiB and wait for the ext4 mount."""
         with (self.root / "pool.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            self._reclaim()
+            reclaim_inactive_disks(self.root)
             directory = Path(tempfile.mkdtemp(prefix="sandbox-", dir=self.root))
             with ExitStack() as resources:
                 errors = resources.enter_context(tempfile.TemporaryFile())

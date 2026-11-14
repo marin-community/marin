@@ -1659,6 +1659,34 @@ frozen runtime binding as `TaskConfig.source_runtime`. TaskSpec trials validate 
 task/runtime hashes and equality with any existing sidecar; native Harbor trials
 reject this field. The producer reads this binding from the frozen input cohort,
 so the historical package and its checksum remain unchanged.
+
+LOCAL continuation workers can share an explicit physical-host admission contract:
+
+```json
+{"control_root":"s3://marin-us-east-02a/marin/rl-data/atlas/local-host-admission/v1","max_trials_per_host":1}
+```
+
+Pass its file as `--host-admission`, with `--host-node-id "$IRIS_NODE_NAME"`
+and `--host-worker-id "$IRIS_TASK_ID"`, to `calibrate` or `retry`. All participating
+workers must use the same pinned control root and limit. Atomic conditional-object
+slots coordinate private pod namespaces by the Iris physical node name; the kernel
+boot ID must match the host contract. Admission waits before starting Harbor and
+holds a slot through its subprocess, including teardown. Each attempt records
+`host-admission.json`. Source machine arguments and execution limits do not change.
+
+Held claims never expire or get stolen. A crashed worker can leave a claim held;
+release requires evidence that its exact owner and owned resources are gone.
+Changing the contract or reusing a host name after a reboot fails closed until
+that evidence is reconciled. A per-process semaphore or a lock in a pod-private
+disk root does not enforce this campaign-wide host cap.
+
+Known pre-command host failures remain unscored infrastructure: the original
+Daytona oracle's resource-counter call finding a closed machine, and LOCAL's
+disk-probe loop-allocation failure. Historical one-attempt phases remain readable;
+new calibration still uses three infrastructure attempts, with bounded backoff
+for these signatures. A matching message from source execution is insufficient.
+LOCAL reclamation opens only an existing released lease, preserving a live
+guardian's lock even after its lease pathname is unlinked during cleanup.
 Calibration validates and deduplicates Harbor's selected-result copy and physical
 attempt result before consuming the physical verdict, oracle exit and resource receipts.
 Calibration and approved retry trials set `trial_attempt_timeout_sec` to 72 hours.

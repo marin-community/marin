@@ -8,12 +8,13 @@ import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ContentEvidenceReference
+from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.local import cgroup
 from taskcompendium.evaluation.corpus import file_sha256
@@ -28,6 +29,12 @@ from taskcompendium.pipeline.oracle_filter import (
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation import oracle_filter
+from experiments.post_training.task_curation.local_host_admission import (
+    HostSlotRecord,
+    LocalHostAdmission,
+    LocalHostAdmissionConfig,
+    SlotStatus,
+)
 from experiments.post_training.task_curation.oracle_filter import (
     backend_code_files,
     calibrate_cohort,
@@ -288,6 +295,43 @@ def test_retry_requires_approval_for_the_actual_parent_result(tmp_path, retry_ca
     with pytest.raises(ValueError, match="another parent attempt"):
         write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, tmp_path / "plan")
     assert len(case.calls) == 3
+
+
+def test_retry_holds_shared_host_slot_during_the_actual_harbor_subprocess(tmp_path, monkeypatch, retry_case):
+    case = retry_case
+
+    def storage(path):
+        return conditional_object(str(tmp_path / "controls" / path.removeprefix("s3://controls/")))
+
+    admission = LocalHostAdmission(
+        LocalHostAdmissionConfig(control_root="s3://controls/admission", max_trials_per_host=1),
+        UUID(int=1),
+        "node-1",
+        "worker-1",
+        storage,
+    )
+    runner = subprocess.run
+
+    def process_boundary(args, **kwargs):
+        if "harbor" in args:
+            control = storage(admission.control_path("slot-0000.json")).read()
+            assert control is not None
+            record = HostSlotRecord.model_validate_json(control.data)
+            assert record.status is SlotStatus.HELD
+            assert (record.worker_id, record.task_id) == ("worker-1", "task")
+        return runner(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", process_boundary)
+    frozen = tmp_path / "retry-plan"
+    write_retry_plan(case.cohort, case.parent_map, case.approvals, case.backend_fix, frozen)
+    destination = tmp_path / "retry-run"
+    retry_cohort(frozen / "plan.json", destination, 1, host_admission=admission)
+    observations = list(destination.rglob("host-admission.json"))
+    assert len(observations) == 1
+    assert json.loads(observations[0].read_text())["node_id"] == "node-1"
+    next_claim = admission.try_claim("next-task")
+    assert next_claim is not None
+    next_claim.release()
 
 
 @pytest.mark.parametrize("retry_case", ["grown"], indirect=True)
