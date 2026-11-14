@@ -18,6 +18,7 @@ from taskcompendium.models import ExecutionRequirements, NoGrader, judge_spec
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 from taskcompendium.runtime.staging import resource_files
 
+from experiments.post_training.glm import GLM_MODEL
 from experiments.post_training.task_curation.calibration_inventory import packages_lock_exists
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
@@ -43,7 +44,9 @@ def prepare_source(source: DifficultySource, root: Path) -> PreparedSource:
         judge = judge_spec(task.grader)
         if reason is None and source.backend == "daytona":
             reason = "daytona_snapshot_preflight_pending" if native else "faithful_daytona_task_spec_factory_pending"
-        if reason is None and judge is not None and judge.model not in {"", "glm-5.3"}:
+        if reason is None and judge is not None and judge.api != "chat_completions":
+            reason = f"production_judge_api_not_qualified:{judge.api}"
+        if reason is None and judge is not None and judge.model not in {"", GLM_MODEL}:
             reason = f"production_judge_route_not_qualified:{judge.model}"
         if reason is None:
             environments = [task.environment_requirements]

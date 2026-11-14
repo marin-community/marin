@@ -901,6 +901,10 @@ GLM judges use the same production host service at temperature 0.7. The host
 records requested and effective parameters while preserving each source's
 TaskSpec, rubric and grading token limits. A blank declared judge model uses the explicitly recorded
 GLM host default; a different named model requires its own qualified route.
+Only Chat Completions judge APIs are qualified; Responses judges retain an
+explicit `production_judge_api_not_qualified:responses` reason before candidate
+execution. Sources without judges omit judge-window traffic and temperature
+metadata.
 Each source's attempt receipt links separate candidate and judge traffic
 archives and token counts. Final judge traffic, including replies that outlive
 an infrastructure-failed task, is sealed under `trials/judge/`.
@@ -920,6 +924,9 @@ network qualification. A task's first valid score, including zero, is retained;
 only unfinished tasks execute. Individual attempt receipts also survive a source
 aggregate interrupted by a framework failure. Every continuation writes a new
 catalog and retains references to the previous attempts.
+A continuation records its parent serving and source-queue bindings before
+dispatch. Later runs verify this ancestry even when an interrupted worker never
+visited a source or wrote its aggregate; inherited scores remain reusable once.
 
 Per-source token and GPU figures sum available source aggregates. An interrupted
 source may lack those totals; use every campaign's final model-traffic receipt
