@@ -88,7 +88,7 @@ pub async fn maintain(runtime: &TableRuntime) -> Result<bool, StatsError> {
             recovered_key
         };
         let missing_columns = column_bounds::missing_columns(&record.column_bounds, bounds_columns);
-        // Every missing column gets an entry, if only `ALWAYS_SCAN`, so a
+        // Every missing column gets an entry, if only `ColumnRange::Unknown`, so a
         // footer without statistics cannot hold a backfill slot forever.
         let columns = column_bounds::from_parquet(input.metadata(), &missing_columns);
         if key.is_none() && columns.is_empty() {

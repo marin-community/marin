@@ -509,8 +509,10 @@ fn published_snapshot_rebuild_preserves_segment_artifacts_and_column_bounds() {
             },
         )]),
     };
-    let column_bounds =
-        crate::store::column_bounds::ColumnBounds::from([("epoch_ms".to_string(), (1_000, 2_000))]);
+    let column_bounds = crate::store::column_bounds::ColumnBounds::from([(
+        "epoch_ms".to_string(),
+        crate::store::column_bounds::ColumnRange::new(1_000, 2_000),
+    )]);
     let segment = PublishedObjectSegment {
         row: SegmentRow {
             namespace: "a".to_string(),
