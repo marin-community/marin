@@ -69,6 +69,45 @@ class NativeVerifierGrade(BaseModel):
     task_checksum: str
 
 
+def pre_oracle_host_unavailable(result: dict[str, Any], verdict: dict | None, oracle_exit_code: int | None) -> bool:
+    """Recognize frozen host failures that occurred before the original command."""
+    config = result.get("config", {})
+    if (
+        verdict is not None
+        or oracle_exit_code is not None
+        or (result.get("verifier_result") or {}).get("rewards")
+        or (result.get("agent_info") or {}).get("name") != "oracle"
+        or config.get("agent", {}).get("name") != "oracle"
+    ):
+        return False
+    exception = result.get("exception_info") or {}
+    kind = exception.get("exception_type")
+    message = exception.get("exception_message", "")
+    traceback = exception.get("exception_traceback", "")
+    backend = config.get("environment", {}).get("type")
+    if backend == "daytona":
+        return (
+            kind == "RuntimeError"
+            and message == "Machine is closed"
+            and "/harbor/agents/oracle.py" in traceback
+            and "counters = await resource_counters(environment)" in traceback
+            and "in resource_counters" in traceback
+            and "await environment.exec_control(" in traceback
+            and "/shellbox/backends/daytona/machine.py" in traceback
+        )
+    return (
+        backend == "local"
+        and result.get("agent_execution") is None
+        and kind == "UnsupportedMachineSpec"
+        and message.startswith("LOCAL disk enforcement host probe failed:")
+        and "failed to setup loop device for " in message
+        and "/disk.img" in message
+        and "/shellbox/backends/local/disk.py" in traceback
+        and "self._probe()" in traceback
+        and "in _prepare" in traceback
+    )
+
+
 class OracleTrialReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     path: str
@@ -129,6 +168,8 @@ class OracleTrialReceipt(BaseModel):
             FailureSignal.VERIFIER_TIMEOUT,
         }:
             return signal
+        if pre_oracle_host_unavailable(self.result, self.verdict, self.oracle_exit_code):
+            return FailureSignal.INFRASTRUCTURE
         if (self.verdict or {}).get("status") == "infra_error":
             return FailureSignal.INFRASTRUCTURE
         if self.infrastructure_retry is not None and not self.scored and signal is FailureSignal.NON_RESOURCE:
@@ -261,7 +302,11 @@ class ResourceCalibrationReceipt(BaseModel):
                 infrastructure_retries += 1
                 if infrastructure_retries > 3:
                     raise ValueError("Calibration exceeded the infrastructure retry budget")
-                if index == len(self.attempts) - 1 and infrastructure_retries < 3:
+                if (
+                    index == len(self.attempts) - 1
+                    and infrastructure_retries < 3
+                    and not pre_oracle_host_unavailable(trial.result, trial.verdict, trial.oracle_exit_code)
+                ):
                     raise ValueError("Calibration infrastructure retry budget is incomplete")
                 continue
             infrastructure_retries = 0
