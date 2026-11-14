@@ -111,15 +111,13 @@ def fingerprint_source(documents: Iterable[Mapping], inputs: dict[str, str]) -> 
     count, selected = seeded_sample(
         samples(), size=REVIEW_SAMPLE_SIZE, key=lambda sample: seeded_order(sample.task_id, FINGERPRINT_SEED)
     )
-    if not count:
-        raise ValueError("Source fingerprints require a nonempty converted population")
     return SourceFingerprint(
         seed=FINGERPRINT_SEED,
         task_count=count,
         within_source_duplicates=duplicate_count,
         sample_sha256=canonical_sha256([sample.model_dump(mode="json") for sample in selected]),
         sample=selected,
-        instruction_minhash=signature,
+        instruction_minhash=signature if count else [],
         instruction_hashes=nsmallest(HASH_SAMPLE_SIZE, instructions),
         reference_hashes=nsmallest(HASH_SAMPLE_SIZE, references),
         test_hashes=nsmallest(HASH_SAMPLE_SIZE, tests),
@@ -140,6 +138,19 @@ def sampled_hash_overlap(left: list[str], right: list[str]) -> float:
 
 
 def pair_similarity(left_id: str, left: SourceFingerprint, right_id: str, right: SourceFingerprint) -> PairSimilarity:
+    if not left.task_count or not right.task_count:
+        return PairSimilarity(
+            left=left_id,
+            right=right_id,
+            rank_score=0,
+            instruction_similarity=0,
+            instruction_overlap=0,
+            reference_overlap=0,
+            test_overlap=0,
+            task_id_overlap=0,
+            url_overlap=0,
+            shared_lineage=False,
+        )
     if (left.version, left.seed, len(left.instruction_minhash)) != (
         right.version,
         right.seed,
@@ -184,8 +195,12 @@ def candidate_pairs(
         raise ValueError("Changed sources need complete fingerprints before duplicate review")
     selected = {}
     for source_id in sorted(changed_sources, key=original_source_id):
+        if not fingerprints[source_id].task_count:
+            continue
         candidates = []
         for other_id in sorted(fingerprints.keys() - {source_id}, key=original_source_id):
+            if not fingerprints[other_id].task_count:
+                continue
             left, right = sorted((source_id, other_id), key=original_source_id)
             candidates.append(pair_similarity(left, fingerprints[left], right, fingerprints[right]))
         for pair in sorted(
