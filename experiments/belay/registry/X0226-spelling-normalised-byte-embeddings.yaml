@@ -78,6 +78,19 @@ trials:
   commit: 624c2e78ec
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t005
+  variant: spelling-normalised byte embeddings, 4-rung ladder
+  rung: competitive-d1280
+  protocol: equal_steps
+  batch: X0226
+  date: '2026-11-14'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0226
+  wandb: []
+  settings:
+    spelling_byte_embeds: 'true'
+  commit: 8312ea94ec
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
   rationale: −0.0112 at equal time (step time within 1%, equal data = equal time); ladder escalated, not run; MFU not run
