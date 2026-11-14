@@ -135,7 +135,12 @@ def test_historical_corpus_inventory_keeps_the_current_embedding_plan(tmp_path, 
             title=None,
         ),
     )
-    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
+
+    def current_sources():
+        sys.stderr.write("Planning diagnostic\n")
+        return {source.info.id: source}
+
+    monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", current_sources)
     options = ["--embed", "coverage", "--cache-dir", str(tmp_path / "cache")]
     plans = []
     for identifier in (source.info.id, "MarinSkyRL:math500"):
@@ -152,7 +157,7 @@ def test_historical_corpus_inventory_keeps_the_current_embedding_plan(tmp_path, 
         frozen = corpus.read_bytes()
         result = CliRunner().invoke(main, [*options, "--corpus", str(corpus)])
         assert result.exit_code == 0, result.output
-        plans.append(json.loads(result.output))
+        plans.append(json.loads(result.stdout))
         assert corpus.read_bytes() == frozen
     assert plans[0] == plans[1]
 
