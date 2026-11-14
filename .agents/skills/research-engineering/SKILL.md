@@ -32,6 +32,12 @@ root instructions rather than the logbooks index branch's instructions.
   notebook entries before a milestone issue update or handoff.
 - Keep the issue body current and its comments useful as a readable account of
   the important attempts, results, and changes of direction.
+- Add one task record under `index/` through a PR to logbooks `main` after
+  publishing the initial notebook. Update that file when the work reaches a
+  material result, changes direction, or ends. Follow the
+  [logbooks index procedure](https://github.com/marin-community/marin-logbooks/blob/main/WORKFLOW.md#maintain-the-index).
+- Link the coordinating logbooks issue from each Marin contribution PR using
+  the `Research logbook:` line in the [research engineering guide](../../../docs/dev-guide/research-engineering.md#promote-the-selected-implementation).
 - Extract selected code into Marin contribution branches. Use `manage-pr` for
   their validation, publication, and feedback; keep the research branch intact.
   A useful negative result can finish a program without a code PR.
