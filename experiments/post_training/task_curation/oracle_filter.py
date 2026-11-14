@@ -25,6 +25,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff
 from shellbox.backends.local.cgroup import check_cgroup_parent, delegated_cgroup_parent
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grading_environment import GradingEnvironmentMode
 from taskcompendium.harbor.adapter import TASK_SPEC_FILE, declared_execution_limits
 from taskcompendium.harbor.execution import native_execution_limits
@@ -579,12 +580,16 @@ def filter_cohort(
                 original = Path(mapping["task_path"])
                 if original_packages[str(original)]["task_checksum"] != mapping.get("source_task_checksum", checksum):
                     raise ValueError(f"Source package changed after Harbor export: {task.id}")
-                if calibration.preserved_requirements != declared_native_requirements(original, source_binding):
+                if not is_nonagentic_task(task) and calibration.preserved_requirements != declared_native_requirements(
+                    original, source_binding
+                ):
                     raise ValueError(f"Calibration changed source-declared limits: {task.id}")
                 qualification = legacy.get(task.id)
                 verifier_profile = native_verifier_profile(original, source_binding)
+                if calibration.verifier.mode != verifier_profile.mode:
+                    raise ValueError(f"Calibration changed the source grading boundary: {task.id}")
                 if qualification is None:
-                    if calibration.verifier != verifier_profile:
+                    if not is_nonagentic_task(task) and calibration.verifier != verifier_profile:
                         raise ValueError(f"Calibration changed the declared verifier resource profile: {task.id}")
                 elif calibration.verifier.mode != verifier_profile.mode or any(
                     getattr(qualification.verifier.execution_requirements, name) != value
@@ -611,19 +616,28 @@ def filter_cohort(
                     if calibration_package_identity(package, calibration.oracle_kind) != package_identity:
                         raise ValueError(f"Calibration changed the task environment or scripts: {task.id}")
                 requirements = calibration.execution_requirements
-                if task.execution_requirements is not None and task.execution_requirements != requirements:
+                if (
+                    not is_nonagentic_task(task)
+                    and task.execution_requirements is not None
+                    and task.execution_requirements != requirements
+                ):
                     raise ValueError(f"Calibration overrides task specification: {task.id}")
                 verifier_requirements = (
                     qualification.verifier.execution_requirements
                     if qualification is not None
                     else calibration.attempts[-1].verifier_execution_requirements
                 )
-                if (original / TASK_SPEC_FILE).is_file() and verifier_requirements is None:
+                if (
+                    not is_nonagentic_task(task)
+                    and (original / TASK_SPEC_FILE).is_file()
+                    and verifier_requirements is None
+                ):
                     raise ValueError(f"Separate-role allocation is unqualified without verifier evidence: {task.id}")
                 final_package = Path(calibration.attempts[-1].result["config"]["task"]["path"])
-                task = calibrated_task_spec(
-                    task, requirements, verifier_requirements, (final_package / "task.toml").read_bytes()
-                )
+                if not is_nonagentic_task(task):
+                    task = calibrated_task_spec(
+                        task, requirements, verifier_requirements, (final_package / "task.toml").read_bytes()
+                    )
                 row = row_with_task(row, task)
                 source_setup = (
                     tomllib.loads((original / "task.toml").read_text())

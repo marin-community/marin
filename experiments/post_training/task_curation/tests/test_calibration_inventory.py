@@ -6,6 +6,7 @@
 import base64
 import hashlib
 import json
+import tarfile
 from pathlib import Path
 
 import pyarrow as pa
@@ -14,6 +15,7 @@ import pytest
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import NoGrader, Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -27,6 +29,17 @@ from experiments.post_training.task_curation.lexical_contamination import write_
 from experiments.post_training.task_curation.remediation_publish import ReleasePlan
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
+
+
+def test_original_actorless_calendar_ignores_unavailable_grader_lock(monkeypatch):
+    fixtures = Path(__file__).parent / "fixtures/legacy_roles"
+    with tarfile.open(fixtures / "calendar.tar.gz") as archive:
+        task = TaskSpec.model_validate_json(archive.extractfile("original-packet/task-spec.json").read())
+    monkeypatch.setattr(
+        "experiments.post_training.task_curation.calibration_inventory.packages_lock_exists", lambda path: False
+    )
+    assert is_nonagentic_task(task)
+    assert task_blockers(task) == set()
 
 
 def test_native_inventory_preserves_pinned_multistage_environment_and_detects_fragment_oracle():

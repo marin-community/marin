@@ -7,10 +7,14 @@ import gzip
 import hashlib
 import json
 import tarfile
+from copy import deepcopy
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from finestore.rl.curation import ContentEvidenceReference
+from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import (
@@ -28,6 +32,7 @@ from experiments.post_training.task_curation.legacy_role_qualification import (
     LegacyRoleQualificationEvidence,
     legacy_role_qualifications,
 )
+from experiments.post_training.task_curation.oracle_filter import filter_cohort, write_task_map
 from lib.taskcompendium.tests.oracle_filter_fixtures import negative_control_policy
 
 FIXTURES = Path(__file__).parent / "fixtures/legacy_roles"
@@ -131,8 +136,11 @@ def test_actual_completed_pass_qualification_preserves_raw_history_and_control_g
     unqualified = proof.model_dump(mode="json")
     del unqualified["tasks"][task.id]["legacy_role_qualification"]
     path.write_text(json.dumps(unqualified))
-    with pytest.raises(ValueError, match="requires measured or qualified verifier allocation"):
-        require_oracle_filter(task, load_oracle_filter(str(path)), qualification.source_runtime.runtime)
+    if actor_present:
+        with pytest.raises(ValueError, match="requires measured or qualified verifier allocation"):
+            require_oracle_filter(task, load_oracle_filter(str(path)), qualification.source_runtime.runtime)
+    else:
+        assert require_oracle_filter(task, load_oracle_filter(str(path)), qualification.source_runtime.runtime)
     for field in ("task_sha256", "source_task_sha256", "source_task_checksum", "harbor_task_checksum"):
         foreign = proof.model_dump(mode="json")
         foreign["tasks"][task.id][field] = "0" * 64
@@ -144,6 +152,55 @@ def test_actual_completed_pass_qualification_preserves_raw_history_and_control_g
     path.write_text(json.dumps(foreign_scope))
     with pytest.raises(ValueError, match="adoption decision scope"):
         load_oracle_filter(str(path))
+
+
+@pytest.mark.parametrize(
+    "legacy_reason",
+    [None, OracleExclusionReason.NEGATIVE_CONTROL_PENDING, OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED],
+)
+def test_actual_actorless_calendar_admits_original_unprojected_task_without_role_qualification(tmp_path, legacy_reason):
+    payload = gzip.decompress((FIXTURES / "calendar.receipt.json.gz").read_bytes())
+    mapping = json.loads(payload)["receipt"]
+    with tarfile.open(FIXTURES / "calendar.tar.gz") as archive:
+        task = TaskSpec.model_validate_json(archive.extractfile("original-packet/task-spec.json").read())
+    assert is_nonagentic_task(task)
+    assert task.execution_requirements is None and task.verifier_execution_requirements is None
+    calibration = ResourceCalibrationReceipt.model_validate(mapping["calibration"])
+    original_history = calibration.model_dump_json()
+    entry = OracleTaskReceipt(
+        task_sha256=canonical_sha256(task.model_dump(mode="json")),
+        source_task_sha256=mapping["task_sha256"],
+        source_task_checksum=mapping["source_task_checksum"],
+        runtime_sha256=mapping["runtime_sha256"],
+        harbor_task_checksum=mapping["task_checksum"],
+        has_oracle=True,
+        trials=(calibration.attempts[-1],),
+        calibration=calibration,
+        negative_control_applicability=(
+            "workspace"
+            if legacy_reason is OracleExclusionReason.NEGATIVE_CONTROL_PENDING
+            else negative_control_applicability(task)
+        ),
+        exclusion_reason=legacy_reason,
+    )
+    proof = OracleFilterReceipt(
+        negative_control_policy=negative_control_policy(),
+        recipe_identity=None,
+        input_cohort_sha256="c" * 64,
+        input_rows=1,
+        conversion_rejections=0,
+        tasks={task.id: entry},
+    )
+    path = tmp_path / "actorless.json"
+    path.write_text(proof.model_dump_json())
+    loaded = load_oracle_filter(str(path))
+    runtime = calibration.attempts[-1].result["config"]["task"]["source_runtime"]["runtime"]
+    assert require_oracle_filter(task, loaded, runtime)
+    assert loaded.tasks[task.id].legacy_role_qualification is None
+    assert loaded.tasks[task.id].calibration.model_dump_json() == original_history
+    assert loaded.tasks[task.id].calibration.attempts[-1].verifier_execution_requirements is None
+    with pytest.raises(ValueError, match="Runtime changed"):
+        require_oracle_filter(task, loaded, {"foreign": True})
 
 
 def test_legacy_evidence_refuses_changed_physical_archive_or_unreviewed_partition(tmp_path, evidence):
@@ -205,3 +262,55 @@ def test_approved_actual_calendar_subset_cannot_qualify_extra_taco_task(tmp_path
     borrowed = evidence.model_copy(update={"decision": approved.decision})
     with pytest.raises(ValueError, match="adoption decision scope"):
         legacy_role_qualifications(borrowed, frozenset({calendar_id, taco_id}))
+
+
+@pytest.mark.parametrize("reward", [0, 1])
+def test_collector_keeps_original_actorless_contract_and_legacy_verifier_absence(tmp_path, reward):
+    mapping = json.loads(gzip.decompress((FIXTURES / "calendar.receipt.json.gz").read_bytes()))["receipt"]
+    template = mapping["calibration"]["attempts"][-1]
+    with tarfile.open(FIXTURES / "calendar.tar.gz") as archive:
+        task = TaskSpec.model_validate_json(archive.extractfile("original-packet/task-spec.json").read())
+        packet = tmp_path / "native" / task.id
+        for member in archive.getmembers():
+            if member.isdir() and member.name.startswith("original-packet/"):
+                (packet / Path(member.name).relative_to("original-packet")).mkdir(parents=True, exist_ok=True)
+            if member.isfile() and member.name.startswith("original-packet/"):
+                path = packet / Path(member.name).relative_to("original-packet")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(archive.extractfile(member).read())
+    runtime = template["result"]["config"]["task"]["source_runtime"]["runtime"]
+    encoded = task.model_dump_json()
+    cohort = tmp_path / "tasks.parquet"
+    pq.write_table(pa.Table.from_pylist([{"task_spec": encoded, "runtime": json.dumps(runtime)}]), cohort)
+    task_map = tmp_path / "map.json"
+    write_task_map(cohort, packet.parent, task_map)
+    jobs = tmp_path / "jobs"
+    trial = jobs / "oracle"
+    (trial / "verifier").mkdir(parents=True)
+    (trial / "agent").mkdir()
+    result = deepcopy(template["result"])
+    result.update(task_name=task.id, trial_name="oracle", trial_uri=trial.as_uri(), task_id={"path": str(packet)})
+    result["config"]["task"]["path"] = str(packet)
+    result["config"].update(trial_name="oracle", trials_dir=str(jobs))
+    result["verifier_result"]["rewards"] = {"reward": reward}
+    payload = json.dumps(result).encode()
+    (trial / "result.json").write_bytes(payload)
+    (trial / "config.json").write_text(json.dumps(result["config"]))
+    (trial / "agent/exit-code.txt").write_text("0")
+    (trial / "verifier/verdict.json").write_text(json.dumps({"status": "scored", "reward": reward}))
+    policy = tmp_path / "policy.json"
+    policy.write_text("{}")
+    global_policy = negative_control_policy().model_copy(update={"decision": reference(policy)})
+    output = tmp_path / "filtered/tasks.parquet"
+    receipt = filter_cohort(cohort, task_map, jobs, output, negative_control_policy=global_policy)
+    entry = receipt.tasks[task.id]
+    assert entry.legacy_role_qualification is None
+    assert entry.calibration.attempts[-1].verifier_execution_requirements is None
+    assert entry.calibration.attempts[-1].result == result
+    assert (trial / "result.json").read_bytes() == payload
+    assert receipt.admits(task, runtime) is bool(reward)
+    retained = pq.read_table(output).to_pylist()
+    assert len(retained) == reward
+    if reward:
+        assert retained[0]["task_spec"] == encoded
+        assert TaskSpec.model_validate_json(retained[0]["task_spec"]) == task

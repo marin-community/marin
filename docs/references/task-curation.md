@@ -1664,6 +1664,12 @@ calibration or role-allocation evidence.
 Harbor export writes these values into the task package. Trials must use them
 without resource overrides or timeout multipliers.
 
+Collection evaluates `is_nonagentic_task` from each TaskSpec. For non-agentic
+contracts, it preserves existing TaskSpec fields verbatim and adds no resource
+projection. Actual Trial/config/history records remain in the receipt with their
+original result hashes. The [current admission policy](#current-admission-policy)
+defines which checks still apply.
+
 Native Harbor ingestion and the TaskTrove archive wrapper lift all five explicit
 `task.toml` limits into `execution_requirements`. Partial declarations remain in
 the original package; ingestion supplies no defaults. An existing top-level

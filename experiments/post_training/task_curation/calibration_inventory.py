@@ -20,6 +20,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grading_environment import assess_grading_environment
 from taskcompendium.harbor.adapter import unsupported_harbor_contract
 from taskcompendium.identity import canonical_sha256
@@ -74,6 +75,9 @@ def packages_lock_exists(path: str) -> bool:
 
 def task_blockers(task: TaskSpec) -> set[str]:
     """Record static execution blockers; an empty set supplies no qualification evidence."""
+    if is_nonagentic_task(task):
+        boundary = assess_grading_environment(task)
+        return set() if boundary.status == "matched" else {f"grading_environment_{boundary.status}"}
     blockers: set[str] = set()
     resources = {resource.path: resource for resource in task.resources.verifier}
     native = "harbor" in task.tags and "task.toml" in resources

@@ -13,7 +13,12 @@ from finestore.rl.curation import ContentEvidenceReference
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 
-from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment
+from taskcompendium.execution_applicability import is_nonagentic_task
+from taskcompendium.grading_environment import (
+    GradingEnvironmentMode,
+    GradingEnvironmentStatus,
+    assess_grading_environment,
+)
 from taskcompendium.harbor.adapter import actor_machine_required
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, TaskSpecRuntimeBinding, network_policy_qualified
 from taskcompendium.identity import canonical_sha256
@@ -311,6 +316,8 @@ class OracleTrialReceipt(BaseModel):
 
 def trial_network_qualified(task: TaskSpec, runtime: dict | None, trial: OracleTrialReceipt) -> bool:
     """Require observed policies for source-declared machine network permissions."""
+    if is_nonagentic_task(task):
+        return True
     binding = (
         TaskSpecRuntimeBinding(
             task_sha256=canonical_sha256(task.model_dump(mode="json")),
@@ -859,6 +866,8 @@ ANSWER_GRADED_MODES = frozenset(
 
 def negative_control_applicability(task: TaskSpec) -> NegativeControlApplicability:
     """Derive control scope from the state the source grading contract reads."""
+    if is_nonagentic_task(task):
+        return NegativeControlApplicability.ANSWER_GRADED_NOT_APPLICABLE
     if assess_grading_environment(task).required is GradingEnvironmentMode.SHARED:
         return NegativeControlApplicability.WORKSPACE
     if (
@@ -1296,6 +1305,20 @@ class OracleTaskReceipt(BaseModel):
         return self
 
     @property
+    def original_oracle_passed(self) -> bool:
+        if not self.has_oracle:
+            return False
+        if self.native_success_policy is not None:
+            return self.calibration.oracle_kind == "original" and self.native_success_policy.passes(
+                self.calibration.attempts[-1], self.harbor_task_checksum
+            )
+        return (
+            self.calibration.passed
+            and self.calibration.oracle_kind == "original"
+            and any(trial.passed(self.harbor_task_checksum) for trial in self.trials)
+        )
+
+    @property
     def passed(self) -> bool:
         if self.exclusion_reason is not None:
             return False
@@ -1306,15 +1329,7 @@ class OracleTaskReceipt(BaseModel):
                     return False
                 if not control.conclusive and control.annotation is None:
                     return False
-            if self.native_success_policy is not None:
-                return self.calibration.oracle_kind == "original" and self.native_success_policy.passes(
-                    self.calibration.attempts[-1], self.harbor_task_checksum
-                )
-            return (
-                self.calibration.passed
-                and self.calibration.oracle_kind == "original"
-                and any(trial.passed(self.harbor_task_checksum) for trial in self.trials)
-            )
+            return self.original_oracle_passed
         control = self.executability_run
         return (
             self.calibration.oracle_kind == "calibration_only"
@@ -1397,6 +1412,9 @@ class OracleFilterReceipt(BaseModel):
             raise ValueError(f"Oracle presence changed after filtering: {task.id}")
         if isinstance(entry, MechanicalOracleTaskReceipt):
             return False
+        if is_nonagentic_task(task):
+            outcome = entry.original_oracle_passed if entry.has_oracle else entry.passed
+            return outcome and assess_grading_environment(task).status is GradingEnvironmentStatus.MATCHED
         if entry.has_oracle and entry.negative_control_applicability != negative_control_applicability(task):
             raise ValueError(f"Negative-control applicability differs from the source grading contract: {task.id}")
         if task.execution_requirements is None:
@@ -1445,7 +1463,7 @@ def require_oracle_filter(task: TaskSpec, receipt: OracleFilterReceipt | None, r
             or a checked identity differs from the recorded measurement.
     """
     if receipt is None:
-        if task.execution_requirements is None:
+        if not is_nonagentic_task(task) and task.execution_requirements is None:
             raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         raise ValueError(f"SAMPLE/FULL admission requires a full-population Harbor oracle filter receipt: {task.id}")
     return receipt.admits(task, runtime)

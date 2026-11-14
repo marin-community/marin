@@ -390,8 +390,6 @@ def prebuilt_artifact(
                 raise ValueError(f"grading_environment_mismatch: {task.id}: {assessment.model_dump_json()}")
             if issue := shared_integrity_issue(task):
                 raise ValueError(f"{issue}: {task.id}")
-            if task.execution_requirements is None:
-                raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
             if oracle_filter is None:
                 receipt_path = hf_hub_download(
                     repo_id=invocation.cohort.repo,

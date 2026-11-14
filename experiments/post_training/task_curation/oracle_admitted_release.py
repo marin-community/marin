@@ -25,6 +25,7 @@ from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grading_environment import shared_integrity_issue
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import OracleExclusionReason, require_oracle_filter
@@ -351,7 +352,7 @@ def main() -> None:
         for row in batch.to_pylist():
             task = TaskSpec.model_validate_json(row["task_spec"])
             require_runnable_grader(task)
-            if task.execution_requirements is None or shared_integrity_issue(task):
+            if (not is_nonagentic_task(task) and task.execution_requirements is None) or shared_integrity_issue(task):
                 raise ValueError(f"Published task lacks its required execution/integrity contract: {task.id}")
             if not require_oracle_filter(task, verified, json.loads(row["runtime"])):
                 raise ValueError(f"Published task/runtime lacks canonical oracle admission: {task.id}")
