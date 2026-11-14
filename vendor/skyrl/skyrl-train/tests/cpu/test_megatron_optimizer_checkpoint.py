@@ -141,3 +141,11 @@ def test_chained_optimizer_recovers_each_childs_saved_counter(tmp_path):
         advance(reference, reference_parameter, 7)
         advance(receiver, parameter, 7)
         assert_optimizer_matches(receiver, parameter, reference, reference_parameter)
+
+
+def test_rank_without_trainable_parameters_can_restore_its_empty_state():
+    # MCore's empty chain has no config; restoring it must still work on ranks
+    # without trainable parameters.
+    optimizer = ChainedOptimizer([])
+    load_optimizer_checkpoint(optimizer, {})
+    assert optimizer.state_dict() == []

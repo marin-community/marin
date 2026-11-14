@@ -18,9 +18,10 @@ from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_mas
 
 def load_optimizer_checkpoint(optimizer: MegatronOptimizer, state_dict: dict) -> None:
     """Load optimizer state, recovering omitted CPU Adam bucket counters."""
-    config = optimizer.config
-    if config is not None and config.optimizer_cpu_offload and config.optimizer.lower() in ("adam", "adamw"):
-        _restore_omitted_adam_steps(state_dict)
+    if not optimizer.is_stub_optimizer:
+        config = optimizer.config
+        if config is not None and config.optimizer_cpu_offload and config.optimizer.lower() in ("adam", "adamw"):
+            _restore_omitted_adam_steps(state_dict)
     optimizer.load_state_dict(state_dict)
 
 

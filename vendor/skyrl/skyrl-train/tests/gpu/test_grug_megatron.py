@@ -23,6 +23,7 @@ import ray
 import torch
 from megatron.bridge import AutoBridge
 from megatron.core import parallel_state, tensor_parallel
+from megatron.core.optimizer import ChainedOptimizer
 from megatron.core.transformer.module import Float16Module
 from omegaconf import open_dict
 from ray.util.placement_group import placement_group
@@ -525,7 +526,9 @@ def test_grug_megatron_four_gpu_disaggregated_rollout_train_sync_rollout(tmp_pat
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
     cfg = _config(
-        str(model_path), world_size=policy_world_size, pp=2 if transport == "broadcast" else 1,
+        str(model_path),
+        world_size=policy_world_size,
+        pp=2 if transport == "broadcast" else 1,
         ep=1 if transport == "broadcast" else 2,
     )
     cfg.generator.weight_sync_transport = transport
@@ -732,9 +735,7 @@ def test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_
         moe_backend="triton",
     )
     try:
-        policy = init_worker_with_type(
-            "policy", shared_pg=shared_pg, colocate_all=True, num_gpus_per_node=4, cfg=cfg
-        )
+        policy = init_worker_with_type("policy", shared_pg=shared_pg, colocate_all=True, num_gpus_per_node=4, cfg=cfg)
         sync = ExpertBlockSync(policy_model=policy, inference_engine_client=client, timeout_seconds=600, colocated=True)
         for step in range(3):
             if step:
@@ -843,14 +844,39 @@ def test_cpu_offloaded_optimizer_load_does_not_stage_moments_on_cuda(dtype):
         torch.testing.assert_close(parameter.cpu(), continued, rtol=0, atol=0)
 
 
-def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
+def _adam_checkpoint_snapshot(worker):
+    optimizer = worker.optimizer
+    children = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
+    states = []
+    for child in children:
+        for group in child.optimizer.param_groups:
+            for parameter in group["params"]:
+                state = child.optimizer.state[parameter]
+                states.append(
+                    {
+                        "param": parameter.detach().cpu().clone(),
+                        **{name: state[name].detach().cpu().clone() for name in ("step", "exp_avg", "exp_avg_sq")},
+                    }
+                )
+    assert states
+    return states
+
+
+def _assert_adam_checkpoint_matches(actual, expected):
+    for actual_rank, expected_rank in zip(actual, expected, strict=True):
+        for actual_parameter, expected_parameter in zip(actual_rank, expected_rank, strict=True):
+            for name in ("param", "step", "exp_avg", "exp_avg_sq"):
+                torch.testing.assert_close(actual_parameter[name], expected_parameter[name], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("world_size", [1, 2])
+def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path, world_size):
     """A checkpoint saved with CPU optimizer offload loads, restores the weights, and continues.
 
     Training from the checkpoint again must repeat the step taken right after saving it, which
     holds only if the CPU-offloaded masters and moments were restored too. The load must also
     return the pinned host copies it replaced instead of leaving them cached.
     """
-    world_size = 2
     require_hoppers(world_size)
     model_path = tmp_path / "model"
     model_path.mkdir()
@@ -867,17 +893,35 @@ def test_grug_megatron_cpu_offloaded_optimizer_resumes_checkpoint(tmp_path):
     initialize_ray(cfg)
     try:
         policy = _init_policy(cfg, world_size)
-        _train_step(policy, batch)
-        saved = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+        for _ in range(5):
+            assert _train_step(policy, batch)["skipped_steps"] == 0
+        saved = copy.deepcopy(rank0_validation_snapshot(policy, PARAMETER_NAMES))
+        saved_optimizer = copy.deepcopy(
+            ray.get([actor.__ray_call__.remote(_adam_checkpoint_snapshot) for actor in policy._actor_handlers])
+        )
         ray.get(policy.async_run_ray_method("pass_through", "save_checkpoint", checkpoint_dir, tokenizer))
-        _train_step(policy, batch)
-        after_saved_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+        assert _train_step(policy, batch)["skipped_steps"] == 0
+        after_saved_step = copy.deepcopy(rank0_validation_snapshot(policy, PARAMETER_NAMES))
+        after_saved_optimizer = copy.deepcopy(
+            ray.get([actor.__ray_call__.remote(_adam_checkpoint_snapshot) for actor in policy._actor_handlers])
+        )
 
+        ray.shutdown()
+        initialize_ray(cfg)
+        policy = _init_policy(cfg, world_size)
         ray.get(policy.async_run_ray_method("pass_through", "load_checkpoint", checkpoint_dir))
         idle_pinned = ray.get([actor.__ray_call__.remote(_idle_pinned_host_bytes) for actor in policy._actor_handlers])
         restored = rank0_validation_snapshot(policy, PARAMETER_NAMES)
-        _train_step(policy, batch)
+        restored_optimizer = ray.get(
+            [actor.__ray_call__.remote(_adam_checkpoint_snapshot) for actor in policy._actor_handlers]
+        )
+        _assert_adam_checkpoint_matches(restored_optimizer, saved_optimizer)
+        assert _train_step(policy, batch)["skipped_steps"] == 0
         after_restored_step = rank0_validation_snapshot(policy, PARAMETER_NAMES)
+        after_restored_optimizer = ray.get(
+            [actor.__ray_call__.remote(_adam_checkpoint_snapshot) for actor in policy._actor_handlers]
+        )
+        _assert_adam_checkpoint_matches(after_restored_optimizer, after_saved_optimizer)
 
         assert idle_pinned == [0] * world_size
 
