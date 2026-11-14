@@ -15,9 +15,14 @@ from transformers import AutoTokenizer
 from cloud.iris.hf_model_cache import stage_model_metadata
 from marinskyrl.model_manifest import snapshot_model_manifest
 from tests.gpu.grug_gpu_gates import require_hoppers
+from tests.gpu.grug_policy_training import (
+    _config,
+    _init_policy,
+    _megatron_response_logprobs,
+    _padded_batch,
+)
 from tests.gpu.grug_serving import rank0_validation_snapshot
 from tests.gpu.grug_tiny_checkpoint import write_tiny_checkpoint
-from tests.gpu.test_grug_megatron import _config, _init_policy, _megatron_response_logprobs, _padded_batch
 
 
 def write_tiny_hero_checkpoint(path: Path):
