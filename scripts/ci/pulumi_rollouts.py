@@ -59,6 +59,7 @@ ROLLOUTS = (
             "lib/finelog",
             "lib/finestore",
             "lib/iris",
+            "lib/marin/src/marin/evaluation",
             "lib/rigging",
         ),
         # App packages have their own release lifecycle.
