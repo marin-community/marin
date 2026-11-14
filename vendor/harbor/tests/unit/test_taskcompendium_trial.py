@@ -17,6 +17,10 @@ from pathlib import Path
 import httpx
 import pytest
 import tomlkit
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import PreTrainedTokenizerFast
+from rolloutengine.models import RolloutLimits
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Backend, ExitReason, NetworkPolicy, Result, UnsupportedMachineSpec
@@ -160,6 +164,63 @@ def original_task(name):
 
 def declared_oracle(task):
     return OracleCommand("bash ../solution/solve.sh", answer_file=grader_workspace(task.grader) + "/answer.txt")
+
+
+@pytest.mark.asyncio
+async def test_candidate_renders_replayed_tool_arguments_without_changing_wire_history(tmp_path, monkeypatch):
+    task = exact_answer_task(
+        RawRow("tool-replay", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Use the shell, then return 42.", answers=("42",), ignore_case=False,
+    ).model_copy(update={"environment_requirements": EnvironmentRequirements(
+        capabilities=("shell",), command_semantics=CommandSemantics.LINUX_PROCESS, working_directory="/workspace",
+    )})
+    # GLM's pinned template iterates decoded argument mappings; OpenAI wire history uses JSON strings.
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]")), unk_token="[UNK]",
+        chat_template="""{% for message in messages %}{{ message.content or '' }}
+{% for call in message.get('tool_calls') or [] %}
+{% for key, value in call.function.arguments.items() %}{{key}}={{value}}{% endfor %}
+{% endfor %}{% endfor %}""",
+    )
+    requests = []
+    arguments = json.dumps({"command": "printf replay > marker"})
+
+    def response(request):
+        requests.append(json.loads(request.content))
+        message = {"role": "assistant", "content": "42"}
+        finish = "stop"
+        if len(requests) == 1:
+            message = {"role": "assistant", "content": "", "tool_calls": [{
+                "id": "shell-1", "type": "function", "function": {"name": "shell", "arguments": arguments},
+            }]}
+            finish = "tool_calls"
+        return httpx.Response(200, json={
+            "id": f"reply-{len(requests)}", "object": "chat.completion", "created": 0, "model": "candidate",
+            "choices": [{"index": 0, "finish_reason": finish, "message": message}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+
+    real_client = agents.AsyncOpenAI
+    monkeypatch.setattr(agents.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
+    monkeypatch.setattr(agents, "AsyncOpenAI", lambda **kwargs: real_client(
+        **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(response)),
+    ))
+    agent = agents.TaskSpecChatAgent(
+        logs_dir=tmp_path / "agent", model_name="openai/candidate", model_alias="openai/candidate",
+        api_base="https://candidate.fixture/v1", max_turns=2, max_tokens=128, context_window=65536,
+        max_input_tokens=49152, request_parameters={"temperature": 0.7},
+        tokenizer_model="fixture/tool-replay", tokenizer_revision="9" * 40,
+    )
+    actor_root = tmp_path / "actor"
+    (actor_root / "workspace").mkdir(parents=True)
+    machine = FileMachine(root=actor_root, workdir="/workspace")
+    limits = RolloutLimits(max_turns=2, max_total_tokens=None, model_turn_timeout=5, tool_turn_timeout=5,
+                          total_turn_timeout=10, attempt_timeout=15, verifier_timeout=5, cleanup_timeout=1)
+    attempt = await agent.run_task(task, machine, limits)
+    assert (actor_root / "workspace/marker").read_text() == "replay"
+    assert requests[1]["messages"][1]["tool_calls"][0]["function"]["arguments"] == arguments
+    assert requests[1]["messages"][-1]["role"] == "tool"
+    assert attempt.conversation.events[-1].content == "42"
 
 
 @pytest.mark.parametrize(

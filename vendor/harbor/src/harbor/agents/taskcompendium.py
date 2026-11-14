@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from openai import AsyncOpenAI
+from rigging.chat_templates import chat_template_messages
 from transformers import AutoTokenizer
 from rolloutengine.chat import ChatModel
 from rolloutengine.harness.shell import ShellHarness, task_prompt
@@ -151,7 +152,7 @@ class TaskSpecChatAgent(TaskSpecAgent):
                 }
                 parameters["extra_body"] = extra_body
                 prompt_ids = await asyncio.to_thread(
-                    tokenizer.apply_chat_template, list(request.messages),
+                    tokenizer.apply_chat_template, chat_template_messages(request.messages),
                     tools=parameters.get("tools") or None, add_generation_prompt=True,
                     tokenize=True, return_dict=False, **extra_body.get("chat_template_kwargs", {}),
                 )

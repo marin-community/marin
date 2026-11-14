@@ -863,6 +863,7 @@ uv run iris --cluster marin job run --no-wait \
   --job-name <new-run-name> --target-cluster cw-rno2a \
   --enable-extra-resources --cpu 32 --memory 128GB --disk 1TB \
   --timeout 259200 --container-profile container_profile_privileged \
+  --egress-policy egress_policy_cluster \
   --sync-package marin-core --extra cpu --extra dedup \
   --secret GLM_BULK_TOKEN env:GLM_BULK_TOKEN --secret HF_TOKEN env:HF_TOKEN \
   -- python -m experiments.post_training.task_curation.difficulty_campaign \
@@ -876,6 +877,7 @@ Choose `small`, `large`, `hosted` or `snowball`. Local model serving requests
 production relay. Every prepared task preserves the original runtime packet.
 TaskSpec trial archives include `network-policy.json`, bound to that packet's
 hash, with declared and effective actor and grader policies recorded separately.
+The Iris parent allows network access; each LOCAL role enforces its source policy.
 SAFE tasks remain explicitly unmeasured until their Daytona factory and snapshot
 qualification are available. Missing original environment artifacts and
 unqualified judge routes also retain explicit reasons.

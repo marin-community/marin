@@ -12,6 +12,7 @@ import math
 import tarfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -47,6 +48,15 @@ from experiments.post_training.task_curation.difficulty_relay import budget_rela
 
 LOGGER = logging.getLogger(__name__)
 ATTEMPT_TIMEOUT = 259200
+INPUT_BUDGET_REASON = (
+    "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned."
+)
+
+
+@dataclass(frozen=True)
+class TaskOutcome:
+    attempts: list[DifficultyAttempt]
+    pending_reason: str | None
 
 
 class CandidateRun(BaseModel):
@@ -106,15 +116,14 @@ async def execute_trial(configuration: TrialConfig, authentication: dict[str, st
     return trial, await trial.run()
 
 
-def run_task(
-    task: PreparedTask, config: CandidateRun, base_url: str, root: Path, output: str
-) -> list[DifficultyAttempt]:
+def run_task(task: PreparedTask, config: CandidateRun, base_url: str, root: Path, output: str) -> TaskOutcome:
     key = hashlib.sha256(task.task_id.encode()).hexdigest()
     destination = StoragePath(output) / key
     if task.reason is not None or task.path is None:
         write_json(destination / "pending.json", {"task_id": task.task_id, "reason": task.reason})
-        return [DifficultyAttempt(task_id=task.task_id, status="pending", reward=None)]
+        return TaskOutcome([DifficultyAttempt(task_id=task.task_id, status="pending", reward=None)], task.reason)
     attempts = []
+    pending_reason = None
     for number in range(config.attempts_per_task):
         local = root / key / f"{number:02d}"
         local.mkdir(parents=True, exist_ok=False)
@@ -179,6 +188,7 @@ def run_task(
                 unserved = True
         if unserved:
             reward = None
+            pending_reason = INPUT_BUDGET_REASON
         get_artifact_writer().flush(timeout=300)
         archive = local / "trial-artifacts.tar.gz"
         with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
@@ -217,7 +227,7 @@ def run_task(
         attempts.append(attempt)
         if reward is not None or unserved:
             break
-    return attempts
+    return TaskOutcome(attempts, pending_reason)
 
 
 def main() -> None:
@@ -262,11 +272,17 @@ def main() -> None:
                     for task in tasks
                 ]
                 try:
-                    attempts = [attempt for future in futures for attempt in future.result()]
+                    outcomes = [future.result() for future in futures]
                 except BaseException:
                     for future in futures:
                         future.cancel()
                     raise
+                attempts = [attempt for outcome in outcomes for attempt in outcome.attempts]
+                pending_reasons = {
+                    task.task_id: outcome.pending_reason
+                    for task, outcome in zip(tasks, outcomes, strict=True)
+                    if outcome.pending_reason is not None
+                }
                 input_tokens = output_tokens = 0
                 request_root = args.local_root / "model-requests"
                 archive = args.local_root / source_key / "model-requests.tar.gz"
@@ -290,6 +306,7 @@ def main() -> None:
                     output / source_key / "attempts.json",
                     {
                         "attempts": [item.model_dump(mode="json") for item in attempts],
+                        "pending_reasons": pending_reasons,
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
                         "gpu_hour_basis": (
@@ -332,14 +349,9 @@ def main() -> None:
                             "reason": "; ".join(blocked),
                         }
                     )
-                elif any(attempt.status == "pending" for attempt in attempts):
+                elif pending_reasons:
                     measurement = measurement.model_copy(
-                        update={
-                            "reason": (
-                                "A candidate prompt exceeded the protocol input budget before dispatch. "
-                                "No solver score was assigned."
-                            )
-                        }
+                        update={"reason": "; ".join(sorted(set(pending_reasons.values())))}
                     )
                 with DataStore.open(str(output / "catalog")) as store:
                     register_difficulty(store)

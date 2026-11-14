@@ -15,6 +15,7 @@ from threading import Lock, Thread
 import httpx
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS
 from harbor.environments.model_relay import _upstream_error
+from rigging.chat_templates import chat_template_messages
 from transformers import AutoTokenizer
 
 CONTEXT_TOKENS, INPUT_TOKENS, OUTPUT_TOKENS = (int(value) for value in PROTOCOLS[PROTOCOL_ID].sampling[:3])
@@ -70,7 +71,7 @@ def budget_relay(
                 }
                 if "messages" in body:
                     tokens = tokenizer.apply_chat_template(
-                        body["messages"],
+                        chat_template_messages(body["messages"]),
                         tools=body.get("tools") or None,
                         add_generation_prompt=body.get("add_generation_prompt", True),
                         tokenize=True,

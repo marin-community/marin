@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 import httpx
 from finestore.rl.difficulty import SOLVER_MODELS, Solver
+from rigging.chat_templates import chat_template_messages
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
@@ -27,7 +28,22 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str) 
         parameters = request_parameters(solver)
         probe = {
             "model": api_model,
-            "messages": [{"role": "user", "content": "Reply with exactly OK."}],
+            "messages": [
+                {"role": "user", "content": "Look up record A."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "lookup-1",
+                            "type": "function",
+                            "function": {"name": "lookup_record", "arguments": '{"record_id":"A"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "lookup-1", "content": "Record A exists."},
+                {"role": "user", "content": "Reply with exactly OK."},
+            ],
             "tools": [
                 {
                     "type": "function",
@@ -49,7 +65,7 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str) 
         tokenizer = AutoTokenizer.from_pretrained(SOLVER_MODELS[solver], revision=pin.revision)
         prompt_tokens = len(
             tokenizer.apply_chat_template(
-                probe["messages"],
+                chat_template_messages(probe["messages"]),
                 tools=probe["tools"],
                 add_generation_prompt=True,
                 tokenize=True,
