@@ -6,7 +6,7 @@ summary: 'Follow-up to X0224 (idea #2, from RavnaBergsndot on #9514): statistic 
   during training. Log the max element and the element RMS of each layer''s output over training, to see whether some layers
   grow unusually large activations (the GatedNorm paper found activation outliers used implicitly to scale down other activations).'
 source: maintainer
-status: approved
+status: report
 track: custom
 code_commits:
 - 94ddd8bdc683eeeb11b2ad6168fe3708a986214b
