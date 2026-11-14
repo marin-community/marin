@@ -14,6 +14,7 @@ import draccus
 from iris.cli.connect import open_iris_client
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.types import JobName
+from iris.resources.state import TERMINAL_TASK_STATES, TaskState
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.snowball_isoflop.budget import allocation_ledger
@@ -29,7 +30,6 @@ class Phase(StrEnum):
 
 CEILINGS = {Phase.A: 2200, Phase.B: 144, Phase.C: 384, Phase.D: 384, Phase.Q5: 1152}
 POLL_SECONDS = 30
-TERMINAL_TASK_STATES = {"succeeded", "failed", "killed"}
 logger = logging.getLogger(__name__)
 
 
@@ -67,7 +67,7 @@ def budget_snapshot(client: IrisClient, config: GuardConfig) -> dict:
             seen.add(name)
             ledgers.append(allocation_ledger(client, root))
         active_gpus = 8 * sum(
-            task["state"] not in TERMINAL_TASK_STATES for ledger in ledgers for task in ledger["tasks"]
+            TaskState(task["state"]) not in TERMINAL_TASK_STATES for ledger in ledgers for task in ledger["tasks"]
         )
         observed = sum(ledger["h100_hours"] for ledger in ledgers)
         charged = observed + budget.reserved_h100_hours
@@ -111,7 +111,7 @@ def main():
         for phase in violations:
             for ledger in phase["ledgers"]:
                 if ledger["root"] not in cancelled_roots and any(
-                    task["state"] not in TERMINAL_TASK_STATES for task in ledger["tasks"]
+                    TaskState(task["state"]) not in TERMINAL_TASK_STATES for task in ledger["tasks"]
                 ):
                     context.client.job(JobName.from_wire(ledger["root"])).cancel()
                     cancelled_roots.add(ledger["root"])

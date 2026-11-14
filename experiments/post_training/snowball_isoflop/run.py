@@ -94,7 +94,9 @@ def main():
             or not StoragePath(gate.pre_reseed_reference_path).exists()
         ):
             raise ValueError(f"Missing upstream reference evaluation for d{cell.size}; no training jobs submitted")
-    manager_root = StoragePath(f"{PREFIX}/{VERSION}/manager-{args.phase}-{args.size or 'all'}")
+    phases = {cell.phase for cell in cells}
+    manager_phase = phases.pop() if len(phases) == 1 else args.phase
+    manager_root = StoragePath(f"{PREFIX}/{VERSION}/manager-{manager_phase}-{args.size or 'all'}")
     if args.initial_concurrent is not None:
         if args.initial_concurrent > args.max_concurrent:
             parser.error("Initial concurrency exceeds the maximum")

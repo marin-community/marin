@@ -13,6 +13,7 @@ from marin.execution.lazy import StepContext
 from marin.training.training import TrainLmOnPodConfig, apply_output_path
 
 from experiments.post_training.snowball_isoflop.config import (
+    BASE_HOST_MEMORY,
     BATCH_SIZE,
     PREFIX,
     SEQ_LEN,
@@ -81,6 +82,7 @@ class Probe:
     seed: int = 0
     optimizer: str = "grug_moe_muonh_v1"
     learning_rate: float = 5e-5
+    host_memory: str = BASE_HOST_MEMORY
 
     @property
     def batch_size(self) -> int:
@@ -92,7 +94,7 @@ class Probe:
             f"{self.phase}-{self.layout.label}-mb{self.microbatch}-acc{self.accumulation}-"
             f"{self.optimizer}-lr{self.learning_rate:g}"
         )
-        return Cell(self.size, Mask.ASSISTANT, self.seed, self.steps, (self.steps,), label)
+        return Cell(self.size, Mask.ASSISTANT, self.seed, self.steps, (self.steps,), label, self.host_memory)
 
 
 def batch_probes(size: int, layout: Layout = Layout()) -> tuple[Probe, ...]:
@@ -163,7 +165,7 @@ def build_probe_pod(probe: Probe) -> TrainLmOnPodConfig:
             record_device_memory=True,
             max_eval_batches=(
                 0
-                if probe.phase.startswith("B") or probe.phase == "C-throughput"
+                if probe.phase.startswith("B") or probe.phase.startswith("C-throughput")
                 else spec.trainer_config.max_eval_batches
             ),
         ),
@@ -175,6 +177,6 @@ def build_probe_pod(probe: Probe) -> TrainLmOnPodConfig:
     )
     output = f"{PREFIX}/{VERSION}/{probe.cell.name}"
     pod = spec.model.build_train_config(
-        StepContext.for_run(output, PREFIX), spec, spec.prepared_data, resources(), probe.steps
+        StepContext.for_run(output, PREFIX), spec, spec.prepared_data, resources(probe.host_memory), probe.steps
     )
     return replace(pod, train_config=apply_output_path(pod.train_config, output))

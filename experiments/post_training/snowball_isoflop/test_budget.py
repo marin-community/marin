@@ -3,7 +3,7 @@
 
 from dataclasses import replace
 
-from iris.client.workload import TaskStatus
+from iris.client.workload import BuildMetrics, TaskStatus
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from rigging.timing import Timestamp
@@ -35,12 +35,15 @@ def test_unadmitted_queue_time_is_excluded_but_assigned_setup_is_bounded():
         status_message="",
     )
     now = Timestamp.from_seconds(1000)
-    job_started = Timestamp.from_seconds(100)
-
-    assert allocated_seconds(task, now, job_started) == 300
+    assert allocated_seconds(task, now) == 300
     finished = replace(task, state=TaskState.SUCCEEDED, finished_at=Timestamp.from_seconds(900))
-    assert allocated_seconds(finished, now, job_started) == 200
+    assert allocated_seconds(finished, now) == 200
     queued = replace(task, state=TaskState.BUILDING, started_at=None)
-    assert allocated_seconds(queued, now, job_started) == 0
+    assert allocated_seconds(queued, now) == 0
     assigned = replace(queued, worker_id="allocated-worker")
-    assert allocated_seconds(assigned, now, job_started) == 900
+    assert allocated_seconds(assigned, now) == 0
+    building = replace(
+        assigned,
+        build_metrics=BuildMetrics(Timestamp.from_seconds(500), None, False, "test-image"),
+    )
+    assert allocated_seconds(building, now) == 500

@@ -18,16 +18,13 @@ from rigging.timing import Timestamp
 logger = logging.getLogger(__name__)
 
 
-def allocated_seconds(task: TaskStatus, now: Timestamp, job_started_at: Timestamp | None) -> float:
-    """Charge known worker time, excluding unadmitted pods without assigned nodes."""
+def allocated_seconds(task: TaskStatus, now: Timestamp) -> float:
+    """Charge timestamped worker/build time; job submission and queue waits are excluded."""
     starts = [task.started_at]
     if task.build_metrics is not None:
         starts.append(task.build_metrics.started_at)
     starts.extend(attempt.started_at for attempt in task.attempts)
     present = [value.epoch_seconds() for value in starts if value is not None]
-    assigned = bool(task.worker_id) or any(attempt.node_name for attempt in task.attempts)
-    if not present and assigned and job_started_at is not None:
-        present.append(job_started_at.epoch_seconds())
     if not present:
         return 0.0
     end = task.finished_at or now
@@ -56,7 +53,7 @@ def allocation_ledger(client: IrisClient, root: JobName) -> dict:
                 {
                     "task": task.task_id.to_wire(),
                     "state": task.state.value,
-                    "h100_hours": device.count * allocated_seconds(task, now, job.started_at) / 3600,
+                    "h100_hours": device.count * allocated_seconds(task, now) / 3600,
                 }
             )
     return {

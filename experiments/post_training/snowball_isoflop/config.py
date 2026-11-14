@@ -35,6 +35,7 @@ from experiments.sft.launcher import HFModel, SFTSpec
 INPUTS = Path(__file__).with_name("inputs")
 SEQ_LEN = 262144
 BATCH_SIZE = 8
+BASE_HOST_MEMORY = "1500GB"
 SCHEDULE_STEPS = 4750
 TASK_TIMEOUT = 259200
 PREFIX = "s3://marin-us-east-08a/marin/users/benfeuer/snowball-isoflop"
@@ -77,6 +78,7 @@ class Cell:
     stop_step: int
     checkpoint_steps: tuple[int, ...]
     phase: str
+    host_memory: str = BASE_HOST_MEMORY
 
     @property
     def name(self) -> str:
@@ -162,10 +164,12 @@ def primary_cells() -> tuple[Cell, ...]:
     cells = []
     for d in SIZES:
         endpoints = tuple(budget_steps(d, c) for c in BUDGETS)
+        phase = "A-host768-r2" if d == 1024 else "A"
+        host_memory = "768GB" if d == 1024 else BASE_HOST_MEMORY
         for mask in Mask:
-            cells.append(Cell(d, mask, 0, endpoints[-1], endpoints, "A"))
+            cells.append(Cell(d, mask, 0, endpoints[-1], endpoints, phase, host_memory))
             for seed in (1, 2):
-                cells.append(Cell(d, mask, seed, endpoints[1], (endpoints[1],), "A"))
+                cells.append(Cell(d, mask, seed, endpoints[1], (endpoints[1],), phase, host_memory))
     return tuple(cells)
 
 
@@ -330,8 +334,8 @@ def build_spec(cell: Cell, *, runtime: RuntimePolicy = RuntimePolicy.LOSS_CURVE)
     )
 
 
-def resources() -> ResourceConfig:
-    return ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="1500GB", disk="500GB", replicas=1, preemptible=False)
+def resources(host_memory: str = BASE_HOST_MEMORY) -> ResourceConfig:
+    return ResourceConfig.with_gpu("H100", count=8, cpu=64, ram=host_memory, disk="500GB", replicas=1, preemptible=False)
 
 
 def build_pod(
@@ -340,6 +344,6 @@ def build_pod(
     spec = build_spec(cell, runtime=runtime)
     output = f"{output_prefix}/{VERSION}/{cell.name}"
     pod = spec.model.build_train_config(
-        StepContext.for_run(output, output_prefix), spec, spec.prepared_data, resources(), cell.stop_step
+        StepContext.for_run(output, output_prefix), spec, spec.prepared_data, resources(cell.host_memory), cell.stop_step
     )
     return replace(pod, train_config=apply_output_path(pod.train_config, output))

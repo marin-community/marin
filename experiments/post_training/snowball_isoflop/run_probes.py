@@ -71,7 +71,7 @@ def run_probe(probe: Probe) -> dict:
     if any(not math.isfinite(float(row["train/loss"])) for row in training):
         raise ValueError("Probe loss history is nonfinite")
     result.update(status="complete", initial_eval=gate)
-    if probe.phase.startswith("B") or probe.phase == "C-throughput":
+    if probe.phase.startswith("B") or probe.phase.startswith("C-throughput"):
         result["measurement"] = asdict(warm_measurement(rows, probe.size, probe.batch_size))
     if probe.phase.startswith("C"):
         keys = ("train/moe/sender_dropped", "train/moe/receiver_dropped")
