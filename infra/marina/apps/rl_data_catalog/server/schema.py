@@ -4,6 +4,10 @@
 """Postgres storage for one staged curation catalog load."""
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS atlas_derived_contracts (
+    source_id TEXT NOT NULL,receipt_id TEXT NOT NULL,receipt JSONB NOT NULL,
+    PRIMARY KEY (source_id,receipt_id)
+);
 CREATE TABLE IF NOT EXISTS atlas_difficulty (
     measurement_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
     protocol_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL,
@@ -65,6 +69,11 @@ CREATE TABLE IF NOT EXISTS curriculum_statistics (
     PRIMARY KEY (load_id, source_id, metric, subject_id, node_id),
     FOREIGN KEY (load_id, source_id) REFERENCES curriculum_sources (load_id, source_id)
 );
+CREATE TABLE IF NOT EXISTS curriculum_confidence (
+    load_id TEXT NOT NULL, scope_id TEXT NOT NULL, metric TEXT NOT NULL,
+    subject_id TEXT NOT NULL, node_id TEXT NOT NULL, instances BIGINT[] NOT NULL,
+    PRIMARY KEY (load_id, scope_id, metric, subject_id, node_id)
+);
 CREATE TABLE IF NOT EXISTS atlas_sources (
     load_id TEXT NOT NULL, id TEXT NOT NULL, declaration JSONB NOT NULL,
     assessment_key TEXT, latest_attempt_key TEXT, latest_attempt_status TEXT NOT NULL,
@@ -80,6 +89,18 @@ CREATE TABLE IF NOT EXISTS atlas_identity_surveys (
 CREATE TABLE IF NOT EXISTS atlas_duplicate_reviews (
     load_id TEXT NOT NULL, left_source TEXT NOT NULL, right_source TEXT NOT NULL, review JSONB NOT NULL,
     PRIMARY KEY (load_id, left_source, right_source)
+);
+CREATE TABLE IF NOT EXISTS atlas_identity_measurements (
+    load_id TEXT NOT NULL, measurement_id TEXT NOT NULL, metadata JSONB NOT NULL,
+    PRIMARY KEY (load_id,measurement_id)
+);
+CREATE TABLE IF NOT EXISTS atlas_identity_measurement_reviews (
+    load_id TEXT NOT NULL, measurement_id TEXT NOT NULL, left_source TEXT NOT NULL,
+    right_source TEXT NOT NULL, review JSONB NOT NULL,
+    PRIMARY KEY (load_id,measurement_id,left_source,right_source)
+);
+CREATE TABLE IF NOT EXISTS atlas_identity_measurement_current (
+    load_id TEXT PRIMARY KEY, measurement_id TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS atlas_assessments (
     load_id TEXT NOT NULL, pipeline_key TEXT NOT NULL, source_id TEXT NOT NULL,

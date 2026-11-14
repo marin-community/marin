@@ -172,6 +172,30 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                     )
                 },
             )
+            connection.execute(
+                text("INSERT INTO atlas_derived_contracts VALUES ('Marin:clean','fixture',CAST(:receipt AS JSONB))"),
+                {
+                    "receipt": json.dumps(
+                        {
+                            "source_id": "Marin:clean",
+                            "input": ACTOR_INPUT,
+                            "scanned_task_specs_sha256": "f" * 64,
+                            "evidence_url": "https://example.org/derived-receipt.json",
+                            "summary": {
+                                "task_count": 3,
+                                "grader_type_counts": {"script": 1, "llm-judge": 2},
+                                "judge_rubric_counts": {"reference": 2},
+                                "judge_reference_count": 2,
+                                "judge_no_reference_count": 0,
+                                "agentic_count": 3,
+                                "single_turn_count": 0,
+                                "reply_only_count": 0,
+                                "workspace_graded_count": 3,
+                            },
+                        }
+                    )
+                },
+            )
             connection.execute(text("UPDATE atlas_current SET load_id='lexical' WHERE name='latest'"))
             for payload in connection.execute(
                 text(
@@ -348,6 +372,98 @@ def lexical_catalog(marina_kernel: Kernel, marina_database: DatabaseSpec) -> Ite
                 connection.execute(
                     text("INSERT INTO curriculum_statistics VALUES " "('counts','Marin:clean',:metric,'','',:count)"),
                     {"metric": metric, "count": count},
+                )
+            confidence_levels = [
+                {"label": label, "subject_min_similarity": subject, "capability_min_similarity": capability}
+                for label, subject, capability in [
+                    ("All (nearest)", 0.3, 0.3),
+                    ("Broad", 0.55, 0.6),
+                    ("Moderate", 0.55, 0.65),
+                    ("Strict", 0.55, 0.7),
+                    ("Original", 0.55, 0.75),
+                ]
+            ]
+            confidence_manifest = {
+                **manifest,
+                "confidence": {"levels": confidence_levels, "reference": {"uri": "fixture", "sha256": "a" * 64}},
+            }
+            connection.execute(
+                text(
+                    "INSERT INTO curriculum_loads (load_id,release_id,release_uri,manifest) VALUES "
+                    "('confidence','confidence','fixture',CAST(:manifest AS JSONB))"
+                ),
+                {"manifest": json.dumps(confidence_manifest)},
+            )
+            connection.execute(text("UPDATE curriculum_current SET previous_load_id='confidence' WHERE name='latest'"))
+            for table in ("sources", "nodes", "ancestors", "tasks", "matches", "statistics"):
+                columns = [
+                    row[0]
+                    for row in connection.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns WHERE "
+                            "table_schema=current_schema() AND table_name=:table ORDER BY ordinal_position"
+                        ),
+                        {"table": "curriculum_" + table},
+                    )
+                    if row[0] != "load_id"
+                ]
+                names = ",".join(columns)
+                connection.execute(
+                    text(
+                        f"INSERT INTO curriculum_{table} (load_id,{names}) SELECT 'confidence',{names} FROM "
+                        f"curriculum_{table} WHERE load_id='counts'"
+                    )
+                )
+            vectors = []
+            for row in connection.execute(text("SELECT * FROM curriculum_statistics WHERE load_id='counts'")).mappings():
+                broad = row["instances"]
+                if row["metric"] == "assigned":
+                    broad = 7110 if row["source_id"] == "Marin:clean" else 2
+                elif row["metric"] == "subject_only":
+                    broad = 0
+                elif row["metric"] == "placement" and row["subject_id"] == "D05" and row["node_id"] != "weather":
+                    broad = 7086 if row["source_id"] == "Marin:clean" else 2
+                elif row["metric"] == "capability":
+                    broad = 7086 if row["subject_id"] == "D05" else 24
+                vector = [broad, broad, row["instances"], row["instances"], row["instances"]]
+                vectors.append(
+                    {
+                        "scope": row["source_id"],
+                        "metric": row["metric"],
+                        "subject": row["subject_id"],
+                        "node": row["node_id"],
+                        "values": vector,
+                    }
+                )
+            for metric, subject, node, values in [
+                ("assigned", "", "", [2, 2, 0, 0, 0]),
+                ("placement", "D05", "earth", [2, 2, 0, 0, 0]),
+                ("placement", "D05", "climate", [2, 2, 0, 0, 0]),
+            ]:
+                vectors.append(
+                    {"scope": "Marin:eval", "metric": metric, "subject": subject, "node": node, "values": values}
+                )
+            for scope, use in [("@all", None), ("@train", "Marin:clean"), ("@eval", "Marin:eval")]:
+                combined = {}
+                for row in vectors:
+                    if use and row["scope"] != use:
+                        continue
+                    key = (row["metric"], row["subject"], row["node"])
+                    combined[key] = [a + b for a, b in zip(combined.get(key, [0] * 5), row["values"], strict=True)]
+                for (metric, subject, node), values in combined.items():
+                    connection.execute(
+                        text(
+                            "INSERT INTO curriculum_confidence VALUES "
+                            "('confidence',:scope,:metric,:subject,:node,:values)"
+                        ),
+                        {"scope": scope, "metric": metric, "subject": subject, "node": node, "values": values},
+                    )
+            for row in vectors:
+                connection.execute(
+                    text(
+                        "INSERT INTO curriculum_confidence VALUES ('confidence',:scope,:metric,:subject,:node,:values)"
+                    ),
+                    row,
                 )
         yield
     finally:

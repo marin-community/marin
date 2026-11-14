@@ -80,10 +80,12 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
+from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements
+from infra.marina.apps.rl_data_catalog.load_identity import load_identity
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.release_evidence import (
     catalog_state,
@@ -2020,3 +2022,162 @@ def test_frozen_catalog_projects_measured_math_folds_and_directional_notes(catal
         }
     with catalog_database.connect() as connection:
         assert connection.execute(text("SELECT DISTINCT duplicate_group FROM atlas_sources")).scalar_one() == stored
+
+
+@pytest.mark.parametrize("corruption", [None, "aggregate", "population", "parent"])
+def test_confidence_export_reconciles_real_source_vectors_at_every_level(tmp_path: Path, corruption: str | None) -> None:
+    path = curriculum_release(tmp_path)
+    release = AlignmentRelease.model_validate_json(path.read_text())
+    coverage = CurriculumCoverage.model_validate_json((tmp_path / "coverage.json").read_text())
+    levels = [
+        {"label": "Broad", "subject_min_similarity": 0.55, "capability_min_similarity": 0.6},
+        {"label": "Original", "subject_min_similarity": 0.55, "capability_min_similarity": 0.75},
+    ]
+    coverage = CurriculumCoverage.model_validate({**coverage.model_dump(), "confidence_levels": levels})
+    source_rows = []
+    combined = {}
+    for source in release.sources:
+        statistics = []
+        for row in pq.read_table(coverage.paths[0]).to_pylist():
+            if row["source_id"] != source.source_id:
+                continue
+            strict = row["instances"]
+            broad = strict
+            if source.source_id == "Marin:a":
+                if row["metric"] in ("assigned", "capability") or row["node_id"] in ("arithmetic", "add"):
+                    broad = 200
+                elif row["metric"] == "subject_only":
+                    broad = 0
+            key = (row["metric"], row["subject_id"], row["node_id"])
+            vector = [broad, strict]
+            statistics.append({"metric": key[0], "subject_id": key[1], "node_id": key[2], "instances": vector})
+            combined[key] = [a + b for a, b in zip(combined.get(key, [0, 0]), vector, strict=True)]
+        source_rows.append({"source_id": source.source_id, "intended_use": "train", "statistics": statistics})
+    aggregate = [
+        {"metric": key[0], "subject_id": key[1], "node_id": key[2], "instances": vector}
+        for key, vector in combined.items()
+    ]
+    document = {
+        "schema_version": 1,
+        "release": {"release_id": release.release_id},
+        "coverage": {"coverage_id": coverage.coverage_id},
+        "levels": levels,
+        "sources": source_rows,
+        "aggregates": {"all": aggregate, "train": aggregate, "eval": []},
+        "samples": {"paths": coverage.sample_paths, "task_count": coverage.sample_task_count},
+    }
+    if corruption == "aggregate":
+        aggregate[0]["instances"][0] += 1
+    elif corruption == "population":
+        source_rows[0]["statistics"][0]["instances"][0] += 1
+    elif corruption == "parent":
+        next(row for row in source_rows[0]["statistics"] if row["node_id"] == "add")["instances"][0] = 301
+    if corruption:
+        with pytest.raises(ValueError):
+            list(confidence_rows(document, release, coverage))
+    else:
+        result = list(confidence_rows(document, release, coverage))
+        totals = {row["metric"]: row["instances"] for row in result if row["scope_id"] == "@all" and not row["node_id"]}
+        assert totals["denominator"] == [400, 400]
+        assert totals["assigned"] == [300, 200]
+        assert totals["subject_only"] == [0, 100]
+
+
+def test_overlap_refresh_binds_frozen_inputs_and_preserves_legacy_reviews(catalog_database, catalog_query, tmp_path):
+    root = str(tmp_path / "catalog")
+    publish_sample(root, "frozen")
+    load_catalog(CurationCatalog(root), catalog_query)
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "experiments/post_training/task_curation/tests/fixtures/math_overlap_reviews.json"
+    )
+    evidence = json.loads(fixture.read_text())
+    fingerprints = {}
+    with catalog_database.begin() as connection:
+        template = dict(connection.execute(text("SELECT * FROM atlas_sources")).mappings().one())
+        for index, source in enumerate(evidence["sources"]):
+            fingerprint = SourceFingerprint(
+                version=1,
+                seed=0,
+                task_count=source["task_count"],
+                within_source_duplicates=0,
+                sample_sha256="a" * 64,
+                sample=[],
+                instruction_minhash=[],
+                instruction_hashes=[],
+                reference_hashes=[],
+                test_hashes=[],
+                task_id_hashes=[],
+                url_hashes=[],
+                lineage=[],
+                inputs={f"fixture-{index}": "b" * 64},
+            )
+            fingerprints[source["id"]] = fingerprint.model_dump(mode="json")
+            declaration = {
+                **template["declaration"],
+                "id": source["id"],
+                "within_source_dedup": {
+                    **template["declaration"]["within_source_dedup"],
+                    "unique_count": source["task_count"],
+                },
+            }
+            connection.execute(
+                text(
+                    "INSERT INTO atlas_sources SELECT (jsonb_populate_record(NULL::atlas_sources,to"
+                    "_jsonb(s) || CAST(:patch AS JSONB))).* FROM atlas_sources s WHERE id=:template"
+                ),
+                {
+                    "template": template["id"],
+                    "patch": json.dumps(
+                        {
+                            "id": source["id"],
+                            "declaration": declaration,
+                            "source_fingerprint": fingerprint.model_dump(mode="json"),
+                        }
+                    ),
+                },
+            )
+        connection.execute(text("DELETE FROM atlas_sources WHERE id=:source"), {"source": template["id"]})
+    survey = {
+        "version": 1,
+        "catalog_root": "fixture",
+        "snapshot_id": "archived",
+        "generated_at": "2026-11-14T00:00:00Z",
+        "fingerprints": fingerprints,
+        "reviews": evidence["reviews"],
+        "groups": [],
+        "judge": None,
+    }
+    path = tmp_path / "overlap.json"
+    path.write_text(json.dumps(survey))
+    reference = ManifestReference(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE atlas_sources SET source_fingerprint=jsonb_set(source_fingerprint,'{inp"
+                "uts}','{}'::jsonb) WHERE id=:source"
+            ),
+            {"source": evidence["sources"][0]["id"]},
+        )
+    with pytest.raises(ValueError, match="differs from the frozen catalog"):
+        load_identity(reference, catalog_query)
+    assert catalog_query("SELECT * FROM atlas_identity_measurement_current", {})["rows"] == []
+    with catalog_database.begin() as connection:
+        connection.execute(
+            text("UPDATE atlas_sources SET source_fingerprint=CAST(:fingerprint AS JSONB) WHERE id=:source"),
+            {
+                "fingerprint": json.dumps(fingerprints[evidence["sources"][0]["id"]]),
+                "source": evidence["sources"][0]["id"],
+            },
+        )
+    before = catalog_state(catalog_query)
+    first = load_identity(reference, catalog_query)
+    assert load_identity(reference, catalog_query) == first
+    after = catalog_state(catalog_query)
+    assert before["archives"] == after["archives"]
+    assert before["packets"] == after["packets"]
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        rows = {row["id"]: row for row in client.get("/sources").json()["sources"]}
+        assert rows["AI-MO:numina_math"]["duplicate_group"] is None
+        assert rows["EleutherAI:hendrycks_math"]["duplicate_group"]["canonical_source_id"] == "agentica-org:deepscaler"
+        assert client.get("/source-duplicates").json()["survey_id"] == reference.sha256

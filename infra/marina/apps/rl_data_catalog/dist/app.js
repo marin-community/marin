@@ -6,7 +6,7 @@ const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
   ['display_name', 'Source'], ['examples', 'Examples'], ['filtration', 'Filtration'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
-  ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['backends', 'Backends'], ['grading', 'Grading'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'], ['difficulty', 'Difficulty'],
+  ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['backends', 'Backends'], ['grading', 'Grading'], ['grader_type', 'Grader'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'], ['difficulty', 'Difficulty'],
 ];
 const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
 const state = {sources: [], sort: 'display_name', direction: 1, origin: 'all', syncedAt: null, daytonaLimit: null};
@@ -33,6 +33,7 @@ function matchesFilters(row) {
   const search = $('search').value.trim().toLowerCase();
   if (state.origin !== 'all' && originOf(row) !== state.origin) return false;
   if ($('use').value !== 'all' && value(row, 'use') !== $('use').value) return false;
+  if ($('grader').value !== 'all' && (row.grader_type || 'pending') !== $('grader').value) return false;
   if ($('quality').value !== 'all' && row.quality !== $('quality').value) return false;
   if ($('result').value !== 'all' && resultKey(row) !== $('result').value) return false;
   const text = [row.display_name, row.name, row.dataset_id, row.family, ...(row.tags || [])].join(' ').toLowerCase();
@@ -179,7 +180,8 @@ function sourceRow(row, others, canonical) {
     const difficulty = node('td', undefined, 'difficulty-cell'); difficulty.append(AtlasDifficulty.comparison(row.difficulty));
     const backends = node('td', undefined, 'backends-cell'); backends.append(backendLink(row, state.daytonaLimit));
     const grading = node('td'); grading.append(gradingChips(row));
-    tr.append(name, examples, filtration, use, quality, result, issueRate, contamination, overlap, backends, grading, area, updated, evidence, difficulty); return tr;
+    const grader = node('td', undefined, 'grader-cell'); grader.append(graderChip(row));
+    tr.append(name, examples, filtration, use, quality, result, issueRate, contamination, overlap, backends, grading, grader, area, updated, evidence, difficulty); return tr;
 }
 function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
@@ -276,7 +278,7 @@ async function load() {
 }
 function viewUrl() {
   const params = new URLSearchParams();
-  for (const id of ['search', 'use', 'quality', 'result', 'difficulty-model']) {
+  for (const id of ['search', 'use', 'quality', 'result', 'grader', 'difficulty-model']) {
     const item = $(id).value.trim();
     if (item && item !== 'all') params.set(id, item);
   }
@@ -290,7 +292,7 @@ function viewUrl() {
 function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
   $('filters').reset(); $('search').value = params.get('search') || '';
-  for (const id of ['use', 'quality', 'result']) if (params.has(id)) $(id).value = params.get(id);
+  for (const id of ['use', 'quality', 'result', 'grader']) if (params.has(id)) $(id).value = params.get(id);
   if (AtlasDifficulty.solvers.includes(params.get('difficulty-model'))) $('difficulty-model').value = params.get('difficulty-model');
   $('show-all').checked = params.get('all') === '1';
   expandedGroups.clear();
@@ -304,7 +306,7 @@ function update(replace = false) {
   history[replace ? 'replaceState' : 'pushState'](null, '', viewUrl());
   render();
 }
-for (const id of ['use', 'quality', 'result']) $(id).addEventListener('change', () => update());
+for (const id of ['use', 'quality', 'result', 'grader']) $(id).addEventListener('change', () => update());
 $('difficulty-model').addEventListener('change', () => {
   state.sort = $('difficulty-model').value === 'all' ? 'display_name' : 'difficulty';
   state.direction = state.sort === 'difficulty' ? -1 : 1;

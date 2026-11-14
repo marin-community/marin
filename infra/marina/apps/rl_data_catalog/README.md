@@ -106,3 +106,16 @@ Actorless count observations also cite ruling `b02c3b35…22da118`. Their bound
 audit removes agentic-only exclusions using the actual TaskSpec actor/harness
 contract, while preserving grading and other applicable checks. Both policy
 references remain visible in source Evidence.
+
+Curriculum confidence is a viewer choice over precomputed count vectors and
+scored sample examples. Changing it performs no classification work. Examples
+are pooled across sources with an explicit Source field; source selection is an
+optional filter. Complete per-source counts remain available below the samples.
+The confidence sidecar and overlap/Grader measurement loaders are documented in
+[Release procedure](RELEASE.md#intended-measurement-refreshes).
+
+Backend fit is binary for each source/backend: Supported requires every present
+role and applicable task to be supported. Conditional survey support and
+unsupported environment kinds display Unsupported with typed reasons and exact
+per-role affected counts. N/A is reserved for an absent role. Counts from agent
+and grader roles can overlap and must not be added into a unique-task union.

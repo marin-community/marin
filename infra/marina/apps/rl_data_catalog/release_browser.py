@@ -90,7 +90,8 @@ def check_view(
     expected_ids = eligible_ids if expanded else standalone | {groups[key]["canonical_source_id"] for key in foldable}
     expect(page.locator("#rows tr")).to_have_count(len(expected_ids))
     rendered = page.locator("#rows tr").evaluate_all(
-        "rows=>rows.map(r=>({id:r.dataset.sourceId,examples:r.cells[1].textContent}))"
+        "rows=>rows.map(r=>({id:r.dataset.sourceId,examples:r.cells[1].textContent,grad"
+        "er:r.querySelector('.grader-cell .chip')?.textContent}))"
     )
     displayed_ids = [row["id"] for row in rendered]
     if not page.locator("#rows tr td:first-child").evaluate_all(
@@ -105,6 +106,18 @@ def check_view(
     if len(set(displayed_ids)) != len(displayed_ids) or set(displayed_ids) != expected_ids:
         raise ValueError("Displayed sources violate filters or fold under an absent/non-canonical representative")
     for row in rendered:
+        grader_labels = {
+            "llm-judge": "LLM judge",
+            "exact-match": "Exact match",
+            "math-verify": "Math verify",
+            "unit-tests": "Unit tests",
+            "script": "Script",
+            "reward-model": "Reward model",
+            "none": "None",
+            "mixed": "Mixed",
+        }
+        if row["grader"] != grader_labels.get(rows[row["id"]].get("grader_type"), "Pending"):
+            raise ValueError(f"Grader label differs from the bound census: {row['id']}")
         counts = rows[row["id"]]["filtration"]
         expected = (
             f"{counts['example_count']:,}"
@@ -168,7 +181,9 @@ def source_sweep(page: Page, root: str, sources: list[dict[str, Any]], shots: Pa
         expect(page.locator("#difficulty-model")).to_have_value("all")
         default = check_view(page, sources)
         headers = page.locator(".metrics > div").evaluate_all(
-            "cards=>cards.map(c=>({label:c.querySelector('.metric-label').textContent,value:c.querySelector('strong').textContent,shown:c.querySelector('.metric-detail')?.textContent||null}))"
+            "cards=>cards.map(c=>({label:c.querySelector('.metric-label').textContent,value"
+            ":c.querySelector('strong').textContent,shown:c.querySelector('.metric-detail')"
+            "?.textContent||null}))"
         )
         page.screenshot(path=str(shots / f"default-{theme}-{width}.png"))
         page.locator("#use").select_option("train")
@@ -281,6 +296,42 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
             for use in ("all", "train", "eval"):
                 page.goto(root + "curriculum.html#" + urlencode({"release": release["release_id"], "intended_use": use}))
                 result = check_map(page)
+                confidence = page.evaluate(
+                    "async()=> (await fetch('api/curriculum?' + new URLSearchParams({release:docume"
+                    "nt.querySelector('#release').value,intended_use:document.querySelector('#use')"
+                    ".value}))).json())"
+                )
+                levels = confidence.get("confidence", {}).get("levels", []) if confidence.get("confidence") else []
+                for index, level in enumerate(levels):
+                    page.locator("#confidence").select_option(str(index))
+                    vectors = {
+                        row["metric"]: row["instances"][index]
+                        for row in confidence["confidence"]["statistics"]
+                        if not row["subject_id"] and not row["node_id"]
+                    }
+                    assert (
+                        sum(
+                            vectors.get(metric, 0)
+                            for metric in ("assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
+                        )
+                        == vectors["denominator"]
+                    )
+                    assert integers(page.locator("#task-count").inner_text()) == [vectors["denominator"]]
+                    assert integers(page.locator("#capability-count").inner_text()) == [vectors.get("assigned", 0)]
+                    assert (
+                        sum(integers(value)[0] for value in page.locator("#outcomes b").all_inner_texts())
+                        == vectors["denominator"]
+                    )
+                    results.append(
+                        {
+                            "theme": theme,
+                            "width": width,
+                            "release": release["release_id"],
+                            "use": use,
+                            "confidence": level,
+                            **check_map(page),
+                        }
+                    )
                 results.append({"theme": theme, "width": width, "release": release["release_id"], "use": use, **result})
         page.goto(root + "curriculum.html")
         check_map(page)
@@ -311,7 +362,9 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
             expect(page.locator("#area-summary")).to_contain_text(f"{count:,} task instances")
             breakdown = page.locator("#area-sources b").all_inner_texts()
             assert sum(integers(value)[0] for value in breakdown) == count
-            expect(page.locator("#task-message")).to_contain_text(re.compile("sampled examples|No task examples"))
+            expect(page.locator("#task-message")).to_contain_text(
+                re.compile("sampled examples|No task examples|No stored sample examples")
+            )
 
             page.locator("#search").fill("__release_check_unmatched_search__")
             check_map(page)

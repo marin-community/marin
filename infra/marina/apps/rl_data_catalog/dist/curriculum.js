@@ -4,7 +4,7 @@ const compact = new Intl.NumberFormat('en-US', {notation: 'compact', maximumFrac
 const percent = value => `${(100 * value).toFixed(1)}%`;
 const useLabels = {train: 'Training', eval: 'Evaluation'};
 const outcomes = {assigned: 'Capability match', subject_only: 'Subject only', out_of_scope: 'Outside cutoff', insufficient_context: 'Insufficient context', skipped: 'Embedding skipped'};
-const state = { data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null};
+const state = { data: null, parent: '', subject: '', nodes: new Map(), request: 0, taskRequest: 0, next: '', taskQuery: null, raw: null, level: 0, taskSelection: null, pools: new Map(), breakdowns: new Map()};
 
 function parameters() {
   return new URLSearchParams({intended_use: $('use').value, source_id: $('source').value, release: $('release').value});
@@ -24,7 +24,15 @@ async function loadCoverage() {
   try {
     const data = await json(`api/curriculum?${params}`);
     if (request !== state.request) return;
-    state.data = data;
+    state.raw = data;
+    $('confidence').replaceChildren();
+    const levels = data.confidence?.levels || [{label: 'Release cutoffs', subject_min_similarity: 1-data.thresholds.subject_distance, capability_min_similarity: 1-data.thresholds.capability_distance}];
+    levels.forEach((level, index) => {
+      const option = node('option', `${level.label} · subject ≥${level.subject_min_similarity.toFixed(2)} / capability ≥${level.capability_min_similarity.toFixed(2)}`);
+      option.value = index; $('confidence').append(option);
+    });
+    state.level = Math.min(state.level, levels.length-1); $('confidence').value = state.level;
+    applyConfidence();
     state.nodes = new Map(data.hierarchy.map(item => [`${item.subject_id}/${item.node_id}`, item]));
     const selected = $('source').value;
     $('source').replaceChildren(node('option', 'All sources'));
@@ -55,6 +63,23 @@ async function loadCoverage() {
     if (area) await showTasks(area);
   } catch (error) { if (request === state.request) $('message').textContent = `Coverage could not be loaded. ${error.message}`; }
   finally { if (request === state.request) { $('curriculum-map').removeAttribute('aria-busy'); $('curriculum-map').inert = false; $('outcomes').inert = false; } }
+}
+
+function applyConfidence() {
+  const raw = state.raw;
+  if (!raw.confidence) { state.data = raw; return; }
+  const level = raw.confidence.levels[state.level], totals = {...raw.totals}, area_counts = [];
+  let subject_members = 0, capability_matches = 0;
+  for (const row of raw.confidence.statistics) {
+    const count = row.instances[state.level];
+    if (row.metric === 'placement') area_counts.push({subject_id: row.subject_id, node_id: row.node_id, count});
+    if (!row.subject_id && !row.node_id) totals[row.metric] = count;
+    if (row.subject_id === state.subject && row.node_id === `subject:${state.subject}`) {
+      if (row.metric === 'placement') subject_members = count;
+      if (row.metric === 'capability') capability_matches = count;
+    }
+  }
+  state.data = {...raw, totals, area_counts, thresholds: {subject_distance: 1-level.subject_min_similarity, capability_distance: 1-level.capability_min_similarity}, scope_summary: state.subject ? {subject_members, capability_matches} : null};
 }
 
 function navigate(item) {
@@ -240,6 +265,7 @@ function openTasks(area, outcome = 'all') {
 }
 
 async function showTasks(area, outcome = 'all', sourceId = '') {
+  state.taskSelection = {area, outcome, sourceId};
   state.taskQuery = new URLSearchParams(state.data.filters); state.taskQuery.set('release', state.data.release_id);
   if (area) { state.taskQuery.set('node_id', area.node_id); state.taskQuery.set('subject_id', area.subject_id); state.taskQuery.set('scope', area.scope || 'all'); }
   if (sourceId) state.taskQuery.set('source_id', sourceId);
@@ -250,7 +276,11 @@ async function showTasks(area, outcome = 'all', sourceId = '') {
   $('task-scope').textContent = `${sourceId || $('source').selectedOptions[0].textContent} · sampled examples`;
   if (area) {
     try {
-      const details = await json(`api/curriculum/area?${state.taskQuery}`);
+      const key = state.taskQuery.toString();
+      if (!state.breakdowns.has(key)) state.breakdowns.set(key, await json(`api/curriculum/area?${state.taskQuery}`));
+      const stored = state.breakdowns.get(key);
+      const sources = stored.confidence_sources ? stored.confidence_sources.map(source => ({...source, count: source.instances[state.level]})).filter(source => source.count > 0).sort((a,b) => b.count-a.count || a.source_id.localeCompare(b.source_id)) : stored.sources;
+      const details = {...stored, sources, count: sources.reduce((sum, source) => sum + source.count, 0)};
       if (request !== state.taskRequest) return;
       $('area-summary').textContent = `${number.format(details.count)} task instances · complete source breakdown. Task examples below are sampled.`;
       for (const source of details.sources) {
@@ -263,7 +293,62 @@ async function showTasks(area, outcome = 'all', sourceId = '') {
       }
     } catch (error) { if (request === state.taskRequest) $('area-summary').textContent = `Source breakdown could not be loaded. ${error.message}`; }
   }
-  if (request === state.taskRequest) await loadTasks();
+  if (request === state.taskRequest) await (state.raw.confidence ? loadPool() : loadTasks());
+}
+function confidenceOutcome(task) {
+  if (task.description_status === 'skipped' || task.description_status === 'insufficient_context') return task.description_status;
+  const members = (task.matches || []).filter(match => match.membership_similarity >= 1-state.data.thresholds.subject_distance);
+  if (members.some(match => match.candidates[0].similarity >= 1-state.data.thresholds.capability_distance)) return 'assigned';
+  return members.length ? 'subject_only' : 'out_of_scope';
+}
+function selectedSample(task) {
+  const {area, outcome} = state.taskSelection;
+  const result = confidenceOutcome(task);
+  if (outcome !== 'all' && outcome !== result) return null;
+  if (!area) return {...task, outcome: result};
+  const match = (task.matches || []).find(match => match.subject_id === area.subject_id && match.membership_similarity >= 1-state.data.thresholds.subject_distance);
+  if (!match) return null;
+  const placed = new Set([`subject:${area.subject_id}`]);
+  if (match.candidates[0].similarity >= 1-state.data.thresholds.capability_distance) {
+    let current = state.nodes.get(`${area.subject_id}/${match.candidates[0].capability_id}`);
+    while (current) { placed.add(current.node_id); current = state.nodes.get(`${current.subject_id}/${current.parent_id}`); }
+  }
+  if (!placed.has(area.node_id)) return null;
+  if (area.scope === 'unlisted' && state.data.hierarchy.some(node => node.subject_id === area.subject_id && node.parent_id === area.node_id && placed.has(node.node_id))) return null;
+  return {...task, outcome: area.scope === 'unlisted' ? 'subject_only' : result};
+}
+function appendTask(task) {
+  const item = button('', 'task-row', () => openDetail(task));
+  const source = state.data.sources.find(source => source.source_id === task.source_id);
+  const identity = node('span', '', 'task-source'); identity.append(node('span', 'Source', 'task-column-label'), node('span', source?.name || task.source_id), node('span', task.task_id, 'task-id')); identity.title = task.source_id;
+  item.append(identity, node('span', task.task_preview || (task.outcome === 'skipped' ? 'Embedding skipped; open details for the failure.' : 'Instructions do not establish the requested operation.'), 'task-description'), node('span', outcomes[task.outcome], 'task-outcome'));
+  $('task-list').append(item);
+}
+async function loadPool() {
+  const request = ++state.taskRequest;
+  const params = new URLSearchParams(state.data.filters);
+  params.set('release', state.data.release_id); params.set('sample_pool', 'true'); params.set('limit', '1000');
+  const {area, sourceId} = state.taskSelection;
+  if (area) params.set('subject_id', area.subject_id);
+  if (sourceId) params.set('source_id', sourceId);
+  const key = params.toString();
+  if (!state.pools.has(key)) state.pools.set(key, (async () => {
+    const tasks = []; let cursor = '';
+    do {
+      if (cursor) params.set('cursor', cursor);
+      const data = await json(`api/curriculum/tasks?${params}`);
+      tasks.push(...data.tasks); cursor = data.next_cursor;
+    } while (cursor);
+    return tasks;
+  })().catch(error => { state.pools.delete(key); throw error; }));
+  $('task-message').textContent = 'Loading sampled examples…'; $('more-tasks').hidden = true;
+  try {
+    const pool = await state.pools.get(key);
+    if (request !== state.taskRequest) return;
+    $('task-list').replaceChildren();
+    for (const task of pool) { const selected = selectedSample(task); if (selected) appendTask(selected); }
+    $('task-message').textContent = $('task-list').children.length ? `${number.format($('task-list').children.length)} sampled examples · all stored samples in this selection` : 'No stored sample examples match this confidence level.';
+  } catch (error) { if (request === state.taskRequest) $('task-message').textContent = `Tasks could not be loaded. ${error.message}`; }
 }
 async function loadTasks() {
   const request = ++state.taskRequest;
@@ -272,13 +357,7 @@ async function loadTasks() {
   try {
     const data = await json(`api/curriculum/tasks?${params}`);
     if (request !== state.taskRequest) return;
-    for (const task of data.tasks) {
-      const item = button('', 'task-row', () => openDetail(task));
-      const source = state.data.sources.find(source => source.source_id === task.source_id);
-      const identity = node('span', '', 'task-source'); identity.append(node('span', 'Source', 'task-column-label'), node('span', source?.name || task.source_id), node('span', task.task_id, 'task-id')); identity.title = task.source_id;
-      item.append(identity, node('span', task.task_preview || (task.outcome === 'skipped' ? 'Embedding skipped; open details for the failure.' : 'Instructions do not establish the requested operation.'), 'task-description'), node('span', outcomes[task.outcome], 'task-outcome'));
-      $('task-list').append(item);
-    }
+    for (const task of data.tasks) appendTask(task);
     state.next = data.next_cursor; $('more-tasks').hidden = !state.next;
     $('task-message').textContent = $('task-list').children.length ? `${number.format($('task-list').children.length)} sampled examples${state.next ? ' · more available' : ''}` : 'No task examples are available in this area at the release cutoffs.';
   } catch (error) { if (request === state.taskRequest) $('task-message').textContent = `Tasks could not be loaded. ${error.message}`; }
@@ -313,13 +392,14 @@ async function openDetail(task) {
   } catch (error) { $('detail-description').textContent = `Task could not be loaded. ${error.message}`; }
 }
 function scoreTable(scores, target = $('detail-matches')) {
-  const table = node('table'), head = node('tr'); for (const text of ['Area', 'Cosine', 'Distance', 'At release cutoffs']) head.append(node('th', text)); const thead = node('thead'); thead.append(head); table.append(thead);
+  const table = node('table'), head = node('tr'); for (const text of ['Area', 'Cosine', 'Distance', 'At selected cutoffs']) head.append(node('th', text)); const thead = node('thead'); thead.append(head); table.append(thead);
   const body = node('tbody'); for (const score of scores) { const row = node('tr'); row.append(node('td', score.name), node('td', score.similarity.toFixed(3), 'score'), node('td', (1-score.similarity).toFixed(3), 'score'), node('td', score.status, `score-status${score.within ? '' : ' outside'}`)); body.append(row); } table.append(body); target.append(table);
 }
 
 function viewUrl() {
   const hash = new URLSearchParams();
   if ($('use').value !== 'all') hash.set('intended_use', $('use').value);
+  if (state.level) hash.set('confidence', state.level);
   if ($('source').value) hash.set('source_id', $('source').value);
   if ($('release').value) hash.set('release', $('release').value);
   if (state.parent) { hash.set('parent_id', state.parent); hash.set('subject_id', state.subject); }
@@ -328,6 +408,7 @@ function viewUrl() {
 }
 function readLocation() {
   const initial = new URLSearchParams(location.hash.slice(1));
+  state.level = Math.max(0, Number(initial.get('confidence')) || 0);
   $('use').value = initial.get('intended_use') || 'all';
   $('release').value = initial.get('release') || '';
   $('search').value = initial.get('search') || '';
@@ -342,6 +423,10 @@ $('controls').addEventListener('submit', event => event.preventDefault());
 for (const id of ['source', 'use', 'release']) $(id).addEventListener('change', () => {
   history.pushState(null, '', viewUrl()); loadCoverage();
 });
+$('confidence').addEventListener('change', () => {
+  state.level = Number($('confidence').value); applyConfidence(); renderCoverage();
+  if (!$('task-panel').hidden && state.taskSelection) { const {area, outcome, sourceId} = state.taskSelection; showTasks(area, outcome, sourceId); }
+});
 $('domain').addEventListener('change', () => navigate($('domain').value ? state.nodes.get(`${$('domain').value}/subject:${$('domain').value}`) : null));
 $('search').addEventListener('input', () => {
   ++state.taskRequest; $('task-panel').hidden = true; renderCoverage();
@@ -351,7 +436,7 @@ $('more-tasks').addEventListener('click', loadTasks);
 $('close-tasks').addEventListener('click', () => { ++state.taskRequest; $('task-panel').hidden = true; });
 $('close-detail').addEventListener('click', () => $('task-detail').close());
 $('reset-view').addEventListener('click', () => {
-  $('controls').reset(); state.parent = ''; state.subject = '';
+  $('controls').reset(); state.level = 0; state.parent = ''; state.subject = '';
   history.pushState(null, '', viewUrl()); loadCoverage();
 });
 window.addEventListener('popstate', () => { readLocation(); loadCoverage(); });

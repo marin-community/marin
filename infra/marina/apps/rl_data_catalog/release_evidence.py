@@ -12,8 +12,10 @@ from typing import Any
 from taskcompendium.source_fingerprints import DuplicateReview
 
 from .server.app import canonical_duplicate_group, canonical_duplicate_review
+from .server.derived_contract import contract_projection
 from .server.duplicate_folding import SourceStanding, fold_groups, partial_overlap_notes
 from .server.filtration import filtration
+from .server.identity_measurements import IDENTITY_REVIEWS_SQL
 from .server.source_counts import SourceCounts
 
 SqlQuery = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -80,6 +82,17 @@ def projected_sources(data: dict[str, Any], counts: SourceCounts) -> dict[str, A
     return {**data, "sources": rows}
 
 
+def projected_contract_inventory(data: dict[str, Any], query: SqlQuery) -> dict[str, Any]:
+    receipts = query("SELECT source_id,receipt FROM atlas_derived_contracts ORDER BY receipt_id", {})["rows"]
+    return {
+        **data,
+        "sources": [
+            contract_projection(row, [record["receipt"] for record in receipts if record["source_id"] == row["id"]])
+            for row in data["sources"]
+        ],
+    }
+
+
 DUPLICATE_REVIEW_BATCH = 100
 
 
@@ -89,8 +102,8 @@ def projected_duplicate_inventory(data: dict[str, Any], query: SqlQuery, load_id
     offset = 0
     while True:
         rows = query(
-            "SELECT review FROM atlas_duplicate_reviews WHERE load_id=:load_id "
-            "ORDER BY left_source,right_source LIMIT :limit OFFSET :offset",
+            "SELECT review FROM (" + IDENTITY_REVIEWS_SQL + ") selected "
+            "ORDER BY review->'similarity'->>'left',review->'similarity'->>'right' LIMIT :limit OFFSET :offset",
             {"load_id": load_id, "limit": DUPLICATE_REVIEW_BATCH, "offset": offset},
         )["rows"]
         reviews.extend(DuplicateReview.model_validate(canonical_duplicate_review(row["review"])) for row in rows)
@@ -173,6 +186,34 @@ def catalog_state(query: SqlQuery) -> dict[str, Any]:
         "FROM curriculum_loads ORDER BY load_id",
         {},
     )["rows"]
+    identity_measurements = query(
+        """SELECT m.load_id || '/' || m.measurement_id AS id,
+        md5(m.metadata::text) AS metadata_checksum,
+        (SELECT COUNT(*) FROM atlas_identity_measurement_reviews r
+            WHERE r.load_id=m.load_id AND r.measurement_id=m.measurement_id) AS reviews,
+        (SELECT md5(COALESCE(string_agg(md5(r.review::text),'' ORDER BY r.left_source,r.right_source),''))
+            FROM atlas_identity_measurement_reviews r WHERE r.load_id=m.load_id
+            AND r.measurement_id=m.measurement_id) AS reviews_checksum
+        FROM atlas_identity_measurements m ORDER BY id""",
+        {},
+    )["rows"]
+    identity_selection = query("SELECT * FROM atlas_identity_measurement_current ORDER BY load_id", {})["rows"]
+    derived_contracts = query(
+        (
+            "SELECT source_id || '/' || receipt_id AS id,md5(receipt::text) AS checksum FRO"
+            "M atlas_derived_contracts ORDER BY id"
+        ),
+        {},
+    )["rows"]
+    confidence_vectors = query(
+        """SELECT l.load_id,
+        (SELECT COUNT(*) FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS vectors,
+        (SELECT md5(COALESCE(string_agg(md5(to_jsonb(v)::text),'' ORDER BY v.scope_id,v.metric,
+            v.subject_id,v.node_id),''))
+         FROM curriculum_confidence v WHERE v.load_id=l.load_id) AS checksum
+        FROM curriculum_loads l ORDER BY l.load_id""",
+        {},
+    )["rows"]
     end = query("SELECT load_id FROM atlas_current WHERE name='latest'", {})["rows"]
     if end != [{"load_id": current[0]["load_id"]}]:
         raise ValueError("Catalog selection changed while recording the baseline")
@@ -183,12 +224,19 @@ def catalog_state(query: SqlQuery) -> dict[str, Any]:
         "packets": packets,
         "curriculum": curriculum,
         "releases": releases,
+        "identity_measurements": identity_measurements,
+        "identity_selection": identity_selection,
+        "derived_contracts": derived_contracts,
+        "confidence_vectors": confidence_vectors,
     }
 
 
 def verify_preservation(before: dict[str, Any], after: dict[str, Any], *, refresh_snapshot: str | None = None) -> None:
     """Allow an explicitly named new catalog, while preserving all prior evidence."""
     fields = [("releases", "load_id"), ("assessments", "pipeline_key"), ("packets", "pipeline_key")]
+    for field, key in (("identity_measurements", "id"), ("derived_contracts", "id"), ("confidence_vectors", "load_id")):
+        if field in before:
+            fields.append((field, key))
     if refresh_snapshot is None:
         fields.append(("archives", "load_id"))
     for field, key_field in fields:
@@ -197,7 +245,9 @@ def verify_preservation(before: dict[str, Any], after: dict[str, Any], *, refres
         if any(current.get(key) != row for key, row in previous.items()):
             raise ValueError(f"Historical {field} were removed or changed")
     if refresh_snapshot is None:
-        for field in ("selected", "curriculum"):
+        for field in ("selected", "curriculum", "identity_selection"):
+            if field not in before:
+                continue
             if before[field] != after[field]:
                 raise ValueError(f"{field} changed during a code-only release")
     elif after["selected"]["snapshot_id"] != refresh_snapshot:

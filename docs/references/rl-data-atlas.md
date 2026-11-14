@@ -1165,3 +1165,21 @@ Before a TRAIN remediation release, union duplicate and lexical exclusions and q
 population. Eval/benchmark sources strictly drop duplicates while recording lexical matches without
 lexical exclusions. Publish one new private `open-athena` TaskCompendium version per source only after the
 release has been authorized. Preserve the previous artifacts and receipts.
+
+### Refreshing displayed measurements without replacing the catalog
+
+The [release procedure](../../infra/marina/apps/rl_data_catalog/RELEASE.md#intended-measurement-refreshes)
+provides pinned overlap-survey, derived Grader-profile and confidence-export load
+commands. Overlap refreshes bind to the frozen fingerprint inputs and preserve
+legacy survey/review bytes for retained revisions. Grader profiles bind the full
+current TaskSpec census identity; changed inputs remain Pending. The table uses
+one enum chip, including Mixed, and Evidence contains its task-count breakdown,
+judge rubric/reference profile and actual census receipt.
+
+Curriculum Confidence selects exported similarity thresholds, with All (nearest)
+as the default. Counts, Unplaced/outcome partitions, Other/unlisted and stored
+sample examples change together in the browser. Subject and capability thresholds
+are cosine similarities; the historical 0.45/0.25 distances correspond to
+0.55/0.75 similarities. Source is an optional filter, not a prerequisite for
+seeing pooled examples. Every example identifies its source. Exact population
+and per-source counts remain distinct from the stored sample list.

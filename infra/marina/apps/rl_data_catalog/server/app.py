@@ -18,9 +18,11 @@ from .contamination import contamination
 from .count_evidence import SOURCE_COUNTS
 from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
+from .derived_contract import contract_projection, contract_records
 from .difficulty import difficulty_records, difficulty_summary
 from .duplicate_folding import SourceStanding, fold_groups, partial_overlap_notes
 from .filtration import filtration
+from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
 from .quality import intended_use, issue_rate, quality_display, result
 from .schema import SCHEMA_SQL
 from .source_counts import SourceCounts
@@ -104,7 +106,9 @@ def duplicate_projection(
         DuplicateReview.model_validate(canonical_duplicate_review(row))
         for row in connection.execute(
             text(
-                "SELECT review FROM atlas_duplicate_reviews WHERE load_id = :load_id ORDER BY left_source, right_source"
+                "SELECT review FROM ("
+                + IDENTITY_REVIEWS_SQL
+                + ") selected ORDER BY review->'similarity'->>'left',review->'similarity'->>'right'"
             ),
             {"load_id": load_id},
         ).scalars()
@@ -164,7 +168,11 @@ def source_record(connection: Connection, source_id: str) -> dict[str, Any]:
     )
     if row is None:
         raise HTTPException(404, "Source not found")
-    return canonical_source_record(dict(row))
+    result = canonical_source_record(dict(row))
+    result["declaration"] = contract_projection(
+        result["declaration"], contract_records(connection).get(result["id"], [])
+    )
+    return result
 
 
 def cohort_summaries(connection: Connection, load_id: str, pipeline_key: str) -> dict[str, Any]:
@@ -218,6 +226,7 @@ def create_api(services: AppletServices) -> FastAPI:
             metadata = loaded_catalog(connection)
             coverage = source_coverage(connection)
             measurements = difficulty_records(connection)
+            contracts = contract_records(connection)
             rows = connection.execute(
                 text(
                     """
@@ -242,6 +251,7 @@ def create_api(services: AppletServices) -> FastAPI:
             inventory = []
             for retained_row in rows:
                 row = canonical_source_record(dict(retained_row))
+                row["declaration"] = contract_projection(row["declaration"], contracts.get(row["id"], []))
                 display = quality_display(row["declaration"], row["curation"], row["assessment_key"])
                 inventory.append(
                     {
@@ -336,20 +346,15 @@ def create_api(services: AppletServices) -> FastAPI:
         with engine.connect() as connection:
             metadata = loaded_catalog(connection)
             parameters = {"load_id": metadata["load_id"]}
-            survey = (
-                connection.execute(
-                    text("SELECT survey_id, metadata FROM atlas_identity_surveys WHERE load_id = :load_id"), parameters
-                )
-                .mappings()
-                .first()
-            )
+            survey = connection.execute(text(IDENTITY_SURVEY_SQL), parameters).mappings().first()
             if survey is None:
                 raise HTTPException(503, "Selected catalog has no source identity survey")
             reviews = (
                 connection.execute(
                     text(
-                        "SELECT review FROM atlas_duplicate_reviews WHERE load_id = :load_id "
-                        "ORDER BY left_source, right_source"
+                        "SELECT review FROM ("
+                        + IDENTITY_REVIEWS_SQL
+                        + ") selected ORDER BY review->'similarity'->>'left',review->'similarity'->>'right'"
                     ),
                     parameters,
                 )

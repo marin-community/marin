@@ -35,7 +35,7 @@ window.AtlasColumns = (() => {
     const headers = [...table.tHead.rows[0].cells];
     const defaults = headers.map(header => header.getBoundingClientRect().width);
     const minimum = headers.map((header, index) => minimumWidth(header, [...table.tBodies[0].rows].map(row => row.cells[index])));
-    const widths = columns.map(([key], index) => Math.max(minimum[index], saved[key] ?? defaults[index]));
+    const widths = columns.map(([key], index) => saved[key] == null ? defaults[index] : Math.max(minimum[index], saved[key]));
     const group = document.createElement('colgroup');
     for (const width of widths) { const col = document.createElement('col'); col.style.width = `${width}px`; group.append(col); }
     function apply() {
@@ -66,7 +66,7 @@ window.AtlasColumns = (() => {
       handle.addEventListener('pointerdown', event => {
         if (event.button !== 0) return;
         event.preventDefault(); event.stopPropagation();
-        const start = event.clientX, width = widths[index];
+        const start = event.clientX, width = header.getBoundingClientRect().width;
         handle.setPointerCapture(event.pointerId); handle.focus();
         table.classList.add('resizing-column');
         function move(next) { resize(width + next.clientX - start); }

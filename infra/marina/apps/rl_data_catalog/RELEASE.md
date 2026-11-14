@@ -184,3 +184,60 @@ button and optional fold toggle. Source subtitles, dataset links, overlap notes
 and all other secondary content belong in Evidence/detail views. Enum chips
 carry their label without secondary text underneath. The browser gates enforce
 both invariants at 1440/390 in light/dark themes before every publication.
+
+## Intended measurement refreshes
+
+Stage measurement changes before the preflight baseline, from the landed cut.
+Keep source declarations, assessment packets and archived measurements intact.
+Each loader creates only its additive measurement tables. Never replace a catalog
+just to refresh an independent measurement. Retained app revisions continue to
+read their original overlap tables.
+
+For an explicitly approved overlap survey, pin both its URI and SHA-256:
+
+```bash
+uv run python -m infra.marina.apps.rl_data_catalog.load_identity \
+  --survey "$SURVEY_URI" "$SURVEY_SHA256" --app-id "$PREVIEW_APP_ID" \
+  --receipt "$ARTIFACTS/identity-load.json"
+```
+
+The loader compares immutable fingerprint inputs, population counts, sample
+hashes and seeds against the frozen catalog. It excludes reviews touching
+current empty populations, retains the full survey reference and records that
+exclusion. Any other input mismatch aborts selection. Repeating an identical
+load is safe; conflicting stored reviews fail. Pass
+`--identity-measurement "$SURVEY_SHA256"` to the preflight checker to require that
+exact measurement. Its selected pointer and every archived review checksum are
+then covered by the hosted baseline.
+
+Load derived-contract manifests with explicit byte hashes:
+
+```bash
+uv run python -m infra.marina.apps.rl_data_catalog.load_derived_contract \
+  --input "$GRADER_MANIFEST" "$GRADER_SHA256" --app-id "$PREVIEW_APP_ID" \
+  --receipt "$ARTIFACTS/grader-load.json"
+```
+
+Grader profiles bind to source ID, dataset ID/revision, converter version/revision,
+TaskSpec digest and population size. Unbound profiles show Pending. Mixed is one
+chip; the complete type counts, judge profile and receipt are in Evidence.
+
+For a new confidence export, run the curriculum loader in the export's storage
+region. Supply the exact release, coverage and hashed confidence sidecar:
+
+```bash
+uv run python -m infra.marina.apps.rl_data_catalog.load_curriculum \
+  --release "$CURRICULUM_RELEASE_URI" --coverage "$COVERAGE_URI" \
+  --confidence "$CONFIDENCE_URI" "$CONFIDENCE_SHA256" --app-id "$PREVIEW_APP_ID"
+```
+
+The sidecar must bind the same immutable release/coverage bytes and sample union.
+Every confidence level must reconcile outcomes to the population; every aggregate
+must equal its per-source vectors; children cannot exceed their parent. Old loads
+are retained. Confidence selection reads precomputed vectors and filters cached
+scored samples in the browser. Source is optional: examples are pooled across
+sources, each with its Source field. Lists contain stored samples, not a complete
+instance index. A stricter subject-only view filters the full subject sample pool,
+so samples are not lost merely because they were capability matches at a broader
+level. The canonical checker exercises all exported levels and task partitions
+at each layout, including the original cutoffs and historical populations.

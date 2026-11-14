@@ -310,3 +310,6 @@ function remediatedReleaseLink(source) {
   if (source.contamination_status !== 'REMEDIATED' || !source.lexical_contamination?.receipt?.release?.private) return null;
   return receiptLink(source.current_release.url, 'Remediated PRIVATE version ↗');
 }
+
+const graderLabels = {'llm-judge': 'LLM judge', 'exact-match': 'Exact match', 'math-verify': 'Math verify', 'unit-tests': 'Unit tests', script: 'Script', 'reward-model': 'Reward model', none: 'None', mixed: 'Mixed'};
+function graderChip(source) { return node('span', graderLabels[source.grader_type] || 'Pending', `chip quality-${source.grader_type ? 'good' : 'unassessed'}`); }

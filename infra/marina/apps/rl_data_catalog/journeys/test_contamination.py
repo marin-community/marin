@@ -819,3 +819,65 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
         "!a[i+1] || c.getBoundingClientRect().right <= a[i+1].getBoundingClientRect().left + 1))"
     )
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_confidence_changes_counts_and_pooled_samples_without_requests(journey: Journey, theme: str, width: int) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.get_by_role("link", name="By curriculum", exact=True).click()
+    page.goto(page.url.split("#")[0] + "#release=confidence")
+    expect(page.locator("#confidence option")).to_have_count(5)
+    expect(page.locator("#capability-count")).to_have_text("7,112")
+    page.locator('[data-subject="D05"] .domain-count').click()
+    expect(page.locator("#task-list .task-row")).to_have_count(3)
+    requests = []
+    page.on("request", lambda request: requests.append(request.url) if "/api/" in request.url else None)
+    for index in range(5):
+        page.locator("#confidence").select_option(str(index))
+        expect(page.locator("#capability-count")).to_have_text("7,112" if index < 2 else "30")
+        expect(page.locator("#task-list .task-row")).to_have_count(3)
+        assert (
+            page.locator("#outcomes b").evaluate_all(
+                "nodes => nodes.reduce((sum, node) => sum + Number(node.textContent.replaceAll(',', '')), 0)"
+            )
+            == 7112
+        )
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert requests == []
+    page.locator('[data-subject="D05"]').get_by_role("button", name="Other/unlisted (subject only)", exact=True).click()
+    expect(page.locator("#task-list .task-row")).to_have_count(2)
+    expect(page.locator("#area-summary")).to_contain_text("7,078 task instances")
+    requests.clear()
+    page.locator("#confidence").select_option("0")
+    expect(page.locator("#task-list .task-row")).to_have_count(0)
+    expect(page.locator("#area-summary")).to_contain_text("0 task instances")
+    page.locator("#confidence").select_option("4")
+    expect(page.locator("#task-list .task-row")).to_have_count(2)
+    assert requests == []
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390])
+def test_grader_filter_and_mixed_profile_keep_counts_on_evidence(journey: Journey, theme: str, width: int) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 900})
+    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    page.locator("#show-all").check()
+    clean = page.locator('tr[data-source-id="Marin:clean"]')
+    expect(clean.locator(".grader-cell")).to_have_text("Mixed")
+    expect(clean.locator(".grader-cell .chip")).to_have_count(1)
+    page.locator("#grader").select_option("mixed")
+    expect(page.locator("#rows tr")).to_have_count(1)
+    clean.get_by_role("link", name="Evidence →").click()
+    profile = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Grader profile", exact=True))
+    expect(profile).to_contain_text("script")
+    expect(profile).to_contain_text("llm-judge")
+    expect(profile.locator('a[href="https://example.org/derived-receipt.json"]')).to_have_attribute(
+        "href", "https://example.org/derived-receipt.json"
+    )
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")

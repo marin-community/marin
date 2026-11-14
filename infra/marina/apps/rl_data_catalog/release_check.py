@@ -39,6 +39,7 @@ from .release_evidence import (
     SqlQuery,
     catalog_state,
     json_sha256,
+    projected_contract_inventory,
     projected_duplicate_inventory,
     projected_sources,
     stored_duplicate_groups,
@@ -54,15 +55,17 @@ from .release_receipts import (
 )
 from .server.curriculum import (
     AREA_SQL,
+    CONFIDENCE_AREA_SQL,
     RELEASE_SQL,
     TASKS_SQL,
     CoverageQuery,
     area_parameters,
     area_response,
-    display_hierarchy,
+    coverage_document,
     task_parameters,
     task_response,
 )
+from .server.derived_contract import PROFILE_FIELDS
 from .server.source_counts import SourceCounts
 
 LOGGER = logging.getLogger(__name__)
@@ -193,7 +196,11 @@ class CatalogReader:
                     ],
                     "snapshot_id": catalog["snapshot_id"],
                 }
-            elif self.query is not None and url.path in {"api/curriculum/area", "api/curriculum/tasks"}:
+            elif self.query is not None and url.path in {
+                "api/curriculum",
+                "api/curriculum/area",
+                "api/curriculum/tasks",
+            }:
                 release = params.get("release", "")
                 if release not in self.releases:
                     self.releases[release] = self.query(RELEASE_SQL, {"release": release})["rows"][0]
@@ -206,9 +213,17 @@ class CatalogReader:
                     params.get("node_id", ""),
                     params.get("scope", "all"),
                 )
-                if url.path == "api/curriculum/area":
-                    rows = self.query(AREA_SQL, area_parameters(metadata, filters, subject, node, scope))["rows"]
+                if url.path == "api/curriculum":
+                    data = coverage_document(
+                        lambda sql, bound: self.query(sql, bound)["rows"], metadata, filters, subject
+                    )
+                elif url.path == "api/curriculum/area":
+                    bound = area_parameters(metadata, filters, subject, node, scope)
+                    rows = self.query(AREA_SQL, bound)["rows"]
                     data = area_response(metadata, rows)
+                    if metadata["manifest"].get("confidence"):
+                        bound["levels"] = len(metadata["manifest"]["confidence"]["levels"])
+                        data["confidence_sources"] = self.query(CONFIDENCE_AREA_SQL, bound)["rows"]
                 else:
                     limit = int(params.get("limit", "50"))
                     bound = task_parameters(
@@ -220,13 +235,11 @@ class CatalogReader:
                         params.get("outcome", "all"),
                         params.get("cursor", ""),
                         limit,
+                        params.get("sample_pool") == "true",
                     )
                     data = task_response(metadata, self.query(TASKS_SQL, bound)["rows"], limit)
             else:
                 data = marina_request(self.root, "GET", "/" + key, session=self.session, token_provider=self.provider)
-                if self.query is not None and url.path == "api/curriculum":
-                    assert isinstance(data, dict)
-                    data = {**data, "hierarchy": display_hierarchy(data["hierarchy"])}
             self.cache[key] = data
         return self.cache[key]
 
@@ -273,6 +286,7 @@ def browser_checks(
                         row = next(item for item in expected["sources"] if item["id"] == data["declaration"]["id"])
                         data = {
                             **data,
+                            "declaration": {**data["declaration"], **{key: row.get(key) for key in PROFILE_FIELDS}},
                             "duplicate_group": row["duplicate_group"],
                             "partial_overlaps": row["partial_overlaps"],
                             "daytona_snapshot_limit": expected["daytona_snapshot_limit"],
@@ -403,10 +417,16 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             f"{args.app_origin.rstrip('/')}/a/{PREVIEW_APP_ID}/v/{revision}/", session, query if package else None
         )
         before = catalog_state(query)
+        if args.identity_measurement:
+            selected = [row for row in before["identity_selection"] if row["load_id"] == before["selected"]["load_id"]]
+            if selected != [{"load_id": before["selected"]["load_id"], "measurement_id": args.identity_measurement}]:
+                raise ValueError("Selected overlap evidence differs from the explicitly pinned measurement")
         actual = reader.get("api/sources")
         if package or args.refresh_snapshot:
             expected = projected_duplicate_inventory(
-                projected_sources(actual, counts), query, before["selected"]["load_id"]
+                projected_contract_inventory(projected_sources(actual, counts), query),
+                query,
+                before["selected"]["load_id"],
             )
         else:
             if baseline is None:
@@ -457,6 +477,9 @@ def main() -> None:
     mode.add_argument("--revision", type=int, help="Published immutable preview revision")
     parser.add_argument("--source-counts", type=Path, help="Explicit pinned count manifest (required for --dist)")
     parser.add_argument("--oracle-inventory", type=Path, help="Explicit pinned inventory (required for --dist)")
+    parser.add_argument(
+        "--identity-measurement", help="Explicit selected overlap survey SHA-256 for an intended refresh"
+    )
     parser.add_argument("--baseline", type=Path, help="Successful preflight receipt (required for --revision)")
     parser.add_argument("--production-version", type=int, required=True)
     parser.add_argument(

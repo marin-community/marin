@@ -41,6 +41,7 @@ from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prio
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
+from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
@@ -94,6 +95,17 @@ def batches(rows: Iterable[dict[str, Any]]) -> Iterable[str]:
         size += length
     if batch:
         yield "[" + ",".join(batch) + "]"
+
+
+def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
+    """Create explicitly requested additive measurement tables from the app's schema."""
+    statements: dict[str, str] = {
+        statement.strip().split()[5]: statement
+        for statement in SCHEMA_SQL.split(";")
+        if statement.strip().startswith("CREATE TABLE IF NOT EXISTS ")
+    }
+    for name in names:
+        query(statements[name], {})
 
 
 def insert_rows(query: AppletQuery, table: str, columns: str, load_id: str, rows: Iterable[dict[str, Any]]) -> int:
