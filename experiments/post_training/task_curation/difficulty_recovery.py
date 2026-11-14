@@ -94,7 +94,7 @@ def recovered_source(
     identity: SolverIdentity,
     settings: SamplingSettings,
     parameters: dict,
-    judge_identity: SolverIdentity,
+    judge_identity: SolverIdentity | None,
 ) -> RecoveredSource:
     """Recover every completed attempt, including tasks whose source aggregate was interrupted."""
     serving = previous.serving
@@ -175,6 +175,8 @@ def recovered_source(
         if attempt.status == "scored":
             task = tasks[attempt.task_id]
             if task.judge_model is not None:
+                if judge_identity is None:
+                    raise ValueError("Scored judged history requires a qualified judge identity")
                 prior_judge = serving.get("judge")
                 expected = judge_identity.model_dump(exclude={"serving_receipt"})
                 if prior_judge is None or (

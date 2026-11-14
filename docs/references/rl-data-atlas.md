@@ -422,20 +422,13 @@ blocks cleanup.
 `/backends` serves the selected matrix, revision, profile and limit observations.
 Each `/sources` row includes `backend_capabilities`: census basis, input digests,
 role demands, resource ranges, supported/partial/unsupported task counts and
-blockers. Fit is role-aware: a role is measured only where it is a candidate.
-A role whose environment resolves to a kind the backend cannot host (a
-HostImage grader environment on an image-only backend) is `not_applicable`
-there, with the exclusion counted in `not_applicable`; a role the population
-does not declare (a grader-only source has no actor) is `role_absent`. Neither
-is a failure, and neither contributes blockers. Genuine demand failures stay
-typed on candidate backends. A task's outcome on a backend is the worst
-applicable-role outcome; with no applicable roles it is `not_applicable`, and
-a task that declares no roles is `role_absent`. `role_backend_assignments`
-records the Daytona deployment: the actor uses Daytona and a package-lock
-grader uses LOCAL. Read the assigned backend's `roles` counts for each role.
-Daytona safety counts only actor snapshots and actor refusals; a reply-only
-task has no Daytona actor and is N/A. LOCAL grader quota or feature failures
-remain visible independently. Backend names are never distribution features.
+blockers. Both slots must fit for a single-backend deployment; per-role results
+also describe split execution. `role_backend_assignments` records the Daytona
+deployment: the actor uses Daytona and a package-lock grader uses LOCAL. Read
+the assigned backend's `roles` counts for each role. Daytona safety counts only
+actor snapshots and actor refusals; a reply-only task has no Daytona actor and
+is N/A. LOCAL grader quota or feature failures remain visible independently.
+Backend names are never distribution features.
 The map carries the catalog's `grading_environment` census unchanged; its
 required/declared boundary counts and mismatch reasons come from converted-row
 evidence. The loader rejects a map carrying different grading evidence.
@@ -867,7 +860,12 @@ presence alone does not indicate whether filtering is complete.
 
 Run tasks through production Harbor trials in their declared environments and
 grade each with its own grader. Select Daytona only for measured SAFE sources;
-use LOCAL/Iris otherwise. Keep provider waits separate from task attempts and
+use LOCAL/Iris otherwise. Hosted difficulty traffic admits at most four actor
+requests and one judge request per campaign, with admission and peak counts in
+the trusted host logs. Admission waits while its caller remains connected;
+ordinary queueing does not consume a task attempt. Retry 429 and transient 5xx replies with jittered backoff,
+preserving each upstream reply and wait. Exhausted provider admission stays
+pending without a solver grade or infrastructure-attempt count. Keep provider waits separate from task attempts and
 preserve infrastructure-failed attempts for re-driving. Those attempts never
 enter the scored denominator. A completed measurement requires every sampled
 task to have a score and an archived attempt receipt. Pending observations do
@@ -910,7 +908,8 @@ GLM host default; a different named model requires its own qualified route.
 Only Chat Completions judge APIs are qualified; Responses judges retain an
 explicit `production_judge_api_not_qualified:responses` reason before candidate
 execution. Sources without judges omit judge-window traffic and temperature
-metadata.
+metadata, judge-service probes and judge-credential lookup. Candidate and judge
+limits are recorded from the same configurations that the worker enforces.
 Each source's attempt receipt links separate candidate and judge traffic
 archives and token counts. Final judge traffic, including replies that outlive
 an infrastructure-failed task, is sealed under `trials/judge/`.

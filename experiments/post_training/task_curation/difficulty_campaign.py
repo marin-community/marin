@@ -28,6 +28,7 @@ from rigging.timing import Duration
 from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
+from experiments.post_training.task_curation.difficulty_config import CandidateRun, JudgeRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_preparation import prepare_source
 from experiments.post_training.task_curation.difficulty_protocol import (
@@ -36,6 +37,7 @@ from experiments.post_training.task_curation.difficulty_protocol import (
     TARGET_CLUSTER,
     serving_model,
 )
+from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.difficulty_serving_probe import probe_endpoint
@@ -144,15 +146,15 @@ def run_trial_worker(
     output: StoragePath,
     api_key: str,
     recovery_arguments: list[str],
+    judge: JudgeRun | None,
 ) -> None:
     """Launch the locked Harbor runtime with private host-side secret files."""
     secrets_dir = local_root / "framework-secrets"
     secrets_dir.mkdir(mode=0o700)
-    for name, value in {
-        **forwarded_secrets(),
-        "ATLAS_DIFFICULTY_CANDIDATE_TOKEN": api_key,
-        GLM_BULK_TOKEN_ENV: require_secret(GLM_BULK_TOKEN_ENV),
-    }.items():
+    secrets = {**forwarded_secrets(), "ATLAS_DIFFICULTY_CANDIDATE_TOKEN": api_key}
+    if judge is not None:
+        secrets[judge.api_key_secret] = require_secret(judge.api_key_secret)
+    for name, value in secrets.items():
         path = secrets_dir / name
         path.write_text(value)
         path.chmod(0o600)
@@ -219,13 +221,6 @@ def main() -> None:
         if {source.declaration.id for source in sources} != set(args.source_id):
             raise ValueError("Requested source is absent from the frozen selection")
     pin = PINS[args.solver]
-    for selected_solver in {args.solver, Solver.HOSTED}:
-        selected_pin = PINS[selected_solver]
-        template = Path(
-            hf_hub_download(SOLVER_MODELS[selected_solver], "chat_template.jinja", revision=selected_pin.revision)
-        )
-        if hashlib.sha256(template.read_bytes()).hexdigest() != selected_pin.template_sha256:
-            raise ValueError("Pinned chat template differs from the resolved model identity")
     args.local_root.mkdir(parents=True)
     options = worker_limits(args.local_root)
     if args.registry_auth_secret is not None:
@@ -234,6 +229,14 @@ def main() -> None:
         authfile.chmod(0o600)
         options["registry_authfile"] = str(authfile)
     prepared = [prepare_source(source, args.local_root / "prepared") for source in sources]
+    has_judge = any(task.judge_model is not None and task.reason is None for source in prepared for task in source.tasks)
+    for selected_solver in {args.solver, Solver.HOSTED} if has_judge else {args.solver}:
+        selected_pin = PINS[selected_solver]
+        template = Path(
+            hf_hub_download(SOLVER_MODELS[selected_solver], "chat_template.jinja", revision=selected_pin.revision)
+        )
+        if hashlib.sha256(template.read_bytes()).hexdigest() != selected_pin.template_sha256:
+            raise ValueError("Pinned chat template differs from the resolved model identity")
     prepared_path = args.local_root / "prepared-sources.json"
     prepared_path.write_text(json.dumps([source.model_dump(mode="json") for source in prepared]) + "\n")
     write_json_evidence(
@@ -251,22 +254,41 @@ def main() -> None:
         else []
     )
     settings = sampling_settings(args.solver, deviations)
+    provider_limits = ProviderLimits(
+        max_in_flight=4 if args.solver == Solver.HOSTED else args.workers,
+        attempts=6 if args.solver == Solver.HOSTED else 1,
+    )
+    judge_limits = ProviderLimits(max_in_flight=1, attempts=6) if has_judge else None
     with solver_endpoint(args.solver, settings) as (endpoint, api_model, api_key, jobs):
         probe = probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
         judge_pin = PINS[Solver.HOSTED]
-        judge_endpoint = resolve_glm_base_url(GLM_RELAY_JOB)
-        judge_probe = (
-            probe
-            if args.solver == Solver.HOSTED
-            else probe_endpoint(
-                Solver.HOSTED,
-                judge_endpoint,
-                GLM_MODEL,
-                require_secret(GLM_BULK_TOKEN_ENV),
-                sampling_settings(Solver.HOSTED, []),
+        judge_metadata = None
+        judge_endpoint = None
+        if has_judge:
+            judge_endpoint = resolve_glm_base_url(GLM_RELAY_JOB)
+            judge_probe = (
+                probe
+                if args.solver == Solver.HOSTED
+                else probe_endpoint(
+                    Solver.HOSTED,
+                    judge_endpoint,
+                    GLM_MODEL,
+                    require_secret(GLM_BULK_TOKEN_ENV),
+                    sampling_settings(Solver.HOSTED, []),
+                )
             )
-        )
-        judge_revision = f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}"
+            judge_metadata = {
+                "model": SOLVER_MODELS[Solver.HOSTED],
+                "api_model": GLM_MODEL,
+                "revision": f"unexposed:{judge_probe['tools_thinking_probe']['completion']['system_fingerprint']}",
+                "tokenizer": SOLVER_MODELS[Solver.HOSTED],
+                "tokenizer_revision": judge_pin.revision,
+                "chat_template_sha256": judge_pin.template_sha256,
+                "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
+                "token_budget": "original source request; production service enforces its served context",
+                "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
+                "serving_probe": judge_probe,
+            }
         completion = probe["tools_thinking_probe"]["completion"]
         revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
         receipt = write_json_evidence(
@@ -289,18 +311,9 @@ def main() -> None:
                     "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
                 },
                 "sampling": request_parameters(settings),
-                "judge": {
-                    "model": SOLVER_MODELS[Solver.HOSTED],
-                    "api_model": GLM_MODEL,
-                    "revision": judge_revision,
-                    "tokenizer": SOLVER_MODELS[Solver.HOSTED],
-                    "tokenizer_revision": judge_pin.revision,
-                    "chat_template_sha256": judge_pin.template_sha256,
-                    "effective_temperature": PROTOCOLS[PROTOCOL_ID].temperature,
-                    "token_budget": "original source request; production service enforces its served context",
-                    "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
-                    "serving_probe": judge_probe,
-                },
+                "provider_limits": asdict(provider_limits),
+                "judge_provider_limits": None if judge_limits is None else asdict(judge_limits),
+                "judge": judge_metadata,
                 "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
                 "compilation_and_cuda_graphs_requested": True,
                 "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
@@ -321,25 +334,33 @@ def main() -> None:
             "endpoint": endpoint,
             "api_model": api_model,
             "api_key_secret": "ATLAS_DIFFICULTY_CANDIDATE_TOKEN",
+            "provider_limits": asdict(provider_limits),
             "environment_options": options,
             "workers": args.workers,
             "gpu_count": pin.gpus,
             "attempts_per_task": args.attempts_per_task,
             "task_limit": args.task_limit,
-            "judge_endpoint": judge_endpoint,
-            "judge_api_key_secret": GLM_BULK_TOKEN_ENV,
-            "judge_api_model": GLM_MODEL,
-            "judge_identity": {
-                "model": SOLVER_MODELS[Solver.HOSTED],
-                "revision": judge_revision,
-                "tokenizer": SOLVER_MODELS[Solver.HOSTED],
-                "tokenizer_revision": judge_pin.revision,
-                "chat_template_sha256": judge_pin.template_sha256,
-                "serving_receipt": receipt.model_dump(mode="json"),
-            },
+            "judge": (
+                None
+                if judge_metadata is None
+                else {
+                    "endpoint": judge_endpoint,
+                    "api_model": GLM_MODEL,
+                    "api_key_secret": GLM_BULK_TOKEN_ENV,
+                    "provider_limits": asdict(judge_limits),
+                    "identity": {
+                        **{
+                            key: judge_metadata[key]
+                            for key in ("model", "revision", "tokenizer", "tokenizer_revision", "chat_template_sha256")
+                        },
+                        "serving_receipt": receipt.model_dump(mode="json"),
+                    },
+                }
+            ),
         }
         config_path = args.local_root / "candidate.json"
-        config_path.write_text(json.dumps(config) + "\n")
+        candidate = CandidateRun.model_validate(config)
+        config_path.write_text(candidate.model_dump_json() + "\n")
         recovery_arguments = []
         if args.previous_campaign is not None:
             recovery_arguments = [
@@ -350,7 +371,9 @@ def main() -> None:
                 "--source-queue-sha256",
                 args.sources_sha256,
             ]
-        run_trial_worker(prepared_path, config_path, args.local_root, output, api_key, recovery_arguments)
+        run_trial_worker(
+            prepared_path, config_path, args.local_root, output, api_key, recovery_arguments, candidate.judge
+        )
         write_json_evidence(output / "completion.json", {"solver": args.solver, "serving_jobs": jobs, "worker_exit": 0})
 
 

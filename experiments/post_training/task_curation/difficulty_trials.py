@@ -25,9 +25,6 @@ from finestore.rl.difficulty import (
     PROTOCOLS,
     DifficultyAttempt,
     DifficultyMeasurement,
-    SamplingSettings,
-    Solver,
-    SolverIdentity,
     measurement_from_attempts,
     register_difficulty,
 )
@@ -37,7 +34,6 @@ from harbor.models.trial.config import AgentConfig, EnvironmentConfig, TaskConfi
 from harbor.trial.trial import Trial
 from harbor.utils.artifact_writer import get_artifact_writer
 from harbor_config.errors import ErrorCategory, error_category
-from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.filesystem.transfer import copy
@@ -45,6 +41,7 @@ from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 
+from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_recovery import (
@@ -61,6 +58,7 @@ JUDGE_TEMPERATURE = PROTOCOLS[PROTOCOL_ID].temperature
 INPUT_BUDGET_REASON = (
     "A candidate prompt exceeded the protocol input budget before dispatch. No solver score was assigned."
 )
+PROVIDER_WAIT_REASON = "Awaiting shared model provider capacity; provider waits are excluded from task attempts."
 
 
 @dataclass(frozen=True)
@@ -97,7 +95,8 @@ def archive_model_traffic(
                     continue
                 stream.add(folder, arcname=folder.name)
                 for response_path in folder.glob("*/response.json"):
-                    usage = json.loads(response_path.read_text())["body"].get("usage") or {}
+                    response = json.loads(response_path.read_text())
+                    usage = response.get("upstream_usage") or response["body"].get("usage") or {}
                     input_tokens += usage.get("prompt_tokens", 0)
                     output_tokens += usage.get("completion_tokens", 0)
     copy(str(archive), str(destination), no_clobber=True)
@@ -106,25 +105,6 @@ def archive_model_traffic(
         input_tokens,
         output_tokens,
     )
-
-
-class CandidateRun(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    solver: Solver
-    identity: SolverIdentity
-    settings: SamplingSettings
-    endpoint: str
-    api_model: str
-    api_key_secret: str | None
-    environment_options: dict
-    judge_endpoint: str
-    judge_api_key_secret: str
-    judge_api_model: str
-    judge_identity: SolverIdentity
-    workers: int
-    gpu_count: int
-    attempts_per_task: int
-    task_limit: int | None
 
 
 @contextmanager
@@ -142,7 +122,8 @@ def preserved_model_traffic(root: Path, output: StoragePath):
         copy(str(archive), str(destination), no_clobber=True)
         input_tokens = output_tokens = responses_with_usage = 0
         for path in requests.glob("*/*/response.json"):
-            usage = json.loads(path.read_text())["body"].get("usage") or {}
+            response = json.loads(path.read_text())
+            usage = response.get("upstream_usage") or response["body"].get("usage") or {}
             responses_with_usage += bool(usage)
             input_tokens += usage.get("prompt_tokens", 0)
             output_tokens += usage.get("completion_tokens", 0)
@@ -233,10 +214,10 @@ def run_task(
         options = dict(config.environment_options)
         authentication = {endpoint: "EMPTY"}
         if task.judge_model is not None:
-            if judge_url is None:
+            if judge_url is None or config.judge is None:
                 raise ValueError("A task judge requires the protocol's host-side relay")
             judge_endpoint = f"{judge_url}/{root.name}-{key}-{number}/v1"
-            options.update(model_endpoint=judge_endpoint, model_name=task.judge_model or config.judge_api_model)
+            options.update(model_endpoint=judge_endpoint, model_name=task.judge_model or config.judge.api_model)
             authentication[judge_endpoint] = "EMPTY"
         configuration = TrialConfig(
             task=TaskConfig(path=Path(task.path)),
@@ -271,16 +252,47 @@ def run_task(
         write_json_evidence(destination / f"{number:02d}" / "trial.json", raw_receipt)
         reward = scored_reward(result, trial)
         unserved = False
+        provider_wait = False
+        model_request_failed = False
+        candidate_served = False
         route = f"/{root.name}-{key}-{number}"
-        requests = root.parent / "model-requests" / hashlib.sha256(route.encode()).hexdigest()
-        for response_path in requests.glob("*/response.json"):
-            response = json.loads(response_path.read_text())
+        for traffic in (root.parent / "model-requests", root.parent / "judge" / "model-requests"):
+            requests = sorted((traffic / hashlib.sha256(route.encode()).hexdigest()).glob("*"))
+            responses = [
+                json.loads((request / "response.json").read_text())
+                for request in requests
+                if (request / "response.json").exists()
+            ]
+            if traffic == root.parent / "model-requests":
+                candidate_served = any(response["status"] == 200 for response in responses)
+            if not requests:
+                continue
+            last = requests[-1]
+            if not (last / "response.json").exists():
+                model_request_failed = True
+                provider_wait |= (
+                    (last / "provider-queued.json").exists() and not (last / "provider-admitted.json").exists()
+                ) or any((last / "provider-waits").glob("*.json"))
+                continue
+            response = json.loads((last / "response.json").read_text())
+            model_request_failed |= response["status"] != 200
             error = response["body"].get("error")
-            if isinstance(error, dict) and error.get("code") == "input_budget_unserved":
-                unserved = True
+            if isinstance(error, dict):
+                unserved |= error.get("code") == "input_budget_unserved"
+                provider_wait |= error.get("code") == "provider_wait"
+        if result.exception_info is not None and not candidate_served:
+            model_request_failed = True
+        if reward is not None and reward != 0 and candidate_served:
+            provider_wait = False
+            model_request_failed = False
         if unserved:
             reward = None
             pending_reason = INPUT_BUDGET_REASON
+        elif provider_wait:
+            reward = None
+            pending_reason = PROVIDER_WAIT_REASON
+        elif model_request_failed:
+            reward = None
         if task.workload == "task_spec":
             binding = read_source_runtime(Path(task.path))
             policy = TaskNetworkPolicyReceipt.model_validate_json(
@@ -292,20 +304,20 @@ def run_task(
                 raise ValueError("Trial changed an original declared network policy")
         attempt = DifficultyAttempt(
             task_id=task.task_id,
-            status="pending" if unserved else ("scored" if reward is not None else "infrastructure"),
+            status="pending" if unserved or provider_wait else ("scored" if reward is not None else "infrastructure"),
             reward=reward,
         )
         write_json_evidence(
             destination / f"{number:02d}" / "attempt.json",
             {
                 **attempt.model_dump(mode="json"),
-                "reason": "input_budget_unserved" if unserved else None,
+                "reason": "input_budget_unserved" if unserved else ("provider_wait" if provider_wait else None),
                 **raw_receipt,
                 "judge_temperature": JUDGE_TEMPERATURE if task.judge_model is not None else None,
             },
         )
         attempts.append(attempt)
-        if reward is not None or unserved:
+        if reward is not None or unserved or provider_wait:
             break
     return TaskOutcome(attempts, pending_reason)
 
@@ -342,7 +354,10 @@ def main() -> None:
             ).model_dump(mode="json"),
         )
     key = "EMPTY" if config.api_key_secret is None else require_secret(config.api_key_secret)
-    has_judge = any(task.judge_model is not None for source in sources for task in source.tasks)
+    has_judge = any(task.judge_model is not None and task.reason is None for source in sources for task in source.tasks)
+    judge = config.judge if has_judge else None
+    if has_judge and judge is None:
+        raise ValueError("Eligible judges require an explicit production judge configuration")
     judge_root = args.local_root / "judge"
     if has_judge:
         judge_root.mkdir()
@@ -359,20 +374,22 @@ def main() -> None:
             budget=RequestBudget(
                 config.settings.context_tokens, config.settings.input_tokens, config.settings.output_tokens
             ),
+            provider_limits=config.provider_limits,
             receipts=args.local_root / "model-requests",
         ) as relay,
         (
             budget_relay(
-                endpoint=config.judge_endpoint,
-                model=config.judge_api_model,
-                api_key=require_secret(config.judge_api_key_secret),
-                tokenizer_model=config.judge_identity.tokenizer,
-                tokenizer_revision=config.judge_identity.tokenizer_revision,
+                endpoint=judge.endpoint,
+                model=judge.api_model,
+                api_key=require_secret(judge.api_key_secret),
+                tokenizer_model=judge.identity.tokenizer,
+                tokenizer_revision=judge.identity.tokenizer_revision,
                 parameters={"temperature": JUDGE_TEMPERATURE},
                 budget=None,
+                provider_limits=judge.provider_limits,
                 receipts=judge_root / "model-requests",
             )
-            if has_judge
+            if judge is not None
             else nullcontext()
         ) as judge_relay,
     ):
@@ -388,7 +405,7 @@ def main() -> None:
                         config.identity,
                         config.settings,
                         request_parameters(config.settings),
-                        config.judge_identity,
+                        None if config.judge is None else config.judge.identity,
                     )
                     if previous is not None
                     else None

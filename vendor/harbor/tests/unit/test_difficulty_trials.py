@@ -28,20 +28,26 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
 
 from experiments.post_training.task_curation import difficulty_relay, difficulty_trials
+from experiments.post_training.task_curation.difficulty_config import CandidateRun, JudgeRun
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
+from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 
 
 @pytest.mark.parametrize("graded_reward,upstream_failure,workload,legacy_buffer,with_judge", [
     *[(reward, failure, "task_spec", 0, False) for reward in (0.0, 1.0) for failure in (None, "json", "html")],
+    *[(reward, "nonretryable", "task_spec", 0, False) for reward in (0.0, 1.0)],
+    *[(reward, "actor_recovered", "task_spec", 0, False) for reward in (0.0, 1.0)],
+    *[(reward, "judge_recovered", "task_spec", 0, True) for reward in (0.0, 1.0)],
     (0.0, None, "task_spec", 0, True),
     (0.0, "json", "task_spec", 0, True),
     *[(reward, None, "native", buffer, False) for reward in (0.0, 1.0) for buffer in (0, 8)],
     (1.0, "input_tokenize", "native", 0, False),
 ])
 def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, upstream_failure, graded_reward, workload, legacy_buffer, with_judge):
-    infrastructure_first = upstream_failure is not None
+    infrastructure_first = upstream_failure in {"json", "html", "input_tokenize", "nonretryable"}
     unserved = upstream_failure == "input_tokenize"
+    provider_wait = upstream_failure in {"json", "html"}
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
     blocker = "missing_environment_artifact: fixture/original/requirements.lock"
@@ -66,7 +72,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
         task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
     ).model_dump_json())
-    config = difficulty_trials.CandidateRun(
+    config = CandidateRun(
         solver=Solver.HOSTED,
         identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
                                 tokenizer=SOLVER_MODELS[Solver.HOSTED], tokenizer_revision="a" * 40,
@@ -76,13 +82,14 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                                   temperature=0.7, top_p=0.95, top_k=20, min_p=0, repetition_penalty=1,
                                   presence_penalty=0, frequency_penalty=0, thinking="low", deviations=[]),
         endpoint="https://model.fixture/v1", api_model="glm-5.3", api_key_secret=None,
-        environment_options={}, judge_endpoint="https://judge.fixture/v1",
-        judge_api_key_secret="unused", workers=2, gpu_count=0, attempts_per_task=2, task_limit=None,
-        judge_api_model="glm-5.3",
-        judge_identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
+        provider_limits=ProviderLimits(max_in_flight=2, attempts=2),
+        environment_options={}, workers=2, gpu_count=0, attempts_per_task=2, task_limit=None,
+        judge=JudgeRun(endpoint="https://judge.fixture/v1", api_key_secret="unused", api_model="glm-5.3",
+                       provider_limits=ProviderLimits(max_in_flight=1, attempts=1),
+                       identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
                                      tokenizer=SOLVER_MODELS[Solver.HOSTED], tokenizer_revision="a" * 40,
                                      chat_template_sha256="f" * 64,
-                                     serving_receipt={"uri": "fixture:serving", "sha256": "0" * 64}),
+                                     serving_receipt={"uri": "fixture:serving", "sha256": "0" * 64})) if with_judge else None,
     )
     source_path = tmp_path / "sources.json"
     source_path.write_text(json.dumps([source.model_dump(mode="json")]))
@@ -97,8 +104,8 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         "tokenizer_revision": config.identity.tokenizer_revision,
         "chat_template_sha256": config.identity.chat_template_sha256, "sampling": request_parameters(config.settings),
         "tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}},
-        "judge": {**config.judge_identity.model_dump(exclude={"serving_receipt"}),
-                  "api_model": config.judge_api_model, "effective_temperature": 0.7},
+        "judge": None if config.judge is None else {**config.judge.identity.model_dump(exclude={"serving_receipt"}),
+                  "api_model": config.judge.api_model, "effective_temperature": 0.7},
     }
     serving_bytes = json.dumps(serving).encode()
     (campaign / "serving.json").write_bytes(serving_bytes)
@@ -113,8 +120,14 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         body = json.loads(request.content)
         if request.url.host == "judge.fixture":
             judge_requests.append(body)
+            if upstream_failure == "judge_recovered" and len(judge_requests) == 1:
+                return httpx.Response(503, json={"error": {"message": "Transient judge failure"}})
             return httpx.Response(200, json={"usage": {"prompt_tokens": 1, "completion_tokens": 20000}})
         candidate_requests.append(body)
+        if upstream_failure == "actor_recovered":
+            return httpx.Response(401 if len(candidate_requests) == 1 else 200, json={"usage": {"prompt_tokens": 1, "completion_tokens": 2}})
+        if upstream_failure == "nonretryable":
+            return httpx.Response(401, json={"error": {"message": "Credential rejected"}})
         if upstream_failure == "json":
             return httpx.Response(503, json={"error": {"message": "Transient serving failure"}})
         return httpx.Response(502, text="<html>Temporary gateway failure</html>")
@@ -155,6 +168,19 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                               data=json.dumps({"model": "glm-5.3", "temperature": 0.0, "max_tokens": 32768,
                                                "messages": [{"role": "user", "content": "Original rubric"}]}).encode(),
                               headers={"Content-Type": "application/json"})
+            if upstream_failure == "judge_recovered" and len(judge_requests) == 0:
+                with pytest.raises(HTTPError) as error:
+                    urlopen(request, timeout=10)
+                assert error.value.code == 503
+            with urlopen(request, timeout=10) as response:
+                assert response.status == 200
+        if upstream_failure == "actor_recovered" and not candidate_requests:
+            request = Request(configuration.agent.kwargs["api_base"] + "/chat/completions", method="POST",
+                              data=json.dumps({"messages": [{"role": "user", "content": "Original task"}]}).encode(),
+                              headers={"Content-Type": "application/json"})
+            with pytest.raises(HTTPError) as error:
+                urlopen(request, timeout=10)
+            assert error.value.code == 401
             with urlopen(request, timeout=10) as response:
                 assert response.status == 200
         if failed:
@@ -164,19 +190,21 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                               headers={"Content-Type": "application/json"})
             with pytest.raises(HTTPError) as error:
                 urlopen(request, timeout=10)
-            assert error.value.code == (400 if unserved else 502)
-        if not failed:
-            (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": reward}))
+            assert error.value.code == (400 if unserved else (401 if upstream_failure == "nonretryable" else 503))
+        # A source may grade empty output zero even though its model request was never served.
+        verdict_reward = reward
+        if not unserved:
+            (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": verdict_reward}))
         (directory / "network-policy.json").write_text(json.dumps({
             "source_runtime_sha256": runtime_sha256, "actor_declared": "allow", "verifier_declared": "allow",
-            "actor_required": True, "actor_effective": "allow", "verifier_effective": None if failed else "allow",
+            "actor_required": True, "actor_effective": "allow", "verifier_effective": None if unserved else "allow",
         }))
-        payload = {"exception_info": {"exception_type": "RolloutInterrupted"} if failed else None,
-                   "verifier_result": None if failed else {"rewards": {"reward": reward}}}
+        payload = {"exception_info": {"exception_type": "AgentTimeoutError"} if failed else None,
+                   "verifier_result": None if unserved else {"rewards": {"reward": verdict_reward}}}
         (directory / "result.json").write_text(json.dumps(payload))
-        result = SimpleNamespace(finished_at=datetime.now(UTC), completion=None if failed else "completed",
-                                 exception_info=SimpleNamespace(exception_type="RolloutInterrupted") if failed else None,
-                                 verifier_result=None if failed else SimpleNamespace(rewards={"reward": reward}),
+        result = SimpleNamespace(finished_at=datetime.now(UTC), completion=None if unserved else "completed",
+                                 exception_info=SimpleNamespace(exception_type="AgentTimeoutError") if failed else None,
+                                 verifier_result=None if unserved else SimpleNamespace(rewards={"reward": verdict_reward}),
                                  model_dump=lambda **kwargs: payload)
         trial = SimpleNamespace(paths=SimpleNamespace(trial_dir=directory, agent_dir=agent, verifier_dir=verifier))
         return trial, result
@@ -189,9 +217,9 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
     assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
-        "pending", 0 if unserved else 1, 0 if unserved else int(graded_reward), 2 if unserved else 1)
+        "pending", 0 if unserved or provider_wait else 1, 0 if unserved or provider_wait else int(graded_reward), 2 if unserved or provider_wait else 1)
     assert blocker in measurement.reason
-    assert measurement.infrastructure_attempts == int(infrastructure_first and not unserved)
+    assert measurement.infrastructure_attempts == int(upstream_failure == "nonretryable")
     attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
     if not with_judge:
         assert all(attempts[name] is None for name in (
@@ -201,10 +229,12 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     pending = {"blocked": blocker}
     if unserved:
         pending["scored"] = difficulty_trials.INPUT_BUDGET_REASON
+    elif provider_wait:
+        pending["scored"] = difficulty_trials.PROVIDER_WAIT_REASON
     assert attempts["pending_reasons"] == pending
-    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(infrastructure_first and not unserved)
-    assert len(candidate_requests) == int(infrastructure_first and not unserved)
-    if unserved:
+    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(upstream_failure == "nonretryable")
+    assert len(candidate_requests) == (2 if provider_wait or upstream_failure == "actor_recovered" else int(upstream_failure == "nonretryable"))
+    if unserved or provider_wait:
         return
     if infrastructure_first:
         aggregate = next(output.glob("*/attempts.json"))
@@ -271,7 +301,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     assert continued.infrastructure_attempts == int(infrastructure_first)
     assert len(physical_attempts) == 2 + int(infrastructure_first)
     if with_judge:
-        assert len(judge_requests) == 2
+        assert len(judge_requests) == (3 if upstream_failure == "judge_recovered" else 2)
         assert {request["temperature"] for request in judge_requests} == {0.7}
         assert {request["model"] for request in judge_requests} == {"glm-5.3"}
         assert {request["max_tokens"] for request in judge_requests} == {32768}
@@ -313,9 +343,9 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     assert (final.n, final.solved, final.infrastructure_attempts) == (2, 1 + int(graded_reward), int(infrastructure_first))
     assert len(physical_attempts) == 2 + int(infrastructure_first)
     if with_judge:
-        assert len(judge_requests) == 2
-        changed_judge = config.judge_identity.model_copy(update={"revision": "unexposed:changed"})
-        config_path.write_text(config.model_copy(update={"judge_identity": changed_judge}).model_dump_json())
+        assert len(judge_requests) == (3 if upstream_failure == "judge_recovered" else 2)
+        changed_judge = config.judge.identity.model_copy(update={"revision": "unexposed:changed"})
+        config_path.write_text(config.model_copy(update={"judge": config.judge.model_copy(update={"identity": changed_judge})}).model_dump_json())
         monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
                                         "--output-root", str(tmp_path / "changed-judge"),
                                         "--local-root", str(tmp_path / "changed-judge-local"),
