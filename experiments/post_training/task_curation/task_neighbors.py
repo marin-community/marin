@@ -71,12 +71,7 @@ def content_rows(documents: Iterable[Mapping]) -> Iterable[TaskContent]:
 
 
 def wrapper_lines(rows: list[TaskContent]) -> set[str]:
-    """Remove repeated whole wrapper lines, retaining short and task-specific text.
-
-    Only long lines shared by at least 90% of a content-seeded panel are stripped.
-    A line repeated because the source has one unique instruction is retained.
-    No common-prefix character trimming can erase a varying number or option.
-    """
+    """Find long wrapper lines shared by at least 90% of sampled texts."""
     panel = nsmallest(128, {row.text for row in rows}, key=lambda text: seeded_order(text, SEED))
     lines = Counter(
         line.strip()
