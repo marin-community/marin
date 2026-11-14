@@ -121,6 +121,16 @@ def shingles(text: str) -> set[str]:
     return {" ".join(words[index : index + width]) for index in range(len(words) - width + 1)} if width else set()
 
 
+def lsh_band_keys(signature: list[int]) -> Iterable[tuple[int, tuple[int, ...]]]:
+    for start in range(0, len(signature), BAND_ROWS):
+        yield start, tuple(signature[start : start + BAND_ROWS])
+
+
+def jaccard_similarity(left: set[str], right: set[str]) -> float:
+    union = left | right
+    return len(left & right) / len(union) if union else 0.0
+
+
 class PopulationIndex:
     """An exact lookup and lazy MinHash/LSH search of every target task."""
 
@@ -168,12 +178,12 @@ class PopulationIndex:
             if self.buckets is None:
                 self.buckets = defaultdict(list)
                 for index, signature in enumerate(signatures(self.rows)):
-                    for start in range(0, PERMUTATIONS, BAND_ROWS):
-                        self.buckets[start, tuple(signature[start : start + BAND_ROWS])].append(index)
+                    for key in lsh_band_keys(signature):
+                        self.buckets[key].append(index)
             for index, signature in zip(missing, signatures([queries[item] for item in missing]), strict=True):
                 candidates = set()
-                for start in range(0, PERMUTATIONS, BAND_ROWS):
-                    candidates.update(self.buckets.get((start, tuple(signature[start : start + BAND_ROWS])), ()))
+                for key in lsh_band_keys(signature):
+                    candidates.update(self.buckets.get(key, ()))
                 query = queries[index]
                 query_shingles = shingles(query.text)
                 best, score = None, 0.0
@@ -182,8 +192,7 @@ class PopulationIndex:
                     if partner.state_hash != query.state_hash:
                         continue
                     other = shingles(partner.text)
-                    union = query_shingles | other
-                    similarity = len(query_shingles & other) / len(union) if union else 0.0
+                    similarity = jaccard_similarity(query_shingles, other)
                     if similarity > score:
                         best, score = partner, similarity
                 result[index] = neighbor_receipt(query, best, score, "lsh" if best else "unmatched")

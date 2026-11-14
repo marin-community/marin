@@ -590,7 +590,9 @@ identities. It also selects SHA-verified regional content caches prepared next t
 their raw data. Unknown or out-of-region inputs fail preflight. CI selects pairs
 first, caches only those sources, and loads two populations at a time.
 The scan verifies each input SHA-256 and population count before matching.
-CI uses `cw-us-east-02a`, 16 CPUs, 64 GB RAM and a three-day job timeout.
+CI uses `cw-us-east-02a`, 16 CPUs, 64 GB RAM and a three-day Iris timeout.
+The hosted GitHub job can wait six hours; its expiry leaves the Iris job running
+under its own deadline.
 Measured receipts are written to `.receipts.jsonl` and `.receipts.neighbors/`.
 Non-distinct flags require resolution or an acknowledgement keyed by the exact
 measurement digest in `source_duplicate_acknowledgements.json`. The digest includes a hash of every sampled neighbor and excludes output URIs,

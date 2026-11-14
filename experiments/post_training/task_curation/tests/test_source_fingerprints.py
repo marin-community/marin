@@ -37,7 +37,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
     pair_similarity,
 )
-from experiments.post_training.task_curation.source_neighbor_survey import (
+from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     cache_population,
     read_population,
@@ -315,7 +315,7 @@ def test_population_cache_verifies_pinned_bytes_and_retains_complete_task_conten
     fingerprint = fingerprint.model_copy(update={"inputs": {"0:tasks.parquet": digest}})
     locations = PopulationLocations(files={digest: "s3://marin-us-east-02a/fixture/specs.parquet"})
     monkeypatch.setattr(
-        "experiments.post_training.task_curation.source_neighbor_survey.filesystem_for",
+        "experiments.post_training.task_curation.source_population_cache.filesystem_for",
         lambda uri: (fsspec.filesystem("file"), str(shard)),
     )
     cache = tmp_path / "cache"

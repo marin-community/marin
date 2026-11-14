@@ -22,7 +22,7 @@ from experiments.post_training.task_curation.source_fingerprints import (
     fingerprint_source,
     pair_similarity,
 )
-from experiments.post_training.task_curation.source_neighbor_survey import (
+from experiments.post_training.task_curation.source_population_cache import (
     PopulationLocations,
     cache_population,
     read_locator_manifest,
@@ -88,12 +88,15 @@ def scan(
     expected = {(row["left"], row["right"]): DuplicateLabel(row["expected"]) for row in labels}
     reviews = []
     responses = StoragePath(str(receipts.with_suffix(".neighbors")))
+    populations = {}
     with receipts.open("w") as output:
         for pair in ordered:
-            populations = {
-                source_id: read_population(population_paths[source_id], fingerprints[source_id].inputs)
-                for source_id in (pair.left, pair.right)
-            }
+            for source_id in tuple(populations):
+                if source_id not in (pair.left, pair.right):
+                    del populations[source_id]
+            for source_id in (pair.left, pair.right):
+                if source_id not in populations:
+                    populations[source_id] = read_population(population_paths[source_id], fingerprints[source_id].inputs)
             for review in review_pairs([pair], populations, acknowledgements, responses, sample_size):
                 reviews.append(review)
                 output.write(review.model_dump_json() + "\n")
@@ -102,7 +105,6 @@ def scan(
                 label = expected.get((pair.left, pair.right))
                 if label is not None and label != review.verdict.label:
                     raise ValueError(f"Labelled duplicate control disagrees: {pair.left} / {pair.right}")
-            del populations
 
     return survey.model_copy(
         update={

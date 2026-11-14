@@ -25,7 +25,7 @@ jobs:
   overlap:
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 360
     env:
       CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
       CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
@@ -64,7 +64,7 @@ jobs:
           uv run --no-sync iris --config lib/iris/config/marin.yaml job run \
             --target-cluster cw-us-east-02a --job-name atlas-overlap-${{ github.run_id }}-${{ github.run_attempt }} \
             --cpu 16 --memory 64G --disk 64G --enable-extra-resources --extra cpu \
-            --timeout 259200 --max-retries 0 --priority production \
+            --timeout 259200 --no-cancel-on-exit --max-retries 0 --priority production \
             --exclude '^atlas-overlap-inputs/.*[.]json$' --include 'atlas-overlap-inputs/sha256.txt' \
             -- bash -lc 'set -e
               mkdir -p atlas-overlap-inputs
