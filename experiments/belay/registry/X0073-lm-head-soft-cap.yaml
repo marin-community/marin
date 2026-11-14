@@ -643,7 +643,8 @@ events:
   checkpoint: belay-ckpt-2026-10-20
 potential:
   score: 7
-  rationale: −0.0217 speedrun; ladder d512-d1024 wins, d1280 noise, projected +0.0074 at hero (fails); no hero-mfu → 7
+  rationale: −0.0217 speedrun; ladder wins shrink d512→d1024, d1280 noise, projected +0.0074 at hero (fails); no hero-mfu
+    → 7
   model: claude-opus-5-5
   date: '2026-11-14'
   inputs_digest: bcf53a6150ce
