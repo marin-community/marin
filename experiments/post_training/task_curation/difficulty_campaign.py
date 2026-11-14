@@ -15,7 +15,7 @@ from pathlib import Path
 
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SamplingSettings, Solver
 from huggingface_hub import hf_hub_download
-from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_value
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.external_dependencies import VLLM_GPU_RELEASE
@@ -43,7 +43,9 @@ from experiments.post_training.task_curation.difficulty_sampling import request_
 from experiments.post_training.task_curation.difficulty_serving_probe import probe_endpoint
 
 LOGGER = logging.getLogger(__name__)
-PRIORITY = job_pb2.PRIORITY_BAND_PRODUCTION
+# The scheduler preempts lower bands; a production campaign evicts interactive
+# peers such as the Snowball ablation roots. Every launch declares its band.
+PRIORITY_CHOICES = ("production", "interactive", "batch", "system")
 MODEL_CACHE_ROOT = "s3://marin-rno2a"
 JOB_TIMEOUT = Duration.from_seconds(259200)
 NATIVE_CONTEXT_SAFETY_BUFFER = 0
@@ -102,7 +104,7 @@ def worker_limits(root: Path) -> dict:
 
 
 @contextmanager
-def solver_endpoint(solver: Solver, settings: SamplingSettings):
+def solver_endpoint(solver: Solver, settings: SamplingSettings, priority: int):
     if solver == Solver.HOSTED:
         yield resolve_glm_base_url(GLM_RELAY_JOB), GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), []
         return
@@ -114,7 +116,7 @@ def solver_endpoint(solver: Solver, settings: SamplingSettings):
         definition,
         hardware,
         env_vars={"MARIN_TEMP_PREFIX": MODEL_CACHE_ROOT},
-        priority=PRIORITY,
+        priority=priority,
         api_model=SOLVER_MODELS[solver],
     )
     if not isinstance(config.engine, VllmEngineConfig):
@@ -205,6 +207,12 @@ def main() -> None:
     parser.add_argument("--attempts-per-task", type=int, required=True)
     parser.add_argument("--task-limit", type=int)
     parser.add_argument("--registry-auth-secret")
+    parser.add_argument(
+        "--priority",
+        required=True,
+        choices=PRIORITY_CHOICES,
+        help="Band for this campaign's serving jobs; production preempts interactive peers.",
+    )
     args = parser.parse_args()
     if bool(args.previous_campaign) != bool(args.previous_serving_sha256):
         raise ValueError("Continuation requires both the previous campaign and its serving receipt digest")
@@ -259,7 +267,12 @@ def main() -> None:
         attempts=6 if args.solver == Solver.HOSTED else 1,
     )
     judge_limits = ProviderLimits(max_in_flight=1, attempts=6) if has_judge else None
-    with solver_endpoint(args.solver, settings) as (endpoint, api_model, api_key, jobs):
+    with solver_endpoint(args.solver, settings, priority_band_value(args.priority)) as (
+        endpoint,
+        api_model,
+        api_key,
+        jobs,
+    ):
         probe = probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
         judge_pin = PINS[Solver.HOSTED]
         judge_metadata = None

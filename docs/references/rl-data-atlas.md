@@ -927,13 +927,22 @@ uv run iris --cluster marin job run --no-wait \
   --enable-extra-resources --cpu 32 --memory 128GB --disk 1TB \
   --timeout 259200 --container-profile container_profile_privileged \
   --egress-policy egress_policy_cluster \
+  --priority interactive \
   --sync-package marin-core --extra cpu --extra dedup \
   --secret GLM_BULK_TOKEN env:GLM_BULK_TOKEN --secret HF_TOKEN env:HF_TOKEN \
   -- python -m experiments.post_training.task_curation.difficulty_campaign \
   --solver hosted --sources <sources.json> --sources-sha256 <sha256> \
   --output-root <new-s3-run-prefix> --local-root /tmp/<new-run-name> \
-  --workers 8 --attempts-per-task 3
+  --workers 8 --attempts-per-task 3 \
+  --priority interactive
 ```
+
+The launch shell's `--priority` sets the Iris root job's band, and the
+campaign requires the same explicit `--priority` argument to pass that band to
+its serving children; there is no hardcoded default. The scheduler preempts
+lower bands, so a production-band campaign evicts interactive peers such as
+the Snowball ablation roots — declare the band deliberately and keep the root
+and its serving children in the same band.
 
 Choose `small`, `large`, `hosted` or `snowball`. Local model serving requests
 2, 8 and 8 H100s for Small, Large and Snowball respectively; Hosted uses the

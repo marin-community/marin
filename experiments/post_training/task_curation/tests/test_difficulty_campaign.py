@@ -10,9 +10,12 @@ from contextlib import contextmanager
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from types import SimpleNamespace
 
 import pytest
 from finestore.rl.difficulty import Solver
+from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_value
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import TaskSpec
@@ -21,6 +24,7 @@ from verifyit.spec import JudgeSpec
 from experiments.post_training.task_curation import difficulty_campaign
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
+from experiments.post_training.task_curation.difficulty_sampling import sampling_settings
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 
 
@@ -120,7 +124,7 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
         return {}
 
     @contextmanager
-    def endpoint(solver, settings):
+    def endpoint(solver, settings, priority):
         yield "https://solver.fixture/v1", "fixture-small", "fixture-key", []
 
     def probe(solver, endpoint, api_model, api_key, settings):
@@ -179,6 +183,8 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
             "2",
             "--attempts-per-task",
             "3",
+            "--priority",
+            "interactive",
         ],
     )
     difficulty_campaign.main()
@@ -195,3 +201,32 @@ def test_campaign_qualifies_only_required_judge_routes(tmp_path, monkeypatch, di
         assert serving["judge"]["revision"] == config.judge.identity.revision
     else:
         assert config.judge is serving["judge"] is serving["judge_provider_limits"] is None
+
+
+def test_solver_endpoint_passes_the_declared_band_to_serving_children(monkeypatch):
+    captured = []
+
+    @contextmanager
+    def remote_inference(config):
+        captured.append(config)
+        endpoint = SimpleNamespace(base_url="http://solver.fixture/v1", model="fixture-model", api_key="fixture-key")
+        session = SimpleNamespace(
+            ready_direct_session=lambda: SimpleNamespace(
+                effective_serving=SimpleNamespace(max_model_len=settings.context_tokens),
+                model=SimpleNamespace(endpoint=endpoint),
+            ),
+            jobs=[SimpleNamespace(job_id="fixture-job")],
+        )
+        yield session
+
+    monkeypatch.setattr(difficulty_campaign, "remote_inference", remote_inference)
+    settings = sampling_settings(Solver.SMALL, [])
+    with difficulty_campaign.solver_endpoint(Solver.SMALL, settings, priority_band_value("interactive")) as (
+        endpoint,
+        _api_model,
+        _api_key,
+        _jobs,
+    ):
+        assert endpoint.startswith("http")
+    assert len(captured) == 1
+    assert captured[0].iris.priority == job_pb2.PRIORITY_BAND_INTERACTIVE
