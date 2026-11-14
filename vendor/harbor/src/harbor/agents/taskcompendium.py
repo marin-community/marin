@@ -3,18 +3,13 @@
 
 """Candidate and control agents for unchanged TaskSpec trials."""
 
-import asyncio
 import json
-import re
 from abc import abstractmethod
-from dataclasses import asdict, replace
-from functools import cache
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from openai import AsyncOpenAI
-from rigging.chat_templates import chat_template_messages
-from transformers import AutoTokenizer
 from rolloutengine.chat import ChatModel
 from rolloutengine.harness.shell import ShellHarness, task_prompt
 from rolloutengine.models import (
@@ -49,9 +44,6 @@ from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.trial.errors import AgentTimeoutError
-from harbor.llms.vllm_tokenization import completion_budget_from_count
-from harbor.llms.base import ContextBudgetExceededError
-from harbor.utils.artifact_writer import get_artifact_writer
 from harbor_config.model_name import split_provider_model_name
 
 
@@ -93,11 +85,6 @@ class TaskSpecAgent(BaseAgent):
     async def run_task(self, task: TaskSpec, machine: Machine | None, limits: RolloutLimits) -> GradingAttempt: ...
 
 
-@cache
-def candidate_tokenizer(model: str, revision: str):
-    return AutoTokenizer.from_pretrained(model, revision=revision)
-
-
 class TaskSpecChatAgent(TaskSpecAgent):
     model_input: ConversationInput | None = None
 
@@ -106,8 +93,7 @@ class TaskSpecChatAgent(TaskSpecAgent):
         return "task-spec-chat"
 
     def __init__(
-        self, *args, api_base: str, max_turns: int, max_tokens: int, context_window: int,
-        max_input_tokens: int, request_parameters: dict[str, Any], tokenizer_model: str, tokenizer_revision: str, **kwargs
+        self, *args, api_base: str, max_turns: int, max_tokens: int, request_parameters: dict[str, Any], **kwargs
     ):
         sampling = {"temperature", "top_p", "presence_penalty", "frequency_penalty", "reasoning_effort", "extra_body"}
         extra = request_parameters.get("extra_body", {})
@@ -115,22 +101,14 @@ class TaskSpecChatAgent(TaskSpecAgent):
             raise ValueError("Candidate request parameters may change only sampling and template controls")
         if extra.get("chat_template_kwargs", {}).keys() - {"enable_thinking", "reasoning_effort"}:
             raise ValueError("Candidate template controls cannot change the task interface")
-        if re.fullmatch(r"[0-9a-f]{40}", tokenizer_revision) is None:
-            raise ValueError("Candidate tokenizer requires an immutable Hugging Face commit pin")
         super().__init__(*args, **kwargs)
         self.api_base = api_base
         self.max_turns = max_turns
         self.max_tokens = max_tokens
-        self.context_window = context_window
-        self.max_input_tokens = max_input_tokens
         self.request_parameters = request_parameters
-        self.request_number = 0
-        self.tokenizer_model = tokenizer_model
-        self.tokenizer_revision = tokenizer_revision
 
     async def run_task(self, task: TaskSpec, machine: Machine | None, limits: RolloutLimits) -> GradingAttempt:
         self.attempt = empty_attempt(task)
-        tokenizer = await asyncio.to_thread(candidate_tokenizer, self.tokenizer_model, self.tokenizer_revision)
         async with AsyncOpenAI(
             base_url=self.api_base,
             api_key=self._model_authentication.get(self.api_base, "EMPTY"),
@@ -140,7 +118,6 @@ class TaskSpecChatAgent(TaskSpecAgent):
                 raise ValueError("TaskSpecChatAgent requires a model identity")
             model = ChatModel(
                 client, split_provider_model_name(self.model_alias)[1], self.max_tokens,
-                context_window=self.context_window,
             )
 
             async def record(request: ModelRequest) -> ModelTurn:
@@ -151,48 +128,8 @@ class TaskSpecChatAgent(TaskSpecAgent):
                     **self.request_parameters.get("extra_body", {}),
                 }
                 parameters["extra_body"] = extra_body
-                prompt_ids = await asyncio.to_thread(
-                    tokenizer.apply_chat_template, chat_template_messages(request.messages),
-                    tools=parameters.get("tools") or None, add_generation_prompt=True,
-                    tokenize=True, return_dict=False, **extra_body.get("chat_template_kwargs", {}),
-                )
-                if len(prompt_ids) > self.max_input_tokens:
-                    writer = get_artifact_writer()
-                    payload = json.dumps({"prompt_tokens": len(prompt_ids), "max_input_tokens": self.max_input_tokens,
-                                          "reason": "input_budget_unserved"}).encode()
-                    future = await writer.submit_required(
-                        self.logs_dir / "candidate-budget-rejection.json", lambda: payload,
-                        description="Unserved candidate input budget rejection",
-                    )
-                    await writer.await_write(future)
-                    raise ContextBudgetExceededError("Candidate input exceeds the configured request budget before dispatch")
-                parameters["max_tokens"] = completion_budget_from_count(
-                    prompt_tokens=len(prompt_ids), context_window=self.context_window,
-                    max_output_tokens=self.max_tokens, requested_max_tokens=parameters.get("max_tokens"),
-                )
                 request = replace(request, options=parameters)
-                number = self.request_number
-                self.request_number += 1
-                writer = get_artifact_writer()
-                request_payload = json.dumps(asdict(request)).encode()
-                future = await writer.submit_required(
-                    self.logs_dir / "candidate-requests" / f"{number:06d}-request.json",
-                    lambda: request_payload, description="TaskSpec candidate request",
-                )
-                await writer.await_write(future)
                 turn = await model(request)
-                response_payload = json.dumps(asdict(turn)).encode()
-                future = await writer.submit_required(
-                    self.logs_dir / "candidate-requests" / f"{number:06d}-response.json",
-                    lambda: response_payload, description="TaskSpec candidate response",
-                )
-                await writer.await_write(future)
-                if turn.usage is not None and (
-                    turn.usage.prompt_tokens > self.max_input_tokens
-                    or turn.usage.completion_tokens > self.max_tokens
-                    or turn.usage.prompt_tokens + turn.usage.completion_tokens > self.context_window
-                ):
-                    raise ValueError("Server usage exceeds the configured candidate token budget")
                 self.attempt = GradingAttempt(
                     chat_conversation([*request.messages, turn.message]),
                     stop_reason=turn.stop_reason,

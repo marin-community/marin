@@ -48,7 +48,8 @@ from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_poli
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_recovery import previous_campaign, recovered_source
-from experiments.post_training.task_curation.difficulty_relay import CANDIDATE_BUDGET, budget_relay
+from experiments.post_training.task_curation.difficulty_relay import RequestBudget, budget_relay
+from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 
 LOGGER = logging.getLogger(__name__)
 ATTEMPT_TIMEOUT = 259200
@@ -111,7 +112,6 @@ class CandidateRun(BaseModel):
     endpoint: str
     api_model: str
     api_key_secret: str | None
-    request_parameters: dict
     environment_options: dict
     judge_endpoint: str
     judge_api_key_secret: str
@@ -201,18 +201,14 @@ def run_task(
         local = root / key / f"{number:02d}"
         local.mkdir(parents=True, exist_ok=False)
         endpoint = f"{base_url}/{root.name}-{key}-{number}/v1"
-        parameters = config.request_parameters
+        parameters = request_parameters(config.settings)
         common = {"api_base": endpoint}
         if task.workload == "task_spec":
             kwargs = {
                 **common,
                 "max_turns": 50,
                 "max_tokens": config.settings.output_tokens,
-                "context_window": config.settings.context_tokens,
-                "max_input_tokens": config.settings.input_tokens,
                 "request_parameters": parameters,
-                "tokenizer_model": config.identity.tokenizer,
-                "tokenizer_revision": config.identity.tokenizer_revision,
             }
             agent_name = "task-spec-chat"
         else:
@@ -254,17 +250,6 @@ def run_task(
 
         # Framework exceptions propagate and stop dispatch; they are never fabricated as solver zeros.
         trial, result = asyncio.run(execute_trial(configuration, authentication))
-        reward = scored_reward(result, trial)
-        unserved = (trial.paths.agent_dir / "candidate-budget-rejection.json").exists()
-        route = f"/{root.name}-{key}-{number}"
-        requests = root.parent / "model-requests" / hashlib.sha256(route.encode()).hexdigest()
-        for response_path in requests.glob("*/response.json"):
-            response = json.loads(response_path.read_text())
-            if response["body"].get("error", {}).get("code") == "input_budget_unserved":
-                unserved = True
-        if unserved:
-            reward = None
-            pending_reason = INPUT_BUDGET_REASON
         get_artifact_writer().flush(timeout=300)
         archive = local / "trial-artifacts.tar.gz"
         with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
@@ -273,6 +258,25 @@ def run_task(
         if archive_target.exists():
             raise FileExistsError(archive_target)
         copy(str(archive), str(archive_target), no_clobber=True)
+        raw_receipt = {
+            "task_id": task.task_id,
+            "result": result.model_dump(mode="json"),
+            "archive": str(archive_target),
+            "archive_sha256": file_sha256(StoragePath(str(archive))),
+        }
+        write_json_evidence(destination / f"{number:02d}" / "trial.json", raw_receipt)
+        reward = scored_reward(result, trial)
+        unserved = False
+        route = f"/{root.name}-{key}-{number}"
+        requests = root.parent / "model-requests" / hashlib.sha256(route.encode()).hexdigest()
+        for response_path in requests.glob("*/response.json"):
+            response = json.loads(response_path.read_text())
+            error = response["body"].get("error")
+            if isinstance(error, dict) and error.get("code") == "input_budget_unserved":
+                unserved = True
+        if unserved:
+            reward = None
+            pending_reason = INPUT_BUDGET_REASON
         if task.workload == "task_spec":
             binding = read_source_runtime(Path(task.path))
             policy = TaskNetworkPolicyReceipt.model_validate_json(
@@ -292,9 +296,7 @@ def run_task(
             {
                 **attempt.model_dump(mode="json"),
                 "reason": "input_budget_unserved" if unserved else None,
-                "result": result.model_dump(mode="json"),
-                "archive": str(archive_target),
-                "archive_sha256": file_sha256(StoragePath(str(archive))),
+                **raw_receipt,
                 "judge_temperature": JUDGE_TEMPERATURE if task.judge_model is not None else None,
             },
         )
@@ -340,8 +342,10 @@ def main() -> None:
             api_key=key,
             tokenizer_model=config.identity.tokenizer,
             tokenizer_revision=config.identity.tokenizer_revision,
-            parameters=config.request_parameters,
-            budget=CANDIDATE_BUDGET,
+            parameters=request_parameters(config.settings),
+            budget=RequestBudget(
+                config.settings.context_tokens, config.settings.input_tokens, config.settings.output_tokens
+            ),
             receipts=args.local_root / "model-requests",
         ) as relay,
         (
@@ -370,7 +374,7 @@ def main() -> None:
                         config.solver,
                         config.identity,
                         config.settings,
-                        config.request_parameters,
+                        request_parameters(config.settings),
                         config.judge_identity,
                     )
                     if previous is not None

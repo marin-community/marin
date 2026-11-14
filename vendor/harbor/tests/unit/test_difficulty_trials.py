@@ -5,14 +5,15 @@
 
 import json
 import hashlib
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import httpx
 import pytest
 from finestore.reader import ReadView
+from harbor.llms.vllm_tokenization import tokenize_url
 from finestore.rl.difficulty import (
     MEASUREMENTS,
     SOLVER_MODELS,
@@ -27,12 +28,16 @@ from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
 
 from experiments.post_training.task_curation import difficulty_relay, difficulty_trials
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
+from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 
 
-@pytest.mark.parametrize("infrastructure_first", [False, True])
-@pytest.mark.parametrize("graded_reward", [0.0, 1.0])
-@pytest.mark.parametrize("with_judge", [False, True])
-def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, infrastructure_first, graded_reward, with_judge):
+@pytest.mark.parametrize("graded_reward,upstream_failure,with_judge", [
+    *[(reward, failure, judge) for reward in (0.0, 1.0) for failure in (None, "json") for judge in (False, True)],
+    (1.0, "html", False), (1.0, "input_tokenize", False),
+])
+def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path, monkeypatch, graded_reward, upstream_failure, with_judge):
+    infrastructure_first = upstream_failure is not None
+    unserved = upstream_failure == "input_tokenize"
     runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
     runtime_sha256 = canonical_sha256(runtime)
     blocker = "missing_environment_artifact: fixture/original/requirements.lock"
@@ -47,7 +52,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         sample=sample, sample_receipt={"uri": "fixture:sample", "sha256": "e" * 64},
         tasks=[
             PreparedTask(task_id="scored", runtime_sha256=runtime_sha256, path=str(tmp_path / "source-task"),
-                         workload="task_spec", backend="local", reason=None, judge_model="glm-5.3" if with_judge else None),
+                         workload="native" if unserved else "task_spec", backend="local", reason=None, judge_model="glm-5.3" if with_judge else None),
             PreparedTask(task_id="blocked", runtime_sha256=runtime_sha256, path=None,
                          workload="task_spec", backend="local", reason=blocker, judge_model="glm-5.3" if with_judge else None),
         ],
@@ -67,7 +72,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                                   temperature=0.7, top_p=0.95, top_k=20, min_p=0, repetition_penalty=1,
                                   presence_penalty=0, frequency_penalty=0, thinking="low", deviations=[]),
         endpoint="https://model.fixture/v1", api_model="glm-5.3", api_key_secret=None,
-        request_parameters={}, environment_options={}, judge_endpoint="https://judge.fixture/v1",
+        environment_options={}, judge_endpoint="https://judge.fixture/v1",
         judge_api_key_secret="unused", workers=2, gpu_count=0, attempts_per_task=2, task_limit=None,
         judge_api_model="glm-5.3",
         judge_identity=SolverIdentity(model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
@@ -85,7 +90,7 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
     serving = {
         "protocol": "atlas-difficulty-v3", "solver": "hosted", "model": config.identity.model,
         "tokenizer_revision": config.identity.tokenizer_revision,
-        "chat_template_sha256": config.identity.chat_template_sha256, "sampling": config.request_parameters,
+        "chat_template_sha256": config.identity.chat_template_sha256, "sampling": request_parameters(config.settings),
         "tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}},
         "judge": {**config.judge_identity.model_dump(exclude={"serving_receipt"}),
                   "api_model": config.judge_api_model, "effective_temperature": 0.7},
@@ -96,30 +101,27 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         "source_queue_sha256": "1" * 64, "sources": [source.model_dump(mode="json")],
     }))
 
-    judge_requests = []
-    real_budget_relay = difficulty_relay.budget_relay
+    judge_requests, candidate_requests = [], []
     real_client = httpx.Client
 
-    def judge_response(request):
-        judge_requests.append(json.loads(request.content))
-        return httpx.Response(200, json={"usage": {"prompt_tokens": 1, "completion_tokens": 20000}})
+    def model_response(request):
+        body = json.loads(request.content)
+        if request.url.host == "judge.fixture":
+            judge_requests.append(body)
+            return httpx.Response(200, json={"usage": {"prompt_tokens": 1, "completion_tokens": 20000}})
+        candidate_requests.append(body)
+        if upstream_failure == "json":
+            return httpx.Response(503, json={"error": {"message": "Transient serving failure"}})
+        return httpx.Response(502, text="<html>Temporary gateway failure</html>")
 
     class Tokenizer:
         def apply_chat_template(self, *args, **kwargs):
-            return [1]
+            return [1] * (49153 if unserved else 1)
 
     monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: Tokenizer())
     monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs: real_client(
-        **kwargs, transport=httpx.MockTransport(judge_response)))
+        **kwargs, transport=httpx.MockTransport(model_response)))
     monkeypatch.setattr(difficulty_trials, "require_secret", lambda name: "fixture-host-key")
-
-    @contextmanager
-    def model_service(**kwargs):
-        if kwargs["parameters"] == {"temperature": 0.7}:
-            with real_budget_relay(**kwargs) as relay:
-                yield relay
-        else:
-            yield "https://model.fixture"
 
     physical_attempts = []
     continuing = False
@@ -143,6 +145,14 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
                               headers={"Content-Type": "application/json"})
             with urlopen(request, timeout=10) as response:
                 assert response.status == 200
+        if failed:
+            endpoint = configuration.agent.kwargs["api_base"]
+            request = Request(tokenize_url(endpoint) if unserved else endpoint + "/chat/completions", method="POST",
+                              data=json.dumps({"messages": [{"role": "user", "content": "Original task"}]}).encode(),
+                              headers={"Content-Type": "application/json"})
+            with pytest.raises(HTTPError) as error:
+                urlopen(request, timeout=10)
+            assert error.value.code == (400 if unserved else 502)
         if not failed:
             (verifier / "verdict.json").write_text(json.dumps({"status": "scored", "reward": reward}))
         (directory / "network-policy.json").write_text(json.dumps({
@@ -159,7 +169,6 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
         trial = SimpleNamespace(paths=SimpleNamespace(trial_dir=directory, agent_dir=agent, verifier_dir=verifier))
         return trial, result
 
-    monkeypatch.setattr(difficulty_trials, "budget_relay", model_service)
     monkeypatch.setattr(difficulty_trials, "execute_trial", physical_trial)
     monkeypatch.setattr("sys.argv", ["difficulty_trials", "--sources", str(source_path), "--config", str(config_path),
                                     "--output-root", str(output), "--local-root", str(tmp_path / "local")])
@@ -167,12 +176,19 @@ def test_mixed_scored_and_blocked_source_keeps_its_real_pending_reason(tmp_path,
 
     rows = list(ReadView(str(output / "catalog")).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
     (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
-    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("pending", 1, int(graded_reward), 1)
-    assert measurement.reason == blocker
-    assert measurement.infrastructure_attempts == int(infrastructure_first)
+    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == (
+        "pending", 0 if unserved else 1, 0 if unserved else int(graded_reward), 2 if unserved else 1)
+    assert blocker in measurement.reason
+    assert measurement.infrastructure_attempts == int(infrastructure_first and not unserved)
     attempts = json.loads(next(output.glob("*/attempts.json")).read_text())
-    assert attempts["pending_reasons"] == {"blocked": blocker}
-    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(infrastructure_first)
+    pending = {"blocked": blocker}
+    if unserved:
+        pending["scored"] = difficulty_trials.INPUT_BUDGET_REASON
+    assert attempts["pending_reasons"] == pending
+    assert len(list(output.glob("*/attempts/*/*/trial-artifacts.tar.gz"))) == 1 + int(infrastructure_first and not unserved)
+    assert len(candidate_requests) == int(infrastructure_first and not unserved)
+    if unserved:
+        return
     if infrastructure_first:
         aggregate = next(output.glob("*/attempts.json"))
         aggregate.rename(aggregate.with_name("preserved-before-interruption-attempts.json"))

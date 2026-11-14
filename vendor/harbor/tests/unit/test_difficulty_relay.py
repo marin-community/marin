@@ -13,22 +13,58 @@ from threading import Event, Thread
 
 import httpx
 from rigging.filesystem.storage_path import StoragePath
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.task_curation import difficulty_relay
 from experiments.post_training.task_curation.difficulty_trials import preserved_model_traffic
 
 
+def test_relay_renders_tool_arguments_without_changing_upstream_wire_history(tmp_path, monkeypatch):
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]")), unk_token="[UNK]",
+        chat_template="""{% for message in messages %}{{ message.content or '' }}
+{% for call in message.get('tool_calls') or [] %}
+{% for key, value in call.function.arguments.items() %}{{key}}={{value}}{% endfor %}
+{% endfor %}{% endfor %}""",
+    )
+    arguments = '{"command":"echo 42"}'
+    messages = [{"role":"assistant", "content":"", "tool_calls":[{
+        "id":"shell-1", "type":"function", "function":{"name":"shell", "arguments":arguments},
+    }]}, {"role":"tool", "tool_call_id":"shell-1", "content":"42"}]
+    upstream_requests = []
+
+    def model_response(request):
+        upstream_requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"usage":{"prompt_tokens":1, "completion_tokens":2}})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(difficulty_relay.AutoTokenizer, "from_pretrained", lambda *args, **kwargs:tokenizer)
+    monkeypatch.setattr(difficulty_relay.httpx, "Client", lambda **kwargs:real_client(
+        **kwargs, transport=httpx.MockTransport(model_response)))
+    with difficulty_relay.budget_relay(
+        endpoint="https://model.fixture/v1", model="fixture", api_key="fixture",
+        tokenizer_model="fixture", tokenizer_revision="a"*40, parameters={},
+        budget=difficulty_relay.RequestBudget(65536, 49152, 16384), receipts=tmp_path,
+    ) as relay:
+        with real_client() as client:
+            response = client.post(relay+"/task/v1/chat/completions", json={"messages":messages})
+        assert response.status_code == 200
+    assert upstream_requests[0]["messages"] == messages
+    assert upstream_requests[0]["messages"][0]["tool_calls"][0]["function"]["arguments"] == arguments
+
+
 def test_final_archive_waits_for_inflight_upstream_reply(tmp_path, monkeypatch):
     started, release, finish, closing, finished = (Event() for _ in range(5))
     urls = Queue()
-    requests = Queue()
 
     class Upstream(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
         def do_POST(self):
-            requests.put(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            self.rfile.read(int(self.headers["Content-Length"]))
             started.set()
             assert release.wait(10)
             body = json.dumps({"usage": {"prompt_tokens": 1, "completion_tokens": 2}}).encode()
@@ -60,8 +96,8 @@ def test_final_archive_waits_for_inflight_upstream_reply(tmp_path, monkeypatch):
         try:
             with preserved_model_traffic(local, output), difficulty_relay.budget_relay(
                 endpoint=f"http://127.0.0.1:{upstream.server_port}/v1", model="fixture", api_key="fixture",
-                tokenizer_model="fixture", tokenizer_revision="a" * 40, parameters={"temperature": 0.7}, receipts=local / "model-requests",
-                budget=difficulty_relay.CANDIDATE_BUDGET,
+                tokenizer_model="fixture", tokenizer_revision="a" * 40, parameters={}, receipts=local / "model-requests",
+                budget=difficulty_relay.RequestBudget(context_tokens=65536, input_tokens=49152, output_tokens=16384),
             ) as relay:
                 urls.put(relay)
                 assert finish.wait(10)
@@ -73,7 +109,7 @@ def test_final_archive_waits_for_inflight_upstream_reply(tmp_path, monkeypatch):
             worker = pool.submit(campaign)
             relay = urls.get(timeout=10)
             response = pool.submit(httpx.post, relay + "/task/v1/chat/completions",
-                                   json={"messages": [{"role": "user", "content": "answer"}], "temperature": 0.0}, timeout=10)
+                                   json={"messages": [{"role": "user", "content": "answer"}]}, timeout=10)
             try:
                 assert started.wait(10)
                 finish.set()
@@ -84,7 +120,6 @@ def test_final_archive_waits_for_inflight_upstream_reply(tmp_path, monkeypatch):
                 release.set()
                 finish.set()
             assert response.result(timeout=10).status_code == 200
-            assert requests.get(timeout=10)["temperature"] == 0.7
             worker.result(timeout=10)
     finally:
         release.set()
@@ -98,6 +133,3 @@ def test_final_archive_waits_for_inflight_upstream_reply(tmp_path, monkeypatch):
     with tarfile.open(fileobj=io.BytesIO(StoragePath(receipt["archive"]).read_bytes()), mode="r:gz") as archive:
         (member,) = [member for member in archive if member.name.endswith("/response.json")]
         assert json.load(archive.extractfile(member))["body"]["usage"]["completion_tokens"] == 2
-        (request,) = [member for member in archive if member.name.endswith("/request.json")]
-        recorded = json.load(archive.extractfile(request))
-        assert (recorded["requested_body"]["temperature"], recorded["body"]["temperature"]) == (0.0, 0.7)

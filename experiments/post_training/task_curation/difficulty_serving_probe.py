@@ -8,24 +8,25 @@ import json
 from datetime import UTC, datetime
 
 import httpx
-from finestore.rl.difficulty import SOLVER_MODELS, Solver
-from rigging.chat_templates import chat_template_messages
+from finestore.rl.difficulty import SOLVER_MODELS, SamplingSettings, Solver
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
+from rolloutengine.chat import chat_template_messages
 from transformers import AutoTokenizer
 
 from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
-from experiments.post_training.task_curation.difficulty_protocol import PINS, request_parameters
+from experiments.post_training.task_curation.difficulty_protocol import PINS
+from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 
 
-def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str) -> dict:
+def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, settings: SamplingSettings) -> dict:
     """Verify pinned tools/thinking tokenization against authoritative serving usage."""
     pin = PINS[solver]
     with httpx.Client(headers={"Authorization": f"Bearer {api_key}"}, timeout=300) as client:
         models = client.get(endpoint.rstrip("/") + "/models")
         models.raise_for_status()
-        parameters = request_parameters(solver)
+        parameters = request_parameters(settings)
         probe = {
             "model": api_model,
             "messages": [
@@ -58,7 +59,7 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str) 
                     },
                 }
             ],
-            "max_tokens": 16384,
+            "max_tokens": settings.output_tokens,
             **{key: value for key, value in parameters.items() if key != "extra_body"},
             **parameters.get("extra_body", {}),
         }
@@ -94,7 +95,9 @@ def main() -> None:
     if output.exists():
         raise FileExistsError(f"Preserve prior serving probes: {output}")
     base_url = resolve_glm_base_url(args.relay_job)
-    receipt = probe_endpoint(Solver.HOSTED, base_url, GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV))
+    receipt = probe_endpoint(
+        Solver.HOSTED, base_url, GLM_MODEL, require_secret(GLM_BULK_TOKEN_ENV), sampling_settings(Solver.HOSTED, [])
+    )
     (output / "serving-probe.json").write_text(
         json.dumps(
             {"created_at": datetime.now(UTC).isoformat(), "relay_job": args.relay_job, "base_url": base_url, **receipt},
