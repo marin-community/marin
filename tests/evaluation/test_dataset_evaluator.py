@@ -6,9 +6,9 @@
 from types import SimpleNamespace
 
 import httpx
+from evalrecords.records import CuratedSettings
 from marin.evaluation.dataset_evaluator import runtime_config
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
-from marin.evaluation.records import CuratedSettings
 from openai import OpenAI
 
 

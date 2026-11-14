@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
+from evalrecords.records import list_records, read_records
 from finestore.layout import (
     ARCHIVE_FILE,
     FORMAT_VERSION,
@@ -35,7 +36,6 @@ from finestore.migrations.m0001_manifest import (
 )
 from finestore.reader import ReadView
 from finestore.store import DataStore
-from marin.evaluation.records import list_records, read_records
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs

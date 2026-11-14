@@ -12,12 +12,12 @@ from pathlib import Path
 from types import MappingProxyType
 
 import yaml
-from marin.evaluation.eval_policy import source_config_digest
+from evalrecords.eval_policy import source_config_digest
+from evalrecords.records import EvalRef, EvalTaskRef, EvaluationSelection, HarborRef, ModelConfigRef
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalRef, EvalTaskRef, EvaluationSelection, HarborRef, ModelConfigRef
 from marin.evaluation.runner import EvalExecutor
 from rigging.secrets import SecretSpec
 

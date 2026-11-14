@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-evalrecords"
+version = "0.1.0"
+description = "Evaluation run records, result readers, and the statistics computed from them."
+requires-python = ">=3.12"
+dependencies = [
+    "marin-finestore",
+    "marin-rigging",
+    "marin-taskcompendium",
+    "pydantic>=2.0",
+    "pyyaml>=6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/evalrecords"]

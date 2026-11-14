@@ -167,7 +167,7 @@ different protocols distinct in dashboard comparisons. See
 ## Use the shared launcher in a pipeline
 
 ```python
-from marin.evaluation.records import EvaluationSelection
+from evalrecords.records import EvaluationSelection
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import eval_step
 

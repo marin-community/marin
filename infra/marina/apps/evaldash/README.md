@@ -157,7 +157,7 @@ POST /models/{model_name}/archive   set a model's archive flag ({"archived": boo
 ```
 
 `/panel` answers one selection request against the statistics engine in
-`marin.evaluation.eval_stats`, which the eval runners share, so the dashboard and the producers apply
+`evalrecords.eval_stats`, which the eval runners share, so the dashboard and the producers apply
 the same rules. Every cell is a measurement: the rate over the items a run graded, the item counts
 behind it, the per-cause counts of items it attempted and never graded, and a 95% interval. When a run
 reports an attempted count, the interval covers the ungraded items by Manski bounds with an

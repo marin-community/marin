@@ -8,9 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import yaml
-from huggingface_hub import HfApi
-from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
+from evalrecords.records import (
     DEFAULT_EVALUATION_CONCURRENCY,
     CuratedRef,
     CuratedSettings,
@@ -19,6 +17,8 @@ from marin.evaluation.records import (
     PromptFormat,
     ResolvedEvaluationSelection,
 )
+from huggingface_hub import HfApi
+from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep
 from rigging.secrets import is_secret_reference
 from taskcompendium.identity import canonical_sha256

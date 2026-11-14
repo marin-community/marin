@@ -7,6 +7,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
+from evalrecords.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, ModelConfigRef, RunStatus
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import driver_config, runner
 from marin.evaluation.harbor.agent_context import (
@@ -27,7 +28,6 @@ from marin.evaluation.harbor.runner import (
     _read_trials,
 )
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import BenchmarkMetadataRef, BenchmarkMetricRef, MetricKind, ModelConfigRef, RunStatus
 from marin.evaluation.runner import EndpointRoute, EvaluationError, InferenceUnavailable, run_evaluation
 from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel

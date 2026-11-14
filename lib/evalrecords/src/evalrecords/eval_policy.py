@@ -13,9 +13,9 @@ from types import MappingProxyType
 
 import yaml
 
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
-from marin.evaluation.model_identity import model_config_digest
-from marin.evaluation.records import EvalRef, EvalRunRecord, ModelRef
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
+from evalrecords.model_identity import model_config_digest
+from evalrecords.records import EvalRef, EvalRunRecord, ModelRef
 
 EVALCHEMY_COMMIT = "c131e5ab84d3014490549ec06d45deb13b5673c2"
 NUPA_SEED = 20222943

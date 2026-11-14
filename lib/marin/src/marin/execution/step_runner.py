@@ -27,6 +27,9 @@ from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.factory import url_to_fs
+
+# Re-export for backward compatibility
+from rigging.filesystem.step_status import STATUS_DEP_FAILED, STATUS_FAILED, STATUS_SUCCESS, StatusFile
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
@@ -41,18 +44,7 @@ from marin.execution.artifact import (
 )
 from marin.execution.remote import RemoteCallable, sanitize_job_name
 from marin.execution.step_spec import StepSpec
-
-# Re-export for backward compatibility
-from marin.execution.step_status import (
-    STATUS_DEP_FAILED,
-    STATUS_FAILED,
-    STATUS_SUCCESS,
-    PreviousTaskFailedError,
-    StatusFile,
-    StepAlreadyDone,
-    step_lock,
-    worker_id,
-)
+from marin.execution.step_status import PreviousTaskFailedError, StepAlreadyDone, step_lock, worker_id
 from marin.training.run_environment import dependency_groups_for_resources
 from marin.utilities.json_encoder import CustomJsonEncoder
 

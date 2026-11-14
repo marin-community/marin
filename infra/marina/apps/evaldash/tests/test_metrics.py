@@ -9,12 +9,11 @@ from dataclasses import asdict
 import pytest
 from evaldash.app import MemoryRecordStore
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
-from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
-from marin.evaluation.eval_stats import Completeness, MissingPolicy
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
-from marin.evaluation.model_identity import model_config_digest
-from marin.evaluation.records import (
+from evalrecords.eval_policy import EVALCHEMY_COMMIT
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.eval_stats import Completeness, MissingPolicy
+from evalrecords.model_identity import model_config_digest
+from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     CuratedRef,
@@ -33,6 +32,7 @@ from marin.evaluation.records import (
     RunStatus,
     TaskCoverage,
 )
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
 
 ITEMS = 1000
 

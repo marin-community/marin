@@ -7,13 +7,13 @@ import math
 from dataclasses import replace
 
 import pytest
-from marin.evaluation.eval_measurements import (
+from evalrecords.eval_measurements import (
     declared_metric_rows,
     measurement_from_record,
     task_item_count,
     undeclared_metric_rows,
 )
-from marin.evaluation.eval_stats import (
+from evalrecords.eval_stats import (
     AggregationProtocol,
     CohortMode,
     Completeness,
@@ -31,7 +31,7 @@ from marin.evaluation.eval_stats import (
     select,
     wilson_interval,
 )
-from marin.evaluation.records import (
+from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     EvalchemyRef,

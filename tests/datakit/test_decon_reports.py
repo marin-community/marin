@@ -9,7 +9,7 @@ from marin.datakit.decon import DeconAttributes, NGramConfig, _bloom_hash
 from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.step_runner import step_is_built
 from marin.execution.step_spec import StepSpec
-from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
+from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFile
 
 from experiments.datakit import reference_pipeline
 from experiments.datakit.decontam.viewer.export_reference_run import _wait_for_marks
