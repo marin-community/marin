@@ -14,8 +14,9 @@ from experiments.data_belay.prepare import cache_epochs
         (("BSD-3-Clause",), LicenseVerdict.ALLOWED),
         (("wtfpl",), LicenseVerdict.ALLOWED),
         (("openmdw-1.1",), LicenseVerdict.ALLOWED),
-        # A data license is not on the Blue Oak list, so it goes to a person.
-        (("odc-by",), LicenseVerdict.NEEDS_REVIEW),
+        # The attribution and share-alike data licenses are allowed too.
+        (("odc-by",), LicenseVerdict.ALLOWED),
+        (("cc-by-sa-4.0",), LicenseVerdict.ALLOWED),
         # An NC or ND fragment rejects the id.
         (("cc-by-nc-sa-4.0",), LicenseVerdict.REJECTED),
         # An id on no list, or a card with no license, goes to a person.

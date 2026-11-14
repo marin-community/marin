@@ -24,8 +24,8 @@ from levanter.tokenizers import MarinTokenizer
 
 # Licenses a candidate may have: every rating of the Blue Oak Council's list of permissive licenses
 # (https://blueoakcouncil.org/list.json, version 16), by SPDX id, and OpenMDW, a permissive license for models and
-# data. A lowercased SPDX id is the Hugging Face card id. The list holds software licenses only, so a data license
-# such as CC BY or ODC-By goes to a person.
+# data. A lowercased SPDX id is the Hugging Face card id. The list holds software licenses only, so the data licenses
+# that only ask for attribution, or for derivatives under the same terms, are in DATA_LICENSES.
 BLUE_OAK_LICENSES_BY_RATING = {
     "Model": "BlueOak-1.0.0",
     "Gold": "BSD-2-Clause-Patent",
@@ -61,7 +61,11 @@ BLUE_OAK_LICENSES_BY_RATING = {
         "Wsuipa WTFPL xinetd XSkat Zed Zend-2.0 ZPL-1.1"
     ),
 }
-ALLOWED_LICENSES = frozenset(
+# Hugging Face card ids of CC BY, CC BY-SA (every version) and ODC-By.
+DATA_LICENSES = frozenset(
+    {f"cc-by{sa}-{v}" for sa in ("", "-sa") for v in ("1.0", "2.0", "2.5", "3.0", "4.0")} | {"odc-by"}
+)
+ALLOWED_LICENSES = DATA_LICENSES | frozenset(
     spdx_id.lower() for spdx_ids in BLUE_OAK_LICENSES_BY_RATING.values() for spdx_id in spdx_ids.split()
 )
 # OpenMDW's card ids: openmdw-1.0, openmdw-1.1.

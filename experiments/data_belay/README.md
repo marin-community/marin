@@ -59,9 +59,9 @@ share, and `--against` refuses two arms at different shares. `--share` takes a w
 cache it prepares (`p20`) names the share exactly.
 
 `check` allows the licenses on the Blue Oak Council's [list of permissive licenses](https://blueoakcouncil.org/list)
-(every rating, version 16) and OpenMDW. It rejects NC and ND licenses, and refuses any other license for a person to
-review: a data license such as CC BY, CC BY-SA or ODC-By, which the list does not cover, `other`, a missing license,
-or a second license that is not on the list. It also refuses a share that reads the dataset more than 4 times at the
+(every rating, version 16), OpenMDW, and the data licenses CC BY, CC BY-SA and ODC-By, which the list does not cover.
+It rejects NC and ND licenses, and refuses any other license for a person to review: `other`, a missing license, or a
+second license that is not allowed. It also refuses a share that reads the dataset more than 4 times at the
 largest rung. It sizes the head commit only, because the row count comes from the datasets-server, which sizes the head.
 `prepare` checks the epochs again on the cache it built, and writes the manifest that `train` reads only when they
 pass. `prepare-datakit` records the licenses on the sources' Hugging Face cards and does not refuse one off the
