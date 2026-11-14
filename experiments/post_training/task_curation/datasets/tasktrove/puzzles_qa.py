@@ -15,6 +15,10 @@ rejected with a typed ``oracle_answer_not_extractable`` outcome and its bytes as
 The answer's typed shape follows the source's own declared contract: the grader mode and its
 declared expected-member shape, exactly as the canonical TaskSpecs record them. The extraction is
 cross-checked against that declaration; a mismatch is a source defect, never a silent fallback.
+
+Each task's labels carry its lineage back to the canonical conversion this repair derives from:
+the original task ID, the oracle script digest and the extraction method. Labels stay out of the
+contract identity, so archives repeated across rows still deduplicate to the canonical cohort.
 """
 
 import hashlib
@@ -23,6 +27,7 @@ import re
 
 from taskcompendium.convert.answers import answer_task, source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.models import Controls, ImportRejection, NormalizedTask, RawRow
@@ -54,6 +59,10 @@ LITERAL_TEMPLATE = re.compile(
     re.DOTALL,
 )
 
+# The canonical laion__all-puzzles-v2 conversion this repair derives its task identities from.
+ORIGINAL_RECIPE_NAME = "tasktrove-puzzles"
+ORIGINAL_RECIPE_VERSION = "2"
+
 
 def extract_oracle_answer(script: bytes) -> str | None:
     """The answer a literal-template oracle writes, or ``None`` when it computes one."""
@@ -61,14 +70,18 @@ def extract_oracle_answer(script: bytes) -> str | None:
     return None if match is None else match.group(1)
 
 
-def lineage_resource(row_id: str, script: bytes, answer: str) -> dict:
+def original_task_id(row: RawRow) -> str:
+    """The canonical cohort's task ID for the same source row."""
+    origin = row.source.model_copy(update={"importer_revision": ORIGINAL_RECIPE_VERSION})
+    return f"{ORIGINAL_RECIPE_NAME}-{canonical_sha256(origin.model_dump())}"
+
+
+def lineage_labels(row: RawRow, script: bytes) -> dict[str, str]:
     """Per-task lineage from the published task back to its original oracle."""
     return {
-        "task_id": row_id,
-        "solve_sh_path": SOLVE_SH,
-        "solve_sh_sha256": hashlib.sha256(script).hexdigest(),
-        "extracted_answer": answer,
-        "extraction": "literal_printf_template",
+        "original_task_id": original_task_id(row),
+        "original_solve_sh_sha256": hashlib.sha256(script).hexdigest(),
+        "oracle_extraction": "literal_printf_template",
     }
 
 
@@ -119,10 +132,9 @@ def convert_puzzle_qa(row: RawRow, _context) -> TaskSpec | NormalizedTask | Impo
         row,
         prompt=replace_phrases(instruction, ANSWER_FILE_DELIVERY),
         spec=qa_spec(answer, declared_type),
-        evidence=lineage_resource(row.id, script, answer),
     )
     puzzle_type = str(data.get("ptype", "")).strip().lower().replace("_", "-") or "unknown"
-    task = task.model_copy(update={"tags": ("puzzle", "laion", puzzle_type)})
+    task = task.model_copy(update={"tags": ("puzzle", "laion", puzzle_type), "labels": lineage_labels(row, script)})
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 
 
@@ -145,7 +157,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "conversation tasks graded in process by the source's pinned Verifyit exact/math "
                     "grader against the reference mechanically extracted from each task's original "
                     "solution/solve.sh oracle. Grader mode and instruction text unchanged from the "
-                    "canonical conversion."
+                    "canonical conversion; task labels carry the original task ID and oracle digest."
                 ),
                 task_format=TaskFormat.TASKCOMPENDIUM,
             ),

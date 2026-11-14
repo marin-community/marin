@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from taskcompendium.convert.answers import source_evidence
 from taskcompendium.grading_result import Outcome
+from taskcompendium.identity import canonical_sha256, task_identity
 from taskcompendium.models import (
     ConversationTrace,
     EnvironmentRequirements,
@@ -787,12 +787,15 @@ def test_puzzle_qa_keeps_oracle_lineage_and_declared_contract():
         {"gold": "Defect, Salt, chair", "answer_type": "ordered_list"}, "Defect, Salt, chair", script=script
     )
     task = task_of("tasktrove-puzzles-qa", row)
-    evidence = source_evidence(task)
-    assert evidence["extraction"] == "literal_printf_template"
-    assert evidence["solve_sh_path"] == "solution/solve.sh"
-    assert evidence["extracted_answer"] == "Defect, Salt, chair"
-    assert evidence["solve_sh_sha256"] == hashlib.sha256(script).hexdigest()
-    assert evidence["task_id"] == task.id
+    assert task.labels["oracle_extraction"] == "literal_printf_template"
+    assert task.labels["original_solve_sh_sha256"] == hashlib.sha256(script).hexdigest()
+    origin = task.source.model_copy(update={"importer_revision": puzzles_qa.ORIGINAL_RECIPE_VERSION})
+    assert task.labels["original_task_id"] == (
+        f"{puzzles_qa.ORIGINAL_RECIPE_NAME}-{canonical_sha256(origin.model_dump())}"
+    )
+    # Lineage stays out of the contract identity: repeated archives still deduplicate.
+    relabeled = task.model_copy(update={"id": "other", "labels": {**task.labels, "original_task_id": "other"}})
+    assert task_identity(task) == task_identity(relabeled)
 
 
 def test_puzzle_qa_rejects_a_computed_oracle():
