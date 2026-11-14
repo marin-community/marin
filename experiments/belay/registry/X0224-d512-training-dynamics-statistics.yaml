@@ -13,7 +13,7 @@ intake:
   approved_by: ClassicLarry
 potential:
   score: null
-  rationale: 'Study: no verdict; analysis blocked by S3 Forbidden on checkpoint read'
+  rationale: 'Study: no verdict; analysis blocked by analyze run-name parse bug'
   model: claude-opus-5-5
-  date: '2026-11-12'
+  date: '2026-11-14'
   inputs_digest: abb80d7e554f
