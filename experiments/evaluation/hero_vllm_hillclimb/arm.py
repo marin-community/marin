@@ -211,6 +211,8 @@ LEADER_OVERRIDES = {
     "fg32stack95": ("--api-server-count", "4"),
     "fg32stack95lean": ("--api-server-count", "4"),
     "fg128stackmaxat": ("--api-server-count", "4"),
+    "fg128stackcap1": ("--api-server-count", "4"),
+    "fg128stackbi": ("--api-server-count", "4"),
 }
 
 MOE_CONFIG_DIR = "experiments/evaluation/hero_vllm_hillclimb/moe_configs"
@@ -228,6 +230,16 @@ LABEL_ENV = {
     "fg128stacklean": (
         ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
         ("VLLM_USE_NCCL_SYMM_MEM", "1"),
+    ),
+    "fg128stackcap1": (
+        ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
+        ("VLLM_USE_NCCL_SYMM_MEM", "1"),
+    ),
+    # Batch-invariant mode as the Hero RL qualification run used it (it also disables symmetric memory).
+    "fg128stackbi": (
+        ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
+        ("VLLM_USE_NCCL_SYMM_MEM", "1"),
+        ("VLLM_BATCH_INVARIANT", "1"),
     ),
     "fg128stackmaxat": (
         ("VLLM_TUNED_CONFIG_FOLDER", "{workspace}/" + MOE_CONFIG_DIR),
@@ -350,6 +362,19 @@ CANDIDATE_ARGS = {
         "32",
         "--gpu-memory-utilization",
         "0.95",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
+    ),
+    # The full stack with one capture size (every decode step pads to max_num_seqs): peer-load invariance.
+    "fg128stackcap1": (
+        "--max-num-seqs",
+        "128",
+        "--compilation-config",
+        json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE", "cudagraph_capture_sizes": [128]}),
+    ),
+    "fg128stackbi": (
+        "--max-num-seqs",
+        "128",
         "--compilation-config",
         json.dumps(BASE_COMPILATION | {"cudagraph_mode": "FULL_AND_PIECEWISE"}),
     ),
