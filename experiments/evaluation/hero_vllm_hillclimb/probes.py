@@ -270,6 +270,45 @@ async def long_probes(client: Client, cases: dict, config: ProbeConfig) -> dict:
     return results
 
 
+async def _timed(call) -> float:
+    start = time.monotonic()
+    await call
+    return time.monotonic() - start
+
+
+async def _long_repeats(client: Client, cases: dict, config: ProbeConfig, profile: bool) -> dict:
+    """Separate first-use cost from steady prefill cost on long prompts.
+
+    Each long prompt is prefilled three times without log-probs (max_tokens 1) and scored three
+    times with top-5 prompt log-probs, on engine 0. With ``profile`` the third plain prefill runs
+    under the torch profiler.
+    """
+    results = {}
+    for case in cases["long"]:
+        tokens = case["tokens"]
+        if len(tokens) not in config.long_lengths:
+            continue
+        plain = {"prompt": tokens, "max_tokens": 1, "temperature": 0.0}
+        prefill = [await _timed(client.completion(plain, rank=0)) for _ in range(2)]
+        if profile:
+            await _post_root(client, "start_profile")
+        prefill.append(await _timed(client.completion(plain, rank=0)))
+        if profile:
+            await _post_root(client, "stop_profile")
+        score = [await _timed(client.score(tokens, rank=0)) for _ in range(3)]
+        results[case["case_id"]] = {"length": len(tokens), "prefill_seconds": prefill, "score_seconds": score}
+        logger.info("long repeats %s: prefill %s score %s", case["case_id"], prefill, score)
+    return results
+
+
+async def long_repeats(client: Client, cases: dict, config: ProbeConfig) -> dict:
+    return await _long_repeats(client, cases, config, profile=False)
+
+
+async def long_repeats_profiled(client: Client, cases: dict, config: ProbeConfig) -> dict:
+    return await _long_repeats(client, cases, config, profile=True)
+
+
 async def _stream_request(client: Client, body: dict, record: dict, rank: int | None = None) -> None:
     record["submit"] = time.monotonic()
     stamps: list = []

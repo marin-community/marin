@@ -58,6 +58,8 @@ from experiments.evaluation.hero_vllm_hillclimb.probes import (
     gate_probes,
     load_sweep,
     long_probes,
+    long_repeats,
+    long_repeats_profiled,
     profile_points,
 )
 
@@ -349,6 +351,8 @@ _PHASES = {
     "load": load_sweep,
     "profile": profile_points,
     "decode": decode_consistency,
+    "longrep": long_repeats,
+    "longprof": long_repeats_profiled,
 }
 
 
