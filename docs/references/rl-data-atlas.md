@@ -859,7 +859,8 @@ Run tasks through production Harbor trials in their declared environments and
 grade each with its own grader. Select Daytona only for measured SAFE sources;
 use LOCAL/Iris otherwise. Hosted difficulty traffic admits at most four actor
 requests and one judge request per campaign, with admission and peak counts in
-the trusted host logs. Retry 429 and transient 5xx replies with jittered backoff,
+the trusted host logs. Admission waits while its caller remains connected;
+ordinary queueing does not consume a task attempt. Retry 429 and transient 5xx replies with jittered backoff,
 preserving each upstream reply and wait. Exhausted provider admission stays
 pending without a solver grade or infrastructure-attempt count. Keep provider waits separate from task attempts and
 preserve infrastructure-failed attempts for re-driving. Those attempts never
@@ -904,7 +905,8 @@ GLM host default; a different named model requires its own qualified route.
 Only Chat Completions judge APIs are qualified; Responses judges retain an
 explicit `production_judge_api_not_qualified:responses` reason before candidate
 execution. Sources without judges omit judge-window traffic and temperature
-metadata.
+metadata, judge-service probes and judge-credential lookup. Candidate and judge
+limits are recorded from the same configurations that the worker enforces.
 Each source's attempt receipt links separate candidate and judge traffic
 archives and token counts. Final judge traffic, including replies that outlive
 an infrastructure-failed task, is sealed under `trials/judge/`.

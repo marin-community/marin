@@ -17,6 +17,7 @@ from rigging.timing import ExponentialBackoff
 
 LOGGER = logging.getLogger(__name__)
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+ADMISSION_POLL_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -42,18 +43,23 @@ class ProviderGate:
         self.peak = 0
 
     @contextmanager
-    def admission(self, root: Path):
+    def admission(self, root: Path, request_alive: Callable[[], bool]):
         started = time.monotonic()
         (root / "provider-queued.json").write_text(json.dumps({"started_at": time.time()}))
-        if not self.slots.acquire(timeout=30):
-            wait = root / "provider-waits" / "capacity.json"
-            wait.parent.mkdir(exist_ok=True)
-            wait.write_text(
-                json.dumps(
-                    {"kind": "provider_wait", "capacity_wait_seconds": time.monotonic() - started, "task_attempt": False}
+        polls = 0
+        while not self.slots.acquire(timeout=ADMISSION_POLL_SECONDS):
+            polls += 1
+            if polls == 1:
+                (root / "provider-capacity-wait.json").write_text(
+                    json.dumps({"kind": "capacity_queue", "task_attempt": False})
                 )
-            )
-            raise ProviderUnavailable("Provider capacity wait expired")
+            if not request_alive():
+                wait = root / "provider-waits" / "disconnected.json"
+                wait.parent.mkdir(exist_ok=True)
+                wait.write_text(
+                    json.dumps({"kind": "provider_wait", "reason": "client_disconnected", "task_attempt": False})
+                )
+                raise ProviderUnavailable("The waiting client disconnected")
         try:
             with self.lock:
                 self.active += 1
@@ -63,6 +69,7 @@ class ProviderGate:
                     "peak": self.peak,
                     "cap": self.limits.max_in_flight,
                     "capacity_wait_seconds": time.monotonic() - started,
+                    "capacity_polls": polls,
                 }
             (root / "provider-admitted.json").write_text(json.dumps(admission))
             LOGGER.info(
@@ -86,7 +93,7 @@ class ProviderGate:
     ) -> httpx.Response:
         """Retry only rejected provider requests, retaining every upstream reply."""
         backoff = ExponentialBackoff(initial=1, maximum=32, factor=2, jitter=0.25)
-        with self.admission(root):
+        with self.admission(root, request_alive):
             for number in range(self.limits.attempts):
                 if not request_alive():
                     wait = root / "provider-waits" / "disconnected.json"

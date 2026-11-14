@@ -180,7 +180,10 @@ def budget_relay(
                             status, payload = safe.status, json.loads(safe.body)
                     except ProviderUnavailable:
                         status, payload = 503, {
-                            "error": {"code": "provider_wait", "message": "Provider capacity wait expired"}
+                            "error": {
+                                "code": "provider_wait",
+                                "message": "Provider caller disconnected before a response",
+                            }
                         }
                     except httpx.HTTPError as error:
                         # Preserve transport classification; source commands are never replayed here.

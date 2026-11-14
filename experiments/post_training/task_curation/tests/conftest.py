@@ -7,23 +7,28 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from finestore.rl.difficulty import DifficultySample
 from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from taskcompendium.runtime.resources import inline_resource
 
 from experiments.post_training.task_curation import driver
+from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.full_qc_inputs import InputConfig
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, HostedJudgeEndpoint
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
+from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
 from experiments.post_training.task_curation.tests.local_grader import LocalGraderMachines, local_grader_machines
+from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 from experiments.post_training.task_curation.tests.review_server import running_review_server
 
@@ -118,3 +123,49 @@ def qc_inputs(tmp_path):
         InputConfig(population.path, plan, file_sha256(StoragePath(str(drop_path))), str(tmp_path / "prepared")),
         documents,
     )
+
+
+@pytest.fixture
+def difficulty_source(tmp_path):
+    declaration = number_source(tmp_path / "declaration").declaration
+
+    def build(task: TaskSpec) -> DifficultySource:
+        task_sha = canonical_sha256(task.model_dump(mode="json"))
+        panel = SamplePanel(
+            source_id=declaration.id,
+            dataset_id=declaration.current_release.repo,
+            dataset_revision=declaration.current_release.revision,
+            converter_version=declaration.pipeline.version,
+            input_artifact="fixture:population",
+            task_specs_sha256=task_sha,
+            scanned_task_specs_sha256=task_sha,
+            retained_tasks=1,
+            sample_seed=0,
+            sample_size=1,
+            panel_path="fixture:panel",
+            panel_sha256="a" * 64,
+            evidence_url="fixture:inventory",
+        )
+        sample = DifficultySample(
+            source_id=declaration.id,
+            release=declaration.current_release,
+            converter_version=declaration.pipeline.version,
+            converter_revision="b" * 40,
+            population_count=1,
+            task_specs_sha256=task_sha,
+            drop_manifest={"uri": "fixture:drops", "sha256": "c" * 64},
+            seed=0,
+            pre_oracle_filter=False,
+            resample_after_oracle_filter=False,
+            tasks=[{"task_id": task.id, "task_sha256": task_sha}],
+        )
+        source = DifficultySource(
+            declaration=declaration,
+            panel=panel,
+            sample=sample,
+            sample_receipt={"uri": "fixture:sample", "sha256": "d" * 64},
+            backend="local",
+        )
+        return source
+
+    return build

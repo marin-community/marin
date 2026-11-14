@@ -18,12 +18,13 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.task_curation import difficulty_relay
+from experiments.post_training.task_curation import difficulty_provider, difficulty_relay
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
 from experiments.post_training.task_curation.difficulty_trials import preserved_model_traffic
 
 
 def test_provider_capacity_bounds_concurrent_http_requests(tmp_path, monkeypatch):
+    monkeypatch.setattr(difficulty_provider, "ADMISSION_POLL_SECONDS", .01)
     first, second, release = Event(), Event(), Event()
     calls = []
 
@@ -53,9 +54,9 @@ def test_provider_capacity_bounds_concurrent_http_requests(tmp_path, monkeypatch
             two = pool.submit(client.post, relay+"/two/v1/chat/completions", json={"messages": []})
             try:
                 assert ExponentialBackoff(initial=.01,maximum=.05).wait_until(
-                    lambda: len(list(tmp_path.glob("*/000000/provider-queued.json"))) == 2,
+                    lambda: len(list(tmp_path.glob("*/000000/provider-capacity-wait.json"))) == 1,
                     Duration.from_seconds(5))
-                assert not second.wait(.25)
+                assert len(calls) == 1
             finally:
                 release.set()
             assert one.result(timeout=10).status_code == two.result(timeout=10).status_code == 200
@@ -64,6 +65,7 @@ def test_provider_capacity_bounds_concurrent_http_requests(tmp_path, monkeypatch
     admitted = [json.loads(path.read_text()) for path in tmp_path.glob("*/000000/provider-admitted.json")]
     assert len(admitted) == 2
     assert max(row["peak"] for row in admitted) == 1
+    assert max(row["capacity_polls"] for row in admitted) >= 1
 
 
 def test_provider_retries_rejections_with_preserved_waits(tmp_path, monkeypatch):
