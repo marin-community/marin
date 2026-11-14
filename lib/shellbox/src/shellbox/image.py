@@ -21,6 +21,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 OCI_TAG = "image"
+DOCKER_BUILD_METADATA = frozenset({"container", "docker_version"})
 SHA256_PATTERN = r"sha256:[0-9a-f]{64}"
 Sha256Digest = Annotated[str, Field(pattern=f"^{SHA256_PATTERN}$")]
 
@@ -181,6 +182,38 @@ def _configuration_json(configuration: dict[str, Any]) -> str:
     return json.dumps(configuration, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+def _configuration_without_build_metadata(configuration: dict[str, Any]) -> dict[str, Any]:
+    comparable = {key: value for key, value in configuration.items() if key not in DOCKER_BUILD_METADATA}
+    process = comparable.get("config")
+    if process is not None:
+        comparable["config"] = {key: value for key, value in process.items() if key != "Image"}
+    return comparable
+
+
+def _restore_source_configuration(layout: Path, digest: str, source_configuration: bytes) -> str:
+    """Retain Docker build metadata lost by OCI conversion without changing runtime values."""
+    manifest = _oci_json_blob(layout, digest)
+    original = json.loads(source_configuration)
+    prepared = _oci_json_blob(layout, manifest["config"]["digest"])
+    if _configuration_json(_configuration_without_build_metadata(original)) != _configuration_json(
+        _configuration_without_build_metadata(prepared)
+    ):
+        raise ValueError("Prepared image configuration differs from its pinned registry source")
+    config_digest = hashlib.sha256(source_configuration).hexdigest()
+    (layout / "blobs" / "sha256" / config_digest).write_bytes(source_configuration)
+    manifest["config"].update(digest=f"sha256:{config_digest}", size=len(source_configuration))
+    encoded = _configuration_json(manifest).encode()
+    restored_digest = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    (layout / "blobs" / "sha256" / _digest_hex(restored_digest)).write_bytes(encoded)
+    index_path = layout / "index.json"
+    index = json.loads(index_path.read_bytes())
+    for descriptor in index["manifests"]:
+        if descriptor.get("annotations", {}).get("org.opencontainers.image.ref.name") == OCI_TAG:
+            descriptor.update(digest=restored_digest, size=len(encoded))
+    index_path.write_text(json.dumps(index))
+    return _manifest_digest(layout, expected=restored_digest)
+
+
 def _registry_manifest_chain(
     repository: str, digest: str, configuration_digest: str, layers: tuple[str, ...], authfile: Path | None
 ) -> tuple[bytes, ...] | None:
@@ -327,7 +360,8 @@ def prepare_image(
             if _configuration_json(json.loads(source_configuration)) != _configuration_json(
                 _oci_json_blob(layout, prepared["config"]["digest"])
             ):
-                raise ValueError("Prepared image configuration differs from its pinned registry source")
+                digest = _restore_source_configuration(layout, digest, source_configuration)
+                prepared = _oci_json_blob(layout, digest)
             configuration_digest = f"sha256:{hashlib.sha256(source_configuration).hexdigest()}"
             chain = _registry_manifest_chain(
                 repository, pinned_digest, configuration_digest, _layer_digests(prepared), authfile

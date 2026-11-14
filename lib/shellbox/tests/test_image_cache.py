@@ -20,7 +20,14 @@ from pathlib import Path
 import pytest
 from shellbox.backends.local.images import prepare_local_image
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
-from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
+from shellbox.image import (
+    DockerfileSource,
+    ImageCache,
+    PreparedImage,
+    RegistryImage,
+    prepared_image_config,
+    prepared_image_workdir,
+)
 
 
 @dataclass(frozen=True)
@@ -272,6 +279,46 @@ def test_converted_registry_image_evicted_layout_is_copied_again(tmp_path, conve
     assert restored.manifest_digest == prepared.manifest_digest
     assert restored.source == fixture.source
     assert prepared_image_workdir(restored) == "/data"
+
+
+def test_docker_build_metadata_is_restored_before_verified_offline_reuse(
+    tmp_path, converted_registry_image, monkeypatch
+):
+    fixture = converted_registry_image
+    configuration = json.loads(fixture.source_configuration)
+    configuration.update(container="original-builder", docker_version="26.1.3")
+    configuration["config"]["Image"] = f"sha256:{'a' * 64}"
+    original_config = json.dumps(configuration, indent=2).encode()
+    manifest = json.loads(fixture.manifests[fixture.source.reference.rsplit("@", 1)[1]])
+    manifest["config"].update(digest=f"sha256:{hashlib.sha256(original_config).hexdigest()}", size=len(original_config))
+    original_manifest = json.dumps(manifest).encode()
+    source_digest = f"sha256:{hashlib.sha256(original_manifest).hexdigest()}"
+    fixture.manifests[source_digest] = original_manifest
+    source = RegistryImage(f"registry.invalid/task@{source_digest}")
+    image_tool = subprocess.run
+
+    def registry(args, **kwargs):
+        if "inspect" in args and "--config" in args:
+            return subprocess.CompletedProcess(args, 0, stdout=original_config, stderr=b"")
+        return image_tool(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", registry)
+    cache = tmp_path / "cache"
+    prepared = ImageCache(cache).prepare(source)
+    blobs = prepared.layout / "blobs/sha256"
+    selected = json.loads((blobs / prepared.manifest_digest.removeprefix("sha256:")).read_bytes())
+    assert (blobs / selected["config"]["digest"].removeprefix("sha256:")).read_bytes() == original_config
+    assert [layer["digest"] for layer in selected["layers"]] == [layer["digest"] for layer in manifest["layers"]]
+    assert prepared_image_config(prepared) == configuration
+
+    def unavailable(*_args, **_kwargs):
+        pytest.fail("The restored source configuration must remain verifiable offline")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    reloaded = ImageCache(cache).prepare(source)
+    assert reloaded.manifest_digest == prepared.manifest_digest
+    assert reloaded.source == source
+    assert prepared_image_workdir(reloaded) == "/data"
 
 
 @pytest.mark.parametrize(
