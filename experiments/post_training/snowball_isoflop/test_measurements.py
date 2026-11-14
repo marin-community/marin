@@ -3,7 +3,34 @@
 
 import pytest
 
-from experiments.post_training.snowball_isoflop.measurements import warm_measurement
+from experiments.post_training.snowball_isoflop.measurements import training_history, warm_measurement
+
+
+def test_history_reader_uses_mounted_credentials_without_environment(tmp_path, monkeypatch):
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    (tmp_path / "WANDB_API_KEY").write_text("test-only-mounted-credential")
+    rows = [{"global_step": 0, "train/loss": 2.0}]
+
+    class Run:
+        state = "finished"
+
+        def scan_history(self, *, page_size, min_step, max_step):
+            assert (page_size, min_step, max_step) == (100, 0, 20)
+            return iter(rows)
+
+    class Api:
+        def __init__(self, *, timeout, api_key):
+            assert timeout == 30
+            if api_key != "test-only-mounted-credential":
+                raise RuntimeError("W&B authentication requires the mounted credential")
+
+        def run(self, path):
+            assert path.endswith("-calibration-d512-assistant-seed0-n20")
+            return Run()
+
+    monkeypatch.setattr("experiments.post_training.snowball_isoflop.measurements.wandb.Api", Api)
+    assert training_history("calibration-d512-assistant-seed0-n20", 20) == ("finished", rows)
 
 
 def test_warm_rates_exclude_compile_include_overheads_and_keep_early_drops():

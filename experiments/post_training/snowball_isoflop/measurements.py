@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import wandb
 from rigging.filesystem.buckets import filesystem_for
+from rigging.secrets import get_secret
 
 from experiments.post_training.snowball_isoflop.config import SEQ_LEN, VERSION, training_flops_per_position
 
@@ -40,7 +41,7 @@ def read_json(path: str) -> dict:
 
 
 def training_history(cell_name: str, steps: int) -> tuple[str, list[dict]]:
-    run = wandb.Api(timeout=30).run(f"{WANDB_PROJECT}/{VERSION}-{cell_name}")
+    run = wandb.Api(timeout=30, api_key=get_secret("WANDB_API_KEY")).run(f"{WANDB_PROJECT}/{VERSION}-{cell_name}")
     rows = list(run.scan_history(page_size=100, min_step=0, max_step=steps))
     return run.state, rows
 
