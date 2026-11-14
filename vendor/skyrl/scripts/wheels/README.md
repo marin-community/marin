@@ -1,15 +1,34 @@
-# Native CUDA wheels
+# GPU wheels
+
+The locked trainer uses the published FA3 3.0.1 wheel on H100 (Linux x86_64)
+and FA4 4.0.0b39 on GB200 (Linux aarch64). Torch 2.14.1+cu132, Core 0.18,
+Bridge 0.6 and TE 2.21 stay fixed. Both attention packages install without a
+local build. The [SkyRL lockfile](../../uv.lock) records the exact wheel URLs
+and SHA-256 hashes.
+
+| Trainer package | Published wheel | Import |
+| --- | --- | --- |
+| FA3 3.0.1 | [PyTorch CUDA 13.2 index](https://download.pytorch.org/whl/cu132/flash-attn-3/) | `flash_attn_interface` |
+| FA4 4.0.0b39 | [PyPI release](https://pypi.org/project/flash-attn-4/4.0.0b39/) | `flash_attn.cute.interface` |
+
+FA3 contains a compiled extension. FA4 contains Python/CuTe DSL code and uses
+the existing CUTLASS DSL 4.7.1 dependency. vLLM carries its own attention code;
+it selects its bundled FA3 on H100 and FA4 on GB200. Matching family names do
+not imply identical trainer and inference arithmetic. These pins qualify the
+two GPU targets above; they do not establish support for other GPU families.
+
+## Native builds and FA2 rollback
 
 `build_native.sh` builds native extensions from exact upstream commits. It uses
 ordinary source builds and does not rewrite wheel contents after compilation.
 Runtime installation consumes published wheels; it does not invoke this script.
-The [SkyRL lockfile](../../uv.lock) records their URLs and SHA-256 hashes.
 The [TE 2.21 native release](https://github.com/marin-community/marin/releases/tag/skyrl-native-te221-cu132torch2141-20261113-0821e3af)
-contains the qualified wheels and their original build records.
+contains the stock TE Torch bindings, the qualified FA2 rollback wheels and
+their original build records.
 
 | Target | Source | Torch / CUDA toolkit | Linux architectures |
 | --- | --- | --- | --- |
-| FlashAttention 2.8.4 | `f87af617fab71c29c11e7f9bc74746ae7534a59d` | 2.14.1+cu132 / 13.2.2 | x86_64 SM90, aarch64 SM100 |
+| FlashAttention 2.8.4 (rollback) | `f87af617fab71c29c11e7f9bc74746ae7534a59d` | 2.14.1+cu132 / 13.2.2 | x86_64 SM90, aarch64 SM100 |
 | Transformer Engine Torch 2.21.0 | `7457e47d26d9d02dfb783007335dfbe75e1b90a8` | 2.14.1+cu132 / 13.2.2 | x86_64, aarch64 |
 | causal-conv1d and Mamba | Commits selected in the script | 2.13.0+cu132 / 13.2.1 | x86_64 |
 
@@ -50,10 +69,11 @@ digest alongside each wheel.
 Before adoption, install the exact wheel bytes and check attention values and
 gradients, packed GQA/masks, and
 [`test_megatron_flash_attention_cp2_forward_backward`](../../skyrl-train/tests/gpu/test_megatron_worker.py)
-on H100 and GB200. Also check Grug train/eval agreement, a nonzero trainer
-update, native save/restore, and publication to vLLM. Run the peer-batch check
-with `trainer.algorithm.batch_invariant=true`. Native
-attention tests alone cannot detect TE's FA2 version cap. Update runtime URLs
+on H100 and GB200. Run the train/eval and peer-rank checks in
+[`test_grug_megatron.py`](../../skyrl-train/tests/gpu/test_grug_megatron.py),
+with `trainer.algorithm.batch_invariant=true` for the peer-rank check. Also
+check a nonzero trainer update, native save/restore and publication to vLLM. Native
+attention tests alone cannot detect TE's dependency version checks. Update runtime URLs
 and hashes only after these checks pass.
 
 The causal-conv1d and Mamba targets retain their historical Torch 2.13 build

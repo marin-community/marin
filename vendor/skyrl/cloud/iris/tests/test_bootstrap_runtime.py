@@ -63,8 +63,10 @@ def _fake_frozen_runtime(
         _write_module(site_packages, f"{package}/__init__.py")
 
     _write_module(site_packages, "quack/activation.py")
-    _write_module(site_packages, "flash_attn.py", "__version__ = '2.8.4'\n")
-    _write_module(site_packages, "flash_attn_2_cuda.py")
+    _write_module(site_packages, "flash_attn/__init__.py")
+    _write_module(site_packages, "flash_attn/cute/__init__.py")
+    _write_module(site_packages, "flash_attn/cute/interface.py", "flash_attn_varlen_func = object()\n")
+    _write_module(site_packages, "flash_attn_interface.py", "flash_attn_varlen_func = object()\n")
     _write_module(site_packages, "memray.py")
     _write_module(site_packages, "megatron/bridge/__init__.py", "class AutoBridge: pass\n")
     _write_module(site_packages, "torch.py", "__version__ = '2.13.0+cu132'\n")
@@ -145,23 +147,30 @@ def _run_bootstrap(
     )
 
 
-@pytest.mark.parametrize("architecture", ["x86_64", "aarch64"])
-def test_policy_bootstrap_rejects_runtime_without_flash_attention_extension(tmp_path: Path, architecture: str) -> None:
+@pytest.mark.parametrize(
+    ("architecture", "missing_module", "import_name"),
+    [
+        ("x86_64", "flash_attn_interface.py", "flash_attn_interface"),
+        ("aarch64", "flash_attn/cute/interface.py", "flash_attn.cute.interface"),
+    ],
+)
+def test_policy_bootstrap_rejects_runtime_without_flash_attention_extension(
+    tmp_path: Path, architecture: str, missing_module: str, import_name: str
+) -> None:
     environment, process_environment = _fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
-    (site_packages / "flash_attn_2_cuda.py").unlink()
+    (site_packages / missing_module).unlink()
     _write_module(site_packages, "sitecustomize.py", f"import platform\nplatform.machine = lambda: {architecture!r}\n")
 
     result = _run_bootstrap(environment, process_environment, "megatron")
 
     assert result.returncode != 0
-    assert "No module named 'flash_attn_2_cuda'" in result.stderr
+    assert f"No module named '{import_name}'" in result.stderr
 
 
 def test_export_bootstrap_does_not_require_rollout_or_telemetry_packages(tmp_path: Path) -> None:
     environment, process_environment = _fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
-    _write_module(site_packages, "flash_attn_2_cuda.py")
     _write_module(site_packages, "ray.py")
     _write_module(site_packages, "skyrl_train/checkpoint_exporter.py", "class CheckpointExporter: pass\n")
     (site_packages / "shellbox/backends/daytona/machine.py").unlink()
