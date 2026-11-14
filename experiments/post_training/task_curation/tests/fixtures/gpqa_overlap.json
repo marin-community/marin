@@ -1,0 +1,108 @@
+{
+  "provenance": {
+    "survey_sha256": "bb490e2dc0bd361f6a697878702c6b227acc2aebeadc3826a39bd13821b96dc4",
+    "note": "Eight real GPQA question pairs with shuffled choices; source-grader code omitted."
+  },
+  "sources": {
+    "eval": [
+      {
+        "task_id": "evalchemy-gpqa-diamond-e16d1d599362e60e05433d561aefc839abf20103bdab9e511200f945d74cbd0c",
+        "text": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Two quantum states with energies E1 and E2 have a lifetime of 10^-9 sec and 10^-8 sec, respectively. We want to clearly distinguish these two energy levels. Which one of the following options could be their energy difference so that they can be clearly resolved?\n\nOptions: A) 10^-8 eV\n, B) 10^-11 eV, C) 10^-4 eV, D) 10^-9 eV\nAnswer:",
+        "expected": "C",
+        "grader": "gpqa"
+      },
+      {
+        "task_id": "evalchemy-gpqa-diamond-af998dd5c76cf9546572f49b8960b9f427d3522f97d97d9ce706e3690e246fb2",
+        "text": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: In the lab, a chemist discovers an unnamed bottle with a white solid inside. He gathers the following spectral information in order to identify the liquid. Make a reasonable structural suggestion for the unidentified drug using the information provided.\nMass: molecular ion peak at m/z = 156 (100%)\na peak at m/z = 158 (32%)\nIR : broad peak from 3500-2700 cm^-1, strong sharp peak at 1720 cm-1\n1H NMR: 11.0 ppm (s, 1H), 8.02 ppm (d, 2H), 7.72 (d, 2H)\nOptions: A) 3-Chloro-2-hydroxybenzaldehyde\n, B) 4-chlorobenzoic acid, C) 2-chlorobenzoic acid, D) Phenyl chloroformate\nAnswer:",
+        "expected": "B",
+        "grader": "gpqa"
+      },
+      {
+        "task_id": "evalchemy-gpqa-diamond-949736ac96beb012dc569e1c05be3e31b2710a4a08cfc153e6f27dbf50f99514",
+        "text": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: A student performed an acid-catalyzed reaction of 3-methylpyrrolidine with compound A, the final product of the reaction is 1-(cyclohexylidenemethyl)-3-methylpyrrolidine. Select the suitable reagent (A) and catalyst (B) for the reaction.\n3-methylpyrrolidine + A (B, Heat, solvent) ---> 1-(cyclohexylidenemethyl)-3-methylpyrrolidine\nOptions: A) A = vinylcyclohexane, B = TsOH, B) A = cyclohexanecarbaldehyde, B = Acetic acid, C) A = cyclohexanecarbaldehyde, B = TsOH, D) A = vinylcyclohexane, B = Acetic acid\nAnswer:",
+        "expected": "C",
+        "grader": "gpqa"
+      },
+      {
+        "task_id": "evalchemy-gpqa-diamond-1daa11034d2508993b7aba8a1c3fb5a970590476b76f9fd76ed57159fa14c240",
+        "text": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: A vector field f(r) falls off radially as 1/r^2 from the origin, i.e. the magnitude of the field is f(r) = 1/r^2. The field has non-zero component only along  the radial direction in spherical coordinates. Evaluate the volume integral of the divergence of the field, \u2207.f inside the volume of a sphere of radius R centred at the origin. Here, \u2207 and f both are implied as vectors. Which answer below is the most appropriate one for the answer of the integral?\nOptions: A) 0, B) 1, C) 4/3 \u03c0 R , D) 4 \u03c0\nAnswer:",
+        "expected": "D",
+        "grader": "gpqa"
+      },
+      {
+        "task_id": "evalchemy-gpqa-diamond-3cdf53faf352db84d1f9e9f689e1adf8b613c1714c445917e8aa0f3bb0b5f54b",
+        "text": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: 1,3-dibromoadamantane is heated to 240C with an excess of KOH, creating a light yellow solid product 1, With 1H nmr spectrum: 4.79(2H), 2.41-2.23(10H), 1.94(2H) and a characteristic absorbance in the IR spectrum at 1720cm-1.\n\nThis product was then heated with an excess of aluminum isopropoxide, forming product 2.\n\nozone was bubbled through a solution of 2 at -78C, followed by addition of dimethylsulfide, forming product 3.\n\nin the 1H nmr spectrum of 3, what is the coupling pattern of the most deshielded hydrogen atom (excluding those that will exchange with deuterated solvent)?\nOptions: A) triplet of triplets, B) pentet, C) doublet of triplets, D) triplet\nAnswer:",
+        "expected": "A",
+        "grader": "gpqa"
+      },
+      {
+        "task_id": "evalchemy-gpqa-diamond-aa791a4b01bae11152d41f3ce61a2376b59a4bbe108774f505f60b1d2732a503",
+        "text": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: There has been an outbreak of an viral infectious disease in your city. You have been asked to design a molecular diagnostic kit for quick detection of this retrovirus. How would you go about designing this kit?\nOptions: A) First you identify the IgG antibodies for the infection. You then develop an ELISA kit targeting IgG antibodies for quick \n and accurate diagnosis., B) First you identify the virus by performing cDNA sequencing.  You then develop a real time PCR kit for quick and accurate diagnosis., C) First you identify the virus by performing DNA sequencing. You then develop a PCR kit for  quick and accurate diagnosis, D) First you identify the virus using the information about the symptoms, provided by the affected patients. You then design a nested PCR kit based on the information for quick diagnosis.\nAnswer:",
+        "expected": "B",
+        "grader": "gpqa"
+      },
+      {
+        "task_id": "evalchemy-gpqa-diamond-20ed4672026508184fa916ac99cb500547b9625d465e911acd6e7318463d9a66",
+        "text": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Name reactions in chemistry refer to a specific set of well-known chemical reactions that are typically named after their discoverers or the scientists who made significant contributions to their development. These reactions have had a profound impact on the field of chemistry and are often used as fundamental building blocks in various chemical syntheses.\nIdentify the reactants for the following name reactions.\nA + H2SO4 ---> 2,8-dimethylspiro[4.5]decan-6-one\nB + BuLi + H+ ---> 4-methyl-1-phenylpent-3-en-1-ol\nOptions: A) A = 2,8-dimethylspiro[4.5]decan-6-ol, B = 4-methyl-1-phenylpent-3-en-1-one, B) A = 2,8-dimethylspiro[4.5]decan-6-ol, B = (((3-methylbut-2-en-1-yl)oxy)methyl)benzene, C) A = 2,7-dimethyloctahydronaphthalene-4a,8a-diol, B = 4-methyl-1-phenylpent-3-en-1-one, D) A = 2,7-dimethyloctahydronaphthalene-4a,8a-diol, B = (((3-methylbut-2-en-1-yl)oxy)methyl)benzene\nAnswer:",
+        "expected": "D",
+        "grader": "gpqa"
+      },
+      {
+        "task_id": "evalchemy-gpqa-diamond-7e05f37527b6f2d449fca9cfbc50f2e062a6e136f828942adccf458c667324a4",
+        "text": "Return your final response within \\boxed{} and only include the letter choice (A, B, C, or D) as your final response.\nProblem: Five binary compounds of fluorine with element Y are known. The bright-red substance A1 decomposes at 293 K into A2 (\u0277F=31,96%) and fluorine. A1 oxidizes xenon under normal conditions. A3 can also interact with xenon. A3 is obtained by fluorination of element Y with fluorine. By adding Y in a 1:1 molar ratio to a hot colorless concentrated solution of A4, A5 can be obtained. In water, A5 decomposes with the formation of two substances. Indicate the range in which the molecular weight of the substance A4 falls.\nOptions: A) 140-160, B) 110-130, C) 220-240, D) 160-180\nAnswer:",
+        "expected": "B",
+        "grader": "gpqa"
+      }
+    ],
+    "marin": [
+      {
+        "task_id": "gpqa-032d75afdb18e5a3e1f84be37454c5268d8c02fba63af15e43c3a3653f1a25e7",
+        "text": "Two quantum states with energies E1 and E2 have a lifetime of 10^-9 sec and 10^-8 sec, respectively. We want to clearly distinguish these two energy levels. Which one of the following options could be their energy difference so that they can be clearly resolved?\n\nA. 10^-8 eV\nB. 10^-11 eV\nC. 10^-9 eV\nD. 10^-4 eV\n\nChoose one option letter from A through D.",
+        "expected": "D",
+        "grader": "mcq"
+      },
+      {
+        "task_id": "gpqa-0ae86cbf3168626e7741fc61356a8c6c6561bc11d00c7f09bfe2b1ff89491234",
+        "text": "In the lab, a chemist discovers an unnamed bottle with a white solid inside. He gathers the following spectral information in order to identify the liquid. Make a reasonable structural suggestion for the unidentified drug using the information provided.\nMass: molecular ion peak at m/z = 156 (100%)\na peak at m/z = 158 (32%)\nIR : broad peak from 3500-2700 cm^-1, strong sharp peak at 1720 cm-1\n1H NMR: 11.0 ppm (s, 1H), 8.02 ppm (d, 2H), 7.72 (d, 2H)\n\nA. Phenyl chloroformate\nB. 2-chlorobenzoic acid\nC. 4-chlorobenzoic acid\nD. 3-Chloro-2-hydroxybenzaldehyde\n\nChoose one option letter from A through D.",
+        "expected": "C",
+        "grader": "mcq"
+      },
+      {
+        "task_id": "gpqa-0afb722cf474f7dfd57010f4f950aab7adc289b39838bc4d60f7abe3ef1af199",
+        "text": "A student performed an acid-catalyzed reaction of 3-methylpyrrolidine with compound A, the final product of the reaction is 1-(cyclohexylidenemethyl)-3-methylpyrrolidine. Select the suitable reagent (A) and catalyst (B) for the reaction.\n3-methylpyrrolidine + A (B, Heat, solvent) ---> 1-(cyclohexylidenemethyl)-3-methylpyrrolidine\n\nA. A = vinylcyclohexane, B = TsOH\nB. A = vinylcyclohexane, B = Acetic acid\nC. A = cyclohexanecarbaldehyde, B = Acetic acid\nD. A = cyclohexanecarbaldehyde, B = TsOH\n\nChoose one option letter from A through D.",
+        "expected": "D",
+        "grader": "mcq"
+      },
+      {
+        "task_id": "gpqa-0ba13af84ef550e1bfd36b360edd9adbea0d58ca4a4aa4c0cfb31e895269dd78",
+        "text": "A vector field f(r) falls off radially as 1/r^2 from the origin, i.e. the magnitude of the field is f(r) = 1/r^2. The field has non-zero component only along  the radial direction in spherical coordinates. Evaluate the volume integral of the divergence of the field, \u2207.f inside the volume of a sphere of radius R centred at the origin. Here, \u2207 and f both are implied as vectors. Which answer below is the most appropriate one for the answer of the integral?\n\nA. 1\nB. 0\nC. 4 \u03c0\nD. 4/3 \u03c0 R\n\nChoose one option letter from A through D.",
+        "expected": "C",
+        "grader": "mcq"
+      },
+      {
+        "task_id": "gpqa-0ee1ba162a950dc3caa4e157666dc56d688d335d38e709258930813fdccacedf",
+        "text": "1,3-dibromoadamantane is heated to 240C with an excess of KOH, creating a light yellow solid product 1, With 1H nmr spectrum: 4.79(2H), 2.41-2.23(10H), 1.94(2H) and a characteristic absorbance in the IR spectrum at 1720cm-1.\n\nThis product was then heated with an excess of aluminum isopropoxide, forming product 2.\n\nozone was bubbled through a solution of 2 at -78C, followed by addition of dimethylsulfide, forming product 3.\n\nin the 1H nmr spectrum of 3, what is the coupling pattern of the most deshielded hydrogen atom (excluding those that will exchange with deuterated solvent)?\n\nA. pentet\nB. doublet of triplets\nC. triplet\nD. triplet of triplets\n\nChoose one option letter from A through D.",
+        "expected": "D",
+        "grader": "mcq"
+      },
+      {
+        "task_id": "gpqa-0fa8b2704a325dd34237cbfcd5b90f0c2cc1e8e5ac3ad7637a4962be4ba557e9",
+        "text": "There has been an outbreak of an viral infectious disease in your city. You have been asked to design a molecular diagnostic kit for quick detection of this retrovirus. How would you go about designing this kit?\n\nA. First you identify the virus by performing cDNA sequencing.  You then develop a real time PCR kit for quick and accurate diagnosis.\nB. First you identify the virus using the information about the symptoms, provided by the affected patients. You then design a nested PCR kit based on the information for quick diagnosis.\nC. First you identify the IgG antibodies for the infection. You then develop an ELISA kit targeting IgG antibodies for quick \n and accurate diagnosis.\nD. First you identify the virus by performing DNA sequencing. You then develop a PCR kit for  quick and accurate diagnosis\n\nChoose one option letter from A through D.",
+        "expected": "A",
+        "grader": "mcq"
+      },
+      {
+        "task_id": "gpqa-10cec8cb8d649d9bf2657ee41aad7ca7f3a7f0d746ef437f8d6b95b79ccd0005",
+        "text": "Name reactions in chemistry refer to a specific set of well-known chemical reactions that are typically named after their discoverers or the scientists who made significant contributions to their development. These reactions have had a profound impact on the field of chemistry and are often used as fundamental building blocks in various chemical syntheses.\nIdentify the reactants for the following name reactions.\nA + H2SO4 ---> 2,8-dimethylspiro[4.5]decan-6-one\nB + BuLi + H+ ---> 4-methyl-1-phenylpent-3-en-1-ol\n\nA. A = 2,7-dimethyloctahydronaphthalene-4a,8a-diol, B = (((3-methylbut-2-en-1-yl)oxy)methyl)benzene\nB. A = 2,8-dimethylspiro[4.5]decan-6-ol, B = 4-methyl-1-phenylpent-3-en-1-one\nC. A = 2,8-dimethylspiro[4.5]decan-6-ol, B = (((3-methylbut-2-en-1-yl)oxy)methyl)benzene\nD. A = 2,7-dimethyloctahydronaphthalene-4a,8a-diol, B = 4-methyl-1-phenylpent-3-en-1-one\n\nChoose one option letter from A through D.",
+        "expected": "A",
+        "grader": "mcq"
+      },
+      {
+        "task_id": "gpqa-111aff14960632504ce39f76e27ee137147655b2f93e6368fb4859e8a0cd3e86",
+        "text": "Five binary compounds of fluorine with element Y are known. The bright-red substance A1 decomposes at 293 K into A2 (\u0277F=31,96%) and fluorine. A1 oxidizes xenon under normal conditions. A3 can also interact with xenon. A3 is obtained by fluorination of element Y with fluorine. By adding Y in a 1:1 molar ratio to a hot colorless concentrated solution of A4, A5 can be obtained. In water, A5 decomposes with the formation of two substances. Indicate the range in which the molecular weight of the substance A4 falls.\n\nA. 110-130\nB. 220-240\nC. 140-160\nD. 160-180\n\nChoose one option letter from A through D.",
+        "expected": "A",
+        "grader": "mcq"
+      }
+    ]
+  }
+}

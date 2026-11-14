@@ -652,6 +652,19 @@ occurrences with seed 0, looks up their complete normalized instruction hashes
 in the other source's full population, then searches remaining queries with
 128-permutation character-5-gram MinHash and 32 LSH bands. Long whole wrapper
 lines shared by at least 90% of a source panel are removed before near matching.
+For numeric, boxed-math and GPQA/MCQ grading contracts, the v4 matcher also removes
+the anchored AIME/GPQA prompt templates and normalizes math delimiters and token
+spacing. Literal syntax in other tasks is preserved. GPQA matching compares the full question and
+all four choice texts independently of their letter order; reference agreement
+compares the selected choice text. Different MMLU subjects cannot match through
+shared answer letters. When exactly one copy omits an Asymptote diagram, a
+`statement` receipt requires identical remaining problem text (at least 80
+characters), matching integer reference answers and matching assistant-prefill
+and tool-state hashes.
+Two supplied diagrams cannot match through this statement-only path. Integer
+answers compare across numeric and boxed-math graders, including leading zeros.
+The content cache version is `complete-context-v2`; older prepared caches are
+regenerated from their SHA-bound raw inputs before these comparisons.
 Complete conversation context is retained. Assistant prefills and tool state
 must agree before near matching can count a pair. Retrieved candidates are scored with word-trigram Jaccard; a score of at least
 0.90 counts as a near duplicate. The partner ID, score, reference-hash agreement
@@ -710,13 +723,22 @@ For a versioned survey rerun, use `source_neighbor_survey --survey URI
 --survey-sha256 SHA --output-root NEW_URI --allocated-cpus 16`. It retains every old pair, widens
 with full fingerprint hash evidence and a 256-task-per-source LSH discovery
 panel, then measures each selected pair against complete populations. It writes
-`source-identities-content-nn-v3.json`, `label-diff.json`, `openqa-integrity.json`
+`source-identities-content-nn-v4.json`, `label-diff.json`, `fold-diff.json`, `openqa-integrity.json`
 and `result.json`. Complete per-sample neighbors live under `neighbors/`; the
 survey includes bounded examples and their receipt URIs. The diff preserves
 old labels, request digests and acknowledgements. Full exact-question reference
 checks for the OpenQA pairs are checkpointed under `integrity/` as soon as they
 complete. Cross-source agreement cannot exclude an answer defect shared by
 both sources. Use a fresh output root; old evidence is never overwritten.
+
+For a focused audit, repeat `--source SOURCE_ID` for each source to compare.
+This measures every pair within that set, including pairs absent from the old
+shortlist, and retains every other review unchanged with its original method
+version and request-bound acknowledgement. `result.json` lists the remeasured sources and
+separates measured pair counts from the total retained reviews. `fold-diff.json`
+compares the old and new measurements under the 95% directed folding rule above;
+it does not compare against obsolete stored groups. Focused audits do not emit
+a reusable full-survey shortlist.
 
 During direction measurement, exact instruction hashes and disjoint conversation
 states are checked before loading text. A run without a frozen shortlist scans

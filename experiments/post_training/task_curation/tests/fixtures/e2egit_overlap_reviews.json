@@ -1,0 +1,204 @@
+{
+  "provenance": {
+    "survey_sha256": "bb490e2dc0bd361f6a697878702c6b227acc2aebeadc3826a39bd13821b96dc4"
+  },
+  "reviews": [
+    {
+      "similarity": {
+        "left": "TaskTrove:DCAgent__exp_rpt_e2egit-v2",
+        "right": "TaskTrove:laion__mix_h10_reward_proportional-v2",
+        "rank_score": 0.1765625,
+        "instruction_similarity": 0.109375,
+        "instruction_overlap": 0.15625,
+        "reference_overlap": 0.0,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": true
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.16620013995801258,
+        "reason": "Content NN A\u2192B=0.9958 (95% CI 0.9958-0.9958); B\u2192A=0.1662 (95% CI 0.1662-0.1662). Full exact fractions=0.9958/0.1662. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "f95106c56c5350cf368f111e0d3d6067b499b5c4d9c4c88183cd3e02eacda93a",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "c547b38568329e535f72410c92c8259dfa101d88151f047c95f38786c740e369",
+        "right_inputs_sha256": "a259e6bb2dfbe8c50b6501c4a93c521fd512e85178b9f6142a11659b53e49aa8",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 477,
+          "sampled": 477,
+          "matched": 475,
+          "fraction": 0.9958071278825996,
+          "ci_low": 0.9958071278825996,
+          "ci_high": 0.9958071278825996,
+          "exact_matched": 475,
+          "exact_fraction": 0.9958071278825996,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/c13d05e055716c4f6a2d0e38371d8d54e94a3c508d6e3df265746d15950be8cb.json",
+          "neighbors_sha256": "f8a2e9f052c680661932cab2454c8a0baa2d5436d09c5f9dc232eb0d331dacb4"
+        },
+        "right_to_left": {
+          "population": 2858,
+          "sampled": 2858,
+          "matched": 475,
+          "fraction": 0.16620013995801258,
+          "ci_low": 0.16620013995801258,
+          "ci_high": 0.16620013995801258,
+          "exact_matched": 475,
+          "exact_fraction": 0.16620013995801258,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/80c2820e3efee4ece0bf854a02cb2edd004c8d9d4b939e331b1d6370a2d65ac9.json",
+          "neighbors_sha256": "178ff7cef05eeeee782968113d0d701c27240607d16a6e491f2fc9acc7a951b6"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "TaskTrove:DCAgent__exp_rpt_e2egit-v2",
+        "right": "TaskTrove:laion__mix_h11_single_skill_only-v2",
+        "rank_score": 0.1765625,
+        "instruction_similarity": 0.109375,
+        "instruction_overlap": 0.15625,
+        "reference_overlap": 0.0,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": true
+      },
+      "verdict": {
+        "label": "partial_overlap",
+        "overlap_fraction": 0.1664917803427772,
+        "reason": "Content NN A\u2192B=0.9979 (95% CI 0.9979-0.9979); B\u2192A=0.1665 (95% CI 0.1665-0.1665). Full exact fractions=0.9979/0.1665. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "5a8aa4a8a71ebd0ea1fbe7d53e151cc3d503d0457f5beeb5d97ce7b8ff0ffb0e",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "c547b38568329e535f72410c92c8259dfa101d88151f047c95f38786c740e369",
+        "right_inputs_sha256": "ff3b28f722b3e4ca70e7077e0b6f8883b5ff212180a9cb4361075331f51ae183",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 477,
+          "sampled": 477,
+          "matched": 476,
+          "fraction": 0.9979035639412998,
+          "ci_low": 0.9979035639412998,
+          "ci_high": 0.9979035639412998,
+          "exact_matched": 476,
+          "exact_fraction": 0.9979035639412998,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/b399738993779f30a68b8cb3b008991a935df045e7943bf67e59036b0550f5d1.json",
+          "neighbors_sha256": "696c85580f16ea202a96ea6e010e82a2ccf49b676cc93c170cb2a0d82f1dc404"
+        },
+        "right_to_left": {
+          "population": 2859,
+          "sampled": 2859,
+          "matched": 476,
+          "fraction": 0.1664917803427772,
+          "ci_low": 0.1664917803427772,
+          "ci_high": 0.1664917803427772,
+          "exact_matched": 476,
+          "exact_fraction": 0.1664917803427772,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/7b0feea895c60ed0b414628ec65f8fe3fb52355f4fde95845ce777c3bcf66540.json",
+          "neighbors_sha256": "acff80de82bca2dc406871a5657c5d959e49819ddaa588b42ee427fa7f52b289"
+        }
+      }
+    },
+    {
+      "similarity": {
+        "left": "TaskTrove:laion__mix_h10_reward_proportional-v2",
+        "right": "TaskTrove:laion__mix_h11_single_skill_only-v2",
+        "rank_score": 1.0,
+        "instruction_similarity": 1.0,
+        "instruction_overlap": 1.0,
+        "reference_overlap": 0.0,
+        "test_overlap": 0.0,
+        "task_id_overlap": 0.0,
+        "url_overlap": 0.0,
+        "shared_lineage": true
+      },
+      "verdict": {
+        "label": "duplicate",
+        "overlap_fraction": 1.0,
+        "reason": "Content NN A\u2192B=0.9997 (95% CI 0.9997-0.9997); B\u2192A=0.9993 (95% CI 0.9993-0.9993). Full exact fractions=0.9997/0.9993. LSH retrieval is approximate; distinct means below the 1% reporting threshold, not proof of zero reuse."
+      },
+      "prompt_sha256": "00af09da35b83e0f0746399f64490d9fa9b2c2f95b7c8bb29fe2b6aef6ecc8a4",
+      "model": "deterministic:content-nn-v3",
+      "completion_id": "content-nn-v3",
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "acknowledgement": null,
+      "measurement": {
+        "version": "content-nn-v3",
+        "seed": 0,
+        "sample_size": 4096,
+        "left_inputs_sha256": "a259e6bb2dfbe8c50b6501c4a93c521fd512e85178b9f6142a11659b53e49aa8",
+        "right_inputs_sha256": "ff3b28f722b3e4ca70e7077e0b6f8883b5ff212180a9cb4361075331f51ae183",
+        "similarity_threshold": 0.9,
+        "duplicate_threshold": 0.98,
+        "partial_threshold": 0.01,
+        "left_to_right": {
+          "population": 2858,
+          "sampled": 2858,
+          "matched": 2857,
+          "fraction": 0.9996501049685095,
+          "ci_low": 0.9996501049685095,
+          "ci_high": 0.9996501049685095,
+          "exact_matched": 2857,
+          "exact_fraction": 0.9996501049685095,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/a278f01d86a067e3c8e5c02fd5e7d11a9e12ca6cb28ea10a82a5073117574707.json",
+          "neighbors_sha256": "4b0130ab2b8f17241f1822a3bb00c41fe9a2dd0b771d77fee75b5ddb538e7faa"
+        },
+        "right_to_left": {
+          "population": 2859,
+          "sampled": 2859,
+          "matched": 2857,
+          "fraction": 0.9993004547044421,
+          "ci_low": 0.9993004547044421,
+          "ci_high": 0.9993004547044421,
+          "exact_matched": 2857,
+          "exact_fraction": 0.9993004547044421,
+          "neighbors": [],
+          "neighbor_receipts_uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261113/content-nn-v3-full-f/neighbors/9cf212a5187ab2fb395f19395bf441c48e436e74ac37fa7a2e55ece2c93271f1.json",
+          "neighbors_sha256": "14dc3a5fc2efb092e1bddc8e9c587cf8c37fc7c155a080764102845059d05626"
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": "TaskTrove:DCAgent__exp_rpt_e2egit-v2",
+      "task_count": 477
+    },
+    {
+      "id": "TaskTrove:laion__mix_h10_reward_proportional-v2",
+      "task_count": 2858
+    },
+    {
+      "id": "TaskTrove:laion__mix_h11_single_skill_only-v2",
+      "task_count": 2859
+    }
+  ]
+}

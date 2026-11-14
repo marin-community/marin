@@ -114,7 +114,7 @@ class TaskNeighbor(BaseModel):
     task_id: str
     partner_task_id: str | None
     similarity: float
-    method: Literal["exact", "lsh", "unmatched"]
+    method: Literal["exact", "statement", "lsh", "unmatched"]
     reference_match: bool | None
     tests_match: bool | None
 
@@ -135,13 +135,13 @@ class DirectionalOverlap(BaseModel):
     neighbors_sha256: str | None = None
 
 
-CURRENT_OVERLAP_VERSION: Literal["content-nn-v3"] = "content-nn-v3"
+CURRENT_OVERLAP_VERSION: Literal["content-nn-v4"] = "content-nn-v4"
 
 
 class MeasuredOverlap(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    version: Literal["content-nn-v2", "content-nn-v3"] = CURRENT_OVERLAP_VERSION
+    version: Literal["content-nn-v2", "content-nn-v3", "content-nn-v4"] = CURRENT_OVERLAP_VERSION
     seed: int
     sample_size: int
     left_inputs_sha256: str | None = None

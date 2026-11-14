@@ -11,6 +11,7 @@ from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from heapq import nsmallest
+from typing import Literal
 
 import dupekit
 import pyarrow as pa
@@ -30,7 +31,10 @@ from taskcompendium.source_fingerprints import (
 )
 
 from experiments.post_training.task_curation.source_fingerprints import (
+    benchmark_choices,
+    benchmark_kind,
     normalized_instruction,
+    overlap_reference_hash,
     reference_test_hashes,
 )
 
@@ -44,6 +48,8 @@ BAND_ROWS = 4
 NGRAM_SIZE = 5
 BOILERPLATE_MIN_CHARACTERS = 80
 SHINGLE_CACHE_BYTES = 512 * 1024 * 1024
+ASY_DIAGRAM = re.compile(r"\[\s*asy\s*\].*?\[\s*/\s*asy\s*\]", re.IGNORECASE | re.DOTALL)
+MIN_STATEMENT_CHARACTERS = 80
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,7 @@ class TaskContent:
     reference_hash: str | None
     tests_hash: str
     state_hash: str
+    benchmark: Literal["math", "choice"] | None = None
 
 
 def content_rows(documents: Iterable[Mapping]) -> Iterable[TaskContent]:
@@ -67,8 +74,15 @@ def content_rows(documents: Iterable[Mapping]) -> Iterable[TaskContent]:
             if not isinstance(event, TextMessage) or event.role == "assistant"
         ]
         reference, tests = reference_test_hashes(task)
+        reference = overlap_reference_hash(task, reference)
         yield TaskContent(
-            task.id, canonical_sha256(normalized_instruction(task)), text, reference, tests, canonical_sha256(state)
+            task.id,
+            canonical_sha256(normalized_instruction(task)),
+            text,
+            reference,
+            tests,
+            canonical_sha256(state),
+            benchmark_kind(task),
         )
 
 
@@ -97,8 +111,37 @@ def wrapper_lines(rows: list[TaskContent]) -> set[str]:
 def normalized_content(row: TaskContent, wrappers: set[str]) -> TaskContent:
     text = "\n".join(line for line in row.text.splitlines() if line.strip() not in wrappers).strip()
     text = text or row.text
+    choices = benchmark_choices(text) if row.benchmark == "choice" else None
+    if choices is not None:
+        question, options = choices
+        text = question + "\nChoices:\n" + "\n".join(sorted(options))
     text = " ".join(unicodedata.normalize("NFKC", text).casefold().split())
-    return TaskContent(row.task_id, row.instruction_hash, text, row.reference_hash, row.tests_hash, row.state_hash)
+    if row.benchmark is None:
+        return TaskContent(row.task_id, row.instruction_hash, text, row.reference_hash, row.tests_hash, row.state_hash)
+    # These anchored benchmark templates contain no problem-specific information.
+    text = re.sub(
+        r"\A(user:\s*)?return your final response within \\boxed\{\} and only include the letter choice "
+        r"\(a, b, c, or d\) as your final response\.\s*",
+        r"\1",
+        text,
+    )
+    text = re.sub(r"\A(user:\s*)?problem:\s*", r"\1", text)
+    text = re.sub(r"\s*mark your solution with \\boxed\s+answer:\s*\Z", "", text)
+    text = re.sub(r"<br\s*/?>", " ", text)
+    text = re.sub(r"\\(?:begin|end)\{equation\*?\}|\\[()[\]]", " ", text)
+    text = re.sub(r"\$([^$]+)\$", r"\1", text)
+    text = " ".join(re.findall(r"\w+|[^\w\s]", text))
+    return TaskContent(
+        row.task_id, row.instruction_hash, text, row.reference_hash, row.tests_hash, row.state_hash, row.benchmark
+    )
+
+
+def statement_key(row: TaskContent) -> str | None:
+    """Require a complete prose statement and answer when one copy omits a diagram."""
+    text = " ".join(ASY_DIAGRAM.sub(" ", row.text).split())
+    if row.benchmark != "math" or row.reference_hash is None or len(text) < MIN_STATEMENT_CHARACTERS:
+        return None
+    return canonical_sha256((text, row.reference_hash, row.state_hash))
 
 
 def strip_boilerplate(rows: list[TaskContent]) -> list[TaskContent]:
@@ -156,6 +199,7 @@ class PopulationIndex:
         self._rows: list[TaskContent] | None = None
         self._wrappers: set[str] | None = None
         self.stripped: dict[str, list[int]] = defaultdict(list)
+        self.statements: dict[str, list[int]] = defaultdict(list)
         self.buckets: dict[tuple[int, tuple[int, ...]], list[int]] | None = None
         self._shingle_cache_limit = shingle_cache_bytes
         self._shingle_cache: OrderedDict[int, tuple[set[str], int]] = OrderedDict()
@@ -194,6 +238,9 @@ class PopulationIndex:
             self._rows = [self.normalized_row(row) for row in self.raw_rows]
             for index, row in enumerate(self._rows):
                 self.stripped[canonical_sha256((row.text, row.state_hash))].append(index)
+                key = statement_key(row)
+                if key is not None:
+                    self.statements[key].append(index)
         return self._rows
 
     def raw_sample(self, size: int) -> list[TaskContent]:
@@ -210,6 +257,7 @@ class PopulationIndex:
         prepared = {}
         missing = []
         for index, row in enumerate(queries):
+            method = "exact"
             candidates = self.exact.get(row.instruction_hash)
             matching_rows = self.raw_rows
             if not candidates and row.state_hash not in self.states:
@@ -219,6 +267,15 @@ class PopulationIndex:
                 prepared[index] = source.normalized_row(row) if source is not None else row
                 matching_rows = self.rows
                 candidates = self.stripped.get(canonical_sha256((prepared[index].text, row.state_hash)))
+                if not candidates:
+                    query = prepared[index]
+                    candidates = [
+                        item
+                        for item in self.statements.get(statement_key(query), ())
+                        # Different supplied diagrams must never collapse through prose alone.
+                        if bool(ASY_DIAGRAM.search(query.text)) != bool(ASY_DIAGRAM.search(self.rows[item].text))
+                    ]
+                    method = "statement"
             if candidates:
                 partner = min(
                     (matching_rows[item] for item in candidates),
@@ -228,7 +285,7 @@ class PopulationIndex:
                         candidate.task_id,
                     ),
                 )
-                result[index] = neighbor_receipt(row, partner, 1.0, "exact")
+                result[index] = neighbor_receipt(row, partner, 1.0, method)
             else:
                 missing.append(index)
         if missing:

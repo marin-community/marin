@@ -5,7 +5,7 @@
 
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import fsspec
@@ -22,11 +22,15 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
     PlainText,
+    ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
     ToolResult,
+    VerifyitGrader,
 )
+from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.source_fingerprints import (
     DirectionalOverlap,
     DuplicateLabel,
@@ -291,6 +295,108 @@ def test_neighbor_integrity_reports_answer_swap_even_with_identical_id_sets():
     result = exact_reference_integrity(original, PopulationIndex(swapped, {}))
     assert result["checked"] == result["mismatched"] == 10
     assert result["examples"][0]["reference_sha256"] != result["examples"][0]["partner_reference_sha256"]
+
+
+def benchmark_fixture_documents(filename: str) -> dict[str, list[dict]]:
+    fixture = json.loads((Path(__file__).parent / "fixtures" / filename).read_text())
+    populations = {}
+    for name, rows in fixture["sources"].items():
+        documents = []
+        for row in rows:
+            document = task_document(row["task_id"], row["text"])
+            if row.get("grader") in {"boxed_math", "gpqa"}:
+                document["grader"] = ScriptGrader(
+                    argv=("python3", "-m", "source_grader.main", row["grader"]),
+                    environment=EnvironmentRequirements(command_semantics="linux_process", packages_lock="fixture.lock"),
+                ).model_dump(mode="json")
+                document["resources"] = ResourceGroups(
+                    verifier=(inline_resource("config.json", json.dumps({"expected": row["expected"]}).encode()),)
+                ).model_dump(mode="json")
+            else:
+                parameters = {"expected": row["expected"]}
+                if row.get("grader") == "numeric":
+                    parameters.update(tolerance_abs=0.0, tolerance_rel=0.0)
+                elif row.get("grader") == "mcq":
+                    parameters["options"] = 4
+                document["grader"] = VerifyitGrader(
+                    mode=row.get("grader", "exact"),
+                    parameters=parameters,
+                ).model_dump(mode="json")
+            documents.append(document)
+        populations[name] = documents
+    return populations
+
+
+def test_real_aime24_wrappers_formatting_and_missing_diagrams_match_every_problem(tmp_path):
+    documents = benchmark_fixture_documents("aime24_overlap.json")
+    pair = pair_similarity(
+        "eval", fingerprint_source(documents["eval"], {}), "marin", fingerprint_source(documents["marin"], {})
+    )
+    populations = [PopulationIndex(list(content_rows(documents[name])), {}) for name in ("eval", "marin")]
+    direct = compare_populations(pair, *populations)
+    assert direct.verdict.label is DuplicateLabel.DUPLICATE
+    assert direct.measurement.left_to_right.matched == direct.measurement.right_to_left.matched == 30
+    statement_matches = [row for row in direct.measurement.left_to_right.neighbors if row.method == "statement"]
+    assert len(statement_matches) == 3
+    assert all(row.reference_match for row in statement_matches)
+    paths = []
+    for name, population in zip(("eval", "marin"), populations, strict=True):
+        path = tmp_path / f"{name}.parquet"
+        pq.write_table(pa.Table.from_pylist([asdict(row) for row in population.raw_rows]), path)
+        paths.append(path)
+    cached = compare_populations(pair, *(read_hash_population(path, {}) for path in paths))
+    assert cached == direct
+
+
+def test_real_mmlu_subjects_with_shared_answer_letters_remain_distinct():
+    documents = benchmark_fixture_documents("mmlu_overlap_negatives.json")
+    populations = [PopulationIndex(list(content_rows(rows)), {}) for rows in documents.values()]
+    pair = pair_similarity("algebra", fingerprint_source([], {}), "anatomy", fingerprint_source([], {}))
+    review = compare_populations(pair, *populations)
+    assert {row.reference_hash for row in populations[0].raw_rows} & {
+        row.reference_hash for row in populations[1].raw_rows
+    }
+    assert review.verdict.label is DuplicateLabel.DISTINCT
+    assert review.measurement.left_to_right.matched == review.measurement.right_to_left.matched == 0
+
+
+def test_real_gpqa_wrappers_and_shuffled_choices_preserve_questions_and_answer_content():
+    documents = benchmark_fixture_documents("gpqa_overlap.json")
+    populations = [PopulationIndex(list(content_rows(rows)), {}) for rows in documents.values()]
+    pair = pair_similarity("eval", fingerprint_source([], {}), "marin", fingerprint_source([], {}))
+    review = compare_populations(pair, *populations)
+    assert review.verdict.label is DuplicateLabel.DUPLICATE
+    assert review.measurement.left_to_right.matched == review.measurement.right_to_left.matched == 8
+    assert all(row.reference_match for row in review.measurement.left_to_right.neighbors)
+
+
+def test_nonbenchmark_literal_syntax_is_preserved_during_matching():
+    populations = [
+        PopulationIndex(list(content_rows([task_document("task", text)])), {})
+        for text in (r"Emit the literal string '\(x+1\)'.", "Emit the literal string 'x+1'.")
+    ]
+    pair = pair_similarity("escaped", fingerprint_source([], {}), "plain", fingerprint_source([], {}))
+    review = compare_populations(pair, *populations)
+    assert review.verdict.label is DuplicateLabel.DISTINCT
+    assert review.measurement.left_to_right.matched == review.measurement.right_to_left.matched == 0
+
+
+@pytest.mark.parametrize("difference", ["answer", "diagram", "number", "state"])
+def test_missing_diagram_matching_requires_problem_answer_and_state_agreement(difference):
+    documents = benchmark_fixture_documents("aime24_overlap.json")
+    left = next(row for row in content_rows(documents["eval"]) if "Rectangles" in row.text)
+    right = next(row for row in content_rows(documents["marin"]) if "Rectangles" in row.text)
+    if difference == "answer":
+        right = replace(right, reference_hash="conflicting-answer")
+    elif difference == "diagram":
+        # Reusing the prose and answer cannot override two different supplied diagrams.
+        right = replace(right, text=right.text + " [asy] " + "draw(other); " * 200 + " [/asy]")
+    elif difference == "number":
+        right = replace(right, text=right.text.replace("107", "108"))
+    else:
+        right = replace(right, state_hash="different-prefill")
+    query, target = PopulationIndex([left], {}), PopulationIndex([right], {})
+    assert target.neighbors([left], query)[0].similarity < 0.9
 
 
 def test_lsh_matches_full_population_after_shared_wrapper_is_stripped():
@@ -695,3 +801,20 @@ def test_duplicate_groups_real_numina_dapo_deepscaler_hendrycks_regression():
     assert not any(
         {r.similarity.left, r.similarity.right} == {"AI-MO:numina_math", "BytedTsinghua-SIA:dapo_math"} for r in reviews
     )
+
+
+def test_real_e2egit_subset_folds_under_directly_measured_larger_mix():
+    document = json.loads((Path(__file__).parent / "fixtures/e2egit_overlap_reviews.json").read_text())
+    reviews = [DuplicateReview.model_validate(row) for row in document["reviews"]]
+    standings = {row["id"]: SourceStanding(row["task_count"]) for row in document["sources"]}
+    groups = duplicate_groups(reviews, standings)
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.canonical_source_id == "TaskTrove:laion__mix_h11_single_skill_only-v2"
+    assert {member.source_id for member in group.members} == standings.keys()
+    e2egit = "TaskTrove:DCAgent__exp_rpt_e2egit-v2"
+    h10 = "TaskTrove:laion__mix_h10_reward_proportional-v2"
+    review = next(row for row in reviews if {row.similarity.left, row.similarity.right} == {e2egit, h10})
+    assert review.verdict.label is DuplicateLabel.PARTIAL_OVERLAP
+    assert review.measurement.left_to_right.exact_matched == 475
+    assert review.measurement.left_to_right.population == 477

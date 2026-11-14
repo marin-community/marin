@@ -4,16 +4,19 @@
 """Deterministic source fingerprints and candidate ranking over normalized tasks."""
 
 import itertools
+import json
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping
 from heapq import nsmallest
+from typing import Literal
 
 import dupekit
 import pyarrow as pa
 from taskcompendium.identity import canonical_sha256, task_identity
-from taskcompendium.models import TaskSpec, VerifyitGrader, format_conversation
+from taskcompendium.models import ScriptGrader, TaskSpec, VerifyitGrader, format_conversation
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
+from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.source_fingerprints import (
     DuplicateGroup,
     DuplicateReview,
@@ -37,6 +40,23 @@ MINHASH_PERMUTATIONS = 64
 MINHASH_NGRAM_SIZE = 5
 HASH_SAMPLE_SIZE = 128
 FINGERPRINT_BATCH_SIZE = 32
+GPQA_INLINE_CHOICES = re.compile(
+    r"\A(.*)\nOptions:\s*A\)(.*?)\s*,\s*B\)(.*?)\s*,\s*C\)(.*?)\s*,\s*D\)(.*?)\s*\nAnswer:\s*\Z",
+    re.DOTALL,
+)
+GPQA_LINE_CHOICES = re.compile(
+    r"\A(.*)\nA\.\s*(.*?)\nB\.\s*(.*?)\nC\.\s*(.*?)\nD\.\s*(.*?)"
+    r"\n\s*Choose one option letter from A through D\.\s*\Z",
+    re.DOTALL,
+)
+
+
+def benchmark_choices(text: str) -> tuple[str, tuple[str, ...]] | None:
+    """Parse the two GPQA prompt contracts without dropping any question content."""
+    match = GPQA_INLINE_CHOICES.fullmatch(text) or GPQA_LINE_CHOICES.fullmatch(text)
+    if match is None:
+        return None
+    return match[1], tuple(" ".join(value.split()) for value in match.groups()[1:])
 
 
 def normalized_instruction(task: TaskSpec) -> str:
@@ -55,6 +75,42 @@ def reference_test_hashes(task: TaskSpec) -> tuple[str | None, str]:
         canonical_sha256(reference) if reference else None,
         canonical_sha256({"grader": grader, "files": private_tests}),
     )
+
+
+def benchmark_kind(task: TaskSpec) -> Literal["math", "choice"] | None:
+    """Limit prompt normalization to the supported benchmark grading contracts."""
+    if isinstance(task.grader, VerifyitGrader):
+        if task.grader.mode == "numeric":
+            return "math"
+        if task.grader.mode == "mcq":
+            return "choice"
+    if isinstance(task.grader, ScriptGrader) and task.grader.argv[:-1] == ("python3", "-m", "source_grader.main"):
+        if task.grader.argv[-1] == "boxed_math":
+            return "math"
+        if task.grader.argv[-1] == "gpqa":
+            return "choice"
+    return None
+
+
+def overlap_reference_hash(task: TaskSpec, reference_hash: str | None) -> str | None:
+    """Compare integer answers and selected choice content across benchmark graders."""
+    expected = None
+    kind = benchmark_kind(task)
+    if kind is None:
+        return reference_hash
+    if isinstance(task.grader, VerifyitGrader):
+        expected = task.grader.parameters.get("expected")
+    elif isinstance(task.grader, ScriptGrader):
+        config = next((resource for resource in task.resources.verifier if resource.path == "config.json"), None)
+        if config is not None:
+            expected = json.loads(resource_bytes(config)).get("expected")
+    if kind == "choice":
+        choices = benchmark_choices(format_conversation(task.context.events))
+        if choices is not None and isinstance(expected, str) and expected in "ABCD" and len(expected) == 1:
+            return canonical_sha256({"choice_answer": choices[1][ord(expected) - ord("A")]})
+    elif isinstance(expected, (str, int)) and re.fullmatch(r"[+-]?\d+", str(expected).strip()):
+        return canonical_sha256({"integer_answer": int(expected)})
+    return reference_hash
 
 
 def fingerprint_source(documents: Iterable[Mapping], inputs: dict[str, str]) -> SourceFingerprint:

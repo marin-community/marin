@@ -35,7 +35,7 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import original_so
 logger = logging.getLogger(__name__)
 
 
-CONTENT_TEXT_VERSION: Final = "complete-context-v1"
+CONTENT_TEXT_VERSION: Final = "complete-context-v2"
 CONTENT_SCHEMA = pa.schema(
     [
         ("task_id", pa.string()),
@@ -44,6 +44,7 @@ CONTENT_SCHEMA = pa.schema(
         ("reference_hash", pa.string()),
         ("tests_hash", pa.string()),
         ("state_hash", pa.string()),
+        ("benchmark", pa.string()),
     ]
 )
 HASH_COLUMNS = [name for name in CONTENT_SCHEMA.names if name != "text"]
@@ -55,7 +56,7 @@ class PreparedPopulation(BaseModel):
     sha256: str
     inputs_sha256: str
     task_count: int
-    text_version: Literal["complete-context-v1"] = CONTENT_TEXT_VERSION
+    text_version: Literal["complete-context-v1", "complete-context-v2"] = CONTENT_TEXT_VERSION
 
 
 class PopulationLocations(BaseModel):
@@ -75,7 +76,7 @@ def population_preflight(survey: SourceIdentitySurvey, locations: PopulationLoca
     for source_id, fingerprint in survey.fingerprints.items():
         if fingerprint is None:
             continue
-        prepared = locations.prepared.get(source_id)
+        prepared = current_prepared_population(source_id, locations)
         if prepared is not None:
             if prepared.inputs_sha256 != canonical_sha256(fingerprint.inputs):
                 raise ValueError(f"Prepared inputs differ: {source_id}")
@@ -92,6 +93,11 @@ def population_preflight(survey: SourceIdentitySurvey, locations: PopulationLoca
     return {"prepared_sources": prepared_count, "located_files": located_files, "source_bucket": source_bucket}
 
 
+def current_prepared_population(source_id: str, locations: PopulationLocations) -> PreparedPopulation | None:
+    prepared = locations.prepared.get(source_id)
+    return prepared if prepared is not None and prepared.text_version == CONTENT_TEXT_VERSION else None
+
+
 def cache_population(
     source_id: str,
     fingerprint: SourceFingerprint,
@@ -102,7 +108,7 @@ def cache_population(
     source_bucket: str,
 ) -> Path:
     """Verify input bytes before extracting complete task content into a local cache."""
-    prepared = locations.prepared.get(source_id)
+    prepared = current_prepared_population(source_id, locations)
     cache_key = canonical_sha256(
         {
             "source": source_id,

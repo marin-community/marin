@@ -5,6 +5,7 @@
 
 import argparse
 import hashlib
+import itertools
 import json
 import logging
 import time
@@ -49,7 +50,7 @@ from experiments.post_training.task_curation.task_neighbors import (
     shingles,
     signatures,
 )
-from infra.marina.apps.rl_data_catalog.server.source_identity import original_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -280,11 +281,21 @@ def rerun(
     source_survey_uri: str,
     source_survey_sha256: str,
     shingle_cache_bytes: int = SHINGLE_CACHE_BYTES,
+    source_ids: set[str] | None = None,
 ) -> dict:
     output = StoragePath(output_root)
     started = time.monotonic()
     fingerprints = {key: value for key, value in survey.fingerprints.items() if value is not None}
     pairs = shortlist_pairs(survey, shortlist) if shortlist is not None else widened_pairs(survey)
+    if source_ids is not None:
+        if not source_ids or not source_ids <= fingerprints.keys() or only_openqa or shortlist is not None:
+            raise ValueError("Focused sources must name populated sources without another pair selector")
+        prior_pairs = {frozenset((pair.left, pair.right)): pair for pair in pairs}
+        pairs = [
+            prior_pairs.get(frozenset((left, right)))
+            or pair_similarity(left, fingerprints[left], right, fingerprints[right])
+            for left, right in itertools.combinations(sorted(source_ids, key=original_source_id), 2)
+        ]
     if only_openqa:
         pairs = [
             pair
@@ -292,11 +303,19 @@ def rerun(
             if pair.instruction_overlap >= 0.99
             and all("openq" in original_source_id(key) for key in (pair.left, pair.right))
         ]
-    needed = {key for pair in pairs for key in (pair.left, pair.right)} if only_openqa else set(fingerprints)
+    needed = (
+        {key for pair in pairs for key in (pair.left, pair.right)}
+        if only_openqa or source_ids is not None
+        else set(fingerprints)
+    )
     work_dir.mkdir(parents=True, exist_ok=True)
     # Cache the integrity-critical populations first; no population content leaves the region.
     sources = sorted(needed, key=lambda key: ("openq" not in original_source_id(key), original_source_id(key)))
-    population_preflight(survey, locations, "marin-us-east-02a")
+    population_preflight(
+        survey.model_copy(update={"fingerprints": {key: fingerprints[key] for key in needed}}),
+        locations,
+        "marin-us-east-02a",
+    )
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as executor:
         pending = {
             executor.submit(
@@ -315,10 +334,10 @@ def rerun(
             source = pending[future]
             paths[source] = future.result()
             logger.info("Prepared %d/%d populations: %s", len(paths), len(sources), original_source_id(source))
-    if not only_openqa and shortlist is None:
+    if not only_openqa and shortlist is None and source_ids is None:
         pairs = discover_pairs(paths, fingerprints, pairs)
     shortlist_uri, shortlist_sha256 = None, None
-    if not only_openqa:
+    if not only_openqa and source_ids is None:
         shortlist_uri = str(output / "pair-shortlist.json")
         shortlist_sha256 = write_pair_shortlist(shortlist_uri, survey, source_survey_uri, source_survey_sha256, pairs)
     directions: dict[tuple[str, str], DirectionalOverlap] = {}
@@ -382,18 +401,38 @@ def rerun(
                 "right_to_left": directions[pair.right, pair.left].model_dump(mode="json", exclude={"neighbors"}),
             }
         )
+    if source_ids is not None:
+        measured_keys = {frozenset((pair.left, pair.right)) for pair in pairs}
+        reviews.extend(
+            row for row in survey.reviews if frozenset((row.similarity.left, row.similarity.right)) not in measured_keys
+        )
+    standings = {key: SourceStanding(value.task_count) for key, value in fingerprints.items()}
+    groups = duplicate_groups(reviews, standings)
+    folds = [
+        {
+            member.source_id: group.canonical_source_id
+            for group in selected
+            for member in group.members
+            if member.source_id != group.canonical_source_id
+        }
+        for selected in (duplicate_groups(survey.reviews, standings), groups)
+    ]
+    fold_diff_uri = str(output / "fold-diff.json")
+    fold_diff_sha256 = write_json(
+        fold_diff_uri,
+        {
+            "sources": [
+                {"source": original_source_id(key), "before": folds[0].get(key), "after": folds[1].get(key)}
+                for key in sorted(folds[0].keys() | folds[1].keys(), key=original_source_id)
+                if folds[0].get(key) != folds[1].get(key)
+            ]
+        },
+    )
     result = survey.model_copy(
         update={
             "generated_at": datetime.now(UTC).isoformat(),
             "reviews": reviews,
-            "groups": duplicate_groups(
-                reviews,
-                {
-                    key: SourceStanding(value.task_count)
-                    for key, value in survey.fingerprints.items()
-                    if value is not None
-                },
-            ),
+            "groups": groups,
             "judge": None,
         }
     )
@@ -415,11 +454,15 @@ def rerun(
         "survey_sha256": sha,
         "label_diff_uri": str(output / "label-diff.json"),
         "label_diff_sha256": diff_sha,
+        "fold_diff_uri": fold_diff_uri,
+        "fold_diff_sha256": fold_diff_sha256,
         "integrity_uri": str(output / "openqa-integrity.json"),
         "integrity_sha256": integrity_sha,
         "source_snapshot": survey.snapshot_id,
         "population": "exact archived fingerprint.inputs; exclusions are not newly applied",
         "pairs": len(pairs),
+        "total_pairs": len(reviews),
+        "remeasured_sources": sorted(source_ids) if source_ids is not None else None,
         "prior_pairs": len(survey.reviews),
         "changed_pairs": sum(row["changed"] for row in diff),
         "labels": dict(Counter(row.verdict.label for row in reviews)),
@@ -460,6 +503,9 @@ def main() -> None:
     parser.add_argument("--shingle-cache-bytes", type=int, default=SHINGLE_CACHE_BYTES)
     parser.add_argument("--sample-size", type=int, default=SAMPLE_SIZE)
     parser.add_argument("--only-openqa", action="store_true")
+    parser.add_argument(
+        "--source", action="append", help="Remeasure every pair within these sources; retain other reviews"
+    )
     args = parser.parse_args()
     configure_coreweave_s3()
     payload = StoragePath(args.survey).read_bytes()
@@ -487,6 +533,7 @@ def main() -> None:
         source_survey_uri=args.survey,
         source_survey_sha256=args.survey_sha256,
         shingle_cache_bytes=args.shingle_cache_bytes,
+        source_ids={canonical_source_id(key) for key in args.source} if args.source else None,
     )
 
 
