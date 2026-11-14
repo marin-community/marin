@@ -18,12 +18,8 @@ import httpx
 import pytest
 import tomlkit
 from shellbox.backends.local.machine import LocalMachineFactory
-<<<<<<< HEAD
-from shellbox.machine import Backend, ExitReason, Result
-=======
 from shellbox.image import RegistryImage
-from shellbox.machine import Backend, UnsupportedMachineSpec
->>>>>>> e93288dfa9946587ac0b09cd88b9a7b9653ce67d
+from shellbox.machine import Backend, ExitReason, Result, UnsupportedMachineSpec
 from taskcompendium.harbor.adapter import write_harbor_task
 from taskcompendium.harbor.oracle import ORACLE_COMMAND_FILE, write_oracle_command
 from taskcompendium.harbor.protected_runtime import (
