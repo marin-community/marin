@@ -616,6 +616,10 @@ def filter_cohort(
                     if calibration_package_identity(package, calibration.oracle_kind) != package_identity:
                         raise ValueError(f"Calibration changed the task environment or scripts: {task.id}")
                 requirements = calibration.execution_requirements
+                final = calibration.attempts[-1]
+                policy = policies.get(task.id)
+                oracle_passed = policy.passes(final, checksum) if policy is not None else calibration.passed
+                scored_failure = oracle and calibration.oracle_kind == "original" and final.scored and not oracle_passed
                 if (
                     not is_nonagentic_task(task)
                     and task.execution_requirements is not None
@@ -629,12 +633,13 @@ def filter_cohort(
                 )
                 if (
                     not is_nonagentic_task(task)
+                    and not scored_failure
                     and (original / TASK_SPEC_FILE).is_file()
                     and verifier_requirements is None
                 ):
                     raise ValueError(f"Separate-role allocation is unqualified without verifier evidence: {task.id}")
                 final_package = Path(calibration.attempts[-1].result["config"]["task"]["path"])
-                if not is_nonagentic_task(task):
+                if not is_nonagentic_task(task) and not scored_failure:
                     task = calibrated_task_spec(
                         task, requirements, verifier_requirements, (final_package / "task.toml").read_bytes()
                     )
@@ -646,9 +651,7 @@ def filter_cohort(
                     .get("command", "")
                 )
                 incompatibility = source_environment_incompatibility(calibration.attempts[-1], source_setup)
-                final = calibration.attempts[-1]
                 control = controls.get(task.id)
-                policy = policies.get(task.id)
                 if policy is not None and (
                     policy.source_task_sha256 != mapping["task_sha256"]
                     or policy.source_task_checksum != mapping.get("source_task_checksum", checksum)
@@ -656,7 +659,6 @@ def filter_cohort(
                     or policy.input_cohort_sha256 != cohort_hash
                 ):
                     raise ValueError(f"Native success policy differs from the frozen source contract: {task.id}")
-                oracle_passed = policy.passes(final, checksum) if policy is not None else calibration.passed
                 if oracle_passed or (not oracle and control is not None and control.passed and control.trial == final):
                     reason = None
                 else:

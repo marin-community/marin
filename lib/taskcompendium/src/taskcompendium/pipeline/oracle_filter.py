@@ -1503,6 +1503,15 @@ class OracleFilterReceipt(BaseModel):
             observed_setup = entry.negative_control.setup_kind or NegativeControlSetupKind.NATIVE_SCRIPT
             if expected_setup != observed_setup:
                 raise ValueError(f"Negative-control preparation differs from the original source workload: {task.id}")
+        if (
+            entry.has_oracle
+            and entry.calibration.oracle_kind == "original"
+            and entry.exclusion_reason is OracleExclusionReason.ORACLE_FAILED
+            and entry.calibration.attempts[-1].scored
+            and entry.calibration.attempts[-1].result.get("task_checksum") == entry.harbor_task_checksum
+            and not entry.original_oracle_passed
+        ):
+            return False
         if task.execution_requirements is None:
             raise ValueError(f"SAMPLE/FULL admission requires explicit execution requirements: {task.id}")
         if task.execution_requirements != entry.calibration.execution_requirements:

@@ -2998,6 +2998,32 @@ Original trial JSON, calibration history and unknown allocation fields remain
 unchanged. Actorless trials retain an absent actor and their observed oracle
 helper allocation.
 
+For the separate small-source authority, `decision` references a
+`LegacySmallRoleAdoptionDecision` JSON file. Its
+`input_index_sha256` binds the evidence object's `input_partition`,
+`input_partition_sha256` binds `audit`, and `audit_sha256` binds an additional audit
+manifest that records file hashes and outcome counts. Add `small_scope` to
+`evidence.json`, alongside `input_partition`, `audit`, and `decision`:
+
+```json
+{
+  "small_scope": {
+    "audit_manifest": {"uri": "...", "sha256": "..."},
+    "ruling": {"uri": "...", "sha256": "..."}
+  }
+}
+```
+
+The decision retains its original `ruling.path` and digest; the published ruling
+is a copy of that text with the same digest. The collector verifies every indexed receipt and
+archive, including unrequested members, and checks the decision's
+`adopted_count` and `excluded_scored_failures` against the complete partition.
+The approved small-source partition contains 249 passes and one scored failure.
+Only the passes receive qualification. A conclusive original scored failure
+remains excluded with its original TaskSpec and raw history, without requiring a
+passing allocation qualification. Existing receipts omit `small_scope` and
+serialize exactly as before.
+
 Qualification does not supply a workspace negative control or content review.
 Qualified tasks still use the full-population collector and its grading/network
 checks. Workspace tasks also require the [negative controls below](#workspace-oracle-negative-controls).

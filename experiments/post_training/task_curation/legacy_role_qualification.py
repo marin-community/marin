@@ -7,7 +7,7 @@ import hashlib
 import json
 
 from finestore.rl.curation import ContentEvidenceReference
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExecutionRequirements, TaskSpec
@@ -15,6 +15,9 @@ from taskcompendium.pipeline.legacy_roles import (
     LegacyRoleAdoptionDecision,
     LegacyRoleAllocation,
     LegacyRoleQualificationReceipt,
+    LegacySmallRoleAdoptionDecision,
+    LegacySmallRoleScope,
+    require_legacy_adoption_scope,
 )
 from taskcompendium.pipeline.oracle_filter import ResourceCalibrationReceipt
 
@@ -27,6 +30,7 @@ class LegacyRoleQualificationEvidence(BaseModel):
     input_partition: ContentEvidenceReference
     audit: ContentEvidenceReference
     decision: ContentEvidenceReference
+    small_scope: LegacySmallRoleScope | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 def _verified_bytes(reference: ContentEvidenceReference) -> bytes:
@@ -49,20 +53,69 @@ def _allocation(observation: dict | None, deadlines: ExecutionRequirements) -> L
     )
 
 
+def _require_small_partition(inputs: dict, audit: dict, manifest: dict, decision: LegacySmallRoleAdoptionDecision):
+    entries = {entry["task_id"]: entry for entry in inputs["entries"]}
+    rows = {row["task_id"]: row for row in audit["rows"]}
+    total = decision.adopted_count + decision.excluded_scored_failures
+    files = {item["path"]: item["sha256"] for item in manifest["files"]}
+    if (
+        len(entries) != len(inputs["entries"])
+        or len(rows) != len(audit["rows"])
+        or entries.keys() != rows.keys()
+        or len(entries) != total
+        or inputs["tasks"] != total
+        or inputs["source_commands_executed"] != 0
+        or manifest["version"] != 1
+        or manifest["producer_revision"] != decision.producer_revision
+        or manifest["compatible_completed_passes"] != decision.adopted_count
+        or manifest["scored_failure_held_unchanged"] != decision.excluded_scored_failures
+        or manifest["providers"] != 0
+        or manifest["source_commands"] != 0
+        or files.get("index.json") != decision.input_index_sha256
+        or files.get("partition-v2.json") != decision.input_partition_sha256
+        or audit["counts"]
+        != {"compatible_completed_pass": decision.adopted_count, "held": decision.excluded_scored_failures}
+    ):
+        raise ValueError("Legacy small adoption requires its complete offline partition and exact outcome counts")
+    passes = failures = 0
+    for task_id, entry in entries.items():
+        row = rows[task_id]
+        if (
+            {key: row[key] for key in entry} != entry
+            or not entry["scored"]
+            or row["observation"]["source_commands"] != 0
+            or row["observation"]["provider_creations"] != 0
+        ):
+            raise ValueError("Legacy small audit changed its frozen membership or performed execution")
+        if entry["passed"] and row["outcome"] == "compatible_completed_pass":
+            passes += 1
+        elif not entry["passed"] and row["outcome"] == "held":
+            failures += 1
+        else:
+            raise ValueError("Legacy small audit changed a scored source outcome")
+    if (passes, failures) != (decision.adopted_count, decision.excluded_scored_failures):
+        raise ValueError("Legacy small audit differs from the adopted pass/failure partition")
+
+
 def legacy_role_qualifications(
     evidence: LegacyRoleQualificationEvidence, task_ids: frozenset[str]
 ) -> dict[str, LegacyRoleQualificationReceipt]:
     """Verify audit membership and original bytes before qualifying the requested subset."""
     inputs = json.loads(_verified_bytes(evidence.input_partition))
     audit = json.loads(_verified_bytes(evidence.audit))
-    decision = LegacyRoleAdoptionDecision.model_validate_json(_verified_bytes(evidence.decision))
-    if (
-        decision.input_partition_sha256 != evidence.input_partition.sha256
-        or decision.audit_sha256 != evidence.audit.sha256
-        or decision.producer_revision != inputs["backend_revision"]
-    ):
+    decision = TypeAdapter(LegacyRoleAdoptionDecision | LegacySmallRoleAdoptionDecision).validate_json(
+        _verified_bytes(evidence.decision)
+    )
+    require_legacy_adoption_scope(decision, evidence.input_partition, evidence.audit, evidence.small_scope)
+    if decision.producer_revision != inputs["backend_revision"]:
         raise ValueError("Legacy adoption decision scope differs from the requested partition or audit")
-    _verified_bytes(decision.ruling)
+    if isinstance(decision, LegacySmallRoleAdoptionDecision):
+        assert evidence.small_scope is not None
+        _verified_bytes(evidence.small_scope.ruling)
+        manifest = json.loads(_verified_bytes(evidence.small_scope.audit_manifest))
+        _require_small_partition(inputs, audit, manifest, decision)
+    else:
+        _verified_bytes(decision.ruling)
     if (
         audit["version"] != 2
         or audit["input_partition_sha256"] != evidence.input_partition.sha256
@@ -81,21 +134,26 @@ def legacy_role_qualifications(
     qualified = {}
     for entry in inputs["entries"]:
         task_id = entry["task_id"]
-        if task_id not in task_ids:
+        if task_id not in task_ids and evidence.small_scope is None:
             continue
         row = rows[task_id]
-        if row["outcome"] != "compatible_completed_pass":
+        if row["outcome"] != "compatible_completed_pass" and evidence.small_scope is None:
             continue
-        if {key: row[key] for key in entry} != entry or not entry["passed"] or not entry["scored"]:
+        if {key: row[key] for key in entry} != entry or not entry["scored"]:
             raise ValueError("Legacy allocation audit changed its original input or source outcome")
         observation = row["observation"]
         mapping = json.loads(
             _verified_bytes(ContentEvidenceReference(uri=entry["receipt_uri"], sha256=entry["receipt_sha256"]))
         )["receipt"]
         calibration = ResourceCalibrationReceipt.model_validate(mapping["calibration"])
-        if not calibration.passed or calibration.oracle_kind != "original":
-            raise ValueError("Legacy qualification cannot promote a source failure or calibration-only trial")
         final = calibration.attempts[-1]
+        if (
+            calibration.oracle_kind != "original"
+            or calibration.passed != entry["passed"]
+            or not final.scored
+            or (not calibration.passed and evidence.small_scope is None)
+        ):
+            raise ValueError("Legacy qualification cannot change the original scored source outcome")
         archive = ContentEvidenceReference(uri=entry["trial_archive_uri"], sha256=entry["trial_archive_sha256"])
         members = verified_archive_members(archive, {"original-packet/task-spec.json", "original-packet/task.toml"})
         task = TaskSpec.model_validate_json(members["original-packet/task-spec.json"])
@@ -108,8 +166,12 @@ def legacy_role_qualifications(
             or observation["archive_sha256"] != archive.sha256
             or observation["raw_result_sha256"] != final.result_sha256
             or observation["phase_deadlines"] != final.execution_requirements.model_dump(mode="json")
+            or observation["source_runtime"]["runtime_sha256"] != entry["runtime_sha256"]
+            or mapping["runtime_sha256"] != entry["runtime_sha256"]
         ):
             raise ValueError("Legacy audit belongs to another original packet or final production trial")
+        if not calibration.passed:
+            continue
         deadlines = final.execution_requirements
         verifier = _allocation(observation["verifier"], deadlines)
         if verifier is None:
@@ -138,8 +200,10 @@ def legacy_role_qualifications(
             audit=evidence.audit,
             decision=evidence.decision,
             adoption_decision=decision,
+            small_scope=evidence.small_scope,
         )
         if task_id in qualified:
             raise ValueError("Legacy input partition repeats a task")
-        qualified[task_id] = qualification
+        if task_id in task_ids:
+            qualified[task_id] = qualification
     return qualified
