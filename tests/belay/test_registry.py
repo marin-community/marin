@@ -104,6 +104,25 @@ def test_load_rejects_an_unquoted_all_digit_commit(tmp_path):
         R.load_registry(tmp_path)
 
 
+def test_load_checks_baseline_controls_against_the_recipes(tmp_path):
+    (trial,) = _experiment().trials
+    R.write_experiment(_experiment(trials=(dataclasses.replace(trial, baseline_control="ckpt1.c001"),)), tmp_path)
+    with pytest.raises(ValueError, match=r"ckpt1\.c001"):
+        R.load_registry(tmp_path)
+    (tmp_path / "recipes").mkdir()
+    recipe = tmp_path / "recipes" / "ckpt1.yaml"
+    recipe.write_text(
+        "id: ckpt1\nname: Ckpt 1\nbranch: b\ncommit: 8415c3ce84\n"
+        "controls:\n- id: c001\n  wandb: [ctrl-s0]\n  loss: [3.0]\n  rung: d512\n  steps: 2760\n"
+    )
+    (experiment,) = R.load_registry(tmp_path)
+    assert experiment.trials[0].baseline_control == "ckpt1.c001"
+    # A control at another rung is not this trial's baseline.
+    recipe.write_text(recipe.read_text().replace("rung: d512", "rung: d768"))
+    with pytest.raises(ValueError, match=r"ckpt1\.c001"):
+        R.load_registry(tmp_path)
+
+
 def test_validate_rejects_duplicate_slugs():
     with pytest.raises(ValueError):
         R.validate([_experiment(), _experiment(id="X0002")])
