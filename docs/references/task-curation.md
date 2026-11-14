@@ -1644,7 +1644,10 @@ Use a fresh phase directory under the existing calibration root so `collect` can
 inspect both phases through one `--jobs-dir`. No prior file is overwritten.
 The runner verifies the task, native files, declared limits, original backend
 configuration and pinned backend source before dispatch. The existing budget of
-three infrastructure attempts applies independently to this approved phase.
+three infrastructure attempts applies independently to this approved phase. A new scored
+original negative keeps `oracle_failed`; a measured source-declared deadline keeps
+its phase timeout exclusion. Earlier infrastructure history does not mask these
+new source outcomes.
 For partially declared tasks, the phase records `initial_requirements` and starts
 at the parent's final calibrated allocation. Declared and preserved source limits
 remain fixed; an earlier OOM increase is retained instead of starting over.
