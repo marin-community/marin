@@ -181,7 +181,8 @@ class TestVerifierCapturesOutput:
     shaping for a whole run.
     """
 
-    async def test_output_comes_from_the_teed_files(self):
+    @pytest.mark.parametrize("exit_code", [0, 17])
+    async def test_output_comes_from_the_teed_files(self, exit_code):
         """The tee'd files hold the full text, so they win over the ExecResult."""
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = _create_task_dir(Path(tmp))
@@ -201,7 +202,7 @@ class TestVerifierCapturesOutput:
             env.os = TaskOS.LINUX
             env.exec = AsyncMock(
                 return_value=ExecResult(
-                    return_code=0, stdout="truncated", stderr="truncated"
+                    return_code=exit_code, stdout="truncated", stderr="truncated"
                 )
             )
 
@@ -215,6 +216,7 @@ class TestVerifierCapturesOutput:
 
             assert result.stdout == "7 passed, 3 failed\n"
             assert result.stderr == "a warning\n"
+            assert result.exit_code == exit_code
 
     async def test_output_falls_back_to_the_exec_result(self):
         """No tee'd file: report what the environment returned."""

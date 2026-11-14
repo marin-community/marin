@@ -5,8 +5,9 @@
 
 import itertools
 import re
+import sys
 import unicodedata
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from heapq import nsmallest
@@ -42,6 +43,7 @@ PERMUTATIONS = 128
 BAND_ROWS = 4
 NGRAM_SIZE = 5
 BOILERPLATE_MIN_CHARACTERS = 80
+SHINGLE_CACHE_BYTES = 512 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -125,8 +127,9 @@ def lsh_band_keys(signature: list[int]) -> Iterable[tuple[int, tuple[int, ...]]]
 
 
 def jaccard_similarity(left: set[str], right: set[str]) -> float:
-    union = left | right
-    return len(left & right) / len(union) if union else 0.0
+    intersection = len(left & right)
+    union = len(left) + len(right) - intersection
+    return intersection / union if union else 0.0
 
 
 class PopulationIndex:
@@ -137,6 +140,8 @@ class PopulationIndex:
         rows: list[TaskContent],
         inputs: dict[str, str],
         normalized_loader: Callable[[], list[TaskContent]] | None = None,
+        *,
+        shingle_cache_bytes: int = SHINGLE_CACHE_BYTES,
     ):
         if not rows:
             raise ValueError("Overlap requires nonempty source populations")
@@ -152,6 +157,25 @@ class PopulationIndex:
         self._wrappers: set[str] | None = None
         self.stripped: dict[str, list[int]] = defaultdict(list)
         self.buckets: dict[tuple[int, tuple[int, ...]], list[int]] | None = None
+        self._shingle_cache_limit = shingle_cache_bytes
+        self._shingle_cache: OrderedDict[int, tuple[set[str], int]] = OrderedDict()
+        self._shingle_cache_bytes = 0
+
+    def _candidate_shingles(self, index: int) -> set[str]:
+        cached = self._shingle_cache.get(index)
+        if cached is not None:
+            self._shingle_cache.move_to_end(index)
+            return cached[0]
+        result = shingles(self.rows[index].text)
+        size = sys.getsizeof(result) + sum(sys.getsizeof(value) for value in result)
+        if size > self._shingle_cache_limit:
+            return result
+        while self._shingle_cache_bytes + size > self._shingle_cache_limit:
+            _, (_, removed_bytes) = self._shingle_cache.popitem(last=False)
+            self._shingle_cache_bytes -= removed_bytes
+        self._shingle_cache[index] = result, size
+        self._shingle_cache_bytes += size
+        return result
 
     def normalized_row(self, row: TaskContent) -> TaskContent:
         if self._normalized_loader is not None:
@@ -224,7 +248,7 @@ class PopulationIndex:
                     partner = self.rows[candidate]
                     if partner.state_hash != query.state_hash:
                         continue
-                    similarity = jaccard_similarity(query_shingles, shingles(partner.text))
+                    similarity = jaccard_similarity(query_shingles, self._candidate_shingles(candidate))
                     if similarity > score:
                         best, score = partner, similarity
                 result[index] = neighbor_receipt(query, best, score, "lsh" if best else "unmatched")
