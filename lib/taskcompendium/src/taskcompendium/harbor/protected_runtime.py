@@ -6,7 +6,7 @@
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
@@ -41,7 +41,6 @@ print(json.dumps({"executable": sys.executable, "version": list(sys.version_info
 class RuntimeRole(StrEnum):
     ORACLE_CONTROL = "oracle_control"
     SOURCE_GRADER = "source_grader"
-    HOST_FRAMEWORK = "host_framework"
 
 
 class RuntimeFile(BaseModel):
@@ -99,12 +98,6 @@ class ProtectedRuntimeBinding(BaseModel):
     task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     runtime_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     roles: dict[RuntimeRole, ExpectedRuntime]
-
-    @model_validator(mode="after")
-    def source_roles_only(self):
-        if RuntimeRole.HOST_FRAMEWORK in self.roles:
-            raise ValueError("A source-runtime projection cannot change the trusted host judge framework")
-        return self
 
     def require_task(self, task: TaskSpec) -> None:
         if self.task_sha256 != canonical_sha256(task.model_dump(mode="json")):

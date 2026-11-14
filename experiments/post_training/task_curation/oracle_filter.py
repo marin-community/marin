@@ -185,11 +185,16 @@ def row_task(row: dict) -> TaskSpec | None:
     return TaskSpec.model_validate_json(serialized) if serialized is not None else None
 
 
-def row_runtime_hash(row: dict) -> str | None:
+def row_runtime(row: dict) -> dict | None:
     if "lowered_task_spec" in row:
-        return canonical_sha256(json.loads(row["lowered_task_spec"])["runtime"])
+        return json.loads(row["lowered_task_spec"])["runtime"]
     runtime = row.get("runtime")
-    return canonical_sha256(json.loads(runtime)) if runtime is not None else None
+    return json.loads(runtime) if runtime is not None else None
+
+
+def row_runtime_hash(row: dict) -> str | None:
+    runtime = row_runtime(row)
+    return canonical_sha256(runtime) if runtime is not None else None
 
 
 def collect_trials(jobs: Path) -> dict[tuple[str, str], list[OracleTrialReceipt]]:

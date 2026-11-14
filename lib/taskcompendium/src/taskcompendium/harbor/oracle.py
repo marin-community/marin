@@ -4,13 +4,15 @@
 """Bind a declared source OracleCommand to its unchanged task and runtime."""
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import AnswerType, TaskSpec
-from taskcompendium.pipeline.models import OracleCommand
+from taskcompendium.pipeline.fingerprints import callable_identity
+from taskcompendium.pipeline.models import ControlSubmission, OracleCommand
 from taskcompendium.runtime.resources import has_oracle_solution, resource_bytes
 
 ORACLE_COMMAND_FILE = "oracle-command.json"
@@ -46,8 +48,7 @@ class OracleCommandBinding(BaseModel):
     runtime_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     resources_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
-    source_definition_path: str = Field(min_length=1)
-    source_definition_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    control_identity: dict[str, JsonValue]
     submission: OracleCommand
 
     def require_task(self, task: TaskSpec) -> None:
@@ -71,23 +72,24 @@ def read_oracle_command(directory: Path) -> OracleCommandBinding | None:
 def write_oracle_command(
     task: TaskSpec,
     runtime: dict,
-    submission: OracleCommand,
+    golden: Callable[[TaskSpec], ControlSubmission | None],
     directory: Path,
     *,
     source_revision: str,
-    source_definition_path: str,
-    source_definition_sha256: str,
-) -> None:
-    """Freeze an explicit source control beside a Harbor TaskSpec packet."""
+) -> bool:
+    """Write a conversation command when the declared source control supplies one."""
+    submission = golden(task)
+    if not isinstance(submission, OracleCommand) or submission.answer_file is None:
+        return False
     binding = OracleCommandBinding(
         task_sha256=canonical_sha256(task.model_dump(mode="json")),
         runtime_sha256=canonical_sha256(runtime),
         resources_sha256=oracle_resource_identity(task),
         source_revision=source_revision,
-        source_definition_path=source_definition_path,
-        source_definition_sha256=source_definition_sha256,
+        control_identity=callable_identity(golden),
         submission=submission,
     )
     binding.require_task(task)
     with (directory / ORACLE_COMMAND_FILE).open("x") as stream:
         stream.write(binding.model_dump_json(indent=2) + "\n")
+    return True

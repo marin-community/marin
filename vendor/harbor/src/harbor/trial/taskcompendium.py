@@ -12,6 +12,8 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 
+from upath import UPath
+
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.machines import grading_machine_factory, prepare_machine, task_machine
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
@@ -47,7 +49,6 @@ from taskcompendium.models import (
     TaskSpec,
     VerifyitGrader,
     judge_spec,
-    grader_workspace,
 )
 from taskcompendium.runtime.grading import (
     VERDICT_PATH,
@@ -55,6 +56,7 @@ from taskcompendium.runtime.grading import (
     grade_in_sandbox,
 )
 from taskcompendium.runtime.output_capture import captured_output_files
+from taskcompendium.runtime.oracle import oracle_actor_required, oracle_environment
 from verifyit.modes.grade_judge import (
     API_KEY_ENV,
     BASE_URL_ENV,
@@ -154,10 +156,12 @@ class _TrialMachineFactory:
         trial: "TaskSpecTrial",
         relay: ModelRelay | None,
         stack: AsyncExitStack,
-        role: RuntimeRole,
+        observation_role: RuntimeRole | None,
+        usage_path: UPath | None,
     ):
         self.factory, self.trial, self.relay, self.stack = factory, trial, relay, stack
-        self.role = role
+        self.observation_role = observation_role
+        self.usage_path = usage_path
 
     @property
     def backend(self):
@@ -177,13 +181,14 @@ class _TrialMachineFactory:
                 judge=self.relay,
                 candidate=None,
             )
-            await self.trial._observe_runtime(machine, self.role)
-            if self.role is RuntimeRole.ORACLE_CONTROL:
+            if self.observation_role is not None:
+                await self.trial._observe_runtime(machine, self.observation_role)
+            if self.usage_path is None:
                 return machine
             measured = await _MeasuredMachine.start(
                 machine,
                 self.trial.verdicts,
-                self.trial.paths.verifier_dir / "resource-usage.json",
+                self.usage_path,
             )
             self.stack.push_async_callback(measured.finish_usage)
         except BaseException:
@@ -337,14 +342,20 @@ class TaskSpecTrial(Trial):
         self.factory = local_machine_factory(**kwargs)
         if self.factory.cgroup_parent is None:
             raise ValueError("Declared TaskSpec CPU and memory require cgroup enforcement")
-        if actor_machine_required(task):
+        required_actor = actor_machine_required(task)
+        if isinstance(self.agent, TaskSpecOracleAgent) and self.agent.command is not None:
+            required_actor = oracle_actor_required(task)
+        if required_actor:
             factory = self.factory
             if (
                 isinstance(self.agent, TaskSpecOracleAgent)
                 and self.runtime_binding is not None
                 and RuntimeRole.ORACLE_CONTROL in self.runtime_binding.roles
             ):
-                factory = _TrialMachineFactory(self.factory, self, None, self._owned, RuntimeRole.ORACLE_CONTROL)
+                factory = _TrialMachineFactory(
+                    self.factory, self, None, self._owned,
+                    observation_role=RuntimeRole.ORACLE_CONTROL, usage_path=None,
+                )
             machine = await self._await_phase(
                 self._owned.enter_async_context(
                     task_machine(
@@ -425,18 +436,17 @@ class TaskSpecTrial(Trial):
         if self.machine is not None or not isinstance(self.agent, TaskSpecOracleAgent) or self.agent.command is None:
             yield self.machine
             return
-        if task.grader.environment is None:
-            raise ValueError("An actor-less OracleCommand requires its original grader environment")
-        environment = task.grader.environment
-        if environment.working_directory is None:
-            environment = environment.model_copy(update={"working_directory": grader_workspace(task.grader)})
+        environment = oracle_environment(task, self.agent.command.submission)
         async with AsyncExitStack() as stack:
             machine = await self._await_phase(
                 stack.enter_async_context(
                     prepare_machine(
                         environment,
                         task.resources.all + task.resources.worker,
-                        _TrialMachineFactory(self.factory, self, None, stack, RuntimeRole.ORACLE_CONTROL),
+                        _TrialMachineFactory(
+                            self.factory, self, None, stack,
+                            observation_role=RuntimeRole.ORACLE_CONTROL, usage_path=None,
+                        ),
                         self.runtime,
                         cleanup_timeout=self.config.trial_cleanup_grace_sec,
                     )
@@ -451,7 +461,7 @@ class TaskSpecTrial(Trial):
                 await measured.finish_usage()
 
     async def _observe_runtime(self, machine: Machine, role: RuntimeRole) -> None:
-        if self.runtime_binding is None or role is RuntimeRole.HOST_FRAMEWORK:
+        if self.runtime_binding is None:
             return
         expected = self.runtime_binding.roles.get(role)
         if expected is None:
@@ -511,7 +521,11 @@ class TaskSpecTrial(Trial):
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
-                    _TrialMachineFactory(self.factory, self, relay, stack, RuntimeRole.SOURCE_GRADER),
+                    _TrialMachineFactory(
+                        self.factory, self, relay, stack,
+                        observation_role=RuntimeRole.SOURCE_GRADER,
+                        usage_path=self.paths.verifier_dir / "resource-usage.json",
+                    ),
                     self.runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )
@@ -568,7 +582,10 @@ class TaskSpecTrial(Trial):
         async with AsyncExitStack() as stack:
             factory = await stack.enter_async_context(
                 grading_machine_factory(
-                    _TrialMachineFactory(self.factory, self, relay, stack, RuntimeRole.HOST_FRAMEWORK),
+                    _TrialMachineFactory(
+                        self.factory, self, relay, stack, observation_role=None,
+                        usage_path=self.paths.verifier_dir / "resource-usage.json",
+                    ),
                     self.runtime,
                     cleanup_timeout=self.config.trial_cleanup_grace_sec,
                 )

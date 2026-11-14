@@ -1499,7 +1499,8 @@ reconversion can change importer provenance even when task files stay identical.
 
 Conversation oracle packets can include `oracle-command.json`, binding the
 source's declared `OracleCommand` to the exact TaskSpec, runtime and resource
-bytes, with its pinned source definition. The command runs inside production
+bytes, with the pinned revision and canonical callable identity of its declared
+`Controls.golden`. The command runs inside production
 Harbor Trial. An actor-less task uses a separate machine of its original grader
 environment in the grader workspace; it keeps the original agent budgets and
 deadline and closes before verification. The captured answer becomes the final
@@ -1704,10 +1705,18 @@ Prepare a frozen, retained cohort with:
 
 ~~~bash
 uv run python -m experiments.post_training.task_curation.task_spec_harbor \
-  --cohort /path/to/converted/tasks.parquet --output /path/to/task-spec-packages-v1
+  --cohort /path/to/converted/tasks.parquet --output /path/to/task-spec-packages-v1 \
+  --source-revision PINNED_CODE_REVISION \
+  --controls experiments.post_training.task_curation.datasets.tasktrove.math:MATH_CONTROLS
 ~~~
 
 This writes an unchanged private `task-spec.json` payload and the task map. The
+optional `--controls module:attribute` selects the source's declared `Controls`
+object; a conversation `OracleCommand` writes its bound packet before checksums
+are measured. `--source-revision` pins that control's code. For an explicitly
+repaired runtime, `--runtime-expectations` accepts a JSON mapping from source
+machine roles to expected interpreter and file facts and writes the protected
+binding before the same checksums. Source commands are not executed by export. The
 wrapper's `task.toml` supplies missing CPU, RAM, disk, agent-timeout and
 verifier-timeout budgets, starting at 1 CPU, 2048 MiB RAM, 2048 MiB disk, 300
 seconds and 60 seconds. Source limits remain fixed. Preparation does not apply deduplication or lexical drops.
