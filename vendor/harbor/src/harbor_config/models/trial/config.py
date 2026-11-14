@@ -9,6 +9,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     PlainSerializer,
     SerializationInfo,
     field_serializer,
@@ -358,6 +359,7 @@ class TaskConfig(BaseModel):
     overwrite: bool = False
     download_dir: Path | None = None
     source: str | None = None
+    source_runtime: dict[str, JsonValue] | None = None
 
     @model_validator(mode="after")
     def validate_task_source(self):
