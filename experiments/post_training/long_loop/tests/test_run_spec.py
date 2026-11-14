@@ -62,6 +62,7 @@ def test_emitted_rl_validation_and_eval_settings_come_from_the_pinned_spec(tmp_p
             assert compiled["ray"][key] == value
         emitted = compiled["skyrl"]
         assert emitted["trainer"]["seed"] == resolved[stage]["seed"]
+        assert emitted["terminal_bench_config"]["harbor"]["eval_daytona_provisioning"] == "declarative"
         if stage == "rl":
             assert emitted["trainer"]["max_ckpts_to_keep"] == resolved[stage]["retained"]
         source = yaml.safe_load(yaml.safe_dump(resolved[stage]["config"]))
