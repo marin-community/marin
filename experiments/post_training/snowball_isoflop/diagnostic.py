@@ -21,6 +21,7 @@ class RuntimeControl(StrEnum):
     SERIAL = "serial-collectives"
     LAUNCH_BLOCKING = "launch-blocking"
     NO_COMMAND_BUFFER = "no-command-buffer"
+    SYNCHRONOUS_LAUNCHES = "synchronous-launches"
 
 
 def diagnostic_pod(cell: Cell) -> TrainLmOnPodConfig:
@@ -32,6 +33,9 @@ def diagnostic_pod(cell: Cell) -> TrainLmOnPodConfig:
         environment["CUDA_LAUNCH_BLOCKING"] = "1"
     elif cell.phase == f"diagnostic-{RuntimeControl.NO_COMMAND_BUFFER}":
         environment["XLA_FLAGS"] += " --xla_gpu_enable_command_buffer="
+    elif cell.phase == f"diagnostic-{RuntimeControl.SYNCHRONOUS_LAUNCHES}":
+        environment["XLA_FLAGS"] += " --xla_gpu_enable_command_buffer="
+        environment["CUDA_LAUNCH_BLOCKING"] = "1"
     else:
         raise ValueError(f"Unknown runtime control: {cell.phase}")
     return replace(pod, env_vars=environment)
