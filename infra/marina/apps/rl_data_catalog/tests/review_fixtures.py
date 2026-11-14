@@ -8,14 +8,37 @@ from finestore.rl.curation import SourceDeclaration
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 
 
+def pending_review_declaration() -> SourceDeclaration:
+    base = contamination_declarations()[0][1].model_dump(mode="json")
+    return SourceDeclaration.model_validate(
+        {
+            **base,
+            "id": "Marin:review-pending",
+            "name": "review-pending",
+            "display_name": "review-pending",
+            "upstream_dataset": "review-pending",
+            "upstream_name": "review-pending",
+            "oversight": "sample",
+            "quality_result": None,
+            "independent_qc": None,
+        }
+    )
+
+
 def review_declarations() -> list[tuple[bool, SourceDeclaration]]:
     base = contamination_declarations()[0][1].model_dump(mode="json")
     cases = [
+        ("sample-content", 2, 0, 0, "none", 2, False),
+        ("sample-unconclusive", 0, 2, 0, "none", 2, True),
+        ("full-waiver-unconclusive", 0, 2, 1, "full", 2, False),
         ("sample-complete", 2, 0, 0, "sample", None, False),
         ("sample-uncertain", 1, 1, 0, "sample", None, True),
         ("full-inflight", 1, 0, 2, "full", 1, True),
         ("full-uncertain", 2, 1, 0, "full", 3, True),
         ("full-complete", 3, 0, 0, "full", 3, False),
+        ("full-waiver", 1, 1, 1, "full", 2, False),
+        ("full-false-complete", 1, 0, 2, "full", 1, True),
+        ("sample-false-waiver", 1, 0, 1, "sample", 1, True),
     ]
     return [
         (
@@ -29,6 +52,20 @@ def review_declarations() -> list[tuple[bool, SourceDeclaration]]:
                     "upstream_dataset": name,
                     "upstream_name": name,
                     "oversight": oversight,
+                    "quality_result_finalization": (
+                        "complete"
+                        if name == "full-false-complete"
+                        else (
+                            "accepted_incomplete"
+                            if name in {"full-waiver", "sample-false-waiver", "full-waiver-unconclusive"}
+                            else None
+                        )
+                    ),
+                    "quality_result_waiver": (
+                        {"uri": "https://example.org/waiver-with-exact-reasons.json", "sha256": "a" * 64}
+                        if name in {"full-waiver", "sample-false-waiver", "full-waiver-unconclusive"}
+                        else None
+                    ),
                     "quality_result": {
                         "reviewed": reviewed,
                         "uncertain_count": uncertain,

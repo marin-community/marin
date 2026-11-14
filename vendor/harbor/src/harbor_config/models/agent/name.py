@@ -12,7 +12,6 @@ class AgentName(str, Enum):
     PI = "pi"
     TASK_SPEC_CHAT = "task-spec-chat"
     TASK_SPEC_RESPONSE = "task-spec-response"
-    TASK_SPEC_EMPTY = "task-spec-empty"
 
     @classmethod
     def values(cls) -> set[str]:

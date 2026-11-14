@@ -161,6 +161,7 @@ function sourceRow(row, others, canonical) {
     examples.title = row.coverage?.basis || 'No coverage measurement in this catalog';
     const use = node('td', useLabels[value(row, 'use')], 'use-cell');
     const quality = node('td'); quality.append(node('span', row.quality, `chip level level-${row.quality.toLowerCase()}`));
+    if (row.quality_review_status) quality.firstElementChild.title = row.quality_review_status;
     const result = node('td'), key = resultKey(row);
     const provisional = row.result && row.result_provisional;
     const badge = node('span', resultLabels[key] + (provisional ? ' · provisional' : ''), `chip quality-${resultClasses[key]}${provisional ? ' result-provisional' : ''}`);
@@ -188,6 +189,7 @@ function details(row) {
   const controls = row.curation?.verification;
   const fields = [
     ['Origin', originOf(row)], ['Build path', row.build_path], ['Status', row.status], ['Quality', row.quality], ['Result', resultLabels[resultKey(row)] + (row.result && row.result_provisional ? ' · provisional' : '')],
+    ['Content review', row.quality_review_status],
     ['Unique examples', row.within_source_dedup?.unique_count], ['Raw converted tasks', row.within_source_dedup?.raw_count], ['Within-source duplicates dropped', row.within_source_dedup?.within_source_duplicates], ['Use', useLabels[value(row, 'use')]],
     ['Coverage basis', row.coverage?.basis], ['Coverage gap', row.coverage?.unavailable_reason],
     ['Oracle validation', row.oracle_validation && (oracleValidationLabels[row.oracle_validation] ?? row.oracle_validation)],

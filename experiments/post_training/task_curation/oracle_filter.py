@@ -124,13 +124,6 @@ def calibration_package_identity(path: Path, oracle_kind: str) -> str:
     return canonical_sha256({"task": document, "files": files})
 
 
-def trial_receipt(path: Path) -> OracleTrialReceipt:
-    document = decode_json_value(path.read_text())
-    native = Path(document["config"]["task"]["path"])
-    package = harbor_inspection("tasks", [str(native)])[str(native)]
-    return receipt_from_trial(path, document, package["task_checksum"])
-
-
 def receipt_from_trial(path: Path, document: dict, native_checksum: str) -> OracleTrialReceipt:
     """Read a trial's evidence against its measured native checksum."""
     native = Path(document["config"]["task"]["path"])
@@ -612,10 +605,10 @@ def calibrated_task(
                 stderr=subprocess.STDOUT,
                 check=True,
             )
-        paths = list((attempt / "jobs").rglob("result.json"))
-        if len(paths) != 1:
+        trials = [trial for group in collect_trials(attempt / "jobs").values() for trial in group]
+        if len(trials) != 1:
             raise ValueError(f"Expected exactly one persisted production trial for {task.id}")
-        trial = trial_receipt(paths[0])
+        trial = trials[0]
         if retry_context is not None:
             trial = trial.model_copy(update={"infrastructure_retry": retry_context})
         attempts.append(trial)
