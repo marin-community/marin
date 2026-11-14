@@ -35,6 +35,8 @@ from experiments.post_training.task_curation.crosscode_python import (
     repair_task,
     structured_grader,
 )
+from experiments.post_training.task_curation.daytona_census import measure_envelopes
+from experiments.post_training.task_curation.daytona_identity import native_task_toml
 from experiments.post_training.task_curation.tasktrove.harbor_export import harbor_payload
 
 NATIVE_SCRIPT = Path(__file__).parent / "fixtures/crosscode-native-test.sh"
@@ -99,6 +101,26 @@ def test_repaired_fragment_exports_the_exact_oracle_and_a_separate_private_grade
     wrapper = tomllib.loads((directory / "task.toml").read_text())
     assert (wrapper["agent"]["timeout_sec"], wrapper["verifier"]["timeout_sec"]) == (900.0, 720.0)
     assert TaskSpec.model_validate_json((directory / "task-spec.json").read_text()) == repaired
+
+
+def test_repaired_fragment_census_uses_declared_images_and_preserved_source_configuration():
+    pytest.importorskip("harbor_config")
+    original = original_task().model_copy(update={"tags": ("harbor",)})
+    repaired = [
+        repair_task(original, actor_image=image, grader_image=GRADER_IMAGE).task
+        for image in (ACTOR_IMAGE, "registry.example/mirrored-actor@sha256:" + "a" * 64)
+    ]
+    documents = [(task.model_dump(mode="json"), {}) for task in repaired]
+
+    measured = measure_envelopes(documents)
+
+    assert measured.converted == measured.machine_slots == 2
+    assert len(measured.snapshot_sizes) == 2
+    assert measured.execution_failure_tasks == 0
+    assert measured.actor_sources == {"docker_image": 2}
+    assert measured.roles["grader"]["daytona"]["machine_slots"] == 2
+    assert not measured.roles["grader"]["daytona"]["failures"]
+    assert native_task_toml(documents[0][0]) == native_task_toml(original.model_dump(mode="json"))
 
 
 @pytest.mark.parametrize("conflict", ["current_config", "explicit_limits"])
