@@ -61,6 +61,14 @@ tbody tr:hover { background: #f7faf7; }
 .num { font-variant-numeric: tabular-nums; text-align: right; }
 th.num button { justify-content: flex-end; }
 .source-table { table-layout: auto; }
+.source-table.resized-columns { table-layout: fixed; }
+.source-table.resized-columns td { overflow-wrap: anywhere; }
+.source-table.resized-columns .dataset-links > a { max-width: 100%; overflow-wrap: anywhere; }
+.source-table.resized-columns td:has(.duplicate-toggle) .source-name { max-width: calc(100% - 28px); }
+.column-resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 12px; cursor: col-resize; touch-action: none; z-index: 3; }
+.column-resize-handle::after { content: ''; position: absolute; top: 25%; bottom: 25%; left: 5px; width: 2px; background: var(--line); }
+.column-resize-handle:hover::after, .column-resize-handle:focus-visible::after { background: var(--green); }
+.resizing-column, .resizing-column * { cursor: col-resize !important; user-select: none; }
 .source-name { border: 0; background: none; padding: 0; color: #244a37; font-size: 14px; font-weight: 550; text-align: left; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-name:hover { text-decoration: underline; }
 .source-subtitle { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

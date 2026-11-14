@@ -124,10 +124,40 @@ function backendLabels(source) {
     return {key, fit, label: fit.support === 'supported' ? name : `${name}: ${status}${reasons.length ? ': ' + reasons.join(', ') : ''}`};
   });
 }
-function backendLink(sourceId) {
+function daytonaEvidenceRows(source, cap) {
+  const declaration = source.declaration || source, safety = source.daytona;
+  const snapshots = safety.snapshots ?? declaration.daytona_snapshot_count;
+  const limit = safety.limit ?? declaration.daytona_snapshot_threshold ?? cap;
+  const ops = receiptLink('https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#snapshot-preflight-and-reclamation', 'How to make it safe: Daytona operations ↗');
+  return [
+    ['Actor verdict', daytonaLabel(safety)],
+    ['Unique actor snapshot identities', snapshots ?? 'Not measured'],
+    ['Snapshot cap', limit ?? 'Not recorded'],
+    ['Snapshot budget rule', limit == null ? 'Not recorded' : `More than ${limit} unique actor snapshot identities is UNSAFE`],
+    ['Actor machine slots', declaration.daytona_machine_slots ?? 'Not measured'],
+    ['Actor roles', declaration.daytona_roles],
+    ['Failed Daytona execution requirements', safety.unsafe_reasons ?? declaration.daytona_unsafe_reasons],
+    ['Requirement details', safety.unsafe_details ?? declaration.daytona_unsafe_details],
+    ['Affected actor tasks', safety.unsafe_counts ?? declaration.daytona_unsafe_counts],
+    ['Execution failures', declaration.daytona_execution_failures ?? 'Not measured'],
+    ['Measurement basis', safety.basis || declaration.daytona_count_basis || safety.reason],
+    ['Exemption', declaration.daytona_exemption],
+    ['Actor census input and provenance', declaration.actor_census_input],
+    ['Actor census receipt', declaration.actor_census_input?.evidence_url && receiptLink(declaration.actor_census_input.evidence_url, 'Actor census receipt ↗')],
+    ['Operations', ops],
+  ];
+}
+function daytonaTooltip(source, cap) {
+  return daytonaEvidenceRows(source, cap).filter(([, value]) => value != null).map(([label, value]) => {
+    const text = value instanceof Node ? `${value.textContent} ${value.href || ''}` : typeof value === 'object' ? JSON.stringify(value) : value;
+    return `${label}: ${text}`;
+  }).join('\n');
+}
+function backendLink(source, cap) {
   const anchor = node('a', 'Backends ›', 'evidence-link backends-link');
-  anchor.href = `backends.html#${new URLSearchParams({source_id: sourceId})}`;
-  anchor.setAttribute('aria-label', `Backend evidence for ${sourceId}`);
+  anchor.href = `backends.html#${new URLSearchParams({source_id: source.id})}`;
+  anchor.title = daytonaTooltip(source, cap);
+  anchor.setAttribute('aria-label', `Backend evidence for ${source.id}. Daytona ${daytonaLabel(source.daytona)}.`);
   return anchor;
 }
 function gradingChips(source) {

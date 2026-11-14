@@ -17,6 +17,7 @@ async function render(sourceId) {
     item.append(/^(https|s3|gs):/.test(uri) ? receiptLink(uri, uri) : node('code', uri), ' · ', node('code', digest)); inputs.append(item);
   }
   const sections = {
+    'daytona-evidence': daytonaEvidenceRows(source, source.daytona_snapshot_limit),
     census: [
       ['Measurement basis', census?.basis ?? 'Not measured'],
       ['Unassessed reason', census?.reason],

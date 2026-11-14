@@ -6,10 +6,10 @@ const useLabels = {train: 'Training', eval: 'Evaluation', unknown: 'Unknown'};
 const oracleValidationLabels = {executed: 'Oracle executed', verifier_executed: 'Verifier executed', skipped: 'Skipped'};
 const columns = [
   ['display_name', 'Source'], ['examples', 'Examples'], ['filtration', 'Filtration'], ['use', 'Use'], ['quality', 'Quality'], ['result', 'Result'],
-  ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['daytona', 'Daytona'], ['backends', 'Backends'], ['grading', 'Grading'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'], ['difficulty', 'Difficulty'],
+  ['issue_rate', 'Issue rate'], ['contamination', 'Contamination'], ['overlap', 'Overlap'], ['backends', 'Backends'], ['grading', 'Grading'], ['area', 'Top curriculum area'], ['updated', 'Last updated'], ['evidence', 'Evidence'], ['difficulty', 'Difficulty'],
 ];
 const qualityOrder = {QUICK: 0, SAMPLE: 1, FULL: 2};
-const state = {sources: [], sort: 'display_name', direction: 1, origin: 'all', syncedAt: null};
+const state = {sources: [], sort: 'display_name', direction: 1, origin: 'all', syncedAt: null, daytonaLimit: null};
 const day = value => value ? new Date(value).toLocaleDateString('en-US', {month: 'short', day: '2-digit', year: 'numeric', timeZone: 'UTC'}) : '—';
 
 const originLabels = {tasktrove: 'TaskTrove', evalchemy: 'Evalchemy', harbor_hub: 'Harbor Hub', nemotron: 'Nemotron', 'Task Trove': 'TaskTrove'};
@@ -23,7 +23,6 @@ function value(row, key) {
   if (key === 'result') return resultKey(row);
   if (key === 'contamination') return row.contamination_status;
   if (key === 'overlap') return row.contamination_status === 'NOT MEASURED' ? null : row.lexical_contamination?.contaminated_tasks;
-  if (key === 'daytona') return row.daytona.state;
   if (key === 'backends') return backendLabels(row).map(item => item.label).join('; ');
   if (key === 'grading') return Object.keys(row.grading_environment?.required_counts || {}).join('; ');
   if (key === 'area') return row.coverage?.top_area?.name;
@@ -89,15 +88,6 @@ function contaminationCell(row) {
   cell.title = contaminationText(row) + '. Open Evidence for the measured input, exclusions and current release pin.';
   return cell;
 }
-function daytonaCell(row) {
-  const cell = node('td'), daytona = row.daytona;
-  const safe = daytona.state === 'safe';
-  const label = daytonaLabel(daytona);
-  const chip = node('span', label, `chip quality-${safe ? 'good' : daytona.state === 'unsafe' ? 'bad' : 'unassessed'}`);
-  chip.title = daytona.reason || daytona.basis || '';
-  cell.append(chip);
-  return cell;
-}
 function renderTabs() {
   const eligible = state.sources.filter(row => $('show-all').checked || shownByDefault(row));
   const origins = ['all', ...[...new Set(state.sources.map(originOf))].sort()];
@@ -113,7 +103,7 @@ function renderTabs() {
 function render() {
   renderTabs();
   $('headers').replaceChildren(...columns.map(([key, title]) => {
-    const th = node('th'); th.scope = 'col';
+    const th = node('th'); th.scope = 'col'; th.setAttribute('aria-label', title);
     if (['examples', 'issue_rate', 'overlap'].includes(key)) th.className = 'num';
     if (['evidence', 'examples'].includes(key) || (key === 'difficulty' && $('difficulty-model').value === 'all')) {
       th.append(node('span', title, 'header-label')); return th;
@@ -137,6 +127,7 @@ function render() {
     return [sourceRow(row, others), ...(open ? others.map(other => sourceRow(other, [], row)) : [])];
   }));
   $('empty').hidden = displayed.length > 0;
+  AtlasColumns.attach(document.querySelector('.source-table'), columns);
   const hidden = state.sources.length - state.sources.filter(row => $('show-all').checked || shownByDefault(row)).length;
   const folded = rows.length - displayed.length;
   $('visible-count').textContent = `${number.format(displayed.length)} displayed sources` +
@@ -188,9 +179,9 @@ function sourceRow(row, others, canonical) {
     const evidence = node('td'), link = node('a', 'Evidence →', 'evidence-link'); link.href = evidenceLink(row); evidence.append(link);
     const contamination = contaminationCell(row);
     const difficulty = node('td', undefined, 'difficulty-cell'); difficulty.append(AtlasDifficulty.comparison(row.difficulty));
-    const backends = node('td', undefined, 'backends-cell'); backends.append(backendLink(row.id));
+    const backends = node('td', undefined, 'backends-cell'); backends.append(backendLink(row, state.daytonaLimit));
     const grading = node('td'); grading.append(gradingChips(row));
-    tr.append(name, examples, filtration, use, quality, result, issueRate, contamination, overlap, daytonaCell(row), backends, grading, area, updated, evidence, difficulty); return tr;
+    tr.append(name, examples, filtration, use, quality, result, issueRate, contamination, overlap, backends, grading, area, updated, evidence, difficulty); return tr;
 }
 function details(row) {
   $('detail-name').textContent = row.display_name; $('detail-notes').textContent = row.notes;
@@ -277,6 +268,7 @@ async function load() {
   const [data, inventory] = await Promise.all([json('api/sources'), json('measurements/oracle-inventory.json')]);
   state.sources = data.sources.map(source => ({...source, oracle_inventory: boundOracleInventory(source, inventory)}));
   state.syncedAt = data.synced_at;
+  state.daytonaLimit = data.daytona_snapshot_limit;
   $('message').hidden = true;
   $('snapshot-info').textContent = `Last updated ${day(data.synced_at)}`;
   readLocation();
@@ -320,6 +312,7 @@ $('difficulty-model').addEventListener('change', () => {
   update();
 });
 $('show-all').addEventListener('change', () => update());
+$('reset-column-widths').addEventListener('click', () => AtlasColumns.reset(document.querySelector('.source-table'), columns));
 $('filters').addEventListener('submit', event => event.preventDefault());
 $('search').addEventListener('input', () => update(true));
 $('close-details').addEventListener('click', () => $('details').close());
@@ -337,7 +330,7 @@ window.addEventListener('popstate', () => { readLocation(); render(); });
 $('export').addEventListener('click', () => {
   const quote = item => `"${String(item ?? '').replaceAll('"', '""')}"`;
   const fields = columns.filter(([key]) => key !== 'evidence');
-  const cell = (row, key) => key === 'quality' ? row.quality : key === 'daytona' ? row.daytona.state : value(row, key);
+  const cell = (row, key) => key === 'quality' ? row.quality : value(row, key);
   const csv = [fields.map(([, title]) => quote(title)).join(','), ...filtered().map(row => fields.map(([key]) => quote(cell(row, key))).join(','))].join('\r\n');
   const url = URL.createObjectURL(new Blob([csv], {type: 'text/csv;charset=utf-8'}));
   const anchor = node('a'); anchor.href = url; anchor.download = 'rl-data-atlas.csv'; anchor.click();

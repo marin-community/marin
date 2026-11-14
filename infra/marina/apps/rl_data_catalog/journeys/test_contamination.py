@@ -228,8 +228,10 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
     expect(page.locator("#rows tr")).to_have_count(25)
-    chip = page.locator('tr[data-source-id="Marin:clean"] td:nth-child(10) .chip')
-    expect(chip).to_have_text("UNSAFE: too_many_snapshots, unbuilt_image")
+    tooltip = page.locator('tr[data-source-id="Marin:clean"] .backends-link').get_attribute("title")
+    assert tooltip is not None and "UNSAFE: too_many_snapshots, unbuilt_image" in tooltip
+    assert "Unique actor snapshot identities: 11" in tooltip and "Snapshot cap: 10" in tooltip
+    expect(page.get_by_role("columnheader", name="Daytona", exact=True)).to_have_count(0)
     expect(page.get_by_role("columnheader", name="Backends")).to_be_visible()
     expect(page.get_by_role("columnheader", name="Grading")).to_be_visible()
     expect(page.get_by_role("columnheader", name="Examples", exact=True).get_by_role("button")).to_have_count(0)
@@ -375,6 +377,14 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     page.locator('tr[data-source-id="Marin:clean"] .backends-link').click()
     expect(page).to_have_url(re.compile(r"/backends\.html#source_id=Marin%3Aclean$"))
     expect(page.locator("#title")).to_have_text("clean")
+    expect(page.locator("#daytona-evidence")).to_contain_text("UNSAFE: too_many_snapshots, unbuilt_image")
+    expect(page.locator("#daytona-evidence")).to_contain_text("More than 10 unique actor snapshot identities is UNSAFE")
+    expect(page.locator("#daytona-evidence")).to_contain_text("One actor declares an unbuilt image")
+    expect(page.locator("#daytona-evidence")).to_contain_text("f" * 64)
+    expect(page.get_by_role("link", name="How to make it safe: Daytona operations ↗")).to_have_attribute(
+        "href",
+        "https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#snapshot-preflight-and-reclamation",
+    )
     expect(page.locator("#fit .backend-table tbody tr")).to_have_count(3)
     expect(page.locator("#fit")).to_contain_text("docker image")
     expect(page.locator("#fit")).to_contain_text("packages lock")
@@ -400,6 +410,7 @@ def test_backend_link_opens_role_fit_and_survey_provenance(journey: Journey, the
     journey.shoot(f"backends-{theme}-{width}")
     page.evaluate("location.hash = 'source_id=Marin%3Aeval'")
     expect(page.locator("#title")).to_have_text("eval")
+    expect(page.locator("#daytona-evidence")).to_contain_text("N/A")
     local = page.locator("#fit tbody tr").filter(has=page.get_by_role("cell", name="LOCAL", exact=True))
     expect(local.locator("td").nth(2)).to_have_text("N/A (no role): 3")
     expect(local.locator("td").nth(3)).to_have_text("supported: 3")

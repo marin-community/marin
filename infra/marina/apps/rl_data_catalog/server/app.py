@@ -481,6 +481,7 @@ def create_api(services: AppletServices) -> FastAPI:
             "result": result(declaration, review),
             "issue_rate": issue_rate(declaration, review),
             "daytona": daytona(declaration, DAYTONA_SAFE_SNAPSHOT_LIMIT),
+            "daytona_snapshot_limit": DAYTONA_SAFE_SNAPSHOT_LIMIT,
             "updated_at": load["loaded_at"],
             "catalog": {"root": load["catalog_root"], "snapshot_id": load["snapshot_id"]},
         }
