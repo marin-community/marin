@@ -57,6 +57,7 @@ from experiments.evaluation.hero_vllm_hillclimb.probes import (
     decode_consistency,
     gate_probes,
     load_sweep,
+    long_load,
     long_probes,
     long_repeats,
     long_repeats_profiled,
@@ -476,6 +477,7 @@ _PHASES = {
     "longrep": long_repeats,
     "longprof": long_repeats_profiled,
     "d1": peer_load_sweep,
+    "longload": long_load,
 }
 
 
@@ -625,6 +627,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--waves", type=int, default=3)
     parser.add_argument("--client-processes", type=int, default=1, help="Load-generator processes")
     parser.add_argument("--long-lengths", default="4096,32768,65536")
+    parser.add_argument("--long-load-lengths", default="32768,65536")
+    parser.add_argument("--long-load-outputs", default="16,1024")
+    parser.add_argument("--long-load-per-engine", default="1,4")
     parser.add_argument("--d1-peer-loads", default="1,2,8,32", help="Requests per peer engine for the d1 phase")
     parser.add_argument("--profile-per-engine", default="1,32,128", help="Sequences per engine for the profile phase")
     parser.add_argument("--vllm-arg", action="append", default=[], help="Extra vLLM flag; repeat per token")
@@ -850,6 +855,9 @@ def _variant_config(args, target: ServedTarget, name, item, geometry, iris_confi
             data_parallel_size=geometry.global_data_parallel_size,
             profile_per_engine=tuple(int(n) for n in args.profile_per_engine.split(",")),
             d1_peer_loads=tuple(int(n) for n in args.d1_peer_loads.split(",")),
+            long_load_lengths=tuple(int(n) for n in args.long_load_lengths.split(",")),
+            long_load_outputs=tuple(int(n) for n in args.long_load_outputs.split(",")),
+            long_load_per_engine=tuple(int(n) for n in args.long_load_per_engine.split(",")),
         ),
         env=env,
         leader_args=LEADER_OVERRIDES.get(label, LEADER_ARGS),

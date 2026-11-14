@@ -51,6 +51,9 @@ class ProbeConfig:
     data_parallel_size: int = 16
     profile_per_engine: tuple[int, ...] = (1, 32, 128)
     d1_peer_loads: tuple[int, ...] = (1, 2, 8, 32)
+    long_load_lengths: tuple[int, ...] = (32768, 65536)
+    long_load_outputs: tuple[int, ...] = (16, 1024)
+    long_load_per_engine: tuple[int, ...] = (1, 4)
 
 
 def _top(entry: dict | None) -> list[list]:
@@ -486,6 +489,42 @@ def _closed_loop_process(
             return await _closed_loop(client, prompts, indices, workers, load)
 
     return asyncio.run(run())
+
+
+async def long_load(client: Client, cases: dict, config: ProbeConfig) -> dict:
+    """Long-prompt serving: TTFT, prefill rate, decode latency and throughput at fixed concurrency.
+
+    Prompts are distinct windows of the longest book case (prefix caching is off, so windows only
+    avoid identical requests). For each prompt length and output length: one request alone (TTFT
+    gives the prefill rate; ITL is decode after a long prefill), then one closed-loop wave of
+    ``per_engine x data_parallel_size`` concurrent requests for each per-engine count.
+    """
+    longest = max(cases["long"], key=lambda case: len(case["tokens"]))["tokens"]
+    results = {}
+    for length in config.long_load_lengths:
+        assert length <= len(longest), (length, len(longest))
+        stride = max(1, (len(longest) - length) // 63)
+        prompts = [longest[start : start + length] for start in range(0, len(longest) - length + 1, stride)][:64]
+        for output in config.long_load_outputs:
+            load = LoadConfig(concurrencies=(), max_tokens=output, waves=1)
+            record: dict = {}
+            await _stream_request(
+                client,
+                {"prompt": prompts[0], "max_tokens": output, "temperature": 1.0, "seed": 0, "ignore_eos": True},
+                record,
+            )
+            single = _summarize([record], concurrency=1, window=None)
+            single["prefill_tokens_per_second"] = length / single["ttft_p50"]
+            point = {"single": single}
+            for per_engine in config.long_load_per_engine:
+                concurrency = per_engine * config.data_parallel_size
+                records, _ = await _closed_loop(client, prompts, list(range(concurrency)), concurrency, load)
+                summary = _summarize(records, concurrency=concurrency, window=None)
+                summary["per_engine"] = per_engine
+                point[f"e{per_engine}"] = summary
+                logger.info("long load L=%d out=%d e%d: %s", length, output, per_engine, summary)
+            results[f"L{length}_o{output}"] = point
+    return results
 
 
 async def _post_root(client: Client, path: str) -> float:
