@@ -466,17 +466,19 @@ def test_reconcile_worker_pending_with_terminal_attempt_emits_stop():
 
 
 @pytest.mark.parametrize(
-    "attempt_state,expected_reason",
+    "attempt_state,expected_reason,holds_retry",
     [
-        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED),
+        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED, True),
         # A coscheduled-sibling requeue leaves the old attempt COSCHED_FAILED.
-        (job_pb2.TASK_STATE_COSCHED_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
-        (job_pb2.TASK_STATE_RUNNING, worker_pb2.Worker.STOP_REASON_SUPERSEDED),
+        (job_pb2.TASK_STATE_COSCHED_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED, True),
+        # The controller drops reports for a nonterminal superseded attempt, so
+        # a hold on it would never release.
+        (job_pb2.TASK_STATE_RUNNING, worker_pb2.Worker.STOP_REASON_SUPERSEDED, False),
     ],
 )
-def test_reconcile_worker_superseded_attempt_is_stopped_and_holds_its_retry(attempt_state, expected_reason):
+def test_reconcile_worker_stops_superseded_attempt(attempt_state, expected_reason, holds_retry):
     """An old attempt stays in the plan as a 'stop' whatever the retry's task
-    state is, and a retry ASSIGNED to the same worker waits for it."""
+    state is. A retry ASSIGNED to the same worker waits for a terminal one."""
     old = _row(
         job_pb2.TASK_STATE_ASSIGNED,
         attempt_id=0,
@@ -489,7 +491,7 @@ def test_reconcile_worker_superseded_attempt_is_stopped_and_holds_its_retry(atte
 
     by_uid = {d.attempt_uid: d for d in plan.request.desired}
     assert by_uid[old.attempt_uid].stop == expected_reason
-    assert retry.attempt_uid not in by_uid
+    assert (retry.attempt_uid not in by_uid) == holds_retry
 
 
 def test_reconcile_worker_holds_assigned_run_while_preemption_victim_occupies_worker():

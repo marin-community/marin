@@ -56,6 +56,12 @@ def _stop_reason(row: "ReconcileRow") -> worker_pb2.Worker.StopReason | None:
     return None
 
 
+def _holds_assigned_dispatch(row: "ReconcileRow") -> bool:
+    if row.attempt_state == job_pb2.TASK_STATE_PREEMPTED:
+        return True
+    return row.superseded and row.attempt_state in TERMINAL_TASK_STATES
+
+
 # ---------------------------------------------------------------------------
 # Reconcile planner inputs/outputs
 # ---------------------------------------------------------------------------
@@ -144,8 +150,10 @@ def _reconcile_worker(
     # this worker, withhold the ASSIGNED run-intents so the worker does not start
     # a process against a live one (libtpu fixed-port crash loop). The terminal
     # observation stamps ``finished_at_ms``, which drops the old attempt from the
-    # next snapshot — in the healthy case, a hold of one reconcile cycle.
-    hold_assigned_dispatch = any(row.superseded or row.attempt_state == job_pb2.TASK_STATE_PREEMPTED for row in rows)
+    # next snapshot — in the healthy case, a hold of one reconcile cycle. Only a
+    # terminal attempt holds: the controller drops a report for a nonterminal
+    # superseded attempt, so that attempt would hold the worker forever.
+    hold_assigned_dispatch = any(_holds_assigned_dispatch(row) for row in rows)
 
     for row in rows:
         stop_reason = _stop_reason(row)
