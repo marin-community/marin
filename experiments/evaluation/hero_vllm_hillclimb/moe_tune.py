@@ -37,6 +37,8 @@ CLUSTER = "cw-us-east-08a"
 EP16_MS = "16,32,64,128,256,384,512,768,1024,1536,2048"
 LOCAL_RESULT = "/tmp/moe_tune.json"
 LOCAL_LOG = "/tmp/moe_tune.log"
+# Relative to the job workspace (the entrypoint is pickled, so __file__ would name the submitter's path).
+KERNEL_SCRIPT = "experiments/evaluation/hero_vllm_hillclimb/moe_tune_kernel.py"
 
 
 def run_tune(release: str, output_uri: str, kernel_args: tuple[str, ...]) -> None:
@@ -49,7 +51,7 @@ def run_tune(release: str, output_uri: str, kernel_args: tuple[str, ...]) -> Non
     command = [
         *command[: command.index(_CUDA_NVCC_BOOTSTRAP) + 1],
         "python",
-        str(Path(__file__).with_name("moe_tune_kernel.py")),
+        str(Path.cwd() / KERNEL_SCRIPT),
         LOCAL_RESULT,
         *kernel_args,
     ]
