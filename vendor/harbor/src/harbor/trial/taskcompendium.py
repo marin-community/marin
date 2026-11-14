@@ -40,6 +40,7 @@ from taskcompendium.harbor.adapter import (
     require_trial_budget,
     unsupported_harbor_contract,
 )
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.harbor.protected_runtime import (
     RUNTIME_OBSERVATION_TIMEOUT,
     RuntimeRole,
@@ -428,6 +429,19 @@ class TaskSpecTrial(Trial):
         task = self.specification
         self.result.environment_setup = TimingInfo(started_at=self._now())
         await _persist(self.paths.trial_dir / "network-policy.json", self.network_policy.model_dump_json())
+        if task.environment_requirements.tool_providers:
+            await _persist(
+                self.paths.trial_dir / "tool-providers.json",
+                json.dumps(
+                    {
+                        "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+                        "providers": {
+                            name: requirement.model_dump(mode="json")
+                            for name, requirement in task.environment_requirements.tool_providers.items()
+                        },
+                    }
+                ),
+            )
         # A missing original lock is a source repair gate, before candidate generation or allocation.
         for environment in (task.environment_requirements, task.grader.environment):
             if environment is not None and environment.packages_lock is not None:

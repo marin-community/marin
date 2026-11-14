@@ -41,6 +41,7 @@ from taskcompendium.models import (
     ConversationTrace,
     EnvironmentRequirements,
     PlainText,
+    ProviderRequirement,
     ResourceGroups,
     ScriptGrader,
     Source,
@@ -76,6 +77,7 @@ from experiments.post_training.task_curation.tests.review_server import (
 from lib.taskcompendium.tests.grading_machines import LocalGradingMachine
 
 FIXTURES = Path(__file__).parents[4] / "experiments/post_training/task_curation/tests/fixtures/harbor_task_specs"
+REPOSITORY_INTERFACE = "shell:v1"
 
 
 @dataclass
@@ -277,6 +279,68 @@ async def test_candidate_preserves_tool_wire_history_across_turns(tmp_path, monk
     assert requests[1]["messages"][1]["tool_calls"][0]["function"]["arguments"] == arguments
     assert requests[1]["messages"][-1]["role"] == "tool"
     assert attempt.conversation.events[-1].content == "42"
+
+
+@pytest.mark.asyncio
+async def test_repository_provider_uses_original_task_through_trial_and_grading(tmp_path, monkeypatch):
+    state = {"repository": "fixture/product", "source_ref": "source-commit", "workspace": "/product"}
+    task = exact_answer_task(
+        RawRow("repository-provider", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
+        prompt="Use the shell in the product workspace, then return 42.", answers=("42",), ignore_case=False,
+    ).model_copy(update={"environment_requirements": EnvironmentRequirements(
+        capabilities=("shell",), command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image="fixture@sha256:" + "0" * 64,
+        tool_providers={"shell": ProviderRequirement(action_interface=REPOSITORY_INTERFACE, initial_state=state)},
+    )})
+    original = task.model_dump_json()
+    directory = tmp_path / "task"
+    write_harbor_task(task, directory, INITIAL_REQUIREMENTS)
+    machines = Machines(tmp_path / "sandboxes")
+    bind_factory(monkeypatch, machines, tmp_path / "disks")
+    requests = []
+
+    def response(request):
+        requests.append(json.loads(request.content))
+        message = {"role": "assistant", "content": "42"}
+        finish = "stop"
+        if len(requests) == 1:
+            message = {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "source-shell", "type": "function", "function": {
+                    "name": "shell", "arguments": json.dumps({"command": "printf changed > product.txt; cat product.txt"}),
+                },
+            }]}
+            finish = "tool_calls"
+        return httpx.Response(200, json={
+            "id": f"reply-{len(requests)}", "object": "chat.completion", "created": 0, "model": "candidate",
+            "choices": [{"index": 0, "finish_reason": finish, "message": message}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
+
+    real_client = agents.AsyncOpenAI
+    monkeypatch.setattr(agents, "AsyncOpenAI", lambda **kwargs: real_client(
+        **kwargs, http_client=httpx.AsyncClient(transport=httpx.MockTransport(response)),
+    ))
+    trial = await Trial.create(TrialConfig(
+        task=TaskConfig(path=directory), trial_name="repository-provider", trials_dir=tmp_path / "trials",
+        agent=AgentConfig(name="task-spec-chat", model_name="openai/candidate", kwargs={
+            "api_base": "https://candidate.fixture/v1", "max_turns": 2, "max_tokens": 128,
+            "request_parameters": {"temperature": 0.7},
+        }),
+        environment=EnvironmentConfig(kwargs={"disk_root": str(tmp_path / "disks")}),
+    ))
+    result = await trial.run()
+    assert result.exception_info is None, result.exception_info
+    assert result.verifier_result.rewards == {"reward": 1.0}
+    assert machines.machines[0].local("/product/product.txt").read_text() == "changed"
+    assert json.loads(requests[1]["messages"][-1]["content"])["stdout"] == "changed"
+    assert [tool["function"]["name"] for tool in requests[0]["tools"]] == ["shell"]
+    binding = json.loads((tmp_path / "trials/repository-provider/tool-providers.json").read_text())
+    assert binding == {
+        "task_sha256": canonical_sha256(task.model_dump(mode="json")),
+        "providers": {"shell": {"action_interface": REPOSITORY_INTERFACE, "initial_state": state}},
+    }
+    assert task.model_dump_json() == original
+    assert (directory / "task-spec.json").read_text().strip() == original
 
 
 @pytest.mark.parametrize(

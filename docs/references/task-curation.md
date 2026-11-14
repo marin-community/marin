@@ -1946,7 +1946,23 @@ For candidate trials, select `task-spec-chat` with explicit `api_base`,
 its candidate endpoint through the protocol relay, which owns tokenization,
 request budgets and traffic receipts. The agent consumes the original conversation
 and final-submission tools; shell tools require the declared actor machine.
-External tool-provider implementations are unsupported. Actor files and setup commands run only in the declared actor
+The `shell:v1` repository provider runs on that same actor machine. Its literal
+`repository`, `source_ref` and absolute `workspace` remain in the TaskSpec;
+commands run in that workspace and retain state between calls. The source's
+public setup instructions and oracle scripts own cloning and installation.
+The provider does not add another clone, install packages or change the checkout.
+It advertises one `shell` function with a required string `command` argument,
+without also advertising the harness's default shell. Trials retain the exact
+provider declaration and TaskSpec hash in `tool-providers.json`.
+
+Other tool-provider interfaces remain unsupported. In particular,
+`nemotron-agent:ns_tools_simple_agent` with `stateful_python_code_exec` needs its
+own stateful Python adapter; a repository shell is not equivalent. Supporting
+`shell:v1` also does not resolve a task's unbuilt environment or SHARED grading
+boundary. Those blockers remain explicit until the corresponding execution
+contract is supported and qualified.
+
+Actor files and setup commands run only in the declared actor
 environment. Script graders and non-judge Verifyit graders retain their declared
 verifier environment.
 A conversation-only task receives no actor image. Verifyit judge mode uses production
@@ -1964,7 +1980,7 @@ declared actor environment. A task without an original oracle instead reads
 `solution/response.json`, containing a JSON array of exactly one OpenAI-format assistant message,
 from `--calibration-solutions/<task-id>/`. That response is calibration-only.
 Select `nop` for independent empty-submission liveness. These controls receive
-no candidate-model settings. Shared-state grading, state capture, tool providers,
+no candidate-model settings. Shared-state grading, state capture, other tool providers,
 unresolved image builds and oracle delivery without an explicit supported
 contract remain execution blockers; the adapter does not rewrite them.
 
