@@ -305,11 +305,13 @@ counts remain Pending. Backend requirement fit alone does not establish executio
 
 After the package release, load the complete catalog with the
 [catalog loader](#updating-atlas), using the explicit preview app ID above.
-Use the [curriculum loader](#curriculum-coverage) twice: first pass the deployment's
-pre-remediation `release.json` and `coverage.json`, then the retained pair.
-Each successful load selects its release and retains the previous selection,
-so this order makes retained coverage primary and pre-remediation coverage previous
-evidence. Keep the exact input URIs and hashes in the deployment record.
+Use the [curriculum loader](#curriculum-coverage) to select the verified live-source
+`release.json` and `coverage.json`. Preserve the existing retained 59-source load
+as the previous selectable release. On a new app, load that retained pair before
+the live-source pair. Older pre-remediation and archived all-source artifacts
+remain immutable historical evidence in the SHA-bound provenance receipt; they
+are not additional selectable releases. Keep exact input URIs and hashes in the
+deployment record.
 
 Production remains on hold. Before a production release, the shared runtime must
 carry these canonical modules natively; this preview staging command always targets
@@ -647,6 +649,14 @@ checks for the OpenQA pairs are checkpointed under `integrity/` as soon as they
 complete. Cross-source agreement cannot exclude an answer defect shared by
 both sources. Use a fresh output root; old evidence is never overwritten.
 
+During direction measurement, exact instruction hashes and disjoint conversation
+states are checked before loading text. Discovery still prepares every population
+and scans its full text on a resumed run. Remaining directions share an atomic local normalization cache per source,
+and target populations are sharded across `--workers` CPU processes. To resume a
+run in a fresh output prefix, pass `--reuse-neighbor-root <prior-output-root>`;
+complete direction receipts are reused only under their input-bound direction
+key and after checking the full neighbor digest. Old outputs remain immutable.
+
 The staged loader selects fingerprints, pair reviews and groups atomically with
 the catalog and backend map. Pass the scan's reviewed output to the loader's
 `--source-identities` option. `/sources` returns a compact fingerprint summary
@@ -659,7 +669,10 @@ sample, and `/source-duplicates` returns review provenance, opinions and groups.
 Choose a domain from the picker or open an area to see its topics and skills.
 Breadcrumbs return to parent areas or all domains. Search names and descriptions
 across the curriculum, and filter counts by source or training/evaluation use.
-The URL preserves the selected area, release and filters. The coverage-population picker keeps the retained release primary and makes the previous pre-remediation release available as evidence. Select a count to read sampled
+The URL preserves the selected area, release and filters. The coverage-population
+picker shows the selected live-source release and the previous retained 59-source
+release. Older pre-remediation and archived all-source artifacts remain historical
+evidence through their SHA-bound provenance receipts. Select a count to read sampled
 examples, then open an example for its public instruction preview, embedding
 text, cosine similarity to curriculum anchors and alternative matches.
 Long instruction previews record the original character count and truncation.
@@ -728,6 +741,38 @@ evidence. An archived all-source cut is distinct from a newer selected catalog:
 prepare a separate release and coverage pair with consistent source lineage for
 that selection instead of relabelling the archived manifests or changing their pins.
 
+`experiments.post_training.task_curation.curriculum_projection` produces this
+separate pair from existing scored assignments. Its immutable inputs manifest
+binds the archived release, coverage and verification receipt, the exact current
+declarations, registered converter Use bindings and retirement ledger, and any
+replacement public-input manifests.
+It requires the live source set to equal the archived set minus retired sources.
+Registered converter Use is authoritative; a benchmark marker does not override
+an explicit TRAIN Use. QC metadata updates are recorded separately from
+task-producing inputs. Changed
+pins require a complete task-ID and public-input comparison; only an exact match
+permits reusing scores while rebinding TaskSpec hashes and source keys.
+
+The CPU pass filters full assignment files, verifies every retained value after
+readback, and rebuilds statistics and deterministic review samples for the selected
+population. Selected-source statistics must equal the archived statistics. This
+replenishes area samples whose old candidates came from retired sources. It does
+not compute vectors or matching scores and never overwrites archived artifacts.
+Run it in the data's region with a new artifact prefix:
+
+```bash
+uv run python -m experiments.post_training.task_curation.curriculum_projection \
+  --inputs IMMUTABLE_PROJECTION_INPUTS_JSON --inputs-sha256 INPUTS_SHA256 \
+  --artifact-root REGIONAL_NEW_ARTIFACT_PREFIX --workers 2 --worker-memory 64g
+```
+
+The dry run prints the identity-bound output path. Add `--run` inside a CPU Iris
+job with an explicit co-located `--target-cluster`, production priority and
+`--timeout 259200`. The output contains `release.json`, `coverage.json` and
+`projection-receipt.json`; pass the two manifests to the maintained loader above
+after validating them against the selected catalog. Keep the original manifests
+for historical reads.
+
 A metadata-only TRAIN-to-EVAL correction requires `--role-projection RECEIPT_URI
 RECEIPT_SHA256`. Set `--release` and `--coverage` to the receipt's exact corrected
 manifest URIs. The loader verifies the receipt and referenced artifact hashes,
@@ -741,6 +786,87 @@ curriculum page links to the correction receipt.
 Start the local stack as shown in [Updating Atlas](#updating-atlas), then use the
 same curriculum-loader command with its printed ID and origin. Stop the stack
 with Ctrl-C when finished.
+
+## Difficulty
+
+Difficulty records a solver's pass fraction on a frozen sample of up to 100
+retained tasks per source, including evaluation sources. It never excludes a
+task or changes Quality, Result, admission, or intended use. The table shows
+four bars in this order: Small, Large, Hosted, Snowball v0.1. Select a Difficulty
+model to sort by its solve rate. Hover or focus a row for its solve count,
+denominator, Wilson 95% confidence interval, model revision, protocol and
+pre-oracle-filter status. Source details show the same bars; Evidence includes
+sample and attempt receipts and historical observations. Missing results have
+an explicit reason and no solve rate.
+Full credit (`reward == 1`) counts as solved. A scored partial-credit answer
+counts in the denominator without counting as solved. A missing or failed
+grader remains unscored until it can be re-driven.
+`finestore.rl.difficulty.measurement_from_attempts` owns this counting rule,
+rejects duplicate scored attempts, and computes the Wilson interval. Protocol
+validation is bound to the immutable entry in `PROTOCOLS`; adding a protocol
+does not change the settings accepted for earlier observations.
+
+`atlas-difficulty-v3` uses Qwen3-Coder-30B-A3B-Instruct with thinking off,
+Qwen3.5-122B-A10B with thinking on, production hosted GLM-5.3 with low reasoning
+effort, and Marin-Snowball-67B-A2B-v0.1. Every run records checkpoint, tokenizer
+revision and chat-template digest. Snowball v0.1 is pinned to
+`adc0078a19a4383bc998fcdb43867b3360baf5f3`; its tokenizer and template come
+from that same repository revision. Its established serving recipe uses
+expert parallelism, tensor parallelism 1 and data parallelism 8 on H100s,
+with the Hermes tool parser. Atlas uses temperature 0.7, overriding the earlier
+sampling re-evaluation's 0.6.
+
+Each model request has a 65,536-token context budget, at most 49,152 input and
+16,384 output tokens. These are per-request limits, including requests within
+an agent's tool loop. Sampling uses temperature 0.7, top-p 0.95, top-k 20, min-p 0,
+repetition penalty 1, and presence/frequency penalties 0. A served context that
+cannot fit these budgets requires an explicit recorded deviation. Hosted
+services that omit a sampling parameter must record that omission. LLM graders
+also use temperature 0.7 through the production host judge service.
+
+The sample receipt binds the exact dataset release, converter, population
+digest, drop-manifest digest, selection seed, selected IDs and task digests.
+The standard SAMPLE QC seed-zero panels can be reused after their population
+and byte digests have been checked. For the 42 oracle-bearing sources whose
+filter has not run (630,595 retained tasks in the November 13 inventory),
+samples carry `pre_oracle_filter=true` and
+`resample_after_oracle_filter=true`. Draw a new seeded sample from the new
+retained population when filtering completes; preserve the earlier receipt and
+observations. A changed release pin or converter makes its prior results
+historical automatically.
+
+For a post-filter sample, pass `--oracle-filters <bindings.json>` to
+`experiments.post_training.task_curation.difficulty_samples`. Each source-keyed
+binding contains `population_count`, `task_specs_sha256`, and `receipt`
+(`uri` and `sha256`) for its completed `OracleFilterReceipt`. The sampler checks
+the binding against the retained census and checks each selected task and
+runtime against passing filter evidence. It stores that receipt, clears the
+pre-filter flags and leaves the source out of the resampling queue. Oracle
+presence alone does not indicate whether filtering is complete.
+
+Run tasks through production Harbor trials in their declared environments and
+grade each with its own grader. Select Daytona only for measured SAFE sources;
+use LOCAL/Iris otherwise. Keep provider waits separate from task attempts and
+preserve infrastructure-failed attempts for re-driving. Those attempts never
+enter the scored denominator. A completed measurement requires every sampled
+task to have a score and an archived attempt receipt. Pending observations do
+not acquire a solve-rate bar. Use Iris H100 serving in `cw-rno2a`, with explicit
+target placement and compilation and CUDA graphs enabled. Record GPU-hours per
+model and input/output tokens; jobs have a three-day limit.
+
+Typed `difficulty_measurements` live in a FineStore catalog or campaign archive.
+Load them into an installed Atlas after its schema migration:
+
+```bash
+uv run python -m infra.marina.apps.rl_data_catalog.load_difficulty \
+  --catalog-root <catalog-or-campaign-root> \
+  --applet-id <atlas-applet-id> --receipt <new-load-receipt.json>
+```
+
+The loader is idempotent for identical records and rejects an existing ID with
+different evidence. It leaves the source catalog selection unchanged and keeps
+historical difficulty records across catalog refreshes. Publication of a UI
+or schema change alone does not establish a measured difficulty.
 
 ## Historical reviews
 

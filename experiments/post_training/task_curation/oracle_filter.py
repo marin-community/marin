@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tomllib
 from collections import Counter
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -631,6 +632,7 @@ def calibrated_task(
     environment_kwargs: dict,
     calibration_solutions: Path | None,
     retry_context: InfrastructureRetryContext | None = None,
+    prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
 ) -> dict:
     """Run the production Trial path once per shape, creating a fresh task package each time."""
     original = Path(mapping["task_path"])
@@ -680,6 +682,8 @@ def calibrated_task(
                 else:
                     document.setdefault(phase, {}).setdefault("timeout_sec", shape.model_dump()[f"{phase}_timeout_sec"])
             (package / "task.toml").write_text(tomlkit.dumps(document))
+        if prepare_attempt is not None:
+            prepare_attempt(package, shape)
         config = {
             "task": {"path": str(package)},
             "agent": {"name": "oracle", "kwargs": {"resource_usage_filename": "resource-usage.json"}},
@@ -758,6 +762,7 @@ def calibrate_cohort(
     concurrency: int,
     calibration_solutions: Path | None = None,
     retry_contexts: dict[str, InfrastructureRetryContext] | None = None,
+    prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
 ) -> None:
     """Fold calibration into full-population oracle filtering; collect the same trials afterward."""
     mappings = json.loads(task_map.read_text())
@@ -791,6 +796,7 @@ def calibrate_cohort(
                 environment_kwargs,
                 calibration_solutions,
                 None if retry_contexts is None else retry_contexts[task.id],
+                prepare_attempt,
             )
             for task in tasks
         }
@@ -917,7 +923,12 @@ def write_retry_plan(cohort: Path, task_map: Path, approvals_path: Path, backend
     (output / "plan.json").write_text(plan.model_dump_json(indent=2) + "\n")
 
 
-def retry_cohort(plan_path: Path, destination: Path, concurrency: int) -> None:
+def retry_cohort(
+    plan_path: Path,
+    destination: Path,
+    concurrency: int,
+    prepare_attempt: Callable[[Path, ExecutionRequirements], None] | None = None,
+) -> None:
     """Run one approved fixed-backend phase using the normal three-attempt infrastructure budget."""
     if destination.exists():
         raise FileExistsError(destination)
@@ -964,7 +975,14 @@ def retry_cohort(plan_path: Path, destination: Path, concurrency: int) -> None:
         for task_id, approval in plan.approvals.items()
     }
     calibrate_cohort(
-        cohort, parent_map, phase, plan.environment, plan.environment_kwargs, concurrency, retry_contexts=contexts
+        cohort,
+        parent_map,
+        phase,
+        plan.environment,
+        plan.environment_kwargs,
+        concurrency,
+        retry_contexts=contexts,
+        prepare_attempt=prepare_attempt,
     )
     require_backend_fix(plan.backend_fix)
     current = json.loads((phase / "task-map.json").read_text())
