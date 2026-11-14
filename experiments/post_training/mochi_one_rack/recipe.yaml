@@ -137,8 +137,9 @@ generator:
       memory_limit: 8589934592
     compilation_config:
       mode: 3
-      # allgather_reducescatter's variable-size DP/EP collectives can fail under graph replay. Keep
-      # compilation enabled; retest PIECEWISE after a graph fix is qualified.
+      # Mochi failed in expert exchange after publication with graphs enabled on
+      # 12 inference ranks. The cause is unknown. Keep compilation enabled; retest
+      # PIECEWISE when upstream supports graphs for allgather_reducescatter.
       # https://github.com/vllm-project/vllm/pull/59646
       cudagraph_mode: NONE
       splitting_ops:
@@ -181,6 +182,8 @@ trajectory_runner:
   rollout_workers:
     num_workers: 2
 extra_env:
+  NVTE_DEBUG: '1'
+  NVTE_DEBUG_LEVEL: '1'
   DAYTONA_TARGET: us
   OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
   PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True

@@ -103,8 +103,8 @@ megatron = [
     "cuda-toolkit[nvcc,cccl]==13.2.2 ; sys_platform == 'linux'",
     "accelerate>=1.14,<2 ; sys_platform == 'linux'",
     "causal-conv1d==1.7.0+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    # Native FA2 source and compatibility checks: scripts/wheels/README.md.
-    "flash-attn==2.8.4+marin.cu132torch2141.1 ; sys_platform == 'linux'",
+    "flash-attn-3==3.0.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "flash-attn-4==4.0.0b39 ; sys_platform == 'linux' and platform_machine == 'aarch64'",
     "flash-linear-attention==0.4.2 ; sys_platform == 'linux'",
     "mamba-ssm==2.3.2.post1+marin.cu132torch2141.1 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "megatron-bridge==0.6.0 ; sys_platform == 'linux'",
@@ -233,11 +233,7 @@ langdetect = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu
 pycosat = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
 torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
 torchcodec = { index = "pytorch-cu132", extra = "vllm", marker = "sys_platform == 'linux'" }
-# FA2 and TE use the unmodified sources and recipes in scripts/wheels/README.md.
-flash-attn = [
-    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
-    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-]
+flash-attn-3 = { index = "pytorch-cu132", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
 harbor = { path = "../harbor", editable = true }
 # Matching packages built normally from source; recipe, hashes and checks accompany the release.
 # https://github.com/marin-community/speculators/releases/tag/v0.8.0%2Bmarin.1

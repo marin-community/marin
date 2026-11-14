@@ -1491,45 +1491,36 @@ wheels = [
 ]
 
 [[package]]
-name = "flash-attn"
-version = "2.8.4+marin.cu132torch2141.1"
-source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl" }
-resolution-markers = [
-    "platform_machine == 'aarch64' and sys_platform == 'linux'",
-]
-dependencies = [
-    { name = "einops", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
-    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
-]
-wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", hash = "sha256:23a4d2ac55dff19db50cfd7f77784e706dcf653e6cb552fe33e5c7ac9a3723e7" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "einops" },
-    { name = "torch" },
-]
-
-[[package]]
-name = "flash-attn"
-version = "2.8.4+marin.cu132torch2141.1"
-source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
+name = "flash-attn-3"
+version = "3.0.1"
+source = { registry = "https://download.pytorch.org/whl/cu132" }
 dependencies = [
     { name = "einops", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "ninja", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "packaging", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", hash = "sha256:4fde7de724c39251932aa3d467ee2b27ae6b70755de7b3e9a4fc05fd567270af" },
+    { url = "https://download.pytorch.org/whl/cu132/flash_attn_3-3.0.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:772e7a1802396bf48aba17fe6597776301a903414f828a03608d255cf21cdce4", upload-time = "2026-10-20T12:38:42Z" },
+    { url = "https://download.pytorch.org/whl/cu132/flash_attn_3-3.0.1-cp310-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:eb36d3704bef166123428eb3e2c2912154315c9a3a603cf6a5198d1f8b3ce306", upload-time = "2026-10-20T12:39:02Z" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "einops" },
-    { name = "torch" },
+[[package]]
+name = "flash-attn-4"
+version = "4.0.0b39"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "apache-tvm-ffi", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "einops", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cutlass-dsl", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "quack-kernels", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch-c-dlpack-ext", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c7/15/5ee14b3cc844f60a05a7c3dba63d67a5d75e11190834e861c795472978bb/flash_attn_4-4.0.0b39.tar.gz", hash = "sha256:ac081e2aeb79c5171538d322552fa4573effb91d33b1b313a301c431d5bb64bf", size = 534758, upload-time = "2026-11-11T08:12:51.003Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/4a/7a6580328219c5effeb51a97a753919ca7075089ee37a00ee84d73933ab1/flash_attn_4-4.0.0b39-py3-none-any.whl", hash = "sha256:9c5e6f4479d81317a0d7da84d0cc33fe942f78d64c60a01bc409fc78d6aa8ea3", size = 563466, upload-time = "2026-11-11T08:12:49.175Z" },
 ]
 
 [[package]]
@@ -3275,8 +3266,8 @@ megatron = [
     { name = "accelerate", marker = "sys_platform == 'linux'" },
     { name = "causal-conv1d", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cccl", "nvcc"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "flash-attn", version = "2.8.4+marin.cu132torch2141.1", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "flash-attn", version = "2.8.4+marin.cu132torch2141.1", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "flash-attn-3", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "flash-attn-4", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "flash-linear-attention", marker = "sys_platform == 'linux'" },
     { name = "harbor", marker = "sys_platform == 'linux'" },
     { name = "mamba-ssm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -3367,9 +3358,8 @@ requires-dist = [
     { name = "debugpy", specifier = "==1.8.0" },
     { name = "fastapi" },
     { name = "filelock", specifier = ">=3.16" },
-    { name = "flash-attn", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_aarch64.whl" },
-    { name = "flash-attn", marker = "platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.8.4+marin.cu132torch2141.1" },
-    { name = "flash-attn", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/flash_attn-2.8.4+marin.cu132torch2141.1-cp312-cp312-linux_x86_64.whl" },
+    { name = "flash-attn-3", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==3.0.1", index = "https://download.pytorch.org/whl/cu132" },
+    { name = "flash-attn-4", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==4.0.0b39" },
     { name = "flash-linear-attention", marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.4.2" },
     { name = "flashinfer-cubin", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl" },
     { name = "flashinfer-python", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.6.18.post1" },
