@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Annotated, Protocol
 
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
@@ -19,6 +19,7 @@ from finestore.rl.curation import (
     IndependentQC,
     IntegrityContractSummary,
     LexicalContaminationEvidence,
+    OracleFiltrationEvidence,
     OracleValidation,
     OversightEvidence,
     OversightLevel,
@@ -34,6 +35,7 @@ from finestore.rl.curation import (
     source_title,
 )
 from marin.execution.lazy import ArtifactStep
+from pydantic import Field
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.admission_binding import population_admission_blocker
@@ -177,6 +179,7 @@ class SourceInfo:
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
     converted_examples: ConvertedExamples | None = None
+    oracle_filtration: Annotated[OracleFiltrationEvidence | None, Field(exclude_if=lambda value: value is None)] = None
     within_source_dedup: WithinSourceDedupEvidence | None = None
     lexical_contamination: LexicalContaminationEvidence | None = None
     daytona_machine_slots: int | None = None
@@ -264,7 +267,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
     @property
     def catalog_declaration(self) -> SourceDeclaration | None:
         """Hold metadata pending while QUICK produces the actor census."""
-        if not self.is_grandfathered_blend and not self.has_actor_census:
+        filtered_to_zero = self.info.oracle_filtration is not None and self.info.oracle_filtration.admitted_count == 0
+        if not self.is_grandfathered_blend and not self.has_actor_census and not filtered_to_zero:
             return None
         return self.declaration
 
@@ -285,6 +289,10 @@ class RlDataSource[ConfigT: CatalogConfig]:
         info = self.info
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
+        if info.oracle_filtration is not None and info.oracle_filtration.admitted_count == 0:
+            blockers.append(
+                "oracle filtration retained no tasks: " + ", ".join(sorted(info.oracle_filtration.exclusion_counts))
+            )
         dataset = self.dataset
         actor = info.actor_census_input
         if actor is not None and (
@@ -348,7 +356,9 @@ class RlDataSource[ConfigT: CatalogConfig]:
         if dedup is None:
             raise ValueError(f"Source {info.id} requires a complete within-source deduplication census")
         tags = info.tags
-        if self.is_grandfathered_blend:
+        if self.is_grandfathered_blend or (
+            info.oracle_filtration is not None and info.oracle_filtration.admitted_count == 0
+        ):
             safety = None
         else:
             if (
@@ -434,6 +444,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             integrity_contracts=info.integrity_contracts,
             actor_census_input=info.actor_census_input,
             converted_examples=info.converted_examples,
+            oracle_filtration=info.oracle_filtration,
             lexical_contamination=info.lexical_contamination,
             daytona_machine_slots=info.daytona_machine_slots,
             daytona_roles=info.daytona_roles,

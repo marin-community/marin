@@ -162,6 +162,32 @@ class ContentEvidenceReference(CatalogRecord):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class OracleFiltrationEvidence(CatalogRecord):
+    """An exact original population, canonical filter and read-back private output."""
+
+    original_release: DatasetRelease
+    original_cohort: ContentEvidenceReference
+    original_count: int = Field(ge=0)
+    oracle_filter: ContentEvidenceReference
+    oracle_filter_version: int
+    filtered_release: DatasetRelease
+    private: bool
+    tasks_parquet: ContentEvidenceReference
+    admitted_count: int = Field(ge=0)
+    exclusion_counts: dict[str, int]
+    validation: ContentEvidenceReference
+
+    @model_validator(mode="after")
+    def _population_partition(self) -> "OracleFiltrationEvidence":
+        if not self.private or not self.filtered_release.repo.startswith("open-athena/"):
+            raise ValueError("Oracle filtration requires a private open-athena release")
+        if any(count <= 0 for count in self.exclusion_counts.values()):
+            raise ValueError("Filtration exclusion counts must describe observed tasks")
+        if self.original_count != self.admitted_count + sum(self.exclusion_counts.values()):
+            raise ValueError("Oracle filtration does not conserve the original population")
+        return self
+
+
 class QualityResultFinalization(StrEnum):
     """Explicit whole-source content Result finalization, independent of coverage."""
 
@@ -651,6 +677,7 @@ class SourceDeclaration(CatalogRecord):
     integrity_contracts: IntegrityContractSummary | None = None
     actor_census_input: ActorCensusInput | None = None
     converted_examples: ConvertedExamples | None = None
+    oracle_filtration: OracleFiltrationEvidence | None = Field(default=None, exclude_if=lambda value: value is None)
     lexical_contamination: LexicalContaminationEvidence | None = None
     daytona_machine_slots: int | None = None
     daytona_roles: dict[str, dict[str, RoleExecutionEvidence]] | None = None
@@ -673,6 +700,12 @@ class SourceDeclaration(CatalogRecord):
             raise ValueError("Within-source deduplication belongs to another dataset pin or converter version")
         if self.task_count != dedup.unique_count:
             raise ValueError("Atlas task count must equal the post-deduplication unique count")
+        filtration = self.oracle_filtration
+        if filtration is not None:
+            if filtration.filtered_release != self.current_release or self.task_count != filtration.admitted_count:
+                raise ValueError("Oracle filtration differs from the configured release or Atlas count")
+            if filtration.admitted_count == 0 and self.status == "Available":
+                raise ValueError("A source filtered to zero cannot remain admitted")
         census = self.actor_census_input
         if census is not None and (
             self.pipeline is None

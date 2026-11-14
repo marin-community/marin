@@ -30,6 +30,7 @@ from experiments.post_training.task_curation.datasets.full_content_results impor
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
+from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
 from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
@@ -54,6 +55,7 @@ from experiments.post_training.task_curation.full_content_binding import bind_fu
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
+from experiments.post_training.task_curation.oracle_release import bind_oracle_filtered_release
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.remediation_binding import bind_retained_release
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
@@ -68,6 +70,7 @@ def all_sources() -> dict[str, RlDataSource]:
     actor_receipts = actor_census_receipts()
     lexical_receipts = lexical_measurements()
     retained_receipts = retained_release_receipts()
+    oracle_receipts = oracle_release_receipts()
     quality_receipts = sample_qc_receipts()
     grading_receipts = grading_census_receipts()
     dedup_receipts = read_dedup_receipts(
@@ -135,6 +138,14 @@ def all_sources() -> dict[str, RlDataSource]:
     ]
     sources = [bind_sample_result(source, quality_receipts.get(source.info.id)) for source in sources]
     sources = [bind_full_content_result(source, full_content_bindings.get(source.info.id)) for source in sources]
+    sources = [
+        (
+            bind_oracle_filtered_release(source, oracle_receipts[source.info.id])
+            if source.info.id in oracle_receipts
+            else source
+        )
+        for source in sources
+    ]
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")

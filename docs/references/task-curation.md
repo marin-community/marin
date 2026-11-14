@@ -1482,6 +1482,19 @@ execution admission, calibration result or publication evidence.
 
 ### Full-population oracle filter
 
+Catalog bindings for oracle filtration use `OracleFilteredReleaseReceipt` and
+`OracleFiltrationEvidence`. They bind the original release and full cohort, the
+canonical oracle-filter receipt, the read-back PRIVATE output pin, and typed
+exclusion counts. Prior deduplication and lexical measurements remain in the
+archived input lineage. The active uniqueness census describes only the new
+output rows; oracle exclusions are recorded separately.
+
+Changing the population clears earlier actor, grading, oversight and content
+qualification. New nonempty admissions require current oracle/control receipts
+and fresh qualification for the filtered pin. A zero-row output remains visible
+as excluded, with zero Atlas Examples and a filtration blocker. It carries no
+actor census or inferred Daytona safety and cannot enter admitted selection.
+
 Every admitted TaskSpec must declare `execution_requirements`: `cpus`,
 `memory_mb`, `storage_mb`, `agent_timeout_sec` and `verifier_timeout_sec`.
 Sizes use MiB and deadlines use seconds. Conversion may leave this field absent;
