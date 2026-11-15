@@ -66,6 +66,44 @@ class ReviewChat:
         }
 
 
+def test_review_commit_leaves_every_valid_completion_in_query_cache(tmp_path):
+    """A committed review must leave every valid completion in the query cache.
+
+    FULL QC, SAMPLE, repair and probe runners all review through ChatReviewer with a
+    query cache root. If the commit-time store regressed, the second review here would
+    have to call the model again and fail this test. Invalid completions (e.g.
+    truncated structured responses) are intentionally not cached, so a later review
+    re-issues them instead of replaying a failure.
+    """
+    task = svamp_row_task(
+        RawRow(
+            "source-a",
+            Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            {"Body": "Ada has two apples.", "Question": "How many apples?", "Answer": "2"},
+        )
+    )
+    rubric = ReviewRubric("fixture", "1", ("Check the supplied count.",))
+    cache = str(tmp_path / "cache")
+    first_chat = ReviewChat()
+    first = (
+        ChatReviewer(first_chat, reviewer_spec("fixture", "deployment"), query_cache_root=cache)
+        .review([task], rubric)
+        .reviews
+    )
+    assert [row.status for row in first] == [ReviewStatus.REVIEWED]
+    assert len(first_chat.requests) == 1
+
+    second_chat = ReviewChat()
+    second = (
+        ChatReviewer(second_chat, reviewer_spec("fixture", "deployment"), query_cache_root=cache)
+        .review([task], rubric)
+        .reviews
+    )
+    assert [row.status for row in second] == [ReviewStatus.REVIEWED]
+    assert second[0].task_id == first[0].task_id
+    assert second_chat.requests == [], "a committed review must be rereadable from the query cache with zero model calls"
+
+
 def test_direct_review_reuses_exact_cache_across_modes_and_source_ids(tmp_path):
     task = svamp_row_task(
         RawRow(
