@@ -542,5 +542,712 @@
         "issue_url": "https://github.com/marin-community/marin/issues/11497"
       }
     ]
+  },
+  "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified": {
+    "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+    "dataset_id": "PrimeIntellect/Scale-SWE-Verified",
+    "revision": "2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6",
+    "resolved_at": "2026-11-15T18:24:33.338377+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Scale-SWE-Verified/resolve/2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6/README.md",
+        "kind": "dataset_card",
+        "sha256": "2047000abfffc6709f759f3427a6358cffe4ce42c94ab8b1f2237001cbb7835f",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L4: license: cc-by-4.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: pretty_name: Scale-SWE-Verified",
+          "L8: tags:",
+          "L9: - software-engineering",
+          "L10: - code",
+          "L11: - swe",
+          "L12: - rl"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Scale-SWE-Verified/resolve/2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6/README.md",
+        "kind": "readme_license",
+        "sha256": "2047000abfffc6709f759f3427a6358cffe4ce42c94ab8b1f2237001cbb7835f",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L40: License mirrors upstream: CC-BY-4.0.",
+          "L345: ## \ud83d\udcc4 License",
+          "L347: This project is licensed under the CC BY 4.0 License - see the [LICENSE](LICENSE) file for details.",
+          "L349: </details>"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Scale-SWE-Verified/resolve/2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6/README.md",
+        "kind": "readme_notice",
+        "sha256": "2047000abfffc6709f759f3427a6358cffe4ce42c94ab8b1f2237001cbb7835f",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": true,
+    "decisions": []
+  },
+  "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified": {
+    "source_id": "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified",
+    "dataset_id": "PrimeIntellect/Multi-SWE-RL-Verified",
+    "revision": "64b3ebf62750b1373e26106cfc658a1861809d0f",
+    "resolved_at": "2026-11-15T18:24:33.500758+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Multi-SWE-RL-Verified/resolve/64b3ebf62750b1373e26106cfc658a1861809d0f/README.md",
+        "kind": "dataset_card",
+        "sha256": "adac6ad9e5b4ff00c73ba51e3932e27e60166821b173d755ece6c6549835908b",
+        "license_ids": [
+          "cc0-1.0"
+        ],
+        "quoted_lines": [
+          "L4: license: other",
+          "L8: license_name: cc0-with-bytedance-notice",
+          "L9: license_link: https://huggingface.co/datasets/ByteDance-Seed/Multi-SWE-RL",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: pretty_name: Multi-SWE-RL-Verified",
+          "L10: tags:",
+          "L11: - software-engineering",
+          "L12: - code"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Multi-SWE-RL-Verified/resolve/64b3ebf62750b1373e26106cfc658a1861809d0f/README.md",
+        "kind": "readme_license",
+        "sha256": "adac6ad9e5b4ff00c73ba51e3932e27e60166821b173d755ece6c6549835908b",
+        "license_ids": [
+          "CC0-1.0"
+        ],
+        "quoted_lines": [
+          "L48: License mirrors upstream: ByteDance licenses the dataset under CC0, subject to any intellectual property rights owned by ByteDance; the underlying repositories keep their own licenses (see the collapsed original card).",
+          "L389: ## \ud83d\udcdc License",
+          "L391: The dataset is licensed under CC0, subject to any intellectual property rights in the dataset owned by Bytedance. The data is adapted from the listed open source projects; your use of that data must comply with their respective licenses.",
+          "L392: licenses of all the repositories collected by us are listed below, with an overall low license risk.",
+          "L393: | Language | Organization/Repository         | Repository Link                                              | Data Link                                                    |",
+          "L394: | -------- | :------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |",
+          "L395: | C        | facebook/zstd                   | [[repo_link]](https://github.com/facebook/zstd)              | [[data_link]](https://huggingface.co/datasets/bytedance-research/Multi-SWE-RL/blob/main/data_20240601_20250331/c/facebook__zstd_dataset.jsonl) |",
+          "L396: | C        | fluent/fluent-bit               | [[repo_link]](https://github.com/fluent/fluent-bit)          | [[data_link]](https://huggingface.co/datasets/bytedance-research/Multi-SWE-RL/blob/main/data_20240601_20250331/c/fluent__fluent-bit_dataset.jsonl) |",
+          "L397: | C        | jqlang/jq                       | [[repo_link]](https://github.com/jqlang/jq)                  | [[data_link]](https://huggingface.co/datasets/bytedance-research/Multi-SWE-RL/blob/main/data_20240601_20250331/c/jqlang__jq_dataset.jsonl) |",
+          "L398: | C        | libgit2/libgit2                 | [[repo_link]](https://github.com/libgit2/libgit2)            | [[data_link]](https://huggingface.co/datasets/bytedance-research/Multi-SWE-RL/blob/main/data_20240601_20250331/c/libgit2__libgit2_dataset.jsonl) |",
+          "L399: | C        | libsdl-org/SDL                  | [[repo_link]](https://github.com/libsdl-org/SDL)             | [[data_link]](https://huggingface.co/datasets/bytedance-research/Multi-SWE-RL/blob/main/data_20240601_20250331/c/libsdl-org__SDL_dataset.jsonl) |",
+          "L400: | C        | mruby/mruby                     | [[repo_link]](https://github.com/mruby/mruby)                | [[data_link]](https://huggingface.co/datasets/bytedance-research/Multi-SWE-RL/blob/main/data_20240601_20250331/c/mruby__mruby_dataset.jsonl) |"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Multi-SWE-RL-Verified/resolve/64b3ebf62750b1373e26106cfc658a1861809d0f/README.md",
+        "kind": "readme_notice",
+        "sha256": "adac6ad9e5b4ff00c73ba51e3932e27e60166821b173d755ece6c6549835908b",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": false,
+    "decisions": []
+  },
+  "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": {
+    "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+    "dataset_id": "PrimeIntellect/SWE-Lego-Real-Data-Verified",
+    "revision": "0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d",
+    "resolved_at": "2026-11-15T18:24:34.060578+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/SWE-Lego-Real-Data-Verified/resolve/0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d/README.md",
+        "kind": "dataset_card",
+        "sha256": "1b9cc85506c4d823df7f72630573ed239f6e0d1d959cb71007faaf8a88d6ad10",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L4: license: apache-2.0",
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: pretty_name: SWE-Lego-Real-Data-Verified",
+          "L8: tags:",
+          "L9: - software-engineering",
+          "L10: - code",
+          "L11: - swe",
+          "L12: - rl"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/SWE-Lego-Real-Data-Verified/resolve/0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d/README.md",
+        "kind": "readme_license",
+        "sha256": "1b9cc85506c4d823df7f72630573ed239f6e0d1d959cb71007faaf8a88d6ad10",
+        "license_ids": [
+          "Apache-2.0"
+        ],
+        "quoted_lines": [
+          "L36: License mirrors upstream: Apache-2.0."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/SWE-Lego-Real-Data-Verified/resolve/0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d/README.md",
+        "kind": "readme_notice",
+        "sha256": "1b9cc85506c4d823df7f72630573ed239f6e0d1d959cb71007faaf8a88d6ad10",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": false,
+    "decisions": []
+  },
+  "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1": {
+    "source_id": "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+    "dataset_id": "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+    "revision": "eaef26944643644c8a3dbbf361ce6128142f5976",
+    "resolved_at": "2026-11-15T18:24:34.044962+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
+        "kind": "dataset_card",
+        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L2: license:",
+          "L3: - cc-by-4.0",
+          "L1: ---",
+          "L4: language:",
+          "L5: - en",
+          "L6: task_categories:",
+          "L7: - text-generation",
+          "L8: pretty_name: Nemotron-RL-Agentic-Terminal-Pivot-v1",
+          "L9: tags:",
+          "L10: - text",
+          "L11: - agentic",
+          "L12: - code"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
+        "kind": "readme_license",
+        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L61: ## License/Terms of Use",
+          "L63: This dataset is licensed under Creative Commons Attribution 4.0 International (CC-BY-4.0)."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
+        "kind": "readme_notice",
+        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": true,
+    "decisions": []
+  },
+  "RST:laion/rts-1k-rootless-apptainer": {
+    "source_id": "RST:laion/rts-1k-rootless-apptainer",
+    "dataset_id": "laion/rts-1k-rootless-apptainer",
+    "revision": "6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe",
+    "resolved_at": "2026-11-15T18:24:35.390503+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/laion/rts-1k-rootless-apptainer/resolve/6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe/LICENSE",
+        "kind": "license_file",
+        "sha256": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L3:  Creative Commons Corporation (\u201cCreative Commons\u201d) is not a law firm and does not provide legal services or legal advice. Distribution of Creative Commons public licenses does not create a lawyer-client or other relationship. Creative Commons makes its licenses and related information available on an \u201cas-is\u201d basis. Creative Commons gives no warranties regarding its licenses, any material licensed under their terms and conditions, or any related information. Creative Commons disclaims all liabili",
+          "L5: Using Creative Commons Public Licenses",
+          "L7: Creative Commons public licenses provide a standard set of terms and conditions that creators and other rights holders may use to share original works of authorship and other material subject to copyright and certain other rights specified in the public license below. The following considerations are for informational purposes only, are not exhaustive, and do not form part of our licenses.",
+          "L9: Considerations for licensors: Our public licenses are intended for use by those authorized to give the public permission to use material in ways otherwise restricted by copyright and certain other rights. Our licenses are irrevocable. Licensors should read and understand the terms and conditions of the license they choose before applying it. Licensors should also secure all rights necessary before applying our licenses so that the public can reuse the material as expected. Licensors should clear",
+          "L11: Considerations for the public: By using one of our public licenses, a licensor grants the public permission to use the licensed material under specified terms and conditions. If the licensor\u2019s permission is not necessary for any reason\u2013for example, because of any applicable exception or limitation to copyright\u2013then that use is not regulated by the license. Our licenses grant only permissions under copyright and certain other rights that a licensor has authority to grant. Use of the licensed mate",
+          "L13: Creative Commons Attribution 4.0 International Public License",
+          "L15: By exercising the Licensed Rights (defined below), You accept and agree to be bound by the terms and conditions of this Creative Commons Attribution 4.0 International Public License (\"Public License\"). To the extent this Public License may be interpreted as a contract, You are granted the Licensed Rights in consideration of Your acceptance of these terms and conditions, and the Licensor grants You such rights in consideration of benefits the Licensor receives from making the Licensed Material av",
+          "L19:      a.\tAdapted Material means material subject to Copyright and Similar Rights that is derived from or based upon the Licensed Material and in which the Licensed Material is translated, altered, arranged, transformed, or otherwise modified in a manner requiring permission under the Copyright and Similar Rights held by the Licensor. For purposes of this Public License, where the Licensed Material is a musical work, performance, or sound recording, Adapted Material is always produced where the Li",
+          "L21:      b.\tAdapter's License means the license You apply to Your Copyright and Similar Rights in Your contributions to Adapted Material in accordance with the terms and conditions of this Public License.",
+          "L23:      c.\tCopyright and Similar Rights means copyright and/or similar rights closely related to copyright including, without limitation, performance, broadcast, sound recording, and Sui Generis Database Rights, without regard to how the rights are labeled or categorized. For purposes of this Public License, the rights specified in Section 2(b)(1)-(2) are not Copyright and Similar Rights.",
+          "L27:      e.\tExceptions and Limitations means fair use, fair dealing, and/or any other exception or limitation to Copyright and Similar Rights that applies to Your use of the Licensed Material.",
+          "L29:      f.\tLicensed Material means the artistic or literary work, database, or other material to which the Licensor applied this Public License.",
+          "L1: Creative Commons Attribution 4.0 International",
+          "L17: Section 1 \u2013 Definitions."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/laion/rts-1k-rootless-apptainer/resolve/6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe/README.md",
+        "kind": "dataset_card",
+        "sha256": "200edba0bb6ea6665d535351f787a21248c6e857339546337af3efeb2013e1ce",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L2: license: cc-by-4.0",
+          "L1: ---",
+          "L3: task_categories:",
+          "L4: - reinforcement-learning",
+          "L5: language:",
+          "L6: - en",
+          "L7: tags:",
+          "L8: - harbor",
+          "L9: - apptainer",
+          "L10: - command-line",
+          "L11: - recursive-task-synthesis",
+          "L12: configs:"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/laion/rts-1k-rootless-apptainer/resolve/6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe/README.md",
+        "kind": "readme_license",
+        "sha256": "200edba0bb6ea6665d535351f787a21248c6e857339546337af3efeb2013e1ce",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/laion/rts-1k-rootless-apptainer/resolve/6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe/README.md",
+        "kind": "readme_notice",
+        "sha256": "200edba0bb6ea6665d535351f787a21248c6e857339546337af3efeb2013e1ce",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": false,
+    "decisions": []
+  },
+  "AllenAI:IF_multi_constraints_upto5": {
+    "source_id": "AllenAI:IF_multi_constraints_upto5",
+    "dataset_id": "allenai/IF_multi_constraints_upto5",
+    "revision": "2e3a77407b7fce69f95b248d64a884e3ae1c2423",
+    "resolved_at": "2026-11-15T18:24:34.224908+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/resolve/2e3a77407b7fce69f95b248d64a884e3ae1c2423/README.md",
+        "kind": "dataset_card",
+        "sha256": "dbfe19c0b500e9c1d5f222315870f46abf236a4f3fe326de8ec23446162e0cdc",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L31: license: odc-by",
+          "L1: ---",
+          "L2: dataset_info:",
+          "L3:   features:",
+          "L4:   - name: key",
+          "L5:     dtype: string",
+          "L6:   - name: messages",
+          "L7:     list:",
+          "L8:     - name: content",
+          "L9:       dtype: string",
+          "L10:     - name: role",
+          "L11:       dtype: string",
+          "L12:   - name: ground_truth"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/resolve/2e3a77407b7fce69f95b248d64a884e3ae1c2423/README.md",
+        "kind": "readme_license",
+        "sha256": "dbfe19c0b500e9c1d5f222315870f46abf236a4f3fe326de8ec23446162e0cdc",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L40: This dataset is licensed under ODC-BY-1.0. It is intended for research and educational use in accordance with Ai2's [Responsible Use Guidelines](https://allenai.org/responsible-use). This dataset includes output data generated from third party models that are subject to separate terms governing their use. "
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/resolve/2e3a77407b7fce69f95b248d64a884e3ae1c2423/README.md",
+        "kind": "readme_notice",
+        "sha256": "dbfe19c0b500e9c1d5f222315870f46abf236a4f3fe326de8ec23446162e0cdc",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": true,
+    "model_generated_outputs": false,
+    "decisions": []
+  },
+  "Tevatron:browsecomp-plus@bm25": {
+    "source_id": "Tevatron:browsecomp-plus@bm25",
+    "dataset_id": "Tevatron/browsecomp-plus",
+    "revision": "144cff8e35b5eaef7e526346aa60774a9deb941f",
+    "resolved_at": "2026-11-15T18:24:36.598851+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/Tevatron/browsecomp-plus/resolve/144cff8e35b5eaef7e526346aa60774a9deb941f/README.md",
+        "kind": "dataset_card",
+        "sha256": "51edd0cd0def52b145901eb04091433c98248aca548dafd8f4c6f2a31553f944",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L45: license: mit",
+          "L1: ---",
+          "L2: configs:",
+          "L3: - config_name: default",
+          "L4:   data_files:",
+          "L5:   - split: test",
+          "L6:     path: data/test-*",
+          "L7: dataset_info:",
+          "L8:   features:",
+          "L9:   - name: query_id",
+          "L10:     dtype: string",
+          "L11:   - name: query",
+          "L12:     dtype: string"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/Tevatron/browsecomp-plus/resolve/144cff8e35b5eaef7e526346aa60774a9deb941f/README.md",
+        "kind": "readme_license",
+        "sha256": "51edd0cd0def52b145901eb04091433c98248aca548dafd8f4c6f2a31553f944",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/Tevatron/browsecomp-plus/resolve/144cff8e35b5eaef7e526346aa60774a9deb941f/README.md",
+        "kind": "readme_notice",
+        "sha256": "51edd0cd0def52b145901eb04091433c98248aca548dafd8f4c6f2a31553f944",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": false,
+    "decisions": []
+  },
+  "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL": {
+    "source_id": "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL",
+    "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
+    "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
+    "resolved_at": "2026-11-15T18:24:34.703329+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "dataset_card",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L2: license: odc-by",
+          "L1: ---",
+          "L3: language:",
+          "L4:   - en",
+          "L5: configs:",
+          "L6:   - config_name: MOPD",
+          "L7:     data_files:",
+          "L8:       - split: train",
+          "L9:         path: MOPD/train.jsonl",
+          "L10:   - config_name: multi-domain-RL",
+          "L11:     data_files:",
+          "L12:       - split: train"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "readme_license",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L79: ## License/Terms of Use:",
+          "L81: The dataset is governed by the [Open Data Commons Attribution License (ODC-By) v1.0](https://opendatacommons.org/licenses/by/1-0/)."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "readme_notice",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": true,
+    "decisions": []
+  },
+  "Nemotron:Nemotron-Cascade-2-RL-data/multi-domain-RL": {
+    "source_id": "Nemotron:Nemotron-Cascade-2-RL-data/multi-domain-RL",
+    "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
+    "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
+    "resolved_at": "2026-11-15T18:24:34.703329+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "dataset_card",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L2: license: odc-by",
+          "L1: ---",
+          "L3: language:",
+          "L4:   - en",
+          "L5: configs:",
+          "L6:   - config_name: MOPD",
+          "L7:     data_files:",
+          "L8:       - split: train",
+          "L9:         path: MOPD/train.jsonl",
+          "L10:   - config_name: multi-domain-RL",
+          "L11:     data_files:",
+          "L12:       - split: train"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "readme_license",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L79: ## License/Terms of Use:",
+          "L81: The dataset is governed by the [Open Data Commons Attribution License (ODC-By) v1.0](https://opendatacommons.org/licenses/by/1-0/)."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "readme_notice",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": true,
+    "decisions": []
+  },
+  "Nemotron:Nemotron-Cascade-2-RL-data/MOPD": {
+    "source_id": "Nemotron:Nemotron-Cascade-2-RL-data/MOPD",
+    "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
+    "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
+    "resolved_at": "2026-11-15T18:24:34.703329+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "dataset_card",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L2: license: odc-by",
+          "L1: ---",
+          "L3: language:",
+          "L4:   - en",
+          "L5: configs:",
+          "L6:   - config_name: MOPD",
+          "L7:     data_files:",
+          "L8:       - split: train",
+          "L9:         path: MOPD/train.jsonl",
+          "L10:   - config_name: multi-domain-RL",
+          "L11:     data_files:",
+          "L12:       - split: train"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "readme_license",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L79: ## License/Terms of Use:",
+          "L81: The dataset is governed by the [Open Data Commons Attribution License (ODC-By) v1.0](https://opendatacommons.org/licenses/by/1-0/)."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "readme_notice",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": true,
+    "decisions": []
+  },
+  "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL": {
+    "source_id": "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL",
+    "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
+    "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
+    "resolved_at": "2026-11-15T18:24:34.703329+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "dataset_card",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L2: license: odc-by",
+          "L1: ---",
+          "L3: language:",
+          "L4:   - en",
+          "L5: configs:",
+          "L6:   - config_name: MOPD",
+          "L7:     data_files:",
+          "L8:       - split: train",
+          "L9:         path: MOPD/train.jsonl",
+          "L10:   - config_name: multi-domain-RL",
+          "L11:     data_files:",
+          "L12:       - split: train"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "readme_license",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L79: ## License/Terms of Use:",
+          "L81: The dataset is governed by the [Open Data Commons Attribution License (ODC-By) v1.0](https://opendatacommons.org/licenses/by/1-0/)."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "readme_notice",
+        "sha256": "3d7403db9e58f1a7a96a3d67c392724d484c6605caa343068292f8385fe64282",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": true,
+    "decisions": []
   }
 }

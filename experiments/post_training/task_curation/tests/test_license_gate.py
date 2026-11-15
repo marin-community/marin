@@ -131,28 +131,37 @@ def test_permissive_source_runs_real_ingestion_and_receipt_file_controls_access(
     input_path = tmp_path / "input.txt"
     input_path.write_text("3\n5\n")
     source = with_license(number_source(input_path))
+    reviewed = fixture_license(source.info.id, NUMBERS_DATASET.name, NUMBERS_DATASET.revision)
     registry = tmp_path / "licenses.json"
-    registry.write_text('{"' + source.info.id + '":' + source.info.license_receipt.model_dump_json() + "}")
+    registry.write_text(json.dumps({source.info.id: reviewed.model_dump(mode="json")}))
     source = replace(source, info=replace(source.info, license_receipt=None))
     monkeypatch.setattr(driver, "runnable_sources", lambda: {source.name: source})
     output = tmp_path / "output"
-    result = CliRunner().invoke(
-        driver.main,
-        [
-            "--source",
-            source.name,
-            "--mode",
-            "quick",
-            "--run",
-            "--output-root",
-            str(output),
-            "--license-receipts",
-            str(registry),
-        ],
-    )
+    arguments = [
+        "--source",
+        source.name,
+        "--mode",
+        "quick",
+        "--run",
+        "--output-root",
+        str(output),
+        "--license-receipts",
+        str(registry),
+    ]
+    result = CliRunner().invoke(driver.main, arguments)
     assert result.exit_code == 0, result.output + str(result.exception)
-    assert list(output.rglob("numbers.json"))
-    assert NUMBERS_DATASET.revision in registry.read_text()
+    assert [json.loads(path.read_text()) for path in output.rglob("numbers.json")] == [[6, 10]]
+    restricted = reviewed.model_copy(
+        update={
+            "evidence": [
+                license_evidence("https://example.test/LICENSE", b"---\nlicense: cc-by-nc-4.0\n---\n", "dataset_card")
+            ]
+        }
+    )
+    registry.write_text(json.dumps({source.info.id: restricted.model_dump(mode="json")}))
+    denied = CliRunner().invoke(driver.main, arguments)
+    assert isinstance(denied.exception, ValueError)
+    assert "restricted blocks ingest and admission" in str(denied.exception)
 
 
 def test_new_admission_requires_permission_even_with_complete_population_evidence(tmp_path):
@@ -193,6 +202,9 @@ def test_user_ban_blocks_ingestion_and_counts_but_preserves_archived_evidence(tm
             info=replace(
                 source.info,
                 id="Marin:renamed",
+                upstream_dataset="renamed",
+                upstream_name="renamed",
+                title=None,
                 license_receipt=fixture_license("Marin:renamed", NUMBERS_DATASET.name, NUMBERS_DATASET.revision),
             ),
         )

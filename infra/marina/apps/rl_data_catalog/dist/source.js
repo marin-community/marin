@@ -15,9 +15,12 @@ function licenseEvidence(declaration) {
   }
   const receipt = declaration.license_receipt;
   if (!receipt) return 'Unresolved';
-  const ids = [...new Set(receipt.evidence.flatMap(item => item.license_ids))];
+  const ids = [...new Set(receipt.evidence.flatMap(item => item.license_ids)
+    .map(id => id.trim().toLowerCase()).filter(id => id !== 'missing'))];
   const line = node('span', ids.join(', ') || 'Missing');
-  if (receipt.evidence.length) line.append(' · ', pointer(receipt.evidence[0].url, 'Evidence ↗'));
+  const evidence = receipt.evidence.find(item => item.license_ids.some(id => id.toLowerCase() !== 'missing'))
+    || receipt.evidence[0];
+  if (evidence) line.append(' · ', pointer(evidence.url, 'Evidence ↗'));
   return line;
 }
 function pointer(uri, label) {
