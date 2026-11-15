@@ -7,20 +7,23 @@ NuminaMath-LEAN (Project Numina, Apache-2.0) pairs competition problems with Lea
 them autoformalized. This source keeps the 9,475 rows with a human statement and a complete human proof
 (``author == "human"``, ``ground_truth_type == "complete"``). Each task asks for a proof of the frozen
 statement and is graded like ProofNet-Verified (``proofs.py``). The row's own proof, kept in the task's
-evidence and never shown to the solver, is the golden control. At the pinned revision 7,628 rows
-convert, every one of their statements validates with the grader's toolchain (``check_statements.py``),
-and 4,595 of their proofs compile; with that many failing, the pipeline's sampled check falls below
-its 95% gate and runs every task's control, so a row whose proof no longer checks is not admitted.
+evidence and never shown to the solver, is the golden control. At the pinned revision 6,834 rows have a
+statement the grader can freeze, and the human proofs of 4,035 of them compile without ``sorry`` with
+the grader's toolchain (``PASSING_PROOFS``); only those 4,035 become tasks, so every task has a working
+golden control whether or not the pipeline samples it.
 
-A row is rejected before it reaches the grader when Prime Intellect's Lean environments (Apache-2.0),
-which pin the same toolchain, record its statement as not compiling or as misformalized, when its
-statement does not compile for another reason (``UNCOMPILABLE``), when its statement or proof uses the
-``∑ x in s`` syntax that current Mathlib no longer parses, when its proof uses ``native_decide``,
-``sorry`` or ``admit`` or runs code while it elaborates, and when it restates one of the eval problems
-(``eval_overlap.py``).
+A row is rejected before it reaches the grader when it comes from MATH's test split, which holds
+MATH-500, when Prime Intellect's Lean environments (Apache-2.0), which pin the same toolchain, record
+its statement as not compiling or as misformalized, when its statement does not compile for another
+reason (``UNCOMPILABLE``), when its statement or proof uses the ``∑ x in s`` syntax that current Mathlib
+no longer parses, when its proof uses ``native_decide``, ``sorry`` or ``admit`` or runs code while it
+elaborates, when its statement runs code, when its statement proves other theorems before the target,
+which the solver would see, when it restates one of the eval problems (``eval_overlap.py``), and when its
+human proof does not compile.
 """
 
 import gzip
+import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -86,6 +89,14 @@ EVAL_OVERLAP = frozenset(json.loads(EVAL_OVERLAP_FILE.read_text())["overlapping"
 ``eval_overlap.py`` finds them at the pinned revisions; rerun it, and bump the recipe's ``version``, when
 an eval set changes."""
 
+PROOFS_FILE = Path(__file__).resolve().parent / "numina_proofs.json"
+PASSING_PROOFS = frozenset(json.loads(PROOFS_FILE.read_text())["passing"])
+"""Rows whose human proof, as the golden control submits it, compiles without ``sorry`` with the grader's
+toolchain, by ``proof_key``. ``check_statements.py numina --write-proofs`` writes the file; rerun it, and
+bump the recipe's ``version``, when the toolchain or the revision moves."""
+HELD_OUT_SOURCES = frozenset({"math_test"})
+"""NuminaMath-LEAN sources taken from a test split Marin evaluates on: MATH's test split holds MATH-500."""
+
 DECLARATION_START = re.compile(
     rf"^[ \t]*{LEADING_OPTIONS}(?:theorem|lemma)\s+(?P<name>{TARGET_NAME.pattern})(?![\w'.!?])", re.MULTILINE
 )
@@ -94,12 +105,15 @@ OPEN_PROOF = re.compile(r":=\s*(?:by\s*)?$")
 """A statement that ends where its proof would start, as NuminaMath-LEAN writes them."""
 OLD_BIG_OPERATOR = re.compile(r"[∑∏][^,∑∏]*?\s+in\s+")
 """``∑ x in s, f x``, which Mathlib replaced by ``∑ x ∈ s, f x``; the pattern Prime Intellect rewrites."""
-UNUSABLE_PROOF = re.compile(
-    r"(?<![\w.'])(?:native_decide|sorry|admit|axiom|run_cmd|run_tac|run_elab|run_meta|by_elab|elab|elab_rules|"
-    r"macro|macro_rules|simproc|dsimproc|initialize|unsafe|implemented_by|extern)(?![\w'])|#eval|(?<![\w.'])IO\."
+RUNS_CODE = (
+    r"(?<![\w.'])(?:run_cmd|run_tac|run_elab|run_meta|by_elab|elab|elab_rules|macro|macro_rules|simproc|"
+    r"dsimproc|initialize|unsafe|implemented_by|extern)(?![\w'])|#eval|(?<![\w.'])IO\."
 )
-"""What makes a human proof unusable as the golden control: what the grader rejects, and commands that
-run code while the proof elaborates."""
+"""Commands that run code while a file elaborates."""
+UNUSABLE_STATEMENT = re.compile(RUNS_CODE)
+"""What a statement must not hold: the reference compiles it as root on every grade."""
+UNUSABLE_PROOF = re.compile(rf"(?<![\w.'])(?:native_decide|sorry|admit|axiom)(?![\w'])|{RUNS_CODE}")
+"""What makes a human proof unusable as the golden control: what the grader rejects, and code that runs."""
 
 
 def is_human_proof_row(row: dict[str, Any], _context: ConversionContext | None) -> bool:
@@ -130,17 +144,30 @@ def numina_contract(formal_statement: str) -> Contract | ImportRejection:
     statement = source[target.start() :]
     if OPEN_PROOF.search(statement):
         statement = f"{statement} sorry"
-    return statement_contract(source[: target.start()], statement, target["name"])
+    contract = statement_contract(source[: target.start()], statement, target["name"])
+    if not isinstance(contract, ImportRejection) and len(declarations) > 1:
+        return unsupported("solved_helper", "The statement proves other theorems first, which the solver would see")
+    return contract
 
 
-def row_contract(data: Mapping[str, Any], listed: Callable[[str], str | None]) -> Contract | ImportRejection:
+def proof_key(data: Mapping[str, Any]) -> str:
+    """A row's uuid and a digest of its statement and proof: some uuids name several different rows."""
+    digest = hashlib.sha256(f"{data['formal_statement']}\0{data['formal_ground_truth']}".encode()).hexdigest()
+    return f"{data['uuid']}:{digest[:12]}"
+
+
+def row_contract(
+    data: Mapping[str, Any], listed: Callable[[str], str | None], *, require_passing_proof: bool = True
+) -> Contract | ImportRejection:
     """The frozen contract of one row, or why the row is left out; ``listed`` names the Prime Intellect list
-    that holds a uuid, if any."""
+    that holds a uuid, if any. ``require_passing_proof`` is off only while ``PROOFS_FILE`` is written."""
     uuid, problem, statement, proof = (
         data.get(key) for key in ("uuid", "problem", "formal_statement", "formal_ground_truth")
     )
     if not all(isinstance(value, str) and value.strip() for value in (uuid, problem, statement, proof)):
         return source_defect("missing_input", "uuid, problem, formal_statement and formal_ground_truth are required")
+    if data.get("source") in HELD_OUT_SOURCES:
+        return unsupported("held_out_split", "The problem comes from a test split Marin evaluates on")
     if (name := listed(uuid)) is not None:
         return source_defect(f"prime_{name}", f"Prime Intellect's Lean environments list this row as {name}")
     if uuid in UNCOMPILABLE:
@@ -151,7 +178,12 @@ def row_contract(data: Mapping[str, Any], listed: Callable[[str], str | None]) -
         return source_defect("old_big_operator_syntax", "Current Mathlib no longer parses `∑ x in s`")
     if UNUSABLE_PROOF.search(without_comments(proof)):
         return unsupported("unusable_proof", "The human proof cannot serve as the golden control")
-    return numina_contract(statement)
+    if UNUSABLE_STATEMENT.search(without_comments(statement)):
+        return unsupported("unusable_statement", "The statement runs code, which the reference would run as root")
+    contract = numina_contract(statement)
+    if not isinstance(contract, ImportRejection) and require_passing_proof and proof_key(data) not in PASSING_PROOFS:
+        return unsupported("proof_does_not_compile", "The human proof does not compile with the grader's toolchain")
+    return contract
 
 
 def convert_numina(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:

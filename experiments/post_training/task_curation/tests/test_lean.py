@@ -27,18 +27,22 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
 )
 from experiments.post_training.task_curation.datasets.lean.numina import (
     EVAL_OVERLAP,
+    PASSING_PROOFS,
     UNCOMPILABLE,
     human_proof,
     is_human_proof_row,
 )
+from experiments.post_training.task_curation.datasets.lean.numina import proof_key as numina_proof_key
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
     NUMINA,
+    NUMINA_ROWS,
     PROOFNET,
     contract,
     numina_row,
     prime_inputs,
     proofnet_row,
+    with_passing_proof,
 )
 
 ADD_ZERO = Contract(prefix="import Mathlib", statement="theorem t (n : Nat) : n + 0 = n :=", target="t")
@@ -255,8 +259,8 @@ def test_the_verdict_is_the_last_json_line_even_when_a_name_holds_a_line_separat
     assert verdict_line("no verdict\n") is None
 
 
-def test_a_numina_row_freezes_its_theorem_and_keeps_the_human_proof_for_the_golden_control(tmp_path):
-    row = numina_row()
+def test_a_numina_row_freezes_its_theorem_and_keeps_the_human_proof_for_the_golden_control(tmp_path, monkeypatch):
+    row = with_passing_proof(monkeypatch, numina_row())
     task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
     assert contract(task) == {
         "prefix": "import Mathlib",
@@ -272,10 +276,11 @@ def test_a_numina_row_freezes_its_theorem_and_keeps_the_human_proof_for_the_gold
     assert proof_block(golden.content) == row["formal_ground_truth"]
 
 
-def test_the_golden_control_drops_the_human_proofs_comments_which_can_hold_code_fences(tmp_path):
+def test_the_golden_control_drops_the_human_proofs_comments_which_can_hold_code_fences(tmp_path, monkeypatch):
     proof = "import Mathlib\n\n/-! Example:\n```lean\nexample : True := trivial\n```\n-/\n"
     proof += "theorem algebra_1 (n : Nat) : n + 0 = n := by\n  exact Nat.add_zero n"
-    task = converted_task(NUMINA, numina_row(formal_ground_truth=proof), inputs=prime_inputs(tmp_path))
+    row = with_passing_proof(monkeypatch, numina_row(formal_ground_truth=proof))
+    task = converted_task(NUMINA, row, inputs=prime_inputs(tmp_path))
     golden = human_proof(task).event
     assert isinstance(golden, TextMessage)
     block = proof_block(golden.content)
@@ -304,8 +309,10 @@ def test_the_golden_control_drops_the_human_proofs_comments_which_can_hold_code_
     ],
     ids=["set_option_in", "open_docstring_attribute", "helper_definition"],
 )
-def test_a_numina_statement_freezes_its_last_theorem_after_its_prefix(formal_statement, prefix, statement, tmp_path):
-    row = numina_row(formal_statement=formal_statement)
+def test_a_numina_statement_freezes_its_last_theorem_after_its_prefix(
+    formal_statement, prefix, statement, tmp_path, monkeypatch
+):
+    row = with_passing_proof(monkeypatch, numina_row(formal_statement=formal_statement))
     frozen = contract(converted_task(NUMINA, row, inputs=prime_inputs(tmp_path)))
     assert (frozen["prefix"], frozen["statement"].strip(), frozen["target"]) == (prefix, statement, "algebra_1")
 
@@ -315,6 +322,10 @@ def test_eval_overlap_matches_statements_that_differ_only_in_binder_names_and_sp
     theirs = statement_key("theorem aime_1 (x y : Nat) (h1 : x = y) : x^2 = y ^ 2 := rfl")
     assert ours is not None and ours == theirs
     assert ours != statement_key("theorem aime_2 (x y : Nat) (h1 : x = y) : x ^ 3 = y ^ 3 := by")
+
+
+def test_the_fixture_rows_used_as_golden_controls_have_passing_proofs():
+    assert all(numina_proof_key(row) in PASSING_PROOFS for row in NUMINA_ROWS)
 
 
 def test_only_rows_with_a_human_statement_and_proof_are_selected():
@@ -359,6 +370,20 @@ OLD_SUM = "theorem algebra_1 (s : Finset Nat) : \u2211 x in s, 0 = 0 := by"
             {"formal_statement": "import Mathlib\nimport Aesop\ntheorem algebra_1 (n : Nat) : n + 0 = n := by"},
             "non_mathlib_import",
         ),
+        ({"source": "math_test"}, "held_out_split"),
+        (
+            {
+                "formal_statement": (
+                    "import Mathlib\nlemma h : True := trivial\ntheorem algebra_1 (n : Nat) : n + 0 = n := by"
+                )
+            },
+            "solved_helper",
+        ),
+        (
+            {"formal_statement": "import Mathlib\n#eval 1\ntheorem algebra_1 (n : Nat) : n + 0 = n := by"},
+            "unusable_statement",
+        ),
+        ({}, "proof_does_not_compile"),
     ],
     ids=[
         "prime_unported",
@@ -372,6 +397,10 @@ OLD_SUM = "theorem algebra_1 (s : Finset Nat) : \u2211 x in s, 0 = 0 := by"
         "proof_runs_code",
         "unproved_helper",
         "non_mathlib_import",
+        "math_test_split",
+        "solved_helper",
+        "statement_runs_code",
+        "proof_not_listed",
     ],
 )
 def test_a_numina_row_without_a_usable_statement_or_proof_is_rejected(fields, reason, tmp_path):

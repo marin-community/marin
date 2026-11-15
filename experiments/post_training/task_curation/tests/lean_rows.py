@@ -89,3 +89,9 @@ def prime_inputs(
         (directory / name / f"{name}.json.gz").write_bytes(gzip.compress(json.dumps(sorted(uuids)).encode()))
         staged[name] = StoragePath(str(directory / name))
     return staged
+
+
+def with_passing_proof(monkeypatch: Any, row: dict[str, Any]) -> dict[str, Any]:
+    """``row``, with its human proof counted as passing for this test only."""
+    monkeypatch.setattr(numina, "PASSING_PROOFS", numina.PASSING_PROOFS | {numina.proof_key(row)})
+    return row
