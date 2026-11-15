@@ -91,15 +91,19 @@ COMPILATION_CONFIG = {
 # Each rank streams its own expert shards; the memory limit bounds host RAM per rank.
 LOADER_CONFIG = {"distributed": True, "concurrency": 4, "memory_limit": 16 * 1024**3}
 
-# The fast decode stack (Loom decode-notebook, E7: 11.2 ms/token at batch 1 against ~55 ms on 4 nodes, with
-# the marin#11430 correctness gates passing). It runs fork release 0ac9dcb with a Python overlay wheel:
+# The fast decode stack (Loom decode-notebook: 10.6 ms/token at batch 1 against ~55 ms on 4 nodes, with the
+# marin#11430 correctness gates passing). It runs fork release 0ac9dcb with a Python overlay wheel:
 # FULL_AND_PIECEWISE decode graphs (vllm#130), lean ShortConv (marin#11430 R19), fused same-input
-# projections, -1 expert ids for padding rows, and a fused Triton router, each enabled by FAST_ENV.
+# projections, -1 expert ids for padding rows, and a fused Triton router, each enabled by FAST_ENV. The
+# wheel also carries options this stack leaves off (shared-expert stream, fused gated norm, two-sided
+# combine sum); without their variables those code paths do not run.
 FAST_WHEEL = (
-    "s3://marin-us-east-02a/marin/users/rav/hero-serving/leanopt-5822d380/"
+    "s3://marin-us-east-02a/marin/users/rav/hero-serving/leangn2-4e4a1568/"
     "vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
 )
-FAST_WHEEL_SHA256 = "5822d380e25f29c6ef2f73d9dc3289906b0a13612703301151d1c25d3acda2d8"
+FAST_WHEEL_SHA256 = "4e4a156858666ccdcf4da752aa69d4e414c6ddf7a833826fc8b7d2c6d1c2f61a"
+# MNNVL one-sided all-to-all with FlashInfer's TRT-LLM BF16 experts (0.6-0.8 ms/token faster than two-sided).
+FAST_ALL2ALL_BACKEND = "flashinfer_nvlink_one_sided"
 FAST_BASE_RELEASE = VllmGpuRelease(
     release_tag="marin-vllm-gpu-20261113-0ac9dcb157ee",
     source_commit="0ac9dcb157ee86ccb447bc717259159c41ad456a",
@@ -161,7 +165,7 @@ class DecodeStack(StrEnum):
 
     # The promoted fork release with PIECEWISE CUDA graphs and all-gather/reduce-scatter MoE collectives.
     PIECEWISE = "piecewise"
-    # Full decode graphs, the MNNVL two-sided all-to-all and the decode overlay (see FAST_WHEEL).
+    # Full decode graphs, the MNNVL one-sided all-to-all and the decode overlay (see FAST_WHEEL).
     FAST = "fast"
 
 
@@ -227,7 +231,7 @@ def _vllm_args(config: HeroDashboardConfig, task_index: int, primary_host: str, 
         # FAST_ENV changes the traced graph, but neither compile-cache key sees environment variables;
         # additional_config is in both keys and ignored by the CUDA platform.
         overlay = json.dumps({"grug_overlay": sorted(f"{k}={v}" for k, v in FAST_ENV.items())})
-        args += ("--all2all-backend", "flashinfer_nvlink_two_sided", "--additional-config", overlay)
+        args += ("--all2all-backend", FAST_ALL2ALL_BACKEND, "--additional-config", overlay)
     if config.quantization is Quantization.FP8:
         args += ("--quantization", "fp8")
     if config.default_thinking is not DefaultThinking.TEMPLATE:
