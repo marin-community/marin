@@ -3,21 +3,21 @@
 
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
-LICENSE_BANS = r'''
+LICENSE_BANS = r"""
 {
-  "version": "2026.11.15.1",
+  "version": "2026.11.15.2",
   "bans": [
     {
       "source_id": "ASDiv:asdiv",
       "upstream_id": "chaochun/nlu-asdiv-dataset",
-      "upstream_revision": "de6a5ba9542b6411897b4ca4658759374942037a",
-      "classification": "unknown",
+      "upstream_revision": "883f90a9a65bf00304ba8f37423910fe743abc47",
+      "classification": "restricted",
       "license_ids": [
-        "unknown"
+        "cc-by-nc-4.0"
       ],
-      "reason": "Primary license and immutable upstream lineage remain unresolved.",
+      "reason": "Pinned upstream dataset README explicitly declares CC BY-NC 4.0.",
       "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/datasets/skyrl/math.py"
+        "https://github.com/chaochun/nlu-asdiv-dataset/blob/883f90a9a65bf00304ba8f37423910fe743abc47/README.md"
       ],
       "decided_at": "2026-11-15T17:27:51.574598+00:00",
       "decision_by": "user via coordinator",
@@ -150,22 +150,6 @@ LICENSE_BANS = r'''
       "decided_at": "2026-11-15T17:27:51.574578+00:00",
       "decision_by": "user via coordinator",
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "Evalchemy:lambada_openai",
-      "upstream_id": "EleutherAI/lambada_openai",
-      "upstream_revision": "900124bf3b8235c6daf21033af9948b3f07346c4",
-      "classification": "permissive",
-      "reason": "Explicit source ban remains in force pending the recorded inheritance/provenance review.",
-      "evidence_urls": [
-        "https://huggingface.co/datasets/EleutherAI/lambada_openai/resolve/900124bf3b8235c6daf21033af9948b3f07346c4/README.md"
-      ],
-      "decided_at": "2026-11-15T17:12:29.218477+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497",
-      "license_ids": [
-        "mit"
-      ]
     },
     {
       "source_id": "Evalchemy:math500",
@@ -392,22 +376,6 @@ LICENSE_BANS = r'''
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
     },
     {
-      "source_id": "Reasoning Gym:reasoning_gym",
-      "upstream_id": "reasoning-gym@0.1.25",
-      "upstream_revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
-      "classification": "unknown",
-      "license_ids": [
-        "unknown"
-      ],
-      "reason": "PyPI declares Apache-2.0, but exact archived wheel lineage has not been verified.",
-      "evidence_urls": [
-        "https://pypi.org/pypi/reasoning-gym/0.1.25/json"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574617+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
       "source_id": "TaskTrove:GAIR__OpenSWE__openswe_oss",
       "upstream_id": "unverified-origin:2ac88a442692",
       "upstream_revision": "dc6df1f3f949439ad1fdd27ffa034a913184405c",
@@ -577,4 +545,4 @@ LICENSE_BANS = r'''
     }
   ]
 }
-'''
+"""
