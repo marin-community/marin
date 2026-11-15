@@ -64,7 +64,7 @@
 #task-detail details { margin-top: 22px; font-size: max(var(--type-min), 12px); }
 #detail-matches table { table-layout: auto; min-width: 560px; }
 #detail-matches td { height: auto; padding: 9px 7px; font-size: max(var(--type-min), 12px); line-height: 1.5; overflow-wrap: normal; }
-#detail-matches th { position: static; padding: 9px 7px; font-size: max(var(--type-min), 12px); }
+#detail-matches th { white-space: nowrap; position: static; padding: 9px 7px; font-size: max(var(--type-min), 12px); }
 #detail-matches .score { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
 .score-status { color: var(--muted); font-size: max(var(--type-min), 12px); }
 .score-status.outside { color: var(--bad-text); }
