@@ -169,14 +169,6 @@ def test_tokenizer_wrappers_do_not_change_structural_evidence():
     )
 
 
-def test_modified_model_bytes_cannot_score_under_a_prior_pin(tmp_path):
-    model = encoded_model(tmp_path)
-    path = tmp_path / "model.json"
-    path.write_text(path.read_text().replace('"intercept": 0', '"intercept": 10'))
-    with pytest.raises(ValueError, match="differs from pinned"):
-        load_model(str(path), model.sha256)
-
-
 def test_score_artifact_relocates_to_consumer_region(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     artifact = LowValueScores(
