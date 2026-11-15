@@ -77,25 +77,27 @@ from typing import Protocol, runtime_checkable
 
 import click
 import draccus
-import jax.numpy as jnp
 import jmp
-from fray.types import ANY_REGION, CpuConfig, GpuConfig, ResourceConfig
+from fray.current_client import current_client
+from fray.types import ANY_REGION, CpuConfig, Entrypoint, GpuConfig, JobRequest, ResourceConfig, create_environment
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.data.text.formats import ChatLmDatasetFormat
+from levanter.eval_audit import InitialEvalMatchConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.lm_model import LmConfig
+from levanter.models.snowball_sft import SnowballSftConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
-from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
+from marin.training.run_environment import extras_for_resources
 from marin.training.training import (
     LevanterCheckpoint,
     TrainLmOnPodConfig,
@@ -238,10 +240,18 @@ def _levanter_train_config(
         # One HF export: the trainer's forced end-of-run hook pass. A period equal to the run
         # length would also fire on the last step and export the same step twice.
         hf_save_steps=num_train_steps + 1,
-        hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
+        hf_save_dtype=spec.hf_save_dtype,
         hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
-        z_loss_weight=0.0,
+        z_loss_weight=spec.z_loss_weight,
+        global_gradient_clip=spec.global_gradient_clip,
+        optimizer_num_train_steps=spec.optimizer_num_train_steps,
+        snowball_sft=spec.snowball_sft,
+        token_weighted_accumulation=spec.token_weighted_accumulation,
+        data_seed=spec.data_seed,
+        tensorstore_cache_bytes=spec.tensorstore_cache_bytes,
+        evaluation_data=spec.evaluation_data,
+        initial_eval_match=spec.initial_eval_match,
     )
 
 
@@ -279,13 +289,20 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
-        env_vars={"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else None,
+        env_vars={
+            **({"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else {}),
+            **({"IRIS_PORT_JAX": str(spec.jax_port)} if spec.jax_port is not None else {}),
+        },
         auto_build_caches=data_config.auto_build_caches,
     )
 
 
 def _levanter_train_job(
-    pod_config: TrainLmOnPodConfig, *, task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS
+    pod_config: TrainLmOnPodConfig,
+    *,
+    task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS,
+    processes_per_task: int = 1,
+    priority: int = 0,
 ) -> None:
     """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
     environment = resolve_training_env(pod_config.env_vars, pod_config.resources)
@@ -318,12 +335,25 @@ def _levanter_train_job(
                 indent=2,
             )
         )
-    remote(
-        run_levanter_train_lm,
-        resources=pod_config.resources,
-        timeout=Duration.from_seconds(task_timeout_seconds),
-        env_vars=environment,
-    )(pod_config)
+    job = current_client().submit(
+        JobRequest(
+            name=f"sft-{pod_config.train_config.trainer.id}",
+            entrypoint=Entrypoint.from_callable(run_levanter_train_lm, args=[pod_config]),
+            resources=pod_config.resources,
+            environment=create_environment(extras=extras_for_resources(pod_config.resources), env_vars=environment),
+            timeout=Duration.from_seconds(task_timeout_seconds),
+            processes_per_task=processes_per_task,
+            priority=priority,
+            max_retries_preemption=0,
+        )
+    )
+    if pod_config.output_path is not None:
+        (StoragePath(pod_config.output_path) / "dispatch.json").write_text(
+            json.dumps(
+                {"job_id": job.job_id, "timeout_seconds": task_timeout_seconds, "processes_per_task": processes_per_task}
+            )
+        )
+    job.wait(raise_on_failure=True)
 
 
 @dataclass(frozen=True)
@@ -341,6 +371,8 @@ class HFModel:
     model_type: str = "qwen3"
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
     task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS
+    processes_per_task: int = 1
+    priority: int = 0
 
     def tokenizer_cache_key(self) -> str:
         return self.tokenizer_path or self.model_ref
@@ -350,7 +382,12 @@ class HFModel:
 
     @property
     def run(self) -> Callable[..., None]:
-        return partial(_levanter_train_job, task_timeout_seconds=self.task_timeout_seconds)
+        return partial(
+            _levanter_train_job,
+            task_timeout_seconds=self.task_timeout_seconds,
+            processes_per_task=self.processes_per_task,
+            priority=self.priority,
+        )
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return ()
@@ -370,7 +407,7 @@ class HFModel:
             resources,
             num_train_steps,
             # use_hf_model_config re-derives the arch from the checkpoint, so only the class matters.
-            model_config=LmConfig.get_choice_class(self.model_type)(),
+            model_config=spec.model_config or LmConfig.get_choice_class(self.model_type)(),
             initialize_from_hf=self.model_ref,
             initialize_model_from_checkpoint_path=None,
             use_hf_model_config=True,
@@ -581,6 +618,17 @@ class SFTSpec:
     prepared_data: LmDataConfig | None = None
     """Already prepared caches and their complete mixture schedule; excludes message datasets."""
     data_dependencies: tuple[ArtifactStep, ...] = ()
+    model_config: LmConfig | None = None
+    trainer_config: TrainerConfig | None = None
+    z_loss_weight: float = 0.0
+    global_gradient_clip: float | None = None
+    initial_eval_match: InitialEvalMatchConfig | None = None
+    optimizer_num_train_steps: int | None = None
+    snowball_sft: SnowballSftConfig | None = None
+    token_weighted_accumulation: bool = False
+    data_seed: int | None = None
+    tensorstore_cache_bytes: int | None = None
+    evaluation_data: LmDataConfig | None = None
     mesh: MeshConfig | None = None
     seq_len: int = 4096
     pack: bool = True  # chat packs by default; a step count must count packed examples
@@ -596,6 +644,7 @@ class SFTSpec:
     num_train_epochs: int | None = None
     hf_save_dtype: str | None = None
     xla_flags: Sequence[str] = ()
+    jax_port: int | None = None
     """Explicit compiler flags for the training process and its validation callbacks."""
     wandb_project: str = "marin-sft-launcher"
     wandb_entity: str | None = None
@@ -732,6 +781,21 @@ def _trainer(
     spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
 ) -> TrainerConfig:
     """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator."""
+    if spec.trainer_config is not None:
+        jax_config = dict(spec.trainer_config.jax_config)
+        if gpu_allocator:
+            jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
+        return replace(
+            spec.trainer_config,
+            id=sft_run_id(spec),
+            train_batch_size=spec.batch_size,
+            num_train_steps=num_train_steps,
+            per_device_parallelism=spec.per_device_parallelism,
+            use_explicit_mesh_axes=use_explicit_mesh_axes,
+            mesh=spec.mesh if spec.mesh is not None else spec.trainer_config.mesh,
+            checkpointer=spec.checkpointer,
+            jax_config=jax_config,
+        )
     jax_config = dict(DEFAULT_JAX_CONFIG)
     if gpu_allocator:
         # The cuda_async allocator is the resume-OOM defrag fix (marin #7115), GPU-only: passing

@@ -4,6 +4,7 @@
 import datetime
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import jax.numpy as jnp
 import numpy as np
@@ -11,8 +12,10 @@ import pytest
 from fray.types import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
 from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint_or_initialize
 from levanter.data.text.datasets import LmDataConfig
+from levanter.main.train_lm import TrainLmConfig
 from levanter.optim.config import AdamConfig
 from levanter.testing.helpers import use_test_mesh
+from levanter.trainer import TrainerConfig
 from marin.execution.lazy import StepContext
 from marin.training.training import TrainLmOnPodConfig, apply_output_path
 from rigging.filesystem.storage_path import StoragePath
@@ -31,26 +34,25 @@ def test_native_sft_dispatch_preserves_accelerator_platform_and_timeout(monkeypa
     monkeypatch.setenv("JAX_PLATFORMS", "cpu")
     submitted = []
 
-    def capture_remote(fn, **execution):
-        def submit(config):
-            submitted.append((execution, config))
+    def submit(request):
+        submitted.append(request)
+        return SimpleNamespace(wait=lambda *, raise_on_failure: None)
 
-        return submit
-
-    monkeypatch.setattr(launcher, "remote", capture_remote)
+    monkeypatch.setattr(launcher, "current_client", lambda: SimpleNamespace(submit=submit))
     kwargs = {} if override is None else {"task_timeout_seconds": override}
     model = HFModel("unused-no-download", **kwargs)
     pod = TrainLmOnPodConfig(
-        train_config=None,
+        train_config=TrainLmConfig(trainer=TrainerConfig(id="dispatch-test")),
         resources=ResourceConfig(device=device),
         env_vars={"XLA_FLAGS": "--xla_gpu_shard_autotuning=false"},
     )
     model.run(pod)
-    assert submitted[0][0]["timeout"] == Duration.from_seconds(259200 if override is None else override)
-    assert submitted[0][1] is pod
-    assert submitted[0][0]["env_vars"]["MARIN_TEMP_PREFIX"] == "s3://marin-us-east-08a/tmp"
-    assert submitted[0][0]["env_vars"].get("JAX_PLATFORMS") == platform
-    flags = submitted[0][0]["env_vars"]["XLA_FLAGS"].split()
+    request = submitted[0]
+    assert request.timeout == Duration.from_seconds(259200 if override is None else override)
+    assert request.resources == pod.resources
+    assert request.environment.env_vars["MARIN_TEMP_PREFIX"] == "s3://marin-us-east-08a/tmp"
+    assert request.environment.env_vars.get("JAX_PLATFORMS") == platform
+    flags = request.environment.env_vars["XLA_FLAGS"].split()
     assert "--xla_gpu_shard_autotuning=false" in flags
 
 
