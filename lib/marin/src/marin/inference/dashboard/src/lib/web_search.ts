@@ -60,6 +60,19 @@ export const WEB_EXTRACT_TOOL_DEFINITION: ToolDefinition = {
   },
 }
 
+/** The system guidance sent while the web tools are enabled; `today` is the browser's local date. */
+export function webSearchInstructions(today: Date): string {
+  const date = [today.getFullYear(), today.getMonth() + 1, today.getDate()]
+    .map((part, index) => String(part).padStart(index ? 2 : 4, '0'))
+    .join('-')
+  return [
+    `Today's date is ${date}.`,
+    'Use web_search for recent events, current facts, and anything that may have changed after your training data.',
+    'Search results contain only short excerpts: read the most relevant pages with web_extract and base your answer on their contents, not only on the excerpts.',
+    'Cite the URL of each source that you use.',
+  ].join(' ')
+}
+
 /** Why the Web search option is disabled, or null when Parallel accepts searches (or search is not configured). */
 export function webSearchUnavailableReason(availability: WebSearchAvailability | null): string | null {
   switch (availability) {

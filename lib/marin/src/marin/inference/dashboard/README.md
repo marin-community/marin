@@ -250,6 +250,13 @@ Parallel, to the request's `tools` field:
   characters per call and gives the page text the same budget, split across
   the URLs.
 
+While the checkbox is selected, each request also starts with a `system` message
+of guidance, placed before the **System prompt** text. It gives the browser's
+local date and tells the model to use `web_search` for recent or changing facts,
+to read the relevant pages with `web_extract` instead of answering from the
+search excerpts alone, and to cite the URL of each source. Raw chat does not
+show this message or the tool definitions.
+
 The checkbox is shown only when the serving job holds the Iris secret
 `PARALLEL_API_KEY`. The dashboard server adds the key to each call, so the
 browser never receives it. Each call is billed to the account that owns the key.

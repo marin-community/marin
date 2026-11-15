@@ -27,6 +27,7 @@ import {
   WEB_EXTRACT_TOOL_NAME,
   WEB_SEARCH_TOOL_DEFINITION,
   WEB_SEARCH_TOOL_NAME,
+  webSearchInstructions,
 } from '../lib/web_search'
 import { requestDebugData, vllmDebugStreamOptions } from '../lib/vllm_debug'
 import type { VllmRequestDebug } from '../lib/vllm_debug'
@@ -184,7 +185,9 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       }
       tools.push(BASH_TOOL_DEFINITION)
     }
+    let preamble = ''
     if (conversation.webSearch && webSearchUsable.value) {
+      preamble = webSearchInstructions(new Date())
       for (const definition of [WEB_SEARCH_TOOL_DEFINITION, WEB_EXTRACT_TOOL_DEFINITION]) {
         const name = definition.function.name
         if (tools.some((tool) => tool.function.name === name)) {
@@ -201,7 +204,7 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
     await runToolRounds(
       props.params.maxToolRounds,
       async () => {
-        const request = modelMessages(conversation)
+        const request = modelMessages(conversation, preamble)
         reply = appendAssistantReply(conversation)
         await complete(reply, request, tools, templateFields, signal)
         persistConversation(conversation)

@@ -23,10 +23,10 @@ export type ModelMessage =
   | { role: 'assistant'; content: string; reasoning?: string; tool_calls?: ModelToolCall[] }
   | { role: 'tool'; name: string; tool_call_id: string; content: string }
 
-/** Build structured history for the served model's active chat template. */
-export function modelMessages(conversation: Conversation): ModelMessage[] {
+/** Build structured history for the served model's active chat template; `preamble` precedes the system prompt. */
+export function modelMessages(conversation: Conversation, preamble = ''): ModelMessage[] {
   const request: ModelMessage[] = []
-  const system = conversation.system.trim()
+  const system = [preamble.trim(), conversation.system.trim()].filter(Boolean).join('\n\n')
   if (system) request.push({ role: 'system', content: system })
   for (const message of conversation.messages) {
     if (message.role === 'assistant') {
