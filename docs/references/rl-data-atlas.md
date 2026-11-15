@@ -748,6 +748,23 @@ remain attached to their old request; new content measurements need new approval
 Groups choose a stable canonical member for default collapsing; every source
 and assessment remains available. The flags are advisory.
 
+Verify the workflow run for the PR's current head before reporting overlap CI
+as passed. A run waiting on workflow concurrency may not yet have a registered
+`overlap` check, so the PR's check rollup can omit it. Use `headRefOid` from the
+first command as `HEAD_SHA`. Select the newest `pull_request` run for that
+commit and use its `databaseId` as `RUN_ID`:
+
+```bash
+gh pr view PR_NUMBER --json headRefOid
+gh run list --workflow atlas-source-duplicates.yaml \
+  --event pull_request --commit HEAD_SHA --limit 1 \
+  --json databaseId,headSha,status,conclusion,url
+gh run watch RUN_ID --exit-status
+```
+
+Recheck the PR head after the run finishes. If it has advanced, repeat the
+commands for the new commit.
+
 For a versioned survey rerun, use `source_neighbor_survey --survey URI
 --survey-sha256 SHA --output-root NEW_URI --allocated-cpus 16`. It retains every old pair, widens
 with full fingerprint hash evidence and a 256-task-per-source LSH discovery
