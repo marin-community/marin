@@ -31,6 +31,7 @@ class Recipe(StrEnum):
     HYBRID = "hybrid"
     RANDRAND_MUON_HYBRID = "randrand_muon_hybrid"
     SPECTRAL_RANDRAND_MUON_HYBRID = "spectral_randrand_muon_hybrid"
+    SPECTRAL_HYBRID = "spectral_hybrid"
 
 
 def optimizer_config(recipe: Recipe) -> RandRANDConfig:
@@ -39,8 +40,9 @@ def optimizer_config(recipe: Recipe) -> RandRANDConfig:
         return RandRANDConfig(learning_rate=0.006, embed_lr=0.6, vector_lr=0.006)
     if recipe == Recipe.RANDRAND_MUON_HYBRID:
         return RandRANDMuonHybridConfig()
-    if recipe == Recipe.SPECTRAL_RANDRAND_MUON_HYBRID:
-        return RandRANDMuonHybridConfig(
+    if recipe in (Recipe.SPECTRAL_RANDRAND_MUON_HYBRID, Recipe.SPECTRAL_HYBRID):
+        config_type = RandRANDConfig if recipe == Recipe.SPECTRAL_HYBRID else RandRANDMuonHybridConfig
+        return config_type(
             variant=RandRANDVariant.SPECTRAL,
             learning_rate=0.0045,
             matrix_betas=(0.95, 0.99),
@@ -115,7 +117,7 @@ def build_config(
         hf_save_path=None,
         trainer=TrainerConfig(
             id=run_id,
-            seed=42 if recipe in (Recipe.RANDRAND_MUON_HYBRID, Recipe.SPECTRAL_RANDRAND_MUON_HYBRID) else 0,
+            seed=0 if recipe in (Recipe.PR6301, Recipe.HYBRID) else 42,
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=128,
             num_train_steps=4959,

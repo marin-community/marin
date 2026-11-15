@@ -674,6 +674,35 @@ the reduced matrix shapes used for replay.
 The private source notebook is not bundled; the runtime and replay tests have
 no Torch dependency. Full accelerator training remains the evaluation target.
 
+#### Standalone spectral RandRAND on the hybrid-normalized model
+
+`--recipe spectral_hybrid` selects `optimizer.type: randrand` with
+`variant: spectral`, using the same model/data seed 42, hybrid-normalized Qwen3
+model, route settings, spectral settings, schedule and evaluation path as
+`spectral_randrand_muon_hybrid`. It runs spectral RandRAND throughout training,
+without MuonH momentum, a blend controller or Hyperball. The four existing
+recipes retain their settings. The older `hybrid` recipe uses paired RandRAND
+and model seed 0; it is not the standalone spectral counterpart.
+
+The source local run `20261110_215628_878228` achieved validation cross-entropy
+3.28225920 at update 4800 and 3.28162917 at update 4959, the best recorded
+standalone spectral run. Its body matrices use LR 0.0045, Adam betas
+`(0.95, 0.99)` and WD 0.0303. Embedding/vector/head LRs are 0.2/0.03/0.006,
+with AdamW betas `(0.9, 0.98)` and WD zero. Matrix epsilon is 1e-8;
+auxiliary epsilon is 1e-15. The spectral rank/sketch sizes are 64/256,
+EMA beta is 0.98, first refresh follows 200 completed updates, and refreshes
+occur every 200 updates with a bank handover every fifth refresh. Relative
+regularization is 1e-6 and boost is 5. The shared schedule warms up for 1,000
+updates and then decays by cosine to zero over the 4,959-update run.
+
+Use the cache/output arguments above with `--recipe spectral_hybrid
+--eval-every 200`; add `--run` inside an accelerator allocation. Compare with
+the spectral blend and MuonH on the same caches, architecture, seeds and
+evaluation settings, reusing matched completed references. This entrypoint
+provides the standalone counterpart to isolate the contribution of blending.
+The local result is slightly worse than the spectral blend's local result;
+both use the notebook's fixed 32-batch holdout and are not Marin Paloma BPB.
+
 #### Hybrid-normalization model reference
 
 The reference is Marin's historical MuonH Qwen3 scaling configuration at
