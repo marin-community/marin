@@ -437,6 +437,30 @@ def test_daytona_recreated_workdir_preserves_command_output(tmp_path: Path, inhe
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="Requires unprivileged directory permission checks")
+@pytest.mark.parametrize("limit", [0, 2])
+def test_daytona_clipped_output_needs_no_new_guest_file(tmp_path: Path, limit: int) -> None:
+    async def scenario():
+        client = LocalDaytona()
+        resources = AsyncExitStack()
+        resources.push_async_callback(client.sandbox.process.close)
+        machine = DaytonaMachine(client.sandbox, MachineSpec(RegistryImage("ubuntu:24.04")), resources)
+        output = tmp_path / "out"
+        payload = b"\x00\xffpayload"
+        output.write_bytes(payload)
+        # Existing capture bytes remain writable, but another directory entry cannot be allocated.
+        tmp_path.chmod(0o500)
+        try:
+            data, truncated = await machine._read_output(str(output), limit)
+            assert data == payload[:limit]
+            assert truncated
+        finally:
+            tmp_path.chmod(0o700)
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> None:
     class NoisyCountProcess(LocalProcess):
         async def exec(self, command, **kwargs):

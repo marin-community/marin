@@ -42,8 +42,10 @@ addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
-Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
+Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `truncate` and `wc`
 for commands and directory transfer.
+Completed command captures are truncated in place before downloading oversized output,
+so collection does not allocate a second guest file. Captures still use guest disk while commands run.
 Daytona sandboxes and Iris jobs default to a six-hour lifetime. Iris scans for
 expired jobs about once a minute. An expired, killed or preempted machine raises
 `MachineTerminated`; uncertain command failures are not replayed.

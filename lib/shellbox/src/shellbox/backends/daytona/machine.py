@@ -244,18 +244,15 @@ class DaytonaMachine:
             data = await self.sandbox.fs.download_file(path)
             assert isinstance(data, bytes)
             return data, False
-        clipped = f"{path}.limited"
+        # Capture files are disposable; reusing their blocks also works on a full guest disk.
         result = await self.sandbox.process.exec(
-            _control_command(f"head -c {limit} {shlex.quote(path)} > {shlex.quote(clipped)}"), cwd=CONTROL_CWD
+            _control_command(f"truncate -s {limit} {shlex.quote(path)}"), cwd=CONTROL_CWD
         )
         if result.exit_code:
             raise RuntimeError(f"Failed to limit command output: {result.result}")
-        try:
-            data = await self.sandbox.fs.download_file(clipped)
-            assert isinstance(data, bytes)
-            return data, True
-        finally:
-            await self.sandbox.process.exec(_control_command(f"rm -f {shlex.quote(clipped)}"), cwd=CONTROL_CWD)
+        data = await self.sandbox.fs.download_file(path)
+        assert isinstance(data, bytes)
+        return data, True
 
     async def _stop_command(self, pidfile: str, completed_path: str) -> None:
         command = _control_command(shlex.join(("/bin/sh", "-c", STOP_COMMAND, "stop-command", pidfile, completed_path)))
