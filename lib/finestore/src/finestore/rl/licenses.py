@@ -153,6 +153,17 @@ class LicenseDecision(BaseModel):
         return value
 
 
+class LicenseSourcePin(BaseModel):
+    """The one source pin declared by a wrapper, with its declaration evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    dataset_id: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+    declaration: LicenseEvidence
+
+
 class LicenseReceipt(BaseModel):
     """Primary evidence at an immutable pin; classification is derived, never asserted."""
 
@@ -167,6 +178,7 @@ class LicenseReceipt(BaseModel):
     bundled_third_party: bool
     model_generated_outputs: bool
     decisions: list[LicenseDecision] = Field(default_factory=list)
+    resolved_source: LicenseSourcePin | None = None
 
     @field_validator("resolved_at")
     @classmethod

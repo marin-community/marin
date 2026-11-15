@@ -30,7 +30,7 @@ from experiments.post_training.task_curation.license_resolution import LicenseTa
 from experiments.post_training.task_curation.sources import all_sources
 from infra.marina.apps.rl_data_catalog.server.licensing import source_license_ban
 
-CHECKER_VERSION = "atlas-license-check-v6"
+CHECKER_VERSION = "atlas-license-check-v8"
 logger = logging.getLogger(__name__)
 
 
@@ -51,8 +51,8 @@ def input_target(value: str) -> LicenseTarget:
     return LicenseTarget(dataset_id, dataset_id, revision, location)
 
 
-def target_ban(target: LicenseTarget) -> LicenseBan | None:
-    return source_license_ban(target.source_id, target.dataset_id)
+def target_ban(target: LicenseTarget, receipt: LicenseReceipt | None = None) -> LicenseBan | None:
+    return source_license_ban(target.source_id, target.dataset_id, receipt)
 
 
 def resolve_target(target: LicenseTarget, cache: Path | None) -> LicenseReceipt:
@@ -86,7 +86,7 @@ def check_target(target: LicenseTarget, cache: Path | None) -> dict:
     else:
         evidence_result = check_license(receipt)
     result = evidence_result
-    if ban := target_ban(target):
+    if ban := target_ban(target, receipt):
         result = evidence_result.model_copy(
             update={
                 "verdict": LicenseCheckVerdict.FAIL,
@@ -120,7 +120,7 @@ def check_targets(targets: list[LicenseTarget], cache: Path | None, workers: int
                 if receipt_data is not None:
                     receipt = LicenseReceipt.model_validate({**receipt_data, "source_id": target.source_id})
                     base = check_license(receipt)
-                    result = check_license(receipt, target_ban(target))
+                    result = check_license(receipt, target_ban(target, receipt))
                     row = {
                         **result.model_dump(mode="json"),
                         "evidence_verdict": base.model_dump(mode="json"),

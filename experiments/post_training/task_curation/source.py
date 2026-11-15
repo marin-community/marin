@@ -242,7 +242,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
     def require_license(self) -> None:
         """Require stage-0 permission at the current pin before constructing any work."""
         dataset = self.dataset
-        require_unbanned(self.info.id, dataset.name if dataset else None)
+        require_unbanned(self.info.id, dataset.name if dataset else None, self.info.license_receipt)
         require_license(
             self.info.license_receipt,
             self.info.id,
@@ -327,7 +327,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
         dataset = self.dataset
-        if ban := source_license_ban(info.id, dataset.name if dataset else None):
+        if ban := source_license_ban(info.id, dataset.name if dataset else None, info.license_receipt):
             blockers.append(f"license ban: {ban.reason} ({ban.issue_url})")
         if info.oracle_filtration is not None and info.oracle_filtration.admitted_count == 0:
             blockers.append(
@@ -483,7 +483,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=(
                 "Excluded"
-                if source_license_ban(info.id, dataset.name if dataset else None) is not None
+                if source_license_ban(info.id, dataset.name if dataset else None, info.license_receipt) is not None
                 else next(
                     (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
                     "Not selectable" if self.admission_blockers else "Available",

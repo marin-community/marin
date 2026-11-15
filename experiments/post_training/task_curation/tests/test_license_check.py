@@ -138,3 +138,144 @@ def test_resolver_checks_task_content_without_following_source_or_teacher_reposi
     )
     assert set(fetched) == {"README.md", "LICENSE", "benchmark/task/LICENSE.content.md"}
     assert check_license(receipt).rule_id.value == "F1"
+
+
+@pytest.fixture
+def pinned_dataset_metadata(monkeypatch):
+    repositories = {}
+    fetched = []
+    license_resolution._primary_license.cache_clear()
+
+    def info(_api, repository, revision):
+        documents = repositories[repository, revision]
+        return SimpleNamespace(sha=revision, siblings=[SimpleNamespace(rfilename=name) for name in documents])
+
+    def fetch(url, **_kwargs):
+        path = url.split("/datasets/", 1)[1]
+        repository, location = path.split("/resolve/", 1)
+        revision, filename = location.split("/", 1)
+        fetched.append((repository, revision, filename))
+        return repositories[repository, revision][filename]
+
+    monkeypatch.setattr(license_resolution.HfApi, "dataset_info", info)
+    monkeypatch.setattr(license_resolution, "_fetch", fetch)
+    yield repositories, fetched
+    license_resolution._primary_license.cache_clear()
+
+
+@pytest.mark.parametrize("structured", [False, True], ids=["legacy-source-pin", "license-source-yaml"])
+def test_our_wrapper_checks_its_one_declared_source_and_preserves_both_pins(pinned_dataset_metadata, structured):
+    repositories, fetched = pinned_dataset_metadata
+    wrapper, wrapper_pin = "open-athena/atlas-scale-swe-retained", "a" * 40
+    parent, parent_pin = "PrimeIntellect/Scale-SWE-Verified", "2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6"
+    parent_url = f"https://huggingface.co/datasets/{parent}/tree/{parent_pin}"
+    if structured:
+        declaration = f"license_source:\n  dataset_id: {parent}\n  revision: {parent_pin}\n  url: {parent_url}\n"
+        card = f"---\npretty_name: Atlas TaskCompendium retention release\n{declaration}---\n"
+    else:
+        card = f"---\npretty_name: Atlas TaskCompendium retention release\n---\nSource pin: `{parent}@{parent_pin}`.\n"
+    card += "Upstream licenses and third-party asset terms continue to apply.\n"
+    repositories[wrapper, wrapper_pin] = {"README.md": card.encode()}
+    repositories[parent, parent_pin] = {"README.md": b"---\nlicense: apache-2.0\n---\n# Scale-SWE\n"}
+    target = LicenseTarget("PrimeIntellect:fixture", wrapper, wrapper_pin, f"https://huggingface.co/datasets/{wrapper}")
+    row = license_check.check_target(target, None)
+    assert (row["verdict"], row["rule_id"]) == ("PASS", "P1")
+    receipt = license_check.LicenseReceipt.model_validate(row["receipt"])
+    require_license(receipt, target.source_id, wrapper, wrapper_pin, "train")
+    assert (receipt.dataset_id, receipt.revision) == (wrapper, wrapper_pin)
+    assert receipt.resolved_source is not None
+    assert (receipt.resolved_source.dataset_id, receipt.resolved_source.revision) == (parent, parent_pin)
+    assert parent_pin in " ".join(receipt.resolved_source.declaration.quoted_lines)
+    assert receipt.resolved_source.declaration.sha256 == license_check.hashlib.sha256(card.encode()).hexdigest()
+    assert {repository for repository, _, _ in fetched} == {wrapper, parent}
+    assert row["evidence_url"].startswith(f"https://huggingface.co/datasets/{parent}/resolve/{parent_pin}/")
+
+
+def test_wrapper_resolution_does_not_follow_a_second_declared_source(pinned_dataset_metadata):
+    repositories, fetched = pinned_dataset_metadata
+    wrapper, parent, grandparent = "open-athena/outer-retained", "open-athena/inner-retained", "fixture/original"
+    pin = "b" * 40
+    for repository, upstream in [(wrapper, parent), (parent, grandparent)]:
+        repositories[repository, pin] = {"README.md": f"Source pin: `{upstream}@{pin}`.\n".encode()}
+    repositories[grandparent, pin] = {"README.md": b"---\nlicense: mit\n---\n"}
+    row = license_check.check_target(
+        LicenseTarget("fixture", wrapper, pin, f"https://huggingface.co/datasets/{wrapper}"), None
+    )
+    assert (row["verdict"], row["rule_id"]) == ("FAIL", "F2")
+    assert grandparent not in {repository for repository, _, _ in fetched}
+
+
+def test_wrapper_restrictions_and_real_separate_terms_still_block(pinned_dataset_metadata):
+    repositories, _ = pinned_dataset_metadata
+    pin = "c" * 40
+    wrapper = "open-athena/restricted-retained"
+    repositories[wrapper, pin] = {"README.md": b"---\nlicense: cc-by-nc-4.0\n---\n"}
+    row = license_check.check_target(
+        LicenseTarget("fixture", wrapper, pin, f"https://huggingface.co/datasets/{wrapper}"), None
+    )
+    assert (row["verdict"], row["rule_id"]) == ("FAIL", "F1")
+    text = b"Upstream licenses and third-party asset terms continue to apply.\n"
+    assert license_evidence(
+        "https://huggingface.co/datasets/publisher/data/README.md", text, "readme_notice"
+    ).unidentified_third_party_terms
+    text += b"Outputs are subject to separate third-party terms.\n"
+    evidence = license_evidence(f"https://huggingface.co/datasets/{wrapper}/README.md", text, "readme_notice")
+    assert evidence.unidentified_third_party_terms
+    assert "Outputs are subject" in " ".join(evidence.quoted_lines)
+    assert "Upstream licenses" not in " ".join(evidence.quoted_lines)
+
+
+def test_wrapper_cannot_hide_a_known_parent_ban(pinned_dataset_metadata, monkeypatch):
+    repositories, _ = pinned_dataset_metadata
+    ban = LicenseBan(
+        source_id="fixture",
+        upstream_id="fixture/banned",
+        upstream_revision="a" * 40,
+        classification="missing",
+        license_ids=["missing"],
+        reason="Recorded user ban",
+        evidence_urls=["https://example.test/LICENSE"],
+        decided_at="2026-11-15T00:00:00+00:00",
+        decision_by="user",
+        issue_url="https://github.com/marin-community/marin/issues/11497",
+    )
+    monkeypatch.setattr(licensing, "license_bans", lambda: {ban.source_id: ban})
+    parent = ban.upstream_id
+    pin, wrapper = "d" * 40, "open-athena/renamed-retained"
+    repositories[wrapper, pin] = {"README.md": f"Source pin: `{parent}@{pin}`.\n".encode()}
+    repositories[parent, pin] = {"README.md": b"---\nlicense: mit\n---\n"}
+    target = LicenseTarget("Marin:renamed", wrapper, pin, f"https://huggingface.co/datasets/{wrapper}")
+    row = license_check.check_target(target, None)
+    assert (row["verdict"], row["rule_id"], row["evidence_verdict"]["verdict"]) == ("FAIL", "F3", "PASS")
+    receipt = license_check.LicenseReceipt.model_validate(row["receipt"])
+    with pytest.raises(ValueError, match="License banned"):
+        licensing.require_unbanned(target.source_id, wrapper, receipt)
+    projected = licensing.license_projection(
+        {"id": target.source_id, "dataset_id": wrapper, "license_receipt": row["receipt"]}
+    )
+    assert projected["status"] == "Excluded"
+    assert projected["license_ban"]["source_id"] == ban.source_id
+
+
+def test_filtered_wrapper_uses_its_pinned_selection_manifest_without_following_again(pinned_dataset_metadata):
+    repositories, fetched = pinned_dataset_metadata
+    pin = "e" * 40
+    wrapper, parent = "open-athena/filtered-fixture", "open-athena/retained-fixture"
+    manifest = {"original_selection_plan": {"source_dataset_id": parent, "source_revision": pin}}
+    repositories[wrapper, pin] = {
+        "README.md": b"---\npretty_name: Atlas oracle-filtered TaskCompendium source\n---\n",
+        "selection-manifest.json": json.dumps(manifest).encode(),
+    }
+    repositories[parent, pin] = {"README.md": b"---\nlicense: mit\n---\n"}
+    row = license_check.check_target(
+        LicenseTarget("fixture", wrapper, pin, f"https://huggingface.co/datasets/{wrapper}"), None
+    )
+    assert (row["verdict"], row["rule_id"]) == ("PASS", "P1")
+    source = row["receipt"]["resolved_source"]
+    assert (source["dataset_id"], source["revision"]) == (parent, pin)
+    assert source["declaration"]["url"].endswith(f"{pin}/selection-manifest.json")
+    assert (
+        source["declaration"]["sha256"]
+        == license_check.hashlib.sha256(repositories[wrapper, pin]["selection-manifest.json"]).hexdigest()
+    )
+    assert {repository for repository, _, _ in fetched} == {wrapper, parent}

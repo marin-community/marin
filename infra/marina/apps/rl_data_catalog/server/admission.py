@@ -43,7 +43,7 @@ def population_admission_blocker(
 
 def require_declaration_admission(declaration: SourceDeclaration) -> None:
     """Require license permission before admitting a newly published source revision."""
-    require_unbanned(declaration.id, declaration.dataset_id)
+    require_unbanned(declaration.id, declaration.dataset_id, declaration.license_receipt)
     require_license(
         declaration.license_receipt,
         declaration.id,
@@ -125,6 +125,9 @@ def require_lexical_qualification(
 
 def require_catalog_declaration(declaration: SourceDeclaration) -> None:
     """Allow a versioned ban to be published while continuing to reject admission."""
-    if source_license_ban(declaration.id, declaration.dataset_id) is not None and declaration.status == "Excluded":
+    if (
+        source_license_ban(declaration.id, declaration.dataset_id, declaration.license_receipt) is not None
+        and declaration.status == "Excluded"
+    ):
         return
     require_declaration_admission(declaration)

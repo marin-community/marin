@@ -8,14 +8,22 @@ import hashlib
 import json
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import requests
 import yaml
-from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseEvidence, LicenseReceipt
+from finestore.rl.licenses import (
+    LICENSE_RESOLVER_VERSION,
+    LicenseCheckRule,
+    LicenseEvidence,
+    LicenseReceipt,
+    LicenseSourcePin,
+    check_license,
+)
 from huggingface_hub import HfApi, get_token
 
 MAX_EVIDENCE_BYTES = 1024 * 1024
@@ -45,6 +53,14 @@ MODEL_OUTPUT_TERMS = re.compile(
     r"synthetic|model.generated|generated (?:by|with|using)|gpt[- ]?[345]|claude", re.IGNORECASE
 )
 THIRD_PARTY_TERMS = re.compile(r"third.party|bundled|mixture|compilation|aggregat(?:e|ed|ion)", re.IGNORECASE)
+WRAPPER_BOILERPLATE = (
+    "Upstream licenses and third-party asset terms continue to apply.",
+    "Upstream licenses and third-party asset terms apply; this conversion grants no new rights.",
+)
+WRAPPER_NAME = re.compile(r"retained|filtered|taskcompendium|oracle", re.I)
+WRAPPER_TITLE = re.compile(r"taskcompendium|retention release|QUICK inspection release", re.I)
+SOURCE_PIN = re.compile(r"^Source pin:\s*`([^`@]+)@([0-9a-f]+)`", re.M | re.I)
+NATIVE_SOURCE_PIN = re.compile(r"^Upstream:\s*(\S+) at ([0-9a-f]+)\.\s+(https://\S+)", re.M | re.I)
 SEPARATE_TERMS = re.compile(
     r"(?:subject to|governed by|under|respect).{0,80}(?:separate|third.party|upstream|respective).{0,80}"
     r"(?:terms|licen[cs]es)|(?:separate|third.party|upstream|respective).{0,50}(?:terms|licen[cs]es).{0,50}(?:apply|govern)",
@@ -67,16 +83,21 @@ class LicenseTarget:
     license_url: str | None = None
 
 
+def _card_metadata(text: str) -> dict:
+    if not text.startswith("---"):
+        return {}
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        raise ValueError("Dataset-card YAML is not terminated")
+    metadata = yaml.safe_load(parts[1]) or {}
+    if not isinstance(metadata, dict):
+        raise ValueError("Dataset-card YAML must contain a mapping")
+    return metadata
+
+
 def _license_ids(text: str, kind: str) -> list[str]:
     if kind == "dataset_card":
-        if not text.startswith("---"):
-            return ["missing"]
-        parts = text.split("---", 2)
-        if len(parts) < 3:
-            return ["missing"]
-        metadata = yaml.safe_load(parts[1]) or {}
-        if not isinstance(metadata, dict):
-            raise ValueError("Dataset-card YAML must contain a mapping")
+        metadata = _card_metadata(text)
         value = metadata.get("license")
         if value is None:
             return ["missing"]
@@ -178,7 +199,8 @@ def _restrictive_lines(text: str) -> list[tuple[int, str]]:
 def license_evidence(url: str, content: bytes, kind: str) -> LicenseEvidence:
     """Keep content hashes and bounded quotations, including restrictive clauses."""
     text = content.decode("utf-8")
-    lines = list(enumerate(text.splitlines(), 1))
+    scoped_text = _license_context(url, text)
+    lines = list(enumerate(scoped_text.splitlines(), 1))
     relevant = lines
     unidentified = []
     if kind == "dataset_card":
@@ -187,7 +209,7 @@ def license_evidence(url: str, content: bytes, kind: str) -> LicenseEvidence:
     elif kind == "readme_license":
         relevant = [
             (i, line)
-            for i, line in _readme_license_lines(text)
+            for i, line in _readme_license_lines(scoped_text)
             if line.strip().lstrip("#").strip().lower() not in LICENSE_SECTION_HEADINGS
             and not re.search(r"more information needed|^\s*(?:TODO|TBD)\b", line, re.I)
         ]
@@ -255,7 +277,151 @@ def _license_files(filenames: list[str]) -> set[str]:
     }
 
 
+def _license_context(url: str, text: str) -> str:
+    parts = urlsplit(url)
+    if parts.hostname == "huggingface.co" and parts.path.startswith("/datasets/open-athena/"):
+        for sentence in WRAPPER_BOILERPLATE:
+            text = text.replace(sentence, "")
+    return text
+
+
+def _wrapper_target(target: LicenseTarget, metadata: dict) -> bool:
+    return (
+        urlsplit(target.url).hostname == "huggingface.co"
+        and target.dataset_id.startswith("open-athena/")
+        and bool(
+            WRAPPER_NAME.search(target.dataset_id)
+            or WRAPPER_TITLE.search(str(metadata.get("pretty_name", "")))
+            or "license_source" in metadata
+        )
+    )
+
+
+def _declared_license_source(target: LicenseTarget, content: bytes, url: str) -> LicenseSourcePin:
+    text = content.decode("utf-8")
+    metadata = _card_metadata(text)
+    declarations = []
+    if "license_source" in metadata:
+        source = metadata["license_source"]
+        if not isinstance(source, dict) or set(source) != {"dataset_id", "revision", "url"}:
+            raise ValueError("Wrapper license_source must declare dataset_id, revision, and url")
+        if any(not isinstance(value, str) or not value for value in source.values()):
+            raise ValueError("Wrapper license_source fields must be nonempty strings")
+        declarations.append((source["dataset_id"], source["revision"], source["url"]))
+    for match in SOURCE_PIN.finditer(text):
+        location, revision = match.groups()
+        source_url = location if "://" in location else f"https://huggingface.co/datasets/{location}"
+        declarations.append((location, revision, source_url))
+    declarations.extend(match.groups() for match in NATIVE_SOURCE_PIN.finditer(text))
+    table_dataset = re.findall(r"^\| Upstream dataset \| `([^`]+)`", text, re.M)
+    table_revision = re.findall(r"^\| Upstream revision \| `([0-9a-f]+)`", text, re.M)
+    if table_dataset or table_revision:
+        if len(table_dataset) != 1 or len(table_revision) != 1:
+            raise ValueError("Wrapper provenance table must declare one dataset and revision")
+        declarations.append((table_dataset[0], table_revision[0], f"https://huggingface.co/datasets/{table_dataset[0]}"))
+    declaration_url, declaration_content = url, content
+    if not declarations:
+        declaration_url = (
+            f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/selection-manifest.json"
+        )
+        declaration_content = _fetch(declaration_url, huggingface=True)
+        plan = json.loads(declaration_content).get("original_selection_plan", {})
+        dataset_id, revision = plan.get("source_dataset_id"), plan.get("source_revision")
+        if not isinstance(dataset_id, str) or not isinstance(revision, str):
+            raise ValueError("Wrapper selection manifest does not declare a source dataset and revision")
+        declarations.append((dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}"))
+    normalized = set()
+    for dataset_id, revision, source_url in declarations:
+        parts = urlsplit(source_url)
+        path = parts.path.strip("/").split("/")
+        if parts.hostname == "huggingface.co" and len(path) >= 3 and path[0] == "datasets":
+            repository = "/".join(path[1:3])
+            source_url = f"https://huggingface.co/datasets/{repository}/tree/{revision}"
+        elif parts.hostname == "github.com" and len(path) >= 2:
+            repository = "/".join(path[:2])
+            source_url = f"https://github.com/{repository}/tree/{revision}"
+        elif parts.hostname == "files.pythonhosted.org" and parts.path.endswith(".whl"):
+            repository = dataset_id
+        else:
+            raise ValueError(f"Unsupported declared wrapper source: {source_url}")
+        declared_parts = urlsplit(dataset_id)
+        declared_path = declared_parts.path.strip("/").split("/")
+        if declared_parts.hostname == "huggingface.co" and declared_path[0] == "datasets":
+            dataset_id = "/".join(declared_path[1:3])
+        elif declared_parts.hostname == "github.com":
+            dataset_id = "/".join(declared_path[:2])
+        if dataset_id != repository:
+            raise ValueError("Wrapper source URL does not identify its declared dataset")
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
+            raise ValueError("Wrapper source requires an immutable commit or wheel SHA-256")
+        normalized.add((repository, revision, source_url))
+    if len(normalized) != 1:
+        raise ValueError("Wrapper must declare exactly one unambiguous source pin")
+    dataset_id, revision, source_url = normalized.pop()
+    if (dataset_id, revision) == (target.dataset_id, target.revision):
+        raise ValueError("Wrapper source pin refers to itself")
+    lines = text.splitlines()
+    selected = set()
+    for index, line in enumerate(lines):
+        if re.match(r"^license_source:", line):
+            selected.add(index)
+            for following in range(index + 1, len(lines)):
+                if lines[following] and not lines[following][0].isspace():
+                    break
+                selected.add(following)
+        if (
+            SOURCE_PIN.match(line)
+            or NATIVE_SOURCE_PIN.match(line)
+            or re.match(r"^\| Upstream (?:dataset|revision) \|", line)
+        ):
+            selected.add(index)
+    quoted_lines = [f"L{i + 1}: {lines[i]}" for i in sorted(selected)]
+    if declaration_url != url:
+        quoted_lines = [
+            f"JSON /original_selection_plan/source_dataset_id: {dataset_id}",
+            f"JSON /original_selection_plan/source_revision: {revision}",
+        ]
+    return LicenseSourcePin(
+        dataset_id=dataset_id,
+        revision=revision,
+        url=source_url,
+        declaration=LicenseEvidence(
+            url=declaration_url,
+            kind="wrapper_source",
+            sha256=hashlib.sha256(declaration_content).hexdigest(),
+            license_ids=[],
+            quoted_lines=quoted_lines,
+        ),
+    )
+
+
 def resolve_license(target: LicenseTarget) -> LicenseReceipt:
+    """Check a dataset, or one explicitly declared input of our repackaged releases."""
+    primary = _primary_license(replace(target, source_id=target.dataset_id))
+    receipt = primary.model_copy(update={"source_id": target.source_id})
+    if urlsplit(target.url).hostname != "huggingface.co" or not target.dataset_id.startswith("open-athena/"):
+        return receipt
+    card = next((item for item in primary.evidence if item.kind == "dataset_card"), None)
+    content = _fetch(card.url, huggingface=True) if card else b""
+    if not _wrapper_target(target, _card_metadata(content.decode("utf-8"))):
+        return receipt
+    # A restrictive wrapper term still applies even when its input has a permissive grant.
+    if check_license(receipt).rule_id in {LicenseCheckRule.RESTRICTED, LicenseCheckRule.THIRD_PARTY}:
+        return receipt
+    source = _declared_license_source(target, content, card.url if card else target.url)
+    parent = _primary_license(LicenseTarget(source.dataset_id, source.dataset_id, source.revision, source.url))
+    return parent.model_copy(
+        update={
+            "source_id": target.source_id,
+            "dataset_id": target.dataset_id,
+            "revision": target.revision,
+            "resolved_source": source,
+        }
+    )
+
+
+@cache
+def _primary_license(target: LicenseTarget) -> LicenseReceipt:
     """Read HF card and license files, GitHub pinned license, or an explicit terms URL.
 
     Authentication, transport, and parsing failures propagate. They must never become a
@@ -278,7 +444,7 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
                 kind = "task_license_file"
             url = f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/{quote(filename)}"
             content = _fetch(url, huggingface=True)
-            documents.append(content.decode("utf-8"))
+            documents.append(_license_context(url, content.decode("utf-8")))
             evidence.append(license_evidence(url, content, kind))
             if filename == "README.md":
                 evidence.extend(license_evidence(url, content, item) for item in ("readme_license", "readme_notice"))

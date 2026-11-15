@@ -27,6 +27,16 @@ owns reusable source importers and the corpus publisher.
 
 Run the deterministic checker before conversion, census, oracle or QA spend; never interpret licenses by hand. It checks only the pinned dataset's card, root/task LICENSE files and README license statements. **PASS** permits ingest; **FAIL** stops it; **ESCALATE** goes to the coordinator and user for a recorded decision. Do not trace upstream lineage, teacher models, source repositories or mixtures. The checker never changes admissions or the ban registry from its findings.
 
+For our `open-athena` retained, filtered and TaskCompendium wrappers, the dataset
+is the one input pin explicitly recorded in `license_source` card metadata (or
+the older `Source pin` / `Upstream` declaration, provenance table or
+`selection-manifest.json` source fields). Check that pin once with the
+dataset-level rules below; never follow a second hop. Receipts preserve the wrapper declaration
+alongside the input's license evidence. Our generic upstream-terms boilerplate
+is not license evidence. New release cards must retain the upstream license ID,
+evidence URL, notices and attribution, and declare `license_source` with
+`dataset_id`, `revision` and `url`. Missing or ambiguous input pins escalate to the coordinator and user.
+
 ```bash
 uv run python -m experiments.post_training.task_curation.license_check \
   'https://huggingface.co/datasets/<owner>/<dataset>@<commit>' \
