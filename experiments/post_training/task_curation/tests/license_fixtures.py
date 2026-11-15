@@ -6,7 +6,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from finestore.rl.licenses import LicenseReceipt
+from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
@@ -14,6 +14,7 @@ from experiments.post_training.task_curation.source import CatalogConfig, RlData
 
 def fixture_license(source_id: str, dataset: str, revision: str) -> LicenseReceipt:
     return LicenseReceipt(
+        resolver_version=LICENSE_RESOLVER_VERSION,
         source_id=source_id,
         dataset_id=dataset,
         revision=revision,

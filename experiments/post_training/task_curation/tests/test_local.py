@@ -36,6 +36,7 @@ from experiments.post_training.task_curation.local import artifact_prefix, run_l
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
+from experiments.post_training.task_curation.tests.license_fixtures import with_license
 
 
 def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cache_dir, source_files_override=None):
@@ -59,6 +60,7 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
         )
         for name, pipeline in pipelines.items()
     }
+    sources = {name: with_license(source) for name, source in sources.items()}
     steps = {name: source.pipeline(source, options) for name, source in sources.items()}
     return run_local_steps(
         steps,
@@ -129,7 +131,7 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
 
 
 def test_local_eval_planning_uses_cache_for_grader_artifact_lookup(tmp_path, monkeypatch):
-    source = next(source for source in eval_math.sources() if source.name == "evalchemy-math500")
+    source = with_license(next(source for source in eval_math.sources() if source.name == "evalchemy-math500"))
     monkeypatch.setattr("experiments.post_training.task_curation.driver.runnable_sources", lambda: {})
     monkeypatch.setattr("experiments.post_training.task_curation.driver.all_sources", lambda: {source.info.id: source})
     cache = tmp_path / "cache"

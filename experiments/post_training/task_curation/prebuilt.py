@@ -61,6 +61,7 @@ from experiments.post_training.task_curation.campaign import CampaignArtifact, P
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.harbor_inspection import native_task_checksums
+from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
 from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
@@ -355,7 +356,7 @@ def prebuilt_artifact(
     encoding: PrebuiltEncoding,
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish validated rows and corpus views while preserving their controlled package bytes."""
-    source.require_license()
+    source = licensed_source(source)
     config = source.config
     assert config is not None
     quick = options.mode is SourceProcessingMode.QUICK

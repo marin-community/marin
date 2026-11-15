@@ -71,7 +71,11 @@ from experiments.post_training.task_curation.inventory import (
     task_selection_step,
 )
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
-from experiments.post_training.task_curation.license_binding import bind_license_receipt, read_license_receipts
+from experiments.post_training.task_curation.license_binding import (
+    bind_license_receipt,
+    licensed_source,
+    read_license_receipts,
+)
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
@@ -603,8 +607,7 @@ def main(
         selected = {
             name: bind_license_receipt(source, receipts.get(source.info.id)) for name, source in selected.items()
         }
-    for source in selected.values():
-        source.require_license()
+    selected = {name: licensed_source(source) for name, source in selected.items()}
     if decontamination_receipt is not None:
         decontamination = LexicalContaminationEvidence.model_validate_json(
             StoragePath(decontamination_receipt).read_text()

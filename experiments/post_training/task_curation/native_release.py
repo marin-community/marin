@@ -31,6 +31,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
+from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, validate_native_package
 from experiments.post_training.task_curation.source import RlDataSource
 
@@ -120,7 +121,7 @@ def import_native_quick(
     source: RlDataSource[PrebuiltCohort], options: PipelineOptions
 ) -> ArtifactStep[CampaignArtifact]:
     """Register a lossless native import whose release has only QUICK evidence."""
-    source.require_license()
+    source = licensed_source(source)
     if options.mode is not SourceProcessingMode.QUICK:
         raise ValueError("Native inspection releases require separate SAMPLE/FULL qualification before admission")
     config = source.config

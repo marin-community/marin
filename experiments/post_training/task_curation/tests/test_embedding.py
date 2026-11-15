@@ -32,6 +32,7 @@ from experiments.post_training.task_curation.embedding import DescriptionEndpoin
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.license_fixtures import with_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import (
     NUMBERS_DATASET,
     NumbersConfig,
@@ -64,6 +65,7 @@ def numeric_actor_census(request, monkeypatch):
                     daytona_count_basis="Fixture numeric rows use a local reply grader and create no actor.",
                 ),
             )
+        sources = {key: with_license(source) for key, source in sources.items()}
     monkeypatch.setattr(driver, "all_sources", lambda: sources)
     monkeypatch.setattr("experiments.post_training.task_curation.sources.all_sources", lambda: sources)
 

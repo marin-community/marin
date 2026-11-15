@@ -27,6 +27,7 @@ from experiments.post_training.task_curation.images.build import (
     environment_artifact,
     identity_digest,
 )
+from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     HfSource,
@@ -169,7 +170,7 @@ def prepare_evaluation(
     source: RlDataSource[EvaluationCorpusRecipe], options: PipelineOptions
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish the complete evaluation population without RL admission or model review."""
-    source.require_license()
+    source = licensed_source(source)
     options = replace(options, license_receipt=source.info.license_receipt)
     dataset = source.config
     assert dataset is not None

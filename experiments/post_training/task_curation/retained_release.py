@@ -24,6 +24,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
+from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.prebuilt import require_runnable_grader
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
@@ -153,7 +154,7 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
 
 def import_retained(source: RlDataSource[RetainedCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Admit a verified subset through its existing qualification and fresh release gates."""
-    source.require_license()
+    source = licensed_source(source)
     if options.mode is not SourceProcessingMode.QUICK:
         if "excluded" in source.info.tags:
             raise ValueError(f"Retained cohort is excluded pending qualification: {source.name}")

@@ -91,6 +91,7 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
+from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.source import RlDataSource
 from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
 
@@ -484,7 +485,7 @@ def _execution_config(
 
 def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Construct the reusable source processor's graph from this dataset's recipe."""
-    source.require_license()
+    source = licensed_source(source)
     options = replace(options, license_receipt=source.info.license_receipt)
     recipe = source.config
     assert recipe is not None

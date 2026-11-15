@@ -15,7 +15,7 @@ from urllib.parse import quote, urlsplit
 
 import requests
 import yaml
-from finestore.rl.licenses import LicenseEvidence, LicenseReceipt
+from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseEvidence, LicenseReceipt
 from huggingface_hub import HfApi, get_token
 
 MAX_EVIDENCE_BYTES = 1024 * 1024
@@ -180,6 +180,7 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
         raise ValueError(f"Source requires a declared primary license URL: {target.source_id}")
     text = "\n".join(documents)
     return LicenseReceipt(
+        resolver_version=LICENSE_RESOLVER_VERSION,
         source_id=target.source_id,
         dataset_id=target.dataset_id,
         revision=target.revision,

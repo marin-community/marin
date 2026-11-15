@@ -5,7 +5,7 @@
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -26,6 +26,7 @@ from experiments.post_training.task_curation.images.build import (
     built_environment,
     environment_artifact,
 )
+from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
     HfSource,
@@ -102,6 +103,8 @@ def _build_run(
 
 
 def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run: EvaluationRun) -> CampaignArtifact:
+    assert options.license_receipt is not None
+    (StoragePath(run.output_path) / "license.json").write_text(options.license_receipt.model_dump_json(indent=2))
     validate_input_identity(dataset.recipe, options.inputs, identity)
     grader_environment = None
     if dataset.recipe.grader is not None:
@@ -140,6 +143,8 @@ def _publish(dataset: EvalDataset, options: PipelineOptions, identity: dict, run
 
 def curate(source: RlDataSource[EvalDataset], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Publish the complete evaluation population without RL admission or model review."""
+    source = licensed_source(source)
+    options = replace(options, license_receipt=source.info.license_receipt)
     dataset = source.config
     assert dataset is not None
     downloaded, auxiliary = source_downloads(dataset.recipe, options)
@@ -149,7 +154,9 @@ def curate(source: RlDataSource[EvalDataset], options: PipelineOptions) -> Artif
         built = built_environment(dataset.recipe.grader)
         grader = environment_artifact(dataset.recipe.grader)
     recipe = source_recipe(dataset.recipe, {}, None)
+    assert source.info.license_receipt is not None
     identity = {
+        "license_receipt": source.info.license_receipt.model_dump(mode="json"),
         "source": {
             **download_identity(dataset.recipe.source),
             "reader": source_files_identity(recipe.source),

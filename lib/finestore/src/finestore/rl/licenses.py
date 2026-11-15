@@ -161,7 +161,7 @@ class LicenseReceipt(BaseModel):
     dataset_id: str
     revision: str = Field(min_length=1)
     resolved_at: str
-    resolver_version: str = LICENSE_RESOLVER_VERSION
+    resolver_version: str
     evidence: list[LicenseEvidence]
     bundled_third_party: bool
     model_generated_outputs: bool

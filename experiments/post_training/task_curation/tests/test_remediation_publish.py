@@ -51,6 +51,7 @@ from experiments.post_training.task_curation.retained_release import (
     run_retained_import,
 )
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
+from experiments.post_training.task_curation.tests.license_fixtures import with_license
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source, prebuilt_task
 from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
@@ -455,7 +456,7 @@ def test_qualified_retained_import_admits_exact_bytes_with_original_sample_prove
         local,
     )
     publication = receipt.publication.model_copy(update={"tasks_parquet_sha256": file_sha256(StoragePath(str(local)))})
-    source = bind_retained_release(original, receipt.model_copy(update={"publication": publication}))
+    source = with_license(bind_retained_release(original, receipt.model_copy(update={"publication": publication})))
     monkeypatch.setattr(retained_release, "hf_hub_download", lambda *args, **kwargs: str(local))
     step = source.pipeline(source, PipelineOptions(mode, CampaignRuntime()))
     destination = tmp_path / "admitted"
@@ -481,7 +482,7 @@ def test_qualified_retained_import_admits_exact_bytes_with_original_sample_prove
 @pytest.mark.parametrize("missing", ["oversight", "actor", "private_receipt", "excluded"])
 def test_unqualified_retained_release_cannot_enter_admitted_import(retained_receipt, missing):
     original, receipt = retained_receipt
-    source = bind_retained_release(original, receipt)
+    source = with_license(bind_retained_release(original, receipt))
     changes = {
         "oversight": {"oversight": None},
         "actor": {"daytona_snapshot_count": None},
@@ -511,7 +512,7 @@ def test_retained_admission_rejects_missing_grader_or_empty_population(tmp_path,
         local,
     )
     publication = receipt.publication.model_copy(update={"tasks_parquet_sha256": file_sha256(StoragePath(str(local)))})
-    source = bind_retained_release(original, receipt.model_copy(update={"publication": publication}))
+    source = with_license(bind_retained_release(original, receipt.model_copy(update={"publication": publication})))
     assert source.config is not None
     monkeypatch.setattr(retained_release, "hf_hub_download", lambda *args, **kwargs: str(local))
     invocation = RetainedImport(
