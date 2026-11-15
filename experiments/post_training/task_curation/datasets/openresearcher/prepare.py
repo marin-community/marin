@@ -100,6 +100,13 @@ class ResearchDataset:
         return IntendedUse.TRAIN
 
 
+@dataclass(frozen=True)
+class RetainedQuestions:
+    rows: list[dict]
+    grounding: GroundedQuestions
+    heldout_exclusions: list[dict]
+
+
 def source_licenses(config: PreparationConfig) -> dict[str, LicenseReceipt]:
     staged = RegionalInputs.model_validate_json(pinned_document(config.stage_receipt, config.stage_receipt_sha256))
     rows = json.loads(
@@ -114,7 +121,7 @@ def source_licenses(config: PreparationConfig) -> dict[str, LicenseReceipt]:
     return receipts
 
 
-def retained_questions(config: PreparationConfig) -> tuple[list[dict], GroundedQuestions, list[dict]]:
+def retained_questions(config: PreparationConfig) -> RetainedQuestions:
     """Require a complete decision bijection and remove exact heldout benchmark matches."""
     pool = QuestionPool.model_validate_json(pinned_document(config.question_receipt, config.question_receipt_sha256))
     grounded = GroundedQuestions.model_validate_json(
@@ -180,7 +187,7 @@ def retained_questions(config: PreparationConfig) -> tuple[list[dict], GroundedQ
             exclusions.append({"id": row["id"], "question_sha256": question_hash, "matches": hashes[question_hash]})
         else:
             retained.append(row)
-    return retained, grounded, exclusions
+    return RetainedQuestions(retained, grounded, exclusions)
 
 
 def prepare(config: PreparationConfig) -> CampaignArtifact:
@@ -188,7 +195,8 @@ def prepare(config: PreparationConfig) -> CampaignArtifact:
     for image in (config.actor_image, config.grader_image):
         if re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image) is None:
             raise ValueError("Actor and grader images require immutable digests")
-    rows, grounded, heldout_drops = retained_questions(config)
+    retained = retained_questions(config)
+    grounded = retained.grounding
     output = StoragePath(config.output_path)
     if (output / "tasks.parquet").exists() or (output / "task-directories").exists():
         raise FileExistsError("Conversion requires a fresh output version")
@@ -196,7 +204,7 @@ def prepare(config: PreparationConfig) -> CampaignArtifact:
     seen = set()
     work = Path(config.workdir)
     work.mkdir(parents=True, exist_ok=False)
-    for row in rows:
+    for row in retained.rows:
         task = convert_question(
             row, state=config.state, actor_image=config.actor_image, grader_image=config.grader_image
         ).model_copy(
@@ -243,7 +251,10 @@ def prepare(config: PreparationConfig) -> CampaignArtifact:
         "intended_use": "train",
         "input_rows": grounded.input_questions,
         "converted_rows": len(records),
-        "rejections": {"grounding_drop": grounded.dropped_questions, "benchmark_heldout": len(heldout_drops)},
+        "rejections": {
+            "grounding_drop": grounded.dropped_questions,
+            "benchmark_heldout": len(retained.heldout_exclusions),
+        },
         "grounding_receipt": config.grounding_receipt,
         "grounding_receipt_sha256": config.grounding_receipt_sha256,
         "heldout_hashes": config.heldout_hashes,
@@ -257,7 +268,7 @@ def prepare(config: PreparationConfig) -> CampaignArtifact:
         "admitted": False,
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    (output / "heldout-drops.json").write_text(json.dumps(heldout_drops, indent=2) + "\n")
+    (output / "heldout-drops.json").write_text(json.dumps(retained.heldout_exclusions, indent=2) + "\n")
     (output / "license-receipts.json").write_text(
         json.dumps({key: value.model_dump(mode="json") for key, value in receipts.items()}, indent=2) + "\n"
     )

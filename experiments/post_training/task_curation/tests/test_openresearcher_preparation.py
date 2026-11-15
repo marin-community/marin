@@ -152,9 +152,9 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
         workdir=str(tmp_path / "work"),
         output_path=str(tmp_path / "converted"),
     )
-    retained, _, excluded = retained_questions(config)
-    assert retained == [rows[0]]
-    assert [row["id"] for row in excluded] == ["benchmark"]
+    retained = retained_questions(config)
+    assert retained.rows == [rows[0]]
+    assert [row["id"] for row in retained.heldout_exclusions] == ["benchmark"]
     result = prepare(config)
     output = tmp_path / "converted"
     exported = pq.read_table(output / "tasks.parquet").to_pylist()

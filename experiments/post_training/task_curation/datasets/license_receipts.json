@@ -934,5 +934,127 @@
     "decisions": [],
     "resolved_source": null,
     "wrapper_chain": []
+  },
+  "OpenResearcher:OpenResearcher-Dataset": {
+    "source_id": "OpenResearcher:OpenResearcher-Dataset",
+    "dataset_id": "OpenResearcher/OpenResearcher-Dataset",
+    "revision": "1edca18c5d7c9c105762da4f3c5c2b83855b3c6e",
+    "resolved_at": "2026-11-15T19:28:43.735754+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Dataset/resolve/1edca18c5d7c9c105762da4f3c5c2b83855b3c6e/README.md",
+        "kind": "dataset_card",
+        "sha256": "e7fa9e023cd6a2efba6c9832eadfa334419b0ef8af7aa3909233bc7d902450ad",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L2116: license: mit",
+          "L1: ---",
+          "L2: dataset_info:",
+          "L3: - config_name: seed_42",
+          "L4:   features:",
+          "L5:   - name: qid",
+          "L6:     dtype: int64",
+          "L7:   - name: question",
+          "L8:     dtype: string",
+          "L9:   - name: answer",
+          "L10:     dtype: string",
+          "L11:   - name: messages",
+          "L12:     list:"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Dataset/resolve/1edca18c5d7c9c105762da4f3c5c2b83855b3c6e/README.md",
+        "kind": "readme_license",
+        "sha256": "e7fa9e023cd6a2efba6c9832eadfa334419b0ef8af7aa3909233bc7d902450ad",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Dataset/resolve/1edca18c5d7c9c105762da4f3c5c2b83855b3c6e/README.md",
+        "kind": "readme_notice",
+        "sha256": "e7fa9e023cd6a2efba6c9832eadfa334419b0ef8af7aa3909233bc7d902450ad",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": true,
+    "decisions": []
+  },
+  "OpenResearcher:OpenResearcher-Corpus": {
+    "source_id": "OpenResearcher:OpenResearcher-Corpus",
+    "dataset_id": "OpenResearcher/OpenResearcher-Corpus",
+    "revision": "8367703babe6e080899a48782f365c284c32b668",
+    "resolved_at": "2026-11-15T19:28:43.727424+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Corpus/resolve/8367703babe6e080899a48782f365c284c32b668/README.md",
+        "kind": "dataset_card",
+        "sha256": "b9e08fcec70d29f91efaf626b47daceab2155d978d3698d4da4752b9e5e459f3",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L21: license: odc-by",
+          "L1: ---",
+          "L2: configs:",
+          "L3: - config_name: default",
+          "L4:   data_files:",
+          "L5:   - split: train",
+          "L6:     path: data/train-*",
+          "L7: dataset_info:",
+          "L8:   features:",
+          "L9:   - name: docid",
+          "L10:     dtype: string",
+          "L11:   - name: text",
+          "L12:     dtype: string"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Corpus/resolve/8367703babe6e080899a48782f365c284c32b668/README.md",
+        "kind": "readme_license",
+        "sha256": "b9e08fcec70d29f91efaf626b47daceab2155d978d3698d4da4752b9e5e459f3",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Corpus/resolve/8367703babe6e080899a48782f365c284c32b668/README.md",
+        "kind": "readme_notice",
+        "sha256": "b9e08fcec70d29f91efaf626b47daceab2155d978d3698d4da4752b9e5e459f3",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": false,
+    "decisions": []
   }
 }
