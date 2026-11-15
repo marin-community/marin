@@ -13,8 +13,10 @@ with TP1/PP1/DP12/EP12. Iris keeps this 15-host GB200 gang in one NVLink domain.
 The role planner checks counts and parallelism; other layouts need their own
 placement check.
 Each host requests 120 CPUs, 900 GiB RAM and 2 TiB disk. Loading uses an 8 GiB
-buffer and four requests per inference worker. This example uses the qualified
-runtime: Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4 on GB200. Compilation mode 3
+buffer and four requests per inference worker. This example pins
+Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4 on GB200. The reused full-model proof
+belongs to [source c2081d90bf8b](https://github.com/marin-community/marin/tree/c2081d90bf8b79005a8b3d60320b51128658131f).
+Newer loop, MuonH and weight-publication changes have only small-scale coverage. Compilation mode 3
 remains enabled. CUDA graphs use `NONE` because graph replay failed after weight
 publication with DP12/EP12 `allgather_reducescatter`. The cause and full-model
 performance cost remain unmeasured.
@@ -35,7 +37,7 @@ are on main. The draft also includes the
 and [turn-terminator fix #11232](https://github.com/marin-community/marin/pull/11232)
 while they remain unmerged. [Draft #11321](https://github.com/marin-community/marin/pull/11321)
 pins the combined revision. Check out its head for the one-rack example.
-It stays in draft while loop unification is discussed.
+It stays in draft while a shared design for the short and long training loops is discussed.
 
 Provide Iris and regional S3 credentials, W&B access, and `DAYTONA_RL_API_KEY`
 and `DAYTONA_EVAL_API_KEY`. Supply HF credentials if any selected input requires
@@ -65,12 +67,14 @@ CONTINUATION_VERSION='<new-continuation-version>'
 ## Fresh start and continuation
 
 Start with two updates. Build the graph and write its source launch configuration
-without submitting:
+without submitting. These commands use a frozen CPU environment for local
+configuration rendering; GPU dependencies come from the submitted job's image:
 
 ```bash
+LAUNCH=(uv run --frozen --all-packages --extra cpu --extra dedup python -m experiments.post_training.mochi_rl.launch)
 COMMON=(--profile one-rack --model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
         --data-uri "$TASKS" --input-version "$INPUT_VERSION")
-uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
+"${LAUNCH[@]}" "${COMMON[@]}" \
   --version "$SMOKE_VERSION" --max-steps 2 --config-output mochi-launch.yaml
 ```
 
@@ -85,7 +89,7 @@ completed native checkpoint directory, such as your run's
 `checkpoints/global_step_2`, then run:
 
 ```bash
-uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
+"${LAUNCH[@]}" "${COMMON[@]}" \
   --version "$CONTINUATION_VERSION" --max-steps 5 --resume-uri "$NATIVE" \
   --config-output mochi-resume.yaml
 ```
