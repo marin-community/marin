@@ -132,7 +132,7 @@ def test_real_tpu_splash_local_and_global_masks_match_reference():
     q_key, k_key, v_key = jax.random.split(jax.random.PRNGKey(0), 3)
     q = jax.device_put(jax.random.normal(q_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
     k = jax.device_put(jax.random.normal(k_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
-    v = jax.device_put(jax.random.normal(v_key, (1, 256, 8, 128), dtype=jnp.float32), sharding)
+    v = jax.device_put(jax.random.normal(v_key, (1, 256, 8, 128), dtype=jnp.float32) * 0.02, sharding)
 
     expected_outputs = []
     with jax.set_mesh(mesh):
