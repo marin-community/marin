@@ -1231,7 +1231,7 @@ def test_a_new_catalog_snapshot_during_import_leaves_the_serving_load_unchanged(
     assert load_catalog(CurationCatalog(root), catalog_query)["changed"]
 
 
-def test_atlas_cleanup_preserves_a_load_started_after_its_cutover(catalog_query, tmp_path):
+def test_atlas_selection_preserves_a_load_started_after_its_cutover(catalog_query, tmp_path):
     roots = [str(tmp_path / name) for name in ("baseline", "first", "later")]
     for root, name in zip(roots, ("baseline", "first", "later"), strict=True):
         publish_sample(root, name)
@@ -1250,10 +1250,11 @@ def test_atlas_cleanup_preserves_a_load_started_after_its_cutover(catalog_query,
 
         def first_query(sql, parameters):
             nonlocal later
-            if sql.startswith("DELETE FROM atlas_sources") and later is None:
+            result = catalog_query(sql, parameters)
+            if sql.startswith("UPDATE atlas_current SET load_id") and later is None:
                 later = executor.submit(load_catalog, CurationCatalog(roots[2]), later_query)
                 assert staged.wait(timeout=15)
-            return catalog_query(sql, parameters)
+            return result
 
         try:
             assert load_catalog(CurationCatalog(roots[1]), first_query)["changed"]
@@ -1267,6 +1268,15 @@ def test_atlas_cleanup_preserves_a_load_started_after_its_cutover(catalog_query,
         "JOIN atlas_packets p USING(load_id) GROUP BY l.snapshot_id",
         {},
     )["rows"] == [{"snapshot_id": "later", "packets": 9}]
+    assert catalog_query(
+        "SELECT l.snapshot_id, count(p.*) AS packets FROM atlas_loads l "
+        "JOIN atlas_packets p USING(load_id) GROUP BY l.snapshot_id ORDER BY l.snapshot_id",
+        {},
+    )["rows"] == [
+        {"snapshot_id": "baseline", "packets": 3},
+        {"snapshot_id": "first", "packets": 6},
+        {"snapshot_id": "later", "packets": 9},
+    ]
 
 
 @pytest.mark.parametrize(

@@ -286,10 +286,13 @@ the receipt artifacts directory: `journeys/rl_data_catalog/readability/` for the
 fixture walk and `screenshots/readability/` for the frozen-input walk. Failed runs retain their completed states for diagnosis. Do not waive a
 failure by removing a layout, lowering a threshold or filtering a selector.
 
-Pending filtered-private candidates and their current-pin SAMPLE receipts remain
-Evidence-only. Remove a pending card when its release is qualified and selected;
-preserve its earlier package and receipts as history. The sweeps read candidate
-source IDs from the package's pinned candidate manifest and include each candidate
-card, even when its source duplicates another QA/admission presentation. Verify
-the pin and filtered count while preserving the selected catalog, Examples and
-Quality; a private publication alone does not qualify Atlas admission.
+Pending private candidates may appear on a source's Evidence page with a SAMPLE
+receipt bound to the candidate's repository and revision. Adding a card must
+preserve the selected catalog release and its By source Examples and Quality.
+Remove the card when the catalog selects that candidate with a qualified
+current-pin admission receipt; preserve its earlier package and receipts as history.
+The checker's Evidence and readability sweeps read source IDs from the released
+app's candidate manifest and check every card, including sources with the same
+Quality, Result or admission state as another source. Check the displayed
+candidate pin and filtered task count against its linked receipt. A private
+publication alone does not qualify Atlas admission.
