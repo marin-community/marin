@@ -54,10 +54,11 @@ def write_report(
     events = []
     sources = []
     for stage in stages:
-        fs, prefix = filesystem_for(prefix_join(stage, "timing"))
-        for key in sorted(fs.glob(prefix_join(prefix, "**/*.jsonl"))):
-            events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
-            sources.append(fs.unstrip_protocol(key))
+        for directory, pattern in (("timing", "**/*.jsonl"), ("telemetry", "**/phases.jsonl")):
+            fs, prefix = filesystem_for(prefix_join(stage, directory))
+            for key in sorted(fs.glob(prefix_join(prefix, pattern))):
+                events.extend(Event(**json.loads(line)) for line in fs.cat_file(key).decode().splitlines())
+                sources.append(fs.unstrip_protocol(key))
     for item in additional_timing or []:
         if item["source"] in sources:
             continue

@@ -148,13 +148,16 @@ resolver before judge allocation.
 The archive derives its inventory from committed stage outputs and consumed
 configs, including retention ledgers, exact evaluation selection and native result
 rows. SkyRL writes the initialized W&B identity to `exports/wandb-run.json`.
-New native SFT and RL runs require explicit W&B entity and project values.
-Every SFT rank and the RL metric producer fsync each metric call locally before
-forwarding it to W&B. Repeated step IDs and uncommitted calls remain separate
+New native long-loop SFT and RL runs require explicit W&B entity and project values.
+Every SFT rank and the RL metric producer append each metric call to a local
+JSONL file and fsync it before forwarding it to W&B. Repeated step IDs and calls
+with W&B `commit=False` remain separate
 JSONL records. Files live beneath `$IRIS_OUTPUT_DIR` when it is available and
-are published to each stage's durable `telemetry/` prefix at producer exit.
-A start marker registers each attempt; the immutable completion receipt pins
-history and phase-journal bytes, row count and observed steps. Failed attempts
+are published to each stage's durable `telemetry/` prefix on normal exit or a
+handled training failure.
+A start marker registers each attempt. The immutable completion receipt records
+SHA-256 hashes of metric-history and phase-journal files, metric row counts, and
+observed step IDs. Failed attempts
 remain separate. A registered attempt without a completion receipt prevents
 telemetry certification.
 
@@ -163,12 +166,12 @@ and steady steps, checkpoint enqueue/write/drain, and HF export. RL's inference
 engine initialization span includes startup and compilation; it does not isolate
 compiler CPU time. The selected RL checkpoint exporter writes its own export
 journal. The archive requires all expected SFT ranks, the RL metric producer and
-the selected exporter, checks every payload hash and sequence, and requires
-paired successful phase boundaries. It copies these artifacts without querying
+the selected exporter, checks every payload hash and the metric record sequence numbers, and requires
+matching start and successful-end events for each required phase. It copies these artifacts without querying
 W&B history. Missing or changed native evidence fails archive construction.
 
 Historical adopted stages without producer telemetry still use pinned
-`additional_evidence` and the provider export path. Use `kind: wandb-run-reference`
+`additional_evidence` and the W&B history-export path described below. Use `kind: wandb-run-reference`
 for an independently verified SFT identity and `native-sft-journal` /
 `native-sft-attempt-archive` for preserved timing. Incomplete historical evidence
 keeps the archive partial and blocks checkpoint cleanup. Model exports go to
@@ -179,8 +182,8 @@ Final evaluation preserves each task's declared verifier timeout. A global
 300-second override previously truncated the 1,800-second
 `mcmc-sampling-stan` and 7,200-second `sam-cell-seg` verifier budgets. The outer
 trial deadline is 10,800 seconds to include setup, the 1,800-second agent window,
-verification and teardown. Verifier exceptions remain infrastructure-unscored;
-whole-agent replay and score imputation are disabled.
+verification and teardown. Verifier exceptions receive no score and are excluded from reward means.
+Whole-agent replay and score imputation are disabled.
 
 An explicitly approved partial evaluation can pass an exact list of
 `data_source`, `uid` and `exception_type` records to

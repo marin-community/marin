@@ -13,12 +13,10 @@ from typing import Any, Literal, Optional
 
 import draccus
 import jax
-from rigging.training_journal import get_training_journal
 from jaxtyping import Scalar
 
 from levanter.tracker.helpers import hparams_to_dict
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.json_logger import _to_jsonable
 from levanter.tracker.tensorboard import TensorboardTracker
 from levanter.tracker.trackio import TrackioTracker
 from levanter.tracker.tracker import CompositeTracker, DictTracker, Tracker
@@ -71,20 +69,20 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
             raise ValueError("Cannot commit from inside jit")
         jit_log(metrics, step=step)
     else:
-        journal = get_training_journal()
-        if journal is not None:
-            journal.log(_to_jsonable(dict(metrics)), step=None if step is None else int(step), commit=commit)
         tracker.log(metrics, step=step, commit=commit)
 
 
 def _do_jit_log(metrics, *, step=None):
-    journal = get_training_journal()
-    if journal is not None:
-        journal.log(_to_jsonable(dict(metrics)), step=None if step is None else int(step), commit=False)
+    tracker = _active_tracker()
+    if tracker is None:
+        return
+    if tracker.training_journal is not None:
+        # A failed producer-history write must fail the callback. The composite
+        # tracker already isolates optional provider mirrors from that write.
+        tracker.log(metrics, step=step, commit=False)
+        return
     try:
-        tracker = _active_tracker()
-        if tracker is not None:
-            tracker.log(metrics, step=step, commit=False)
+        tracker.log(metrics, step=step, commit=False)
     except Exception:
         logger.exception("Error logging metrics")
 

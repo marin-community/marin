@@ -47,7 +47,7 @@ from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
-from rigging.training_journal import phase
+from rigging.training_journal import TrainingJournal, phase
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -1429,6 +1429,7 @@ def save_hf_checkpoint_callback(
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
     field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
+    training_journal: TrainingJournal | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1454,7 +1455,7 @@ def save_hf_checkpoint_callback(
             my_upload_kwargs["commit_message"] = f"Upload for step {step.step} from Levanter"
         else:
             my_upload_kwargs = hf_upload_kwargs
-        with phase("export", step=step.step):
+        with phase(training_journal, "export", step=step.step):
             converter.save_pretrained(
                 cast(ModelWithHfSerializationMixin, step.eval_model),
                 os.path.join(base_path, f"step-{step.step}"),

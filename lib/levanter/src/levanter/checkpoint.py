@@ -35,7 +35,7 @@ from jax.experimental.array_serialization.serialization import GlobalAsyncCheckp
 from jaxtyping import PyTree
 
 from rigging import telemetry
-from rigging.training_journal import phase
+from rigging.training_journal import TrainingJournal, phase
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -494,6 +494,7 @@ class Checkpointer:
         write_config: TensorStoreWriteConfig | None = None,
         metadata: Mapping[str, Any] | None = None,
         async_timeout_seconds: float = DEFAULT_ASYNC_TIMEOUT_SECONDS,
+        training_journal: TrainingJournal | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -538,6 +539,7 @@ class Checkpointer:
         self.debug = debug or CheckpointDebugConfig()
         self.write_config = write_config or TensorStoreWriteConfig()
         self.metadata = metadata
+        self.training_journal = training_journal
         self._temporary_checkpoints = []
         self._checkpoint_request_lock = threading.Lock()
         self._requested_retention: CheckpointRetention | None = None
@@ -803,6 +805,7 @@ class Checkpointer:
             debug=self.debug,
             write_config=self.write_config,
             metadata=self.metadata,
+            training_journal=self.training_journal,
         )
         self._last_save_step = step
         self._last_save_permanent = not is_temporary
@@ -827,6 +830,7 @@ def save_checkpoint(
     debug: CheckpointDebugConfig | None = None,
     write_config: TensorStoreWriteConfig | None = None,
     metadata: Mapping[str, Any] | None = None,
+    training_journal: TrainingJournal | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -872,7 +876,7 @@ def save_checkpoint(
     if progress_logger is not None:
         progress_logger.set_phase("filesystem_ready")
 
-    save_span = phase("checkpoint_save", step=step)
+    save_span = phase(training_journal, "checkpoint_save", step=step)
     save_span.__enter__()
 
     def my_callback():
@@ -1328,7 +1332,9 @@ class CheckpointerConfig:
             return os.path.expanduser(os.path.join(self.temporary_base_path, run_id))
         return os.path.expanduser(self.temporary_base_path)
 
-    def create(self, run_id, *, metadata: Mapping[str, Any] | None = None) -> Checkpointer:
+    def create(
+        self, run_id, *, metadata: Mapping[str, Any] | None = None, training_journal: TrainingJournal | None = None
+    ) -> Checkpointer:
         """Build the run's checkpointer; ``metadata`` is committed with every checkpoint it saves."""
         keeps = [CheckpointInterval(**k) for k in self.keep or []]
         return Checkpointer(
@@ -1342,6 +1348,7 @@ class CheckpointerConfig:
             write_config=self.write,
             metadata=metadata,
             async_timeout_seconds=self.async_timeout_seconds,
+            training_journal=training_journal,
         )
 
     def __post_init__(self):

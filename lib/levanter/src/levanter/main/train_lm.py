@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
-from rigging.training_journal import get_training_journal, set_training_journal, phase
+from rigging.training_journal import phase
 
 import levanter
 import levanter.analysis
@@ -233,6 +233,7 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
+    journal = levanter.tracker.current_tracker().training_journal
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
@@ -287,7 +288,7 @@ def main(config: TrainLmConfig):
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
         # Get the training dataset
-        with phase("data_load"):
+        with phase(journal, "data_load"):
             train_dataset = config.data.train_set(
                 Pos,
                 config.trainer.batch_schedule,
@@ -309,7 +310,7 @@ def main(config: TrainLmConfig):
             parameter_axis_mapping=parameter_axis_mapping,
             trainer=trainer,
         )
-        with phase("init"):
+        with phase(journal, "init"):
             _, resuming = trainer.checkpoint_load_plan()
             weight_source = config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
             if weight_source and not resuming:
@@ -476,10 +477,6 @@ def main(config: TrainLmConfig):
         trainer.train(state, train_loader)
 
     # This isn't necessary except when Levanter is run in a subprocess (as happens under Iris/Fray)
-    journal = get_training_journal()
-    if journal is not None:
-        journal.finish(status="completed")
-        set_training_journal(None)
     trainer.tracker.finish()
 
 

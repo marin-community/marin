@@ -5,7 +5,7 @@ import sys
 from types import SimpleNamespace
 
 from omegaconf import OmegaConf
-from rigging.training_journal import TrainingJournal, set_training_journal, verify_training_journals
+from rigging.training_journal import TrainingJournal, verify_training_journals
 from skyrl_train.utils import tracking
 
 
@@ -46,10 +46,9 @@ def test_local_history_survives_provider_logging_and_shutdown_failure(tmp_path, 
     monkeypatch.setattr(tracking, "require_secret", lambda name: "test-only")
     monkeypatch.setattr(tracking.ray, "is_initialized", lambda: False)
     journal = TrainingJournal(str(tmp_path / "telemetry"), "run-id", "tracking", "trainer")
-    set_training_journal(journal)
     tracker = tracking.Tracking("project", "run-name", "wandb", OmegaConf.create({"trainer": {
         "export_path": str(tmp_path / "exports"), "wandb_entity": "team",
-    }}))
+    }}), journal=journal)
     with tracker:
         with journal.events.span("train"):
             tracker.log({"loss": 0.5}, step=1, commit=False)
@@ -57,6 +56,8 @@ def test_local_history_survives_provider_logging_and_shutdown_failure(tmp_path, 
     receipts = verify_training_journals(str(tmp_path / "telemetry"), {"trainer"}, {"train"})
     assert receipts[0]["steps"] == [1, 2]
     rows = [json.loads(line) for line in (journal.destination / "history.jsonl").read_text().splitlines()]
-    assert [(row["step"], row["metrics"], row["commit"]) for row in rows] == [
+    assert [(row["step"], row["metrics"], row["commit"]) for row in rows if "loss" in row["metrics"]] == [
         (1, {"loss": 0.5}, False), (2, {"loss": 0.25}, True),
     ]
+    errors = [row for row in rows if "tracker/backend_log_failures" in row["metrics"]]
+    assert sum(row["metrics"]["tracker/backend_log_failures"] for row in errors) == 2

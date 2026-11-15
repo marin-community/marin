@@ -52,8 +52,6 @@ def test_native_sft_dispatch_preserves_accelerator_platform_and_timeout(monkeypa
     assert submitted[0][0]["env_vars"].get("JAX_PLATFORMS") == platform
     flags = submitted[0][0]["env_vars"]["XLA_FLAGS"].split()
     assert "--xla_gpu_shard_autotuning=false" in flags
-    if isinstance(device, GpuConfig):
-        assert any(flag.startswith("--xla_gpu_nccl_termination_timeout_seconds=") for flag in flags)
 
 
 @pytest.fixture

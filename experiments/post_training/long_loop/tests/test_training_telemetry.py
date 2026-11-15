@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from rigging.training_journal import TrainingJournal, phase, set_training_journal
+from rigging.training_journal import TrainingJournal
 
 from experiments.post_training.long_loop.archive import ArchiveInput, seal_archive, verify_archive
 from experiments.post_training.long_loop.archive_stage import native_training_inputs
@@ -18,22 +18,18 @@ SPEC = Path(__file__).parents[1] / "specs/round1.yaml"
 
 def produce(root, producer, stage, omit_phase=None):
     journal = TrainingJournal(str(root), "cpu-fixture", stage, producer)
-    set_training_journal(journal)
-    try:
-        phases = ("init", "data_load", "compile", "first_step", "steady_state", "checkpoint_save", "export")
-        if stage == "rl":
-            phases += ("inference_engine_init_and_compile", "save_checkpoints", "queue_hf_export")
-        for name in phases:
-            if name == omit_phase:
-                continue
-            with phase(name):
-                pass
-        for step in range(3):
-            journal.log({"loss": 1 / (step + 1)}, step=step, commit=False)
-            journal.log({"tokens": step * 64}, step=step, commit=True)
-        journal.finish(status="completed")
-    finally:
-        set_training_journal(None)
+    phases = ("init", "data_load", "compile", "first_step", "steady_state", "checkpoint_save", "export")
+    if stage == "rl":
+        phases += ("inference_engine_init_and_compile", "save_checkpoints", "queue_hf_export")
+    for name in phases:
+        if name == omit_phase:
+            continue
+        with journal.events.span(name):
+            pass
+    for step in range(3):
+        journal.log({"loss": 1 / (step + 1)}, step=step, commit=False)
+        journal.log({"tokens": step * 64}, step=step, commit=True)
+    journal.finish(status="completed")
     return journal
 
 
@@ -96,4 +92,14 @@ def test_archive_requires_native_export_phase_even_with_valid_history_hashes(tmp
     produce(rl, "trainer", "rl")
     produce(rl / "exports/step-2", "exporter", "rl_export")
     with pytest.raises(ValueError, match="Missing native phases"):
+        native_training_inputs(str(sft), str(rl), 1, 2)
+
+
+def test_interrupted_producer_attempt_blocks_complete_archive(tmp_path):
+    sft, rl = tmp_path / "sft", tmp_path / "rl"
+    produce(sft, "rank-0", "sft")
+    produce(rl, "trainer", "rl")
+    produce(rl / "exports/step-2", "exporter", "rl_export")
+    TrainingJournal(str(sft), "cpu-fixture", "sft", "rank-0")
+    with pytest.raises(ValueError, match="no completion receipt"):
         native_training_inputs(str(sft), str(rl), 1, 2)

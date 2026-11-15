@@ -20,7 +20,7 @@ from ray.util.placement_group import (
 )
 
 from skyrl_train.telemetry import record_event
-from rigging.training_journal import phase
+from rigging.training_journal import TrainingJournal, phase
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.utils import generation_context_limit
@@ -250,7 +250,8 @@ def use_per_engine_pg(
 
 
 class Timer:
-    def __init__(self, message, update_dict=None, *, log_events: bool = True):
+    def __init__(self, message, update_dict=None, *, log_events: bool = True, journal: TrainingJournal | None = None):
+        self.journal = journal
         self.message = message
         self.update_dict = update_dict
         self.log_events = log_events
@@ -270,7 +271,7 @@ class Timer:
         return time.monotonic() - self.start_time
 
     def __enter__(self):
-        self.journal_span = phase(self.message)
+        self.journal_span = phase(self.journal, self.message)
         self.journal_span.__enter__()
         self.start_time = time.monotonic()
         self.started_unix_ms = round(time.time() * 1000)

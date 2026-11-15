@@ -9,6 +9,7 @@ from typing import Any, List, Optional
 
 import draccus
 import jax
+from rigging.training_journal import TrainingJournal
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class Tracker(abc.ABC):
     """
 
     name: str
+    training_journal: TrainingJournal | None = None
 
     def _prepare_log(self, metrics: typing.Mapping[str, Any]) -> Any:
         """Convert a ``log`` payload to host data, on the caller thread.
@@ -119,8 +121,9 @@ class CompositeTracker(Tracker):
     want isolation from latency.
     """
 
-    def __init__(self, loggers: List[Tracker]):
+    def __init__(self, loggers: List[Tracker], *, training_journal: TrainingJournal | None = None):
         self.loggers = loggers
+        self.training_journal = training_journal
 
     def _for_each(self, op: str, *args, **kwargs) -> None:
         for tracker in self.loggers:
@@ -137,6 +140,8 @@ class CompositeTracker(Tracker):
         self._for_each("log_hyperparameters", hparams)
 
     def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
+        if self.training_journal is not None:
+            self.training_journal.log(metrics, step=None if step is None else int(step), commit=commit)
         self._for_each("log", metrics, step=step, commit=commit)
 
     def log_summary(self, metrics: dict[str, Any]):
@@ -152,6 +157,8 @@ class CompositeTracker(Tracker):
         self._for_each("capture_stall_diagnostics")
 
     def finish(self):
+        if self.training_journal is not None:
+            self.training_journal.finish(status="completed")
         # finish() exceptions are logged and swallowed too; a tracker failing to
         # flush at the very end of a run shouldn't crash the trainer's shutdown.
         self._for_each("finish")

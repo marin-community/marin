@@ -87,7 +87,8 @@ from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct
 from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.telemetry import TelemetryConfig, capture_stall_diagnostics
 from levanter.tracker.wandb import WandbConfig
-from rigging.training_journal import TrainingJournal, get_training_journal, set_training_journal, phase
+from rigging.training_journal import TrainingJournal, phase
+from levanter.tracker.json_logger import _to_jsonable
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
@@ -313,9 +314,8 @@ class Trainer:
             self.tracker = levanter.tracker.current_tracker()
         except RuntimeError:
             # No global tracker set, create one
-            self.tracker = levanter.tracker.CompositeTracker(
-                [c.init(self.run_id) for c in _compose_with_telemetry(config.tracker)]
-            )
+            self.tracker = _configured_tracker(config.tracker, self.run_id, config.native_telemetry_root)
+        self.journal = self.tracker.training_journal
 
         if add_default_hooks:
             self._add_default_hooks()
@@ -426,7 +426,7 @@ class Trainer:
         # already-closed tracker/stdout during teardown.
         if self._checkpointer is not None:
             with (
-                phase("checkpoint_drain"),
+                phase(self.journal, "checkpoint_drain"),
                 progress_event_scope(
                     self.hooks.emit_event,
                     ProgressEvent.CHECKPOINT_STARTED,
@@ -448,10 +448,8 @@ class Trainer:
         self.hooks.emit_event(ProgressEvent.TRAINING_FINISHED)
 
         if args[0] is not None or problems:
-            journal = get_training_journal()
-            if journal is not None:
-                journal.finish(status="failed")
-                set_training_journal(None)
+            if self.journal is not None:
+                self.journal.finish(status="failed")
 
         if len(problems) > 0:
             raise RuntimeError("Exception(s) occurred while exiting trainer", problems) from problems[0]
@@ -608,7 +606,7 @@ class Trainer:
         is_first_step = True
 
         while int(state.step) < self.num_train_steps:
-            with phase("data_load", step=int(state.step)), capture_time() as loading_time:
+            with phase(self.journal, "data_load", step=int(state.step)), capture_time() as loading_time:
                 try:
                     example = next(iter_data)
                 except StopIteration:
@@ -621,7 +619,7 @@ class Trainer:
                     loading_time(),
                 )
 
-            with phase("first_step" if is_first_step else "steady_state", step=int(state.step)):
+            with phase(self.journal, "first_step" if is_first_step else "steady_state", step=int(state.step)):
                 info = self.train_step(state, example)
             state = info.state
 
@@ -673,12 +671,12 @@ class Trainer:
             levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
         )
         # engine.add_hook(callbacks.log_memory_usage(), every=1)
-        checkpointer = self.config.checkpointer.create(self.run_id)
+        checkpointer = self.config.checkpointer.create(self.run_id, training_journal=self.journal)
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
             with (
-                phase("checkpoint_enqueue", step=info.step),
+                phase(self.journal, "checkpoint_enqueue", step=info.step),
                 progress_event_scope(
                     info.emit_event,
                     ProgressEvent.CHECKPOINT_STARTED,
@@ -859,8 +857,8 @@ class Trainer:
         self.tracker.log_artifact(artifact_path, name=name, type=type)
 
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
-        if get_training_journal() is not None and name not in self._compiled_journal_variants:
-            with phase("compile", step=int(args[0].step)):
+        if self.journal is not None and name not in self._compiled_journal_variants:
+            with phase(self.journal, "compile", step=int(args[0].step)):
                 fn.lower(*args, **kwargs).compile()
             self._compiled_journal_variants.add(name)
         logged = False
@@ -895,9 +893,20 @@ def _compose_with_telemetry(config: TrackerConfig | Sequence[TrackerConfig]) -> 
     return configs
 
 
-def _initialize_global_tracker(config, run_id):
-    tracker = levanter.tracker.CompositeTracker([c.init(run_id) for c in _compose_with_telemetry(config)])
-    levanter.tracker.set_global_tracker(tracker)
+def _configured_tracker(config, run_id, native_telemetry_root) -> levanter.tracker.Tracker:
+    journal = None
+    if native_telemetry_root is not None:
+        journal = TrainingJournal(
+            native_telemetry_root, run_id, "sft", f"rank-{jax.process_index()}", json_default=_to_jsonable
+        )
+    with phase(journal, "tracker_init"):
+        return levanter.tracker.CompositeTracker(
+            [c.init(run_id) for c in _compose_with_telemetry(config)], training_journal=journal
+        )
+
+
+def _initialize_global_tracker(config, run_id, native_telemetry_root):
+    levanter.tracker.set_global_tracker(_configured_tracker(config, run_id, native_telemetry_root))
 
 
 @dataclass
@@ -1067,10 +1076,7 @@ class TrainerConfig:
 
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
-        if self.native_telemetry_root is not None:
-            set_training_journal(TrainingJournal(self.native_telemetry_root, id, "sft", f"rank-{jax.process_index()}"))
-        with phase("tracker_init"):
-            _initialize_global_tracker(self.tracker, id)
+        _initialize_global_tracker(self.tracker, id, self.native_telemetry_root)
         levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
         if self.shutdown_at_exit is not False:

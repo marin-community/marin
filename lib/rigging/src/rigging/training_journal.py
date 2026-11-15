@@ -8,22 +8,33 @@ import json
 import os
 import tempfile
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from rigging.event_log import EventLog
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 
 class TrainingJournal:
     """Fsync each metric call locally; publish immutable files and a completion receipt last."""
 
-    def __init__(self, root: str, run: str, stage: str, producer: str):
+    def __init__(
+        self,
+        root: str,
+        run: str,
+        stage: str,
+        producer: str,
+        *,
+        json_default: Callable[[object], object] | None = None,
+    ):
+        self.json_default = json_default
         self.attempt = uuid4().hex
         self.destination = StoragePath(root) / producer / self.attempt
+        self.filesystem, self.destination_key = filesystem_for(str(self.destination))
         self.directory = Path(tempfile.mkdtemp(prefix="training-journal-", dir=os.environ.get("IRIS_OUTPUT_DIR")))
         self.history = self.directory / "history.jsonl"
         self.history.touch()
@@ -47,7 +58,7 @@ class TrainingJournal:
         }
         content = json.dumps(started, sort_keys=True).encode()
         (self.directory / "started.json").write_bytes(content)
-        with (self.destination / "started.json").open("xb") as output:
+        with self.filesystem.open(prefix_join(self.destination_key, "started.json"), "xb") as output:
             output.write(content)
 
     def log(self, metrics: Mapping, *, step: int | None, commit: bool | None) -> None:
@@ -62,7 +73,7 @@ class TrainingJournal:
                 "utc": datetime.now(UTC).isoformat(),
                 "metrics": dict(metrics),
             }
-            encoded = json.dumps(row, sort_keys=True) + "\n"
+            encoded = json.dumps(row, sort_keys=True, default=self.json_default) + "\n"
             with self.history.open("a") as output:
                 output.write(encoded)
                 output.flush()
@@ -82,7 +93,7 @@ class TrainingJournal:
                 target = self.destination / name
                 target.parent.mkdirs(exist_ok=True)
                 # Each writer owns a UUID namespace. Exclusive creation rejects collisions.
-                with target.open("xb") as output:
+                with self.filesystem.open(prefix_join(self.destination_key, name), "xb") as output:
                     output.write(content)
                 files[name] = {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
             receipt = {
@@ -98,27 +109,14 @@ class TrainingJournal:
             }
             content = json.dumps(receipt, sort_keys=True).encode()
             (self.directory / "receipt.json").write_bytes(content)
-            with (self.destination / "receipt.json").open("xb") as output:
+            with self.filesystem.open(prefix_join(self.destination_key, "receipt.json"), "xb") as output:
                 output.write(content)
             self.closed = True
 
 
-_current_journal: TrainingJournal | None = None
-
-
-def get_training_journal() -> TrainingJournal | None:
-    return _current_journal
-
-
-def set_training_journal(journal: TrainingJournal | None) -> None:
-    global _current_journal
-    _current_journal = journal
-
-
 @contextmanager
-def phase(kind: str, *, step: int | None = None) -> Iterator[None]:
+def phase(journal: TrainingJournal | None, kind: str, *, step: int | None = None) -> Iterator[None]:
     """Record a native phase only when this producer has explicit durable telemetry enabled."""
-    journal = get_training_journal()
     if journal is None:
         yield
         return
@@ -128,18 +126,21 @@ def phase(kind: str, *, step: int | None = None) -> Iterator[None]:
 
 def verify_training_journals(root: str, producers: set[str], required_phases: set[str]) -> list[dict]:
     """Verify hashes, every logged row, complete phase pairs and the exact producer set."""
-    location = StoragePath(root)
+    fs, prefix = filesystem_for(root)
     receipts = []
     observed = set()
-    starts = (location / "*/*/started.json").glob()
+    starts = fs.glob(prefix_join(prefix, "*/*/started.json"))
     for started in starts:
-        if not (started.parent / "receipt.json").exists():
-            raise ValueError(f"Telemetry attempt has no completion receipt: {started.parent}")
-    for path in sorted((location / "*/*/receipt.json").glob(), key=str):
-        receipt = json.loads(path.read_bytes())
+        directory = str(StoragePath(started).parent)
+        if not fs.isfile(prefix_join(directory, "receipt.json")):
+            raise ValueError(f"Telemetry attempt has no completion receipt: {fs.unstrip_protocol(directory)}")
+    for key in sorted(fs.glob(prefix_join(prefix, "*/*/receipt.json"))):
+        path = StoragePath(fs.unstrip_protocol(key))
+        directory = str(StoragePath(key).parent)
+        receipt = json.loads(fs.cat_file(key))
         if receipt["status"] not in {"completed", "failed"}:
             raise ValueError("Unknown telemetry completion status")
-        started = json.loads((path.parent / "started.json").read_bytes())
+        started = json.loads(fs.cat_file(prefix_join(directory, "started.json")))
         if any(started[key] != receipt[key] for key in ("run", "stage", "producer", "attempt")):
             raise ValueError("Telemetry completion differs from the started attempt")
         producer = receipt["producer"]
@@ -154,12 +155,12 @@ def verify_training_journals(root: str, producers: set[str], required_phases: se
         for name, identity in receipt["files"].items():
             if name not in {"history.jsonl", "phases.jsonl"}:
                 raise ValueError(f"Unexpected telemetry file: {name}")
-            content = (path.parent / name).read_bytes()
+            content = fs.cat_file(prefix_join(directory, name))
             if len(content) != identity["bytes"] or hashlib.sha256(content).hexdigest() != identity["sha256"]:
                 raise ValueError(f"Telemetry file changed: {path.parent / name}")
         if set(receipt["files"]) != {"history.jsonl", "phases.jsonl"}:
             raise ValueError("Telemetry receipt must include history and phases")
-        rows = [json.loads(line) for line in (path.parent / "history.jsonl").read_text().splitlines()]
+        rows = [json.loads(line) for line in fs.cat_file(prefix_join(directory, "history.jsonl")).decode().splitlines()]
         if [row["sequence"] for row in rows] != list(range(receipt["rows"])):
             raise ValueError("Metric history has missing or reordered rows")
         if (not rows and receipt["status"] == "completed") or sorted(
@@ -167,7 +168,7 @@ def verify_training_journals(root: str, producers: set[str], required_phases: se
         ) != receipt["steps"]:
             raise ValueError("Metric history step coverage differs from the producer receipt")
         spans: dict[str, list[dict]] = {}
-        for line in (path.parent / "phases.jsonl").read_text().splitlines():
+        for line in fs.cat_file(prefix_join(directory, "phases.jsonl")).decode().splitlines():
             event = json.loads(line)
             if (
                 event["run"] != receipt["run"]

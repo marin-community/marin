@@ -20,7 +20,9 @@ def run_checkpoint_export(cfg: DictConfig):
     root = cfg.trainer.get("native_telemetry_root")
     if root is None:
         return checkpoint_exporter(cfg).run()
-    journal = TrainingJournal(root + f"/exports/step-{cfg.checkpoint_export.step}", cfg.trainer.run_name, "rl_export", "exporter")
+    journal = TrainingJournal(
+        root + f"/exports/step-{cfg.checkpoint_export.step}", cfg.trainer.run_name, "rl_export", "exporter"
+    )
     status = "failed"
     try:
         with journal.events.span("export", step=cfg.checkpoint_export.step):

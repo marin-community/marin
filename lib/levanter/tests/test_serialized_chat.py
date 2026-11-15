@@ -33,7 +33,7 @@ def test_cached_transcript_masks_prompts_tools_and_headers_without_changing_toke
     # Weights index the prediction's predecessor, including each assistant EOS.
     np.testing.assert_array_equal(np.flatnonzero(example.loss_weight), [9, 10, 11, 22, 23])
 
-    # Left truncation is explicit for the single-transcript view. It must not
+    # Right truncation is explicit for the single-transcript view. It must not
     # label a tool observation as assistant output or predict beyond the window.
     truncated = dataset_for_component(
         component, Axis("position", 18), writer.result(), eos_id=None, block_cross_document_attention=False

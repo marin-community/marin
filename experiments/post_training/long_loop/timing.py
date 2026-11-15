@@ -81,9 +81,17 @@ def report(events: list[Event], *, synthetic: bool) -> str:
     ]
     components = {
         "Queue and allocation": ("queue", "allocation"),
-        "Model loading, server startup and compilation": ("startup", "spin", "load", "compil"),
+        "Model loading, server startup and compilation": ("startup", "spin", "load", "compil", "init"),
         "File transfers and exports": ("transfer", "export", "convert"),
-        "SFT and RL computation": ("train", "learner", "rollout", "optimizer", "weight_sync"),
+        "SFT and RL computation": (
+            "train",
+            "learner",
+            "rollout",
+            "optimizer",
+            "weight_sync",
+            "first_step",
+            "steady_state",
+        ),
         "Checkpoint saves and drain": ("checkpoint", "drain"),
         "Validation and evaluation": ("eval", "judge", "benchmark"),
         "Archive and cleanup": ("archive", "cleanup"),

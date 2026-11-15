@@ -511,7 +511,7 @@ def derive_archive_plan(
     timing_sources = documents[("report", "timing-sources.json")]
     for index, uri in enumerate(timing_sources):
         inputs.append(_input(uri, f"timing/journals/{index:06d}.jsonl", "timing"))
-    limitations.append("Stage timing journals do not establish complete native phase or allocation coverage.")
+    limitations.append("Timing journals do not establish complete allocation coverage.")
     launch = documents[("rl", "resolved-launch.yaml")]
     trainer = launch["config"]["skyrl"]["trainer"]
     order_root = prefix_join(trainer["export_path"], "training_order")
