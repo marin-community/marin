@@ -93,7 +93,9 @@ def main():
     parser.add_argument(
         "--trial-phase",
         default=None,
-        help="Attempt-scoped identity prefix for D trial probes; required to run D after a preemption burns earlier trial identities",
+        # Attempt-scoped identity prefix: preempted trials keep their dispatch
+        # markers, so each D attempt needs fresh probe identities.
+        help="Attempt-scoped identity prefix for D trial probes; required to run D",
     )
     parser.add_argument("--h100-hour-limit", type=float, required=True)
     parser.add_argument("--max-concurrent", type=int, choices=range(1, 9), default=3)
