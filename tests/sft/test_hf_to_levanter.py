@@ -166,6 +166,7 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
 class _ExportTrainer:
     add_hook = Trainer.add_hook
     run_id = "export-regression"
+    journal = None
     config = SimpleNamespace(checkpointer=None, field_dtype_overrides={})
 
     def __init__(self):
