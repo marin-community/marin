@@ -183,7 +183,7 @@ def test_column_drag_keyboard_persistence_and_reset_preserve_table_geometry(
     page.set_viewport_size({"width": width, "height": 1000})
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-everything").click()
-    expect(page.locator("#rows tr")).to_have_count(25)
+    expect(page.locator("#rows tr")).to_have_count(28)
     header = page.locator("#headers th").first
     before = header.evaluate("e=>e.getBoundingClientRect().width")
     rows = page.locator("#rows tr").evaluate_all("rows=>rows.map(r=>r.dataset.sourceId)")
@@ -204,7 +204,7 @@ def test_column_drag_keyboard_persistence_and_reset_preserve_table_geometry(
     expect(header).to_have_attribute("aria-sort", "ascending")
     assert page.locator("#rows tr").evaluate_all("rows=>rows.map(r=>r.dataset.sourceId)") == rows
     page.reload()
-    expect(page.locator("#rows tr")).to_have_count(25)
+    expect(page.locator("#rows tr")).to_have_count(28)
     assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - changed) < 2
     handle.press("ArrowLeft")
     assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - changed + 16) < 2
@@ -214,7 +214,7 @@ def test_column_drag_keyboard_persistence_and_reset_preserve_table_geometry(
         assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
     page.locator("#reset-column-widths").click()
     page.reload()
-    expect(page.locator("#rows tr")).to_have_count(25)
+    expect(page.locator("#rows tr")).to_have_count(28)
     assert abs(header.evaluate("e=>e.getBoundingClientRect().width") - before) < 2
 
 
@@ -308,7 +308,7 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
     page.emulate_media(color_scheme=theme)
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(25)
+    expect(page.locator("#rows tr")).to_have_count(28)
     expected = {
         "clean": "NO ISSUES",
         "stale-clean": "NOT MEASURED",
@@ -376,7 +376,8 @@ def test_contamination_chips_counts_and_phone_evidence(journey: Journey, theme: 
 def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey: Journey, theme: str) -> None:
     page = journey.page
     page.emulate_media(color_scheme=theme)
-    page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
+    sources_url = f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/"
+    page.goto(sources_url)
     page.locator("#show-all").check()
     complete = page.locator('tr[data-source-id="Marin:sample-complete"]')
     content_only = page.locator('tr[data-source-id="Marin:sample-content"]')
@@ -385,7 +386,15 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     expect(complete.locator(".level")).to_have_text("SAMPLE")
     expect(complete.locator(".result-provisional")).to_have_count(0)
     expect(complete.locator("td").nth(5)).to_have_text("Good")
-    for name in ("sample-uncertain", "full-inflight", "full-uncertain", "full-false-complete", "sample-false-waiver"):
+    for name in (
+        "sample-uncertain",
+        "full-inflight",
+        "full-uncertain",
+        "full-false-complete",
+        "sample-false-waiver",
+        "sample-missing-six",
+        "full-missing-five",
+    ):
         expect(page.locator(f'tr[data-source-id="Marin:{name}"] .result-provisional')).to_have_text("Good · provisional")
     for name in ("full-false-complete", "sample-false-waiver"):
         expect(page.locator(f'tr[data-source-id="Marin:{name}"] .level')).to_have_text("SAMPLE")
@@ -399,6 +408,25 @@ def test_complete_sample_is_final_and_unfinished_reviews_are_provisional(journey
     page.get_by_role("link", name="All quality evidence", exact=True).click()
     expect(page.locator("#labels .result-provisional")).to_have_count(0)
     expect(page.locator("#sections")).to_contain_text("Required content review complete")
+    page.goto(sources_url)
+    page.locator("#show-all").check()
+    tolerated = page.locator('tr[data-source-id="Marin:sample-missing-five"]')
+    expect(tolerated.locator(".level")).to_have_text("SAMPLE")
+    expect(tolerated.locator(".result-provisional")).to_have_count(0)
+    tolerated.locator(".source-name").click()
+    page.get_by_role("link", name="All quality evidence", exact=True).click()
+    coverage = page.locator(".assessment-card").filter(has=page.get_by_role("heading", name="Content review coverage"))
+    for label, value in (
+        ("Status", "Final"),
+        ("Strict coverage complete", "false"),
+        ("Conclusive reviewed contracts", "95"),
+        ("Unreviewed tasks", "5"),
+    ):
+        expect(coverage.locator(".field").filter(has=page.get_by_text(label, exact=True)).locator("dd")).to_have_text(
+            value
+        )
+    expect(coverage).not_to_contain_text("5%")
+    journey.shoot(f"sample-final-missing-{theme}")
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
@@ -459,7 +487,7 @@ def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: s
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     page.locator("#show-all").check()
-    expect(page.locator("#rows tr")).to_have_count(25)
+    expect(page.locator("#rows tr")).to_have_count(28)
     tooltip = page.locator('tr[data-source-id="Marin:clean"] .backends-link').get_attribute("title")
     assert tooltip is not None and "UNSAFE: too_many_snapshots, unbuilt_image" in tooltip
     assert "Unique actor snapshot identities: 11" in tooltip and "Snapshot cap: 10" in tooltip
