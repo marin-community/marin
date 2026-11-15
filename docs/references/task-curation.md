@@ -1719,6 +1719,12 @@ quality result covering the whole filtered population. Content evidence for the
 original pin remains archival. Unresolved infrastructure failures in original
 oracle trials or negative controls prevent release qualification.
 
+After selecting a nonempty filtered pin, regenerate its complete-population
+[source fingerprint](rl-data-atlas.md#source-identity-and-overlap-review) and
+update its task-input binding in the fingerprint registry. An unchanged source
+ID or task count does not preserve the old binding. Remeasure affected overlap
+pairs and review acknowledgements for the resulting measurement digests.
+
 Every oracle-bearing agentic TaskSpec admitted through an execution receipt must declare `execution_requirements`: `cpus`,
 `memory_mb`, `storage_mb`, `agent_timeout_sec` and `verifier_timeout_sec`.
 Sizes use MiB and deadlines use seconds. Conversion may leave this field absent;
