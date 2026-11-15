@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import asdict
+from types import SimpleNamespace
+
+from iris.client.client import JobFailedError
+from iris.cluster.types import JobName
 
 from experiments.post_training.snowball_isoflop import run_probes
 from experiments.post_training.snowball_isoflop.probes import Layout, Probe, batch_probes
@@ -111,3 +115,46 @@ def test_layout_throughput_override_rejects_undivided_batch(monkeypatch):
         assert "does not divide" in str(error)
     else:
         raise AssertionError("undivided override layout was accepted")
+
+
+def test_failure_classification_reads_aggregate_status_without_task_detail():
+    """GetJobStatus payloads omit task/attempt detail; the watchdog signature
+    must be classified from the terminal error text instead."""
+    # Shape observed live for a stalled D child: aggregate status with no
+    # task detail and a zero aggregate exit code, but the watchdog text in
+    # the terminal error message.
+    status = SimpleNamespace(
+        state=SimpleNamespace(name="FAILED"),
+        tasks=(),
+        error_message=(
+            "Cumulative failed task attempts exceeded max_task_failures: failures=1, limit=0; "
+            "levanter.callbacks.progress_watchdog No progress after process_started for 1800.0 "
+            "seconds (timeout 1800.0); terminating with exit code 124"
+        ),
+        status_message="",
+        exit_code=0,
+    )
+    error = JobFailedError(JobName.from_wire("/benfeuer/snowball-isoflop-D-r5-v10/child"), status)
+    signals, watchdog_exit = run_probes._failure_signals(error)
+    assert watchdog_exit is False
+    assert run_probes.classify_probe_failure(signals, "D-r5", watchdog_exit) == "stall_limit"
+    # OOM text still classifies as a memory limit, and unrelated failures
+    # remain unclassified so they propagate.
+    oom = SimpleNamespace(
+        state=SimpleNamespace(name="FAILED"),
+        tasks=(),
+        error_message="RESOURCE_EXHAUSTED: out of memory",
+        status_message="",
+        exit_code=1,
+    )
+    signals, _ = run_probes._failure_signals(JobFailedError(JobName.from_wire("/benfeuer/j"), oom))
+    assert run_probes.classify_probe_failure(signals, "D-r5", False) == "memory_limit"
+    other = SimpleNamespace(
+        state=SimpleNamespace(name="FAILED"),
+        tasks=(),
+        error_message="segfault at pc 0xdeadbeef",
+        status_message="",
+        exit_code=139,
+    )
+    signals, _ = run_probes._failure_signals(JobFailedError(JobName.from_wire("/benfeuer/j"), other))
+    assert run_probes.classify_probe_failure(signals, "D-r5", False) is None
