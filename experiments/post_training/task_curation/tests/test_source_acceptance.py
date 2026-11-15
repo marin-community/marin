@@ -176,11 +176,7 @@ def test_grandfathered_execution_exemption_does_not_bypass_grader_census(tmp_pat
 
 @pytest.mark.data_integration
 def test_every_registered_source_declares_catalog_metadata():
-    """Regression: a registered source without a bound actor census must still declare.
-
-    Catalog consumers construct declarations for every registered source; a
-    missing safety measurement raises there instead of staying pending.
-    """
+    """Missing census evidence remains pending when catalog metadata is declared."""
     for source in all_sources().values():
         declaration = source.declaration
         assert declaration.id == source.info.id
