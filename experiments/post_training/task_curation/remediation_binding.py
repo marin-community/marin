@@ -22,6 +22,8 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
+from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
+from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.remediation_publish import ReleasePlan
 from experiments.post_training.task_curation.retained_grading import RetainedGradingReceipt
@@ -31,6 +33,7 @@ from experiments.post_training.task_curation.retained_release import (
     import_retained,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference, TaskFormat
+from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
 from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
 
 RETAINED_RECEIPTS_PER_SHARD = 16
@@ -225,17 +228,54 @@ def bind_retained_release(source: RlDataSource, receipt: RetainedReleaseReceipt)
     return bind_actor_census(retained, receipt.actor)
 
 
+def measured_intake_source(
+    source: RlDataSource, publication: PublicationReceipt, actor: ActorCensusReceipt
+) -> RlDataSource:
+    """Bind a pending converter's measured original input without adding it to the catalog."""
+    source = bind_actor_census(licensed_source(source), actor)
+    plan = publication.plan
+    if source.info.actor_census_input is None or (
+        source.info.id,
+        actor.input.task_specs_sha256,
+        actor.input.converter_revision,
+        actor.input.measured_tasks,
+    ) != (plan.source_id, plan.task_specs_sha256, plan.converter_revision, plan.raw_count):
+        raise ValueError("Pending retention requires its complete original actor census")
+    return bind_within_source_dedup(
+        source,
+        WithinSourceDedupEvidence(
+            raw_count=plan.raw_count,
+            unique_count=plan.unique_count,
+            within_source_duplicates=plan.within_source_duplicates,
+            source_dataset_id=plan.source_dataset_id,
+            source_revision=plan.source_revision,
+            converter_revision=plan.converter_revision,
+            converter_version=plan.converter_version,
+            drop_manifest_uri=plan.drop_manifest_uri,
+            evidence_url=plan.evidence_url,
+        ),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--releases", type=Path, nargs="+", required=True)
     parser.add_argument("--censuses", type=Path, nargs="+", required=True)
     parser.add_argument("--grading", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--pending-source", action="append", default=[], help="Explicit pending Atlas source ID")
     args = parser.parse_args()
     # Registry loading depends on this module once retained receipts are installed.
-    from experiments.post_training.task_curation.sources import all_sources  # noqa: PLC0415
+    from experiments.post_training.task_curation.sources import (  # noqa: PLC0415
+        PENDING_MEASUREMENT_SOURCES,
+        all_sources,
+    )
 
     sources = all_sources()
+    pending = {source.info.id: source for source in PENDING_MEASUREMENT_SOURCES}
+    if unknown := set(args.pending_source) - pending.keys():
+        raise ValueError(f"Unknown pending source IDs: {sorted(unknown)}")
+    original_actors = actor_census_receipts() if args.pending_source else {}
     censuses = {record["source_id"]: record for path in args.censuses for record in json.loads(path.read_text())}
     grading = {
         row["source_id"]: RetainedGradingReceipt.model_validate(row) for row in json.loads(args.grading.read_text())
@@ -244,7 +284,13 @@ def main() -> None:
     for path in args.releases:
         for record in json.loads(path.read_text()):
             publication = PublicationReceipt.model_validate(record)
-            source = sources[publication.source_id]
+            source = (
+                measured_intake_source(
+                    pending[publication.source_id], publication, original_actors[publication.source_id]
+                )
+                if publication.source_id in args.pending_source
+                else sources[publication.source_id]
+            )
             measured = censuses[publication.source_id]
             receipt = RetainedReleaseReceipt(
                 source_id=publication.source_id,

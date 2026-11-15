@@ -41,6 +41,7 @@ from experiments.post_training.task_curation.remediation_binding import (
     PublicationReceipt,
     RetainedReleaseReceipt,
     bind_retained_release,
+    measured_intake_source,
     release_lexical_evidence,
 )
 from experiments.post_training.task_curation.remediation_publish import (
@@ -302,6 +303,34 @@ def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(r
     changed = replace(source, config=replace(source.config, revision="2" * 40))
     with pytest.raises(ValueError, match="different conversion input"):
         bind_retained_release(changed, receipt)
+
+
+@pytest.mark.parametrize("stale_actor", [False, True])
+def test_pending_retention_requires_original_measurement_without_inheriting_admission(retained_receipt, stale_actor):
+    source, receipt = retained_receipt
+    original = receipt.actor.model_copy(
+        update={
+            "input": source.info.actor_census_input,
+            "measurement": receipt.actor.measurement.model_copy(
+                update={"dataset_id": source.dataset.name, "dataset_revision": source.dataset.revision}
+            ),
+        }
+    )
+    pending = replace(
+        source,
+        info=replace(source.info, actor_census_input=None, within_source_dedup=None, oversight=None),
+    )
+    if stale_actor:
+        original = original.model_copy(update={"input": original.input.model_copy(update={"measured_tasks": 4})})
+        with pytest.raises(ValueError, match="complete original actor census"):
+            measured_intake_source(pending, receipt.publication, original)
+        return
+    measured = measured_intake_source(pending, receipt.publication, original)
+    bound = bind_retained_release(measured, receipt)
+    assert bound.current_release == receipt.publication.release
+    assert bound.info.oversight is None and bound.info.inherited_admission is None
+    assert bound.declaration.status != "Available"
+    assert pending.info.actor_census_input is None and pending.info.within_source_dedup is None
 
 
 def test_resumed_publication_rechecks_license_and_remains_readable_by_retained_binding(

@@ -806,6 +806,15 @@ has a Lean kernel-replay converter and remains pending
 it only after these measurements and the [admission requirements](#current-admission-policy)
 cover its exact input pin, converter version, and resulting TaskSpec population.
 
+After a pending source has a verified private retention release and complete
+original and retained censuses, pass its exact Atlas ID through
+`remediation_binding --pending-source ID`. This explicit selection binds the
+original actor receipt and frozen deduplication plan before producing retained
+receipt shards. It leaves the source outside the default catalog and supplies
+no inherited admission or execution qualification. Use the resulting typed
+binding for final-pin quality panels; register the source only after its
+remaining admission requirements pass.
+
 NuminaMath-LEAN (`project-numina:NuminaMath-LEAN`, pinned input
 `project-numina/NuminaMath-LEAN@51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94`)
 is also pending these measurements. Its converter and human-reference proof
