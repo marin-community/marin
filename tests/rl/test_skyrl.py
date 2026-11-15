@@ -17,8 +17,10 @@ from typing import IO
 
 import pytest
 import yaml
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, ArtifactRecord, FingerprintMismatchError, write_record
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_status import STATUS_SUCCESS, StatusFile
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -578,7 +580,7 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
     ]
 
 
-def test_starting_checkpoint_binds_dependency_identity_and_path() -> None:
+def test_starting_checkpoint_binds_identity_and_rejects_cached_output_reuse(tmp_path: Path, monkeypatch) -> None:
     spec = _spec()
     checkpoints = [
         ArtifactStep.adopt("tests/native", f"2026.11.13.{step}", f"s3://checkpoints/global_step_{step}")
@@ -597,6 +599,13 @@ def test_starting_checkpoint_binds_dependency_identity_and_path() -> None:
         }
         assert not checkpoint.adopt_source.startswith(config.output.checkpoint_root)
     assert runs[0].fingerprint() != runs[1].fingerprint()
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    output = runs[0].path(str(tmp_path))
+    write_record(ArtifactRecord(output_path=output, fingerprint=runs[0].fingerprint()))
+    StatusFile(output, worker_id="test").write_status(STATUS_SUCCESS)
+    StepRunner().run([runs[0].lower()])
+    with pytest.raises(FingerprintMismatchError):
+        StepRunner().run([runs[1].lower()])
 
 
 def test_skyrl_step_routes_disposable_state_to_ttl_storage(

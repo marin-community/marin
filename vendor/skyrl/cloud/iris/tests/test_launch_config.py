@@ -33,20 +33,24 @@ from skyrl_train.config.rollout_validation import EntrypointOperation, validate_
 from skyrl_train.inference_engines import placement as inference_placement
 
 
-@pytest.mark.parametrize("mode", [None, "from_path", "none"])
-def test_starting_checkpoint_resolves_without_overriding_resume_mode(tmp_path: Path, mode: str | None) -> None:
+@pytest.mark.parametrize(
+    "overrides", [{}, {"resume_mode": "from_path"}, {"resume_mode": "none"}, {"resume_path": "other"}]
+)
+def test_starting_checkpoint_requires_automatic_recovery(tmp_path: Path, overrides: dict) -> None:
     raw = raw_launch_config()
     checkpoint = {"uri": "s3://seed/checkpoints/global_step_2", "identity": "seed@2026.11.13:abc"}
     raw["inputs"]["starting_checkpoint"] = checkpoint
-    if mode is not None:
-        raw["skyrl"]["trainer"]["resume_mode"] = mode
+    raw["skyrl"]["trainer"].update(overrides)
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
 
-    resolved = load_launch_config(path)
-
-    assert resolved.skyrl.trainer.resume_mode == (mode or "latest")
-    assert resolved.skyrl.trainer.resume_path == checkpoint["uri"]
+    if overrides:
+        with pytest.raises(ValueError, match="starting_checkpoint"):
+            load_launch_config(path)
+    else:
+        resolved = load_launch_config(path)
+        assert resolved.skyrl.trainer.resume_mode == "latest"
+        assert resolved.skyrl.trainer.resume_path == checkpoint["uri"]
 
 
 @pytest.mark.parametrize("entrypoint", ["generate", "terminal_bench_generate"])

@@ -11,6 +11,8 @@ import torch.distributed as dist
 from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
+from skyrl_train.rollouts.context import TrainingContextState
+from skyrl_train.rollouts.loader import PromptLoaderState, SeededPasses
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.utils.trainer_utils import ResumeMode
 from tests.cpu.tiny_training.cpu_backend import CPUStrategy
@@ -36,12 +38,16 @@ class LocalPolicyGroup:
         self.strategy.backward(loss, self.model, self.optimizer)
         self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-    def save(self, root: Path, step: int) -> Path:
+    def save(self, root: Path, step: int, *, data_position: int = 1) -> Path:
         checkpoint = root / f"global_step_{step}"
         self.strategy.save_checkpoint(self.model, str(checkpoint / "policy"), 0, self.optimizer, self.scheduler)
         torch.save(
             {"global_step": step, "distillation_scored_tokens_total": step * 17},
             checkpoint / TRAINER_STATE_FILENAME,
+        )
+        torch.save(
+            TrainingContextState(PromptLoaderState({"epoch": 0, "position": data_position}, []), [], None),
+            checkpoint / "data.pt",
         )
         (root / LATEST_CHECKPOINT_FILE).write_text(str(step))
         return checkpoint
@@ -53,18 +59,20 @@ def trainer_factory(tmp_path, monkeypatch):
     # Keep the RPC boundary local; checkpoint serialization and restoration are real.
     monkeypatch.setattr(ray, "get", lambda result: result)
 
-    def make(output: Path, seed: Path | None = None, mode: str = "latest"):
+    def make(output: Path, seed: Path | None = None, mode: str = "latest", *, reset: bool = False):
         trainer = RayPPOTrainer.__new__(RayPPOTrainer)
         trainer.cfg = get_default_config()
         trainer.cfg.trainer.ckpt_path = str(output)
         trainer.cfg.trainer.resume_path = str(seed) if seed else None
         trainer.cfg.trainer.ckpt_interval = 1
-        trainer.cfg.trainer.restore_dataloader_state = False
+        trainer.cfg.trainer.reset_global_step_on_resume = reset
+        trainer.cfg.trainer.reset_distillation_token_count_on_resume = reset
         trainer.resume_mode = ResumeMode(mode)
         trainer.colocate_all = True
         trainer.policy_model = LocalPolicyGroup()
         trainer.critic_model = None
         trainer._domain_balancer = None
+        trainer._restored_rollout_state = None
         trainer.distillation_scored_tokens_total = 0
         return trainer
 
@@ -72,25 +80,37 @@ def trainer_factory(tmp_path, monkeypatch):
     dist.destroy_process_group()
 
 
-def test_continuation_recovers_own_progress_and_next_update(tmp_path, trainer_factory):
+def next_prompt_index(trainer) -> int:
+    order = SeededPasses(2, seed=0, shuffle=False)
+    if trainer._restored_rollout_state is not None:
+        order.load_state_dict(trainer._restored_rollout_state.loader.order)
+    return order.next_index()
+
+
+@pytest.mark.parametrize("reset", [False, True])
+def test_continuation_recovers_own_progress_and_next_update(tmp_path, trainer_factory, reset):
     original = trainer_factory(tmp_path / "seed")
     assert original.load_checkpoints() == (0, None)
     for _ in range(2):
         original.policy_model.update()
-    seed = original.policy_model.save(tmp_path / "seed", 2)
+    # The starting run's cursor lies beyond the continuation's smaller dataset.
+    seed = original.policy_model.save(tmp_path / "seed", 2, data_position=3)
     output = tmp_path / "continuation"
 
-    continuation = trainer_factory(output, seed)
-    assert continuation.load_checkpoints() == (2, str(seed))
-    assert continuation.distillation_scored_tokens_total == 34
+    continuation = trainer_factory(output, seed, reset=reset)
+    assert continuation.load_checkpoints() == (0 if reset else 2, str(seed))
+    assert continuation.distillation_scored_tokens_total == (0 if reset else 34)
+    assert next_prompt_index(continuation) == 0
     for _ in range(3):
         original.policy_model.update()
         continuation.policy_model.update()
-    own = continuation.policy_model.save(output, 5)
+    own_step = 3 if reset else 5
+    own = continuation.policy_model.save(output, own_step)
 
-    recovered = trainer_factory(output, seed)
-    assert recovered.load_checkpoints() == (5, str(own))
-    assert recovered.distillation_scored_tokens_total == 85
+    recovered = trainer_factory(output, seed, reset=reset)
+    assert recovered.load_checkpoints() == (own_step, str(own))
+    assert recovered.distillation_scored_tokens_total == own_step * 17
+    assert next_prompt_index(recovered) == 1
     original.policy_model.update()
     for policy in (continuation.policy_model, recovered.policy_model):
         policy.update()

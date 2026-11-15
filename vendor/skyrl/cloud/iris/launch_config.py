@@ -204,6 +204,8 @@ def _compose_source_recipe(config: DictConfig) -> DictConfig:
         raise TypeError("skyrl must be a mapping")
     if config.inputs.starting_checkpoint is not None:
         trainer = raw_skyrl.setdefault("trainer", {})
+        if trainer.get("resume_path"):
+            raise ValueError("inputs.starting_checkpoint replaces trainer.resume_path; omit trainer.resume_path")
         trainer["resume_path"] = str(config.inputs.starting_checkpoint.uri)
     model_uri = str(config.inputs.model.uri)
     model_identity = str(config.inputs.model.identity)
@@ -365,13 +367,17 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     runtime = raw["runtime"]
     entrypoint = runtime["entrypoint"]
     registered_rl_entrypoint_module(entrypoint)
-    if raw["inputs"]["starting_checkpoint"] is not None and entrypoint in (
-        RL_ENTRYPOINTS[RLEntrypoint.GENERATE],
-        RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE],
-    ):
-        raise ValueError(
-            "Generation cannot restore inputs.starting_checkpoint; inputs.model requires a Hugging Face model."
-        )
+    checkpoint = raw["inputs"]["starting_checkpoint"]
+    if checkpoint is not None:
+        if entrypoint in (RL_ENTRYPOINTS[RLEntrypoint.GENERATE], RL_ENTRYPOINTS[RLEntrypoint.TERMINAL_BENCH_GENERATE]):
+            raise ValueError(
+                "Generation cannot restore inputs.starting_checkpoint; inputs.model requires a Hugging Face model."
+            )
+        trainer = skyrl["trainer"]
+        if trainer["resume_mode"] != "latest":
+            raise ValueError("inputs.starting_checkpoint requires trainer.resume_mode=latest for automatic recovery")
+        if trainer["resume_path"] != checkpoint["uri"]:
+            raise ValueError("trainer.resume_path must match inputs.starting_checkpoint.uri")
     if (
         skyrl.get("generator", {}).get("weight_sync_transport") == WeightSyncTransport.EXPERT_BLOCK
         and skyrl.get("trainer", {}).get("placement", {}).get("colocate_all")

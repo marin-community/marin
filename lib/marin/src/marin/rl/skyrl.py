@@ -13,7 +13,7 @@ import tempfile
 import tomllib
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -1010,7 +1010,7 @@ def skyrl_step(
             draft_checkpoint_root=draft_checkpoint_root,
         )
 
-    return ArtifactStep(
+    step = ArtifactStep(
         name=step_name,
         version=spec.version,
         artifact_type=SkyRLRun,
@@ -1019,3 +1019,5 @@ def skyrl_step(
         deps=deps,
         runtime_args={_EXECUTION: execution},
     )
+    # A completed training version must not serve another continuation's cached result.
+    return replace(step, expected_fingerprint=step.fingerprint())
