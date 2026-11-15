@@ -35,7 +35,6 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
-from skyrlrecipe.declared import CheckpointCallback
 from skyrlrecipe.locality import RoleTopologyMode
 
 RECIPE_PATH = Path(__file__).with_name("recipe.yaml")
@@ -113,13 +112,20 @@ def build_run(
     retention: SkyRLRetentionPolicy = RETENTION,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind model, mixed tasks and optional native state to one RL artifact."""
+    if profile.data_namespace is not None and data_sha256 is None:
+        raise ValueError(f"{profile.name} requires data_sha256")
+    if data_sha256 is not None and len(train_data) != 1:
+        raise ValueError("data_sha256 requires exactly one training data source")
     recipe = SkyRLRecipe.from_document(yaml.safe_load(recipe_path.read_text())).merge(profile.patch)
     if profile.checkpoint_at_target:
         recipe = recipe.merge(
             RecipePatch(
                 trainer=sections.Trainer(
                     ckpt_interval=max_steps,
-                    callbacks=(CheckpointCallback(type="checkpoint", save_steps=max_steps, save_on_train_end=True),),
+                    callbacks=tuple(
+                        callback.replace(save_steps=max_steps) if callback.type == "checkpoint" else callback
+                        for callback in recipe.trainer.callbacks
+                    ),
                 )
             )
         )
