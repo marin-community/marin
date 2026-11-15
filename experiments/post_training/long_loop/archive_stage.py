@@ -147,8 +147,24 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
         or best["ema_window"] != VALIDATION_EMA_WINDOW
     ):
         raise ValueError("Exported RL step differs from the five-step validation selection")
+    launch = _read_document(prefix_join(trained, "resolved-launch.yaml"))
+    max_checkpoints = launch["config"]["skyrl"]["trainer"]["max_ckpts_to_keep"]
+    if max_checkpoints == 0:
+        raise ValueError("Checkpoint retention must keep a positive count or all checkpoints")
+    objects = fs.find(root, detail=True)
+    checkpoint_names = set()
+    for key in objects:
+        component = StoragePath(key).relative_to(StoragePath(root)).split("/", 1)[0]
+        if re.fullmatch(r"global_step_[0-9]+", component):
+            checkpoint_names.add(component)
+    ordered = sorted(checkpoint_names, key=lambda name: int(name.removeprefix("global_step_")))
+    retained = set(ordered if max_checkpoints < 0 else ordered[-max_checkpoints:])
+    retained.add(f"global_step_{best['step']}")
     request_sha = hashlib.sha256(
-        json.dumps({"plan": plan, "trained": trained, "report": completed_report}, sort_keys=True).encode()
+        json.dumps(
+            {"plan": plan, "trained": trained, "report": completed_report, "max_ckpts_to_keep": max_checkpoints},
+            sort_keys=True,
+        ).encode()
     ).hexdigest()
     archive_fs, archive_key = filesystem_for(prefix_join(output, "resolved-plan.json"))
     if archive_fs.exists(archive_key):
@@ -165,12 +181,12 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
     resolved["archive_request_sha256"] = request_sha
     resolved["hf_upload"].update(source=run.hf_model_uri, native_checkpoint=selected)
     disposable = []
-    for key, info in sorted(fs.find(root, detail=True).items()):
+    for key, info in sorted(objects.items()):
         relative = StoragePath(key).relative_to(StoragePath(root))
         component = relative.split("/", 1)[0]
         if info.get("type") != "file" or re.fullmatch(r"global_step_[0-9]+", component) is None:
             continue
-        if component == f"global_step_{best['step']}":
+        if component in retained:
             continue
         disposable.append(
             {"source": prefix_join(run.checkpoint_root, relative), "storage_identity": file_identity(info)}
@@ -179,6 +195,8 @@ def archive_selected_run(*, output: str, plan: dict, trained: str, completed_rep
         "root": run.checkpoint_root,
         "selected": selected,
         "ttl": resolved["native_checkpoint_ttl"],
+        "max_ckpts_to_keep": max_checkpoints,
+        "retained": [prefix_join(run.checkpoint_root, name) for name in sorted(retained)],
         "disposable_files": disposable,
     }
     for filename in (BEST_CHECKPOINT_FILENAME, "validation_selection_history.json"):

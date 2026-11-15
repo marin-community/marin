@@ -56,6 +56,9 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
     (keep / "weight").write_bytes(b"best")
     item = old / "weight"
     item.write_bytes(b"old")
+    recent = checkpoints / "global_step_4" / "weight"
+    recent.parent.mkdir()
+    recent.write_bytes(b"recent")
     root = str(tmp_path / "archive")
 
     def inventory(path):
@@ -73,13 +76,16 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
             "checkpoint_inventory": {
                 "root": str(checkpoints),
                 "selected": str(keep),
+                "retained": [str(keep), str(recent.parent)],
                 "ttl": "14d",
-                "disposable_files": [inventory(item)],
+                "disposable_files": [inventory(item), inventory(recent)],
             },
         },
     )
     with pytest.raises(ValueError, match="selected"):
         checkpoint_cleanup(root, str(checkpoints), str(keep), [str(keep / "weight")])
+    with pytest.raises(ValueError, match="retained"):
+        checkpoint_cleanup(root, str(checkpoints), str(keep), [str(recent)])
     original_stat = item.stat()
     item.write_bytes(b"mutated")
     with pytest.raises(ValueError, match="changed"):
@@ -90,12 +96,14 @@ def test_cleanup_is_verified_scoped_and_preserves_selected(tmp_path, hub):
     checkpoint_cleanup(root, str(checkpoints), str(keep), [str(item)])
     assert not item.exists()
     assert (keep / "weight").read_bytes() == b"best"
+    assert recent.read_bytes() == b"recent"
 
 
 @pytest.mark.parametrize("incomplete", [False, True])
 @pytest.mark.parametrize("unscored", [False, True])
+@pytest.mark.parametrize("max_checkpoints", [3, -1])
 def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
-    tmp_path, monkeypatch, hub, incomplete, unscored
+    tmp_path, monkeypatch, hub, incomplete, unscored, max_checkpoints
 ):
 
     report = tmp_path / "report"
@@ -132,6 +140,7 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
             "checkpoint_inventory": {
                 "root": str(selected.parent),
                 "selected": str(selected),
+                "retained": [str(selected)],
                 "ttl": "14d",
                 "disposable_files": [],
             },
@@ -203,6 +212,16 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
         ).result_payload(),
         trained_path,
     )
+    (Path(trained_path) / "resolved-launch.yaml").write_text(
+        json.dumps({"config": {"skyrl": {"trainer": {"max_ckpts_to_keep": max_checkpoints}}}})
+    )
+    recent = []
+    for step in (8, 10, 12):
+        checkpoint = selected.parent / f"global_step_{step}"
+        checkpoint.mkdir()
+        path = checkpoint / "weights.distcp"
+        path.write_bytes(f"native-{step}".encode())
+        recent.append(path)
     trained = ArtifactStep.adopt("test/rl", "2026.11.09", trained_path, kind=SkyRLRun)
     completed = ArtifactStep.adopt("test/completed-report", "2026.11.09", str(report))
     stage = apply(
@@ -223,8 +242,10 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
     assert manifest["provenance"]["checkpoint_inventory"]["ttl"] == "14d"
     assert not any("weight" in item["destination"] for item in manifest["objects"])
     assert weight.read_bytes() == b"selected-native-weights"
+    assert [path.read_bytes() for path in recent] == [b"native-8", b"native-10", b"native-12"]
+    assert manifest["provenance"]["checkpoint_inventory"]["max_ckpts_to_keep"] == max_checkpoints
     assert manifest["provenance"]["evaluation_complete"] is not unscored
-    assert (prior / "weights.distcp").exists() == (incomplete or unscored)
+    assert (prior / "weights.distcp").exists() == (incomplete or unscored or max_checkpoints < 0)
     assert Path(root, "cleanup-blocked.json").exists() == (incomplete or unscored)
 
 

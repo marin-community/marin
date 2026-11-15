@@ -307,6 +307,9 @@ The next trial explicitly budgets 10 hours from its first optimizer step. Native
 checkpoints save every two updates and retain the latest three plus the selected
 best; the selection uses five validation observations at two-update intervals.
 Final evaluation, HF export and archive use that same selected best checkpoint.
+Archive cleanup reads `trainer.max_ckpts_to_keep` from the consumed RL launch and
+preserves that rolling window plus the selected best. Its sealed inventory names
+the retained checkpoints, and cleanup rejects any retained path.
 # SWE task admission
 
 The repaired SWE release is derived from the pinned source packages rather than

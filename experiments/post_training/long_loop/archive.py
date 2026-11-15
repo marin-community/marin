@@ -111,6 +111,7 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
         raise ValueError("Native checkpoint location and TTL must remain in provenance")
     root_path = StoragePath(checkpoint_root)
     keep_path = StoragePath(selected)
+    retained_paths = [StoragePath(path) for path in inventory["retained"]]
     if str(root_path) != checkpoint_root or str(keep_path) != selected:
         raise ValueError("Checkpoint cleanup requires canonical storage paths")
     if not keep_path.relative_to(root_path):
@@ -122,6 +123,8 @@ def checkpoint_cleanup(root: str, checkpoint_root: str, selected: str, candidate
             raise ValueError(f"Cleanup target is outside scope: {uri}")
         if path == keep_path or path.segments[: len(keep_path.segments)] == keep_path.segments:
             raise ValueError(f"Cleanup target is selected: {uri}")
+        if any(path.segments[: len(keep.segments)] == keep.segments for keep in retained_paths):
+            raise ValueError(f"Cleanup target is retained: {uri}")
         if uri not in disposable:
             raise ValueError(f"Cleanup requires a sealed checkpoint inventory: {uri}")
         fs, key = filesystem_for(uri)
