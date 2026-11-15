@@ -47,6 +47,7 @@ MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
 MODEL_REVISION = "0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe"
 API_MODEL = "openresearcher-grounding-qwen3-30b-a3b"
 MODEL_CONFIG = Path(__file__).with_name("grounding-model.yaml")
+WORKER_TRANSPORT_ENV = {"MARIN_TEMP_PREFIX": "s3://marin-us-east-02a", "HF_HUB_DISABLE_XET": "1"}
 
 
 class GroundedQuestions(Artifact):
@@ -183,7 +184,7 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
             context_window_tokens=32768,
             accelerator=AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=1),
             priority=job_pb2.PRIORITY_BAND_BATCH,
-            env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-02a"},
+            env_vars=WORKER_TRANSPORT_ENV,
             worker_timeout=Duration.from_seconds(259200),
         ),
         LocalJudgeModel(MODEL, MODEL_REVISION, API_MODEL, 32768),
@@ -200,6 +201,7 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
             "child_placement": "same_controller",
             "accelerator": {"type": "H100", "count": 1},
             "priority": "batch",
+            "worker_transport_environment": WORKER_TRANSPORT_ENV,
         }
         (output / "backend-identity.json").write_text(json.dumps(identity, indent=2))
         decisions = asyncio.run(grounded_rows(config, rows, connection, tokenizer, output))
