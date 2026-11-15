@@ -140,7 +140,8 @@ FAST_COMPILATION_CONFIG = {
 # FlashInfer's TRT-LLM attention and MoE kernels otherwise download these cubins from NVIDIA at start-up;
 # concurrent downloads have stalled a gang's first forward for over 20 minutes.
 FLASHINFER_CUBINS = "s3://marin-us-east-02a/marin/users/rav/hero-serving/flashinfer-cubins-0.6.18.post1.tgz"
-FLASHINFER_CUBIN_DIR = Path.home() / ".cache" / "flashinfer" / "cubins"
+# Relative to the task user's home; resolved inside the task, not on the submitting machine.
+FLASHINFER_CUBIN_SUBDIR = Path(".cache") / "flashinfer" / "cubins"
 SMOKE_PROMPT = "What is 2 + 2? Answer briefly."
 EPHEMERAL_PORT_RANGE = "/proc/sys/net/ipv4/ip_local_port_range"
 DP_RPC_PORT_SEARCH = 1000
@@ -278,10 +279,11 @@ def _fast_release() -> VllmGpuRelease:
 
 
 def _stage_flashinfer_cubins() -> None:
-    FLASHINFER_CUBIN_DIR.mkdir(parents=True, exist_ok=True)
+    target = Path.home() / FLASHINFER_CUBIN_SUBDIR
+    target.mkdir(parents=True, exist_ok=True)
     with fsspec.open(FLASHINFER_CUBINS, "rb") as source, tarfile.open(fileobj=source, mode="r:gz") as archive:
-        archive.extractall(FLASHINFER_CUBIN_DIR, filter="data")
-    logger.info("Staged FlashInfer cubins from %s in %s", FLASHINFER_CUBINS, FLASHINFER_CUBIN_DIR)
+        archive.extractall(target, filter="data")
+    logger.info("Staged FlashInfer cubins from %s in %s", FLASHINFER_CUBINS, target)
 
 
 def _smoke_test(server_url: str, model_id: str) -> dict:
