@@ -13,6 +13,35 @@ class SharedDependencyState(StrEnum):
     AGENT_MUTABLE = "agent_mutable"
 
 
+class SharedSourceFamily(StrEnum):
+    """Protected SHARED source-scorer families built on original Prime pytest graders."""
+
+    SCALE_SWE = "scale-swe"
+    SWE_LEGO = "swe-lego"
+
+
+class SourceSharedRunner(BaseModel):
+    """Pinned source scorer material and capture boundaries for one family.
+
+    ``capture_dirs`` and ``capture_patterns`` select the workspace paths the
+    bootstrap freezes as the trusted grading reference; ``patch_config_keys``
+    name the private config entries holding unified diffs whose affected paths
+    must be captured. ``dependency_paths`` are the source interpreter
+    environments whose live inventory grading audits.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    family: SharedSourceFamily
+    capture_dirs: tuple[str, ...] = ()
+    capture_patterns: tuple[str, ...] = ()
+    patch_config_keys: tuple[str, ...] = ()
+    dependency_paths: tuple[str, ...] = ()
+    trusted_commit_key: str = "base_commit"
+    workspace_config_key: str = "workdir"
+    shared_controller_sha256: str = ""
+
+
 class SharedTestFamily(StrEnum):
     GO = "go"
     RUST = "rust"
@@ -49,7 +78,7 @@ class SharedIntegrityContract(BaseModel):
     """The enforcement configuration published with a new SHARED task version."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    id: Literal["shared-pytest", "shared-native"] = "shared-pytest"
+    id: Literal["shared-pytest", "shared-native", "shared-source"] = "shared-pytest"
     version: Literal[2] = 2
     dependency_state: SharedDependencyState
     workspace: str = "/testbed"
@@ -76,29 +105,34 @@ class SharedIntegrityContract(BaseModel):
     agent_may_modify: str = "Dependencies and filesystem paths outside the protected grading infrastructure"
     known_open_gaps: tuple[str, ...] = (".pth interpreter hooks", "sitecustomize import hooks")
     audit_probes: tuple[str, ...] = ("site-packages-diff.json", "startup-hooks-diff.json")
-    native: NativeSharedRunner | None = None
+    native: NativeSharedRunner | SourceSharedRunner | None = None
 
     @model_validator(mode="after")
     def validate_runner(self) -> Self:
-        if (self.id == "shared-native") != (self.native is not None):
+        native = isinstance(self.native, NativeSharedRunner)
+        source = isinstance(self.native, SourceSharedRunner)
+        if (self.id == "shared-native") != native or (self.id == "shared-source") != source:
             raise ValueError("The integrity contract ID must match its native runner declaration")
         return self
 
 
 def shared_preamble(contract: SharedIntegrityContract) -> str:
     """Render only agent-facing policy; auditor gaps remain in the contract."""
-    tests = (
-        "Test files and every conftest.py"
-        if contract.native is None
-        else "Test files and language startup configuration"
-    )
-    runner = (
-        "third-party test runner and plugins, test interpreter"
-        if contract.native is None
-        else "source test command, runner and toolchain"
-    )
-    family = "" if contract.native is None else f", {contract.native.family.value}"
-    product_plugins = "Repository-owned pytest plugins remain mutable product code. " if contract.native is None else ""
+    if isinstance(contract.native, NativeSharedRunner):
+        tests = "Test files and language startup configuration"
+        runner = "source test command, runner and toolchain"
+        family = f", {contract.native.family.value}"
+        product_plugins = ""
+    elif isinstance(contract.native, SourceSharedRunner):
+        tests = "Test files"
+        runner = "source scorer, its private grading configuration and material"
+        family = f", {contract.native.family.value}"
+        product_plugins = ""
+    else:
+        tests = "Test files and every conftest.py"
+        runner = "third-party test runner and plugins, test interpreter"
+        family = ""
+        product_plugins = "Repository-owned pytest plugins remain mutable product code. "
     return (
         f"Grading rules ({contract.id} v{contract.version}{family}, {contract.dependency_state.value}):\n"
         f"{tests} under {contract.workspace}, the grading configuration, "
