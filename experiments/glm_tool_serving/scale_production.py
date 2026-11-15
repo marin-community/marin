@@ -22,6 +22,7 @@ from tokenizers import Tokenizer
 
 from experiments.glm_tool_serving.ortet_production import read_bulk_token, resolve_relay_base_url, resume_cursor
 from experiments.glm_tool_serving.provenance import emit_receipt, write_provenance
+from experiments.glm_tool_serving.route_gate import gate_result, load_route_gate
 from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
 from experiments.tool_normalization.preflight import classify
@@ -97,6 +98,7 @@ def main() -> None:
     config_path = root / "config.json"
     config_path.write_text(json.dumps(cfg, indent=2))
     provenance = write_provenance(Path(__file__).resolve().parents[2], root, catalog_hash)
+    route_gate = load_route_gate(root)
     environment_path = Path(__file__).resolve().parents[1] / "tool_normalization/environments.json"
     packages = json.loads(environment_path.read_text())[cfg["execution"]["image"]]["packages"]
     tokenizer = Tokenizer.from_file(cfg["sft_tokenizer"])
@@ -172,6 +174,7 @@ def main() -> None:
             for item in index:
                 source_file = batch / "sources" / item["id"] / "source.json"
                 source = json.loads(source_file.read_text())
+                gated = gate_result(route_gate, item)
                 if terminus:
                     result = {
                         "status": "out_of_scope_terminus",
@@ -179,6 +182,10 @@ def main() -> None:
                             "terminus-2-class terminal-JSON trace; out of scope per the 2026-11-15 campaign refocus"
                         ),
                     }
+                elif gated is not None:
+                    # Deterministic replacement exists for this exact row (shard+row+input
+                    # hash verified); the row converts on the CPU path, not here.
+                    result = gated
                 else:
                     result = {"status": "previously_processed"} if item["id"] in skip else classify(source, packages)
                     # Open-SWE needs outcome provenance before entering review; never infer success.
