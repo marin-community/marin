@@ -51,6 +51,7 @@ from experiments.post_training.task_curation.tests.image_builds import (
     install_fake_archive,
     install_fake_build_tools,
 )
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from experiments.post_training.task_curation.tests.resource_receipts import resource_recipe, write_fixture_receipt
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
@@ -95,6 +96,9 @@ def catalog(monkeypatch, tmp_path):
                         upstream_name=name,
                         build_path="test",
                         origin=SourceOrigin.MARIN,
+                        license_receipt=fixture_license(
+                            f"Marin:{name}", pipeline.dataset.name, pipeline.dataset.revision
+                        ),
                         lexical_contamination=decontamination_evidence(
                             pipeline.dataset.name, pipeline.dataset.revision, 1
                         ),

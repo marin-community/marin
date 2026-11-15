@@ -12,6 +12,7 @@ from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence, 
 
 from experiments.post_training.task_curation import registry, retirement
 from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 
 
 @pytest.fixture
@@ -71,6 +72,7 @@ def with_admission_census(source: RlDataSource) -> RlDataSource:
         source,
         info=replace(
             source.info,
+            license_receipt=fixture_license(source.info.id, source.dataset.name, source.dataset.revision),
             actor_census_input=binding,
             grading_environment=source.info.grading_environment or grading_evidence(binding.measured_tasks),
         ),
@@ -89,6 +91,7 @@ def with_declaration_admission_census(declaration: SourceDeclaration) -> SourceD
     return SourceDeclaration.model_validate(
         {
             **declaration.model_dump(),
+            "license_receipt": fixture_license(declaration.id, declaration.dataset_id, declaration.dataset_revision),
             "actor_census_input": binding,
             "grading_environment": declaration.grading_environment or grading_evidence(binding.measured_tasks),
         }

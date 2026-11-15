@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from finestore.rl.licenses import LicenseReceipt
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS
 from taskcompendium.pipeline.controls import GradingMachines
 from taskcompendium.pipeline.source_processing import SourcePipelineConfig, SourceProcessingMode
@@ -51,3 +52,4 @@ class PipelineOptions:
     runtime: CampaignRuntime
     inputs: InputOverrides = field(default_factory=InputOverrides)
     recipe_settings: RecipeSettings | None = None
+    license_receipt: LicenseReceipt | None = None

@@ -9,8 +9,8 @@ from finestore.rl.curation import OracleFiltrationEvidence, OracleValidation, So
 
 from .admission import (
     require_content_result,
-    require_declaration_admission,
     require_lexical_qualification,
+    require_population_admission,
 )
 from .source_counts import SourceCountEvidence
 
@@ -60,7 +60,7 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
         qualified = SourceDeclaration.model_validate(
             {key: value for key, value in declaration.items() if key in SourceDeclaration.model_fields}
         )
-        require_declaration_admission(qualified)
+        require_population_admission(qualified)
         require_content_result(qualified, None, None)
         if qualified.intended_use is None:
             return pending

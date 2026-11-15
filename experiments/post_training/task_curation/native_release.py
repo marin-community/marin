@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.licenses import LicenseReceipt, require_license
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.grading_environment import (
     GradingEnvironmentStatus,
     assess_grading_environment,
@@ -39,10 +41,14 @@ NATIVE_IMPORT_VERSION = "2026.11.13.2"
 class NativeQuickImport:
     output_path: str
     cohort: PrebuiltCohort
+    license_receipt: LicenseReceipt
 
 
 def run_native_import(invocation: NativeQuickImport) -> CampaignArtifact:
     config = invocation.cohort
+    receipt = invocation.license_receipt
+    require_license(receipt, receipt.source_id, config.repo, config.revision, config.intended_use.value)
+    (StoragePath(invocation.output_path) / "license.json").write_text(receipt.model_dump_json(indent=2))
     local = Path(hf_hub_download(config.repo, "tasks.parquet", repo_type="dataset", revision=config.revision))
     provenance = hf_hub_download(config.repo, "manifest.json", repo_type="dataset", revision=config.revision)
     parquet = pq.ParquetFile(local)
@@ -114,13 +120,15 @@ def import_native_quick(
     source: RlDataSource[PrebuiltCohort], options: PipelineOptions
 ) -> ArtifactStep[CampaignArtifact]:
     """Register a lossless native import whose release has only QUICK evidence."""
+    source.require_license()
     if options.mode is not SourceProcessingMode.QUICK:
         raise ValueError("Native inspection releases require separate SAMPLE/FULL qualification before admission")
     config = source.config
     assert config is not None
 
     def build_config(context) -> NativeQuickImport:
-        return NativeQuickImport(context.output_path, config)
+        assert source.info.license_receipt is not None
+        return NativeQuickImport(context.output_path, config, source.info.license_receipt)
 
     return ArtifactStep(
         name=f"native-harbor/{config.repo}/{config.revision}",

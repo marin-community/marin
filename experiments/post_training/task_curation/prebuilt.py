@@ -355,6 +355,7 @@ def prebuilt_artifact(
     encoding: PrebuiltEncoding,
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish validated rows and corpus views while preserving their controlled package bytes."""
+    source.require_license()
     config = source.config
     assert config is not None
     quick = options.mode is SourceProcessingMode.QUICK
@@ -385,6 +386,11 @@ def prebuilt_artifact(
         )
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
+        source.require_license()
+        assert source.info.license_receipt is not None
+        (StoragePath(invocation.output_path) / "license.json").write_text(
+            source.info.license_receipt.model_dump_json(indent=2)
+        )
         if not quick:
             require_lexical_qualification(
                 invocation.lexical_contamination,
@@ -527,7 +533,8 @@ def prebuilt_artifact(
             ),
         )
 
-    name = config.name
+    assert source.info.license_receipt is not None
+    name = f"{config.name}-license-{canonical_sha256(source.info.license_receipt.model_dump(mode="json"))[:16]}"
     if evidence is not None:
         name = f"{name}-{canonical_sha256(evidence.model_dump(mode='json'))[:16]}"
     return ArtifactStep(

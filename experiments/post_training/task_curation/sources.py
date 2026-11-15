@@ -60,6 +60,11 @@ from experiments.post_training.task_curation.derived_contract_tags import bind_d
 from experiments.post_training.task_curation.grading_binding import bind_grading_census
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
+from experiments.post_training.task_curation.license_binding import (
+    LICENSE_REGISTRY,
+    bind_license_receipt,
+    read_license_receipts,
+)
 from experiments.post_training.task_curation.oracle_admitted_release import (
     bind_oracle_admitted_release,
     bind_selected_source_content,
@@ -175,6 +180,11 @@ def all_sources() -> dict[str, RlDataSource]:
             originals[source_id], source, samples.get(source_id), full_content.get(source_id)
         )
         for source_id, source in sources.items()
+    }
+    license_receipts = read_license_receipts(LICENSE_REGISTRY)
+    selected = {
+        source_id: bind_license_receipt(source, license_receipts.get(source_id))
+        for source_id, source in selected.items()
     }
     receipts = derived_contract_receipts()
     selected = {

@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from finestore.layout import BlobTables, OnConflict, parse_uri
 from finestore.reader import ReadView
+from finestore.rl.licenses import LicenseReceipt
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -745,6 +746,7 @@ class SourceDeclaration(CatalogRecord):
     kind: str
     status: str
     pipeline: PipelineReference | None
+    license_receipt: LicenseReceipt | None = None
     independent_qc: IndependentQC | None = None
     daytona_safety: DaytonaSafety | None
     daytona_exemption: str | None = Field(default=None, min_length=1)

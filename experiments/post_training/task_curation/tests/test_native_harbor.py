@@ -29,6 +29,7 @@ from experiments.post_training.task_curation.datasets import native_releases
 from experiments.post_training.task_curation.datasets.native_harbor import native_task, unpack_native
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.license_fixtures import with_license
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -143,6 +144,7 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
         ),
         pipeline=native_release.import_native_quick,
     )
+    source = with_license(source)
     artifact = run(source.pipeline(source, PipelineOptions(SourceProcessingMode.QUICK, CampaignRuntime())))[0]
     output = Path(artifact.path)
     imported = pq.read_table(next((output / "normalize").glob("*.parquet"))).to_pylist()
@@ -172,7 +174,9 @@ def test_native_package_round_trip_keeps_state_boundary_private_files_and_modes(
         published / "tasks.parquet",
     )
     with pytest.raises(ValueError, match="Incomplete native Harbor package"):
-        native_release.run_native_import(native_release.NativeQuickImport(str(tmp_path / "incomplete"), source.config))
+        native_release.run_native_import(
+            native_release.NativeQuickImport(str(tmp_path / "incomplete"), source.config, source.info.license_receipt)
+        )
 
 
 @pytest.mark.parametrize(

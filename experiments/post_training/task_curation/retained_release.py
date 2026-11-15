@@ -153,6 +153,7 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
 
 def import_retained(source: RlDataSource[RetainedCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Admit a verified subset through its existing qualification and fresh release gates."""
+    source.require_license()
     if options.mode is not SourceProcessingMode.QUICK:
         if "excluded" in source.info.tags:
             raise ValueError(f"Retained cohort is excluded pending qualification: {source.name}")

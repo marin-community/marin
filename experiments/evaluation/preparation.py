@@ -125,6 +125,8 @@ def _build_run(
 def _publish(
     dataset: EvaluationCorpusRecipe, options: PipelineOptions, identity: dict, run: EvaluationRun
 ) -> CampaignArtifact:
+    assert options.license_receipt is not None
+    (StoragePath(run.output_path) / "license.json").write_text(options.license_receipt.model_dump_json(indent=2))
     validate_input_identity(dataset.recipe, options.inputs, identity)
     grader_environment = None
     if dataset.recipe.grader is not None:
@@ -167,6 +169,8 @@ def prepare_evaluation(
     source: RlDataSource[EvaluationCorpusRecipe], options: PipelineOptions
 ) -> ArtifactStep[CampaignArtifact]:
     """Publish the complete evaluation population without RL admission or model review."""
+    source.require_license()
+    options = replace(options, license_receipt=source.info.license_receipt)
     dataset = source.config
     assert dataset is not None
     downloaded, auxiliary = source_downloads(dataset.recipe, options)
@@ -182,7 +186,9 @@ def prepare_evaluation(
             else EnvironmentArtifact(path=grader.path(), identity=identity_digest(dataset.recipe.grader))
         )
     recipe = source_recipe(dataset.recipe, {}, None)
+    assert source.info.license_receipt is not None
     identity = {
+        "license_receipt": source.info.license_receipt.model_dump(mode="json"),
         "source": {
             **download_identity(dataset.recipe.source),
             "reader": source_files_identity(recipe.source),

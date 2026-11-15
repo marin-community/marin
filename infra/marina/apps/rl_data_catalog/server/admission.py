@@ -15,6 +15,7 @@ from finestore.rl.curation import (
     SourceUse,
     require_decontamination,
 )
+from finestore.rl.licenses import require_license
 
 MISSING_GRADER_REASON = "No executable grader is declared"
 
@@ -39,6 +40,18 @@ def population_admission_blocker(
 
 
 def require_declaration_admission(declaration: SourceDeclaration) -> None:
+    """Require license permission before admitting a newly published source revision."""
+    require_license(
+        declaration.license_receipt,
+        declaration.id,
+        declaration.dataset_id,
+        declaration.dataset_revision,
+        declaration.intended_use.value if declaration.intended_use else "unknown",
+    )
+    require_population_admission(declaration)
+
+
+def require_population_admission(declaration: SourceDeclaration) -> None:
     """Reject incomplete or differently pinned evidence before publication or loading."""
     binding, pipeline = declaration.actor_census_input, declaration.pipeline
     if (

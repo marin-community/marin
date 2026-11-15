@@ -37,6 +37,7 @@ from finestore.rl.curation import (
     source_identifier,
     source_title,
 )
+from finestore.rl.licenses import LicenseReceipt, require_license
 from marin.execution.lazy import ArtifactStep
 from pydantic import Field
 from taskcompendium.derived_contract import DerivedContractSummary
@@ -145,6 +146,7 @@ class SourceInfo:
     count: int | None = None
     notes: str = ""
     dataset: SourceReference | None = None
+    license_receipt: LicenseReceipt | None = None
     independent_qc: IndependentQC | None = None
     daytona_snapshot_count: int | None = None
     """Distinct environments the source's own task specs require, as measured.
@@ -235,6 +237,17 @@ class RlDataSource[ConfigT: CatalogConfig]:
     info: SourceInfo
     config: ConfigT | None = None
     pipeline: "CurationPipeline[ConfigT] | None" = None
+
+    def require_license(self) -> None:
+        """Require stage-0 permission at the current pin before constructing any work."""
+        dataset = self.dataset
+        require_license(
+            self.info.license_receipt,
+            self.info.id,
+            dataset.name if dataset else None,
+            dataset.revision if dataset else None,
+            self.intended_use.value,
+        )
 
     @property
     def intended_use(self) -> SourceUse:
@@ -469,6 +482,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
                 "Not selectable" if self.admission_blockers else "Available",
             ),
             pipeline=invocation,
+            license_receipt=info.license_receipt,
             independent_qc=info.independent_qc,
             daytona_safety=safety,
             daytona_exemption=GRANDFATHERED_DAYTONA_EXEMPTION if self.is_grandfathered_blend else None,

@@ -6,6 +6,14 @@ const resultLabels = {GOOD: 'Good', SOME_ISSUES: 'Some issues', BAD: 'Bad', UNKN
 const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', UNKNOWN: 'unknown'};
 
 // Object-store URLs get a Filer link beside the raw URL, which stays available for CLI use.
+function licenseEvidence(declaration) {
+  const receipt = declaration.license_receipt;
+  if (!receipt) return 'Unresolved';
+  const ids = [...new Set(receipt.evidence.flatMap(item => item.license_ids))];
+  const line = node('span', ids.join(', ') || 'Missing');
+  if (receipt.evidence.length) line.append(' · ', pointer(receipt.evidence[0].url, 'Evidence ↗'));
+  return line;
+}
 function pointer(uri, label) {
   const span = node('span', undefined, 'pointer');
   if (/^https:\/\//.test(uri)) {
@@ -162,6 +170,7 @@ async function render(data, sourceId) {
   sections.push(card('Releases and measurements', [
     ['Origin', d.origin], ['Build path', d.build_path],
     ['Datasets', datasetLinks(d)], ['Input revision', d.dataset_revision],
+    ['License', licenseEvidence(d)],
     ['Current release pin', current && `${current.repo} @ ${current.revision}`],
     ['Pipeline', d.pipeline && `${d.pipeline.name} @ ${d.pipeline.version}`],
     ['Retained converted population', d.within_source_dedup?.unique_count], ['Use', data.intended_use],

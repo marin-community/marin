@@ -23,6 +23,69 @@ protocol, and item builder. Evaluation owns shot selection and prompt preparatio
 shared curation code supplies acquisition and catalog publication. TaskCompendium
 owns reusable source importers and the corpus publisher.
 
+## Stage 0: binding license gate
+
+License permission is the first ingest check, before conversion, actor census,
+oracle execution, model review or other QA spend. QUICK, SAMPLE, FULL, native
+imports and evaluation publication require an exact-pin `LicenseReceipt`.
+New admission publication checks it again. Existing published admissions remain
+unchanged during the backfill audit; a missing receipt is not a retroactive ban.
+
+The single policy table is
+[`finestore.rl.licenses`](https://github.com/marin-community/marin/blob/atlas-env-audit/lib/finestore/src/finestore/rl/licenses.py),
+shared with Data Belay intake. It reuses Data Belay's Blue Oak Council v16
+permissive SPDX list and its data-license additions.
+
+| Class | Evidence | New ingest and admission |
+|---|---|---|
+| PERMISSIVE | Accepted Blue Oak IDs (including Apache-2.0, MIT, BSD and CC0), CC BY/CC BY-SA versions 1.0–4.0, ODC-By/PDDL, OpenMDW matching the canonical pattern | Pass, subject to provenance decisions below |
+| RESTRICTED | NC or ND identifiers; research-only terms; terms forbidding training or redistribution, including applicable model-output terms | Fail without an explicit scoped exception |
+| UNKNOWN | Custom or unrecognized license, ambiguous applicability, or unresolved primary evidence | Fail without an explicit scoped exception |
+| MISSING | No declared license at the pin | Fail without an explicit scoped exception |
+
+Every listed identifier must be accepted. A permissive card cannot override a
+restrictive LICENSE file. A repository's code license does not establish rights
+in separately hosted task data. The resolver records pinned primary URLs, each
+evidence file's SHA-256 and quoted lines, resolution time and resolver version.
+It reads HF card YAML and license files at the dataset commit, or GitHub license
+files at the commit; GitHub's current API license is informational. Other sources
+require an explicit primary license URL. Transport or authentication errors stay
+unresolved and block the gate; the resolver never infers permission.
+
+`bundled_third_party` and `model_generated_outputs` are conservative review flags.
+Each true flag requires its own human/coordinator decision, even for a permissive
+license. Automated flags and unresolved audit findings are hypotheses for review;
+they are not bans or legal determinations.
+
+Resolve the catalog without downloading task payloads or changing admissions:
+
+```bash
+uv run python -m experiments.post_training.task_curation.license_backfill \
+  --output /tmp/atlas-license-audit --workers 2
+```
+
+The output contains resumable receipts, `report.json` and `table.md`. Review
+primary evidence, record any provenance decisions, then add exact source-ID keys
+and typed receipts to `datasets/license_receipts.json` or supply a reviewed JSON
+registry explicitly:
+
+```bash
+uv run python -m experiments.post_training.task_curation.driver \
+  --source <name> --mode quick --license-receipts /path/to/reviewed-licenses.json \
+  --output-root /path/to/output --run
+```
+
+**Exceptions and bans.** Keep the evidence and decision in the
+[blocked-source registry](https://github.com/marin-community/marin/issues/11497).
+An exception records the decision-maker, timestamp, source ID, dataset ID, exact
+revision, intended-use scope (`train` or `eval`), rationale, evidence URLs and
+issue link. Attach it as an approved `exception` decision on the receipt;
+third-party and generated-output decisions use their separate typed kinds.
+A negative decision or `ban` always blocks the applicable scope. Decisions do
+not transfer across source IDs, revisions or uses. Never generate approvals
+from the audit itself. Report already-admitted MISSING/RESTRICTED findings to
+the coordinator immediately; the user decides any admission changes.
+
 ## Current admission policy
 
 These rules include the admission display policy for Atlas preview revision 19 (2026-11-15). When a
@@ -178,7 +241,7 @@ changes. Report the landed SHA to the coordinator. Never force-push or push to
 
 ## Pipeline overview
 
-The mandatory ingest order is conversion → exact within-source deduplication → lexical
+The mandatory ingest order is license permission (stage 0) → conversion → exact within-source deduplication → lexical
 decontamination → resource calibration (agentic tasks only) and full-population
 oracle filtering → SAMPLE/FULL QA → the late-stage derived contract census.
 QUICK also deduplicates its complete converted population.
@@ -193,7 +256,8 @@ populations remain distinct throughout the export.
 
 ```mermaid
 flowchart TD
-    sources["Pinned dataset declarations"] --> conversion["Dataset-owned conversion graph"]
+    sources["Pinned dataset declarations"] --> license["Stage 0: binding license permission"]
+    license --> conversion["Dataset-owned conversion graph"]
     conversion --> dedup["Within-source exact deduplication"]
     dedup --> quick["QUICK: unique converted TaskSpecs"]
     dedup --> decon["Lexical decontamination or benchmark measurement"]

@@ -73,6 +73,7 @@ from experiments.post_training.task_curation.tests.image_builds import (
     REQUIREMENTS,
     install_fake_build_tools,
 )
+from experiments.post_training.task_curation.tests.license_fixtures import with_license
 from experiments.post_training.task_curation.tests.resource_receipts import (
     ResourceConverter,
     fixture_receipt,
@@ -148,7 +149,7 @@ def source_step(recipe: CurationRecipe, options: PipelineOptions, receipt_root: 
         config=recipe,
         pipeline=process_rows,
     )
-    return process_rows(source, options)
+    return process_rows(with_license(source), options)
 
 
 def step_name(pipeline, config) -> str:

@@ -41,6 +41,7 @@ from experiments.post_training.task_curation.driver import _conversion_steps
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.tests.license_fixtures import with_license
 
 
 def decode_prefix(data: dict, _context: ConversionContext, *, prefix: str) -> dict:
@@ -125,14 +126,14 @@ def local_graph(tmp_path, monkeypatch):
 def test_evaluation_artifact_cache_distinguishes_source_preparation(local_graph):
     root, options = local_graph
     (root / "rows.jsonl").write_text(json.dumps({"prompt": "Name a color"}) + "\n")
-    source = fixture_source()
+    source = with_license(fixture_source())
     dataset = source.config
     assert dataset is not None
     outputs = []
     for prefix in ("First: ", "Second: "):
         prepared = replace(dataset.recipe.source, decode=partial(decode_prefix, prefix=prefix))
         configured = replace(source, config=replace(dataset, recipe=replace(dataset.recipe, source=prepared)))
-        artifact = run(prepare_evaluation(configured, options), max_concurrent=1)[0]
+        artifact = run(prepare_evaluation(with_license(configured), options), max_concurrent=1)[0]
         outputs.append(next(evaluation_cases(artifact.path)).task.context.events[0].content)
     assert outputs == ["First: Name a color", "Second: Name a color"]
 
@@ -178,7 +179,7 @@ def test_python_evaluation_artifact_cache_separates_operation_models_and_options
                 item_builder=partial(python_item, generation=operation),
             ),
         )
-        artifact = run(prepare_evaluation(configured, options), max_concurrent=1)[0]
+        artifact = run(prepare_evaluation(with_license(configured), options), max_concurrent=1)[0]
         published.append((artifact.path, next(evaluation_cases(artifact.path)).item.operation))
     assert len({path for path, _ in published}) == 3
     assert published[-1] == published[-2]
@@ -191,7 +192,7 @@ def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(
         json.dumps({"prompt": "Name a color", "mutate_path": str(path), "mutation_marker": str(root / "mutated")}) + "\n"
     )
     original = path.read_bytes()
-    source = fixture_source()
+    source = with_license(fixture_source())
     dataset = source.config
     assert dataset is not None
     source = replace(source, config=replace(dataset, recipe=replace(dataset.recipe, convert=convert_mutating_fixture)))
@@ -213,7 +214,7 @@ def test_evaluation_input_change_during_conversion_withdraws_the_release_marker(
 def test_remote_quick_wrapper_does_not_reuse_corpora_after_protocol_or_item_builder_changes(local_graph):
     root, options = local_graph
     (root / "rows.jsonl").write_text(json.dumps({"prompt": "Name a color"}) + "\n")
-    source = fixture_source()
+    source = with_license(fixture_source())
     dataset = source.config
     assert dataset is not None
     changed = replace(

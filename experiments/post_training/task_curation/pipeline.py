@@ -24,6 +24,7 @@ from typing import Any, cast
 import click
 import requests
 from finestore.rl.curation import ContentEvidenceReference, LexicalContaminationEvidence
+from finestore.rl.licenses import LicenseReceipt
 from fray.types import ResourceConfig
 from marin.datakit.download.huggingface import (
     DownloadConfig,
@@ -483,6 +484,8 @@ def _execution_config(
 
 def process_rows(source: RlDataSource[CurationRecipe], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Construct the reusable source processor's graph from this dataset's recipe."""
+    source.require_license()
+    options = replace(options, license_receipt=source.info.license_receipt)
     recipe = source.config
     assert recipe is not None
     if options.mode == SourceProcessingMode.QUICK:
@@ -888,6 +891,8 @@ def _run_source(
     options: PipelineOptions,
     run: SourceRun,
 ) -> RlDataArtifact:
+    assert options.license_receipt is not None
+    (StoragePath(run.output_path) / "license.json").write_text(options.license_receipt.model_dump_json(indent=2))
     (StoragePath(run.output_path) / "identity.json").write_text(canonical_json(run.identity))
     grader_environment = None
     if pipeline.grader is not None:
@@ -932,6 +937,8 @@ def _reviewed_step(
         grader_built = built_environment(pipeline.grader)
         grader_step = environment_artifact(pipeline.grader)
     identity = pipeline_identity(pipeline, config, grader_built)
+    assert options.license_receipt is not None
+    identity["license_receipt"] = options.license_receipt.model_dump(mode="json")
     assert options.recipe_settings is not None
     identity["curation_attempt"] = options.recipe_settings.curation_attempt
     overrides = options.inputs
@@ -957,6 +964,7 @@ class QuickRun:
     source_input: str
     inputs: dict[str, str]
     output_path: str
+    license_receipt: LicenseReceipt | None
 
 
 def _quick_run(
@@ -966,6 +974,7 @@ def _quick_run(
     ctx: StepContext,
 ) -> QuickRun:
     return QuickRun(
+        license_receipt=options.license_receipt,
         source_input=ctx.artifact_path(downloaded) if downloaded is not None else options.inputs.root or ctx.output_path,
         inputs={**options.inputs.auxiliary, **{name: ctx.artifact_path(step) for name, step in auxiliary.items()}},
         output_path=ctx.output_path,
@@ -992,6 +1001,8 @@ def _conversion_context(context: ZephyrContext, pipeline: CurationRecipe, run: Q
 
 
 def _run_quick_source(pipeline: CurationRecipe, options: PipelineOptions, run: QuickRun) -> CampaignArtifact:
+    assert options.license_receipt is not None
+    (StoragePath(run.output_path) / "license.json").write_text(options.license_receipt.model_dump_json(indent=2))
     overrides = input_file_overrides(options.inputs.files)
     if options.inputs.root is not None and not options.inputs.files:
         overrides = _staged_file_overrides(

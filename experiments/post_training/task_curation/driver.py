@@ -71,6 +71,7 @@ from experiments.post_training.task_curation.inventory import (
     task_selection_step,
 )
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, JudgeTier
+from experiments.post_training.task_curation.license_binding import bind_license_receipt, read_license_receipts
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines, CurationRecipe
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
@@ -521,8 +522,14 @@ def _embedding_pass(
     show_default=True,
     help="Remote artifact root; overrides MARIN_PREFIX. Local --cache-dir takes precedence.",
 )
+@click.option(
+    "--license-receipts",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Reviewed exact-pin license receipt registry (JSON).",
+)
 @click.option("--run", "do_run", is_flag=True)
 def main(
+    license_receipts: Path | None,
     model: str,
     model_revision: str | None,
     base_url: str | None,
@@ -591,6 +598,13 @@ def main(
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
     selected = _selected_sources(sources, processing_mode) if corpus is None else {}
+    if license_receipts is not None:
+        receipts = read_license_receipts(license_receipts)
+        selected = {
+            name: bind_license_receipt(source, receipts.get(source.info.id)) for name, source in selected.items()
+        }
+    for source in selected.values():
+        source.require_license()
     if decontamination_receipt is not None:
         decontamination = LexicalContaminationEvidence.model_validate_json(
             StoragePath(decontamination_receipt).read_text()
