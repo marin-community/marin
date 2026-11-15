@@ -11,13 +11,13 @@ with TP1/PP1/DP12/EP12. Iris keeps this 15-host GB200 gang in one NVLink domain.
 The role planner checks counts and parallelism; other layouts need their own
 placement check.
 Each host requests 120 CPUs, 900 GiB RAM and 2 TiB disk. Loading uses an 8 GiB
-buffer and four requests per inference worker. This example uses LA1's qualified
+buffer and four requests per inference worker. This example uses the qualified
 runtime: Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4 on GB200. Compilation mode 3
 remains enabled. CUDA graphs use `NONE` because graph replay failed after weight
 publication with DP12/EP12 `allgather_reducescatter`. The cause and full-model
 performance cost remain unmeasured.
 
-The recipe retains Long Loop's eight-response RLOO-N groups, with two prompts
+The recipe uses eight-response RLOO-N groups, with two prompts
 per update, the reasoning-marker penalty and error masking. It selects Hero
 MuonH with `expert_normalization: all_experts`, FP32 masters and pinned CPU
 momentum. Supply ordinary mixed-task Parquet artifacts; no length probe is added.
@@ -30,7 +30,8 @@ Planning, Hero MuonH, Harbor harness binding and
 are on main. The draft also includes the
 [qualified GPU runtime #11307](https://github.com/marin-community/marin/pull/11307)
 and [turn-terminator fix #11232](https://github.com/marin-community/marin/pull/11232)
-while they remain unmerged. Its PR body pins the combined revision. This is a
+while they remain unmerged. [Draft #11321](https://github.com/marin-community/marin/pull/11321)
+pins the combined revision. This is a
 runnable example kept in draft while loop unification is discussed.
 
 Provide Iris and regional S3 credentials, W&B access, and `DAYTONA_RL_API_KEY`
@@ -111,7 +112,8 @@ the regional three-day TTL, with two rolling checkpoints. `--ttl-days` and
 `--tokenizer-uri` selects a separate pinned tokenizer artifact. Python callers
 can supply another topology, Megatron geometry, recipe and execution configuration
 to `build_run`. The reused GPU evidence covers the one-rack layout at its pinned
-source. The PR body records that boundary; these CPU checks do not qualify arbitrary overrides.
+source. [#11321](https://github.com/marin-community/marin/pull/11321) records that
+source and the CPU checks; those checks do not qualify other layouts.
 
 ## 262K three-rack example
 
