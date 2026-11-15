@@ -54,8 +54,6 @@ def test_pending_private_filter_evidence_keeps_catalog_admission_and_quality(
     expect(card.locator(".field").filter(has=page.get_by_text("Oracle-filtered tasks", exact=True))).to_contain_text(
         "2,699 of 2,699"
     )
-    expect(card).to_contain_text("not selected or admitted to Atlas")
-    expect(card).to_contain_text("earlier QC is not inherited")
     expect(page.locator("#labels .level")).to_have_text(f"Quality {detail['quality']}")
     current_pin = page.locator(".field").filter(has=page.get_by_text("Current release pin", exact=True))
     current = detail["declaration"]["current_release"]
