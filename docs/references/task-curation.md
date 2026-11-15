@@ -2995,14 +2995,19 @@ Review the complete staged collection, then append it to the existing private
 registry and update its references:
 
 ```bash
-uv run python -m experiments.post_training.task_curation.registry \
+mkdir -p ~/.local/share/atlas-push
+/usr/bin/lockf -k -t 3600 ~/.local/share/atlas-push/registry.lock \
+  uv run python -m experiments.post_training.task_curation.registry \
   --staged-root /tmp/atlas-registry-YYYYMMDD-v1 --references-root . \
   --repo open-athena/marin-rl-data-atlas-registry \
-  --parent-revision CURRENT_REGISTRY_COMMIT --message 'Record approved census receipts'
+  --parent-revision FROZEN_STAGE_PARENT_COMMIT --message 'Record approved census receipts'
 ```
 
-Use the registry's current 40-character commit as `--parent-revision`; a concurrent
-update fails rather than overwriting it. The command uses add operations only,
+Use the same 40-character registry parent against which the complete staged
+collection was prepared. Acquire the lock only for the append command and its
+readback. If another writer advanced that parent, the commit fails; rebuild the
+complete collection from the new parent before retrying. Do not replace a stale
+stage's parent argument with the latest commit. The command uses add operations only,
 reads every staged file back at the new immutable commit and verifies its hash
 before updating any Git reference. Earlier commits and artifacts remain intact.
 Stage the complete replacement shard collection. For each staged `part-*.json`
@@ -3107,10 +3112,62 @@ when the receipts are not in the canonical registry. Their shared
 original card and notices, and pinned evidence URLs. `license_source` identifies
 the checked dataset grant; `license_input` separately records the physical input
 pin. Every new private pin must pass its own license check before its publication
-receipt is returned. Run Hugging Face writes under the shared
-`~/.local/share/atlas-push/registry.lock`; these commands create new repositories
-and refuse existing destinations. `native_quick` requires an explicit new
-`--version` suffix.
+receipt is returned. Fresh per-source private repositories may be written
+independently. Shared registry appends take
+`~/.local/share/atlas-push/registry.lock` only for fresh refs → upload → readback;
+do not hold it while waiting for a regional job. These commands refuse existing
+destinations. `native_quick` requires an explicit new `--version` suffix.
+
+For flagged external training inputs, `remediation_publish --raw-archives`
+requires a list of `RawSourceArchive` receipts. Each archive keeps every pinned
+source file under `raw/`, with its source manifest in `raw-snapshot.json`.
+The publisher verifies the source pin, complete file inventory, repository
+privacy, every archived byte hash and the archive pin's own license check.
+`original_private_pin` identifies this raw source archive. The separate
+`converted-original-pin.json` preserves the unfiltered converted TaskSpecs;
+it cannot substitute for the raw source snapshot.
+
+Produce raw archive receipts with `raw_source_publish`, after completing the
+standard [`download_step` acquisition](../../experiments/post_training/task_curation/pipeline.py)
+for the **entire** pinned Hugging Face repository. Supply its `HfSource.files`
+with the complete inventory. Acquire and hash large inputs on an Iris CPU worker
+in the target bucket's region, writing directly to regional S3. Build the inventory from
+`HfApi().dataset_info(DATASET, revision=PIN).siblings`, rather than from a
+converter's selected Parquet files. Hash each acquired file. Run publication on
+an Iris CPU job in the source artifacts' region; use a new repository version
+and evidence root. Snapshot `revision` must be the full upstream commit SHA,
+not a branch or tag. The staged snapshot list has this shape:
+
+```json
+[
+  {
+    "source_id": "Example:upstream/dataset",
+    "dataset_id": "upstream/dataset",
+    "revision": "immutable-upstream-pin",
+    "artifact": "s3://REGIONAL-BUCKET/pinned-download-artifact",
+    "source_files": ["README.md", "data/train.parquet"],
+    "files": [
+      {"path": "README.md", "uri": "s3://REGIONAL-BUCKET/pinned-download-artifact/README.md", "sha256": "verified-file-sha256"},
+      {"path": "data/train.parquet", "uri": "s3://REGIONAL-BUCKET/pinned-download-artifact/data/train.parquet", "sha256": "verified-file-sha256"}
+    ]
+  }
+]
+```
+
+```bash
+uv run python -m experiments.post_training.task_curation.raw_source_publish \
+  --snapshots s3://REGIONAL-BUCKET/frozen-raw-snapshots.json --use train \
+  --version YYYYMMDD-v1 --evidence-root s3://REGIONAL-BUCKET/new-raw-archive-evidence
+```
+
+The producer checks the complete source inventory, archives all original bytes,
+preserves checked license notices, and verifies every HF readback hash. It writes
+`raw-source-archives.json` under the evidence root. In each resulting receipt,
+`source_revision` is the original dataset pin; `revision` is the new private raw
+archive's 40-character HF commit. `source_artifact` identifies the acquisition
+artifact. `file_hashes` uses archive-relative paths, including the `raw/` prefix
+and root provenance files. `license_check` is generated by the new archive pin's
+checker; do not hand-author it or transfer an old pin's exception.
 
 ```bash
 uv run iris --config lib/iris/config/marin.yaml job run \
@@ -3119,6 +3176,7 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   --priority production --timeout 259200 --no-wait -- \
   python -m experiments.post_training.task_curation.remediation_publish \
   --plans s3://BUCKET/frozen-plans.json --version YYYYMMDD-v1 \
+  --raw-archives s3://BUCKET/new-raw-archive-evidence/raw-source-archives.json \
   --evidence-root s3://BUCKET/new-publication-prefix --workers 4
 ```
 

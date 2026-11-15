@@ -44,6 +44,7 @@ from experiments.post_training.task_curation.remediation_binding import (
     release_lexical_evidence,
 )
 from experiments.post_training.task_curation.remediation_publish import (
+    RawSourceArchive,
     ReleasePlan,
     filter_population,
     verify_retained,
@@ -333,9 +334,83 @@ def test_resumed_publication_rechecks_license_and_remains_readable_by_retained_b
         "fixture",
         str(evidence),
         fixture_license(plan.source_id, plan.source_dataset_id, plan.source_revision),
+        None,
     )
     assert PublicationReceipt.model_validate(result).release == publication.release
     assert checked == [(publication.repo, publication.revision)]
+
+
+def test_flagged_external_input_requires_its_raw_snapshot_before_task_read(tmp_path, frozen_population):
+    plan, _, _ = frozen_population
+    with pytest.raises(ValueError, match="requires a verified original raw source archive"):
+        remediation_publish.publish_plan(
+            plan,
+            "fixture",
+            str(tmp_path / "evidence"),
+            fixture_license(plan.source_id, plan.source_dataset_id, plan.source_revision),
+            None,
+        )
+
+
+@pytest.mark.parametrize("mutation", [None, "missing_file", "changed_bytes"])
+def test_raw_source_archive_readback_rejects_missing_or_changed_files(
+    tmp_path, monkeypatch, frozen_population, mutation
+):
+    plan, _, _ = frozen_population
+    repository = tmp_path / "raw-repository"
+    (repository / "raw").mkdir(parents=True)
+    content = b"original source bytes"
+    (repository / "raw/data.json").write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    manifest = {
+        "source_id": plan.source_id,
+        "dataset_id": plan.source_dataset_id,
+        "revision": plan.source_revision,
+        "source_files": ["data.json"],
+        "files": [{"path": "data.json", "sha256": digest}],
+    }
+    (repository / "raw-snapshot.json").write_text(json.dumps(manifest))
+    hashes = {
+        "raw/data.json": digest,
+        "raw-snapshot.json": file_sha256(StoragePath(str(repository / "raw-snapshot.json"))),
+    }
+    if mutation == "missing_file":
+        hashes.pop("raw/data.json")
+    if mutation == "changed_bytes":
+        (repository / "raw/data.json").write_bytes(b"changed source bytes")
+    archive = RawSourceArchive(
+        source_id=plan.source_id,
+        dataset_id=plan.source_dataset_id,
+        source_revision=plan.source_revision,
+        repo="open-athena/raw-fixture",
+        revision="f" * 40,
+        url="https://huggingface.co/datasets/open-athena/raw-fixture/tree/" + "f" * 40,
+        private=True,
+        scope="exact_pinned_raw_source_archive",
+        source_artifact=plan.input_artifact,
+        verified_raw_files=1,
+        file_hashes=hashes,
+        license_check={"verdict": "PASS"},
+    )
+    monkeypatch.setattr(
+        remediation_publish,
+        "HfApi",
+        lambda: SimpleNamespace(repo_info=lambda *args, **kwargs: SimpleNamespace(private=True)),
+    )
+    monkeypatch.setattr(
+        remediation_publish, "hf_hub_download", lambda repo, filename, **kwargs: str(repository / filename)
+    )
+    monkeypatch.setattr(
+        license_publication,
+        "resolve_license",
+        lambda target: fixture_license(target.source_id, target.dataset_id, target.revision),
+    )
+    if mutation is not None:
+        with pytest.raises(ValueError, match=r"complete frozen source snapshot|readback differs"):
+            remediation_publish.verify_raw_archive(plan, archive)
+        return
+    release = remediation_publish.verify_raw_archive(plan, archive)
+    assert (release.repo, release.revision) == (archive.repo, archive.revision)
 
 
 def test_duplicate_first_receipt_preserves_overlapping_raw_lexical_numerator(retained_receipt):
