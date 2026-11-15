@@ -209,6 +209,7 @@ def verifier_recovery(tmp_path):
         "selection": str(selection),
         "recovery": str(recovery),
         "recovery_manifest_sha256": hashlib.sha256(manifest).hexdigest(),
+        "accepted_unscored_attempts": [],
     }
 
 
@@ -249,3 +250,25 @@ def test_verifier_recovery_rejects_wrong_attempt_or_changed_frozen_grader(tmp_pa
     with pytest.raises(ValueError, match=message):
         merge_verifier_recovery(output=str(output), **verifier_recovery)
     assert not output.exists()
+
+
+def test_verifier_recovery_preserves_only_explicitly_accepted_unscored_attempts(tmp_path, verifier_recovery):
+    native = tmp_path / "original/exports/dumped_evals/eval_only/other.jsonl"
+    row = json.loads(native.read_text())
+    row["exception_type"] = "VerifierTimeoutError"
+    row["verification"].update(status="error", score=None, passed=None)
+    native.write_text(json.dumps(row) + "\n")
+    original_bytes = native.read_bytes()
+    output = tmp_path / "merged"
+    with pytest.raises(ValueError, match="additional unscored"):
+        merge_verifier_recovery(output=str(output), **verifier_recovery)
+    assert not output.exists()
+    accepted = [{"data_source": "other", "uid": "1", "exception_type": "VerifierTimeoutError"}]
+    merge_verifier_recovery(output=str(output), **{**verifier_recovery, "accepted_unscored_attempts": accepted})
+    report = json.loads((output / "evaluation.json").read_text())
+    assert report["completed_rollouts"] == 2
+    assert report["verified_rollouts"] == 1
+    assert not report["all_verified"]
+    assert report["unscored_attempts"] == report["accepted_unscored_attempts"] == accepted
+    assert (output / "exports/dumped_evals/eval_only/other.jsonl").read_bytes() == original_bytes
+    assert native.read_bytes() == original_bytes

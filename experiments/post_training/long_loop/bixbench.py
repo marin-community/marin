@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A one-task BixBench continuation and a provenance-preserving result merge."""
+"""BixBench continuations and provenance-preserving result recovery."""
 
 import hashlib
 import json
@@ -15,7 +15,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.archive import write_once
-from experiments.post_training.long_loop.eval_runtime.audit_results import audit
+from experiments.post_training.long_loop.eval_runtime.audit_results import audit, require_evaluation_coverage
 from experiments.post_training.long_loop.sft import read_json
 
 BIXBENCH_RESULTS_FILENAME = "bixbench-pi.jsonl"
@@ -169,7 +169,13 @@ def merge_results(*, output: str, original: str, repair: str) -> None:
 
 
 def merge_verifier_recovery(
-    *, output: str, original: str, selection: str, recovery: str, recovery_manifest_sha256: str
+    *,
+    output: str,
+    original: str,
+    selection: str,
+    recovery: str,
+    recovery_manifest_sha256: str,
+    accepted_unscored_attempts: list[dict],
 ) -> None:
     """Publish a separate scored view of one original BixBench verifier timeout."""
     manifest_uri = prefix_join(recovery, "manifest.json")
@@ -240,13 +246,15 @@ def merge_verifier_recovery(
             raise ValueError("Recovery did not use the original frozen verifier")
     before = audit(original, selected["attempts"], selected["attempts_per_data_source"], selected["identities"])
     expected_unscored = [
-        {"data_source": "bixbench-pi", "uid": identity["dataset_row_uid"], "exception_type": "VerifierTimeoutError"}
+        {"data_source": "bixbench-pi", "uid": identity["dataset_row_uid"], "exception_type": "VerifierTimeoutError"},
+        *accepted_unscored_attempts,
     ]
     if (
         before["completed_rollouts"] != selected["attempts"]
         or not before["source_coverage_matches"]
         or not before["identity_coverage_matches"]
-        or before["unscored_attempts"] != expected_unscored
+        or sorted(json.dumps(row, sort_keys=True) for row in before["unscored_attempts"])
+        != sorted(json.dumps(row, sort_keys=True) for row in expected_unscored)
     ):
         raise ValueError("Native evaluation has missing identities or additional unscored attempts")
     if read_json(prefix_join(original, "terminal.json"))["result"]["state"] != "succeeded":
@@ -294,8 +302,8 @@ def merge_verifier_recovery(
     for name in ("resolved-launch.yaml", "terminal.json"):
         write_once(prefix_join(output, name), StoragePath(prefix_join(original, name)).read_bytes())
     after = audit(output, selected["attempts"], selected["attempts_per_data_source"], selected["identities"])
-    if not after["all_verified"]:
-        raise ValueError("Recovered evaluation view lacks full scored coverage")
+    after["accepted_unscored_attempts"] = accepted_unscored_attempts
+    require_evaluation_coverage(after)
     write_once(prefix_join(output, "evaluation.json"), json.dumps(after, indent=2).encode())
     write_once(
         prefix_join(output, "merge-provenance.json"),
@@ -308,6 +316,8 @@ def merge_verifier_recovery(
                 "identity": identity,
                 "native_scored": before["verified_rollouts"],
                 "recovered_scored": after["verified_rollouts"],
+                "all_verified": after["all_verified"],
+                "accepted_unscored_attempts": accepted_unscored_attempts,
                 "source_files": files,
                 "metadata": "Verbatim original job snapshots; this view did not run candidate generation",
                 "judge_model": result["judge_model"],

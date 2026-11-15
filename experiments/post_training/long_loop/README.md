@@ -315,7 +315,11 @@ For a BixBench verifier timeout, a separately verified grade of the retained
 original answer can be incorporated with `bixbench.merge_verifier_recovery`.
 Pass the original evaluation, frozen selection, recovery receipt root and pinned
 recovery-manifest SHA to a new artifact version. The merge requires the complete
-selected native result set and exactly that one unscored attempt. It checks the
+selected native result set and that one recoverable unscored attempt. Pass an
+explicit `accepted_unscored_attempts` list (empty for full scoring) for any
+separately approved infrastructure exclusions. Unexpected missing rewards still
+block the merge; accepted exclusions remain unscored in the view and report.
+It checks the
 original task/session, sampled trajectory, final answer, frozen grader and
 verifier deadline; it does not generate another answer. The scored view preserves
 every original native file and aggregate under `original-native/`, records native
