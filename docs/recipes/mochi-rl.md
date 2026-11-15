@@ -154,10 +154,21 @@ Use a completed native checkpoint with matching TP1/PP16/CP4/EP4 geometry for
 `NATIVE_262K`. The continuation example starts from an existing completed step-5
 checkpoint. Both profiles use absolute `--max-steps`: `--max-steps 7` requests
 two further updates from step 5. Repeat the same version and command after
-interruption to recover this continuation's progress. Add `--run` only after
+interruption to recover the latest completed checkpoint of this continuation. Add `--run` only after
 checking the configurations and retained inputs. Responses default to 8,192
 tokens; `--max-new-tokens 1024` retains the short-smoke option.
-The GPU job limit is six hours, with a 72-hour coordinator limit for queueing and setup.
+This profile saves checkpoints at the target step and at normal training end.
+An interruption before a new checkpoint completes restarts from the supplied
+checkpoint, or from SFT for a fresh run. The GPU job limit is six hours, with a
+72-hour coordinator limit for queueing and setup. `--job-timeout-hours` also
+applies to this profile.
+
+The shared typed recipe changes the three-rack training fingerprint. Reusing a
+completed pre-refactor artifact version therefore raises a fingerprint mismatch;
+use a new output version and `--resume-uri` to continue from its checkpoint.
+An interrupted version without a completed artifact record keeps its checkpoint
+root and can recover there. The old source refs remain available to reproduce
+completed versions.
 
 [#11353](https://github.com/marin-community/marin/pull/11353) records the older
 three-rack GPU proof, which used TE 2.19/FA2 and a 1,024-token response cap.
