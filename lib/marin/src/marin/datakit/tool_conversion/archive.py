@@ -75,8 +75,6 @@ def commit_batch(
     data = archive_bytes(files)
     archive_uri = prefix_join(prefix, f"batches/{name}.tar.gz")
     write_immutable(archive_uri, data)
-    # Receipt is the immutable commit point. This independent path has no GLM
-    # claims or uncertain network requests to reconcile or replay.
     cursor = {**cursor, "artifact_bytes": cursor.get("artifact_bytes_before_batch", 0) + len(data)}
     receipt = {
         "batch": name,
