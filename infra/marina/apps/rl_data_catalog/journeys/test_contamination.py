@@ -108,6 +108,23 @@ def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey
     expect(page.locator("#rows tr").first).to_have_attribute("data-source-id", "Marin:clean")
 
 
+def test_table_bounds_rejects_header_words_wrapped_into_vertical_letters(journey: Journey) -> None:
+    page = journey.page
+    page.set_content(
+        """<style>
+        table {table-layout:fixed;width:40px;}
+        th {font:16px/20px sans-serif;overflow-wrap:anywhere;}
+        .header-label {display:block;width:15px;white-space:normal;}
+        </style><table><thead><tr><th><span class="header-label">Examples</span></th></tr></thead>
+        <tbody></tbody></table>"""
+    )
+    failures = page.locator("table").evaluate(TABLE_BOUNDS)
+    assert any(row[:2] == ["header", "Examples"] for row in failures)
+    page.locator("table").evaluate("e=>e.style.width='200px'")
+    page.locator(".header-label").evaluate("e=>{e.style.whiteSpace='nowrap';e.style.width='auto';}")
+    assert not page.locator("table").evaluate(TABLE_BOUNDS)
+
+
 @pytest.mark.parametrize("theme", ["light", "dark"])
 @pytest.mark.parametrize("width", [1440, 390])
 def test_source_cells_are_names_only_and_overlap_evidence_qualifies_colliding_names(
@@ -435,7 +452,7 @@ def test_whole_source_waiver_is_full_final_with_incomplete_evidence(journey: Jou
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])
-@pytest.mark.parametrize("width", [1440, 390])
+@pytest.mark.parametrize("width", [1440, 390, 320])
 def test_wide_enum_columns_scroll_without_overlapping(journey: Journey, theme: str, width: int) -> None:
     page = journey.page
     page.emulate_media(color_scheme=theme)

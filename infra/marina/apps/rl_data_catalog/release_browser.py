@@ -17,6 +17,12 @@ LAYOUTS = tuple((theme, width) for theme in ("light", "dark") for width in (1440
 
 TABLE_BOUNDS = """table => {
  const heads=[...table.tHead.rows[0].cells].map(c=>c.getBoundingClientRect()), failures=[];
+ for(const label of table.querySelectorAll('thead button,thead .header-label')){
+  const range=document.createRange();range.selectNodeContents(label);
+  const tops=[...range.getClientRects()].filter(r=>r.width&&r.height).map(r=>r.top);
+  if(tops.length&&Math.max(...tops)-Math.min(...tops)>parseFloat(getComputedStyle(label).lineHeight)/2)
+   failures.push(['header',label.textContent,'header text wraps']);
+ }
  for(const row of table.tBodies[0].rows)for(const [i,cell] of [...row.cells].entries()){
   const b=cell.getBoundingClientRect(),next=row.cells[i+1]?.getBoundingClientRect();
   if((next&&b.right>next.left+1)||Math.abs(b.left-heads[i].left)>1||Math.abs(b.right-heads[i].right)>1)

@@ -53,6 +53,7 @@ table { border-collapse: separate; border-spacing: 0; width: 100%; text-align: l
 thead th { position: sticky; top: 0; background: var(--soft); border-bottom: 1px solid var(--line); color: var(--muted); z-index: 2; font-weight: 500; }
 thead button { display: flex; gap: 9px; align-items: center; padding: 13px 18px; border: 0; background: none; color: inherit; font-size: max(var(--type-min), 12px); font-weight: 600; width: 100%; text-align: left; white-space: nowrap; }
 thead button:hover { color: var(--green); }
+.source-table .header-label { display: block; padding: 13px 18px; white-space: nowrap; overflow-wrap: normal; }
 .sort-indicator { color: var(--green); }
 td { border-bottom: 1px solid var(--line); padding: 14px 18px; line-height: 1.45; }
 tbody tr:last-child td { border-bottom: 0; }
