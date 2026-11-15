@@ -18,6 +18,7 @@ from finestore.rl.curation import (
     OracleValidation,
     PipelineReference,
     RecipeQAHistoricalNotes,
+    SourceUse,
     WithinSourceDedupEvidence,
 )
 from huggingface_hub import HfApi, hf_hub_download
@@ -30,7 +31,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import OracleExclusionReason, require_oracle_filter
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
-from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.decontamination import require_lexical_qualification
 from experiments.post_training.task_curation.full_content_binding import (
     bind_full_content_result,
     matches_full_content_input,
@@ -56,6 +57,7 @@ class OracleAdmittedReleaseReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_id: str
+    intended_use: SourceUse
     task_format: Literal[TaskFormat.HARBOR, TaskFormat.TASKCOMPENDIUM]
     original_pipeline: PipelineReference
     original_info: SourceInfo
@@ -142,7 +144,7 @@ class OracleAdmittedReleaseReceipt(BaseModel):
             actor.measured_tasks,
         ):
             raise ValueError("Lexical measurement belongs to another filtered population")
-        require_private_release(lexical, release.repo, release.revision)
+        require_lexical_qualification(lexical, release.repo, release.revision, self.intended_use)
         if lexical.receipt is None or lexical.receipt.retained_tasks != evidence.admitted_count:
             raise ValueError("Lexical receipt does not cover the published subset")
         panel, review = self.sample.review.panel, self.sample.review
@@ -184,6 +186,7 @@ def bind_oracle_admitted_release(
     evidence = receipt.filtration
     if (
         source.info.id != receipt.source_id
+        or source.intended_use is not receipt.intended_use
         or source.pipeline_reference != receipt.original_pipeline
         or source.current_release != evidence.original_release
         or source.info.within_source_dedup != receipt.original_info.within_source_dedup
@@ -316,6 +319,7 @@ def main() -> None:
             raise ValueError("Source repair provenance bytes changed")
     receipt = OracleAdmittedReleaseReceipt(
         source_id=item.source_id,
+        intended_use=source.intended_use,
         task_format=item.task_format,
         original_pipeline=source.pipeline_reference,
         original_info=source.info,

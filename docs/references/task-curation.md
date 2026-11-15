@@ -1687,7 +1687,7 @@ integrity-contract census. `TaskFormat.HARBOR` selects
 `import_oracle_harbor_prebuilt`; `TaskFormat.TASKCOMPENDIUM` selects
 `import_taskcompendium_prebuilt`. The selected `PrebuiltCohort.version` must match
 the actor census's recorded `converter_version` so its measurements cover that
-pipeline. Qualification of the original, unfiltered population remains archived.
+pipeline. Qualification of the original, unfiltered population remains archived. After oracle filtering, evaluation sources record lexical overlap measured for the exact filtered dataset revision. These measurements preserve every task and make no lexical decontamination claim. Admission preserves the configured evaluation use. Training sources still require a private dataset release with clean or remediated lexical evidence.
 
 `filtration.original_release` identifies the configured source before repair.
 `filtration.original_cohort` identifies the exact executed cohort, which may be

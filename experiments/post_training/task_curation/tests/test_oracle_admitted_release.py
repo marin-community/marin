@@ -10,14 +10,19 @@ from finestore.rl.curation import (
     ContentEvidenceReference,
     DatasetRelease,
     DaytonaMeasurement,
+    LexicalContaminationEvidence,
+    LexicalUse,
     OracleFiltrationEvidence,
     OracleValidation,
     QualityResultFinalization,
     SourceQualityResult,
+    SourceUse,
 )
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
+from experiments.post_training.task_curation.lexical_policy import measurement_for_use
 from experiments.post_training.task_curation.oracle_admitted_release import (
     OracleAdmittedReleaseReceipt,
     bind_oracle_admitted_release,
@@ -115,6 +120,7 @@ def admitted_release(tmp_path):
     )
     receipt = OracleAdmittedReleaseReceipt(
         source_id=source.info.id,
+        intended_use=source.intended_use,
         task_format=TaskFormat.HARBOR,
         original_pipeline=source.pipeline_reference,
         original_info=source.info,
@@ -260,3 +266,39 @@ def test_fresh_full_result_attaches_after_filtered_sample(admitted_release):
     assert bound.info.full_content_result_binding == full
     assert bound.info.actor_census_input == receipt.actor.input
     assert bound.info.oracle_validation is OracleValidation.EXECUTED
+
+
+def test_filtered_evaluation_retains_measured_overlap_without_training_remediation(admitted_release):
+    source, receipt = admitted_release
+    source = replace(source, config=replace(source.config, intended_use=IntendedUse.EVAL))
+    raw = receipt.lexical.model_dump(mode="json")
+    raw.update(receipt=None, contaminated_tasks=1, contaminated_fraction=1.0, matched_evals={"HumanEval": 1})
+    measured = measurement_for_use(LexicalContaminationEvidence.model_validate(raw), LexicalUse.EVAL)
+    record = receipt.model_dump(mode="json")
+    record.update(intended_use="eval", lexical=measured.model_dump(mode="json"))
+    evaluation = OracleAdmittedReleaseReceipt.model_validate(record)
+    bound = bind_derived_oversight(bind_oracle_admitted_release(source, evaluation), evaluation.sample, None)
+
+    assert not bound.admission_blockers
+    assert bound.declaration.intended_use is SourceUse.EVAL
+    assert bound.declaration.task_count == 1 and bound.declaration.status == "Available"
+    assert bound.info.lexical_contamination.contaminated_tasks == 1
+    assert bound.info.lexical_contamination.receipt.release is None
+    assert bound.info.lexical_contamination.receipt.dropped_tasks == 0
+
+    record["intended_use"] = "train"
+    with pytest.raises(ValueError, match="benchmark measurement does not certify a training release"):
+        OracleAdmittedReleaseReceipt.model_validate(record)
+
+
+def test_evaluation_receipt_cannot_change_a_configured_training_source(admitted_release):
+    source, receipt = admitted_release
+    raw = receipt.lexical.model_dump(mode="json")
+    raw["receipt"] = None
+    measured = measurement_for_use(LexicalContaminationEvidence.model_validate(raw), LexicalUse.EVAL)
+    record = receipt.model_dump(mode="json")
+    record.update(intended_use="eval", lexical=measured.model_dump(mode="json"))
+    evaluation = OracleAdmittedReleaseReceipt.model_validate(record)
+
+    with pytest.raises(ValueError, match="another configured original population"):
+        bind_oracle_admitted_release(source, evaluation)

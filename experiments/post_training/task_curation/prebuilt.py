@@ -59,7 +59,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.decontamination import require_lexical_qualification
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.harbor_inspection import native_task_checksums
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
@@ -386,7 +386,12 @@ def prebuilt_artifact(
 
     def run(invocation: PrebuiltImport) -> CampaignArtifact:
         if not quick:
-            require_private_release(invocation.lexical_contamination, invocation.cohort.repo, invocation.cohort.revision)
+            require_lexical_qualification(
+                invocation.lexical_contamination,
+                invocation.cohort.repo,
+                invocation.cohort.revision,
+                SourceUse(invocation.cohort.intended_use.value),
+            )
         local = Path(load(invocation.cohort))
         if quick:
             return _quick_view(config, local, invocation.output_path)

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.rl.curation import DatasetRelease, LexicalContaminationEvidence, OversightEvidence
+from finestore.rl.curation import DatasetRelease, LexicalContaminationEvidence, OversightEvidence, SourceUse
 from huggingface_hub import hf_hub_download
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.storage_path import StoragePath
@@ -24,7 +24,7 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.decontamination import require_private_release
+from experiments.post_training.task_curation.decontamination import require_lexical_qualification
 from experiments.post_training.task_curation.prebuilt import require_runnable_grader
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
 
@@ -70,7 +70,12 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
     if admitted:
         if cohort.expected_rows <= 0:
             raise ValueError("An admitted source requires a nonempty retained population")
-        require_private_release(invocation.lexical_contamination, cohort.release.repo, cohort.release.revision)
+        require_lexical_qualification(
+            invocation.lexical_contamination,
+            cohort.release.repo,
+            cohort.release.revision,
+            SourceUse(cohort.intended_use.value),
+        )
     local = Path(
         hf_hub_download(cohort.release.repo, "tasks.parquet", repo_type="dataset", revision=cohort.release.revision)
     )
