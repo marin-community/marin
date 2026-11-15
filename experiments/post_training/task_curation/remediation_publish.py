@@ -192,7 +192,8 @@ def publish_plan(plan: ReleasePlan, version: str, evidence_root: str, license_re
             raise ValueError(f"Completed release readback differs: {plan.source_id}")
         if not HfApi().repo_info(result["repo"], repo_type="dataset", revision=result["revision"]).private:
             raise ValueError(f"Completed release is not private: {plan.source_id}")
-        return {**result, "license_check": check_publication(plan.source_id, result["repo"], result["revision"])}
+        check_publication(plan.source_id, result["repo"], result["revision"])
+        return result
     metadata = json.loads((StoragePath(plan.input_artifact) / ".artifact.json").read_text())["result"]
     for name, expected in (
         ("dataset_id", plan.source_dataset_id),
@@ -292,8 +293,8 @@ def publish_plan(plan: ReleasePlan, version: str, evidence_root: str, license_re
             "specs_output_dir": str(output / "specs"),
             "evidence_url": str(result_path),
             "lexical": measurement,
-            "license_check": final_license,
         }
+        (output / "license-check.json").write_text(json.dumps(final_license, indent=2) + "\n", auto_mkdir=True)
         result_path.write_text(json.dumps(result, indent=2) + "\n", auto_mkdir=True)
     LOGGER.info("Verified private release %s@%s: %d retained", repo, revision, plan.retained_count)
     return result

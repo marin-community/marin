@@ -4,6 +4,7 @@
 import hashlib
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,7 +27,12 @@ from taskcompendium.models import EnvironmentRequirements, NoGrader, TaskSpec
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
-from experiments.post_training.task_curation import calibforge_publish, retained_release
+from experiments.post_training.task_curation import (
+    calibforge_publish,
+    license_publication,
+    remediation_publish,
+    retained_release,
+)
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.config import PipelineOptions
@@ -51,7 +57,7 @@ from experiments.post_training.task_curation.retained_release import (
     run_retained_import,
 )
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
-from experiments.post_training.task_curation.tests.license_fixtures import with_license
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source, prebuilt_task
 from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
@@ -295,6 +301,41 @@ def test_binding_selects_private_retained_pin_and_uses_new_population_evidence(r
     changed = replace(source, config=replace(source.config, revision="2" * 40))
     with pytest.raises(ValueError, match="different conversion input"):
         bind_retained_release(changed, receipt)
+
+
+def test_resumed_publication_rechecks_license_and_remains_readable_by_retained_binding(
+    tmp_path, monkeypatch, retained_receipt
+):
+    _, receipt = retained_receipt
+    tasks = tmp_path / "cached-tasks.parquet"
+    tasks.write_bytes(b"frozen publication fixture")
+    publication = receipt.publication.model_copy(update={"tasks_parquet_sha256": file_sha256(StoragePath(str(tasks)))})
+    evidence = tmp_path / "evidence"
+    output = evidence / hashlib.sha256(publication.source_id.encode()).hexdigest()[:20]
+    output.mkdir(parents=True)
+    (output / "result.json").write_text(publication.model_dump_json())
+    monkeypatch.setattr(remediation_publish, "hf_hub_download", lambda *args, **kwargs: str(tasks))
+    monkeypatch.setattr(
+        remediation_publish,
+        "HfApi",
+        lambda: SimpleNamespace(repo_info=lambda *args, **kwargs: SimpleNamespace(private=True)),
+    )
+    checked = []
+
+    def resolve(target):
+        checked.append((target.dataset_id, target.revision))
+        return fixture_license(target.source_id, target.dataset_id, target.revision)
+
+    monkeypatch.setattr(license_publication, "resolve_license", resolve)
+    plan = publication.plan
+    result = remediation_publish.publish_plan(
+        plan,
+        "fixture",
+        str(evidence),
+        fixture_license(plan.source_id, plan.source_dataset_id, plan.source_revision),
+    )
+    assert PublicationReceipt.model_validate(result).release == publication.release
+    assert checked == [(publication.repo, publication.revision)]
 
 
 def test_duplicate_first_receipt_preserves_overlapping_raw_lexical_numerator(retained_receipt):
