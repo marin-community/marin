@@ -31,6 +31,7 @@ from experiments.post_training.task_curation.datasets.evalchemy import reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
 from experiments.post_training.task_curation.datasets.full_content_results import full_content_result_bindings
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
+from experiments.post_training.task_curation.datasets.ifbench import tasks as ifbench
 from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
@@ -123,6 +124,7 @@ def configured_sources() -> list[RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
+        *ifbench.sources(),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
