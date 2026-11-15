@@ -10,17 +10,18 @@ from types import SimpleNamespace
 import pytest
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 from huggingface_hub.hf_api import RepoFile
+from huggingface_hub.utils import validate_repo_id
 
 from experiments.post_training.task_curation import license_publication, raw_source_publish
 from experiments.post_training.task_curation.license_resolution import license_evidence
 
 
 @pytest.mark.parametrize("mutation", [None, "incomplete_inventory", "changed_source_bytes"])
+@pytest.mark.parametrize("source_id", ["fixture:raw-source", "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified"])
 def test_raw_archive_preserves_complete_source_and_rejects_mutated_staging_before_upload(
-    tmp_path, monkeypatch, mutation
+    tmp_path, monkeypatch, mutation, source_id
 ):
     dataset, revision = "fixture/raw-source", "a" * 40
-    source_id = "fixture:raw-source"
     upstream = tmp_path / "upstream"
     staged = tmp_path / "staged"
     published = tmp_path / "published"
@@ -73,6 +74,7 @@ def test_raw_archive_preserves_complete_source_and_rejects_mutated_staging_befor
             return [RepoFile(path=name, size=len(content), oid="c" * 40) for name, content in original.items()]
 
         def create_repo(self, repo, *, repo_type, private, exist_ok):
+            validate_repo_id(repo)
             assert (repo_type, private, exist_ok) == ("dataset", True, False)
             created.append(repo)
 

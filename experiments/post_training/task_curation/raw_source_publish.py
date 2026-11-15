@@ -46,7 +46,8 @@ def publish_raw_source(
     names = [file["path"] for file in stage["files"]]
     if len(names) != len(set(names)) or sorted(names) != expected:
         raise ValueError("Staged raw files do not cover the complete pinned snapshot exactly once")
-    repo = f"open-athena/atlas-raw-{source_slug(stage['source_id'])[:40]}-{identity}-{version}"
+    slug = source_slug(stage["source_id"])[:40].rstrip("-")
+    repo = f"open-athena/atlas-raw-{slug}-{identity}-{version}"
     with TemporaryDirectory(prefix="atlas-raw-source-") as scratch:
         root = Path(scratch)
         publication = prepare_license_publication(receipt, root, use=use)
