@@ -27,7 +27,7 @@ expression and may select live-cluster tests. Run excluded markers only when
 requested or directed by the relevant module guide.
 
 Tests that execute Linux guest behavior directly on the host can declare a
-requirement marker from the root `conftest.py`: `requires_host_setsid` for the
+requirement marker from their package's `conftest.py`: `requires_host_setsid` for the
 host executable, `requires_linux_procfs` for Linux CPU sampling,
 `requires_linux_loopback` for arbitrary loopback-address binding, or
 `requires_linux_process_api` for `/proc` process ownership and `waitid` with
