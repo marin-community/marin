@@ -173,6 +173,11 @@ def prepare_initializer_smoke(
     if c4_input_audit(data) != reference["input_audit"]:
         raise ValueError("Regional C4 token stream differs from the frozen reference")
     reference["regional_bundle"] = {"uri": reference_bundle, "sha256": reference_bundle_sha256, "manifest": manifest}
+    reference["initializer_stage"] = {
+        "receipt_uri": initializer_receipt,
+        "receipt_sha256": initializer_receipt_sha256,
+        "receipt": json.loads(StoragePath(initializer_receipt).read_text()),
+    }
     (StoragePath(output) / "c4-reference.json").write_text(json.dumps(reference, indent=2))
     (StoragePath(output) / "c4-data.json").write_text(json.dumps(draccus.encode(data), indent=2))
 
