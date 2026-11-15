@@ -24,6 +24,8 @@ from collections import Counter
 from pathlib import Path
 
 import fsspec
+from iris.client.client import iris_ctx
+from iris.cluster.types import JobName
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
@@ -31,6 +33,7 @@ from tokenizers import Tokenizer
 
 from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
+from experiments.glm_tool_serving.provenance import emit_receipt, write_provenance
 from experiments.tool_normalization.preflight import classify
 
 DESTINATION = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization/ortet-24-20261112"
@@ -41,9 +44,6 @@ SECRET_FILE = Path(os.environ.get("RIGGING_SECRETS_DIR", "/run/rigging/secrets")
 
 def resolve_relay_base_url(token: str) -> str:
     """Resolve the relay's registered glm-5.3 endpoint and confirm it serves the model."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import JobName
-
     client = iris_ctx().client
     if client is None:
         raise RuntimeError("Iris client is unavailable inside the task")
@@ -52,9 +52,7 @@ def resolve_relay_base_url(token: str) -> str:
         raise RuntimeError("The GLM relay has no registered endpoint")
     base_url = endpoints[0].url.rstrip("/")
     base_url = base_url if base_url.endswith("/v1") else f"{base_url}/v1"
-    request = urllib.request.Request(
-        base_url + "/models", headers={"Authorization": "Bearer " + token}
-    )
+    request = urllib.request.Request(base_url + "/models", headers={"Authorization": "Bearer " + token})
     with urllib.request.urlopen(request, timeout=30) as response:
         models = {entry["id"] for entry in json.load(response)["data"]}
     if "glm-5.3" not in models:
@@ -157,6 +155,7 @@ def main() -> None:
     )
     config_path = root / "config.json"
     config_path.write_text(json.dumps(cfg, indent=2))
+    provenance = write_provenance(Path(__file__).resolve().parents[2], root, catalog_hash)
     environment_path = Path(__file__).resolve().parents[1] / "tool_normalization/environments.json"
     packages = json.loads(environment_path.read_text())[cfg["execution"]["image"]]["packages"]
     tokenizer = Tokenizer.from_file(cfg["sft_tokenizer"])
@@ -269,6 +268,7 @@ def main() -> None:
                 tar.add(batch, arcname=name)
                 tar.add(config_path, arcname="config.json")
                 tar.add(root / "lineage.json", arcname="lineage.json")
+                tar.add(root / "provenance.json", arcname="provenance.json")
             with archive.open("rb") as source, fsspec.open(prefix + "/batches/" + archive.name, "wb") as target:
                 shutil.copyfileobj(source, target)
             if occupied or (selected and (summary.get("pending", 0) or summary.get("capacity_deferred", 0))):
@@ -284,6 +284,7 @@ def main() -> None:
             with fsspec.open(cursor_url, "w") as stream:
                 json.dump(cursor, stream)
             print(json.dumps({"phase": "batch_committed", "name": name, "cursor": cursor}), flush=True)
+            emit_receipt(prefix, name, archive, catalog_hash, cursor, provenance)
             shutil.rmtree(batch)
             archive.unlink()
     print(json.dumps({"phase": "catalog_complete", "cursor": cursor}), flush=True)
