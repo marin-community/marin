@@ -123,6 +123,7 @@ class SourceOrigin(StrEnum):
     OPEN_R1 = "Open-R1"
     OPENAI = "OpenAI"
     OPENATHENA = "OpenAthena"
+    OPENRESEARCHER = "OpenResearcher"
     PRIME_RL = "PRIME-RL"
     PRIME_INTELLECT = "PrimeIntellect"
     PROJECT_NUMINA = "project-numina"

@@ -39,8 +39,8 @@ searches the approved index, and checks literal document quotations for every
 hop. A separate request to the same pinned judge receives the question and
 evidence quotations, excluding the gold answer and the gold-derived requirement
 claims. Its
-answer must match the gold answer under the source's answer-equivalence
-prompt and parser. A separate audit checks all original clues, evidence links,
+answer must match the gold answer under the MIT BrowseComp answer-equivalence
+prompt and parser reused by the task grader. A separate audit checks all original clues, evidence links,
 answer support and ambiguity. The private receipt retains retrieval results,
 judge requests/responses and every keep/drop decision.
 
@@ -57,7 +57,39 @@ The versioned `openresearcher-bm25:v1` provider exposes `search` and
 pins the implementation, corpus, tokenizer and index manifest. The gold
 answer belongs only in private verifier resources.
 
-After grounding, follow the [source procedure](../../../../../docs/references/task-curation.md#source-procedure)
+`prepare` creates the source's QUICK artifact after grounding and physical image
+QA. Its [`PreparationConfig`](prepare.py) binds the stage, question, grounding and benchmark
+hash receipts by SHA, the retrieval state, two immutable image digests and a
+fresh local work directory. It rechecks both dataset licenses before reading
+questions. Every original question must have exactly one completed grounding
+decision; retained question and answer bytes must match their original rows.
+Exact BrowseComp and BrowseComp-Plus question matches are excluded again and
+recorded in `heldout-drops.json`. The benchmark hash manifest uses whitespace
+collapse followed by Unicode case folding; it supplements Atlas decontamination.
+The benchmark JSON has `normalizer` set to
+`whitespace-collapse-then-unicode-casefold-v1` and a `questions` object mapping
+SHA256 hashes of normalized questions to their benchmark source references.
+Construct `state` with [`OpenResearcherState`](../../../../../lib/taskcompendium/src/taskcompendium/openresearcher.py),
+using the verified index manifest SHA and the implementation/tokenizer revisions
+in [`runtime.py`](runtime.py). The fixed corpus revision, top-five search,
+512-token snippets and `get_document` setting must match the physically tested
+image's `/opt/openresearcher/state.json`.
+
+```bash
+uv run python -m experiments.post_training.task_curation.datasets.openresearcher.prepare \
+  --config pinned-preparation.json \
+  --artifact-root s3://marin-us-east-02a/marin \
+  --output s3://marin-us-east-02a/marin/rl-data/openresearcher/conversion/NEW_VERSION/receipt.json \
+  --run
+```
+
+The artifact contains native TaskCompendium task directories, `tasks.parquet`
+and standard `normalize/*.parquet` rows. Actor prompts contain the question;
+private verifier resources retain the gold answer, original source-row references
+and the MIT answer-equivalence grader. Task IDs depend only on the public
+question. QUICK marks the population unreviewed and unadmitted.
+
+Follow the [source procedure](../../../../../docs/references/task-curation.md#source-procedure)
 for census, exact deduplication, the full shared lexical scan and evaluation
 heldout checks, private publication/readback, final-pin qualification, SAMPLE,
 retention and admission. BrowseComp and BrowseComp-Plus questions must remain
