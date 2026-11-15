@@ -91,6 +91,12 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         packing_cap=recipe["packing_cap"],
         lookahead=recipe["packing_lookahead"],
     )
+    evaluation_data = prepared_supervision_data(
+        draccus.decode(LmDataConfig, recipe["evaluation_data"]),
+        metadata,
+        packing_cap=recipe["packing_cap"],
+        lookahead=recipe["packing_lookahead"],
+    )
     trainer = draccus.decode(TrainerConfig, recipe["trainer"])
     if trainer.mp.param_dtype != jnp.float32 or trainer.mp.compute_dtype != jnp.bfloat16:
         raise ValueError("Exp3 requires retained FP32 parameters and BF16 computation")
@@ -130,7 +136,7 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         snowball_sft=exp3_controls(),
         token_weighted_accumulation=True,
         initial_eval_match=gate,
-        evaluation_data=draccus.decode(LmDataConfig, recipe["evaluation_data"]),
+        evaluation_data=evaluation_data,
         data_seed=recipe["data_seed"],
         tensorstore_cache_bytes=recipe["tensorstore_cache_bytes"],
         mesh=mesh,
