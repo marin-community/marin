@@ -30,9 +30,11 @@ prompt: |-
   - **Is tautological / mirrors the implementation** — re-asserts a literal or
     constant, or recomputes the same expression the code does so it passes by
     construction.
-  - **Projects static configuration back onto itself** — loads checked-in YAML
-    or TOML and asserts the same selected values or membership written there,
-    without exercising the configured behavior or a cross-field invariant.
+  - **Projects configuration back onto itself** — loads checked-in YAML or TOML,
+    or builds a manifest from test-supplied settings, then asserts copied values
+    or membership without exercising behavior, validation, or a meaningful
+    translation. Judge the specific assertion: a useful test elsewhere in the
+    file does not make a pass-through configuration assertion useful.
   - **Tests an obvious validation guard in isolation** — checks that a
     constructor rejects one missing or invalid scalar solely because a matching
     `if` / `raise` branch exists, with no reported regression or public contract
@@ -51,7 +53,7 @@ prompt: |-
   end-to-end may be asserted on the parsed argument, with a comment saying why.
   A test of configuration or validation is also useful when it exercises a
   real integration boundary, a reported regression, or a compatibility-critical
-  public contract instead of repeating a checked-in value or the guard itself.
+  public contract instead of repeating an input value or the guard itself.
 
   **Bad example:**
   ```python
@@ -74,4 +76,10 @@ prompt: |-
       profiles = yaml.safe_load(PROFILE_PATH.read_text())["profiles"]
       assert {name for name, profile in profiles.items() if "remote" in profile["groups"]} == {"marina"}
       # Restates the checked-in groups; no configured behavior is exercised.
+
+  def test_task_manifest_copies_input():
+      config = TaskConfig(working_dir="/agent")
+      pod = build_pod(config)
+      assert pod["spec"]["containers"][0]["workingDir"] == "/agent"
+      # Repeats the fixture value; no validation or consequential translation is checked.
   ```
