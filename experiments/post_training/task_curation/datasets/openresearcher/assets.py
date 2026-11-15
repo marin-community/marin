@@ -183,7 +183,10 @@ def main() -> None:
             return
         with local_client() as client:
             with ZephyrContext(
-                client=client, max_workers=args.max_workers, resources=ResourceConfig(cpu=1, ram="2g")
+                client=client,
+                max_workers=args.max_workers,
+                resources=ResourceConfig(cpu=1, ram="2g"),
+                chunk_storage_prefix=args.artifact_root.rstrip("/") + "/.zephyr/openresearcher-assets",
             ) as context:
                 with runtime.activate(context):
                     result = run(step)[0]
