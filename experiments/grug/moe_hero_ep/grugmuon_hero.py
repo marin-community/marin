@@ -44,9 +44,10 @@ def _intra_rack_axes(mesh) -> list[tuple[str, int]]:
 def _target_named_sharding(array) -> NamedSharding | None:
     if array is None or not hasattr(array, "shape"):
         return None
+    # Tracer.sharding builds the graph's origin message before raising AttributeError.
+    if isinstance(array, jax.core.Tracer):
+        array = jax.typeof(array)
     sharding = getattr(array, "sharding", None)
-    if sharding is None:
-        sharding = getattr(jax.typeof(array), "sharding", None)
     return sharding if isinstance(sharding, NamedSharding) else None
 
 
