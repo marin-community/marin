@@ -11,14 +11,17 @@ import pytest
 from haliax import Axis
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, NamedLmDataset
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
+from levanter.main.train_lm import TrainLmConfig
 from levanter.store.cache import SerialCacheWriter
 from levanter.utils.thread_utils import blocking_wait
+from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.verified_copy import verified_copy_prefix
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
 
-from experiments.post_training.long_loop.exp3_initializer_smoke import initializer_recipe
+from experiments.post_training.long_loop import exp3_initializer_smoke
+from experiments.post_training.long_loop.exp3_initializer_smoke import initializer_recipe, run_initializer_smoke
 from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec, verified_initializer_model
 from experiments.post_training.long_loop.sft import BASE_MODEL, BASE_REVISION
 from experiments.post_training.long_loop.stage_guard import StageGuard
@@ -67,7 +70,8 @@ def test_verified_hub_snapshot_resolves_regional_model_and_rejects_changed_copy(
         verified_initializer_model(str(receipt_path), receipt_sha256)
 
 
-def test_exp3_reserved_validation_remains_disjoint_under_native_lookahead(tmp_path, staged_initializer):
+@pytest.fixture
+def prepared_sources(tmp_path, staged_initializer):
     receipt_path, receipt_sha256, _, _ = staged_initializer
     tokens = {"<pad>": 0, **{f"doc{i}": i for i in range(1, 65)}, "<eos>": 65}
     tokenizer = PreTrainedTokenizerFast(
@@ -126,6 +130,11 @@ def test_exp3_reserved_validation_remains_disjoint_under_native_lookahead(tmp_pa
             }
         )
     )
+    return tmp_path
+
+
+def test_exp3_reserved_validation_remains_disjoint_under_native_lookahead(prepared_sources):
+    tmp_path = prepared_sources
     recipe = initializer_recipe(
         prepared=str(tmp_path), output=str(tmp_path / "output"), artifact_version="fixture", policy=StageGuard(1, 30, 2)
     )
@@ -144,3 +153,30 @@ def test_exp3_reserved_validation_remains_disjoint_under_native_lookahead(tmp_pa
     assert blocking_wait(validation.async_len()) == 8
     assert training_ids.isdisjoint(validation_ids)
     assert training_ids | validation_ids == set(range(1, 65))
+
+
+def test_initializer_coordinator_validates_concrete_worker_config_before_dispatch(prepared_sources, monkeypatch):
+    output = prepared_sources / "run"
+    output.mkdir()
+    submitted = []
+
+    def complete_at_scheduler_boundary(request, policy, guard_output):
+        submitted.append(request)
+        return {"attempts": [], "h100_hours": 0}
+
+    monkeypatch.setattr(exp3_initializer_smoke, "run_guarded_stage", complete_at_scheduler_boundary)
+    run_initializer_smoke(
+        output=str(output), prepared=str(prepared_sources), artifact_version="fixture", policy=StageGuard(1, 30, 2)
+    )
+    [request] = submitted
+    assert request.entrypoint.callable_entrypoint is not None
+    [pod] = request.entrypoint.callable_entrypoint.args
+    config = pod.train_config
+    assert isinstance(config, TrainLmConfig)
+    assert config.hf_save_steps is None
+    assert config.initialize_from_hf == str(prepared_sources / "regional")
+    assert config.trainer.num_train_steps == 2
+    assert isinstance(config.trainer.load_checkpoint_path, list)
+    consumed = json.loads((output / "consumed-config.json").read_text())
+    assert draccus.decode(TrainLmConfig, consumed["train_config"]) == config
+    assert json.loads((StoragePath(str(output)) / "guard-result.json").read_text())["h100_hours"] == 0
