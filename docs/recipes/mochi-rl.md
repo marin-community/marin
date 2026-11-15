@@ -127,17 +127,20 @@ and two 64-GPU inference replicas at TP1/PP1/DP64/EP64. Mandatory NVLink placeme
 keeps these three roles in separate domains. The trainer retains activation
 fusion, 256 KiB NCCL buffers and pinned CPU storage for checkpointed activation
 inputs. Compilation mode 3 remains enabled with CUDA graphs `NONE`.
+Check out the head of #11353 for this profile; it includes the one-rack launcher
+and the same pinned prerequisites.
 
 The input is a completed BF16 SFT export; no SFT job is built. Select retained
-model, tokenizer and mixed-task inputs as above. Supply the published SHA-256
-of `train.parquet`; the launcher checks it before submitting training. These
+model, tokenizer and mixed-task inputs as above. Supply the SHA-256 of `train.parquet` from its artifact manifest, or compute
+it from that exact immutable file before running the command. The launcher checks
+it before submitting training. These
 commands only render configurations:
 
 ```bash
 DATA_SHA256='<train.parquet-sha256>'
 THREE_RACK_VERSION='<new-three-rack-version>'
 THREE_RACK_RESUME_VERSION='<new-three-rack-continuation-version>'
-NATIVE_262K='<completed-TP1-PP16-CP4-EP4-checkpoint-directory>'
+NATIVE_262K='<completed-TP1-PP16-CP4-EP4-checkpoints>/global_step_5'
 THREE_RACK=(--profile three-rack --model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
             --input-version "$INPUT_VERSION" --data-uri "$TASKS" --data-sha256 "$DATA_SHA256")
 uv run python -m experiments.post_training.mochi_rl.launch "${THREE_RACK[@]}" \
@@ -148,17 +151,18 @@ uv run python -m experiments.post_training.mochi_rl.launch "${THREE_RACK[@]}" \
 ```
 
 Use a completed native checkpoint with matching TP1/PP16/CP4/EP4 geometry for
-`NATIVE_262K`. Both profiles use absolute `--max-steps`: checkpoint 5 with
-`--max-steps 7` requests two further updates. This replaces the former three-rack
-`--updates 2` command without changing its target. Repeat the same version and command after
+`NATIVE_262K`. The continuation example starts from an existing completed step-5
+checkpoint. Both profiles use absolute `--max-steps`: `--max-steps 7` requests
+two further updates from step 5. Repeat the same version and command after
 interruption to recover this continuation's progress. Add `--run` only after
 checking the configurations and retained inputs. Responses default to 8,192
 tokens; `--max-new-tokens 1024` retains the short-smoke option.
 The GPU job limit is six hours, with a 72-hour coordinator limit for queueing and setup.
 
-The older three-rack GPU proof used TE 2.19/FA2 and a 1,024-token response cap.
+[#11353](https://github.com/marin-community/marin/pull/11353) records the older
+three-rack GPU proof, which used TE 2.19/FA2 and a 1,024-token response cap.
 It established near-262K backward and native continuation. Its later nonzero
 gradient proof was an offline replay. The aligned FA4/TE 2.21 example and its
 8,192-token response default have CPU validation only. Fresh on-policy learning
-at these settings remains unverified. Endurance, task/batch tuning and
-performance work belong to the separate Mochi follow-up.
+at these settings remains unverified. Endurance, task/batch tuning and performance experiments remain outside this
+launcher refactor.

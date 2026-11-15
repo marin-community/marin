@@ -111,7 +111,9 @@ PROFILES = MappingProxyType(
             data_namespace="documents/mochi-three-rack",
             checkpoint_at_target=True,
             patch=RecipePatch(
-                context_budget=ContextBudget(request_window_tokens=262144, max_new_tokens_per_turn=8192, max_turns=4),
+                context_budget=ContextBudget(
+                    request_window_tokens=262144, max_new_tokens_per_turn=DEFAULT_MAX_NEW_TOKENS, max_turns=4
+                ),
                 trainer=sections.Trainer(
                     project_name="mochi-three-rack",
                     policy=sections.Policy(
