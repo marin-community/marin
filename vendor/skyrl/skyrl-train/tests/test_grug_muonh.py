@@ -1,5 +1,6 @@
 """Hero EP numerical and expert-parallel regressions, using CPU tensors."""
 
+import copy
 import io
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import torch.multiprocessing as mp
 from skyrl_train.distributed.megatron.grug_muonh import (
     MegatronGrugMuonH,
     megatron_grug_expert_bank,
+    megatron_grug_parameter_banks,
     megatron_grug_route,
 )
 
@@ -175,3 +177,50 @@ def test_hero_expert_parallel_bank_matches_jax_with_unequal_local_banks(tmp_path
 def test_whole_bank_rejects_unrecognized_routed_expert_names():
     with pytest.raises(ValueError):
         megatron_grug_expert_bank("decoder.layers.0.mlp.experts.local_experts.0.linear_fc2.weight")
+
+
+def expert_chunk(scale, generator):
+    chunk = torch.nn.Module()
+    chunk.decoder = torch.nn.Module()
+    chunk.decoder.layers = torch.nn.ModuleList([torch.nn.Module()])
+    chunk.decoder.layers[0].mlp = torch.nn.Module()
+    chunk.decoder.layers[0].mlp.experts = torch.nn.Module()
+    projection = chunk.decoder.layers[0].mlp.experts.linear_fc2 = torch.nn.Module()
+    for expert in range(2):
+        weight = torch.nn.Parameter(scale * torch.randn(4, 3, generator=generator))
+        projection.register_parameter(f"weight{expert}", weight)
+    return chunk
+
+
+def chunk_optimizer(chunks):
+    return MegatronGrugMuonH(
+        [{"params": [parameter for chunk in chunks for parameter in chunk.parameters()], "optimizer": "grug_muonh"}],
+        lr=0.03,
+        betas=(0.9, 0.95),
+        momentum=0.95,
+        nesterov=True,
+        ns_steps=5,
+        eps=1e-8,
+        muon_eps=1e-8,
+        qkv_split_shapes=(4, 2, 2),
+        parameter_banks=megatron_grug_parameter_banks(chunks),
+    )
+
+
+def test_virtual_chunks_with_repeated_local_names_keep_separate_expert_banks():
+    generator = torch.Generator().manual_seed(19)
+    # Different scales put the two chunks' banks on different spheres; a merged bank would mix their norms.
+    chunks = [expert_chunk(scale, generator) for scale in (1.0, 7.0)]
+    independent = copy.deepcopy(chunks)
+    for chunk, copied in zip(chunks, independent, strict=True):
+        for parameter, copied_parameter in zip(chunk.parameters(), copied.parameters(), strict=True):
+            parameter.grad = torch.randn(parameter.shape, generator=generator)
+            copied_parameter.grad = parameter.grad.clone()
+
+    chunk_optimizer(chunks).step()
+    for chunk in independent:
+        chunk_optimizer([chunk]).step()
+
+    for chunk, copied in zip(chunks, independent, strict=True):
+        for parameter, copied_parameter in zip(chunk.parameters(), copied.parameters(), strict=True):
+            torch.testing.assert_close(parameter, copied_parameter, atol=0, rtol=0)

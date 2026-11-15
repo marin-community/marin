@@ -117,6 +117,16 @@ def megatron_grug_expert_bank(name: str) -> str | None:
     return match[1] if match is not None else None
 
 
+def megatron_grug_parameter_banks(model_chunks: Iterable[torch.nn.Module]) -> dict[Tensor, str]:
+    """Map trainable routed projections to banks, qualified by chunk because virtual stages repeat local names."""
+    return {
+        parameter: f"{chunk_index}.{bank}"
+        for chunk_index, chunk in enumerate(model_chunks)
+        for name, parameter in chunk.named_parameters()
+        if parameter.requires_grad and (bank := megatron_grug_expert_bank(name)) is not None
+    }
+
+
 def _expert_bank_step_(
     matrices: list[tuple[Tensor, Tensor]], *, lr: float, expert_parallel_group: dist.ProcessGroup | None
 ) -> None:
