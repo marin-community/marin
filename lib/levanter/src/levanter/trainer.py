@@ -1034,7 +1034,8 @@ class TrainerConfig:
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
     load_checkpoint: Optional[bool] = None
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
-    load_checkpoint_path: Optional[str | list[str]] = None
+    # Draccus tries union members in order; its str decoder stringifies lists.
+    load_checkpoint_path: list[str] | str | None = None
     """One checkpoint root/path, or ordered roots searched for the newest checkpoint.
 
     If None, search the checkpointer's permanent and temporary roots.

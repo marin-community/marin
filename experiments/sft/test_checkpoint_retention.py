@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import draccus
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -130,6 +131,8 @@ def test_sft_default_rolls_temporary_checkpoints_resumes_and_keeps_final(sft_tra
 
     # A fresh launch must restore the complete payload from scratch when no permanent save exists.
     restarted_trainer = sft_trainer()
+    # Production recipes cross a JSON boundary before the launcher resolves resume roots.
+    restarted_trainer = draccus.decode(TrainerConfig, json.loads(json.dumps(draccus.encode(restarted_trainer))))
     paths = restarted_trainer.checkpoint_search_paths("test-run")
     with use_test_mesh():
         restored = load_checkpoint_or_initialize(lambda: _state(0), paths)()
