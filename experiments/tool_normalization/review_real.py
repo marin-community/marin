@@ -150,7 +150,7 @@ def digest(path: Path) -> str:
 def process(
     source_path: Path, directory: Path, model: ModelConfig, tokenizer: PreTrainedTokenizerBase, cfg: dict
 ) -> dict:
-    """Review one trace without replaying its original task or retrying requests."""
+    """Review one trace without replaying its original task."""
     schemas = json.loads(Path(__file__).with_name("opencode-tools.json").read_text())
     environment = json.loads(Path(__file__).with_name("environments.json").read_text())[cfg["execution"]["image"]]
     source = json.loads(source_path.read_text())

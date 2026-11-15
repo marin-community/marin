@@ -40,8 +40,7 @@ def family(kind: str, tool: str) -> str:
 
 
 def terminus_source(source: str) -> bool:
-    """terminus-2-class terminal-JSON traces (agenttrove @terminal_keystrokes) are out
-    of scope per the 2026-11-15 campaign refocus: never converted, never held."""
+    """Identify agenttrove and terminus sources excluded from conversion."""
     return "agenttrove" in source or "terminus" in source
 
 

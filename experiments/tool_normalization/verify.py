@@ -19,7 +19,6 @@ from experiments.tool_normalization.candidate import (
 from experiments.tool_normalization.eligibility_check import eligibility
 from experiments.tool_normalization.historical_projection import historical_projection
 from experiments.tool_normalization.native_seed import native_seed
-from experiments.tool_normalization.native_tools import observations
 from experiments.tool_normalization.review_encoding import ENCODING_INSTRUCTIONS, FORMAT, decode_payload
 from experiments.tool_normalization.review_real import (
     AUDIT,
@@ -58,21 +57,6 @@ def model_value(directory: Path, schema: dict) -> dict:
         raise ValueError("Stored model value differs from receipt")
     jsonschema.validate(value, schema)
     return value
-
-
-def execution_messages(directory: Path, calls: list[dict]) -> list[dict]:
-    receipt = read(directory / "receipt.json")
-    if receipt["exit_code"] != 0 or receipt["stdout_truncated"] or receipt["stderr_truncated"]:
-        raise ValueError("Incomplete execution receipt")
-    for name, key in (("stdout.json", "stdout_sha256"), ("stderr.txt", "stderr_sha256")):
-        if hashlib.sha256((directory / name).read_bytes()).hexdigest() != receipt[key]:
-            raise ValueError("Execution receipt hash mismatch")
-    if read(directory / "calls.json") != calls:
-        raise ValueError("Executed calls differ from candidate")
-    report = read(directory / "stdout.json")
-    if report["exit_code"] != 0 or report["dispatch_errors"]:
-        raise ValueError("Native dispatch failed")
-    return observations(calls, report["tool_events"])
 
 
 def verify_adapter(directory: Path, cfg: dict) -> dict:

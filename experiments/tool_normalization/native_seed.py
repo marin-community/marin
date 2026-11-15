@@ -3,7 +3,6 @@
 
 """Map known source tools to the tested OpenCode interfaces before GLM review."""
 
-import copy
 import hashlib
 import json
 import re
@@ -27,30 +26,6 @@ KERNEL_CODE_ARGUMENTS = {
 BINARY_EDITOR_SUFFIXES = {".xlsx", ".pptx", ".wav", ".mp3", ".m4a", ".flac", ".pdf", ".docx"}
 NATIVE_READ_MAX_LINES = 2000
 FINISH_DESCRIPTION = "Signals the completion of the current task or conversation."
-
-EDIT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "decision": {"enum": ["convert", "hold", "environment_required"]},
-        "rationale": {"type": "string"},
-        "edits": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "source_message_index": {"type": "integer"},
-                    "content": {"type": ["string", "null"]},
-                    "reasoning_content": {"type": ["string", "null"]},
-                    "calls": {"anyOf": [{"type": "null"}, {"type": "array", "items": CALL_SCHEMA}]},
-                },
-                "required": ["source_message_index", "content", "reasoning_content", "calls"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    "required": ["decision", "rationale", "edits"],
-    "additionalProperties": False,
-}
 
 
 def zero_based_read_offsets(original: list[dict]) -> bool:
@@ -234,19 +209,3 @@ def native_seed(original: list[dict], available_packages: Collection[str]) -> di
         "rationale": "Exact known-tool mapping; pending GLM review" if started else "Unused tool-header normalization",
         "turns": turns,
     }
-
-
-def apply_edits(seed: dict, proposal: dict) -> dict:
-    candidate = copy.deepcopy(seed)
-    candidate.update(decision=proposal["decision"], rationale=proposal["rationale"])
-    turns = {turn["source_message_index"]: turn for turn in candidate["turns"]}
-    seen = set()
-    for edit in proposal["edits"]:
-        index = edit["source_message_index"]
-        if index not in turns or index in seen:
-            raise ValueError("Edit targets an absent or repeated source turn")
-        seen.add(index)
-        for field in ("content", "reasoning_content", "calls"):
-            if edit[field] is not None:
-                turns[index][field] = edit[field]
-    return candidate

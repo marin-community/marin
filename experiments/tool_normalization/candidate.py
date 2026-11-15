@@ -31,27 +31,6 @@ CALL_SCHEMA = {
         for tool in NATIVE_SCHEMAS
     ]
 }
-TURN_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "source_message_index": {"type": "integer"},
-        "content": {"type": ["string", "null"], "description": "Null preserves the original visible content exactly."},
-        "reasoning_content": {"type": ["string", "null"], "description": "Null preserves original reasoning exactly."},
-        "calls": {"type": "array", "items": CALL_SCHEMA},
-    },
-    "required": ["source_message_index", "content", "reasoning_content", "calls"],
-    "additionalProperties": False,
-}
-CANDIDATE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "decision": {"enum": ["convert", "hold", "environment_required"]},
-        "rationale": {"type": "string"},
-        "turns": {"type": "array", "items": TURN_SCHEMA},
-    },
-    "required": ["decision", "rationale", "turns"],
-    "additionalProperties": False,
-}
 
 
 def source_messages(text: str) -> list[dict]:

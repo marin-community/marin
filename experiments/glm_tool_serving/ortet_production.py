@@ -1,15 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Feed Ortet-assigned tail shards through conversion against the shared GLM relay.
-
-Mirrors ``scale_production.py`` (same claim, batch, and cursor mechanics, identical
-model, prompt, and verification settings) with three differences: replica ownership
-runs 1..24 over the descending tail catalog, the model endpoint is the shared
-``/muchanem`` glm-5.3 relay resolved in-cluster with ``GLM_BULK_TOKEN`` auth, and
-shards are ordered descending so the run marches away from the existing 8-replica
-frontier.
-"""
+"""Feed Ortet-assigned tail shards through the shared GLM relay."""
 
 import argparse
 import hashlib

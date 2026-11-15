@@ -20,7 +20,7 @@ from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from tokenizers import Tokenizer
 
-from experiments.glm_tool_serving.ortet_production import read_bulk_token, resolve_relay_base_url
+from experiments.glm_tool_serving.ortet_production import read_bulk_token, resolve_relay_base_url, resume_cursor
 from experiments.glm_tool_serving.provenance import emit_receipt, write_provenance
 from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
@@ -28,27 +28,6 @@ from experiments.tool_normalization.preflight import classify
 from experiments.tool_normalization.scope import terminus_source
 
 DESTINATION = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization/h100-scale-20261103"
-
-
-def resume_cursor(prefix: str, predecessor: str | None, catalog_hash: str) -> tuple[dict, str, str]:
-    """Continue from durable progress without moving or rewriting the previous run."""
-    cursor_url = prefix + "/cursor.json"
-    fs, _ = filesystem_for(cursor_url)
-    cursor_source = cursor_url
-    read_prefix = prefix
-    if not fs.exists(cursor_url) and predecessor:
-        cursor_source = predecessor + "/cursor.json"
-        read_prefix = predecessor
-        fs, _ = filesystem_for(cursor_source)
-        if not fs.exists(cursor_source):
-            raise ValueError("Predecessor cursor missing; refusing to restart at row zero")
-    cursor = {"shard": 0, "row": 0, "batches": 0, "artifact_bytes": 0, "counts": {}, "catalog_sha256": catalog_hash}
-    if fs.exists(cursor_source):
-        with fsspec.open(cursor_source) as stream:
-            cursor = json.load(stream)
-        if cursor["catalog_sha256"] != catalog_hash:
-            raise ValueError("Resume catalog differs from the saved cursor")
-    return cursor, read_prefix, cursor_source
 
 
 def main() -> None:

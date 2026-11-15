@@ -1,15 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-run provenance and per-batch commit receipts.
-
-Added 2026-11-15 at the independent indexer's proposal (fleet-owner reviewed):
-each run writes provenance.json (code + data hashes) into its workspace before the
-batch loop, archives include it, and every committed batch emits
-receipts/<batch>.json with the archive URI, SHA-256, and post-commit cursor.
-Purely additive: historical archives predate receipts, and the indexer falls back
-to scanning when a receipt is absent (including crashes after the cursor commit).
-"""
+"""Per-run code and data hashes with per-batch commit receipts."""
 
 import hashlib
 import json
