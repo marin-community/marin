@@ -93,6 +93,7 @@ def convert_record(
             exported = export_conversion(converted, tokenizer, tokenizer_sha)
         except ValueError as error:
             converted = Conversion(Disposition.RESIDUAL, str(error), text)
+            item["disposition"] = converted.disposition
         else:
             source_name = f"{name}/sources/{identity}/source.json"
             source = {**item, "text": text}

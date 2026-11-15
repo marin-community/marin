@@ -10,11 +10,10 @@ import tarfile
 
 import numpy as np
 import pytest
-from tokenizers import Tokenizer, decoders, models, pre_tokenizers
-
 from marin.datakit.tool_conversion.archive import archive_bytes, commit_batch, read_json, write_immutable
 from marin.datakit.tool_conversion.convert import Disposition, convert_trace
 from marin.datakit.tool_conversion.export import digest, export_conversion
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
 
 def trace(
@@ -149,6 +148,20 @@ def test_shell_rename_preserves_command_but_holds_session_mutation():
         source = original.replace("printf hello", command.replace('"', '\\"'))
         held = convert_trace("swe", source, command)
         assert (held.disposition, held.text) == (Disposition.RESIDUAL, source)
+
+
+def test_conversion_preserves_uncalled_tool_declarations():
+    original = trace(
+        [{"name": "execute_bash", "arguments": {"command": "printf hello"}}], ["hello"], name="execute_bash"
+    )
+    editor = {"type": "function", "function": {"name": "str_replace_editor", "parameters": {"type": "object"}}}
+    other = {"type": "function", "function": {"name": "read", "parameters": {"type": "object"}}}
+    original = original.replace("</tools>", json.dumps(editor) + "\n" + json.dumps(other) + "\n</tools>")
+    result = convert_trace("swe", original, "unused-tools")
+    assert result.disposition == Disposition.VERIFIED
+    assert result.tools == [other, editor, result.tools[-1]]
+    assert result.tools[-1]["function"]["name"] == "bash"
+    assert json.dumps(editor) in result.text and json.dumps(other) in result.text
 
 
 def test_archive_receipt_binds_payload_and_refuses_overwrite(tmp_path):

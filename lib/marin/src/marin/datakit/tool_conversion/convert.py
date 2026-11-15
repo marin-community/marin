@@ -381,7 +381,7 @@ def _convert(text: str, identity: str) -> Conversion:
     for i, replacements in edits.items():
         turns[i].body = _replace(turns[i].body, replacements)
     used = {c["name"] for c in mappings.values() if c is not None}
-    tools = _rewrite_declarations(turns, used, definitions, rules)
+    tools = _rewrite_declarations(turns, used, definitions, {change.before["name"] for change in changes}, rules)
     output = prefix + "".join(t.header + t.body + t.ending for i, t in enumerate(turns) if i not in removed_results)
     if output == text or not changes:
         raise ValueError("No actual tool change")
@@ -404,13 +404,13 @@ def _convert(text: str, identity: str) -> Conversion:
 
 
 def _rewrite_declarations(
-    turns: list[Turn], used: set[str], definitions: dict[str, dict], rules: set[str]
+    turns: list[Turn], used: set[str], definitions: dict[str, dict], converted: set[str], rules: set[str]
 ) -> list[dict]:
     # Replace only explicit tool declarations, retaining all other system content.
-    tools = [definitions[n] for n in sorted(used) if n != "bash" and n in definitions]
+    tools = [definitions[n] for n in sorted(definitions.keys() - converted - {"bash"})]
     if used - definitions.keys() - {"bash"}:
         raise ValueError("Missing declared schema for unchanged real tool")
-    if "bash" in used:
+    if "bash" in used or "bash" in definitions:
         tools.append(definitions.get("bash", BASH_TOOL))
     for turn in turns:
         if turn.role == "system":
