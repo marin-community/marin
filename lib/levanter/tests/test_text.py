@@ -355,10 +355,7 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
 
     component = DatasetComponent(
         source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[]),
-        format=PrebuiltLmDatasetFormat(
-            loss_weights_key="loss_weights",
-            loss_weight_transform=lambda weights: weights * 2.0,
-        ),
+        format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
         cache_dir=str(tmp_path),
     )
     config = LmDataConfig(
@@ -379,7 +376,7 @@ def test_prebuilt_cache_with_loss_weights(tmp_path):
 
     example = ds[0]
     np.testing.assert_array_equal(np.asarray(example.tokens), np.array(records[0]["input_ids"], dtype=np.int32))
-    expected_loss_weight = np.array([2.0, 1.0, 0.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
+    expected_loss_weight = np.array([1.0, 0.5, 0.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
 
 

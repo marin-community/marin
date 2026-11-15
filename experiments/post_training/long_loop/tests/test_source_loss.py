@@ -4,6 +4,7 @@
 import hashlib
 import json
 
+import draccus
 import numpy as np
 import pytest
 from haliax import Axis
@@ -48,6 +49,7 @@ def test_pinned_source_modes_preserve_chat_and_full_token_weights_and_accounting
     path.write_bytes(raw)
     metadata = source_loss_metadata(str(path), hashlib.sha256(raw).hexdigest())
     data = prepared_supervision_data(LmDataConfig(components=components), metadata, packing_cap=256, lookahead=128)
+    data = draccus.decode(LmDataConfig, json.loads(json.dumps(draccus.encode(data))))
     rows = []
     for name, component in data.components.items():
         dataset = dataset_for_component(

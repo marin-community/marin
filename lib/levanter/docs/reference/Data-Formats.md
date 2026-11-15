@@ -194,6 +194,10 @@ Direct datasets are expected to yield `LmExample` instances that already include
 
 ## Bounded lookahead packing
 
+Prebuilt caches carry final prediction-indexed loss weights. Apply any weight
+transforms while producing the cache; declarative dataset configuration does not
+accept executable Python callables.
+
 Cache-backed components can fill gaps with later documents by setting
 `packing_lookahead` alongside an explicit document cap:
 

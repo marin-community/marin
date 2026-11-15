@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, NotRequired, TypedDict
 
@@ -104,12 +104,10 @@ class PrebuiltLmDatasetFormat(LmDatasetFormatBase):
     Attributes:
         input_ids_key: Field name containing token ids.
         loss_weights_key: Optional field name containing loss weights.
-        loss_weight_transform: Optional callable to transform loss weights before training.
     """
 
     input_ids_key: str = "input_ids"
     loss_weights_key: str | None = None
-    loss_weight_transform: Callable[[np.ndarray], np.ndarray] | None = None
 
     @property
     def token_data_key(self) -> str:

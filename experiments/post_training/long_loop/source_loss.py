@@ -59,8 +59,6 @@ def prepared_supervision_data(
             raise ValueError("Prepared supervision requires prebuilt token and prediction-weight caches")
         if component.format.loss_weights_key != source.loss_weights_key:
             raise ValueError("Catalog and supervision metadata disagree on the prediction-weight field")
-        if component.format.loss_weight_transform is not None:
-            raise ValueError("Prepared prediction weights must not be transformed again")
         return replace(component, pack=packing_cap, packing_lookahead=lookahead)
 
     return replace(
