@@ -295,12 +295,13 @@ def test_load_jsonl_decompresses_zstd_extensions(tmp_path, ext):
     """
     path = str(tmp_path / f"data{ext}")
     encoder = msgspec.json.Encoder()
-    raw = b"".join(encoder.encode(r) + b"\n" for r in RECORDS)
+    records = [*RECORDS, {"id": 10, "name": "café 測試", "score": 100.0}]
+    raw = b"\n" + b"".join(encoder.encode(r) + b"\n" for r in records)
     with open(path, "wb") as f:
         f.write(zstd.ZstdCompressor().compress(raw))
 
     assert path.endswith(SUPPORTED_EXTENSIONS)
-    assert list(load_jsonl(path)) == RECORDS
+    assert list(load_jsonl(path)) == records
 
 
 def test_load_file_honors_explicit_format_over_extension(tmp_path):
