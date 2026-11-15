@@ -17,6 +17,7 @@ from infra.marina.apps.rl_data_catalog.release_browser import (
     TABLE_BOUNDS,
     check_evidence,
     check_view,
+    curriculum_full_sweep,
     curriculum_sweep,
     evidence_sweep,
 )
@@ -998,13 +999,20 @@ def test_grader_filter_and_mixed_profile_keep_counts_on_evidence(journey: Journe
     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
 
 
-def test_release_checker_sweeps_exported_confidence_levels_and_historical_population(journey: Journey, tmp_path):
+@pytest.mark.parametrize("full", [False, True], ids=["representative", "full_browser"])
+def test_release_checker_sweeps_exported_confidence_levels_and_historical_population(journey: Journey, tmp_path, full):
     page = journey.page
     page.goto(f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/")
     expect(page.locator("#rows tr").first).to_be_visible()
     root = page.url.split("#")[0]
     releases = page.evaluate("async () => (await fetch('api/curriculum/releases')).json()")["releases"]
-    views = curriculum_sweep(page, root, releases, tmp_path)
+    views = (curriculum_full_sweep if full else curriculum_sweep)(page, root, releases, tmp_path)
+    if not full:
+        assert len(views) == 4
+        assert {view["use"] for view in views} == {"all"}
+        assert all(view["domain"] and not view["failures"] for view in views)
+        assert len(list(tmp_path.glob("curriculum-*.png"))) == 4
+        return
     levels = [view for view in views if "confidence" in view]
     assert len(levels) == 5 * 3 * 4
     assert {view["use"] for view in levels} == {"all", "train", "eval"}

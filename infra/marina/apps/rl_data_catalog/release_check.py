@@ -13,6 +13,7 @@ import logging
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -262,6 +263,7 @@ def browser_checks(
     stored_groups: list[dict[str, Any]],
     scope: BrowserScope = BrowserScope.REPRESENTATIVE,
 ) -> dict[str, Any]:
+    started = time.monotonic()
     releases = reader.get("api/curriculum/releases")["releases"]
     inventory = reader.get("measurements/oracle-inventory.json")
     errors: list[str] = []
@@ -338,6 +340,8 @@ def browser_checks(
             if errors:
                 raise ValueError(f"Browser JavaScript errors: {errors}")
             return {
+                "scope": scope.value,
+                "seconds": time.monotonic() - started,
                 "readability": {"violations": readability["violations"], "views": len(readability["views"])},
                 "source_views": sources,
                 "curriculum_views": curriculum,
@@ -390,6 +394,14 @@ def launch_postpublish(args: argparse.Namespace, artifacts: Path) -> dict[str, A
         "--receipt",
         str(receipt),
     ]
+    for flag, value in (
+        ("--refresh-snapshot", args.refresh_snapshot),
+        ("--identity-measurement", args.identity_measurement),
+        ("--source-counts", args.source_counts),
+        ("--oracle-inventory", args.oracle_inventory),
+    ):
+        if value is not None:
+            command.extend([flag, str(value.resolve() if isinstance(value, Path) else value)])
     result: dict[str, Any] = {"blocking": False, "receipt": str(receipt), "log": str(log), "command": command}
     try:
         with log.open("x") as output:

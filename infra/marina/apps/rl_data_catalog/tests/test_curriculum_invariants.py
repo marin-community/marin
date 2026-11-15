@@ -94,11 +94,13 @@ def test_every_use_and_confidence_level_reconciles_sources_empty_nodes_and_remai
     assert all(row["domains"] == 1 and row["nodes"] == 3 for row in checked["cases"])
     broad = count_projection(document["views"]["all"], 0)
     strict = count_projection(document["views"]["all"], 1)
-    assert broad["totals"]["assigned"] == 2 and strict["totals"]["assigned"] == 1
-    assert broad["areas"][("D01", "empty")] == strict["areas"][("D01", "empty")] == 0
+    assert broad.totals["assigned"] == 2 and strict.totals["assigned"] == 1
+    assert broad.areas[("D01", "empty")] == strict.areas[("D01", "empty")] == 0
 
 
-@pytest.mark.parametrize("regression", ["source_breakdown", "empty_node", "subject_label", "displayed_count"])
+@pytest.mark.parametrize(
+    "regression", ["source_breakdown", "empty_node", "subject_label", "displayed_count", "outcome_partition"]
+)
 def test_api_gate_rejects_count_and_taxonomy_regressions(regression):
     document = measured_document()
     data = document["views"]["all"]
@@ -111,6 +113,9 @@ def test_api_gate_rejects_count_and_taxonomy_regressions(regression):
     elif regression == "subject_label":
         next(row for row in data["hierarchy"] if row["node_id"] == "add")["name"] = "Mathematics"
         message = "capability label equals"
+    elif regression == "outcome_partition":
+        next(row for row in data["confidence"]["statistics"] if row["metric"] == "assigned")["instances"][0] += 1
+        message = "outcomes do not partition"
     else:
         data["totals"]["assigned"] = 2
         message = "displayed release counts differ"

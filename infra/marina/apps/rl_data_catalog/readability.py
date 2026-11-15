@@ -21,7 +21,7 @@ CONTROLS = 'a[href],button,input,select,textarea,summary,[tabindex]:not([tabinde
 LAYOUTS = (*RELEASE_LAYOUTS, ("light", 320), ("dark", 320))
 
 
-def inspect_state(page: Page, *, focus: bool = False) -> dict[str, Any]:
+def inspect_state(page: Page, *, focus: bool = False, focus_limit: int | None = None) -> dict[str, Any]:
     """Measure every rendered text node, including content below the fold."""
     result = page.evaluate(AUDIT, {})
     if focus:
@@ -30,7 +30,7 @@ def inspect_state(page: Page, *, focus: bool = False) -> dict[str, Any]:
             "() => {document.body.tabIndex=-1; document.body.focus(); document.body.removeAttribute('tabindex');}"
         )
         visited = set()
-        for _ in range(page.locator(CONTROLS).count() + 2):
+        for _ in range(focus_limit if focus_limit is not None else page.locator(CONTROLS).count() + 2):
             page.keyboard.press("Tab")
             identity = page.evaluate(
                 """selector => {const e=document.activeElement;
@@ -84,7 +84,11 @@ def readability_layout(
         print(f'readability {prefix} {state}: {len(view["findings"])} findings', flush=True)
 
     def capture(state: str, *, focus: bool = False, screenshot: bool = True) -> None:
-        record(state, inspect_state(page, focus=focus), screenshot=screenshot)
+        record(
+            state,
+            inspect_state(page, focus=focus, focus_limit=6 if scope is BrowserScope.REPRESENTATIVE else None),
+            screenshot=screenshot,
+        )
         if not focus:
             return
         # Pointer pseudo states are grouped by rendered style and element classes. Each
@@ -107,6 +111,8 @@ def readability_layout(
         }""",
             CONTROLS,
         )
+        if scope is BrowserScope.REPRESENTATIVE:
+            selectors = selectors[:6]
         document = cdp.send("DOM.getDocument")["root"]["nodeId"]
         for selector in selectors:
             node_id = cdp.send("DOM.querySelector", {"nodeId": document, "selector": selector})["nodeId"]
@@ -153,7 +159,7 @@ def readability_layout(
         if not page.locator(field).count():
             continue
         values = page.locator(field + " option").evaluate_all("es => es.map(e=>e.value)")
-        for value in values:
+        for value in values if scope is BrowserScope.FULL else list(dict.fromkeys((values[0], values[-1]))):
             page.locator(field).select_option(value)
             capture("filter-" + field[1:] + "-" + (value or "all"), screenshot=False)
         page.locator(field).select_option(values[0])
@@ -187,7 +193,8 @@ def readability_layout(
         page.locator("details").evaluate_all("es => es.forEach(e => e.open = true)")
         capture(label, focus=True)
         if label == "guide":
-            for count in page.locator("button.count:not(:disabled)").all():
+            counts = page.locator("button.count:not(:disabled)").all()
+            for count in counts if scope is BrowserScope.FULL else counts[:1]:
                 count.click()
                 capture("guide-leaf-" + str(count.get_attribute("data-leaf")), screenshot=False)
         if label == "archive" and page.locator("#reviews a").count():

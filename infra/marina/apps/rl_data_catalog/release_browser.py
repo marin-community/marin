@@ -414,6 +414,7 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
         page.emulate_media(color_scheme=theme)
         page.set_viewport_size({"width": width, "height": 1000})
         page.goto(root + "curriculum.html#" + urlencode({"release": release["release_id"], "intended_use": "all"}))
+        expect(page.locator("#provenance")).to_contain_text('"release_id"', timeout=60000)
         check_map(page)
         data = page.evaluate(
             """async()=> (await fetch('api/curriculum?' + new URLSearchParams({
@@ -423,8 +424,8 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
         for level in sorted({0, len(levels) - 1}, reverse=True):
             page.locator("#confidence").select_option(str(level))
             projected = count_projection(data, level)
-            expect(page.locator("#task-count")).to_have_text(f"{projected['totals']['denominator']:,}")
-            expect(page.locator("#capability-count")).to_have_text(f"{projected['totals']['assigned']:,}")
+            expect(page.locator("#task-count")).to_have_text(f"{projected.totals['denominator']:,}")
+            expect(page.locator("#capability-count")).to_have_text(f"{projected.totals['assigned']:,}")
             check_map(page)
         domain = representative_domain(data)
         if domain:
@@ -435,7 +436,7 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
                 re.compile("sampled examples|No task examples|No stored sample examples")
             )
             subject = next(row for row in data["hierarchy"] if row["subject_id"] == domain and row["kind"] == "subject")
-            count = count_projection(data, 0)["areas"].get((domain, subject["node_id"]), 0)
+            count = count_projection(data, 0).areas.get((domain, subject["node_id"]), 0)
             expect(page.locator(".domain-count")).to_have_text(f"{count:,}")
             page.locator("#source-breakdown").evaluate("e=>e.open=true")
             assert sum(integers(value)[0] for value in page.locator("#area-sources b").all_inner_texts()) == count

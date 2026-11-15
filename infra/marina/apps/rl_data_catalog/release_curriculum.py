@@ -8,6 +8,7 @@ import re
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
@@ -24,23 +25,29 @@ def _normalized(label: str) -> str:
     return re.sub(r"[^a-z0-9]", "", label.casefold().replace("&", "and"))
 
 
-def count_projection(data: dict[str, Any], level: int) -> dict[str, Any]:
+@dataclass(frozen=True)
+class CountProjection:
+    totals: dict[str, int]
+    areas: dict[tuple[str, str], int]
+
+
+def count_projection(data: dict[str, Any], level: int) -> CountProjection:
     """Project the same exported vector coordinates selected by the viewer."""
     confidence = data.get("confidence")
     if not confidence:
-        return {"totals": data["totals"], "areas": {_key(row): row["count"] for row in data["area_counts"]}}
+        return CountProjection(data["totals"], {_key(row): row["count"] for row in data["area_counts"]})
     totals, areas = {}, {}
     for row in confidence["statistics"]:
         if not row["subject_id"] and not row["node_id"]:
             totals[row["metric"]] = row["instances"][level]
         elif row["metric"] == "placement":
             areas[_key(row)] = row["instances"][level]
-    return {"totals": {metric: totals.get(metric, 0) for metric in TOTAL_METRICS}, "areas": areas}
+    return CountProjection({metric: totals.get(metric, 0) for metric in TOTAL_METRICS}, areas)
 
 
 def representative_domain(data: dict[str, Any]) -> str:
     """Prefer a measured small domain so a smoke check need not download the whole sample union."""
-    areas = count_projection(data, 0)["areas"]
+    areas = count_projection(data, 0).areas
     choices = [
         (areas.get(_key(row), 0), row["subject_id"])
         for row in data["hierarchy"]
@@ -127,7 +134,7 @@ def check_curriculum_document(document: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"{release}: unmeasured source claims statistics: {source['source_id']}")
         for level in range(width):
             projected = count_projection(data, level)
-            totals, areas = projected["totals"], projected["areas"]
+            totals, areas = projected.totals, projected.areas
             if sum(totals.get(metric, 0) for metric in OUTCOMES) != totals["denominator"]:
                 raise ValueError(f"{release}/{use}/{level}: outcomes do not partition the denominator")
             for metric in TOTAL_METRICS:
@@ -165,8 +172,8 @@ def check_curriculum_document(document: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"{release}: recorded cutoffs have no exported confidence level")
             projected = count_projection(data, original)
             recorded_areas = {_key(row): row["count"] for row in data["area_counts"]}
-            if projected["totals"] != data["totals"] or any(
-                projected["areas"].get(key, 0) != recorded_areas.get(key, 0) for key in taxonomy
+            if projected.totals != data["totals"] or any(
+                projected.areas.get(key, 0) != recorded_areas.get(key, 0) for key in taxonomy
             ):
                 raise ValueError(f"{release}/{use}: displayed release counts differ from API confidence counts")
     return {"release_id": release, "cases": cases, "source_vectors": len(sources)}

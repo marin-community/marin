@@ -286,7 +286,8 @@ The installed `test_rendered_contrast_readability_and_reflow` journey and the
 input-bound `browser_checks` both run the representative readability pass. Any
 violation in that pass blocks release. It covers the source table, curriculum, source evidence, backends, assessments,
 archive and guide, plus representative source/evidence states, filters and folded groups, confidence levels and one measured curriculum domain, public instructions from a stored task example in each layout, source breakdowns, archive records, empty/error states, hover,
-active and keyboard focus. Layouts are 1440, 390 and 320 CSS px in both themes;
+active and keyboard focus on representative controls. The full audit retains
+every filter value, keyboard target and grouped pointer style. Layouts are 1440, 390 and 320 CSS px in both themes;
 page and dialog checks also apply 200% text size and WCAG text-spacing overrides.
 
 The [style standard and measured palette](README.md#contrast-and-readability)
