@@ -22,6 +22,7 @@ per update, the reasoning-marker penalty and error masking. It selects Hero
 MuonH with `expert_normalization: all_experts`, FP32 masters and pinned CPU
 momentum. Supply ordinary mixed-task Parquet artifacts; no length probe is added.
 Each response turn can generate up to 8,192 tokens, with at most four turns.
+Use `--max-new-tokens 1024` for a short smoke within the same context window.
 
 ## Prerequisites and inputs
 
@@ -64,7 +65,7 @@ Start with two updates. Build the graph and write its source launch configuratio
 without submitting:
 
 ```bash
-COMMON=(--model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
+COMMON=(--profile one-rack --model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
         --data-uri "$TASKS" --input-version "$INPUT_VERSION")
 uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
   --version "$SMOKE_VERSION" --max-steps 2 --config-output mochi-launch.yaml
@@ -109,9 +110,8 @@ Outputs use your user namespace. Recovery checkpoints and traces default to
 the regional three-day TTL, with two rolling checkpoints. `--ttl-days` and
 `--checkpoint-count` change that policy. Terminal HF export is disabled. Repeat
 `--data-uri` for more task artifacts; `--data-file` defaults to `train.parquet`.
-`--tokenizer-uri` selects a separate pinned tokenizer artifact. Python callers
-can supply another topology, Megatron geometry, recipe and execution configuration
-to `build_run`. The reused GPU evidence covers the one-rack layout at its pinned
+`--tokenizer-uri` selects a separate pinned tokenizer artifact. Python callers pass `profile=PROFILES["one-rack"]` and bound model/data artifacts
+to `build_run`. The profile holds typed role, Megatron, recipe and execution settings. The reused GPU evidence covers the one-rack layout at its pinned
 source. [#11321](https://github.com/marin-community/marin/pull/11321) records that
 source and the CPU checks; those checks do not qualify other layouts.
 

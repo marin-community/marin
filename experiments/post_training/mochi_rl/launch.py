@@ -1,10 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build or run Mochi RL at 65K context on 48 trainer and 12 inference GPUs."""
+"""Build or run Mochi RL with a named resource and context profile."""
 
-from dataclasses import asdict, replace
+import hashlib
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 
 import click
 import yaml
@@ -12,7 +14,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
@@ -24,13 +26,16 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
+    SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
+from skyrlrecipe.declared import CheckpointCallback
 from skyrlrecipe.locality import RoleTopologyMode
 
 RECIPE_PATH = Path(__file__).with_name("recipe.yaml")
@@ -49,12 +54,6 @@ ROLE_PLAN = SkyRLRolePlan(
     policy_mini_batch_size=2,
     micro_train_batch_size_per_gpu=1,
     n_samples_per_prompt=8,
-)
-TOPOLOGY = SkyRLTopology(
-    num_nodes=ROLE_PLAN.num_nodes,
-    gpus_per_node=ROLE_PLAN.policy_num_gpus_per_node,
-    gpu_variant="GB200",
-    role_plan=ROLE_PLAN,
 )
 MEGATRON = MegatronGeometry(
     tensor_model_parallel_size=1,
@@ -83,8 +82,23 @@ EXECUTION = IrisSkyRLExecution(
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=3)
 
 
+@dataclass(frozen=True)
+class MochiProfile:
+    name: str
+    role_plan: SkyRLRolePlan
+    megatron: MegatronGeometry
+    execution: IrisSkyRLExecution
+    patch: RecipePatch = field(default_factory=RecipePatch)
+    data_namespace: str | None = None
+    checkpoint_at_target: bool = False
+
+
+PROFILES = MappingProxyType({"one-rack": MochiProfile("checkpoints/mochi-rl-65k", ROLE_PLAN, MEGATRON, EXECUTION)})
+
+
 def build_run(
     *,
+    profile: MochiProfile,
     name: str,
     version: str,
     model: ArtifactHfModel,
@@ -92,25 +106,36 @@ def build_run(
     max_steps: int,
     resume: ArtifactStep[Artifact] | None = None,
     recipe_path: Path = RECIPE_PATH,
-    topology: SkyRLTopology = TOPOLOGY,
-    megatron: MegatronGeometry = MEGATRON,
-    execution: IrisSkyRLExecution = EXECUTION,
+    max_new_tokens: int = 8192,
+    data_sha256: str | None = None,
+    execution: IrisSkyRLExecution | None = None,
     retention: SkyRLRetentionPolicy = RETENTION,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind model, mixed tasks and optional native state to one RL artifact."""
-    recipe = SkyRLRecipe.from_document(yaml.safe_load(recipe_path.read_text())).merge(
+    recipe = SkyRLRecipe.from_document(yaml.safe_load(recipe_path.read_text())).merge(profile.patch)
+    if profile.checkpoint_at_target:
+        recipe = recipe.merge(
+            RecipePatch(
+                trainer=sections.Trainer(
+                    ckpt_interval=max_steps,
+                    callbacks=(CheckpointCallback(type="checkpoint", save_steps=max_steps, save_on_train_end=True),),
+                )
+            )
+        )
+    recipe = recipe.merge(
         RecipePatch(
+            context_budget=recipe.context_budget.replace(max_new_tokens_per_turn=max_new_tokens),
             trainer=sections.Trainer(
                 # Leave enough epochs for small task sets to reach the global-step target.
                 epochs=max_steps,
                 max_steps=max_steps,
-                micro_forward_batch_size_per_gpu=topology.role_plan.micro_train_batch_size_per_gpu,
-                policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**asdict(megatron))),
-                ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**asdict(megatron))),
-            )
+                micro_forward_batch_size_per_gpu=profile.role_plan.micro_train_batch_size_per_gpu,
+                policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(**asdict(profile.megatron))),
+                ref=sections.Ref(megatron_config=sections.RefMegatronConfig(**asdict(profile.megatron))),
+            ),
         )
     )
-    return skyrl_step(
+    step = skyrl_step(
         SkyRLSpec(
             name=name,
             version=version,
@@ -118,35 +143,60 @@ def build_run(
             model=model,
             train_data=train_data,
             validation_data=(),
-            topology=topology,
+            topology=SkyRLTopology(
+                num_nodes=profile.role_plan.num_nodes,
+                gpus_per_node=profile.role_plan.policy_num_gpus_per_node,
+                gpu_variant="GB200",
+                role_plan=profile.role_plan,
+            ),
             retention=retention,
             seed=SEED,
             starting_checkpoint=resume,
         ),
-        execution,
+        execution or profile.execution,
         export_hf=False,
     )
+    if data_sha256 is None:
+        return step
+    original_build_config = step.build_config
+
+    def bind_runtime(ctx: StepContext) -> SkyRLRunConfig:
+        if not ctx.is_fingerprint:
+            source = train_data[0]
+            with (StoragePath(ctx.artifact_path(source.step)) / source.relative_path).open("rb") as stream:
+                observed = hashlib.file_digest(stream, "sha256").hexdigest()
+            if observed != data_sha256:
+                raise ValueError("The mixed-task Parquet input differs from its pinned SHA-256")
+        return original_build_config(ctx)
+
+    return replace(step, build_config=bind_runtime)
 
 
 @click.command(help=__doc__)
+@click.option("--profile", type=click.Choice(tuple(PROFILES)), required=True)
 @click.option("--model-uri", required=True, help="Completed schema-3 BF16 HF export with its portable model manifest.")
 @click.option("--tokenizer-uri", help="Pinned tokenizer artifact; defaults to the model export.")
 @click.option("--tokenizer-revision", required=True)
 @click.option(
     "--data-uri", multiple=True, required=True, help="Mixed-task artifact directory. Repeat for several inputs."
 )
+@click.option("--data-sha256", help="SHA-256 of one data file; checked before launch and included in its identity.")
 @click.option("--data-file", default="train.parquet", show_default=True)
 @click.option("--input-version", required=True, help="Immutable version identifying the adopted input set.")
-@click.option(
-    "--name", default="checkpoints/mochi-rl-65k", show_default=True, help="Output name within your user namespace."
-)
+@click.option("--name", help="Output name within your user namespace; defaults to the selected profile name.")
 @click.option("--max-steps", type=click.IntRange(min=1), required=True, help="Stop at this absolute optimizer step.")
 @click.option(
     "--job-timeout-hours",
     type=click.IntRange(min=1),
-    default=EXECUTION.job_timeout_seconds // 3600,
-    show_default=True,
+    default=None,
     help="GPU job wall-clock limit. Resume from a completed checkpoint if reached.",
+)
+@click.option(
+    "--max-new-tokens",
+    type=click.IntRange(min=1),
+    default=8192,
+    show_default=True,
+    help="Response tokens per turn; use 1024 for a short smoke.",
 )
 @click.option("--resume-uri", help="Starting native RL checkpoint; recovery prefers this run's saved progress.")
 @click.option("--checkpoint-count", type=click.IntRange(1, 10), default=RETENTION.resume_checkpoint_count)
@@ -156,21 +206,30 @@ def build_run(
 )
 @rl_build_options
 def main(
+    profile: str,
     model_uri: str,
     tokenizer_uri: str | None,
     tokenizer_revision: str,
     data_uri: tuple[str, ...],
     data_file: str,
+    data_sha256: str | None,
     input_version: str,
-    name: str,
+    name: str | None,
     max_steps: int,
-    job_timeout_hours: int,
+    job_timeout_hours: int | None,
+    max_new_tokens: int,
     resume_uri: str | None,
     checkpoint_count: int,
     ttl_days: int,
     config_output: Path | None,
 ) -> ArtifactStep[SkyRLRun]:
-    name = user_owned_name(name)
+    selected = PROFILES[profile]
+    if selected.data_namespace is not None and data_sha256 is None:
+        raise click.UsageError(f"--data-sha256 is required for {profile}")
+    if data_sha256 is not None and len(data_uri) != 1:
+        raise click.UsageError("--data-sha256 requires exactly one --data-uri")
+    name = user_owned_name(name or selected.name)
+    job_timeout_hours = job_timeout_hours or selected.execution.job_timeout_seconds // 3600
     version = resolve_version(name, None)
     model = ArtifactHfModel(
         step=ArtifactStep.adopt(f"{name}/inputs/model", input_version, source=model_uri, kind=LevanterCheckpoint),
@@ -180,23 +239,35 @@ def main(
     )
     train_data = tuple(
         ArtifactDataSource(
-            ArtifactStep.adopt(f"{name}/inputs/data-{index}", input_version, source=uri), relative_path=data_file
+            ArtifactStep.adopt(
+                (
+                    user_owned_name(f"{selected.data_namespace}/{data_sha256}")
+                    if selected.data_namespace
+                    else f"{name}/inputs/data-{index}" + (f"/{data_sha256}" if data_sha256 else "")
+                ),
+                input_version,
+                source=uri,
+            ),
+            relative_path=data_file,
         )
         for index, uri in enumerate(data_uri)
     )
     resume = ArtifactStep.adopt(f"{name}/inputs/resume", version, source=resume_uri) if resume_uri is not None else None
     step = build_run(
+        profile=selected,
         name=name,
         version=version,
         model=model,
         train_data=train_data,
         max_steps=max_steps,
+        max_new_tokens=max_new_tokens,
+        data_sha256=data_sha256,
         resume=resume,
         execution=replace(
-            EXECUTION,
+            selected.execution,
             job_timeout_seconds=job_timeout_hours * 3600,
             coordinator_timeout_hours=max(
-                EXECUTION.coordinator_timeout_hours, job_timeout_hours + COORDINATOR_QUEUE_ALLOWANCE_HOURS
+                selected.execution.coordinator_timeout_hours, job_timeout_hours + COORDINATOR_QUEUE_ALLOWANCE_HOURS
             ),
         ),
         retention=SkyRLRetentionPolicy(resume_checkpoint_count=checkpoint_count, temporary_storage_ttl_days=ttl_days),
