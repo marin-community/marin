@@ -35,6 +35,7 @@ from jax.experimental.array_serialization.serialization import GlobalAsyncCheckp
 from jaxtyping import PyTree
 
 from rigging import telemetry
+from rigging.training_journal import phase
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -871,6 +872,9 @@ def save_checkpoint(
     if progress_logger is not None:
         progress_logger.set_phase("filesystem_ready")
 
+    save_span = phase("checkpoint_save", step=step)
+    save_span.__enter__()
+
     def my_callback():
         if progress_logger is not None:
             progress_logger.set_phase("metadata_write")
@@ -881,9 +885,12 @@ def save_checkpoint(
 
             if commit_callback is not None:
                 commit_callback()
-        except Exception:
+        except BaseException as error:
             status = "failed"
+            save_span.__exit__(type(error), error, error.__traceback__)
             raise
+        else:
+            save_span.__exit__(None, None, None)
         finally:
             if progress_logger is not None:
                 progress_logger.finish(status)
@@ -896,8 +903,14 @@ def save_checkpoint(
             progress_logger.set_phase("async_commit_in_flight")
 
     def on_local_commit(status: str) -> None:
-        if progress_logger is not None and jax.process_index() != 0:
-            progress_logger.finish_local(status)
+        if jax.process_index() != 0:
+            if status == "completed":
+                save_span.__exit__(None, None, None)
+            else:
+                error = RuntimeError("Local checkpoint commit failed")
+                save_span.__exit__(type(error), error, None)
+            if progress_logger is not None:
+                progress_logger.finish_local(status)
 
     try:
         if progress_logger is not None:
@@ -916,7 +929,8 @@ def save_checkpoint(
             debug_log_flush=flush_debug_output if checkpoint_debug.flush_logs else None,
             write_config=write_config,
         )
-    except Exception:
+    except Exception as error:
+        save_span.__exit__(type(error), error, error.__traceback__)
         if progress_logger is not None:
             if jax.process_index() == 0:
                 progress_logger.finish("failed")

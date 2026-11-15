@@ -7,9 +7,9 @@ import json
 import pytest
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.rl.skyrl import SkyRLRun
+from rigging.event_log import EventLog
 
 from experiments.post_training.long_loop.runtime_timing import write_report
-from experiments.post_training.long_loop.timing import EventLog
 
 
 def test_adopted_native_journal_is_verified_and_reported(tmp_path):

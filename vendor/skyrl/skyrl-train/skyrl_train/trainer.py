@@ -17,6 +17,7 @@ import ray
 from ray import ObjectRef
 import torch
 from loguru import logger
+from rigging.training_journal import phase
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
@@ -1401,12 +1402,13 @@ class RayPPOTrainer:
 
         pbar = tqdm(total=self.total_training_steps, initial=self.global_step, desc="Training Step Progress")
         last_completed_step = self.global_step
+        first_journal_step = self.global_step + 1
         while self.global_step < self.total_training_steps:
             self.global_step += 1
             epoch = (self.global_step - 1) // self.num_steps_per_epoch
             cycle_started = time.perf_counter()
             step_wall = StepWallTime(OmegaConf.to_container(self.cfg.trainer.step_phase_budgets))
-            with Timer("step", self.all_timings) as step_timer:
+            with phase("first_step" if self.global_step == first_journal_step else "steady_state", step=self.global_step), Timer("step", self.all_timings) as step_timer:
                 training_input = await self._train_step(epoch, step_wall)
                 # The core wall excludes the step-end callbacks below.
                 core_seconds = time.perf_counter() - cycle_started

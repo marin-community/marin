@@ -41,6 +41,8 @@ def configured_rl_step(
 ) -> ArtifactStep[SkyRLRun]:
     """Bind supplied training settings to admitted model/data artifacts and runtime paths."""
     validate_stage_config(config, "rl")
+    if not execution.wandb_entity or not config["trainer"].get("project_name"):
+        raise ValueError("Long-loop RL requires explicit W&B entity and project")
     buffer = config.get("trainer", {}).get("rollout_buffer", {})
     quotas = buffer.get("consumed_route_quotas", {})
     if quotas and set(buffer.get("source_routes", {}).values()) != set(quotas):
@@ -74,6 +76,8 @@ def configured_rl_step(
         document["run"]["finalization"] = "any_terminal"
         document["ray"].update(ray_timeouts)
         recipe = document["skyrl"]
+        recipe["trainer"]["wandb_entity"] = execution.wandb_entity
+        recipe["trainer"]["native_telemetry_root"] = prefix_join(context.output_path, "telemetry")
         for callback in recipe["trainer"].get("callbacks", []):
             if callback["type"] == "best_checkpoint":
                 callback["initial_model_uri"] = document["inputs"]["model"]["uri"]

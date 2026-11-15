@@ -19,13 +19,13 @@ from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import remote_inference
 from marin.rl.skyrl import SkyRLRun, SkyRLRunConfig, run_skyrl
+from rigging.event_log import EventLog
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
 from experiments.post_training.long_loop.execution_policy import DEFAULT_TASK_TIMEOUT_SECONDS
 from experiments.post_training.long_loop.launch_validation import validate_before_allocation, validate_selected_context
-from experiments.post_training.long_loop.timing import EventLog
 
 
 @dataclass(frozen=True)

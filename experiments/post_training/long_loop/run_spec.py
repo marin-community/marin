@@ -117,6 +117,15 @@ def resolve_spec(
         sft_manifest["data"][field] = read_pin(draccus.decode(FilePin, pin), directory)
     for name in ("sft", "rl", "evaluation", "endpoint", "archive", "initializer", "tokenizer", "execution"):
         result[name] = read_pin(getattr(spec, name), directory)
+    sft_recipe = result["sft"]
+    tracker = sft_recipe if sft_recipe.get("format") == "sft_spec" else sft_recipe["trainer"]["trainer"]["tracker"]
+    entity_key, project_key = (
+        ("wandb_entity", "wandb_project") if sft_recipe.get("format") == "sft_spec" else ("entity", "project")
+    )
+    if not tracker.get(entity_key) or not tracker.get(project_key):
+        raise ValueError("Long-loop SFT requires explicit W&B entity and project")
+    if not result["rl"]["execution"].get("wandb_entity") or not result["rl"]["config"]["trainer"].get("project_name"):
+        raise ValueError("Long-loop RL requires explicit W&B entity and project")
     result["sft_format"] = result["sft"].pop("format", "grug")
     if result["sft_format"] not in {"sft_spec", "grug"}:
         raise ValueError("Unknown SFT configuration format")

@@ -361,6 +361,8 @@ trainer:
   attn_backend: "auto"
   disable_fast_tokenizer: false
   project_name: "skyrl"
+  wandb_entity: null
+  native_telemetry_root: null
   run_name: "test_run"
   logger: "wandb"
   tracker_commit_each_step: true

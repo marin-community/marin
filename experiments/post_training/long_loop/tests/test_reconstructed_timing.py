@@ -4,9 +4,9 @@
 import json
 
 import pytest
+from rigging.event_log import durable_event_log
 
 from experiments.post_training.long_loop.reconstruct_timing import attempt_measurements
-from experiments.post_training.long_loop.timing import durable_event_log
 
 
 def test_running_occupancy_excludes_queue_and_missing_finish_stays_unknown():

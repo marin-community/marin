@@ -634,6 +634,8 @@ class Trainer(Section):
     attn_backend: str = field("auto")
     disable_fast_tokenizer: bool = field(False)
     project_name: str = field("skyrl")
+    wandb_entity: str | None = field(None)
+    native_telemetry_root: str | None = field(None)
     run_name: str | None = field("test_run")
     logger: LoggingBackend | tuple[LoggingBackend, ...] = field("wandb")
     tracker_commit_each_step: bool = field(True)

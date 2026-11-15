@@ -11,6 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from marin.execution.lazy import OUT, ArtifactStep, apply
+from rigging.event_log import Event, EventLog
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
@@ -18,7 +19,7 @@ from experiments.post_training.long_loop.archive_stage import archive_step
 from experiments.post_training.long_loop.eval_runtime.audit_results import audit, require_evaluation_coverage
 from experiments.post_training.long_loop.eval_runtime.profile import SKIPPED_BENCHMARKS, SMOKE_PATH_COUNT
 from experiments.post_training.long_loop.finalization import terminal_outcome
-from experiments.post_training.long_loop.timing import Event, EventLog, report
+from experiments.post_training.long_loop.timing import report
 
 
 def timed(step: ArtifactStep) -> ArtifactStep:

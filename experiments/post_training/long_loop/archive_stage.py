@@ -26,6 +26,7 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.redaction import redact_string
 from rigging.secrets import require_secret
+from rigging.training_journal import verify_training_journals
 from wandb import env as wandb_env
 from wandb.apis.public.runhistory.downloads import IncompleteRunHistoryError
 
@@ -370,6 +371,53 @@ def _wandb_export(refs: list[dict], settings: dict, destination: str) -> tuple[l
     return inputs, status
 
 
+def native_training_inputs(
+    sft_root: str, rl_root: str, sft_producers: int, selected_rl_step: int
+) -> tuple[list[dict], dict]:
+    """Require complete producer-owned histories and journals before archiving a new run."""
+    inputs, coverage = [], {}
+    stages = {
+        "sft": (
+            sft_root,
+            {f"rank-{rank}" for rank in range(sft_producers)},
+            {"init", "data_load", "compile", "first_step", "steady_state", "checkpoint_save", "export"},
+        ),
+        "rl": (
+            rl_root,
+            {"trainer"},
+            {
+                "init",
+                "data_load",
+                "inference_engine_init_and_compile",
+                "first_step",
+                "steady_state",
+                "save_checkpoints",
+                "queue_hf_export",
+            },
+        ),
+    }
+    stages["rl_export"] = (prefix_join(rl_root, f"exports/step-{selected_rl_step}"), {"exporter"}, {"export"})
+    for stage, (root, producers, phases) in stages.items():
+        receipts = verify_training_journals(root, producers, phases)
+        coverage[stage] = {
+            "expected": len(producers),
+            "verified": len({receipt["producer"] for receipt in receipts if receipt["status"] == "completed"}),
+            "producers": sorted(producers),
+            "runs": sorted({receipt["run"] for receipt in receipts}),
+        }
+        for receipt in receipts:
+            directory = StoragePath(receipt["source"]).parent
+            for name in ("started.json", "receipt.json", "history.jsonl", "phases.jsonl"):
+                inputs.append(
+                    _input(
+                        str(directory / name),
+                        f"telemetry/{stage}/{receipt['producer']}/{receipt['attempt']}/{name}",
+                        "timing" if name == "phases.jsonl" else "metric_history",
+                    )
+                )
+    return inputs, coverage
+
+
 def derive_archive_plan(
     *,
     output: str,
@@ -514,28 +562,51 @@ def derive_archive_plan(
         if item.get("kind") == "wandb-run-reference":
             ref = _read_document(item["source"])
             refs = [entry for entry in refs if entry["stage"] != ref["stage"]] + [ref]
-    wandb_inputs, wandb_status = _wandb_export(refs, settings["wandb"], prefix_join(metadata_root, "wandb"))
-    inputs.extend(wandb_inputs)
-    record("wandb-status.json", {"exporter": settings["wandb"]["package"], "runs": wandb_status}, "provenance")
+    sft_telemetry = sft.get("native_telemetry_root")
+    rl_telemetry = trainer.get("native_telemetry_root")
     missing = {}
-    expected_timing = {
-        "native-sft-attempt-archive": full_sft["resources"]["replicas"],
-        "native-sft-journal": full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"]),
-    }
-    timing_coverage = {
-        kind: {"expected": count, "observed": len({item["source"] for item in extra if item.get("kind") == kind})}
-        for kind, count in expected_timing.items()
-    }
-    if any(item["observed"] != item["expected"] for item in timing_coverage.values()):
-        missing["timing"] = (
-            "Native SFT attempt archive/journal coverage is incomplete; stage-wall journals do not substitute."
+    timing_coverage = {}
+    if (sft_telemetry is None) != (rl_telemetry is None):
+        raise ValueError("Native training telemetry must be present for both SFT and RL")
+    if sft_telemetry is not None and rl_telemetry is not None:
+        native_inputs, timing_coverage = native_training_inputs(
+            sft_telemetry,
+            rl_telemetry,
+            full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"]),
+            run.global_step,
         )
-        blockers.append(missing["timing"])
-    if any(item["status"] != "strict_export_verified" for item in wandb_status):
-        missing["wandb"] = (
-            "One or more exact W&B identities or strict native-history exports unavailable; see wandb-status.json."
-        )
-        blockers.append(missing["wandb"])
+        for stage, expected in {"sft": sft["id"], "rl": trainer["run_name"], "rl_export": trainer["run_name"]}.items():
+            if timing_coverage[stage]["runs"] != [expected]:
+                raise ValueError(f"Native {stage} telemetry belongs to another run")
+        inputs.extend(native_inputs)
+        wandb_status = [{**ref, "status": "producer_history_verified"} for ref in refs]
+        record("wandb-status.json", {"runs": wandb_status, "history_source": "producer artifacts"}, "wandb")
+    else:
+        missing["metric_history"] = "Producer-owned training history is unavailable for historical stages."
+        blockers.append(missing["metric_history"])
+        wandb_inputs, wandb_status = _wandb_export(refs, settings["wandb"], prefix_join(metadata_root, "wandb"))
+        inputs.extend(wandb_inputs)
+        record("wandb-status.json", {"exporter": settings["wandb"]["package"], "runs": wandb_status}, "provenance")
+        expected_timing = {
+            "native-sft-attempt-archive": full_sft["resources"]["replicas"],
+            "native-sft-journal": (
+                full_sft["resources"]["replicas"] * (1 if shared_sft else full_sft["processes_per_task"])
+            ),
+        }
+        timing_coverage = {
+            kind: {"expected": count, "observed": len({item["source"] for item in extra if item.get("kind") == kind})}
+            for kind, count in expected_timing.items()
+        }
+        if any(item["observed"] != item["expected"] for item in timing_coverage.values()):
+            missing["timing"] = (
+                "Native SFT attempt archive/journal coverage is incomplete; stage-wall journals do not substitute."
+            )
+            blockers.append(missing["timing"])
+        if any(item["status"] != "strict_export_verified" for item in wandb_status):
+            missing["wandb"] = (
+                "One or more exact W&B identities or strict native-history exports unavailable; see wandb-status.json."
+            )
+            blockers.append(missing["wandb"])
     evaluation = documents[("report", "evaluation.json")]
     require_evaluation_coverage(evaluation)
     if not evaluation["all_verified"]:

@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
+from rigging.training_journal import get_training_journal, set_training_journal, phase
 
 import levanter
 import levanter.analysis
@@ -286,11 +287,12 @@ def main(config: TrainLmConfig):
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
         # Get the training dataset
-        train_dataset = config.data.train_set(
-            Pos,
-            config.trainer.batch_schedule,
-            key=data_key,
-        )
+        with phase("data_load"):
+            train_dataset = config.data.train_set(
+                Pos,
+                config.trainer.batch_schedule,
+                key=data_key,
+            )
         install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
@@ -307,29 +309,32 @@ def main(config: TrainLmConfig):
             parameter_axis_mapping=parameter_axis_mapping,
             trainer=trainer,
         )
-        _, resuming = trainer.checkpoint_load_plan()
-        weight_source = config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
-        if weight_source and not resuming:
-            logger.info("Initializing trainer state directly from pretrained weights")
-            initial_model = load_source_model()
-            state = trainer.initial_state(
-                training_key,
-                model=initial_model,
-                is_trainable=config.adapter.trainable_filter(initial_model),
-            )
-        elif isinstance(config.adapter, NoAdaptorConfig):
-            state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
-        else:
-            initial_model = config.adapter.apply(
-                config.model.build(Vocab, key=model_key),
-                key=adapter_key,
-                axis_mapping=parameter_axis_mapping,
-            )
-            state = trainer.initial_state(
-                training_key,
-                model=initial_model,
-                is_trainable=config.adapter.trainable_filter(initial_model),
-            )
+        with phase("init"):
+            _, resuming = trainer.checkpoint_load_plan()
+            weight_source = config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
+            if weight_source and not resuming:
+                logger.info("Initializing trainer state directly from pretrained weights")
+                initial_model = load_source_model()
+                state = trainer.initial_state(
+                    training_key,
+                    model=initial_model,
+                    is_trainable=config.adapter.trainable_filter(initial_model),
+                )
+            elif isinstance(config.adapter, NoAdaptorConfig):
+                state = trainer.initial_state(
+                    training_key, model_init=lambda: config.model.build(Vocab, key=model_key)
+                )
+            else:
+                initial_model = config.adapter.apply(
+                    config.model.build(Vocab, key=model_key),
+                    key=adapter_key,
+                    axis_mapping=parameter_axis_mapping,
+                )
+                state = trainer.initial_state(
+                    training_key,
+                    model=initial_model,
+                    is_trainable=config.adapter.trainable_filter(initial_model),
+                )
 
         if not resuming and config.initialize_from_checkpoint_path is not None:
             checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
@@ -471,6 +476,10 @@ def main(config: TrainLmConfig):
         trainer.train(state, train_loader)
 
     # This isn't necessary except when Levanter is run in a subprocess (as happens under Iris/Fray)
+    journal = get_training_journal()
+    if journal is not None:
+        journal.finish(status="completed")
+        set_training_journal(None)
     trainer.tracker.finish()
 
 

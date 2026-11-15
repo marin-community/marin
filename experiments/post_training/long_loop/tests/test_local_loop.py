@@ -4,12 +4,13 @@
 from dataclasses import replace
 
 import pytest
+from rigging.event_log import EventLog
 
 from experiments.post_training.long_loop.preflight import (
     EndpointEvidence,
     check_endpoint,
 )
-from experiments.post_training.long_loop.timing import EventLog, read_events
+from experiments.post_training.long_loop.timing import read_events
 
 
 def test_multi_eos_serving_regression():

@@ -598,6 +598,7 @@ class SFTSpec:
     xla_flags: Sequence[str] = ()
     """Explicit compiler flags for the training process and its validation callbacks."""
     wandb_project: str = "marin-sft-launcher"
+    wandb_entity: str | None = None
     checkpointer: CheckpointerConfig = field(
         default_factory=lambda: CheckpointerConfig(
             save_interval=timedelta(minutes=30), keep=None, keep_last_temporary_checkpoints=1
@@ -748,6 +749,7 @@ def _trainer(
         mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
             project=spec.wandb_project,
+            entity=spec.wandb_entity,
             id=sft_run_id(spec),
             tags=["sft", "levanter", spec.name.split("/")[-1]],
         ),

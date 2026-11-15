@@ -62,6 +62,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
+from rigging.event_log import durable_event_log
 from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration
 
@@ -86,7 +87,6 @@ from experiments.post_training.long_loop.sft_runtime.validation_checkpoint impor
     BestValidationCheckpoint,
     best_validation_callback,
 )
-from experiments.post_training.long_loop.timing import durable_event_log
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in

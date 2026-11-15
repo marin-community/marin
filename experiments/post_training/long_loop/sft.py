@@ -47,6 +47,8 @@ def fresh_sft_config(*, output: str, initializer: str, recipe: dict, run_id: str
     for field in ("process_timeout", "startup_timeout", "step_timeout"):
         watchdog.setdefault(field, f"{DEFAULT_TASK_TIMEOUT_SECONDS}s")
     trainer["checkpointer"].setdefault("async_timeout_seconds", DEFAULT_TASK_TIMEOUT_SECONDS)
+    if not trainer["tracker"].get("entity") or not trainer["tracker"].get("project"):
+        raise ValueError("Long-loop SFT requires explicit W&B entity and project")
     trainer["id"] = run_id
     config["native_timing_root"] = prefix_join(output, "timing/native-sft")
     trainer["initialize_from"] = prefix_join(initializer, "native/step-0")

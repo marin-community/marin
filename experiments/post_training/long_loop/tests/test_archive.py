@@ -384,7 +384,7 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
     assert plan["hf_upload"]["repo_id"].endswith("-2026.11.10")
     assert plan["provenance"]["rl_terminal"] == terminal
     assert set(plan["provenance"]["missing_evidence"]) == (
-        {"timing", "wandb", "evaluation"} if unscored else {"timing", "wandb"}
+        {"timing", "wandb", "metric_history", "evaluation"} if unscored else {"timing", "wandb", "metric_history"}
     )
     assert plan["provenance"]["evaluation_complete"] is not unscored
     assert plan["evaldash"]["record"]["status"] == ("infra_failed" if unscored else "succeeded")

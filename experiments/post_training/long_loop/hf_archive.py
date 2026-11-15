@@ -14,12 +14,12 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from huggingface_hub import HfApi, hf_hub_download
+from rigging.event_log import durable_event_log
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 
 from experiments.grug.moe_hero_ep.ops.upload_hf import validate_model_card
-from experiments.post_training.long_loop.timing import durable_event_log
 
 logger = logging.getLogger(__name__)
 UPLOAD_REQUEST = "long-loop-upload-request.json"

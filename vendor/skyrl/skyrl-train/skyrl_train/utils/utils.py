@@ -20,6 +20,7 @@ from ray.util.placement_group import (
 )
 
 from skyrl_train.telemetry import record_event
+from rigging.training_journal import phase
 from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
 from skyrl_train.config.callbacks import validate_hf_export_config
 from skyrl_train.config.utils import generation_context_limit
@@ -269,6 +270,8 @@ class Timer:
         return time.monotonic() - self.start_time
 
     def __enter__(self):
+        self.journal_span = phase(self.message)
+        self.journal_span.__enter__()
         self.start_time = time.monotonic()
         self.started_unix_ms = round(time.time() * 1000)
         if self.log_events:
@@ -294,12 +297,14 @@ class Timer:
             self.update_dict[self.message] = self.update_dict.get(self.message, 0.0) + duration
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.journal_span.__exit__(exc_type, exc_val, exc_tb)
         self._finish(exc_type)
 
     async def __aenter__(self):
         return self.__enter__()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.journal_span.__exit__(exc_type, exc_val, exc_tb)
         self._finish(exc_type)
 
 

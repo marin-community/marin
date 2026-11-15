@@ -74,6 +74,8 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     """Use the checked-in Snowball defaults with the pinned historical sources."""
     if recipe["profile"] != "snowball_h100":
         raise ValueError("The long-loop shared SFT adapter requires the snowball_h100 profile")
+    if not recipe.get("wandb_entity") or not recipe.get("wandb_project"):
+        raise ValueError("Long-loop SFT requires explicit W&B entity and project")
     mesh = draccus.decode(MeshConfig, recipe["mesh"])
     resources = draccus.decode(ResourceConfig, recipe["resources"])
     if not isinstance(resources.device, GpuConfig):
@@ -118,6 +120,7 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         mesh=mesh,
         pack=bool(recipe["pack"]),
         wandb_project=recipe["wandb_project"],
+        wandb_entity=recipe["wandb_entity"],
         xla_flags=tuple(recipe["xla_flags"]),
     )
 
@@ -125,13 +128,27 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
 def native_sft_step(name: str, version: str, recipe: dict) -> ArtifactStep:
     spec = shared_sft_spec(name, version, recipe)
     trained = sft_step(spec, draccus.decode(ResourceConfig, recipe["resources"]))
+    builder = trained.build_config
+
+    def build_config(context):
+        config = builder(context)
+        return replace(
+            config,
+            train_config=replace(
+                config.train_config,
+                trainer=replace(
+                    config.train_config.trainer, native_telemetry_root=prefix_join(context.output_path, "telemetry")
+                ),
+            ),
+        )
+
     run = trained.run
 
     def execute(config):
         run(config)
         select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
 
-    return replace(trained, run=execute)
+    return replace(trained, run=execute, build_config=build_config)
 
 
 def select_shared_sft(*, output: str, completed_updates: int) -> None:

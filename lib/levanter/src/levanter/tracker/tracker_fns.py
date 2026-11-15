@@ -13,10 +13,12 @@ from typing import Any, Literal, Optional
 
 import draccus
 import jax
+from rigging.training_journal import get_training_journal
 from jaxtyping import Scalar
 
 from levanter.tracker.helpers import hparams_to_dict
 from levanter.tracker.histogram import SummaryStats
+from levanter.tracker.json_logger import _to_jsonable
 from levanter.tracker.tensorboard import TensorboardTracker
 from levanter.tracker.trackio import TrackioTracker
 from levanter.tracker.tracker import CompositeTracker, DictTracker, Tracker
@@ -69,11 +71,16 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
             raise ValueError("Cannot commit from inside jit")
         jit_log(metrics, step=step)
     else:
-        # TODO: do we need to coerce to np here?
+        journal = get_training_journal()
+        if journal is not None:
+            journal.log(_to_jsonable(dict(metrics)), step=None if step is None else int(step), commit=commit)
         tracker.log(metrics, step=step, commit=commit)
 
 
 def _do_jit_log(metrics, *, step=None):
+    journal = get_training_journal()
+    if journal is not None:
+        journal.log(_to_jsonable(dict(metrics)), step=None if step is None else int(step), commit=False)
     try:
         tracker = _active_tracker()
         if tracker is not None:

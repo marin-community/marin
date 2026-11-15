@@ -87,6 +87,7 @@ from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct
 from levanter.tracker import TrackerConfig, capture_time
 from levanter.tracker.telemetry import TelemetryConfig, capture_stall_diagnostics
 from levanter.tracker.wandb import WandbConfig
+from rigging.training_journal import TrainingJournal, get_training_journal, set_training_journal, phase
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
@@ -321,6 +322,7 @@ class Trainer:
 
         self._cmanagers = []
         self._logged_jaxprs: set[str] = set()
+        self._compiled_journal_variants: set[str] = set()
 
     @cached_property
     def loss_fn(self) -> WrappedLossFunction:
@@ -423,10 +425,13 @@ class Trainer:
         # letting the background commit thread finish here also avoids it logging into the
         # already-closed tracker/stdout during teardown.
         if self._checkpointer is not None:
-            with progress_event_scope(
-                self.hooks.emit_event,
-                ProgressEvent.CHECKPOINT_STARTED,
-                ProgressEvent.CHECKPOINT_FINISHED,
+            with (
+                phase("checkpoint_drain"),
+                progress_event_scope(
+                    self.hooks.emit_event,
+                    ProgressEvent.CHECKPOINT_STARTED,
+                    ProgressEvent.CHECKPOINT_FINISHED,
+                ),
             ):
                 try:
                     self._checkpointer.wait_until_finished()
@@ -441,6 +446,12 @@ class Trainer:
 
         self._cmanagers = []
         self.hooks.emit_event(ProgressEvent.TRAINING_FINISHED)
+
+        if args[0] is not None or problems:
+            journal = get_training_journal()
+            if journal is not None:
+                journal.finish(status="failed")
+                set_training_journal(None)
 
         if len(problems) > 0:
             raise RuntimeError("Exception(s) occurred while exiting trainer", problems) from problems[0]
@@ -597,7 +608,7 @@ class Trainer:
         is_first_step = True
 
         while int(state.step) < self.num_train_steps:
-            with capture_time() as loading_time:
+            with phase("data_load", step=int(state.step)), capture_time() as loading_time:
                 try:
                     example = next(iter_data)
                 except StopIteration:
@@ -610,7 +621,8 @@ class Trainer:
                     loading_time(),
                 )
 
-            info = self.train_step(state, example)
+            with phase("first_step" if is_first_step else "steady_state", step=int(state.step)):
+                info = self.train_step(state, example)
             state = info.state
 
             if is_first_step:
@@ -665,10 +677,13 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
-            with progress_event_scope(
-                info.emit_event,
-                ProgressEvent.CHECKPOINT_STARTED,
-                ProgressEvent.CHECKPOINT_FINISHED,
+            with (
+                phase("checkpoint_enqueue", step=info.step),
+                progress_event_scope(
+                    info.emit_event,
+                    ProgressEvent.CHECKPOINT_STARTED,
+                    ProgressEvent.CHECKPOINT_FINISHED,
+                ),
             ):
                 checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
 
@@ -844,6 +859,10 @@ class Trainer:
         self.tracker.log_artifact(artifact_path, name=name, type=type)
 
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
+        if get_training_journal() is not None and name not in self._compiled_journal_variants:
+            with phase("compile", step=int(args[0].step)):
+                fn.lower(*args, **kwargs).compile()
+            self._compiled_journal_variants.add(name)
         logged = False
         if self.config.log_jaxprs and name not in self._logged_jaxprs:
             logger.info("Tracing %s for jaxpr...", name)
@@ -900,6 +919,8 @@ class TrainerConfig:
     id: Optional[str] = None  # run id. if None, will be set to a random string
 
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
+    native_telemetry_root: str | None = None
+    """Durable per-process metric history and phase journals; no provider export required."""
     watch: WatchConfig = WatchConfig()
     profiler: ProfilerConfig = ProfilerConfig()
     xla_dump_upload: XlaDumpUploadConfig = XlaDumpUploadConfig()
@@ -1046,7 +1067,10 @@ class TrainerConfig:
 
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
-        _initialize_global_tracker(self.tracker, id)
+        if self.native_telemetry_root is not None:
+            set_training_journal(TrainingJournal(self.native_telemetry_root, id, "sft", f"rank-{jax.process_index()}"))
+        with phase("tracker_init"):
+            _initialize_global_tracker(self.tracker, id)
         levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
         if self.shutdown_at_exit is not False:

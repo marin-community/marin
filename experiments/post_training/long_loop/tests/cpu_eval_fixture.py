@@ -19,6 +19,7 @@ from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import Prompt
+from rolloutengine.test_support import arithmetic_task, rollout_spec
 from skyrl_gym.task_factories import episode_factories
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
@@ -37,6 +38,18 @@ from tests.cpu.task_specs import lowered_task, task_input, text_task
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 from verifyit.spec import NumericSpec
+
+
+def verify_task_verifier_budgets():
+    recipe = yaml.safe_load((Path(__file__).parents[1] / "specs/evaluation.yaml").read_text())
+    settings = HarborTaskSettings.from_config(OmegaConf.create(recipe["config"]["terminal_bench"]))
+    for budget in (1800, 7200):
+        effective = settings.configured_spec(rollout_spec(arithmetic_task(), verifier_timeout=budget), phase="eval")
+        assert effective.limits.verifier_timeout == budget
+        assert effective.limits.attempt_timeout > budget + settings.eval_timeout + 360 + 600
+
+
+verify_task_verifier_budgets()
 
 
 class ScriptedEngine:

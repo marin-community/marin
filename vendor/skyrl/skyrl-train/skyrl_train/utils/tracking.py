@@ -26,6 +26,7 @@ from loguru import logger
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.io import io
 from rigging.secrets import require_secret
+from rigging.training_journal import get_training_journal, set_training_journal
 from omegaconf import DictConfig, OmegaConf
 import pprint
 import ray
@@ -48,6 +49,7 @@ class WandbNodeLogger:
         # Initialize wandb with the same run ID to aggregate system metrics
         run = wandb.init(
             project=project_name,
+            entity=config["trainer"].get("wandb_entity"),
             name=experiment_name,
             id=run_id,
             config=config,
@@ -94,6 +96,7 @@ class Tracking:
 
             run = wandb.init(
                 project=project_name,
+                entity=config["trainer"].get("wandb_entity"),
                 name=experiment_name,
                 config=OmegaConf.to_container(config, resolve=True),
                 group=experiment_name,
@@ -200,11 +203,17 @@ class Tracking:
             logger.warning("Ray is not initialized, skipping distributed wandb logging")
 
     def log(self, data, step, commit=True):
+        journal = get_training_journal()
+        if journal is not None:
+            journal.log(data, step=int(step), commit=commit)
         for logger_name, logger_instance in self.logger.items():
-            if logger_name == "wandb":
-                logger_instance.log(data={**data, _WANDB_STEP_METRIC: step}, commit=commit)
-            else:
-                logger_instance.log(data=data, step=step)
+            try:
+                if logger_name == "wandb":
+                    logger_instance.log(data={**data, _WANDB_STEP_METRIC: step}, commit=commit)
+                else:
+                    logger_instance.log(data=data, step=step)
+            except Exception as error:
+                logger.warning("Tracker backend {} logging failed: {}", logger_name, error)
 
     def __enter__(self) -> Self:
         return self
@@ -219,6 +228,10 @@ class Tracking:
 
     def close(self, *, exit_code: int) -> None:
         """Flush tracker backends without changing the workload's result."""
+        journal = get_training_journal()
+        if journal is not None:
+            journal.finish(status="completed" if exit_code == 0 else "failed")
+            set_training_journal(None)
         if self.remote_loggers:
             try:
                 ray.get([actor.close.remote() for actor in self.remote_loggers], timeout=_WANDB_LOGGER_SHUTDOWN_TIMEOUT)

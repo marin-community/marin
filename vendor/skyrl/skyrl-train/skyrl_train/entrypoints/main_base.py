@@ -22,6 +22,7 @@ import os
 import signal
 import time
 from loguru import logger
+from rigging.training_journal import TrainingJournal, set_training_journal, phase
 import asyncio
 import multiprocessing as mp
 
@@ -290,11 +291,17 @@ class BasePPOExp:
         The `cfg` passed here will be the final config from Hydra, including CLI overrides.
         """
         self.cfg = cfg
+        telemetry_root = cfg.trainer.get("native_telemetry_root")
+        if telemetry_root is not None:
+            if not cfg.trainer.get("wandb_entity") or not cfg.trainer.project_name:
+                raise ValueError("Durable RL telemetry requires explicit W&B entity and project")
+            set_training_journal(TrainingJournal(telemetry_root, cfg.trainer.run_name, "rl", "trainer"))
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()
-        self.train_dataset = self.get_train_dataset()
-        self.eval_dataset = self.get_eval_dataset()
+        with phase("data_load"):
+            self.train_dataset = self.get_train_dataset()
+            self.eval_dataset = self.get_eval_dataset()
         self.colocate_pg = self.get_colocate_pg()
         # Reserve the policy/training placement group BEFORE the inference
         # engines (which are created later, in `_setup_trainer`), so that in the
@@ -615,7 +622,8 @@ class BasePPOExp:
         from skyrl_train.teacher_runtime import prepare_distillation_runtime, start_distillation_runtime  # noqa: PLC0415
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
-        inference_engine_client = self.create_inference_engine_client()
+        with phase("inference_engine_init_and_compile"):
+            inference_engine_client = self.create_inference_engine_client()
 
         trajectory_runner: TrajectoryRunner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
 
@@ -685,7 +693,8 @@ class BasePPOExp:
         with self.get_tracker() as tracker:
             trainer = None
             try:
-                trainer = self._setup_trainer(tracker)
+                with phase("init"):
+                    trainer = self._setup_trainer(tracker)
                 asyncio.run(trainer.train())
             finally:
                 # Release GPU actors before a Ray retry can start another attempt.
