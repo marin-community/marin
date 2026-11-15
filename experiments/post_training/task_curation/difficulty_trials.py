@@ -6,6 +6,7 @@
 import argparse
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import math
@@ -44,7 +45,7 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
-from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
+from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_recovery import (
     CampaignParent,
@@ -90,7 +91,17 @@ def archive_model_traffic(
     """Archive one source's known model replies and count their reported usage."""
     input_tokens = output_tokens = 0
     archive.parent.mkdir(parents=True, exist_ok=True)
+    # A resumed run's per-source archive continues the killed attempt's archive:
+    # its existing entries are carried forward so the destination keeps covering
+    # every route this run version served, instead of colliding with it.
+    prior_entries = []
+    if destination.exists():
+        with tarfile.open(fileobj=io.BytesIO(destination.read_bytes()), mode="r:gz") as prior:
+            for member in prior.getmembers():
+                prior_entries.append((member, None if member.isdir() else prior.extractfile(member)))
     with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
+        for member, data in prior_entries:
+            stream.addfile(member, data)
         for task in tasks:
             task_key = hashlib.sha256(task.task_id.encode()).hexdigest()
             for number in range(attempts_per_task):
@@ -104,7 +115,7 @@ def archive_model_traffic(
                     usage = response.get("upstream_usage") or response["body"].get("usage") or {}
                     input_tokens += usage.get("prompt_tokens", 0)
                     output_tokens += usage.get("completion_tokens", 0)
-    copy(str(archive), str(destination), no_clobber=True)
+    copy(str(archive), str(destination), no_clobber=not prior_entries)
     return ModelTraffic(
         ContentEvidenceReference(uri=str(destination), sha256=file_sha256(StoragePath(str(archive)))),
         input_tokens,
@@ -151,11 +162,11 @@ def preserved_model_traffic(root: Path, output: StoragePath):
         seal_model_traffic(root, output)
 
 
-def write_replaced_json_evidence(path: StoragePath, value: dict) -> None:
+def write_replaced_json_evidence(path: StoragePath, value: dict) -> ContentEvidenceReference:
     """Replace this campaign's own rolling seal; the newest seal is authoritative."""
     if path.exists():
         path.rm()
-    write_json_evidence(path, value)
+    return write_json_evidence(path, value)
 
 
 def scored_reward(result, trial: Trial) -> float | None:
@@ -195,11 +206,15 @@ def run_task(
     key = hashlib.sha256(task.task_id.encode()).hexdigest()
     destination = StoragePath(output) / key
     if task.reason is not None or task.path is None:
-        write_json_evidence(destination / "pending.json", {"task_id": task.task_id, "reason": task.reason})
+        write_same_json_evidence(destination / "pending.json", {"task_id": task.task_id, "reason": task.reason})
         return TaskOutcome([DifficultyAttempt(task_id=task.task_id, status="pending", reward=None)], task.reason)
     attempts = []
     pending_reason = None
-    for number in range(config.attempts_per_task):
+    # A resumed run continues after a killed attempt's durable per-attempt
+    # evidence instead of colliding with it.
+    existing = sorted(int(path.name) for path in (destination / "*").glob() if path.name.isdigit())
+    first_number = existing[-1] + 1 if existing else 0
+    for number in range(first_number, first_number + config.attempts_per_task):
         local = root / key / f"{number:02d}"
         local.mkdir(parents=True, exist_ok=False)
         endpoint = f"{base_url}/{root.name}-{key}-{number}/v1"
@@ -391,10 +406,16 @@ def main() -> None:
         raise ValueError("Continuation requires the previous campaign, serving digest and current source queue digest")
     previous = previous_campaign(*recovery_arguments) if all(recovery_arguments) else None
     output = StoragePath(args.output_root)
-    if output.exists() or args.local_root.exists():
+    # A retried root resumes from its own trials output: the campaign binds the
+    # root as the recovery parent, so the existing per-source evidence is the
+    # chain being continued, not a conflicting prior campaign.
+    resumed = previous is not None and str(previous.root) == str(output.parent)
+    if output.exists() and not resumed:
+        raise FileExistsError("Preserve previous difficulty attempts and select a new version")
+    if args.local_root.exists():
         raise FileExistsError("Preserve previous difficulty attempts and select a new version")
     args.local_root.mkdir(parents=True)
-    if previous is not None:
+    if previous is not None and not resumed:
         write_json_evidence(
             output / "parent-campaign.json",
             CampaignParent(
@@ -447,6 +468,16 @@ def main() -> None:
             for source in sources:
                 started = time.monotonic()
                 source_key = hashlib.sha256(source.sample.source_id.encode()).hexdigest()
+                if resumed and (output / source_key / "measurement.json").exists():
+                    # The killed attempt already published this source's durable
+                    # measurement and catalog row; re-processing it would replay
+                    # scored tasks and duplicate the row.
+                    LOGGER.info(
+                        "%s %s: already measured by the retried attempt; skipping",
+                        config.solver,
+                        source.sample.source_id,
+                    )
+                    continue
                 recovered = (
                     recovered_source(
                         previous,
@@ -510,16 +541,37 @@ def main() -> None:
                     if source_has_judge
                     else None
                 )
-                input_tokens = traffic.input_tokens + (
-                    0 if previous_measurement is None else previous_measurement.input_tokens
+                input_tokens = (
+                    traffic.input_tokens
+                    + (0 if previous_measurement is None else previous_measurement.input_tokens)
+                    + (0 if recovered is None else recovered.prior_input_tokens)
                 )
-                output_tokens = traffic.output_tokens + (
-                    0 if previous_measurement is None else previous_measurement.output_tokens
+                output_tokens = (
+                    traffic.output_tokens
+                    + (0 if previous_measurement is None else previous_measurement.output_tokens)
+                    + (0 if recovered is None else recovered.prior_output_tokens)
+                )
+                judge_input_tokens = (
+                    0
+                    if judge_traffic is None
+                    else judge_traffic.input_tokens + (0 if recovered is None else recovered.prior_judge_input_tokens)
+                )
+                judge_output_tokens = (
+                    0
+                    if judge_traffic is None
+                    else judge_traffic.output_tokens + (0 if recovered is None else recovered.prior_judge_output_tokens)
                 )
                 attempt_receipts = [] if recovered is None else list(recovered.attempt_receipts)
                 for path in sorted((output / source_key / "attempts" / "*" / "*" / "attempt.json").glob(), key=str):
-                    attempt_receipts.append(ContentEvidenceReference(uri=str(path), sha256=file_sha256(path)))
-                receipt = write_json_evidence(
+                    ref = ContentEvidenceReference(uri=str(path), sha256=file_sha256(path))
+                    # A resumed run's recovery already gathered these receipts;
+                    # duplicates would replay the same attempt twice downstream.
+                    if ref not in attempt_receipts:
+                        attempt_receipts.append(ref)
+                # This campaign's own rolling per-source ledger: a resumed run
+                # replaces the killed attempt's interrupted aggregate, which its
+                # attempts and token totals are fully carried into.
+                receipt = write_replaced_json_evidence(
                     output / source_key / "attempts.json",
                     {
                         "attempts": [item.model_dump(mode="json") for item in attempts],
@@ -535,8 +587,8 @@ def main() -> None:
                         "judge_model_requests": (
                             None if judge_traffic is None else judge_traffic.receipt.model_dump(mode="json")
                         ),
-                        "judge_input_tokens": None if judge_traffic is None else judge_traffic.input_tokens,
-                        "judge_output_tokens": None if judge_traffic is None else judge_traffic.output_tokens,
+                        "judge_input_tokens": None if judge_traffic is None else judge_input_tokens,
+                        "judge_output_tokens": None if judge_traffic is None else judge_output_tokens,
                         "judge_temperature": JUDGE_TEMPERATURE if source_has_judge else None,
                         "judge_token_basis": (
                             "this source window; prior campaign traffic remains in linked receipts"

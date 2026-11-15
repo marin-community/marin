@@ -33,6 +33,14 @@ class RecoveredSource:
     attempts: list[DifficultyAttempt]
     attempt_receipts: list[ContentEvidenceReference]
     measurement: DifficultyMeasurement | None
+    # Token totals already recorded in a prior aggregate of this same run
+    # version, when the killed attempt aggregated the source but died before
+    # writing its measurement. Zero for evidence inherited from earlier
+    # campaigns, whose totals arrive through the inherited measurement.
+    prior_input_tokens: int = 0
+    prior_output_tokens: int = 0
+    prior_judge_input_tokens: int = 0
+    prior_judge_output_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,17 +96,34 @@ def reconstruct_sealed_traffic(root: StoragePath, prepared: dict) -> None:
             }
         )
     if not sources:
-        raise ValueError("Previous worker has not drained and sealed its final model traffic")
-    manifest = {
-        "reconstructed": True,
-        "basis": (
-            "assembled from the durable per-source traffic receipts of a worker that died before sealing; "
-            "the in-flight source's ungraded traffic is absent"
-        ),
-        "sources": sources,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-    }
+        # The killed attempt completed no source aggregate, so no durable
+        # per-source traffic receipt exists. Its in-flight traffic died with the
+        # worker's local relay. Record an empty seal instead of fabricating one:
+        # the retry binds this root as its own parent and re-serves the remaining
+        # traffic, while per-attempt evidence (which survives independently of the
+        # traffic ledger) is still recovered from the attempt directories.
+        manifest = {
+            "reconstructed": True,
+            "basis": (
+                "assembled from the durable per-source traffic receipts of a worker that died before sealing; "
+                "no source aggregate survived, so the killed attempt's in-flight traffic is absent while its "
+                "per-attempt evidence remains recoverable from the attempt directories"
+            ),
+            "sources": [],
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+    else:
+        manifest = {
+            "reconstructed": True,
+            "basis": (
+                "assembled from the durable per-source traffic receipts of a worker that died before sealing; "
+                "the in-flight source's ungraded traffic is absent"
+            ),
+            "sources": sources,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        }
     data = (json.dumps(manifest, indent=2) + "\n").encode()
     (root / "trials" / "model-requests-final.json").write_bytes(data)
 
@@ -117,8 +142,6 @@ def previous_campaign(root: str, serving_sha256: str, source_queue_sha256: str) 
             if not prepared_path.exists():
                 raise ValueError("Previous worker has not drained and sealed its final model traffic")
             reconstruct_sealed_traffic(path, json.loads(prepared_path.read_text()))
-            if not (path / "trials" / "model-requests-final.json").exists():
-                raise ValueError("Previous worker has not drained and sealed its final model traffic")
         serving_path = path / "serving.json"
         if file_sha256(serving_path) != serving_sha256:
             raise ValueError("Previous serving receipt differs from its requested digest")
@@ -188,6 +211,18 @@ def recovered_source(
     measurement = (
         DifficultyMeasurement.model_validate_json(measurement_path.read_text()) if measurement_path.exists() else None
     )
+    own_measurement = measurement
+    prior_input_tokens = prior_output_tokens = 0
+    prior_judge_input_tokens = prior_judge_output_tokens = 0
+    if own_measurement is None and aggregate.exists():
+        # The killed attempt aggregated this source but died before publishing
+        # its measurement: the aggregate ledger carries the traffic totals that
+        # no inherited measurement includes.
+        ledger = json.loads(aggregate.read_text())
+        prior_input_tokens = ledger.get("input_tokens", 0)
+        prior_output_tokens = ledger.get("output_tokens", 0)
+        prior_judge_input_tokens = ledger.get("judge_input_tokens") or 0
+        prior_judge_output_tokens = ledger.get("judge_output_tokens") or 0
     if measurement is not None and (
         measurement.sample != source.sample
         or measurement.sample_receipt != source.sample_receipt
@@ -271,4 +306,12 @@ def recovered_source(
                         raise ValueError("Previous scored trial does not qualify against the original source runtime")
             scored.add(attempt.task_id)
         attempts.append(attempt)
-    return RecoveredSource(attempts, refs, measurement)
+    return RecoveredSource(
+        attempts,
+        refs,
+        measurement,
+        prior_input_tokens,
+        prior_output_tokens,
+        prior_judge_input_tokens,
+        prior_judge_output_tokens,
+    )

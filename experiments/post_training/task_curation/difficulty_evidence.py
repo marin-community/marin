@@ -16,3 +16,20 @@ def write_json_evidence(path: StoragePath, value: dict) -> ContentEvidenceRefere
     data = (json.dumps(value, indent=2) + "\n").encode()
     path.write_bytes(data)
     return ContentEvidenceReference(uri=str(path), sha256=hashlib.sha256(data).hexdigest())
+
+
+def write_same_json_evidence(path: StoragePath, value: dict) -> ContentEvidenceReference:
+    """Write immutable evidence, accepting a byte-identical prior write.
+
+    A preempted root is retried with identical arguments and re-derives the same
+    evidence (for example a task's pending receipt). An identical prior write is
+    that same evidence, not a conflict; any different prior content is.
+    """
+    data = (json.dumps(value, indent=2) + "\n").encode()
+    reference = ContentEvidenceReference(uri=str(path), sha256=hashlib.sha256(data).hexdigest())
+    if path.exists():
+        if path.read_bytes() != data:
+            raise FileExistsError(path)
+        return reference
+    path.write_bytes(data)
+    return reference

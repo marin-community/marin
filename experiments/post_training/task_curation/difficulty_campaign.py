@@ -14,6 +14,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import httpx
+from finestore.rl.curation import ContentEvidenceReference
 from finestore.rl.difficulty import PROTOCOL_ID, PROTOCOLS, SOLVER_MODELS, SamplingSettings, Solver
 from huggingface_hub import hf_hub_download
 from iris.rpc.proto_display import priority_band_value
@@ -39,6 +40,7 @@ from experiments.post_training.task_curation.difficulty_protocol import (
     serving_model,
 )
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
+from experiments.post_training.task_curation.difficulty_recovery import CampaignParent
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.difficulty_serving_probe import probe_endpoint
@@ -193,6 +195,40 @@ def run_trial_worker(
     )
 
 
+def same_run_output(output: StoragePath, args: argparse.Namespace) -> bool:
+    """Whether an existing output root is a partial write of this same run version.
+
+    Iris retries a preempted root task with identical arguments; the retry must
+    resume from its own sealed output instead of failing the new-version guard.
+    The binding is verified against the invocation's frozen source queue, its
+    declared parent campaign and the root's solver, so a run version can only
+    resume from evidence it (or its declared parent) produced. An existing root
+    that fails this check keeps the preserve-prior-campaigns error.
+    """
+    prepared_path = output / "prepared.json"
+    if not prepared_path.exists():
+        return False
+    prepared = json.loads(prepared_path.read_text())
+    if prepared.get("source_queue") != args.sources or prepared.get("source_queue_sha256") != args.sources_sha256:
+        return False
+    parent_path = output / "trials" / "parent-campaign.json"
+    if args.previous_campaign is None:
+        if parent_path.exists():
+            return False
+    else:
+        if not parent_path.exists():
+            return False
+        parent = CampaignParent.model_validate_json(parent_path.read_text())
+        if parent.root != args.previous_campaign or parent.serving_receipt.sha256 != args.previous_serving_sha256:
+            return False
+    serving_path = output / "serving.json"
+    if serving_path.exists():
+        serving = json.loads(serving_path.read_text())
+        if serving.get("solver") != args.solver.value:
+            return False
+    return True
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -219,7 +255,8 @@ def main() -> None:
         raise ValueError("Continuation requires both the previous campaign and its serving receipt digest")
     configure_coreweave_s3()
     output = StoragePath(args.output_root)
-    if args.local_root.exists() or output.exists():
+    resumed = output.exists() and same_run_output(output, args)
+    if args.local_root.exists() or (output.exists() and not resumed):
         raise FileExistsError("Preserve prior campaigns and select a new run version")
     source_path = StoragePath(args.sources)
     if file_sha256(source_path) != args.sources_sha256:
@@ -248,15 +285,24 @@ def main() -> None:
             raise ValueError("Pinned chat template differs from the resolved model identity")
     prepared_path = args.local_root / "prepared-sources.json"
     prepared_path.write_text(json.dumps([source.model_dump(mode="json") for source in prepared]) + "\n")
-    write_json_evidence(
-        output / "prepared.json",
-        {
-            "sources": [source.model_dump(mode="json") for source in prepared],
-            "source_queue": args.sources,
-            "source_queue_sha256": args.sources_sha256,
-            "worker_limits": json.loads((args.local_root / "worker-cgroup.json").read_text()),
-        },
-    )
+    if resumed:
+        # The retried attempt re-prepares the same frozen sources; the published
+        # prepared receipt is already durable and must not be replaced.
+        prior_prepared = json.loads((output / "prepared.json").read_text())
+        if [row["sample"]["source_id"] for row in prior_prepared["sources"]] != [
+            source.sample.source_id for source in prepared
+        ]:
+            raise ValueError("Resumed root's prepared sources differ from this invocation")
+    else:
+        write_json_evidence(
+            output / "prepared.json",
+            {
+                "sources": [source.model_dump(mode="json") for source in prepared],
+                "source_queue": args.sources,
+                "source_queue_sha256": args.sources_sha256,
+                "worker_limits": json.loads((args.local_root / "worker-cgroup.json").read_text()),
+            },
+        )
     deviations = (
         ["Hosted weight revision is opaque; tokenizer uses the production config pin. Server fingerprint is archived."]
         if args.solver == Solver.HOSTED
@@ -275,6 +321,36 @@ def main() -> None:
         jobs,
     ):
         probe = probe_endpoint(args.solver, endpoint, api_model, api_key, settings)
+        prior_serving_path = output / "serving.json"
+        prior_serving = json.loads(prior_serving_path.read_text()) if resumed and prior_serving_path.exists() else None
+        if prior_serving is not None:
+            # The retried attempt keeps its own published serving receipt, so the
+            # live serving identity must still be the one that receipt recorded.
+            fresh_revision = (
+                f"unexposed:{probe['tools_thinking_probe']['completion']['system_fingerprint']}"
+                if args.solver == Solver.HOSTED
+                else pin.revision
+            )
+            prior_revision = (
+                f"unexposed:{prior_serving['tools_thinking_probe']['completion']['system_fingerprint']}"
+                if args.solver == Solver.HOSTED
+                else prior_serving["requested_revision"]
+            )
+            changed = [
+                name
+                for name, before, after in (
+                    ("protocol", prior_serving.get("protocol"), PROTOCOL_ID),
+                    ("solver", prior_serving.get("solver"), args.solver.value),
+                    ("model", prior_serving.get("model"), SOLVER_MODELS[args.solver]),
+                    ("revision", prior_revision, fresh_revision),
+                    ("tokenizer_revision", prior_serving.get("tokenizer_revision"), pin.revision),
+                    ("chat_template_sha256", prior_serving.get("chat_template_sha256"), pin.template_sha256),
+                    ("sampling", prior_serving.get("sampling"), request_parameters(settings)),
+                )
+                if before != after
+            ]
+            if changed:
+                raise ValueError("Resumed root's serving identity changed across the retry: " + ", ".join(changed))
         judge_pin = PINS[Solver.HOSTED]
         judge_metadata = None
         judge_endpoint = None
@@ -313,37 +389,76 @@ def main() -> None:
                 "basis": "Host override; original TaskSpec and requested judge parameters are retained.",
                 "serving_probe": judge_probe,
             }
+            if prior_serving is not None and prior_serving.get("judge") is not None:
+                # Keep the killed attempt's judge identity for the whole run
+                # version; a fresh fingerprint from the same shared relay would
+                # otherwise split the version's judged history across receipts.
+                prior_judge = prior_serving["judge"]
+                changed_judge = [
+                    name
+                    for name, before, after in (
+                        ("model", prior_judge.get("model"), judge_metadata["model"]),
+                        ("api_model", prior_judge.get("api_model"), judge_metadata["api_model"]),
+                        ("tokenizer", prior_judge.get("tokenizer"), judge_metadata["tokenizer"]),
+                        (
+                            "tokenizer_revision",
+                            prior_judge.get("tokenizer_revision"),
+                            judge_metadata["tokenizer_revision"],
+                        ),
+                        (
+                            "chat_template_sha256",
+                            prior_judge.get("chat_template_sha256"),
+                            judge_metadata["chat_template_sha256"],
+                        ),
+                        (
+                            "effective_temperature",
+                            prior_judge.get("effective_temperature"),
+                            judge_metadata["effective_temperature"],
+                        ),
+                    )
+                    if before != after
+                ]
+                if changed_judge:
+                    raise ValueError(
+                        "Resumed root's judge identity changed across the retry: " + ", ".join(changed_judge)
+                    )
+                judge_metadata = prior_judge
         completion = probe["tools_thinking_probe"]["completion"]
         revision = f"unexposed:{completion['system_fingerprint']}" if args.solver == Solver.HOSTED else pin.revision
-        receipt = write_json_evidence(
-            output / "serving.json",
-            {
-                "protocol": PROTOCOL_ID,
-                "solver": args.solver.value,
-                "model": SOLVER_MODELS[args.solver],
-                "requested_revision": pin.revision,
-                "tokenizer_revision": pin.revision,
-                "chat_template_sha256": pin.template_sha256,
-                "model_definition": (
-                    None if args.solver == Solver.HOSTED else asdict(serving_model(args.solver, settings.context_tokens))
-                ),
-                "serving_jobs": jobs,
-                "placement": {
-                    "root_target_cluster": TARGET_CLUSTER,
-                    "child_region_constraint": None,
-                    "model_cache_root": MODEL_CACHE_ROOT,
-                    "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
+        if prior_serving is not None:
+            receipt = ContentEvidenceReference(uri=str(prior_serving_path), sha256=file_sha256(prior_serving_path))
+        else:
+            receipt = write_json_evidence(
+                output / "serving.json",
+                {
+                    "protocol": PROTOCOL_ID,
+                    "solver": args.solver.value,
+                    "model": SOLVER_MODELS[args.solver],
+                    "requested_revision": pin.revision,
+                    "tokenizer_revision": pin.revision,
+                    "chat_template_sha256": pin.template_sha256,
+                    "model_definition": (
+                        None
+                        if args.solver == Solver.HOSTED
+                        else asdict(serving_model(args.solver, settings.context_tokens))
+                    ),
+                    "serving_jobs": jobs,
+                    "placement": {
+                        "root_target_cluster": TARGET_CLUSTER,
+                        "child_region_constraint": None,
+                        "model_cache_root": MODEL_CACHE_ROOT,
+                        "basis": "The explicitly targeted coordinator and its entire child job tree share one peer.",
+                    },
+                    "sampling": request_parameters(settings),
+                    "provider_limits": asdict(provider_limits),
+                    "judge_provider_limits": None if judge_limits is None else asdict(judge_limits),
+                    "judge": judge_metadata,
+                    "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
+                    "compilation_and_cuda_graphs_requested": True,
+                    "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
+                    **probe,
                 },
-                "sampling": request_parameters(settings),
-                "provider_limits": asdict(provider_limits),
-                "judge_provider_limits": None if judge_limits is None else asdict(judge_limits),
-                "judge": judge_metadata,
-                "native_client_context_safety_buffer_tokens": NATIVE_CONTEXT_SAFETY_BUFFER,
-                "compilation_and_cuda_graphs_requested": True,
-                "vllm_gpu_release": None if args.solver == Solver.HOSTED else asdict(VLLM_GPU_RELEASE),
-                **probe,
-            },
-        )
+            )
         config = {
             "solver": args.solver,
             "identity": {
@@ -386,7 +501,19 @@ def main() -> None:
         candidate = CandidateRun.model_validate(config)
         config_path.write_text(candidate.model_dump_json() + "\n")
         recovery_arguments = []
-        if args.previous_campaign is not None:
+        if resumed and prior_serving is not None:
+            # The retried attempt continues from its own sealed output: the root
+            # binds itself as the recovery parent, and its parent-campaign.json
+            # keeps the original chain intact.
+            recovery_arguments = [
+                "--previous-campaign",
+                str(output),
+                "--previous-serving-sha256",
+                receipt.sha256,
+                "--source-queue-sha256",
+                args.sources_sha256,
+            ]
+        elif args.previous_campaign is not None:
             recovery_arguments = [
                 "--previous-campaign",
                 args.previous_campaign,

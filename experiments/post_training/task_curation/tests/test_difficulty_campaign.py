@@ -230,3 +230,53 @@ def test_solver_endpoint_passes_the_declared_band_to_serving_children(monkeypatc
         assert endpoint.startswith("http")
     assert len(captured) == 1
     assert captured[0].iris.priority == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+def test_same_run_output_distinguishes_resume_from_a_new_version(tmp_path):
+    prepared = {"source_queue": "/sources.json", "source_queue_sha256": "1" * 64, "sources": []}
+
+    def variant(**changes):
+        return SimpleNamespace(**{**args.__dict__, **changes})
+
+    args = SimpleNamespace(
+        sources="/sources.json",
+        sources_sha256="1" * 64,
+        previous_campaign=None,
+        previous_serving_sha256=None,
+        solver=Solver.HOSTED,
+    )
+    output = StoragePath(str(tmp_path / "root"))
+    assert not difficulty_campaign.same_run_output(output, args)  # absent root
+
+    (tmp_path / "root").mkdir()
+    assert not difficulty_campaign.same_run_output(output, args)  # no prepared receipt yet
+
+    (tmp_path / "root" / "prepared.json").write_text(json.dumps(prepared))
+    assert difficulty_campaign.same_run_output(output, args)
+
+    assert not difficulty_campaign.same_run_output(output, variant(sources_sha256="2" * 64))
+
+    parent_file = tmp_path / "root" / "trials" / "parent-campaign.json"
+    parent_file.parent.mkdir()
+    parent_file.write_text(
+        json.dumps(
+            {
+                "root": "/other",
+                "source_queue_sha256": "1" * 64,
+                "serving_receipt": {"uri": "/other/serving.json", "sha256": "3" * 64},
+            }
+        )
+    )
+    # A root with a parent binding cannot be resumed by a parentless invocation.
+    assert not difficulty_campaign.same_run_output(output, args)
+    assert difficulty_campaign.same_run_output(
+        output, variant(previous_campaign="/other", previous_serving_sha256="3" * 64)
+    )
+    assert not difficulty_campaign.same_run_output(
+        output, variant(previous_campaign="/other", previous_serving_sha256="4" * 64)
+    )
+
+    (tmp_path / "root" / "serving.json").write_text(json.dumps({"solver": "small"}))
+    assert not difficulty_campaign.same_run_output(
+        output, variant(previous_campaign="/other", previous_serving_sha256="3" * 64)
+    )

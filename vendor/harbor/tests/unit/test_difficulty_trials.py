@@ -647,10 +647,10 @@ def _sealed_resume_setup(tmp_path, monkeypatch, physical_attempts):
     return source, config, source_path, config_path, serving_bytes, physical_attempts
 
 
-def _run_trials(tmp_path, output, *, previous=None, serving_sha=None):
+def _run_trials(tmp_path, output, *, previous=None, serving_sha=None, local=None):
     argv = ["difficulty_trials", "--sources", str(tmp_path / "sources.json"),
             "--config", str(tmp_path / "config.json"), "--output-root", str(output),
-            "--local-root", str(output.parent / "local")]
+            "--local-root", str(local if local is not None else output.parent / "local")]
     if previous is not None:
         argv += ["--previous-campaign", str(previous), "--previous-serving-sha256", serving_sha,
                  "--source-queue-sha256", "1" * 64]
@@ -715,3 +715,109 @@ def test_killed_worker_resume_recovers_completed_trials_without_rerunning(tmp_pa
         from rigging.filesystem.storage_path import StoragePath as _StoragePath
         from taskcompendium.evaluation.corpus import file_sha256 as _file_sha256
         assert _file_sha256(_StoragePath(receipt["uri"])) == receipt["sha256"]
+
+
+def test_same_root_resume_retries_from_its_own_output_without_rerunning(tmp_path, monkeypatch):
+    """A preempted root retried with identical arguments resumes its own trials output."""
+    physical_attempts = []
+    source, config, source_path, config_path, serving_bytes, physical_attempts = _sealed_resume_setup(
+        tmp_path, monkeypatch, physical_attempts
+    )
+    root = tmp_path / "root"
+    root.mkdir()
+    output = root / "trials"
+    _run_trials(tmp_path, output)
+    assert len(physical_attempts) == 1
+    (root / "serving.json").write_bytes(serving_bytes)
+    (root / "prepared.json").write_text(json.dumps({
+        "source_queue": str(source_path), "source_queue_sha256": "1" * 64,
+        "sources": [source.model_dump(mode="json")],
+    }))
+    serving_sha = hashlib.sha256(serving_bytes).hexdigest()
+
+    # The retry binds the root as its own recovery parent: the existing output is
+    # the chain being continued, not a conflicting prior campaign. Iris retries
+    # in a fresh container, so the local root is fresh too.
+    _run_trials(tmp_path, output, previous=root, serving_sha=serving_sha,
+                local=tmp_path / "retried-local")
+
+    # The scored trial was recovered from the same root, never re-executed.
+    assert len(physical_attempts) == 1
+    rows = list(ReadView(str(output / "catalog")).iter_rows(
+        MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
+    assert len(rows) == 1
+    (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
+    assert (measurement.status, measurement.n, measurement.solved, measurement.pending_tasks) == ("measured", 1, 1, 0)
+
+
+def test_same_root_resume_replaces_an_interrupted_aggregate_and_keeps_its_tokens(tmp_path, monkeypatch):
+    """A kill between the aggregate and its measurement resumes without losing totals."""
+    physical_attempts = []
+    source, config, source_path, config_path, serving_bytes, physical_attempts = _sealed_resume_setup(
+        tmp_path, monkeypatch, physical_attempts
+    )
+    root = tmp_path / "root"
+    root.mkdir()
+    output = root / "trials"
+
+    real_seal = difficulty_trials.seal_model_traffic
+
+    def seal_then_die(root_, out):
+        # The worker dies right after the first source's aggregate and seal.
+        real_seal(root_, out)
+        raise KeyboardInterrupt
+
+    # A separate patch instance: undoing it must not strip the fixture's own
+    # tokenizer and transport patches before the resumed run.
+    seal_patch = pytest.MonkeyPatch()
+    seal_patch.setattr(difficulty_trials, "seal_model_traffic", seal_then_die)
+    with pytest.raises(KeyboardInterrupt):
+        _run_trials(tmp_path, output)
+    seal_patch.undo()
+    assert not (output / "catalog").exists()
+    aggregate_path = next(output.glob("*/attempts.json"))
+    killed_ledger = json.loads(aggregate_path.read_text())
+    # Simulate nonzero prior traffic: the fixture's mocked trial records none.
+    killed_ledger["input_tokens"] = 4242
+    killed_ledger["output_tokens"] = 17
+    aggregate_path.write_text(json.dumps(killed_ledger))
+
+    (root / "serving.json").write_bytes(serving_bytes)
+    (root / "prepared.json").write_text(json.dumps({
+        "source_queue": str(source_path), "source_queue_sha256": "1" * 64,
+        "sources": [source.model_dump(mode="json")],
+    }))
+    serving_sha = hashlib.sha256(serving_bytes).hexdigest()
+
+    _run_trials(tmp_path, output, previous=root, serving_sha=serving_sha,
+                local=tmp_path / "retried-local")
+
+    assert len(physical_attempts) == 1  # the scored attempt was recovered, not re-run
+    rows = list(ReadView(str(output / "catalog")).iter_rows(
+        MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields)))
+    (measurement,) = [DifficultyMeasurement.model_validate(row) for row in rows]
+    assert (measurement.status, measurement.n, measurement.solved) == ("measured", 1, 1)
+    assert measurement.input_tokens == 4242
+    # The resumed aggregate carries the killed attempt's token totals forward.
+    ledger = json.loads(aggregate_path.read_text())
+    assert ledger["input_tokens"] == killed_ledger["input_tokens"]
+    assert [(attempt["task_id"], attempt["status"], attempt["reward"]) for attempt in ledger["attempts"]] == [
+        ("scored", "scored", 1.0),
+    ]
+
+
+def test_previous_campaign_reconstructs_an_empty_seal_for_an_attempt_with_no_completed_source(tmp_path):
+    """A root killed before any source aggregate still binds as its own parent."""
+    from experiments.post_training.task_curation.difficulty_recovery import previous_campaign
+
+    root = tmp_path / "root"
+    (root / "trials").mkdir(parents=True)
+    (root / "serving.json").write_bytes(b"{}\n")
+    (root / "prepared.json").write_text(json.dumps({"source_queue_sha256": "1" * 64, "sources": []}))
+
+    previous = previous_campaign(str(root), hashlib.sha256(b"{}\n").hexdigest(), "1" * 64)
+
+    assert str(previous.root) == str(root)
+    manifest = json.loads((root / "trials" / "model-requests-final.json").read_text())
+    assert manifest["reconstructed"] is True
+    assert manifest["sources"] == []
