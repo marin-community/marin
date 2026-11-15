@@ -310,6 +310,17 @@ Final evaluation, HF export and archive use that same selected best checkpoint.
 Archive cleanup reads `trainer.max_ckpts_to_keep` from the consumed RL launch and
 preserves that rolling window plus the selected best. Its sealed inventory names
 the retained checkpoints, and cleanup rejects any retained path.
+
+For a BixBench verifier timeout, a separately verified grade of the retained
+original answer can be incorporated with `bixbench.merge_verifier_recovery`.
+Pass the original evaluation, frozen selection, recovery receipt root and pinned
+recovery-manifest SHA to a new artifact version. The merge requires the complete
+selected native result set and exactly that one unscored attempt. It checks the
+original task/session, sampled trajectory, final answer, frozen grader and
+verifier deadline; it does not generate another answer. The scored view preserves
+every original native file and aggregate under `original-native/`, records native
+versus recovered coverage, and computes view metrics in `evaluation.json`.
+Its launch and terminal files are verbatim snapshots of the original job.
 # SWE task admission
 
 The repaired SWE release is derived from the pinned source packages rather than
