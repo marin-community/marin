@@ -45,6 +45,7 @@ from experiments.post_training.long_loop.stage_guard import StageGuard, run_guar
 from experiments.sft.launcher import HFModel, levanter_train_request
 
 C4_CACHE = "gs://marin-us-central2/tokenized/paloma/c4_en-c2eba6/validation"
+COMPILATION_CACHE = "s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache"
 CONTEXT = 262144
 REFERENCE_LOSS = 2.3137418889651173
 REFERENCE_TOLERANCE = 0.5
@@ -214,9 +215,11 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
                 mesh=MESH,
                 max_eval_batches=0,
                 offload_opt_state=True,
+                jax_compilation_cache_dir=COMPILATION_CACHE,
+                watch=replace(tiny.trainer.watch, include_per_parameter_norms=False),
                 checkpointer=CheckpointerConfig(save_interval=None, keep=None),
                 progress_watchdog=ProgressWatchdogConfig(
-                    startup_timeout=timedelta(minutes=20),
+                    startup_timeout=timedelta(minutes=45),
                     step_timeout=timedelta(minutes=10),
                     process_timeout=timedelta(minutes=30),
                     startup_grace_period=timedelta(0),
