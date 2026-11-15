@@ -461,53 +461,78 @@ iris --cluster=<name> cluster status
 iris --cluster=<name> rpc controller list-backends
 ```
 
-### CPU topology label repair
+### CPU topology admission
 
-Kueue excludes Nodes missing any level of its ResourceFlavor's Topology. On
-`cw-us-east-08a`, this can exclude every gVisor CPU Node even when the CPU
-NodePool already declares the synthetic labels. Compare actual Node labels
-with the NodePool declaration before changing queues or resubmitting tasks.
+For gVisor CPU Pods blocked on `cw-us-east-08a` topology admission, use the
+configured `iris-cpu` flavor and hostname-only `iris-cpu-hostname` Topology.
+CoreWeave's `node-metadata-controller.compute.coreweave.com` owns the fabric,
+superpod and leafgroup labels; their live values on CPU Nodes are empty.
+Kueue v0.18.3 accepts empty topology label values;
+missing keys exclude a Node. The old label-repair command was removed after
+its first live application failed readback.
 
-Preview from the intended repository revision using an explicit cluster config:
+`provisioning.coreweave.kueue.cpu_scale_group: cpu-erapids` enables this path
+only on 08a. IaC creates the hostname Topology and CPU ResourceFlavor, then
+adds that flavor first in the existing ClusterQueue. The CPU flavor has zero
+GPU/RDMA quota and selects only the Iris CPU scale group. CPU NodePool
+metadata and `spec.nodeLabels` stop declaring the four synthetic physical
+labels; capacity, instance type and taints are unchanged.
+
+With approval for the named cluster, review a targeted Pulumi preview and apply
+only these four resources: `topology-cpu`, `resource-flavor-cpu`,
+`cluster-queue`, and `nodepool-cw-use08a-cpu-erapids`. Use their exact URNs
+from the stack and the new resource declarations. Require two creates and two
+updates, with no replacement, deletion, capacity, Helm-release or GPU-flavor
+change. The ClusterQueue update can admit existing queued work and changes the
+preferred pool for new CPU-only admissions. It does not rewrite admitted
+Workloads. This procedure requires no Iris or Kueue controller restart.
+
+From the repository root, with stack KMS access and the configured kubeconfig:
 
 ```bash
-uv run --package marin-iris --extra controller \
-  python -m iris.cluster.platforms.k8s.cpu_topology \
-  --config lib/iris/config/cw-us-east-08a.yaml
+cw08_kueue_urn='urn:pulumi:cw-us-east-08a::marin-iac::marin:coreweave:KueueAddon$kubernetes:kueue.x-k8s.io/v1beta1:'
+cw08_cpu_pool_urn='urn:pulumi:cw-us-east-08a::marin-iac::marin:coreweave:CoreweaveCluster$kubernetes:compute.coreweave.com/v1alpha1:NodePool::nodepool-cw-use08a-cpu-erapids'
+cw08_targets=(
+  --target "${cw08_kueue_urn}Topology::topology-cpu"
+  --target "${cw08_kueue_urn}ResourceFlavor::resource-flavor-cpu"
+  --target "${cw08_kueue_urn}ClusterQueue::cluster-queue"
+  --target "$cw08_cpu_pool_urn"
+)
+PULUMI_PYTHON_CMD="$PWD/.venv/bin/python" KUBECONFIG="$HOME/.kube/coreweave-iris" \
+  pulumi -C infra/pulumi preview --stack cw-us-east-08a "${cw08_targets[@]}"
 ```
 
-The command prints the Kubernetes context, affected Node identities and all
-four topology label keys with their proposed `iris-cpu-only` values. It checks
-managed CPU scale groups, instance types, accelerator capacity and live NodePool
-topology declarations. It changes nothing by default.
-With approval for the named cluster, repeat with `--apply`. The repair changes
-only the four topology labels on those CPU Nodes, retaining their observed
-resource versions as concurrency preconditions. It does not change NodePools,
-taints, capacity, Pods or controllers. A conflict or failed readback stops the
-command; inspect current state before retrying a partially applied batch.
+After approval of that exact preview, run the same command with `up` in place
+of `preview`. Do not use an untargeted stack update: other changes may be pending.
 
-After applying, repeat the preview immediately and after five minutes. Both
-must show an empty repair list. Check the pending Workload's
-`status.conditions` for admission and its Pod's assigned `spec.nodeName`, using
-the credential-safe projections in the CoreWeave guide. Making CPU capacity
-visible to Kueue can admit existing queued work without another submission.
-Admission does not establish that the gVisor runtime can start a container.
-Confirm a SANDBOX task records a process start and exits successfully before
-declaring sandbox execution healthy.
+After applying, confirm `iris-cpu` references `iris-cpu-hostname`, that this
+Topology has only the hostname level, that `iris-cq` is Active, and that GPU
+and RDMA quotas on `cw-tas` retain their prior values. Keep
+`TASHandleOverlappingFlavors` enabled: both topologies end at hostname, allowing
+Kueue to account for transient overlap during migration. Verify a separately
+authorized CPU SANDBOX canary receives an `iris-cpu` assignment, starts its
+process and exits successfully; admission alone does not verify the runtime.
 
-The provider behavior that left these labels absent is unknown. If drift
-returns, retain timestamped Node and NodePool label snapshots and escalate to
-the CoreWeave operator; repeated label patches do not establish a durable
-provider fix. New CPU Nodes should
-receive the labels from their NodePool, but verify this after provisioning.
+The failed label repair left `ds.coreweave.com/nvlink.domain=iris-cpu-only`
+on `g8faade`. Remove that synthetic label after the CPU flavor is available,
+checking first that no admitted `cw-tas` Workload has a hostname assignment to
+that Node. Removing a topology level can invalidate such an assignment and
+requeue work. With approval for that cleanup, the command is:
 
-The correction that checks `region` constraints against backend attributes
-instead of adding an `iris.region` selector requires a separately approved
-Iris controller deployment. Existing Pods retain their original selectors;
-neither this label repair nor a controller deployment rewrites them. Inspect their
-stored constraints (`iris --cluster=<name> job describe <job>`) before choosing
-a separately authorized resubmission. A Pod requiring `iris.region` remains
-unschedulable until its replacement is built by the corrected controller.
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris \
+  --context marin-us-east-08a_US-EAST-08A \
+  label node g8faade ds.coreweave.com/nvlink.domain-
+```
+
+Inspect `status.admission.podSetAssignments[].topologyAssignment` on Workloads,
+including admitted Workloads whose Pods have not started. A Pod list alone is
+insufficient for this check. The cleanup affects one label on one CPU Node;
+it must not change physical labels on GPU Nodes.
+
+The earlier `region` constraint correction requires a separately approved Iris
+controller deployment. Existing Pods retain their original `iris.region`
+selectors until replaced; this Kueue substrate change cannot repair them.
 
 ### Public LoadBalancer reachability
 
