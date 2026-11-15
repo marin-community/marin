@@ -692,11 +692,13 @@ with AdamW betas `(0.9, 0.98)` and WD zero. Matrix epsilon is 1e-8;
 auxiliary epsilon is 1e-15. The spectral rank/sketch sizes are 64/256,
 EMA beta is 0.98, first refresh follows 200 completed updates, and refreshes
 occur every 200 updates with a bank handover every fifth refresh. Relative
-regularization is 1e-6 and boost is 5. The shared schedule warms up for 1,000
+regularization is 1e-6. After the first nonzero basis refresh, the scheduled
+matrix LR is multiplied by 5 for both the direction and decoupled decay;
+the WD coefficient is unchanged. The shared schedule warms up for 1,000
 updates and then decays by cosine to zero over the 4,959-update run.
 
-Use the cache/output arguments above with `--recipe spectral_hybrid
---eval-every 200`; add `--run` inside an accelerator allocation. Compare with
+Use the cache/output arguments above with `--recipe spectral_hybrid` and
+`--eval-every 200`; add `--run` inside an accelerator allocation. Compare with
 the spectral blend and MuonH on the same caches, architecture, seeds and
 evaluation settings, reusing matched completed references. This entrypoint
 provides the standalone counterpart to isolate the contribution of blending.
