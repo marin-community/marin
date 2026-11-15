@@ -253,7 +253,10 @@ class NativeLlamaLmConfig(LlamaConfig):
         *,
         check_tokenizer: bool = False,
     ) -> HFCheckpointConverter:
-        # The data tokenizer is authoritative for native initialization.
+        # The data tokenizer is authoritative for native initialization. Only
+        # compare against a tokenizer explicitly configured on the model.
+        if check_tokenizer and self.tokenizer is not None:
+            self.hf_checkpoint_converter().warn_if_tokenizer_mismatch(tokenizer)
         return self.hf_checkpoint_converter(ref, tokenizer=tokenizer)
 
     def with_hf_architecture(self, converter: HFCheckpointConverter) -> "NativeLlamaLmConfig":
