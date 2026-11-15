@@ -186,7 +186,7 @@ def main() -> None:
                 client=client,
                 max_workers=args.max_workers,
                 resources=ResourceConfig(cpu=1, ram="2g"),
-                chunk_storage_prefix=args.artifact_root.rstrip("/") + "/.zephyr/openresearcher-assets",
+                chunk_storage_prefix=str(StoragePath(args.artifact_root) / ".zephyr/openresearcher-assets"),
             ) as context:
                 with runtime.activate(context):
                     result = run(step)[0]

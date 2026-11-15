@@ -11,7 +11,6 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import sys
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -60,6 +59,7 @@ class IndexConfig:
     stage_receipt_sha256: str
     workdir: str
     threads: int
+    runtime_python: str
     output_path: str
 
 
@@ -97,16 +97,13 @@ def build_index(config: IndexConfig) -> BM25Index:
     corpus = next(asset for asset in manifest if asset["dataset_id"] == CORPUS)
     if corpus["revision"] != CORPUS_REVISION:
         raise ValueError("Staging receipt differs from the approved immutable corpus")
-    # This optional dependency exists only in the sealed regional indexing runtime.
-    from pyserini.search.lucene import LuceneSearcher  # noqa: PLC0415
-
     work = Path(config.workdir)
     work.mkdir(parents=True, exist_ok=False)
     collection, index, database = work / "collection", work / "bm25", work / "document-hashes.sqlite"
     count = corpus_collection(staged.source_roots[CORPUS], collection, database)
     subprocess.run(
         [
-            sys.executable,
+            config.runtime_python,
             "-m",
             "pyserini.index.lucene",
             "--collection",
@@ -125,20 +122,21 @@ def build_index(config: IndexConfig) -> BM25Index:
         ],
         check=True,
     )
-    searcher = LuceneSearcher(str(index))
-    if searcher.num_docs != count:
-        raise ValueError(f"Index contains {searcher.num_docs} documents; corpus contains {count}")
-    with sqlite3.connect(database) as connection:
-        for position, (docid, expected) in enumerate(connection.execute("SELECT docid, sha256 FROM docs"), 1):
-            document = searcher.doc(docid)
-            if document is None:
-                raise ValueError(f"Index is missing document {docid}")
-            text = json.loads(document.raw())["contents"]
-            if hashlib.sha256(text.encode()).hexdigest() != expected:
-                raise ValueError(f"Stored index document differs from corpus: {docid}")
-            if position % 100_000 == 0:
-                logger.info("Verified stored index documents=%d/%d", position, count)
-    searcher.close()
+    subprocess.run(
+        [
+            config.runtime_python,
+            str(Path(__file__).with_name("verify_index.py")),
+            "--index",
+            str(index),
+            "--database",
+            str(database),
+            "--count",
+            str(count),
+            "--output",
+            str(work / "verification.json"),
+        ],
+        check=True,
+    )
     output = StoragePath(config.output_path)
     files, total_bytes = [], 0
     for path in sorted(index.rglob("*")):
@@ -155,6 +153,7 @@ def build_index(config: IndexConfig) -> BM25Index:
         total_bytes += path.stat().st_size
     encoded = (json.dumps(files, indent=2) + "\n").encode()
     (output / "index-manifest.json").write_bytes(encoded)
+    (output / "verification.json").write_bytes((work / "verification.json").read_bytes())
     return BM25Index(
         path=config.output_path,
         corpus_revision=CORPUS_REVISION,
@@ -169,8 +168,10 @@ def build_index(config: IndexConfig) -> BM25Index:
     )
 
 
-def index_config(uri: str, sha256: str, workdir: str, threads: int, context: StepContext) -> IndexConfig:
-    return IndexConfig(uri, sha256, workdir, threads, context.output_path)
+def index_config(
+    uri: str, sha256: str, workdir: str, threads: int, runtime_python: str, context: StepContext
+) -> IndexConfig:
+    return IndexConfig(uri, sha256, workdir, threads, runtime_python, context.output_path)
 
 
 def main() -> None:
@@ -181,6 +182,7 @@ def main() -> None:
     parser.add_argument("--artifact-version", required=True)
     parser.add_argument("--workdir", required=True)
     parser.add_argument("--threads", type=int, required=True)
+    parser.add_argument("--runtime-python", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
@@ -195,7 +197,12 @@ def main() -> None:
             artifact_type=BM25Index,
             run=build_index,
             build_config=partial(
-                index_config, args.stage_receipt, args.stage_receipt_sha256, args.workdir, args.threads
+                index_config,
+                args.stage_receipt,
+                args.stage_receipt_sha256,
+                args.workdir,
+                args.threads,
+                args.runtime_python,
             ),
         )
         if not args.run:
