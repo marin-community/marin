@@ -1,31 +1,43 @@
 ---
 name: press-office
-description: Evaluate a newly merged Marin logbook index record for public blog posts. Draft a short, evidence-backed article in the Marin blog voice for each distinct finding that qualifies.
+description: Evaluate a new or updated Marin logbook index record or a closed Marin experiment issue. Draft a short, evidence-backed Research Note for each distinct finding that qualifies.
 ---
 
 # Press office
 
-Use the added or materially changed task file under `index/` on
-[marin-logbooks main](https://github.com/marin-community/marin-logbooks/tree/main/index)
-as the editorial trigger. Use the record path and merge revision to identify
-the input. For a manual trial, evaluate the supplied record directly. For an
-updated record, compare with its previous version and evaluate the new
-finding. Skip generated `INDEX.md` changes and mechanical edits to task files.
+## Find candidate records
+
+- For a logbook, use the added or materially changed task file under `index/`
+  on [marin-logbooks main](https://github.com/marin-community/marin-logbooks/tree/main/index).
+  Use the record path and merge revision to identify the input. Compare an
+  updated record with its previous version and evaluate the new finding. Skip
+  generated `INDEX.md` changes and mechanical edits to task files.
+- For a Marin issue, look for closed issues labeled `experiment`. Give priority
+  to agent-authored records and threads where readers have to reconstruct the
+  result from several comments. Use `agent-generated` and marked agent comments
+  as discovery signals. Check why the issue closed. Find the final result,
+  read any later corrections, and follow links to the measured runs, code, or
+  data. Skip issues that closed without a usable result.
+
+For a manual trial, evaluate the supplied record or issue directly. Check for
+a linked logbook or issue before counting a finding as a separate candidate.
 
 ## Pick the stories
 
-Read the task record, its coordinating issue, and the commit-pinned notebook.
-Open the public benchmark, report, or contribution when needed to check a
-claim. A logbook may support zero, one, or several posts. Look for distinct
-findings across systems, data, and ML work. Evaluate each finding on its own
-evidence.
+Read the source record, the linked coordinating issue and commit-pinned
+notebook where they exist, and any public benchmark, report, or contribution
+needed to verify the claim. A record may support zero, one, or several posts.
+Look for distinct findings across systems, data, and ML work. Evaluate each
+finding on its own evidence.
 
 Before outlining, compare the candidate takeaways side by side. Keep a
 separate post when it gives its intended readers a distinct, useful lesson
 with enough evidence to carry the story. When several candidates lead to
 the same takeaway, keep one post centered on the strongest evidence. Use a
 diagnostic or follow-up as supporting evidence when it helps readers
-understand that takeaway. Leave the remaining findings in the logbook.
+understand that takeaway. If a follow-up changes the interpretation of an
+existing Research Note, propose an update to that note in the editorial
+handoff. Leave the remaining findings in the source record.
 
 For each candidate, look for an existing report or blog post covering it. If a
 human-authored report or post already covers it, defer to that write-up. Skip
@@ -85,9 +97,7 @@ the new article’s facts and claims in its own sources.
 ## Construct the outline
 
 Read Marin's [drafting guide](../../../docs/dev-guide/writing-style/drafting.md)
-and [Research Note brief](../../../docs/dev-guide/writing-style/research-note.md).
-Use the [blog guidance](../../../docs/dev-guide/writing-style/blog-posts.md)
-for structure and figures.
+and [blog guidance](../../../docs/dev-guide/writing-style/blog-posts.md).
 
 **Identify and frame the contribution before drafting.** For each candidate
 post, identify the main question, what the experiments actually establish, and
@@ -124,6 +134,12 @@ conceptual jump, walk through one tiny case using the objects in the
 experiment. Explain what it buys before adding implementation terms. Organize
 the article around a few short sections that explain the finding.
 Aim for 400–700 words when the material warrants it.
+
+If the source issue or logbook has a TL;DR that works on its own as the lead,
+reuse its prose verbatim under the article title. It should make the question,
+main result, and scope clear to a reader new to the work. Check it against
+the final evidence and any corrections before copying. Write a new lead
+when the summary leaves out context the reader needs.
 
 Leave unit-test results, CI status, smoke-test pass counts, and routine
 verification out of the post. Describe an experimental safeguard only when

@@ -1,8 +1,10 @@
 # Blog Posts
 
-Use this guide for public technical explainers and research notes. Consult the [blog exemplars](blog-exemplars.md) for examples of how Marin posts explain different kinds of work.
+Note that this guide is specifically for agent-authored research notes, which is the main style of blog that agents should be writing. Other kinds of blog posts need not adhere to these guidelines.
 
-Give readers a concise account of what we did and learned. Keep the length proportional to the substance.
+Consult the [blog exemplars](blog-exemplars.md) for examples of how Marin posts explain different kinds of work.
+
+Give readers a concise account of what we did and learned. Research Notes make useful findings public with minimal additional work. A few paragraphs can be enough to share a measured result, observation, or engineering lesson. Keep the length proportional to the substance.
 
 ## Target Audience
 
@@ -38,27 +40,18 @@ Unless inappropriate for the content, use the following structure:
 - **Lead-in (no heading).** Lead with the main result. State the question the work set out to answer (or goal to be met), what was tested to answer it, and why the result matters. The question need not be expressed as a literal syntactic question. Readers should be able to understand the question and the answer from the lead alone.
 - **Background.** Explain the problem, why it matters, and the most relevant prior work. Keep it brief and link out for more detail.
 - **Approach.** Explain what changed relative to the baseline and why. Include examples, small Python or pseudocode diffs, or diagrams where helpful. Link to the implementation.
-- **Results.** Present the evidence with concrete numbers, experimental conditions, comparisons, and figures. Generally include at least one results figure. Discuss limitations and unresolved questions where relevant.
+- **Results.** Present the evidence with concrete numbers, experimental conditions, comparisons, and figures. Generally include at least one results figure. Give every figure a caption. Discuss limitations and unresolved questions where relevant.
 
 Use straightforward, functional section headings such as "Background," "Approach," "Benchmark," "Results," or "Limitations." Add a qualifier when useful, as in "Single-TPU Benchmark." Borrow structures from the exemplars when they suit the material.
 
-## Writing Guidelines
+## Writing the article
 
-- **Prioritize clarity and substance.** Use direct, natural, technically precise prose. Lead paragraphs with the main takeaway. Favor intuition, concrete examples, and observed results over abstract claims or lengthy derivations.
-- **Keep the post focused on a coherent question or result.** Choose the main contribution before organizing the material. Include background experiments and follow-up results only when they help explain or interpret that contribution. Don't combine loosely related findings merely because they came from the same research effort.
-- **Connect the result to the research question.** Name the prior result, observation, or constraint that prompted the work. Explain why the team chose the approaches it tested when the sources give a reason. Say what outcome would have counted as an improvement. When a follow-up answers a different question, explain what prompted it and how its comparison changed.
-- **Make comparisons meaningful.** Name the baseline and explain how it handles the part of the problem being changed. Explain the conceptual difference between approaches before quantifying their implementation differences. Describe what changed, how much the measured outcome improved, and under what conditions. Distinguish effects measured separately from those that weren't.
-- Build explanations from concepts to implementations. When introducing a technical technique, first establish the underlying computation, why it is needed, and what makes it expensive or difficult. Then explain how the implementation works and how it differs from the baseline. Don't begin with kernel-specific details, numerical accounting, or implementation comparisons before establishing what is being computed. Favor intuition before implementation detail.
-- Organize information in the order that helps readers understand the result. Introduce concepts before relying on them and use specific referents. Keep the details that support the explanation or evidence. Link to sources for the full implementation and experiment records.
-- Make examples do explanatory work. Choose examples that isolate the central idea, show enough intermediate steps to make the reasoning easy to follow, and explicitly connect the example to the general technique.
-- Don't introduce solutions to unexplained problems. If you're explaining how a technique avoids a numerical instability, computational cost, or other difficulty, first establish why that difficulty arises.
-- Make the links between ideas explicit. When two steps in an explanation depend on each other, say how. Give readers enough context to follow the reasoning without filling in a missing step themselves.
-- **Keep technical detail focused.** Explain enough to make the contribution understandable to a strong ML engineer outside the subarea. Include implementation details when they're central to the result, but don't reproduce a paper or implementation guide.
-- **Link to sources where readers first need them.** Link an unfamiliar named method to its paper, design note, documentation, or implementation on first mention. Link specific runs, diagnostics, and comparisons directly where the prose first uses them, including in the lead. For run-level claims, prefer an accessible Weights & Biases run page over derived JSON checked into the repository. Link derived analyses for calculations or comparisons they document. Put the link on the phrase that names the method or evidence so readers can tell what it opens. Link Git revisions to the relevant commit or file.
-- **Be candid and precise.** Discuss negative results, limitations, and unresolved questions. Distinguish observations from interpretations. Don't invent motivations, causal explanations, experimental details, or broader implications.
-- **Avoid unnecessary rhetoric.** No promotional language, generic introductions, formulaic conclusions, or exaggerated significance. Don't turn modest findings into sweeping claims or drown readers in internal terminology.
+Follow the [general drafting guidance](drafting.md).
 
-Figures should always have captions.
+- **Connect the result to the research question.** Name the prior result, observation, or constraint that prompted the work. Explain the choice of approaches when the sources give a reason, and say what outcome would have counted as an improvement. If a follow-up answers a different question, explain what prompted it and how its comparison changed.
+- **Compare approaches on the relevant workload.** Name the baseline and explain how it handles the work being changed. State the conceptual difference before giving implementation details. Give the measured change and its conditions, and identify which effects the experiment measured separately.
+- **Establish the problem before the technique.** Explain what needs to be computed, why it is needed, and where the cost or difficulty arises. Use a small example to isolate the mechanism, show the steps a reader needs, and connect them to the general technique. Link to the implementation for details beyond the explanation.
+- **Link methods and evidence on first mention.** Link the phrase naming a method, run, diagnostic, or comparison to its specific source, including in the lead. Prefer an accessible Weights & Biases run page for run-level claims. Use derived analyses for the calculations they document and link code revisions directly.
 
 ## Review
 
