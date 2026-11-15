@@ -93,6 +93,31 @@ def test_unknown_drop_id_cannot_certify_full_retention_coverage(qc_inputs):
         prepare_inputs(changed)
 
 
+def test_prepared_inputs_accept_eval_labeled_retention(qc_inputs):
+    """Eval populations freeze under the same raw == retained + drops accounting.
+
+    CrossPy (CrossCode Python) is an eval-use source; its QC inputs must stay
+    labeled eval - never relabeled train - while reusing this pipeline.
+    """
+    config, _ = qc_inputs
+    plan = config.retention.model_copy(update={"lexical_use": "eval"})
+    config = InputConfig(config.population_path, plan, config.drop_manifest_sha256, config.output_path)
+    result = prepare_inputs(config)
+    rows = pq.read_table(result.index_path).to_pylist()
+    assert {row["task_id"] for row in rows} == {"kept", "unshaped"}
+    assert result.retained_count == 2
+    assert result.retention.lexical_use == "eval"
+
+
+def test_prepared_inputs_reject_uncanonical_lexical_use(qc_inputs):
+    """Only canonical train/eval labels freeze; anything else needs its own ruling."""
+    config, _ = qc_inputs
+    plan = config.retention.model_copy(update={"lexical_use": "benchmark"})
+    config = InputConfig(config.population_path, plan, config.drop_manifest_sha256, config.output_path)
+    with pytest.raises(ValueError, match="lexical_use='benchmark'"):
+        prepare_inputs(config)
+
+
 def test_cli_artifact_can_be_reloaded_by_another_process(qc_inputs, tmp_path):
     config, _ = qc_inputs
     plans = tmp_path / "plans.json"

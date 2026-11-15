@@ -73,8 +73,11 @@ def prepare_inputs(config: InputConfig) -> FullQCInputs:
         plan.raw_count,
     ):
         raise ValueError(f"Retention plan differs from frozen population: {plan.source_id}")
-    if plan.lexical_use != "train" or plan.raw_count != plan.retained_count + plan.combined_drop_count:
-        raise ValueError(f"Incomplete training retention accounting: {plan.source_id}")
+    # Only canonical LexicalUse labels freeze: training and eval populations share the
+    # same raw == retained + drops accounting; benchmark populations need their own
+    # ruling before this pipeline accepts them.
+    if plan.lexical_use not in ("train", "eval") or plan.raw_count != plan.retained_count + plan.combined_drop_count:
+        raise ValueError(f"Incomplete retention accounting for lexical_use={plan.lexical_use!r}: {plan.source_id}")
     if file_sha256(StoragePath(plan.combined_drop_manifest_uri)) != config.drop_manifest_sha256:
         raise ValueError(f"Drop manifest changed after planning: {plan.source_id}")
     with StoragePath(plan.combined_drop_manifest_uri).open("rb") as stream:
