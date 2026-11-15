@@ -165,6 +165,23 @@ archive preserves this limitation, publishes an `infra_failed` EvalDash record
 with scored coverage, and blocks deletion of superseded native checkpoints. Unexpected failures still
 stop finalization.
 
+For a completed evaluation with a verified supplemental BixBench result, use
+the tail-only entrypoint. Its SHA-pinned JSON plan names the original resolved
+run specification, adopted artifact roots, verifier-recovery manifest, exact
+accepted unscored identities and additional evidence. Pin the postprocessing
+commit separately from the original training revision.
+
+```bash
+uv run python -m experiments.post_training.long_loop.postprocess \
+  --plan-uri s3://<bucket>/<owner>/postprocessing/plan.json \
+  --plan-sha256 <sha256> --version <fresh-version>
+```
+
+Inspect the dry plan before adding `--run`. This entrypoint adopts all producing
+stages and runs only the recovered view, report, SFT accounting and CPU archive.
+It archives the original native rows and aggregate alongside the scored view.
+The original CPU resources, deadlines and checkpoint-retention controls apply.
+
 If the strict W&B exporter reports `IncompleteRunHistoryError`, the archive
 confirms that typed provider error and automatically streams every row from
 unfiltered, unsampled `run.scan_history()`. The JSONL and its SHA256 receipt are
