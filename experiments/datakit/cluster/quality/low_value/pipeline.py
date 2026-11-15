@@ -9,15 +9,13 @@ from functools import cache, partial
 
 import pyarrow as pa
 from fray.types import ResourceConfig
-from levanter.tokenizers import MarinTokenizer
 from marin.datakit.low_value.model import (
-    LowValueModel,
     OperatingPoint,
     load_model,
-    load_model_tokenizer,
     load_operating_point,
 )
 from marin.datakit.low_value.parquet import SCORE_SCHEMA, LowValueScores, score_batches
+from marin.datakit.low_value.scoring import DocumentScorer, load_scorer
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
@@ -39,9 +37,8 @@ class LowValuePin:
 
 @dataclass(frozen=True)
 class ScoringBundle:
-    model: LowValueModel
+    scorer: DocumentScorer
     operating_point: OperatingPoint
-    tokenizer: MarinTokenizer
 
 
 def _load_bundle(pin: LowValuePin, model_dir: str, target: float) -> ScoringBundle:
@@ -49,7 +46,7 @@ def _load_bundle(pin: LowValuePin, model_dir: str, target: float) -> ScoringBund
     operating_point = load_operating_point(
         prefix_join(model_dir, "calibration.json"), pin.calibration_sha256, pin.model_sha256, target
     )
-    return ScoringBundle(model, operating_point, load_model_tokenizer(model))
+    return ScoringBundle(load_scorer(model), operating_point)
 
 
 _bundle = cache(_load_bundle)
@@ -59,9 +56,7 @@ def _score_shard(
     batches: Iterator[pa.RecordBatch], _shard: ShardInfo, *, source: str, pin: LowValuePin, model_dir: str, target: float
 ) -> Iterator[pa.RecordBatch]:
     bundle = _bundle(pin, model_dir, target)
-    for batch in score_batches(
-        batches, source=source, tokenizer=bundle.tokenizer, model=bundle.model, operating_point=bundle.operating_point
-    ):
+    for batch in score_batches(batches, source=source, scorer=bundle.scorer, operating_point=bundle.operating_point):
         counters.pipeline.update_counter("low_value/documents", len(batch))
         counters.pipeline.update_counter("low_value/flagged", sum(batch.column("is_low_value").to_pylist()))
         yield batch

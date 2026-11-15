@@ -6,11 +6,10 @@
 from collections.abc import Iterator
 
 import pyarrow as pa
-from levanter.tokenizers import MarinTokenizer
 from pydantic import BaseModel
 
-from marin.datakit.low_value.model import LowValueModel, OperatingPoint
-from marin.datakit.low_value.scoring import score_views, text_views
+from marin.datakit.low_value.model import OperatingPoint
+from marin.datakit.low_value.scoring import DocumentScorer, score_views, text_views
 from marin.datakit.source_key import DatakitArtifactPath
 from marin.processing.embeddings.read_chunks import rows_per_chunk
 
@@ -40,8 +39,7 @@ def score_batches(
     batches: Iterator[pa.RecordBatch],
     *,
     source: str,
-    tokenizer: MarinTokenizer,
-    model: LowValueModel,
+    scorer: DocumentScorer,
     operating_point: OperatingPoint,
 ) -> Iterator[pa.RecordBatch]:
     """Emit one row per normalized document in its original order."""
@@ -49,8 +47,11 @@ def score_batches(
         batch_size = min(128, rows_per_chunk(batch.num_rows, batch.nbytes))
         for start in range(0, len(batch), batch_size):
             part = batch.slice(start, batch_size)
-            documents = [text_views(text, tokenizer, model.window_tokens) for text in part.column("text").to_pylist()]
-            scores = score_views(documents, model)
+            documents = [
+                text_views(text, scorer.tokenizer, scorer.model.window_tokens)
+                for text in part.column("text").to_pylist()
+            ]
+            scores = score_views(documents, scorer.model)
             yield pa.RecordBatch.from_arrays(
                 [
                     pa.array([source] * len(part), type=pa.string()),

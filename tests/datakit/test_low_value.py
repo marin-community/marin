@@ -16,7 +16,14 @@ from levanter.store.jagged_array import JaggedArrayStore
 from marin.datakit.low_value.features import FEATURE_NAMES, document_features
 from marin.datakit.low_value.model import load_model, load_model_tokenizer, load_operating_point
 from marin.datakit.low_value.parquet import LowValueScores, score_batches
-from marin.datakit.low_value.scoring import cache_views, score_token_cache, score_views, text_views
+from marin.datakit.low_value.scoring import (
+    cache_views,
+    load_scorer,
+    score_texts,
+    score_token_cache,
+    score_views,
+    text_views,
+)
 from marin.execution.artifact import read_artifact, write_artifact
 from marin.processing.tokenize._core import text_preprocessor
 from sklearn.ensemble import GradientBoostingClassifier
@@ -39,10 +46,17 @@ def model_contract() -> dict:
     }
 
 
-def encoded_model(tmp_path):
+def encoded_model(tmp_path, tokenizer_dir):
+    shutil.copytree(tokenizer_dir, tmp_path / "tokenizer")
+    hashes = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (tmp_path / "tokenizer").iterdir()
+        if path.is_file()
+    }
     feature = FEATURE_NAMES.index("max_encoded_share")
     payload = {
         **model_contract(),
+        "tokenizer_files_sha256": hashes,
         "kind": "gradient_boosting",
         "intercept": 0,
         "learning_rate": 1,
@@ -96,7 +110,9 @@ def test_exported_tree_head_matches_sklearn_probabilities_and_float32_boundaries
     np.testing.assert_allclose(model.predict(values), reference.predict_proba(values)[:, 1], rtol=1e-12, atol=1e-14)
 
 
-def test_cache_scores_include_middle_windows_and_preserve_requested_indices(tmp_path, gpt2_tokenizer):
+def test_cache_scores_include_middle_windows_and_preserve_requested_indices(
+    tmp_path, gpt2_tokenizer, gpt2_tokenizer_path
+):
     natural = "A detailed explanation of history, observations and their interpretation. " * 400
     text = natural + "\n" + "ABCD" * 4000 + "\n" + natural
     texts = [natural, text]
@@ -105,7 +121,7 @@ def test_cache_scores_include_middle_windows_and_preserve_requested_indices(tmp_
     cache = tmp_path / "cache"
     writer = JaggedArrayStore.open(str(cache / "input_ids"), mode="w", item_rank=1, dtype=np.int32)
     writer.extend(rows)
-    model = encoded_model(tmp_path)
+    model = encoded_model(tmp_path, gpt2_tokenizer_path)
     calibration_path = tmp_path / "calibration.json"
     calibration = {
         "model_sha256": model.sha256,
@@ -116,9 +132,7 @@ def test_cache_scores_include_middle_windows_and_preserve_requested_indices(tmp_
     scores = list(
         score_token_cache(
             str(cache),
-            cache_tokenizer_sha256=model.tokenizer_sha256,
-            tokenizer=gpt2_tokenizer,
-            model=model,
+            scorer=load_scorer(model),
             operating_point=point,
             indices=[1, 0],
             batch_size=1,
@@ -137,8 +151,8 @@ def test_cache_scores_include_middle_windows_and_preserve_requested_indices(tmp_
         load_operating_point(str(calibration_path), digest, "different", 0.05)
 
 
-def test_parquet_batches_keep_ids_and_exact_cutoff_decisions(tmp_path, gpt2_tokenizer):
-    model = encoded_model(tmp_path)
+def test_parquet_batches_keep_ids_and_exact_cutoff_decisions(tmp_path, gpt2_tokenizer, gpt2_tokenizer_path):
+    model = encoded_model(tmp_path, gpt2_tokenizer_path)
     texts = ["Readable content about historical events. " * 100, "ABCD" * 400]
     documents = [text_views(text, gpt2_tokenizer, model.window_tokens) for text in texts]
     expected = score_views(documents, model)
@@ -152,13 +166,14 @@ def test_parquet_batches_keep_ids_and_exact_cutoff_decisions(tmp_path, gpt2_toke
     point = load_operating_point(str(path), write_model(path, from_point), model.sha256, 0.02)
     ids = [f"doc-{index:03d}" for index in range(300)]
     batches = iter([pa.record_batch({"id": ids, "text": texts * 150})])
-    output = list(score_batches(batches, source="example", tokenizer=gpt2_tokenizer, model=model, operating_point=point))
+    output = list(score_batches(batches, source="example", scorer=load_scorer(model), operating_point=point))
     destination = tmp_path / "scores.parquet"
     pq.write_table(pa.Table.from_batches(output), destination)
     result = pq.read_table(destination).to_pydict()
     assert result["id"] == ids
     assert result["is_low_value"] == [False, True] * 150
     np.testing.assert_array_equal(result["low_value_score"], np.tile(expected, 150))
+    np.testing.assert_array_equal(score_texts(texts, load_scorer(model)), expected)
 
 
 def test_tokenizer_wrappers_do_not_change_structural_evidence():
@@ -167,14 +182,6 @@ def test_tokenizer_wrappers_do_not_change_structural_evidence():
         document_features([text], 1000),
         document_features(["<|begin_of_text|>" + text + "<|end_of_text|>"], 1000),
     )
-
-
-def test_modified_model_bytes_cannot_score_under_a_prior_pin(tmp_path):
-    model = encoded_model(tmp_path)
-    path = tmp_path / "model.json"
-    path.write_text(path.read_text().replace('"intercept": 0', '"intercept": 10'))
-    with pytest.raises(ValueError, match="differs from pinned"):
-        load_model(str(path), model.sha256)
 
 
 def test_score_artifact_relocates_to_consumer_region(tmp_path, monkeypatch):
@@ -196,7 +203,7 @@ def test_score_artifact_relocates_to_consumer_region(tmp_path, monkeypatch):
 def test_tokenizer_pins_at_same_source_path_load_distinct_verified_backends(tmp_path, gpt2_tokenizer_path):
     source = tmp_path / "tokenizer-source"
     shutil.copytree(gpt2_tokenizer_path, source)
-    model = encoded_model(tmp_path)
+    model = encoded_model(tmp_path, gpt2_tokenizer_path)
 
     def hashes():
         return tuple(

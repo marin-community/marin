@@ -13,8 +13,21 @@ from levanter.tokenizers import MarinTokenizer
 from rigging.filesystem.storage_path import prefix_join
 
 from marin.datakit.low_value.features import document_features
-from marin.datakit.low_value.model import LowValueModel, OperatingPoint
+from marin.datakit.low_value.model import LowValueModel, OperatingPoint, load_model_tokenizer
 from marin.processing.tokenize._core import text_preprocessor
+
+
+@dataclass(frozen=True)
+class DocumentScorer:
+    """A model together with its verified tokenizer backend."""
+
+    model: LowValueModel
+    tokenizer: MarinTokenizer
+
+
+def load_scorer(model: LowValueModel) -> DocumentScorer:
+    """Bind the model to the exact tokenizer files named in its pinned metadata."""
+    return DocumentScorer(model, load_model_tokenizer(model))
 
 
 @dataclass(frozen=True)
@@ -77,27 +90,30 @@ def score_views(documents: Sequence[DocumentViews], model: LowValueModel) -> np.
     return model.predict(structural)
 
 
+def score_texts(texts: Sequence[str], scorer: DocumentScorer) -> np.ndarray:
+    """Score text using the model's verified tokenizer and window policy."""
+    documents = [text_views(text, scorer.tokenizer, scorer.model.window_tokens) for text in texts]
+    return score_views(documents, scorer.model)
+
+
 def score_token_cache(
     cache_dir: str,
     *,
-    cache_tokenizer_sha256: str,
-    tokenizer: MarinTokenizer,
-    model: LowValueModel,
+    scorer: DocumentScorer,
     operating_point: OperatingPoint,
     indices: Sequence[int],
     batch_size: int = 128,
 ) -> Iterator[DocumentScore]:
     """Score selected cache rows, emitting their original row indices as IDs.
 
-    The caller supplies the cache's tokenizer JSON digest. This entrypoint
-    supports the deployed structural tree model.
+    The cache's IDs must use the model's tokenizer vocabulary. Historical
+    cache ledgers do not pin tokenizer bytes, so callers must establish that
+    provenance before selecting a cache; no caller-supplied digest proves it.
     """
-    if cache_tokenizer_sha256 != model.tokenizer_sha256:
-        raise ValueError("Cache tokenizer differs from the classifier window tokenizer")
     store = JaggedArrayStore.open(prefix_join(cache_dir, "input_ids"), mode="r", dtype=np.int32)
     for start in range(0, len(indices), batch_size):
         batch = indices[start : start + batch_size]
-        documents = [cache_views(store, index, tokenizer, model.window_tokens) for index in batch]
-        scores = score_views(documents, model)
+        documents = [cache_views(store, index, scorer.tokenizer, scorer.model.window_tokens) for index in batch]
+        scores = score_views(documents, scorer.model)
         for index, document, score, drop in zip(batch, documents, scores, operating_point.drop(scores), strict=True):
             yield DocumentScore(str(index), document.tokens, float(score), bool(drop))
