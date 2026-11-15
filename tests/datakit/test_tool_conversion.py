@@ -10,10 +10,12 @@ import tarfile
 
 import numpy as np
 import pytest
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.tool_conversion.archive import archive_bytes, commit_batch, read_json, write_immutable
 from marin.datakit.tool_conversion.convert import Disposition, convert_trace, parse_trace
 from marin.datakit.tool_conversion.export import digest, export_conversion
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
+from transformers.utils.chat_template_utils import render_jinja_template
 
 
 def trace(
@@ -130,9 +132,12 @@ def test_think_reasoning_precedes_existing_visible_content():
     ).replace("<tool_call>", "Let me think.<tool_call>")
     result = convert_trace("swe", original, "think-prefix")
     assert result.disposition == Disposition.VERIFIED
-    body = parse_trace(result.text)[1][2].body.strip()
+    turn = parse_trace(result.text)[1][2]
     message = result.messages[2]
-    assert body == "<|start_think|>" + message["reasoning_content"] + "<|end_think|>" + message["content"].strip()
+    rendered, _ = render_jinja_template(
+        conversations=[[message]], chat_template=MARIN_CHAT_TEMPLATE, bos_token="", add_generation_prompt=False
+    )
+    assert rendered[0] == turn.header + turn.body + turn.ending
     assert message["content"].strip() == "Let me think."
 
 
