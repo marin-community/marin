@@ -246,6 +246,7 @@ def run_initializer_smoke(*, output: str, prepared: str, artifact_version: str, 
         config,
         train_config=replace(
             train_config,
+            hf_save_steps=None,
             trainer=replace(train_config.trainer, native_telemetry_root=prefix_join(output, "telemetry")),
         ),
     )

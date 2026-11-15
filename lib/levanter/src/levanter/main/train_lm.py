@@ -97,7 +97,7 @@ class TrainLmConfig:
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
-    hf_save_steps: int = 10000
+    hf_save_steps: int | None = 10000
     hf_save_dtype: Optional[str] = None
     hf_save_chat_template: Optional[str] = None
     """Chat template embedded in the HF export's tokenizer instead of the tokenizer's own."""
