@@ -15,7 +15,7 @@ from levanter.layers.rotary import (
     Llama3RotaryEmbeddingsConfig,
     YarnRotaryEmbeddingsConfig,
 )
-from levanter.layers.rotary_native import Llama3RotaryConfig, RotaryConfig, YarnRotaryConfig, apply_rotary
+from levanter.layers.rotary_native import apply_rotary
 from levanter.layers.rotary import _rotate_half as levanter_rotate_half
 from levanter.testing.model_configs import llama_test_config
 
@@ -206,16 +206,16 @@ def test_yarn_rotary_embedding_vs_hf(factor):
 @pytest.mark.tpu
 @pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
 @pytest.mark.parametrize(
-    "named_config,native_config",
+    "config",
     [
-        (DefaultRotaryEmbeddingsConfig(), RotaryConfig()),
-        (DefaultRotaryEmbeddingsConfig(factor=4.0), RotaryConfig(factor=4.0)),
-        (Llama3RotaryEmbeddingsConfig(theta=500000.0), Llama3RotaryConfig()),
-        (YarnRotaryEmbeddingsConfig(factor=4.0), YarnRotaryConfig(factor=4.0)),
+        DefaultRotaryEmbeddingsConfig(),
+        DefaultRotaryEmbeddingsConfig(factor=4.0),
+        Llama3RotaryEmbeddingsConfig(theta=500000.0),
+        YarnRotaryEmbeddingsConfig(factor=4.0),
     ],
     ids=["default", "linear", "llama3", "yarn"],
 )
-def test_native_rotary_matches_named_values_and_input_gradients(named_config, native_config, dtype):
+def test_native_rotary_matches_named_values_and_input_gradients(config, dtype):
     Batch, Pos, Heads, HeadSize = (
         hax.Axis("batch", 2 * jax.device_count()),
         hax.Axis("position", 8),
@@ -226,14 +226,14 @@ def test_native_rotary_matches_named_values_and_input_gradients(named_config, na
     x = (jax.random.normal(random.PRNGKey(17), shape) * 0.5).astype(dtype)
     positions = jnp.broadcast_to(jnp.array([0, 1, 2, 17, 63, 128, 511, 1023]), (Batch.size, Pos.size))
     cotangent = jax.random.normal(random.PRNGKey(19), shape)
-    named_rope = named_config.build(HeadSize)
+    named_rope = config.build(HeadSize)
 
     def named(value):
         result = named_rope(hax.named(value, (Batch, Pos, Heads, HeadSize)), hax.named(positions, (Batch, Pos)))
         return result.rearrange((Batch, Pos, Heads, HeadSize)).array
 
     def native(value):
-        return apply_rotary(value, positions, native_config)
+        return apply_rotary(value, positions, config)
 
     with hax.axis_mapping({}):
         expected, actual = jax.jit(named)(x), jax.jit(native)(x)

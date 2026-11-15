@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
-from typing import Any, Callable, List, Optional, ParamSpec, Sequence, TypeVar, Union
+from typing import Any, Callable, List, Optional, ParamSpec, Protocol, Sequence, TypeVar, Union, runtime_checkable
 
 import equinox
 import fsspec
@@ -468,6 +468,13 @@ class CheckpointRetention(StrEnum):
     PERMANENT = "permanent"
 
 
+@runtime_checkable
+class CheckpointMetadataProvider(Protocol):
+    """A model that records application metadata with its training checkpoint."""
+
+    def checkpoint_metadata(self) -> Mapping[str, Any]: ...
+
+
 class Checkpointer:
     """
     A checkpointer class that saves checkpoints with two different, but overlapping policies: time and step.
@@ -602,7 +609,7 @@ class Checkpointer:
         ret_dict = self.load_checkpoint({"model": model}, checkpoint_path, axis_mapping=axis_mapping, mesh=mesh)
         return ret_dict["model"]
 
-    def on_step(self, *, tree: PyTree, step: int, force: bool = False, metadata: Mapping[str, Any] | None = None):
+    def on_step(self, *, tree: PyTree, step: int, force: bool = False, model: object = None):
         step = int(step)
 
         if step == 0:
@@ -675,7 +682,7 @@ class Checkpointer:
                 commit_callback=callback,
                 is_temporary=not save_permanent_ckpt,
                 base_path_override=save_base_path,
-                metadata=metadata,
+                metadata=model.checkpoint_metadata() if isinstance(model, CheckpointMetadataProvider) else None,
             )
 
     def request_checkpoint(self, retention: CheckpointRetention) -> None:

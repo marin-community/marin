@@ -24,7 +24,7 @@ from levanter.grug.attention import (
 from levanter.layers.attention import AttentionMask as NamedAttentionMask
 from levanter.layers.attention import _tpu_splash_attention as named_splash_attention
 from levanter.layers.rotary import DefaultRotaryEmbeddings, DefaultRotaryEmbeddingsConfig
-from levanter.layers.rotary_native import RotaryConfig, apply_rotary
+from levanter.layers.rotary_native import apply_rotary
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -225,11 +225,11 @@ def test_splash_rotary_bfloat16_q_gradient_matches_named(cotangent_scale):
 
     def native_vjp(q, k, v, cotangent, ids):
         positions = jnp.broadcast_to(jnp.arange(sequence, dtype=jnp.int32), (batch, sequence))
-        k = apply_rotary(k, positions, RotaryConfig())
+        k = apply_rotary(k, positions, DefaultRotaryEmbeddingsConfig())
         mask = AttentionMask.causal().with_segment_ids(ids)
 
         def endpoint(q):
-            q = apply_rotary(q, positions, RotaryConfig())
+            q = apply_rotary(q, positions, DefaultRotaryEmbeddingsConfig())
             return attention(q, k, v, mask, implementation="tpu_splash")
 
         output, pullback = jax.vjp(endpoint, q)

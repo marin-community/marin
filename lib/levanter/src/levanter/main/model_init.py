@@ -6,16 +6,13 @@ from typing import cast
 
 import equinox as eqx
 import jmp
-from haliax import Axis
-from haliax.partitioning import ResourceMapping, named_jit
-from jaxtyping import PRNGKeyArray
+from haliax.partitioning import named_jit
 
 import haliax as hax
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.field_dtype_overrides import hf_load_dtype
-from levanter.models.lm_model import LmConfig, LmHeadModel
-from levanter.models.llama_native_lm import NativeLlamaLmConfig, native_llama_sharding
+from levanter.models.lm_model import LmConfig, LmHeadModel, ModelPlacement
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.utils.jax_utils import use_cpu_device
 
@@ -27,22 +24,6 @@ class ModelInitContext:
     use_hf_model_config: bool
 
 
-def build_model(
-    model_config: LmConfig,
-    Vocab: Axis,
-    *,
-    key: PRNGKeyArray,
-    parameter_axis_mapping: ResourceMapping,
-    compute_axis_mapping: ResourceMapping,
-    batch_axis_name: str,
-) -> LmHeadModel:
-    """Build a model with explicit native placement or its named-model constructor."""
-    if isinstance(model_config, NativeLlamaLmConfig):
-        sharding = native_llama_sharding(parameter_axis_mapping, compute_axis_mapping, batch_axis_name)
-        return model_config.build(Vocab, key=key, sharding=sharding)
-    return model_config.build(Vocab, key=key)
-
-
 def prepare_model_init_context(
     model: LmConfig,
     *,
@@ -50,43 +31,15 @@ def prepare_model_init_context(
     initialize_from_hf: bool | str,
     use_hf_model_config: bool,
 ) -> ModelInitContext:
-    if isinstance(model, NativeLlamaLmConfig):
-        converter = model.hf_checkpoint_converter(
-            initialize_from_hf if isinstance(initialize_from_hf, str) else None, tokenizer=tokenizer
-        )
-        if initialize_from_hf and use_hf_model_config:
-            model = converter.config_from_hf_config(
-                converter.default_hf_config,
-                overrides={
-                    "attn_backend": model.attn_backend,
-                    "gradient_checkpointing": model.gradient_checkpointing,
-                    "scan_layers": model.scan_layers,
-                    "flash_attention_block_size": model.flash_attention_block_size,
-                    "upcast_attn": model.upcast_attn,
-                    "reference_checkpoint": str(converter.reference_checkpoint),
-                    "tokenizer": model.tokenizer,
-                },
-            )
-        return ModelInitContext(model=model, converter=converter, use_hf_model_config=use_hf_model_config)
-
-    if initialize_from_hf:
-        if not isinstance(model, HFCompatConfig):
+    if not isinstance(model, HFCompatConfig):
+        if initialize_from_hf:
             raise ValueError("initialize_from_hf requires a HF-compatible model configuration.")
+        return ModelInitContext(model=model, converter=None, use_hf_model_config=use_hf_model_config)
 
-        converter = model.hf_checkpoint_converter()
-        converter.warn_if_tokenizer_mismatch(tokenizer)
-        converter = converter.replaced(tokenizer=tokenizer)
-
-        if isinstance(initialize_from_hf, str):
-            converter = converter.replaced(reference_checkpoint=initialize_from_hf)
-
-        if use_hf_model_config:
-            model = converter.config_from_hf_config(converter.default_hf_config)
-    elif isinstance(model, HFCompatConfig):
-        converter = model.hf_checkpoint_converter()
-        converter = converter.replaced(tokenizer=tokenizer)
-    else:
-        converter = None
+    ref = initialize_from_hf if isinstance(initialize_from_hf, str) else None
+    converter = model.hf_checkpoint_converter_for_source(ref, tokenizer, check_tokenizer=bool(initialize_from_hf))
+    if initialize_from_hf and use_hf_model_config:
+        model = model.with_hf_architecture(converter)
 
     return ModelInitContext(model=model, converter=converter, use_hf_model_config=use_hf_model_config)
 
@@ -98,45 +51,29 @@ def load_model_from_source(
     model_key,
     parameter_axis_mapping,
     mp: jmp.Policy,
-    compute_axis_mapping=None,
-    batch_axis_name: str = "batch",
+    placement: ModelPlacement | None = None,
     hf_ref: bool | str = False,
     checkpoint_path: str | None = None,
 ) -> LmHeadModel:
     if hf_ref and checkpoint_path is not None:
         raise ValueError("Specify only one of hf_ref or checkpoint_path.")
 
-    if isinstance(context.model, NativeLlamaLmConfig):
-        if hf_ref:
-            if context.converter is None:
-                raise ValueError("HF model loading requires a HF-compatible model configuration.")
-            source = hf_ref if isinstance(hf_ref, str) else str(context.converter.reference_checkpoint)
-            model = load_hf_checkpoint(
-                context.model,
-                source,
-                axis_mapping=parameter_axis_mapping,
-                tokenizer=context.converter.tokenizer,
-                compute_dtype=hf_load_dtype(mp),
-                compute_axis_mapping=compute_axis_mapping,
-                batch_axis_name=batch_axis_name,
-            )
-        elif checkpoint_path is not None:
-            model = load_levanter_checkpoint(
-                context.model,
-                checkpoint_path,
-                Vocab=Vocab,
-                axis_mapping=parameter_axis_mapping,
-                key=model_key,
-                compute_axis_mapping=compute_axis_mapping,
-                batch_axis_name=batch_axis_name,
-            )
-        else:
-            raise ValueError("Either hf_ref or checkpoint_path must be provided.")
-        return mp.cast_to_param(model)
-
     if hf_ref:
         if context.converter is None:
             raise ValueError("HF model loading requires a HF-compatible model configuration.")
+
+        if context.model.owns_parameter_placement:
+            source = hf_ref if isinstance(hf_ref, str) else str(context.converter.reference_checkpoint)
+            return mp.cast_to_param(
+                load_hf_checkpoint(
+                    context.model,
+                    source,
+                    axis_mapping=parameter_axis_mapping,
+                    tokenizer=context.converter.tokenizer,
+                    compute_dtype=hf_load_dtype(mp),
+                    placement=placement,
+                )
+            )
 
         converter_config = None
         if not context.use_hf_model_config:
@@ -153,6 +90,18 @@ def load_model_from_source(
 
     if checkpoint_path is None:
         raise ValueError("Either hf_ref or checkpoint_path must be provided.")
+
+    if context.model.owns_parameter_placement:
+        return mp.cast_to_param(
+            load_levanter_checkpoint(
+                context.model,
+                checkpoint_path,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                key=model_key,
+                placement=placement,
+            )
+        )
 
     resolved_checkpoint_path = latest_checkpoint_path(checkpoint_path)
     with use_cpu_device():

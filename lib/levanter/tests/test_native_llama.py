@@ -29,7 +29,7 @@ from levanter.models.loss import next_token_ids
 from levanter.trainer import ExplicitTrainingLayout, Trainer, TrainerConfig
 from levanter.tracker import NoopTracker, current_tracker
 from levanter.utils.mesh import MeshConfig
-from levanter.models.lm_model import LmExample
+from levanter.models.lm_model import LmExample, ModelPlacement
 
 
 pytestmark = pytest.mark.tpu
@@ -289,7 +289,7 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
         log_jaxprs=False,
         log_xla_hlo=False,
     )
-    sharding = NativeLlamaSharding(batch_axes=("data",), model_axis="model")
+    placement = ModelPlacement({k: v for k, v in mapping.items() if k != "batch"}, mapping)
     layout = ExplicitTrainingLayout(mesh, P("data", None))
     examples = []
     with jax.set_mesh(mesh), hax.axis_mapping({}):
@@ -325,13 +325,14 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
             trainer_config,
             optax.adam(1e-3),
             loss,
-            explicit_layout=layout,
-            checkpoint_metadata=lambda model: model.checkpoint_metadata(),
+            layout=layout,
         ) as trainer,
     ):
         initial = trainer.initial_state(
             jax.random.PRNGKey(2),
-            model_init=lambda: config.build(hax.Axis("vocab", 32), key=jax.random.PRNGKey(1), sharding=sharding),
+            model_init=lambda: config.build_for_mesh(
+                hax.Axis("vocab", 32), key=jax.random.PRNGKey(1), placement=placement
+            ),
         )
         initial_loss = evaluator.evaluate(initial.model).micro_avg_loss
         initial_key = np.array(initial.training_key)
@@ -356,7 +357,7 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
             restored_config,
             optax.adam(1e-3),
             loss,
-            explicit_layout=layout,
+            layout=layout,
             add_default_hooks=False,
         ) as trainer,
     ):
@@ -364,8 +365,8 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
         assert vocab_size == 32
         restored = trainer.initial_state(
             jax.random.PRNGKey(99),
-            model_init=lambda: config.build(
-                hax.Axis("vocab", vocab_size), key=jax.random.PRNGKey(98), sharding=sharding
+            model_init=lambda: config.build_for_mesh(
+                hax.Axis("vocab", vocab_size), key=jax.random.PRNGKey(98), placement=placement
             ),
         )
         actual_arrays = jax.tree.leaves(eqx.filter(restored, eqx.is_array))
@@ -379,8 +380,7 @@ def test_native_public_trainer_eval_step_checkpoint_resume_preserves_explicit_st
             checkpoint,
             Vocab=hax.Axis("vocab", 19),
             axis_mapping=trainer.parameter_axis_mapping,
-            compute_axis_mapping=trainer.compute_axis_mapping,
-            batch_axis_name="batch",
+            placement=placement,
             key=jax.random.PRNGKey(3),
         )
         assert loaded.Vocab.size == 32

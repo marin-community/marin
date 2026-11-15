@@ -714,6 +714,11 @@ def test_save_pretrained_writes_transformers4_and_5_rope_keys(tmp_path):
 
 
 class NonpersistentBufferWrapper(BasicModelWrapper):
+    @classmethod
+    def init(cls, Vocab: Axis, config: Gpt2Config, *, key: PRNGKey) -> "NonpersistentBufferWrapper":
+        base = BasicModelWrapper.init(Vocab, config, key=key)
+        return cls(base.model, base.an_int_param, base.a_bool_buffer, base.a_float_param)
+
     def to_state_dict(self, prefix=None):
         state = super().to_state_dict(prefix)
         state.pop(with_prefix(prefix, "a_bool_buffer"))
@@ -727,7 +732,7 @@ class NonpersistentBufferWrapper(BasicModelWrapper):
 
 
 @pytest.mark.parametrize("explicit", [False, True])
-def test_local_hf_loading_reconstructs_missing_buffers_with_placed_constructor(
+def test_local_hf_loading_reconstructs_missing_buffers_with_placed_template(
     tmp_path, local_gpt2_tokenizer_path, explicit
 ):
     config = Gpt2Config(num_layers=1, num_heads=1, hidden_dim=16, max_seq_len=8, use_flash_attention=False)
@@ -739,8 +744,7 @@ def test_local_hf_loading_reconstructs_missing_buffers_with_placed_constructor(
     )
 
     def constructor(vocab):
-        base = BasicModelWrapper.init(vocab, config, key=PRNGKey(0))
-        model = NonpersistentBufferWrapper(base.model, base.an_int_param, base.a_bool_buffer, base.a_float_param)
+        model = NonpersistentBufferWrapper.init(vocab, config, key=PRNGKey(0))
         if explicit:
             model = replace(model, a_bool_buffer=jax.sharding.reshard(model.a_bool_buffer, P()))
         return model
@@ -753,7 +757,7 @@ def test_local_hf_loading_reconstructs_missing_buffers_with_placed_constructor(
             ref=RepoRef(str(tmp_path)),
             config=config,
             axis_mapping={},
-            model_init=constructor,
+            model_template=eqx.filter_eval_shape(constructor, Axis("vocab", 32)),
         )
         assert_trees_all_equal(restored, original)
         assert restored.a_bool_buffer.sharding.is_equivalent_to(original.a_bool_buffer.sharding, 1)

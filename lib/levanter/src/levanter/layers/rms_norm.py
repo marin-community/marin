@@ -28,6 +28,7 @@ class RmsNorm(eqx.Module):
         storage_spec: PartitionSpec,
         compute_spec: PartitionSpec,
     ) -> "RmsNorm":
+        """Build affine parameters whose specs refer to the final input axis."""
         weight = reshard(jnp.ones(dim), storage_spec) if use_weight else None
         bias = reshard(jnp.zeros(dim), storage_spec) if use_bias else None
         return RmsNorm(weight, bias, eps, compute_spec)

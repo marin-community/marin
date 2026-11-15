@@ -13,7 +13,7 @@ import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis
-from haliax.partitioning import named_jit, round_axis_for_partitioning
+from haliax.partitioning import named_jit
 
 import levanter
 import levanter.analysis
@@ -34,11 +34,9 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.field_dtype_overrides import hf_load_dtype
 from levanter.models.llama import LlamaConfig
-from levanter.models.llama_native_lm import NativeLlamaLmConfig, native_llama_sharding
-from levanter.main.model_init import ModelInitContext, build_model, prepare_model_init_context, load_model_from_source
-from levanter.model_loading import native_evaluation_axis_mapping
+from levanter.main.model_init import ModelInitContext, prepare_model_init_context, load_model_from_source
 from jax.sharding import PartitionSpec as P
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, ModelPlacement, split_activations
 from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.trainer import ExplicitTrainingLayout, Trainer, TrainerConfig
@@ -146,8 +144,10 @@ def _load_lm_model_from_configured_source(
     adapter_key,
     parameter_axis_mapping,
     trainer: Trainer,
+    placement: ModelPlacement | None = None,
 ) -> LmHeadModel:
-    if isinstance(config.model, NativeLlamaLmConfig):
+    if config.model.owns_parameter_placement:
+        assert placement is not None
         source = config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
         if config.initialize_from_hf or source is not None:
             return load_model_from_source(
@@ -155,20 +155,12 @@ def _load_lm_model_from_configured_source(
                 Vocab=Vocab,
                 model_key=model_key,
                 parameter_axis_mapping=parameter_axis_mapping,
-                compute_axis_mapping=trainer.compute_axis_mapping,
-                batch_axis_name=config.trainer.batch_axis_name,
+                placement=placement,
                 mp=trainer.mp,
                 hf_ref=config.initialize_from_hf,
                 checkpoint_path=source,
             )
-        return build_model(
-            config.model,
-            Vocab,
-            key=model_key,
-            parameter_axis_mapping=parameter_axis_mapping,
-            compute_axis_mapping=trainer.compute_axis_mapping,
-            batch_axis_name=config.trainer.batch_axis_name,
-        )
+        return config.model.build_for_mesh(Vocab, key=model_key, placement=placement)
     if config.initialize_from_hf:
         assert converter is not None
         model = converter.load_pretrained(
@@ -201,9 +193,9 @@ def _load_lm_model_from_configured_source(
 
 
 def main(config: TrainLmConfig):
-    native = isinstance(config.model, NativeLlamaLmConfig)
+    explicit = config.model.owns_parameter_placement
     explicit_layout = None
-    if native:
+    if explicit:
         if config.trainer.quantization is not None or not isinstance(config.adapter, NoAdaptorConfig):
             raise ValueError("llama_native currently supports unquantized models without adapters")
         if config.pad_tokenizer_to_match_model:
@@ -255,7 +247,7 @@ def main(config: TrainLmConfig):
 
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
     # I recommend skipping it for now
-    if native:
+    if explicit:
         context = prepare_model_init_context(
             config.model,
             tokenizer=tokenizer,
@@ -293,14 +285,11 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
-    if native:
-        sharding = native_llama_sharding(
-            config.trainer.parameter_axis_mapping,
-            config.trainer.compute_axis_mapping,
-            config.trainer.batch_axis_name,
-        )
-        config.model.validate_sharding(sharding, config.trainer.device_mesh)
-        explicit_layout = ExplicitTrainingLayout(config.trainer.device_mesh, P(sharding.batch, None))
+    placement = ModelPlacement(
+        config.trainer.parameter_axis_mapping, config.trainer.compute_axis_mapping, config.trainer.batch_axis_name
+    )
+    if explicit:
+        explicit_layout = ExplicitTrainingLayout(config.trainer.device_mesh, P(placement.batch_axes, None))
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
     def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
@@ -315,8 +304,7 @@ def main(config: TrainLmConfig):
             config.trainer,
             optimizer,
             loss_function,
-            explicit_layout=explicit_layout,
-            checkpoint_metadata=(lambda model: model.checkpoint_metadata()) if native else None,
+            layout=explicit_layout,
         ) as trainer,
         TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
     ):
@@ -333,14 +321,8 @@ def main(config: TrainLmConfig):
         # This allows Zero-3-style parameter sharding, where we shard the parameters and optimizer state across the mesh
         compute_axis_mapping = trainer.compute_axis_mapping
         parameter_axis_mapping = trainer.parameter_axis_mapping
-        if native:
-            compute_axis_mapping = native_evaluation_axis_mapping(
-                config.model,
-                parameter_axis_mapping,
-                compute_axis_mapping,
-                trainer.device_mesh,
-                config.trainer.batch_axis_name,
-            )
+        if explicit:
+            compute_axis_mapping = placement.evaluation_mapping(trainer.device_mesh)
 
         # some axes we need
         EvalBatch = config.trainer.EvalBatch
@@ -364,12 +346,11 @@ def main(config: TrainLmConfig):
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
         # tokens: gpt-2 has 50257, for example. So we round up.
         vocab_size = len(tokenizer)
-        vocab_mapping = {"vocab": sharding.model_axis} if native else parameter_axis_mapping
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), vocab_mapping)
+        Vocab = config.model.vocab_axis_for_mesh(Axis("vocab", vocab_size), placement)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
 
-        if native:
+        if explicit:
             checkpoint = trainer.explicit_checkpoint_to_load
             initialization_source = (
                 config.initialize_from_checkpoint_path or config.initialize_model_from_checkpoint_path
@@ -385,7 +366,6 @@ def main(config: TrainLmConfig):
                     if vocab_size > source_vocab:
                         raise ValueError("Tokenizer vocabulary exceeds native checkpoint vocabulary")
                     Vocab = Vocab.resize(source_vocab)
-            config.model.validate_sharding(sharding, trainer.device_mesh, Vocab.size)
 
         # Get the training dataset
         train_dataset = config.data.train_set(
@@ -408,8 +388,9 @@ def main(config: TrainLmConfig):
             adapter_key=adapter_key,
             parameter_axis_mapping=parameter_axis_mapping,
             trainer=trainer,
+            placement=placement,
         )
-        resuming = trainer.explicit_checkpoint_to_load is not None if native else trainer.checkpoint_load_plan()[1]
+        resuming = trainer.explicit_checkpoint_to_load is not None if explicit else trainer.checkpoint_load_plan()[1]
         weight_source = config.initialize_from_hf or config.initialize_model_from_checkpoint_path is not None
         if weight_source and not resuming:
             logger.info("Initializing trainer state directly from pretrained weights")
@@ -422,18 +403,7 @@ def main(config: TrainLmConfig):
         elif isinstance(config.adapter, NoAdaptorConfig):
             state = trainer.initial_state(
                 training_key,
-                model_init=lambda: (
-                    build_model(
-                        config.model,
-                        Vocab,
-                        key=model_key,
-                        parameter_axis_mapping=parameter_axis_mapping,
-                        compute_axis_mapping=trainer.compute_axis_mapping,
-                        batch_axis_name=config.trainer.batch_axis_name,
-                    )
-                    if native
-                    else config.model.build(Vocab, key=model_key)
-                ),
+                model_init=lambda: config.model.build_for_mesh(Vocab, key=model_key, placement=placement),
             )
         else:
             initial_model = config.adapter.apply(
@@ -449,7 +419,7 @@ def main(config: TrainLmConfig):
 
         if not resuming and config.initialize_from_checkpoint_path is not None:
             checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
-            state = load_checkpoint(state, checkpoint_path, **({"mesh": trainer.device_mesh} if native else {}))
+            state = load_checkpoint(state, checkpoint_path, **({"mesh": trainer.device_mesh} if explicit else {}))
             # reset to step 0, we're just initializing weights here
             state = dataclasses.replace(state, step=jnp.array(0))
 
