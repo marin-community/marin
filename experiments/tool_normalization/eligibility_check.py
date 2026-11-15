@@ -10,6 +10,8 @@ from pathlib import Path
 
 import xxhash
 
+from experiments.tool_normalization.eligibility import BOS, EOS_SUFFIX
+
 
 def eligibility(source: dict) -> str:
     binding = source["eligibility"]
@@ -39,7 +41,7 @@ def eligibility(source: dict) -> str:
     if identity != evidence[f"{source['id']}-identity.json"]:
         raise ValueError("Source identity receipt differs")
     text = source["text"]
-    bos, eos = "<|begin_of_text|>", " <|end_of_text|>"
+    bos, eos = BOS, EOS_SUFFIX
     if not text.startswith(bos) or not text.endswith(eos):
         raise ValueError("Unexpected source framing")
     if xxhash.xxh3_128_hexdigest(text[len(bos) : -len(eos)].encode()) != identity["identity"]["id"]:
@@ -60,29 +62,3 @@ def eligibility(source: dict) -> str:
     if disposition != proof["disposition"]:
         raise ValueError("Outcome disposition differs")
     return disposition
-
-
-def bind_manifest(manifest: Path, report: Path, root: Path) -> Path:
-    """Bind existing outcome proofs to source copies without changing archived inputs."""
-    root.mkdir(parents=True, exist_ok=False)
-    proofs = {row["id"]: Path(row["proof"]) for row in json.loads(report.read_text())["rows"]}
-    rows = []
-    for line in manifest.read_text().splitlines():
-        row = json.loads(line)
-        source = json.loads(Path(row["source_file"]).read_text())
-        if source["id"] in proofs:
-            proof = proofs[source["id"]]
-            source["eligibility"] = {
-                "proof_path": str(proof.resolve()),
-                "proof_sha256": hashlib.sha256(proof.read_bytes()).hexdigest(),
-            }
-            eligibility(source)
-            directory = root / source["id"]
-            directory.mkdir(parents=True)
-            path = directory / "source.json"
-            path.write_text(json.dumps(source, ensure_ascii=False, indent=2) + "\n")
-            row = {**row, "source_file": str(path.resolve())}
-        rows.append(row)
-    output = root / "manifest.jsonl"
-    output.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    return output

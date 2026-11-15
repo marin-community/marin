@@ -11,20 +11,15 @@ from pathlib import Path
 import jsonschema
 
 from experiments.tool_normalization.candidate import (
-    CANDIDATE_SCHEMA,
     assembled_messages,
     calls_for_candidate,
     has_source_calls,
     source_messages,
 )
 from experiments.tool_normalization.eligibility_check import eligibility
-from experiments.tool_normalization.fixture_checks import fixture_verification_calls, model_environment
 from experiments.tool_normalization.historical_projection import historical_projection
-from experiments.tool_normalization.native_seed import EDIT_SCHEMA, apply_edits, native_seed
+from experiments.tool_normalization.native_seed import native_seed
 from experiments.tool_normalization.native_tools import observations
-from experiments.tool_normalization.observation_review import observation_alignment, validate_observation_review
-from experiments.tool_normalization.pipeline import AUDIT_SCHEMA, verification_calls
-from experiments.tool_normalization.replay_review import REPLAY_SCHEMA, replay_payload, validate_replay_review
 from experiments.tool_normalization.review_encoding import ENCODING_INSTRUCTIONS, FORMAT, decode_payload
 from experiments.tool_normalization.review_real import (
     AUDIT,
@@ -78,92 +73,6 @@ def execution_messages(directory: Path, calls: list[dict]) -> list[dict]:
     if report["exit_code"] != 0 or report["dispatch_errors"]:
         raise ValueError("Native dispatch failed")
     return observations(calls, report["tool_events"])
-
-
-def verify(directory: Path, sft_tokenizer: Path) -> dict:
-    seal = read(directory / "seal.json")
-    for name, expected in seal.items():
-        if hashlib.sha256((directory / name).read_bytes()).hexdigest() != expected:
-            raise ValueError(f"Sealed artifact changed: {name}")
-    if read(directory / "result.json")["status"] != "accepted":
-        raise ValueError("Record was not accepted")
-    source_ref = read(directory / "source-reference.json")
-    source_file = Path(source_ref["path"])
-    if hashlib.sha256(source_file.read_bytes()).hexdigest() != source_ref["sha256"]:
-        raise ValueError("Source reference changed")
-    source = read(source_file)
-    if source["source"].startswith("open_swe_traces/"):
-        if eligibility(source) != "eligible" or read(directory / "eligibility.json") != source["eligibility"]:
-            raise ValueError("Open-SWE source is not eligible")
-    original = source_messages(source["text"])
-    stages = sorted(path for path in directory.glob("attempt-*") if (path / "replay").exists())
-    if len(stages) != 1:
-        raise ValueError("No unique final replay")
-    stage = stages[0]
-    schemas = read(Path(__file__).with_name("opencode-tools.json"))
-    requested = json.loads(read(stage / "convert/request.json")["messages"][1]["content"])
-    if requested["source"] != [dict(index=index, **message) for index, message in enumerate(original)]:
-        raise ValueError("Conversion request used a different source")
-    environment = read(directory / "environment.json")
-    if requested["environment_manifest"] != model_environment(environment):
-        raise ValueError("Conversion request used a different environment")
-    seed = native_seed(original, environment["packages"])
-    if seed is not None:
-        if requested["seed"] != seed:
-            raise ValueError("Prepared candidate differs from exact source mapping")
-        candidate = apply_edits(seed, model_value(stage / "convert", EDIT_SCHEMA))
-    else:
-        candidate = model_value(stage / "convert", CANDIDATE_SCHEMA)
-    if candidate != read(stage / "materialized-candidate.json"):
-        raise ValueError("Materialized candidate differs from model proposal")
-    for name in ("execution", "replay"):
-        execution_config = read(stage / name / "manifest.json")["config"]
-        if any(execution_config[key] != environment[key] for key in ("image", "workdir", "recorder_python")):
-            raise ValueError("Execution used a different environment")
-    calls = calls_for_candidate(original, candidate, schemas)
-    observed = execution_messages(stage / "execution", calls)
-    messages = assembled_messages(original, candidate, observed)
-    audit = model_value(stage / "audit", AUDIT_SCHEMA)
-    audit_input = json.loads(read(stage / "audit/request.json")["messages"][1]["content"])
-    if audit_input["original"] != original or audit_input["candidate"] != messages:
-        raise ValueError("Audit reviewed a different source or candidate")
-    alignment = observation_alignment(original, candidate)
-    if audit_input["observation_alignment"] != alignment:
-        raise ValueError("Audit observation alignment differs")
-    validate_observation_review(alignment, audit["observation_reviews"])
-    if (
-        audit["decision"] != "pass"
-        or audit["issues"]
-        or not audit["requirements"]
-        or not all(check["fulfilled"] for check in audit["requirements"])
-    ):
-        raise ValueError("Audit does not pass")
-    checks = verification_calls(audit["verification_script"]) + fixture_verification_calls(source, environment)
-    if (calls and not checks) or any(call["name"] != "bash" for call in checks):
-        raise ValueError("Missing task verification")
-    replay = execution_messages(stage / "replay", calls + checks)
-    if replay[: len(calls)] != observed:
-        comparison = replay_payload(calls, observed, replay[: len(calls)], messages)
-        replay_audit = model_value(stage / "replay-audit", REPLAY_SCHEMA)
-        supplied = json.loads(read(stage / "replay-audit/request.json")["messages"][1]["content"])
-        if supplied != comparison:
-            raise ValueError("Replay audit reviewed different evidence")
-        validate_replay_review(comparison, replay_audit)
-    events = read(stage / "replay/stdout.json")["tool_events"][len(calls) :]
-    if any(
-        event["part"]["state"]["status"] != "completed" or event["part"]["state"].get("metadata", {}).get("exit") != 0
-        for event in events
-    ):
-        raise ValueError("Task verification failed")
-    if messages != read(directory / "export/messages.json"):
-        raise ValueError("Export differs from executed candidate")
-    with tempfile.TemporaryDirectory() as temporary:
-        rebuilt = Path(temporary) / "export"
-        export(messages, schemas, sft_tokenizer, rebuilt)
-        for name in ("text.txt", "input_ids.i32", "loss_mask.u8", "tools.json"):
-            if (rebuilt / name).read_bytes() != (directory / "export" / name).read_bytes():
-                raise ValueError(f"Export failed reconstruction: {name}")
-    return {"verified": True, "calls": len(calls), "checks": len(checks), "files": len(seal)}
 
 
 def verify_adapter(directory: Path, cfg: dict) -> dict:
