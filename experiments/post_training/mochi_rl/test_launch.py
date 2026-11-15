@@ -62,6 +62,10 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert trainer["resume_mode"] == "latest"
     if resume_step is not None:
         assert inputs["starting_checkpoint"]["uri"] == str(native)
+    if PROFILES[profile].data_namespace:
+        (first_tasks / "train.parquet").write_bytes(b"changed after pinning")
+        corrupted = CliRunner().invoke(main, args)
+        assert isinstance(corrupted.exception, ValueError)
 
 
 def test_continuations_keep_distinct_inputs_and_coordinator_queue_time(tmp_path: Path) -> None:
