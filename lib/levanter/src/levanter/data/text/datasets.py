@@ -421,6 +421,23 @@ def _resolve_pack_config(
     return int(pack), packed_slice_strategy
 
 
+def _prepacked_cache(
+    cache: TreeCache[T],
+    max_length: int,
+    *,
+    max_segments: int,
+    slice_strategy: Literal["left", "right", "raise", "drop"],
+    lookahead: int | None,
+) -> GreedyPrepackedDataset[T] | LookaheadPrepackedDataset[T]:
+    if lookahead is not None:
+        return LookaheadPrepackedDataset(
+            cache.jagged_array_tree(), max_length, max_segments_per_example=max_segments, lookahead=lookahead
+        )
+    return GreedyPrepackedDataset(
+        cache.jagged_array_tree(), max_length, max_segments_per_example=max_segments, slice_strategy=slice_strategy
+    )
+
+
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
     """Packed version of token dataset using GreedyPrepackedDataset."""
 
@@ -435,21 +452,13 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         input_ids_key: str = "input_ids",
         packing_lookahead: int | None = None,
     ):
-        self.packed: GreedyPrepackedDataset[dict] | LookaheadPrepackedDataset[dict]
-        if packing_lookahead is None:
-            self.packed = GreedyPrepackedDataset(
-                cache.jagged_array_tree(),
-                Pos.size,
-                max_segments_per_example=max_segments_per_example,
-                slice_strategy=slice_strategy,
-            )
-        else:
-            self.packed = LookaheadPrepackedDataset(
-                cache.jagged_array_tree(),
-                Pos.size,
-                max_segments_per_example=max_segments_per_example,
-                lookahead=packing_lookahead,
-            )
+        self.packed = _prepacked_cache(
+            cache,
+            Pos.size,
+            max_segments=max_segments_per_example,
+            slice_strategy=slice_strategy,
+            lookahead=packing_lookahead,
+        )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
         self.loss_weights_key = loss_weights_key
@@ -508,21 +517,13 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         block_cross_document_attention: bool = True,
         packing_lookahead: int | None = None,
     ):
-        self.packed: GreedyPrepackedDataset[ProcessedChatDict] | LookaheadPrepackedDataset[ProcessedChatDict]
-        if packing_lookahead is None:
-            self.packed = GreedyPrepackedDataset(
-                cache.jagged_array_tree(),
-                Pos.size,
-                max_segments_per_example=max_segments_per_example,
-                slice_strategy=slice_strategy,
-            )
-        else:
-            self.packed = LookaheadPrepackedDataset(
-                cache.jagged_array_tree(),
-                Pos.size,
-                max_segments_per_example=max_segments_per_example,
-                lookahead=packing_lookahead,
-            )
+        self.packed = _prepacked_cache(
+            cache,
+            Pos.size,
+            max_segments=max_segments_per_example,
+            slice_strategy=slice_strategy,
+            lookahead=packing_lookahead,
+        )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
 

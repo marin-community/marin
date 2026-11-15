@@ -7,7 +7,6 @@ import json
 import math
 
 from marin.rl.skyrl import SkyRLRun
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, trailing_validation_ema
@@ -51,10 +50,8 @@ def validate_selection_receipts(best: dict, history: list[dict], selected_step: 
 def validate_full_selection(run: SkyRLRun) -> dict:
     """Read the durable native selection before admitting its HF export to eval."""
     root = run.checkpoint_root
-    fs, key = filesystem_for(prefix_join(root, BEST_CHECKPOINT_FILENAME))
-    best = json.loads(fs.cat_file(key))
-    fs, key = filesystem_for(prefix_join(root, "validation_selection_history.json"))
-    history = json.loads(fs.cat_file(key))
+    best = json.loads((StoragePath(root) / BEST_CHECKPOINT_FILENAME).read_bytes())
+    history = json.loads((StoragePath(root) / "validation_selection_history.json").read_bytes())
     if run.global_step is None or not run.hf_model_uri:
         raise ValueError("Full RL result has no selected HF export")
     if best["model_uri"] != prefix_join(root, f"global_step_{run.global_step}/policy"):

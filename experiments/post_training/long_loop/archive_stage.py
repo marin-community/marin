@@ -59,8 +59,7 @@ RUNTIME_WORKSPACE = Path(__file__).resolve().parents[3]
 
 def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
     """Seal an explicit reviewed inventory, then clean only its superseded checkpoints."""
-    fs, key = filesystem_for(prefix_join(completed_report, "evaluation.json"))
-    evaluation = json.loads(fs.cat_file(key))
+    evaluation = json.loads((StoragePath(completed_report) / "evaluation.json").read_bytes())
     require_evaluation_coverage(evaluation)
     inputs = [ArchiveInput(**item) for item in plan["inputs"]]
     missing = REQUIRED_CATEGORIES - {item.category for item in inputs}

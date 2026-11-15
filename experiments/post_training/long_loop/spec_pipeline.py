@@ -14,7 +14,6 @@ from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.execution.remote import remote
 from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, IrisSkyRLExecution, SkyRLRolePlan
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
@@ -61,8 +60,7 @@ def verify_inputs(*, output: str, manifests: dict) -> None:
         if "data_file" in manifest and not manifest.get("files"):
             raise ValueError(f"Dataset {name} has no pinned payload files")
         for entry in manifest.get("files", ()):
-            fs, key = filesystem_for(entry["uri"])
-            with fs.open(key, "rb") as source:
+            with StoragePath(entry["uri"]).open("rb") as source:
                 actual = hashlib.file_digest(source, "sha256").hexdigest()
             if actual != entry["sha256"]:
                 raise ValueError(f"Dataset {name} changed: {entry['uri']}")
