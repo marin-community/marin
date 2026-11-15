@@ -818,7 +818,7 @@ def decontamination_steps(
         required_eval_names=AA_BENCHMARK_NAMES,
         additional_required_eval_manifests=(
             RequiredEvalManifest(
-                path=f"{marin_prefix()}/{COVERAGE_RELATIVE}/{COVERAGE_MANIFEST}",
+                path=prefix_join(prefix_join(marin_prefix(), COVERAGE_RELATIVE), COVERAGE_MANIFEST),
                 version=COVERAGE_VERSION,
                 names=tuple(source.name for source in reference_catalog()),
                 source_catalog_sha256=reference_sources_sha256(reference_catalog()),

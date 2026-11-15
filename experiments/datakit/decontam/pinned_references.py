@@ -214,7 +214,7 @@ def prepare_references(output_root: str, sources: tuple[ReferenceSource, ...]) -
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", default=f"{marin_prefix()}/{COVERAGE_RELATIVE}")
+    parser.add_argument("--output-root", default=prefix_join(marin_prefix(), COVERAGE_RELATIVE))
     parser.add_argument("--catalog", type=Path, default=CATALOG_PATH)
     args = parser.parse_args()
     configure_logging(logging.INFO)
