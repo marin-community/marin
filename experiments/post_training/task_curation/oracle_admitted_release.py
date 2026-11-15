@@ -50,7 +50,11 @@ from experiments.post_training.task_curation.prebuilt import (
 )
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.retained_grading import RetainedGradingReceipt
-from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt, bind_sample_result
+from experiments.post_training.task_curation.sample_qc_binding import (
+    SampleQCReceipt,
+    bind_sample_result,
+    require_sample_qualification,
+)
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 
@@ -170,13 +174,9 @@ class OracleAdmittedReleaseReceipt(BaseModel):
         ):
             raise ValueError("Whole-source content review belongs to another filtered population")
         sample_size = min(100, evidence.admitted_count)
-        if (
-            not review.panel_coverage_complete
-            or review.attempted_count != sample_size
-            or panel.sample_seed != 0
-            or panel.sample_size != sample_size
-        ):
+        if review.attempted_count != sample_size or panel.sample_seed != 0 or panel.sample_size != sample_size:
             raise ValueError("Filtered SAMPLE observations are incomplete")
+        require_sample_qualification(self.sample)
         return self
 
 
@@ -217,7 +217,7 @@ def bind_oracle_admitted_release(
         recipe_qa_history=RecipeQAHistoricalNotes(
             campaign=evidence.validation.uri,
             recipe_revision=receipt.actor.input.converter_revision,
-            reviewed=receipt.sample.review.attempted_count,
+            reviewed=receipt.sample.review.result.reviewed,
             admitted=evidence.admitted_count,
             verification=(
                 f"Full original-oracle outcomes and applicable controls: {evidence.oracle_filter.uri}; "

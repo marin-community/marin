@@ -49,7 +49,7 @@ issues when its judgment is Some issues or Bad:
 - Good: at least 90% clean (no more than 10% with issues).
 - Bad: at least 50% with issues.
 - Some issues: more than 10% and fewer than 50% with issues.
-- Unknown: no conclusive reviewed tasks or incomplete sample coverage.
+- Unknown: no conclusive reviewed tasks. Missing observations remain coverage diagnostics.
 
 Exactly 10% issues is Good; exactly 50% is Bad. Store the reviewed and issue
 counts, issue rate, issue evidence and repair recommendation. Unavailable and
@@ -104,19 +104,25 @@ binding shows FULL, a current-pin SAMPLE receipt shows SAMPLE unless its
 complete-population panel covers every retained task, which also shows FULL,
 and conversion-only sources show QUICK — and the levels define required
 content-review scope: QUICK converts
-without content review, SAMPLE requires a complete review of the selected sample,
+without content review, SAMPLE requires at least 95% conclusive reviews of its fixed selected sample,
 and FULL requires a review of the whole retained population. An explicitly accepted
 whole-source waiver also displays FULL when its pinned evidence accounts for every
 unreviewed task and reason; strict coverage remains false. Execution qualification is recorded separately. Result uses the
 inclusive issue-rate boundaries above.
 
-The loader records required and conclusive reviewed counts plus coverage
-completeness. Result is provisional if coverage is incomplete or any required
-observation remains unreviewed or uncertain, unless a verified whole-source
-finalization accepts those observations with pinned waiver evidence. Its Result is
-final while Evidence retains the incomplete coverage, unreviewed count and exact
-reasons. A completed SAMPLE review is final
-for its sample; the Quality label alone never makes Result provisional. These
+The loader records required and conclusive reviewed counts plus strict coverage
+completeness. SAMPLE permits at most 5% missing observations (at most 5 of 100);
+unavailable and uncertain rows count as missing, and issue rates use reviewed
+rows. The seed and panel stay fixed: no replacement or resampling. Missing task
+IDs, reasons, bounded attempts and hashed deployment/batch evidence remain in the
+receipts. A qualifying SAMPLE displays SAMPLE with a final Result and measured
+counts such as “99 reviewed, 1 unavailable”, plus any uncertain count; strict
+coverage remains false when observations are unavailable. Above 5%, SAMPLE remains provisional until repaired.
+
+FULL finality is unchanged: an incomplete required whole-source review stays
+provisional unless a verified `accepted_incomplete` whole-source waiver accounts
+for its unreviewed tasks and exact reasons. `accepted_incomplete` applies only to
+FULL. The Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
 

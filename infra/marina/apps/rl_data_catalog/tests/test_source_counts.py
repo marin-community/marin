@@ -5,8 +5,10 @@ import pytest
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
+from infra.marina.apps.rl_data_catalog.server.quality import quality_display, review_completeness
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence
+from infra.marina.apps.rl_data_catalog.tests.review_fixtures import review_declarations
 
 
 @pytest.mark.parametrize(
@@ -52,3 +54,16 @@ def test_oracle_inventory_and_missing_static_audit_do_not_establish_counts() -> 
     static = filtration(source.model_dump(mode="json"), count_evidence(source, oracle_tasks=0, blocked=None))
     assert oracle["state"] == "pending_oracle" and oracle["example_count"] is None
     assert static["state"] == "pending_static" and static["example_count"] is None
+
+
+@pytest.mark.parametrize("provisional,declaration", review_declarations())
+def test_sample_tolerance_display_preserves_counts_and_full_finality(provisional, declaration):
+    completeness = review_completeness(declaration, [], [])
+    assert completeness is not None
+    assert completeness["provisional"] is provisional
+    assert completeness["reviewed"] == declaration.quality_result.reviewed
+    assert completeness["required"] == declaration.quality_result.sample_count
+    assert completeness["coverage_complete"] is (declaration.quality_result.unavailable_count == 0)
+    if declaration.name.startswith("sample-missing-"):
+        assert quality_display(declaration.model_dump(mode="json"), None, None).quality.value == "SAMPLE"
+        assert not completeness["coverage_complete"]

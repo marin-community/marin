@@ -2504,6 +2504,26 @@ configured cap in `normalized_shard_limit`. Full preparation uses the same
 population rule with a cap of 64 deduplication partitions; persisted review files
 retain their independent record and byte limits.
 
+### SAMPLE missing-review tolerance
+
+A fixed SAMPLE panel qualifies with at least 95% conclusive reviewed rows:
+`SAMPLE_MAX_MISSING_FRACTION = 0.05` permits at most 5 missing rows in a
+100-row attempted panel. Smaller panels allow at most
+`floor(0.05 × attempted rows)` missing rows. Unavailable and uncertain
+observations count as missing for qualification;
+their measured counts remain separate. Issue rates divide findings by conclusive
+reviewed rows.
+
+Keep the seed and panel fixed. Do not replace or resample missing tasks.
+Preserve each missing task ID, status and exact reason, bounded-attempt evidence,
+and deployment and batch receipts with SHA-256 hashes. Generated SAMPLE receipts
+include missing observations and their hashed batch receipts; the immutable
+review artifact binds the panel, reviewer deployment and complete records.
+`panel_coverage_complete` continues to report strict observed coverage and is
+never changed to claim completeness. A qualifying SAMPLE Result is final for its
+sample while showing the actual reviewed, unavailable and uncertain counts.
+Panels with more than 5% missing remain unqualified and provisional until repaired.
+
 ### QA reviewer
 
 SAMPLE and FULL curation require an immutable `ReviewerSpec`. `--reviewer-tier HEAVY`
@@ -2542,15 +2562,16 @@ The [FULL-QC reviewer changelog](https://github.com/marin-community/marin/blob/a
 records cache separation, resume commands and the preserved v2 repair policy.
 
 Whole-source content Result finality is recorded explicitly as `complete` or
-`accepted_incomplete`, independently of coverage. The latter requires a pinned
+`accepted_incomplete`, independently of coverage. These states apply only to FULL;
+SAMPLE uses the missing-review tolerance above. `accepted_incomplete` requires a pinned
 waiver enumerating every unreviewed task and exact reason, and preserves
 missing-review and uncertainty counts. This accepted whole-source review displays
 Quality FULL and a final Result; strict coverage remains false on Evidence.
 Exact-input whole-source bindings
 take precedence over later SAMPLE panels; input changes invalidate that finality.
 See [final whole-source Results](https://github.com/marin-community/marin/blob/atlas-env-audit/experiments/post_training/task_curation/README.md#final-whole-source-content-results)
-for offline evidence verification and transport. Completed SAMPLE panels retain
-their existing finality semantics. Content finality supplies neither execution
+for offline evidence verification and transport. SAMPLE finality follows the
+95% conclusive-review threshold above. Content finality supplies neither execution
 qualification nor permission to publish a remediated dataset.
 
 Quality manifests and assessment model metadata record the complete spec identity.

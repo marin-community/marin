@@ -571,6 +571,16 @@ reviewer without reserving GPUs. A resume reuses reviewed batch receipts only
 when task/runtime contracts, rubric and reviewer identity match exactly.
 Unavailable observations and unsuccessful attempts remain recorded.
 
+A fixed SAMPLE panel qualifies with at least 95% conclusive reviewed rows:
+`SAMPLE_MAX_MISSING_FRACTION = 0.05` permits at most 5 missing rows of 100,
+with the same fractional limit for smaller panels. Unavailable and uncertain
+rows count as missing; issue rates use reviewed rows. Do not replace or resample
+missing tasks. Record their IDs, exact reasons, bounded attempts and hashed
+deployment/batch receipts. Receipt generation retains missing observations and
+batch hashes and rejects panels above the tolerance. A qualifying SAMPLE Result
+is final for its sample with actual reviewed, unavailable and uncertain counts;
+`panel_coverage_complete` remains a truthful strict coverage field.
+
 Export a selected Result for each source with:
 
 ```bash
@@ -590,8 +600,9 @@ uses the pinned content Result while retaining earlier assessments and packets.
 
 ### Final whole-source content Results
 
-Whole-source finalization is explicit. Content coverage records whether every
-retained task has a completed review observation, including valid uncertain
+`accepted_incomplete` applies only to FULL; SAMPLE uses the 5% missing-review
+tolerance above. Whole-source finalization is explicit. Content coverage records
+whether every retained task has a completed review observation, including valid uncertain
 observations. A verified
 `FullContentResultBinding` records the exact dataset pin, converter, retained
 population digest/count, contract index, immutable review receipt and records.
@@ -661,7 +672,7 @@ declaration persists `quality_result_finalization` and `quality_result_waiver`.
 Atlas requires both accepted-incomplete finality and its typed waiver reference
 plus whole-population accounting to display FULL. Evidence shows false strict
 coverage, the unreviewed count, and the pinned receipt containing exact reasons.
-Completed SAMPLE panels keep their existing finality rules.
+SAMPLE panels use the 5% missing-review tolerance above.
 
 ### Audit reviewer errors
 

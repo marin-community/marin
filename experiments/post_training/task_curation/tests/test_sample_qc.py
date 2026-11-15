@@ -4,7 +4,7 @@
 import hashlib
 import json
 import shutil
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -16,6 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
+from taskcompendium.pipeline.models import ReviewRecord
 from taskcompendium.pipeline.oracle_filter import OracleTaskReceipt
 from taskcompendium.pipeline.review import ChatReviewer
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
@@ -26,12 +27,13 @@ from experiments.post_training.task_curation.difficulty_samples import (
     prepare_sample,
     relocated_panel,
 )
-from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
+from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
+from experiments.post_training.task_curation.full_qc_review import ContractBatch, quality_result, write_observations
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.published_census import population_documents, population_rows
 from experiments.post_training.task_curation.sample_qc import SamplePanel, panel_tasks, review_panel
-from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
+from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory, SampleQCReview
 from experiments.post_training.task_curation.sample_qc_binding import bind_sample_result
 from experiments.post_training.task_curation.sample_qc_receipts import sample_qc_receipt
 from experiments.post_training.task_curation.source import SourceOrigin, SourceReference
@@ -273,3 +275,117 @@ def test_sample_result_cannot_claim_issue_counts_absent_from_observations(sample
     write_record(record.model_copy(update={"result": {**record.result, "result": claimed.model_dump(mode="json")}}))
     with pytest.raises(ValueError, match="differs from its task-level observations"):
         sample_qc_receipt(result.path)
+
+
+@pytest.mark.parametrize("missing_count", [5, 6])
+def test_sample_missing_tolerance_preserves_frozen_panel_and_missing_evidence(sample_panel, tmp_path, missing_count):
+    template = panel_tasks(sample_panel)[0][0]
+    tasks = [template.model_copy(update={"id": f"task-{index:03d}"}) for index in range(100)]
+    files = write_text_population(((task.model_dump(mode="json"), {}) for task in tasks), str(tmp_path / "hundred"))
+    population = SourceTextPopulation.raw_load(sample_panel.input_artifact).model_copy(
+        update={
+            "path": str(tmp_path / "hundred"),
+            "task_count": 100,
+            "task_specs_sha256": files.task_specs_sha256,
+            "main_output_dir": files.main_output_dir,
+            "specs_output_dir": files.specs_output_dir,
+        }
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=population.path,
+            result_type=result_type_name(type(population)),
+            result=population.result_payload(),
+        )
+    )
+    panel_path = tmp_path / "hundred-panel.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"task_id": task.id, "task_spec": task.model_dump_json(), "runtime": "{}"} for task in tasks],
+            schema=PANEL_SCHEMA,
+        ),
+        panel_path,
+    )
+    inventory = SampleInventory.model_validate_json(StoragePath(sample_panel.evidence_url).read_text()).model_copy(
+        update={
+            "input_artifact": population.path,
+            "retained_tasks": 100,
+            "sample_size": 100,
+            "task_specs_sha256": population.task_specs_sha256,
+            "scanned_task_specs_sha256": population.task_specs_sha256,
+            "panel_path": str(panel_path),
+            "panel_sha256": file_sha256(StoragePath(str(panel_path))),
+            "evidence_url": str(tmp_path / "hundred-inventory.json"),
+        }
+    )
+    StoragePath(inventory.evidence_url).write_text(inventory.model_dump_json())
+    panel = inventory.qc_panel()
+    _, contracts = panel_tasks(panel)
+    reviews = [
+        ReviewRecord.model_validate_json(
+            json.dumps(
+                {
+                    "task_id": task.id,
+                    "status": "invalid" if index < missing_count else "reviewed",
+                    "detail": "Truncated response after bounded attempts" if index < missing_count else "",
+                    "verdict": (
+                        None
+                        if index < missing_count
+                        else {
+                            "task_id": task.id,
+                            "quality": "good",
+                            "confidence": "high",
+                            "reference_status": "consistent",
+                            "defects": [],
+                            "evidence": "Reference agrees with the task.",
+                        }
+                    ),
+                }
+            )
+        )
+        for index, task in enumerate(tasks)
+    ]
+    batch = tmp_path / "batch.json"
+    batch.write_text(json.dumps({"reviews": [row.model_dump(mode="json") for row in reviews], "attempts": []}))
+    observations = write_observations(
+        str(tmp_path / "observations"),
+        [
+            (ContractBatch(0, tasks, contracts), reviews, str(batch)),
+        ],
+    )
+    reviewer = ChatReviewer(
+        OpenAIChatClient("http://localhost:1/v1", "unused", timeout=2), local_reviewer(ReviewerVersion.V3)
+    )
+    result = SampleQCReview(
+        path=str(observations.records_path.parent),
+        panel=panel,
+        reviewer=reviewer.identity,
+        rubric=asdict(REVIEW_RUBRIC),
+        panel_coverage_complete=False,
+        attempted_count=100,
+        result=quality_result(reviews),
+        records_path=str(observations.records_path),
+        records_sha256=file_sha256(observations.records_path),
+        batch_receipts=observations.batch_receipts,
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=result.path, result_type=result_type_name(type(result)), result=result.result_payload()
+        )
+    )
+    if missing_count == 6:
+        with pytest.raises(ValueError, match="at most 5% missing"):
+            sample_qc_receipt(result.path)
+        return
+    receipt = sample_qc_receipt(result.path)
+    assert receipt.review.panel == panel and not receipt.review.panel_coverage_complete
+    assert receipt.review.result.reviewed == 95 and receipt.review.result.unavailable_count == 5
+    assert receipt.review.result.issue_rate == 0
+    assert {row.review.task_id for row in receipt.missing_observations} == {task.id for task in tasks[:5]}
+    assert all(
+        row.review.status.value == "invalid"
+        and row.review.detail == "Truncated response after bounded attempts"
+        and row.batch_receipt.uri == str(batch)
+        and row.batch_receipt.sha256 == file_sha256(StoragePath(str(batch)))
+        for row in receipt.missing_observations
+    )

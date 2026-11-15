@@ -21,7 +21,11 @@ from experiments.post_training.task_curation.full_qc_review import quality_resul
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.sample_qc import panel_tasks
 from experiments.post_training.task_curation.sample_qc_artifacts import PINNED_REVIEWER_SHA256, SampleQCReview
-from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
+from experiments.post_training.task_curation.sample_qc_binding import (
+    SampleMissingObservation,
+    SampleQCReceipt,
+    require_sample_qualification,
+)
 
 
 def sample_qc_receipt(path: str) -> SampleQCReceipt:
@@ -47,6 +51,8 @@ def sample_qc_receipt(path: str) -> SampleQCReceipt:
     if len(rows) != len(expected) or {row["task_id"] for row in rows} != set(expected):
         raise ValueError("Sample Result does not cover its selected panel exactly once")
     reviews = []
+    missing = []
+    batch_hashes = {}
     for row in rows:
         contract = {key: row[key] for key in ("task_id", "task_sha256", "runtime_sha256")}
         if contract != expected[row["task_id"]] or row["batch_receipt"] not in result.batch_receipts:
@@ -55,17 +61,30 @@ def sample_qc_receipt(path: str) -> SampleQCReceipt:
         if review.task_id != row["task_id"]:
             raise ValueError("Sample observation belongs to another task")
         reviews.append(review)
+        if quality_result([review]).reviewed == 0:
+            batch = row["batch_receipt"]
+            if batch not in batch_hashes:
+                batch_hashes[batch] = file_sha256(StoragePath(batch))
+            missing.append(
+                SampleMissingObservation(
+                    review=review,
+                    batch_receipt={"uri": batch, "sha256": batch_hashes[batch]},
+                )
+            )
     if (
         quality_result(reviews) != result.result
         or result.attempted_count != len(reviews)
         or result.panel_coverage_complete != all(row.status is ReviewStatus.REVIEWED for row in reviews)
     ):
         raise ValueError("Sample Result differs from its task-level observations")
-    return SampleQCReceipt(
+    receipt = SampleQCReceipt(
         source_id=result.panel.source_id,
         review=result,
         artifact_sha256=file_sha256(StoragePath(path) / RECORD_FILENAME),
+        missing_observations=tuple(missing),
     )
+    require_sample_qualification(receipt)
+    return receipt
 
 
 def main() -> None:

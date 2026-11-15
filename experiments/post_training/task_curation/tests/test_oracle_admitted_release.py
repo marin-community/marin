@@ -317,3 +317,80 @@ def test_evaluation_receipt_cannot_change_a_configured_training_source(admitted_
 
     with pytest.raises(ValueError, match="another configured original population"):
         bind_oracle_admitted_release(source, evaluation)
+
+
+@pytest.mark.parametrize("missing_count", [5, 6])
+def test_filtered_release_sample_missing_tolerance_keeps_measured_counts(admitted_release, missing_count):
+    source, original = admitted_release
+    source = replace(
+        source,
+        info=replace(
+            source.info,
+            count=101,
+            within_source_dedup=source.info.within_source_dedup.model_copy(
+                update={"raw_count": 101, "unique_count": 101}
+            ),
+        ),
+    )
+    raw = original.model_dump(mode="json")
+    raw["original_info"]["count"] = 101
+    raw["original_info"]["within_source_dedup"].update(raw_count=101, unique_count=101)
+    raw["filtration"].update(original_count=101, admitted_count=100)
+    raw["actor"]["input"]["measured_tasks"] = 100
+    raw["grading"]["input"]["measured_tasks"] = 100
+    raw["grading"]["evidence"] = grading_evidence(100).model_dump(mode="json")
+    raw["output_dedup"].update(raw_count=100, unique_count=100)
+    lexical = decontamination_evidence(
+        original.filtration.filtered_release.repo, original.filtration.filtered_release.revision, 100
+    )
+    raw["lexical"] = lexical.model_copy(
+        update={"converter_revision": original.actor.input.converter_revision}
+    ).model_dump(mode="json")
+    raw["sample"]["review"]["panel"].update(retained_tasks=100, sample_size=100)
+    raw["sample"]["review"].update(
+        panel_coverage_complete=False,
+        attempted_count=100,
+        result=SourceQualityResult(
+            reviewed=100 - missing_count,
+            unavailable_count=missing_count,
+            issue_count=19,
+            issues=[],
+            repair_recommendation="Inspect findings",
+        ).model_dump(mode="json"),
+    )
+    raw["sample"]["missing_observations"] = [
+        {
+            "review": {
+                "task_id": f"missing-{index}",
+                "status": "invalid",
+                "verdict": None,
+                "detail": "Truncated response after bounded attempts",
+            },
+            "batch_receipt": {"uri": "memory://fixture/batch.json", "sha256": "e" * 64},
+        }
+        for index in range(missing_count)
+    ]
+    if missing_count == 6:
+        with pytest.raises(ValueError, match="at most 5% missing"):
+            OracleAdmittedReleaseReceipt.model_validate(raw)
+        return
+    receipt = OracleAdmittedReleaseReceipt.model_validate(raw)
+    bound = bind_derived_oversight(bind_oracle_admitted_release(source, receipt), receipt.sample, None)
+    assert bound.declaration.status == "Available" and bound.declaration.task_count == 100
+    assert bound.declaration.oversight.value == "sample"
+    assert bound.info.quality_result.reviewed == bound.info.independent_qc.reviewed == 95
+    assert bound.info.recipe_qa_history.reviewed == 95
+    assert bound.info.quality_result.unavailable_count == 5
+    assert bound.info.quality_result.issue_rate == 19 / 95
+    assert not receipt.sample.review.panel_coverage_complete
+    with pytest.raises(ValueError, match="Complete finalization requires complete coverage"):
+        FullContentResultBinding(
+            source_id=source.info.id,
+            input=receipt.actor.input,
+            contract_index=receipt.consumer,
+            review_receipt=receipt.consumer,
+            records=receipt.consumer,
+            result=receipt.sample.review.result,
+            coverage_complete=False,
+            finalization=QualityResultFinalization.COMPLETE,
+        )

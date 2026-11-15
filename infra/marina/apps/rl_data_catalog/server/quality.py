@@ -8,9 +8,11 @@ from enum import StrEnum
 from typing import Any
 
 from finestore.rl.curation import (
+    SAMPLE_MAX_MISSING_FRACTION,
     AssessmentItem,
     AssessmentPopulation,
     JudgmentStatus,
+    OversightLevel,
     QualityResultFinalization,
     SourceDeclaration,
     SourceQualityResult,
@@ -79,9 +81,22 @@ def review_completeness(
         )
     else:
         return None
+    sample_qualified = (
+        declaration.oversight is OversightLevel.SAMPLE
+        and declaration.quality_result_finalization is None
+        and aggregate is not None
+        and declaration.independent_qc is not None
+        and declaration.independent_qc.reviewed == aggregate.reviewed
+        and completeness.required > 0
+        and completeness.required - completeness.reviewed <= SAMPLE_MAX_MISSING_FRACTION * completeness.required
+    )
     return {
         **asdict(completeness),
-        "provisional": completeness.provisional and not final_whole_source_result(declaration.model_dump(mode="json")),
+        "provisional": (
+            completeness.provisional
+            and not sample_qualified
+            and not final_whole_source_result(declaration.model_dump(mode="json"))
+        ),
     }
 
 
