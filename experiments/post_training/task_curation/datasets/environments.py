@@ -127,5 +127,13 @@ LEAN_KERNEL_GRADER_PACKAGES = replace(GRADER_PACKAGES, dockerfile=HERE / "lean/l
 """The grader packages with Lean, Mathlib and Prime Intellect's proof checker, for the Lean proof grader in
 ``lean/lean_grade.py``, which replays each accepted proof in the kernel."""
 
-BUILDABLE_ENVIRONMENTS = (GRADER_PACKAGES, COMPILER_GRADER_PACKAGES, LEAN_GRADER_PACKAGES, LEAN_KERNEL_GRADER_PACKAGES)
+TERMINUS_GRADER_PACKAGES = Environment(requirements=("openapi-schema-validator==0.6.3",))
+
+BUILDABLE_ENVIRONMENTS = (
+    GRADER_PACKAGES,
+    COMPILER_GRADER_PACKAGES,
+    LEAN_GRADER_PACKAGES,
+    LEAN_KERNEL_GRADER_PACKAGES,
+    TERMINUS_GRADER_PACKAGES,
+)
 """Explicit environment registrations for the images build CLI."""

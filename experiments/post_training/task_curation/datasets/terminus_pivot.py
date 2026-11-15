@@ -14,7 +14,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat, requ
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, OracleCommand, RawRow
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.environment import Environment
+from experiments.post_training.task_curation.datasets.environments import TERMINUS_GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
@@ -25,7 +25,6 @@ NEMO_REVISION = "951ee9ec835dde26c32302dcb86bcf0ed445bf4d"
 VERSION = "2026.11.15.2"
 AGENT = "terminus_judge_string_only_simple_agent"
 FILES = grade_script(HERE / "terminus_grade.py", *shipped_files(HERE, "terminus_schemas.py"))
-GRADER = Environment(requirements=("openapi-schema-validator==0.6.3",))
 
 
 def original_answer(_task: TaskSpec) -> OracleCommand:
@@ -93,7 +92,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 source=HfSource(DATASET, REVISION, ("atcb_terminal_pivot_release_final_v2.jsonl",), SourceFormat.JSONL),
                 convert=convert,
                 intended_use=IntendedUse.TRAIN,
-                grader=GRADER,
+                grader=TERMINUS_GRADER_PACKAGES,
                 controls=CONTROLS,
                 oracle_solutions=True,
                 rubric="""Inspect the visible terminal history and requested next action against the private reference.
