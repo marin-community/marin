@@ -108,8 +108,10 @@ grading assessment are unchanged.
   tasks. A model may not downgrade a pair whose measured overlap clears the threshold.
   Cross-source overlap is advisory: it never removes tasks from a source. The Atlas
   folds source B under source A only when at least 95% of B's tasks are measured
-  inside A. Partial or unmeasured pairs never fold and never chain groups together.
-  They appear as directional notes instead, such as "73% of X's tasks are in Y".
+  inside A. Pairs below 95% containment in both directions and unmeasured pairs never
+  fold. Every folded member needs a direct measurement against the canonical; groups
+  never chain. Other measured overlaps appear as directional notes, such as "73% of X's
+  tasks are in Y".
   The superset is shown on top; mutual duplicates prefer the larger task count, then
   FULL, SAMPLE, QUICK, then source ID. See
   [cross-source overlap](rl-data-atlas.md) for the measurement details.
