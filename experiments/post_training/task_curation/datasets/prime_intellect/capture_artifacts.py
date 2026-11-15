@@ -18,7 +18,9 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from finestore.rl.licenses import LicenseReceipt, require_license
+from iris.cli.connect import connect_controller
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
@@ -220,15 +222,37 @@ def capture_artifacts(config: CaptureConfig) -> CapturedArtifacts:
     job = get_job_info()
     output = StoragePath(config.output_path)
     bucket = data_buckets().get(output.bucket)
-    if (
-        job is None
-        or not job.worker_region
-        or output.scheme != "s3"
-        or bucket is None
-        or bucket.signing_region is None
-        or job.worker_region.casefold() != bucket.signing_region.casefold()
-    ):
+    if job is None or not job.controller_address or output.scheme != "s3" or bucket is None:
         raise ValueError("Full capture must write directly from a regional Iris CPU job to its same-region S3 bucket")
+    endpoint = connect_controller(controller_url=job.controller_address)
+    client = RemoteClusterClient(
+        endpoint.url,
+        interceptors=endpoint.credentials.interceptors() if endpoint.credentials is not None else (),
+    )
+    task = client.get_task_status(job.task_id)
+    backends = [backend for backend in client.list_backends() if backend.backend_id == task.backend_id]
+    if task.cluster != "local" or len(backends) != 1:
+        raise ValueError("Capture placement must resolve to one local controller backend")
+    backend = backends[0]
+    regions = tuple(backend.advertised_attributes["region"].values)
+    if (
+        backend.name != config.cluster
+        or len(regions) != 1
+        or bucket.signing_region is None
+        or regions[0].casefold() != bucket.signing_region.casefold()
+    ):
+        raise ValueError("Controller-advertised capture region does not match the requested cluster and S3 bucket")
+    placement = {
+        "task_id": job.task_id.to_wire(),
+        "attempt_id": job.attempt_id,
+        "backend_id": backend.backend_id,
+        "backend_name": backend.name,
+        "region": regions[0],
+        "bucket": output.bucket,
+        "bucket_region": bucket.signing_region,
+        "evidence": "Current task and backend records from its submitting Iris controller",
+    }
+    (output / "placement.json").write_text(json.dumps(placement, indent=2) + "\n", auto_mkdir=True)
     raw = StoragePath(config.input_path).read_bytes()
     if hashlib.sha256(raw).hexdigest() != config.input_sha256:
         raise ValueError("Frozen source image index changed")
