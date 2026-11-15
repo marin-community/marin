@@ -10,11 +10,13 @@ import os
 from pathlib import Path
 
 import draccus
+import jax
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, create_environment
 from iris.cli.connect import open_iris_client
 from iris.jax.compile_cache import configure_jax_compilation_cache
 from iris.rpc.proto_display import priority_band_value
+from levanter.checkpoint import load_checkpoint_metadata
 from marin.training.training import resolve_training_env
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -53,6 +55,35 @@ def train_arm(config: GrugRunConfig, runtime: dict) -> None:
     if int(os.environ["IRIS_MULTIGPU_PROCESS_INDEX"]) == 0:
         (output / "consumed-config.json").write_text(json.dumps(draccus.encode(config), indent=2))
     _run_grug_local(config)
+    rank = int(os.environ["IRIS_MULTIGPU_PROCESS_INDEX"])
+    (output / f"allocator-end-rank-{rank}.json").write_text(
+        json.dumps(
+            {
+                "rank": rank,
+                "platform": jax.default_backend(),
+                "devices": [{"id": device.id, "stats": device.memory_stats()} for device in jax.local_devices()],
+            },
+            indent=2,
+        )
+    )
+    step = config.stop_after_steps
+    checkpoint = str(output / "checkpoints" / f"step-{step}")
+    metadata = load_checkpoint_metadata(checkpoint)
+    if metadata["step"] != step or metadata["is_temporary"]:
+        raise ValueError("Recipe arm did not commit its selected final checkpoint")
+    if int(os.environ["IRIS_MULTIGPU_PROCESS_INDEX"]) == 0:
+        (output / "selected.json").write_text(
+            json.dumps(
+                {
+                    "step": step,
+                    "checkpoint": checkpoint,
+                    "metadata_sha256": (
+                        hashlib.sha256((StoragePath(checkpoint) / "metadata.json").read_bytes()).hexdigest()
+                    ),
+                },
+                indent=2,
+            )
+        )
 
 
 def request_for_arm(config: GrugRunConfig, runtime: dict, workspace: Path) -> JobRequest:

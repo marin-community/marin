@@ -48,6 +48,24 @@ def dump_grug_state_sharding_run_artifact(
     run_id: str,
     path_override: str | None,
 ) -> None:
+    if path_override is not None:
+        destination = StoragePath(path_override)
+        if not destination.is_local:
+            rank = jax.process_index()
+            destination = destination.parent / f"{Path(destination.name).stem}-rank-{rank}.json"
+            report = {
+                "rank": rank,
+                "platform": jax.default_backend(),
+                "device_kind": jax.local_devices()[0].device_kind,
+                **grug_state_sharding_dict(state),
+                "arrays": {
+                    "params": array_metadata_dict(state.params),
+                    "opt_state": array_metadata_dict(state.opt_state),
+                },
+            }
+            destination.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+            current_tracker().log_summary({f"{GRUG_SHARDING_ARTIFACT_NAME}/rank_{rank}": str(destination)})
+            return
     path = Path(path_override) if path_override is not None else default_grug_sharding_dump_path(log_dir, run_id)
     dump_grug_state_sharding_artifact(state, path)
 
@@ -63,6 +81,24 @@ def tree_sharding_dict(tree: Any) -> dict[str, str]:
         if is_jax_array_like(value):
             shardings[jax.tree_util.keystr(path)] = _sharding_spec(value)
     return shardings
+
+
+def array_metadata_dict(tree: Any) -> dict[str, dict[str, Any]]:
+    """Observe concrete array dtype, shape, sharding, and addressable shards without reading values."""
+    output = {}
+    for path, value in jax.tree_util.tree_leaves_with_path(tree):
+        if isinstance(value, jax.Array):
+            output[jax.tree_util.keystr(path)] = {
+                "dtype": str(value.dtype),
+                "shape": list(value.shape),
+                "sharding": _sharding_spec(value),
+                "memory_kind": value.sharding.memory_kind,
+                "local_shards": [
+                    {"device_id": shard.device.id, "shape": list(shard.data.shape), "index": str(shard.index)}
+                    for shard in value.addressable_shards
+                ],
+            }
+    return output
 
 
 def _sharding_spec(value: Any) -> str:
