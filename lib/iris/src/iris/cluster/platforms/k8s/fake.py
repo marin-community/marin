@@ -560,6 +560,12 @@ class InMemoryK8sService:
         expected = metadata.get("resourceVersion")
         if expected is not None and expected != node["metadata"].get("resourceVersion"):
             raise KubectlError("node resourceVersion conflict")
+        labels = node["metadata"].setdefault("labels", {})
+        for key, value in metadata.get("labels", {}).items():
+            if value is None:
+                labels.pop(key, None)
+            else:
+                labels[key] = value
         annotations = node["metadata"].setdefault("annotations", {})
         for key, value in metadata.get("annotations", {}).items():
             if value is None:
