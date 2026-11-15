@@ -35,7 +35,7 @@ def hub_metadata(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def reviewed_evaluation_licenses(tmp_path, monkeypatch):
+def reviewed_evaluation_licenses(tmp_path_factory, monkeypatch):
     """Give launcher fixtures explicit grants without resolving real upstream terms."""
     receipts = {}
     for benchmark in evaluation_benchmarks().values():
@@ -46,6 +46,6 @@ def reviewed_evaluation_licenses(tmp_path, monkeypatch):
                 receipts[source.info.id] = fixture_license(source.info.id, dataset.name, dataset.revision).model_dump(
                     mode="json"
                 )
-    path = tmp_path / "reviewed-licenses.json"
+    path = tmp_path_factory.mktemp("reviewed-license-registry") / "licenses.json"
     path.write_text(json.dumps(receipts))
     monkeypatch.setattr(license_binding, "LICENSE_REGISTRY", path)
