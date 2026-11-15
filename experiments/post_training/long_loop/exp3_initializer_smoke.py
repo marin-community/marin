@@ -190,7 +190,9 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
     c4 = draccus.decode(LmDataConfig, json.loads((StoragePath(prepared) / "c4-data.json").read_text()))
     reference = prefix_join(prepared, "c4-reference.json")
     gate = InitialEvalMatchConfig(c4, reference, CONTEXT, 1, TOKEN_IDS, REFERENCE_TOLERANCE, reference)
-    model = draccus.encode(SnowballConfig(max_seq_len=CONTEXT, moe_implementation="sonic", moe_capacity_factor=1))
+    model = draccus.encode(
+        SnowballConfig(max_seq_len=CONTEXT, moe_implementation="ring_gather_combine", moe_capacity_factor=1)
+    )
     model.pop("type", None)
     return {
         **json.loads((StoragePath(prepared) / "initializer.json").read_text()),

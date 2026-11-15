@@ -3,16 +3,24 @@
 
 import hashlib
 import json
+from dataclasses import replace
 
 import draccus
+import equinox as eqx
+import haliax as hax
+import jax
+import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 import pytest
 from haliax import Axis
+from jax.sharding import AxisType, Mesh
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, NamedLmDataset
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.store.cache import SerialCacheWriter
+from levanter.testing.devices import use_test_devices
 from levanter.utils.thread_utils import blocking_wait
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.verified_copy import verified_copy_prefix
@@ -180,3 +188,42 @@ def test_initializer_coordinator_validates_concrete_worker_config_before_dispatc
     consumed = json.loads((output / "consumed-config.json").read_text())
     assert draccus.decode(TrainLmConfig, consumed["train_config"]) == config
     assert json.loads((StoragePath(str(output)) / "guard-result.json").read_text())["h100_hours"] == 0
+
+
+@pytest.mark.multidevice
+def test_initializer_recipe_runs_forward_with_expert_and_context_parallelism(prepared_sources):
+    recipe = initializer_recipe(
+        prepared=str(prepared_sources),
+        output=str(prepared_sources / "output"),
+        artifact_version="fixture",
+        policy=StageGuard(1, 30, 2),
+    )
+    config = replace(
+        draccus.decode(SnowballConfig, recipe["model"]),
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_experts=16,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    # The full initializer previously loaded all weights before Sonic rejected EP8.
+    with use_test_devices(16) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, 8, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "replica", "model"),
+            axis_types=(AxisType.Explicit,) * 6,
+        )
+        with jax.set_mesh(mesh):
+            model = SnowballLMHeadModel.init(Axis("vocab", 32), config, key=jrandom.PRNGKey(0))
+            axes = (Axis("batch", 8), Axis("position", 16))
+            tokens = hax.named(jnp.arange(128, dtype=jnp.int32).reshape(8, 16) % 32, axes)
+            valid = hax.named(jnp.ones((8, 16), dtype=jnp.bool_), axes)
+            hidden, _ = eqx.filter_jit(model.activations_with_stats)(tokens, valid)
+            assert np.isfinite(np.asarray(hidden.array)).all()
