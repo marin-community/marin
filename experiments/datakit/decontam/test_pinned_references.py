@@ -59,9 +59,10 @@ def benchmark_decisions(tmp_path_factory):
     return {row["id"]: row["contaminated"] for row in rows}
 
 
-@pytest.mark.parametrize("source", SOURCES, ids=lambda source: source.name)
-def test_benchmark_problem_is_detected_and_near_miss_is_retained(source, benchmark_decisions):
-    sample = SAMPLES[source.name]
+@pytest.mark.parametrize("name", SAMPLES)
+def test_benchmark_problem_is_detected_and_near_miss_is_retained(name, benchmark_decisions):
+    source = next(source for source in SOURCES if source.name == name)
+    sample = SAMPLES[name]
     [record] = reference_records(iter([sample["row"]]), source)
     assert record["text"] == sample["text"]
     assert benchmark_decisions[f"{source.name}:copy"] is True
@@ -69,27 +70,29 @@ def test_benchmark_problem_is_detected_and_near_miss_is_retained(source, benchma
 
 
 def test_empty_configured_family_does_not_publish_manifest(tmp_path, monkeypatch):
-    source = next(source for source in SOURCES if source.name == "micro210-cruxeval")
+    source = next(source for source in SOURCES if source.name == "micro210-gsm8k-0shot")
     raw = tmp_path / "input.parquet"
     pq.write_table(pa.Table.from_pylist([SAMPLES[source.name]["row"]]), raw)
     source = replace(
         source,
         benchmark="absent-family",
-        files=(ReferenceFile(path="input.parquet", sha256=hashlib.sha256(raw.read_bytes()).hexdigest()),),
+        file=ReferenceFile(path="input.parquet", sha256=hashlib.sha256(raw.read_bytes()).hexdigest()),
     )
     monkeypatch.setattr(pinned_references, "hf_hub_download", lambda *args, **kwargs: str(raw))
     output = tmp_path / "release"
-    with pytest.raises(ValueError, match="zero matchable records"):
+    with pytest.raises(ValueError, match="expected 10 records, extracted 0"):
         prepare_references(str(output), (source,))
     assert not (output / "_manifest.json").exists()
 
 
 def test_changed_reference_bytes_are_rejected_before_bloom_build(tmp_path, monkeypatch):
-    source = next(source for source in SOURCES if source.name == "micro210-cruxeval")
+    source = next(source for source in SOURCES if source.name == "micro210-gsm8k-0shot")
     raw = tmp_path / "input.parquet"
     pq.write_table(pa.Table.from_pylist([SAMPLES[source.name]["row"]]), raw)
     source = replace(
-        source, files=(ReferenceFile(path="input.parquet", sha256=hashlib.sha256(raw.read_bytes()).hexdigest()),)
+        source,
+        file=ReferenceFile(path="input.parquet", sha256=hashlib.sha256(raw.read_bytes()).hexdigest()),
+        expected_records=1,
     )
     monkeypatch.setattr(pinned_references, "hf_hub_download", lambda *args, **kwargs: str(raw))
     output = tmp_path / "release"
@@ -110,11 +113,13 @@ def test_changed_reference_bytes_are_rejected_before_bloom_build(tmp_path, monke
 
 
 def test_source_pin_update_cannot_reuse_sealed_reference_release(tmp_path, monkeypatch):
-    source = next(source for source in SOURCES if source.name == "micro210-cruxeval")
+    source = next(source for source in SOURCES if source.name == "micro210-gsm8k-0shot")
     raw = tmp_path / "input.parquet"
     pq.write_table(pa.Table.from_pylist([SAMPLES[source.name]["row"]]), raw)
     source = replace(
-        source, files=(ReferenceFile(path="input.parquet", sha256=hashlib.sha256(raw.read_bytes()).hexdigest()),)
+        source,
+        file=ReferenceFile(path="input.parquet", sha256=hashlib.sha256(raw.read_bytes()).hexdigest()),
+        expected_records=1,
     )
     monkeypatch.setattr(pinned_references, "hf_hub_download", lambda *args, **kwargs: str(raw))
     output = tmp_path / "release"

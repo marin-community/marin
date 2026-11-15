@@ -1,25 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Extract benchmark references without importing benchmark scoring runtimes.
-
-The catalog pins the dataset commit and SHA-256 of every input file. TaskSpec
-sources index only the supplied conversation, excluding graders, dependencies,
-and solutions. Field sources select problem and answer fields explicitly.
-"""
+"""Prepare pinned Micro210, SWE-bench test and long-loop holdout references."""
 
 import argparse
-import csv
 import hashlib
 import io
 import json
 import logging
-import urllib.request
-import zipfile
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from enum import StrEnum
-from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -31,20 +22,16 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.decontam.reference_io import _write_json, _write_parquet
+from experiments.datakit.decontam.prepare_eval_corpus import _write_json, _write_parquet
 
-logger = logging.getLogger(__name__)
-
-CATALOG_PATH = Path(__file__).with_name("reference_catalog.json")
-COVERAGE_VERSION = "atlas-eval-coverage-v2"
+COVERAGE_VERSION = "atlas-benchmark-references-v1"
 COVERAGE_RELATIVE = f"datakit/decontam/evals/{COVERAGE_VERSION}"
 COVERAGE_MANIFEST = "_manifest.json"
 
 
 class TextPolicy(StrEnum):
-    FIELDS = "fields"
+    PROBLEM = "problem"
     TASK_SPEC = "task_spec"
-    QAS = "qas"
 
 
 @dataclass(frozen=True)
@@ -58,35 +45,100 @@ class ReferenceSource:
     name: str
     repository: str
     revision: str
-    files: tuple[ReferenceFile, ...]
+    file: ReferenceFile
+    expected_records: int
     policy: TextPolicy
-    fields: tuple[str, ...]
-    configured_tasks: tuple[str, ...]
     benchmark: str | None = None
 
 
-def reference_catalog(path: Path = CATALOG_PATH) -> tuple[ReferenceSource, ...]:
-    with path.open() as source:
-        catalog = json.load(source)
-    return tuple(
+_MICRO_BENCHMARKS = (
+    "cruxeval",
+    "bixbench-pi",
+    "humanevalplus",
+    "tb2-recovery",
+    "ot-tblite-recovery",
+    "gsm8k-0shot",
+    "ds-1000-local",
+    "ifbench",
+    "bfclparity-pi",
+    "truthfulqa",
+    "olympiadbench",
+    "triviaqa",
+    "tau3-pi",
+    "aime24",
+    "gpqa-diamond",
+    "math500",
+    "mrcr",
+    "NUPA",
+    "mmlu-pro",
+    "swebench-verified",
+    "mbppplus",
+)
+
+
+def reference_catalog() -> tuple[ReferenceSource, ...]:
+    """Return source pins for the selected tasks and test splits."""
+    micro = tuple(
         ReferenceSource(
-            name=entry["name"],
-            repository=entry["repository"],
-            revision=entry["revision"],
-            files=tuple(ReferenceFile(**file) for file in entry["files"]),
-            policy=TextPolicy(entry["policy"]),
-            fields=tuple(entry["fields"]),
-            configured_tasks=tuple(entry["configured_tasks"]),
-            benchmark=entry.get("benchmark"),
+            name=f"micro210-{benchmark}",
+            repository="open-athena/Marin-Micro-Eval-210",
+            revision="4564ed081c316bc3231ae5c3a53a46b39248c819",
+            file=ReferenceFile(
+                "data/validation.parquet", "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+            ),
+            expected_records=10,
+            policy=TextPolicy.TASK_SPEC,
+            benchmark=benchmark,
         )
-        for entry in catalog["sources"]
+        for benchmark in _MICRO_BENCHMARKS
+    )
+    return (
+        *micro,
+        ReferenceSource(
+            name="swe-bench",
+            repository="princeton-nlp/SWE-bench",
+            revision="e48e2bd1e9fecd5bbd641e9414ac59da9f2e69f6",
+            file=ReferenceFile(
+                "data/test-00000-of-00001.parquet", "db4f70ef735b3162c74801ddcdf8d7bae8d704193788c6d844f898c20b571cbb"
+            ),
+            expected_records=2294,
+            policy=TextPolicy.PROBLEM,
+        ),
+        ReferenceSource(
+            name="swe-bench-verified",
+            repository="princeton-nlp/SWE-bench_Verified",
+            revision="c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+            file=ReferenceFile(
+                "data/test-00000-of-00001.parquet", "a45b1fe4e2f0c8390b2b2938ac83e92ed5979000856808f3679c07812e9e6dcd"
+            ),
+            expected_records=500,
+            policy=TextPolicy.PROBLEM,
+        ),
+        ReferenceSource(
+            name="swe-bench-lite",
+            repository="princeton-nlp/SWE-bench_Lite",
+            revision="6ec7bb89b9342f664a54a6e0a6ea6501d3437cc2",
+            file=ReferenceFile(
+                "data/test-00000-of-00001.parquet", "7a21f37b8bc179c7db5beeb14e88ac538ba283455c776e6b2535bbfb6e3551b4"
+            ),
+            expected_records=300,
+            policy=TextPolicy.PROBLEM,
+        ),
+        ReferenceSource(
+            name="long-loop-holdouts",
+            repository="s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release",
+            revision="sha256:8601f26d9b16467efdfb022166367a1c413adfa4118f5110a76b12258e254838",
+            file=ReferenceFile("validation.parquet", "8601f26d9b16467efdfb022166367a1c413adfa4118f5110a76b12258e254838"),
+            expected_records=120,
+            policy=TextPolicy.TASK_SPEC,
+        ),
     )
 
 
 def reference_sources_sha256(sources: tuple[ReferenceSource, ...]) -> str:
-    """Fingerprint source bytes, selections and extraction policies together."""
+    """Fingerprint source pins, selections and extraction policies together."""
     content = json.dumps([asdict(source) for source in sources], sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return hashlib.sha256(content.encode()).hexdigest()
 
 
 def _field_text(value: Any) -> str:
@@ -100,106 +152,66 @@ def _field_text(value: Any) -> str:
 
 
 def reference_records(rows: Iterator[dict[str, Any]], source: ReferenceSource) -> Iterator[dict[str, str]]:
-    """Extract the configured problem text, rejecting silent empty records."""
+    """Extract public problem text without graders, solutions or image bytes."""
     for index, row in enumerate(rows):
         if source.benchmark is not None and row["benchmark"] != source.benchmark:
             continue
         identifier = str(row.get("task_id", row.get("instance_id", row.get("id", index))))
         if source.policy == TextPolicy.TASK_SPEC:
-            spec = json.loads(row["task_spec"])
-            events = spec["context"]["events"]
+            events = json.loads(row["task_spec"])["context"]["events"]
             text = "\n\n".join(
                 _field_text(event["content"])
                 for event in events
                 if event["type"] == "message" and event["role"] in {"system", "user"}
             )
-        elif source.policy == TextPolicy.QAS:
-            text = _field_text(row["qas"]["question"])
         else:
-            missing = set(source.fields) - row.keys()
-            if missing:
-                raise ValueError(f"{source.name}: missing fields {sorted(missing)}")
-            text = "\n\n".join(part for field in source.fields if (part := _field_text(row[field])))
-        if not text.strip():
+            text = row["problem_statement"].strip()
+        if not text:
             raise ValueError(f"{source.name}: empty problem text for {identifier}")
         yield {"id": f"{source.name}:{identifier}", "text": text}
 
 
-def _reference_bytes(source: ReferenceSource, file: ReferenceFile) -> bytes:
-    if source.repository.startswith("https://raw.githubusercontent.com/"):
-        url = f"{source.repository}/{source.revision}/{file.path}"
-        with urllib.request.urlopen(url, timeout=60) as response:
-            content = response.read()
-    elif source.repository.startswith("s3://"):
-        fs, key = filesystem_for(prefix_join(source.repository, file.path))
+def _reference_rows(source: ReferenceSource) -> Iterator[dict[str, Any]]:
+    if source.repository.startswith("s3://"):
+        fs, key = filesystem_for(prefix_join(source.repository, source.file.path))
         with fs.open(key, "rb") as stream:
             content = stream.read()
     else:
-        path = hf_hub_download(source.repository, file.path, repo_type="dataset", revision=source.revision)
+        path = hf_hub_download(source.repository, source.file.path, repo_type="dataset", revision=source.revision)
         content = Path(path).read_bytes()
-    actual = hashlib.sha256(content).hexdigest()
-    if actual != file.sha256:
-        raise ValueError(f"{source.name}/{file.path}: SHA-256 {actual}, expected {file.sha256}")
-    return content
-
-
-def _reference_rows(source: ReferenceSource, file: ReferenceFile) -> Iterator[dict[str, Any]]:
-    content = _reference_bytes(source, file)
-    if file.path.endswith(".zip"):
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            for member in sorted(archive.namelist()):
-                if not member.endswith(".csv") or "test" not in Path(member).parts:
-                    continue
-                with archive.open(member) as stream:
-                    yield from csv.DictReader(io.TextIOWrapper(stream, encoding="utf-8-sig"))
-        return
-    if file.path.endswith((".jsonl", ".txt")):
-        for line in content.decode("utf-8").splitlines():
-            if line.strip():
-                yield json.loads(line)
-        return
-    parquet = pq.ParquetFile(io.BytesIO(content))
-    for batch in parquet.iter_batches(batch_size=256):
+    if hashlib.sha256(content).hexdigest() != source.file.sha256:
+        raise ValueError(f"{source.name}: source SHA-256 differs from its pin")
+    for batch in pq.ParquetFile(io.BytesIO(content)).iter_batches(batch_size=256):
         yield from batch.to_pylist()
 
 
 def prepare_references(output_root: str, sources: tuple[ReferenceSource, ...]) -> dict[str, Any]:
-    """Write a new reference release; publish its manifest after all families pass."""
+    """Publish a new manifest after every selected benchmark passes validation."""
     manifest_path = prefix_join(output_root, COVERAGE_MANIFEST)
     if StoragePath(manifest_path).exists():
         raise ValueError(f"Reference release already exists: {manifest_path}; choose a new version")
-    entries: list[dict[str, Any]] = []
+    entries = []
+    ngram = NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2)
     for source in sources:
-        raw_rows = chain.from_iterable(_reference_rows(source, file) for file in source.files)
-        records = list(reference_records(raw_rows, source))
-        extracted_records = len(records)
-        ngram = NGramConfig(ngram_length=13, overlap_threshold=0.5, min_matched_features=2)
-        unmatchable_ids = [record["id"] for record in records if not _record_feature_status(record["text"], ngram)[1]]
-        omitted = set(unmatchable_ids)
-        records = [record for record in records if record["id"] not in omitted]
-        if not records:
-            raise ValueError(f"{source.name}: configured reference family yielded zero matchable records")
+        records = list(reference_records(_reference_rows(source), source))
+        if len(records) != source.expected_records:
+            raise ValueError(f"{source.name}: expected {source.expected_records} records, extracted {len(records)}")
+        if any(not _record_feature_status(record["text"], ngram)[1] for record in records):
+            raise ValueError(f"{source.name}: a benchmark record cannot match itself")
         artifact = f"{source.name}/eval.parquet"
         output_path = prefix_join(output_root, artifact)
-        count = _write_parquet(output_path, iter(records))
+        _write_parquet(output_path, iter(records))
         with StoragePath(output_path).open("rb") as stream:
             artifact_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
         entries.append(
             {
                 "name": source.name,
                 "artifact": artifact,
-                "expected_records": count,
-                "extracted_records": extracted_records,
-                "unmatchable_ids": unmatchable_ids,
-                "omission_reason": "No self-match under the canonical 13-gram/minimum-two-feature policy",
+                "expected_records": len(records),
                 "sha256": artifact_sha256,
-                "repository": source.repository,
-                "revision": source.revision,
-                "files": [{"path": file.path, "sha256": file.sha256} for file in source.files],
-                "configured_tasks": list(source.configured_tasks),
+                "source": asdict(source),
             }
         )
-        logger.info("%s: %d records, SHA-256 %s", source.name, count, artifact_sha256)
     manifest = {
         "schema_version": 1,
         "corpus_version": COVERAGE_VERSION,
@@ -215,10 +227,9 @@ def prepare_references(output_root: str, sources: tuple[ReferenceSource, ...]) -
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", default=prefix_join(marin_prefix(), COVERAGE_RELATIVE))
-    parser.add_argument("--catalog", type=Path, default=CATALOG_PATH)
     args = parser.parse_args()
     configure_logging(logging.INFO)
-    prepare_references(args.output_root, reference_catalog(args.catalog))
+    prepare_references(args.output_root, reference_catalog())
 
 
 if __name__ == "__main__":
