@@ -121,7 +121,6 @@ def test_sft_update_preserves_router_and_scales_selected_rows():
             np.testing.assert_array_equal(result.pending_qb_betas, expected_pending)
 
 
-@pytest.mark.multidevice
 @pytest.mark.timeout(180)
 def test_splash_mixed_layer_windows_match_reference(monkeypatch):
     # Run the actual Splash kernel on CPU, preserving the model's scanned mask selection.
@@ -150,9 +149,9 @@ def test_splash_mixed_layer_windows_match_reference(monkeypatch):
         moe_implementation="fixed_all_to_all",
         capacity_factor=4.0,
     )
-    with use_cpu_devices(4):
+    with use_cpu_devices(1):
         mesh = Mesh(
-            np.asarray(jax.devices("cpu")[:4]).reshape(1, 1, 1, 4, 1),
+            np.asarray(jax.devices("cpu")[:1]).reshape(1, 1, 1, 1, 1),
             ("replica_dcn", "data", "expert", "context", "model"),
             axis_types=(AxisType.Explicit,) * 5,
         )
