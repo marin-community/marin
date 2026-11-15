@@ -75,10 +75,17 @@ _LABEL_TASK_HASH = LABEL_TASK_HASH
 def _dispatch(
     request: job_pb2.RunTaskRequest,
     config: PodConfig,
+    *,
+    regions: tuple[str, ...] = ("US-WEST-04A",),
 ) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
     """Dispatch one request through the provider and snapshot its K8s effects."""
     k8s = InMemoryK8sService(namespace=config.namespace)
-    provider = K8sTaskProvider(descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=config, cluster_scan_interval=0.0)
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(advertised_attributes={"region": set(regions)}),
+        kubectl=k8s,
+        pods=config,
+        cluster_scan_interval=0.0,
+    )
     try:
         updates = provider.sync(make_batch(tasks_to_run=[request]))
         resources = {
@@ -708,7 +715,41 @@ def test_constraints_to_node_selector_region():
     add_eq_constraint(req, "region", "US-WEST-04A")
 
     manifest = _build_pod_manifest(req, pod_config())
-    assert manifest["spec"]["nodeSelector"] == {"iris.region": "US-WEST-04A"}
+    assert "nodeSelector" not in manifest["spec"]
+
+
+@pytest.mark.parametrize("regions", [("US-EAST-08A",), ()])
+def test_region_mismatch_rejects_dispatch_before_creating_a_pod(regions):
+    req = make_run_req("/my-job/task-0")
+    add_eq_constraint(req, "region", "US-WEST-04A")
+    updates, resources = _dispatch(req, pod_config(), regions=regions)
+    assert resources[K8sResource.PODS] == []
+    assert len(updates) == 1
+    assert updates[0].new_state == job_pb2.TASK_STATE_FAILED
+    assert "Region constraints do not match" in updates[0].error
+
+
+@pytest.mark.parametrize("op", [job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN])
+def test_region_constraint_matches_backend_without_using_kubernetes_region_labels(op):
+    req = make_run_req("/my-job/task-0")
+    c = req.constraints.add(key="region", op=op)
+    if op == job_pb2.CONSTRAINT_OP_IN:
+        c.values.add(string_value="us-east-02a")
+        c.values.add(string_value="us-east-08a")
+    else:
+        c.value.string_value = "us-east-08a"
+    updates, resources = _dispatch(req, pod_config(), regions=("US-EAST-08A",))
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    assert "nodeSelector" not in pod["spec"]
+
+
+def test_preferred_region_does_not_reject_dispatch():
+    req = make_run_req("/my-job/task-0")
+    add_eq_constraint(req, "region", "US-EAST-08A")
+    req.constraints[0].mode = job_pb2.CONSTRAINT_MODE_PREFERRED
+    manifest = _build_pod_manifest(req, pod_config())
+    assert "nodeSelector" not in manifest["spec"]
 
 
 def test_constraints_to_node_selector_multiple():
@@ -719,7 +760,6 @@ def test_constraints_to_node_selector_multiple():
     manifest = _build_pod_manifest(req, pod_config())
     assert manifest["spec"]["nodeSelector"] == {
         "iris.pool": "h100-8x",
-        "iris.region": "US-WEST-04A",
     }
 
 
@@ -788,7 +828,7 @@ def test_coreweave_constraints_end_to_end():
     spec = manifest["spec"]
 
     assert spec["nodeSelector"]["iris.pool"] == "h100-8x"
-    assert spec["nodeSelector"]["iris.region"] == "US-WEST-04A"
+    assert "iris.region" not in spec["nodeSelector"]
     assert any(t.get("key") == "qos.coreweave.cloud/interruptable" for t in spec["tolerations"])
 
 

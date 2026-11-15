@@ -466,6 +466,54 @@ iris --cluster=<name> cluster status
 iris --cluster=<name> rpc controller list-backends
 ```
 
+### CPU topology label repair
+
+Kueue excludes Nodes missing any level of its ResourceFlavor's Topology. On
+`cw-us-east-08a`, this can exclude every gVisor CPU Node even when the CPU
+NodePool already declares the synthetic labels. Compare actual Node labels
+with the NodePool declaration before changing queues or resubmitting tasks.
+
+Preview from the intended repository revision using an explicit cluster config:
+
+```bash
+uv run --package marin-iris --extra controller \
+  python -m iris.cluster.platforms.k8s.cpu_topology \
+  --config lib/iris/config/cw-us-east-08a.yaml
+```
+
+The command prints the Kubernetes context, affected Node identities and all
+four topology label keys with their proposed `iris-cpu-only` values. It checks
+managed CPU scale groups, instance types, accelerator capacity and live NodePool
+topology declarations. It changes nothing by default.
+With approval for the named cluster, repeat with `--apply`. The repair changes
+only the four topology labels on those CPU Nodes, retaining their observed
+resource versions as concurrency preconditions. It does not change NodePools,
+taints, capacity, Pods or controllers. A conflict or failed readback stops the
+command; inspect current state before retrying a partially applied batch.
+
+After applying, repeat the preview immediately and after five minutes. Both
+must show an empty repair list. Check the pending Workload's
+`status.conditions` for admission and its Pod's assigned `spec.nodeName`, using
+the credential-safe projections in the CoreWeave guide. Making CPU capacity
+visible to Kueue can admit existing queued work without another submission.
+Admission does not establish that the gVisor runtime can start a container.
+Confirm a SANDBOX task records a process start and exits successfully before
+declaring sandbox execution healthy.
+
+The provider behavior that left these labels absent is unknown. If drift
+returns, retain timestamped Node and NodePool label snapshots and escalate to
+the CoreWeave operator; repeated label patches do not establish a durable
+provider fix. New CPU Nodes should
+receive the labels from their NodePool, but verify this after provisioning.
+
+The correction that checks `region` constraints against backend attributes
+instead of adding an `iris.region` selector requires a separately approved
+Iris controller deployment. Existing Pods retain their original selectors;
+neither this label repair nor a controller deployment rewrites them. Inspect their
+stored constraints (`iris --cluster=<name> job describe <job>`) before choosing
+a separately authorized resubmission. A Pod requiring `iris.region` remains
+unschedulable until its replacement is built by the corrected controller.
+
 ### Public LoadBalancer reachability
 
 A working port-forward does not prove federation ingress works. Test controller,

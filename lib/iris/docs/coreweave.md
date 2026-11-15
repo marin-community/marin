@@ -266,6 +266,17 @@ When migrating from the split flavors, apply the NodePool labels before
 switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
 topology cache.
 
+NodePool declarations alone do not establish that existing Nodes carry these
+labels. If sandbox Pods report that all topology nodes fail `nodeSelector`,
+compare the live CPU Node labels with `spec.nodeLabels` on their NodePool. See
+[CPU topology label repair](../OPS.md#cpu-topology-label-repair) for a preview
+and an explicit label-only repair; a NodePool replacement is unnecessary.
+
+Iris `region` constraints match the backend's advertised region. They do not
+become a Node selector: CoreWeave's `US-EAST-08A` backend has Nodes labelled
+`topology.kubernetes.io/region=US-EAST-08`. A required region mismatch is
+rejected before Pod creation; preferred regions do not restrict placement.
+
 TAS admission pins each Pod to a hostname from Kueue's capacity snapshot. The
 same-cycle recomputation gate prevents two newly admitted Workloads from keeping
 the same hostname when only one has capacity. If capacity becomes unavailable
