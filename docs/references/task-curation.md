@@ -25,7 +25,7 @@ owns reusable source importers and the corpus publisher.
 
 ## Current admission policy
 
-These rules include the admission display policy for Atlas preview revision 17 (2026-11-14). When a
+These rules include the admission display policy for Atlas preview revision 18 (2026-11-14). When a
 later section of this reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
@@ -35,7 +35,12 @@ Quality totals count tasks by their source's QUICK/SAMPLE/FULL label. A no-oracl
 shows its static-retained count (below). An oracle source shows Examples Pending
 until its current-pin admission receipt exists.
 
-- *Sources with oracles.* Run the original oracle over the complete population
+- *Sources with oracles.* A filtered private release alone does not admit a source.
+  Its tasks count as admitted only after the final pin has its own actor census,
+  exact deduplication, lexical measurement, grading and consumer bindings, a
+  physical SAMPLE receipt and an oracle-admitted release receipt; nothing is
+  inherited from an earlier pin. Until then Atlas shows the filtered release on
+  Evidence as pending qualification. Run the original oracle over the complete population
   through the production Harbor trial path, in SAMPLE and FULL. Tasks that fail
   are dropped before ingestion. Workspace-graded tasks also need a `nop` negative
   control: admit a task only when its oracle passes and its nop does not pass. A
@@ -138,7 +143,7 @@ A declared value that contradicts a derived one fails ingestion. Atlas shows the
 derived oversight level once, identical to the main-table Quality, with a link to
 its receipt.
 
-**Atlas display.** Source cells show only the source name and fold toggle; origin,
+**Atlas display.** Every authored UI surface meets WCAG 2.2 AA in both themes at 1440, 390 and 320 px, and prose, notes and muted text reach 7:1; the release gate fails on any violation (see the app's `RELEASE.md`). Source cells show only the source name and fold toggle; origin,
 dataset links and overlap notes belong on Evidence. Backend fit is binary: a
 backend is Supported only when every present role is supported, and conditional
 or partial support counts as Unsupported with its blockers. N/A means the role
