@@ -30,9 +30,7 @@ def test_sft_precision_controls_trainable_weights_and_update(tmp_path, params_dt
         num_train_steps=15,
     )
     weights = jnp.array([1.0, -1.0], dtype=jnp.float32)
-    state = TrainerState.init(
-        spec.optimizer.build(15), weights, key=jax.random.key(0), mp=pod.train_config.trainer.mp
-    )
+    state = TrainerState.init(spec.optimizer.build(15), weights, key=jax.random.key(0), mp=pod.train_config.trainer.mp)
     assert state.model.dtype == params_dtype
     updated, _ = state.take_step(jnp.array([0.25, -0.25], dtype=params_dtype), key=jax.random.key(1))
     assert updated.model.dtype == params_dtype
