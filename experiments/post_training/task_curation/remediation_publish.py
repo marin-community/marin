@@ -211,7 +211,7 @@ def publish_plan(plan: ReleasePlan, version: str, evidence_root: str, license_re
         raise ValueError(f"Frozen lexical measurement differs: {plan.source_id}")
     with TemporaryDirectory(prefix="atlas-retention-") as scratch:
         root = Path(scratch)
-        publication = prepare_license_publication(license_receipt, root)
+        publication = prepare_license_publication(license_receipt, root, use=plan.lexical_use.value)
         tasks = root / "tasks.parquet"
         snapshot_required = (
             plan.lexical_use is LexicalUse.TRAIN

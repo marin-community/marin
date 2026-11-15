@@ -61,9 +61,11 @@ def source_slug(source_id: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", original_source_id(source_id).lower()).strip("-")
 
 
-def publish_quick(entry: dict, output: Path, repo: str, license_receipt: LicenseReceipt) -> dict:
+def publish_quick(
+    entry: dict, output: Path, repo: str, license_receipt: LicenseReceipt, *, intended_use: IntendedUse
+) -> dict:
     """Publish conversion evidence and validate every TaskSpec and uploaded byte stream."""
-    require_license(license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], "train")
+    require_license(license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value)
     require_unbanned(entry["id"], entry["dataset_id"], license_receipt)
     manifest = json.loads((output / "manifest.json").read_text())
     destination = output / "tasks.parquet"
@@ -88,7 +90,7 @@ def publish_quick(entry: dict, output: Path, repo: str, license_receipt: License
         raise ValueError("Published row count differs from QUICK conversion")
     if manifest["converted_rows"] == 0:
         return {"id": entry["id"], "status": "no_faithful_tasks", "manifest": manifest}
-    publication = prepare_license_publication(license_receipt, output)
+    publication = prepare_license_publication(license_receipt, output, use=intended_use.value)
     body = (
         f"# {entry['display_name']}\n\n"
         "Private research artifact. QUICK conversion is unreviewed and is not training admission. "
@@ -136,7 +138,8 @@ def publish_quick(entry: dict, output: Path, repo: str, license_receipt: License
 
 
 def run_entry(entry: dict, root: Path, hub_input: str | None, license_receipt: LicenseReceipt, version: str) -> dict:
-    require_license(license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], "train")
+    intended_use = IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN
+    require_license(license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value)
     require_unbanned(entry["id"], entry["dataset_id"], license_receipt)
     slug = source_slug(entry["id"])
     output = root / slug
@@ -174,7 +177,7 @@ def run_entry(entry: dict, root: Path, hub_input: str | None, license_receipt: L
         version=VERSION,
         source=source,
         convert=native_task,
-        intended_use=IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN,
+        intended_use=intended_use,
         rubric=None,
         controls=None,
     )
@@ -199,7 +202,9 @@ def run_entry(entry: dict, root: Path, hub_input: str | None, license_receipt: L
         + "-"
         + hashlib.sha256(original_source_id(entry["id"]).encode()).hexdigest()[:8]
     )
-    return publish_quick(entry, output, f"open-athena/{repo_slug}-taskcompendium-{version}", license_receipt)
+    return publish_quick(
+        entry, output, f"open-athena/{repo_slug}-taskcompendium-{version}", license_receipt, intended_use=intended_use
+    )
 
 
 def main() -> None:
@@ -219,7 +224,8 @@ def main() -> None:
         source_id = canonical_source_id(requested)
         entry = entries[source_id]
         receipt = receipts.get(entry["id"])
-        require_license(receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], "train")
+        intended_use = IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN
+        require_license(receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value)
         assert receipt is not None
         result = run_entry(entry, args.root, args.hub_input, receipt, args.version)
         slug = source_slug(source_id)

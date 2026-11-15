@@ -41,9 +41,9 @@ class LicensePublication:
     attribution: str
 
 
-def prepare_license_publication(receipt: LicenseReceipt, output: Path) -> LicensePublication:
+def prepare_license_publication(receipt: LicenseReceipt, output: Path, *, use: str) -> LicensePublication:
     """Archive the pinned grant and notices after validating the exact input receipt."""
-    require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+    require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, use)
     require_unbanned(receipt.source_id, receipt.dataset_id, receipt)
     source = receipt.resolved_source
     dataset_id = source.dataset_id if source is not None else receipt.dataset_id

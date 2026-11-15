@@ -5,9 +5,10 @@ import hashlib
 import json
 
 import pytest
-from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseBan, LicenseReceipt, LicenseSourcePin
+from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseBan, LicenseDecision, LicenseReceipt, LicenseSourcePin
 from huggingface_hub import DatasetCard
 from huggingface_hub.hf_api import RepoFile
+from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation import license_publication, native_quick
 from experiments.post_training.task_curation.license_resolution import license_evidence
@@ -77,7 +78,9 @@ def test_publication_preserves_custom_notice_and_grant_when_readme_evidence_repe
 ):
     notice = b"Preserve this original attribution exactly.\n"
     snapshot_hub(tmp_path, monkeypatch, {"README.md": card, "NOTICE": notice})
-    publication = license_publication.prepare_license_publication(source_receipt(card), tmp_path / "published")
+    publication = license_publication.prepare_license_publication(
+        source_receipt(card), tmp_path / "published", use="train"
+    )
     rendered = license_publication.licensed_dataset_card("# Private retained tasks", publication, pretty_name="Fixture")
     metadata = DatasetCard(rendered).data.to_dict()
     assert {key: metadata[key] for key in expected} == expected
@@ -101,8 +104,34 @@ def test_changed_license_bytes_fail_before_publication_provenance_is_written(tmp
     card = b"---\nlicense: apache-2.0\n---\n"
     snapshot_hub(tmp_path, monkeypatch, {"README.md": card + b"changed"})
     with pytest.raises(ValueError, match="differs from its checked receipt"):
-        license_publication.prepare_license_publication(source_receipt(card), tmp_path / "published")
+        license_publication.prepare_license_publication(source_receipt(card), tmp_path / "published", use="train")
     assert not (tmp_path / "published/publication-provenance.json").exists()
+
+
+@pytest.mark.parametrize("use", ["train", "eval"])
+def test_publication_preflight_honors_the_requested_use(tmp_path, monkeypatch, use):
+    card = b"---\nlicense: apache-2.0\n---\n"
+    snapshot_hub(tmp_path, monkeypatch, {"README.md": card})
+    decision = LicenseDecision(
+        kind="ban",
+        approved=False,
+        who="Fixture user ruling",
+        when="2026-11-15T00:00:00+00:00",
+        source_id="fixture:source",
+        dataset_id=DATASET,
+        revision=REVISION,
+        scope=["train"],
+        rationale="Fixture source is permitted only for evaluation",
+        evidence_urls=[PREFIX + "README.md"],
+        issue_url="https://github.com/marin-community/marin/issues/11497",
+    )
+    receipt = source_receipt(card).model_copy(update={"decisions": [decision]})
+    if use == "train":
+        with pytest.raises(ValueError, match="bans this source"):
+            license_publication.prepare_license_publication(receipt, tmp_path / "published", use=use)
+        return
+    publication = license_publication.prepare_license_publication(receipt, tmp_path / "published", use=use)
+    assert publication.metadata["license"] == "apache-2.0"
 
 
 def test_wrapper_publication_uses_resolved_grant_and_preserves_physical_input_pin(tmp_path, monkeypatch):
@@ -125,7 +154,7 @@ def test_wrapper_publication_uses_resolved_grant_and_preserves_physical_input_pi
             ),
         }
     )
-    publication = license_publication.prepare_license_publication(receipt, tmp_path / "published")
+    publication = license_publication.prepare_license_publication(receipt, tmp_path / "published", use="train")
     assert publication.metadata["license_source"]["dataset_id"] == DATASET
     assert publication.metadata["license_input"] == {"dataset_id": "open-athena/input", "revision": "b" * 40}
 
@@ -142,7 +171,9 @@ def test_native_publication_binds_the_input_receipt_before_reading_tasks(tmp_pat
     receipt = source_receipt(b"---\nlicense: apache-2.0\n---\n")
     entry = {"id": receipt.source_id, "dataset_id": DATASET, "dataset_revision": "c" * 40}
     with pytest.raises(ValueError, match="License"):
-        native_quick.publish_quick(entry, tmp_path / "no-task-files", "open-athena/new-private-pin", receipt)
+        native_quick.publish_quick(
+            entry, tmp_path / "no-task-files", "open-athena/new-private-pin", receipt, intended_use=IntendedUse.TRAIN
+        )
 
 
 def test_new_private_pin_cannot_hide_a_resolved_upstream_ban(monkeypatch):
