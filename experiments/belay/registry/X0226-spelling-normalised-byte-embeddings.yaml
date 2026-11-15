@@ -94,8 +94,7 @@ trials:
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
-  rationale: '−0.0112 at equal time (step time within 1%); ladder blocked: all rungs hit autotune-cache AccessDenied (escalated);
-    MFU not run → 7'
+  rationale: −0.0112 at equal time (step time within 1%); ladder rungs d512/d768 failed (escalated); MFU not run → 7
   model: claude-opus-5-5
   date: '2026-11-15'
   inputs_digest: a300b15500be
