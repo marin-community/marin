@@ -172,6 +172,7 @@ def test_our_wrapper_checks_its_one_declared_source_and_preserves_both_pins(pinn
     if structured:
         declaration = f"license_source:\n  dataset_id: {parent}\n  revision: {parent_pin}\n  url: {parent_url}\n"
         card = f"---\npretty_name: Atlas TaskCompendium retention release\n{declaration}---\n"
+        card += f"Source pin: `open-athena/physical-input@{wrapper_pin}`.\n"
     else:
         card = f"---\npretty_name: Atlas TaskCompendium retention release\n---\nSource pin: `{parent}@{parent_pin}`.\n"
     card += "Upstream licenses and third-party asset terms continue to apply.\n"
@@ -191,7 +192,7 @@ def test_our_wrapper_checks_its_one_declared_source_and_preserves_both_pins(pinn
     assert row["evidence_url"].startswith(f"https://huggingface.co/datasets/{parent}/resolve/{parent_pin}/")
 
 
-def test_wrapper_resolution_does_not_follow_a_second_declared_source(pinned_dataset_metadata):
+def test_own_wrappers_normalize_to_first_dataset_without_following_its_lineage(pinned_dataset_metadata):
     repositories, fetched = pinned_dataset_metadata
     wrapper, parent, grandparent = "open-athena/outer-retained", "open-athena/inner-retained", "fixture/original"
     pin = "b" * 40
@@ -201,8 +202,10 @@ def test_wrapper_resolution_does_not_follow_a_second_declared_source(pinned_data
     row = license_check.check_target(
         LicenseTarget("fixture", wrapper, pin, f"https://huggingface.co/datasets/{wrapper}"), None
     )
-    assert (row["verdict"], row["rule_id"]) == ("FAIL", "F2")
-    assert grandparent not in {repository for repository, _, _ in fetched}
+    assert (row["verdict"], row["rule_id"]) == ("PASS", "P1")
+    assert row["receipt"]["resolved_source"]["dataset_id"] == grandparent
+    assert [source["dataset_id"] for source in row["receipt"]["wrapper_chain"]] == [parent]
+    assert {repository for repository, _, _ in fetched} == {wrapper, parent, grandparent}
 
 
 def test_wrapper_restrictions_and_real_separate_terms_still_block(pinned_dataset_metadata):
@@ -239,7 +242,8 @@ def test_wrapper_cannot_hide_a_known_parent_ban(pinned_dataset_metadata, monkeyp
         decision_by="user",
         issue_url="https://github.com/marin-community/marin/issues/11497",
     )
-    monkeypatch.setattr(licensing, "license_bans", lambda: {ban.source_id: ban})
+    monkeypatch.setattr(licensing, "LICENSE_BANS", json.dumps({"bans": [ban.model_dump(mode="json")]}))
+    licensing.license_bans.cache_clear()
     parent = ban.upstream_id
     pin, wrapper = "d" * 40, "open-athena/renamed-retained"
     repositories[wrapper, pin] = {"README.md": f"Source pin: `{parent}@{pin}`.\n".encode()}
@@ -257,14 +261,25 @@ def test_wrapper_cannot_hide_a_known_parent_ban(pinned_dataset_metadata, monkeyp
     assert projected["license_ban"]["source_id"] == ban.source_id
 
 
-def test_filtered_wrapper_uses_its_pinned_selection_manifest_without_following_again(pinned_dataset_metadata):
+@pytest.mark.parametrize(
+    "filename,path",
+    [
+        ("selection-manifest.json", "original_selection_plan"),
+        ("selection-manifest.json", "prior_dedup_and_lexical_selection"),
+        ("manifest.json", "source_plan_before_oracle_filter/plan"),
+        ("filtered-source.json", "prior_retention_plan"),
+    ],
+)
+def test_filtered_wrapper_uses_its_recorded_manifest_source(pinned_dataset_metadata, filename, path):
     repositories, fetched = pinned_dataset_metadata
     pin = "e" * 40
-    wrapper, parent = "open-athena/filtered-fixture", "open-athena/retained-fixture"
-    manifest = {"original_selection_plan": {"source_dataset_id": parent, "source_revision": pin}}
+    wrapper, parent = "open-athena/filtered-fixture", "fixture/original"
+    manifest = {"source_dataset_id": parent, "source_revision": pin}
+    for key in reversed(path.split("/")):
+        manifest = {key: manifest}
     repositories[wrapper, pin] = {
         "README.md": b"---\npretty_name: Atlas oracle-filtered TaskCompendium source\n---\n",
-        "selection-manifest.json": json.dumps(manifest).encode(),
+        filename: json.dumps(manifest).encode(),
     }
     repositories[parent, pin] = {"README.md": b"---\nlicense: mit\n---\n"}
     row = license_check.check_target(
@@ -273,9 +288,32 @@ def test_filtered_wrapper_uses_its_pinned_selection_manifest_without_following_a
     assert (row["verdict"], row["rule_id"]) == ("PASS", "P1")
     source = row["receipt"]["resolved_source"]
     assert (source["dataset_id"], source["revision"]) == (parent, pin)
-    assert source["declaration"]["url"].endswith(f"{pin}/selection-manifest.json")
+    assert source["declaration"]["url"].endswith(f"{pin}/{filename}")
     assert (
-        source["declaration"]["sha256"]
-        == license_check.hashlib.sha256(repositories[wrapper, pin]["selection-manifest.json"]).hexdigest()
+        source["declaration"]["sha256"] == license_check.hashlib.sha256(repositories[wrapper, pin][filename]).hexdigest()
     )
     assert {repository for repository, _, _ in fetched} == {wrapper, parent}
+
+
+def test_package_license_is_bound_to_the_exact_wheel_without_downloading_it(monkeypatch):
+    pin = "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435"
+    filename = "reasoning_gym-0.1.25-py3-none-any.whl"
+    wheel = f"https://files.pythonhosted.org/packages/fixture/{filename}"
+    fetched = []
+    metadata = {"info": {"license_expression": "MIT"}, "urls": [{"filename": filename, "digests": {"sha256": pin}}]}
+
+    def fetch(url, **_kwargs):
+        fetched.append(url)
+        return json.dumps(metadata).encode()
+
+    license_resolution._primary_license.cache_clear()
+    monkeypatch.setattr(license_resolution, "_fetch", fetch)
+    target = LicenseTarget("Reasoning Gym:fixture", filename, pin, wheel)
+    receipt = license_resolution.resolve_license(target)
+    assert check_license(receipt).verdict is LicenseCheckVerdict.PASS
+    assert fetched == ["https://pypi.org/pypi/reasoning_gym/0.1.25/json"]
+    metadata["urls"][0]["digests"]["sha256"] = "0" * 64
+    license_resolution._primary_license.cache_clear()
+    with pytest.raises(ValueError, match="does not bind"):
+        license_resolution.resolve_license(target)
+    license_resolution._primary_license.cache_clear()

@@ -179,6 +179,7 @@ class LicenseReceipt(BaseModel):
     model_generated_outputs: bool
     decisions: list[LicenseDecision] = Field(default_factory=list)
     resolved_source: LicenseSourcePin | None = None
+    wrapper_chain: list[LicenseSourcePin] = Field(default_factory=list)
 
     @field_validator("resolved_at")
     @classmethod

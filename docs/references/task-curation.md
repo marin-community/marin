@@ -30,9 +30,9 @@ Run the deterministic checker before conversion, census, oracle or QA spend; nev
 For our `open-athena` retained, filtered and TaskCompendium wrappers, the dataset
 is the one input pin explicitly recorded in `license_source` card metadata (or
 the older `Source pin` / `Upstream` declaration, provenance table or
-`selection-manifest.json` source fields). Check that pin once with the
-dataset-level rules below; never follow a second hop. Receipts preserve the wrapper declaration
-alongside the input's license evidence. Our generic upstream-terms boilerplate
+`selection-manifest.json` source fields). Follow recorded pins through our own wrapper releases to the first dataset,
+then apply the dataset-level rules below without following that dataset's lineage.
+Receipts preserve every wrapper declaration alongside the dataset's license evidence. Our generic upstream-terms boilerplate
 is not license evidence. New release cards must retain the upstream license ID,
 evidence URL, notices and attribution, and declare `license_source` with
 `dataset_id`, `revision` and `url`. Missing or ambiguous input pins escalate to the coordinator and user.

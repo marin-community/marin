@@ -57,10 +57,17 @@ WRAPPER_BOILERPLATE = (
     "Upstream licenses and third-party asset terms continue to apply.",
     "Upstream licenses and third-party asset terms apply; this conversion grants no new rights.",
 )
-WRAPPER_NAME = re.compile(r"retained|filtered|taskcompendium|oracle", re.I)
+WRAPPER_NAME = re.compile(r"retained|filtered|taskcompendium|oracle|quick|rebuilt|repaired", re.I)
 WRAPPER_TITLE = re.compile(r"taskcompendium|retention release|QUICK inspection release", re.I)
 SOURCE_PIN = re.compile(r"^Source pin:\s*`([^`@]+)@([0-9a-f]+)`", re.M | re.I)
 NATIVE_SOURCE_PIN = re.compile(r"^Upstream:\s*(\S+) at ([0-9a-f]+)\.\s+(https://\S+)", re.M | re.I)
+ARCHIVE_SOURCE_PIN = re.compile(r"archive `([^`]+)`\s*@\s*`([0-9a-f]+)`", re.I)
+REPAIR_SOURCE_PIN = re.compile(r"\bfrom `([^`@]+/[^`@]+)@([0-9a-f]+)`", re.I)
+WRAPPER_MANIFESTS = {
+    "selection-manifest.json": ("original_selection_plan", "prior_dedup_and_lexical_selection"),
+    "manifest.json": ("source_plan_before_oracle_filter/plan",),
+    "filtered-source.json": ("prior_retention_plan",),
+}
 SEPARATE_TERMS = re.compile(
     r"(?:subject to|governed by|under|respect).{0,80}(?:separate|third.party|upstream|respective).{0,80}"
     r"(?:terms|licen[cs]es)|(?:separate|third.party|upstream|respective).{0,50}(?:terms|licen[cs]es).{0,50}(?:apply|govern)",
@@ -308,28 +315,52 @@ def _declared_license_source(target: LicenseTarget, content: bytes, url: str) ->
         if any(not isinstance(value, str) or not value for value in source.values()):
             raise ValueError("Wrapper license_source fields must be nonempty strings")
         declarations.append((source["dataset_id"], source["revision"], source["url"]))
-    for match in SOURCE_PIN.finditer(text):
-        location, revision = match.groups()
-        source_url = location if "://" in location else f"https://huggingface.co/datasets/{location}"
-        declarations.append((location, revision, source_url))
-    declarations.extend(match.groups() for match in NATIVE_SOURCE_PIN.finditer(text))
-    table_dataset = re.findall(r"^\| Upstream dataset \| `([^`]+)`", text, re.M)
-    table_revision = re.findall(r"^\| Upstream revision \| `([0-9a-f]+)`", text, re.M)
-    if table_dataset or table_revision:
-        if len(table_dataset) != 1 or len(table_revision) != 1:
-            raise ValueError("Wrapper provenance table must declare one dataset and revision")
-        declarations.append((table_dataset[0], table_revision[0], f"https://huggingface.co/datasets/{table_dataset[0]}"))
-    declaration_url, declaration_content = url, content
     if not declarations:
-        declaration_url = (
-            f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/selection-manifest.json"
-        )
-        declaration_content = _fetch(declaration_url, huggingface=True)
-        plan = json.loads(declaration_content).get("original_selection_plan", {})
-        dataset_id, revision = plan.get("source_dataset_id"), plan.get("source_revision")
-        if not isinstance(dataset_id, str) or not isinstance(revision, str):
-            raise ValueError("Wrapper selection manifest does not declare a source dataset and revision")
-        declarations.append((dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}"))
+        for match in SOURCE_PIN.finditer(text):
+            location, revision = match.groups()
+            source_url = location if "://" in location else f"https://huggingface.co/datasets/{location}"
+            declarations.append((location, revision, source_url))
+        declarations.extend(match.groups() for match in NATIVE_SOURCE_PIN.finditer(text))
+        for pattern in (ARCHIVE_SOURCE_PIN, REPAIR_SOURCE_PIN):
+            declarations.extend(
+                (repo, pin, f"https://huggingface.co/datasets/{repo}") for repo, pin in pattern.findall(text)
+            )
+        table_dataset = re.findall(r"^\| Upstream dataset \| `([^`]+)`", text, re.M)
+        table_dataset += re.findall(r"^\| Upstream source \|[^\n`]*`([^`]+/[^`]+)`", text, re.M)
+        table_revision = re.findall(r"^\| Upstream revision \| `([0-9a-f]+)`", text, re.M)
+        if table_dataset or table_revision:
+            if len(table_dataset) != 1 or len(table_revision) != 1:
+                raise ValueError("Wrapper provenance table must declare one dataset and revision")
+            declarations.append(
+                (table_dataset[0], table_revision[0], f"https://huggingface.co/datasets/{table_dataset[0]}")
+            )
+    declaration_url, declaration_content = url, content
+    manifest_path = None
+    if not declarations:
+        filenames = {
+            item.rfilename for item in HfApi().dataset_info(target.dataset_id, revision=target.revision).siblings or ()
+        }
+        for filename, paths in WRAPPER_MANIFESTS.items():
+            if filename not in filenames:
+                continue
+            declaration_url = f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/{filename}"
+            declaration_content = _fetch(declaration_url, huggingface=True)
+            document = json.loads(declaration_content)
+            for path in paths:
+                plan = document
+                for key in path.split("/"):
+                    if not isinstance(plan, dict):
+                        raise ValueError(f"Wrapper manifest requires an object at {path}")
+                    plan = plan.get(key, {})
+                if not isinstance(plan, dict) or not plan:
+                    continue
+                dataset_id, revision = plan.get("source_dataset_id"), plan.get("source_revision")
+                if not isinstance(dataset_id, str) or not isinstance(revision, str):
+                    raise ValueError(f"Wrapper manifest does not declare a source dataset and revision at {path}")
+                declarations.append((dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}"))
+                manifest_path = path
+            if declarations:
+                break
     normalized = set()
     for dataset_id, revision, source_url in declarations:
         parts = urlsplit(source_url)
@@ -372,14 +403,16 @@ def _declared_license_source(target: LicenseTarget, content: bytes, url: str) ->
         if (
             SOURCE_PIN.match(line)
             or NATIVE_SOURCE_PIN.match(line)
+            or ARCHIVE_SOURCE_PIN.search(line)
+            or REPAIR_SOURCE_PIN.search(line)
             or re.match(r"^\| Upstream (?:dataset|revision) \|", line)
         ):
             selected.add(index)
     quoted_lines = [f"L{i + 1}: {lines[i]}" for i in sorted(selected)]
     if declaration_url != url:
         quoted_lines = [
-            f"JSON /original_selection_plan/source_dataset_id: {dataset_id}",
-            f"JSON /original_selection_plan/source_revision: {revision}",
+            f"JSON /{manifest_path}/source_dataset_id: {dataset_id}",
+            f"JSON /{manifest_path}/source_revision: {revision}",
         ]
     return LicenseSourcePin(
         dataset_id=dataset_id,
@@ -396,26 +429,35 @@ def _declared_license_source(target: LicenseTarget, content: bytes, url: str) ->
 
 
 def resolve_license(target: LicenseTarget) -> LicenseReceipt:
-    """Check a dataset, or one explicitly declared input of our repackaged releases."""
-    primary = _primary_license(replace(target, source_id=target.dataset_id))
-    receipt = primary.model_copy(update={"source_id": target.source_id})
-    if urlsplit(target.url).hostname != "huggingface.co" or not target.dataset_id.startswith("open-athena/"):
-        return receipt
-    card = next((item for item in primary.evidence if item.kind == "dataset_card"), None)
-    content = _fetch(card.url, huggingface=True) if card else b""
-    if not _wrapper_target(target, _card_metadata(content.decode("utf-8"))):
-        return receipt
-    # A restrictive wrapper term still applies even when its input has a permissive grant.
-    if check_license(receipt).rule_id in {LicenseCheckRule.RESTRICTED, LicenseCheckRule.THIRD_PARTY}:
-        return receipt
-    source = _declared_license_source(target, content, card.url if card else target.url)
-    parent = _primary_license(LicenseTarget(source.dataset_id, source.dataset_id, source.revision, source.url))
-    return parent.model_copy(
+    """Normalize our recorded wrapper pins, then check the first dataset without following its lineage."""
+    current = replace(target, source_id=target.dataset_id)
+    chain = []
+    seen = set()
+    while True:
+        identity = (current.dataset_id, current.revision)
+        if identity in seen:
+            raise ValueError("Wrapper source declarations form a cycle")
+        seen.add(identity)
+        primary = _primary_license(current)
+        if urlsplit(current.url).hostname != "huggingface.co" or not current.dataset_id.startswith("open-athena/"):
+            break
+        card = next((item for item in primary.evidence if item.kind == "dataset_card"), None)
+        content = _fetch(card.url, huggingface=True) if card else b""
+        if not _wrapper_target(current, _card_metadata(content.decode("utf-8"))):
+            break
+        # Explicit restrictions on our own publication still apply to its users.
+        if check_license(primary).rule_id in {LicenseCheckRule.RESTRICTED, LicenseCheckRule.THIRD_PARTY}:
+            break
+        source = _declared_license_source(current, content, card.url if card else current.url)
+        chain.append(source)
+        current = LicenseTarget(source.dataset_id, source.dataset_id, source.revision, source.url)
+    return primary.model_copy(
         update={
             "source_id": target.source_id,
             "dataset_id": target.dataset_id,
             "revision": target.revision,
-            "resolved_source": source,
+            "resolved_source": chain[-1] if chain else None,
+            "wrapper_chain": chain[:-1],
         }
     )
 

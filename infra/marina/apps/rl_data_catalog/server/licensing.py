@@ -29,6 +29,7 @@ def source_license_ban(
     datasets = {dataset_id}
     if receipt is not None and receipt.resolved_source is not None:
         datasets.add(receipt.resolved_source.dataset_id)
+        datasets.update(source.dataset_id for source in receipt.wrapper_chain)
     return next((ban for ban in license_bans().values() if ban.upstream_id in datasets), None)
 
 
