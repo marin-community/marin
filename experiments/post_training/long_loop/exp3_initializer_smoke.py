@@ -7,6 +7,7 @@ import functools
 import hashlib
 import json
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import click
@@ -19,6 +20,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from jax.sharding import AxisType, Mesh
+from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
@@ -213,6 +215,12 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
                 max_eval_batches=0,
                 offload_opt_state=True,
                 checkpointer=CheckpointerConfig(save_interval=None, keep=None),
+                progress_watchdog=ProgressWatchdogConfig(
+                    startup_timeout=timedelta(minutes=20),
+                    step_timeout=timedelta(minutes=10),
+                    process_timeout=timedelta(minutes=30),
+                    startup_grace_period=timedelta(0),
+                ),
             )
         ),
         "initial_eval_match": draccus.encode(gate),
