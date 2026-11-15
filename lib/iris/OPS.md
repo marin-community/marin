@@ -480,11 +480,11 @@ labels; capacity, instance type and taints are unchanged.
 With approval for the named cluster, review a targeted Pulumi preview and apply
 only these four resources: `topology-cpu`, `resource-flavor-cpu`,
 `cluster-queue`, and `nodepool-cw-use08a-cpu-erapids`. Use their exact URNs
-from the stack and the new resource declarations. Require two creates and two
-updates, with no replacement, deletion, capacity, Helm-release or GPU-flavor
-change. The ClusterQueue update can admit existing queued work and changes the
-preferred pool for new CPU-only admissions. It does not rewrite admitted
-Workloads. This procedure requires no Iris or Kueue controller restart.
+from the stack and the new resource declarations. Require no replacement,
+deletion, capacity, Helm-release or GPU-flavor change. The ClusterQueue update
+can admit existing queued work and changes the preferred pool for new CPU-only
+admissions. It does not rewrite admitted Workloads. This procedure requires no
+Iris or Kueue controller restart.
 
 From the repository root, with stack KMS access and the configured kubeconfig:
 
@@ -511,23 +511,6 @@ and RDMA quotas on `cw-tas` retain their prior values. Keep
 Kueue to account for transient overlap during migration. Verify a separately
 authorized CPU SANDBOX canary receives an `iris-cpu` assignment, starts its
 process and exits successfully; admission alone does not verify the runtime.
-
-CPU Node `g8faade` carries a stray synthetic
-`ds.coreweave.com/nvlink.domain=iris-cpu-only` label. Remove that synthetic label after the CPU flavor is available,
-checking first that no admitted `cw-tas` Workload has a hostname assignment to
-that Node. Removing a topology level can invalidate such an assignment and
-requeue work. With approval for that cleanup, the command is:
-
-```bash
-kubectl --kubeconfig ~/.kube/coreweave-iris \
-  --context marin-us-east-08a_US-EAST-08A \
-  label node g8faade ds.coreweave.com/nvlink.domain-
-```
-
-Inspect `status.admission.podSetAssignments[].topologyAssignment` on Workloads,
-including admitted Workloads whose Pods have not started. A Pod list alone is
-insufficient for this check. The cleanup affects one label on one CPU Node;
-it must not change physical labels on GPU Nodes.
 
 ### Public LoadBalancer reachability
 

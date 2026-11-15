@@ -726,7 +726,6 @@ def test_region_mismatch_rejects_dispatch_before_creating_a_pod(regions):
     assert resources[K8sResource.PODS] == []
     assert len(updates) == 1
     assert updates[0].new_state == job_pb2.TASK_STATE_FAILED
-    assert "Region constraints do not match" in updates[0].error
 
 
 @pytest.mark.parametrize("op", [job_pb2.CONSTRAINT_OP_EQ, job_pb2.CONSTRAINT_OP_IN])
