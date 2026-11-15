@@ -3,6 +3,8 @@
 
 """Explicit Exp3 SFT controls, independent of the historical shared defaults."""
 
+import hashlib
+import json
 import math
 from dataclasses import replace
 
@@ -18,6 +20,8 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
 
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.post_training.long_loop.sft import BASE_MODEL, BASE_REVISION
@@ -29,6 +33,32 @@ from experiments.sft.launcher import HFModel, SFTSpec
 # 67B pretrain recipe at 92514c5358e9cd99c89bdd4a6600ac7bbeddc147.
 TOKEN_IDS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
 ANCHOR_IDS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
+
+
+def verified_initializer_model(receipt_uri: str, receipt_sha256: str) -> str:
+    """Resolve a staged initializer only after its source and completed copy agree."""
+    raw = StoragePath(receipt_uri).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != receipt_sha256:
+        raise ValueError("Initializer source receipt SHA256 mismatch")
+    receipt = json.loads(raw)
+    if receipt["repo"] != BASE_MODEL or receipt["revision"] != BASE_REVISION:
+        raise ValueError("Staged initializer is not the pinned Exp3 source")
+    model_ref = receipt["model_ref"]
+    manifest_uri = prefix_join(model_ref, COMPLETION_MANIFEST)
+    if receipt["verified_copy_manifest"] != manifest_uri:
+        raise ValueError("Initializer completion manifest belongs to another destination")
+    manifest_raw = StoragePath(manifest_uri).read_bytes()
+    if hashlib.sha256(manifest_raw).hexdigest() != receipt["verified_copy_manifest_sha256"]:
+        raise ValueError("Initializer completion manifest SHA256 mismatch")
+    manifest = json.loads(manifest_raw)
+    expected = {item["path"]: (item["size"], item["sha256"]) for item in receipt["files"]}
+    actual = {item["path"]: (item["size"], item["sha256"]) for item in manifest["files"]}
+    if manifest["destination"] != model_ref or actual != expected:
+        raise ValueError("Regional initializer differs from the verified Hub inventory")
+    for item in receipt["files"]:
+        if item["lfs"] is not None and item["sha256"] != item["lfs"]["sha256"]:
+            raise ValueError(f"Initializer LFS identity mismatch: {item['path']}")
+    return model_ref
 
 
 def exp3_optimizer(*, weight_decay: float) -> GrugMoeMuonHConfig:
@@ -78,7 +108,7 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         name=name,
         version=version,
         model=HFModel(
-            model_ref=f"{BASE_MODEL}@{BASE_REVISION}",
+            model_ref=verified_initializer_model(recipe["initializer_receipt"], recipe["initializer_receipt_sha256"]),
             tokenizer_path=data.tokenizer,
             model_type="snowball",
             eos_token_ids=(128001, 128009),

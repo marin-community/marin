@@ -36,7 +36,7 @@ from marin.rl.skyrl import IrisSkyRLExecution
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.post_training.long_loop.exp3_recipe import TOKEN_IDS, exp3_sft_spec
+from experiments.post_training.long_loop.exp3_recipe import TOKEN_IDS, exp3_sft_spec, verified_initializer_model
 from experiments.post_training.long_loop.exp3_smokes import certify_smoke, prepare_smoke_sources, smoke_train_config
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.stage_guard import StageGuard, run_guarded_stage
@@ -132,8 +132,25 @@ def c4_input_audit(data: LmDataConfig) -> dict:
         return evaluation_input_audit(evaluator, TOKEN_IDS)
 
 
-def prepare_initializer_smoke(*, output: str, reference_bundle: str, reference_bundle_sha256: str) -> None:
+def prepare_initializer_smoke(
+    *,
+    output: str,
+    reference_bundle: str,
+    reference_bundle_sha256: str,
+    initializer_receipt: str,
+    initializer_receipt_sha256: str,
+) -> None:
     """Adopt an inventoried regional reference; production workers never fetch the GCS source."""
+    verified_initializer_model(initializer_receipt, initializer_receipt_sha256)
+    (StoragePath(output) / "initializer.json").write_text(
+        json.dumps(
+            {
+                "initializer_receipt": initializer_receipt,
+                "initializer_receipt_sha256": initializer_receipt_sha256,
+            },
+            indent=2,
+        )
+    )
     prepare_smoke_sources(output=output)
     raw = StoragePath(reference_bundle).read_bytes()
     if hashlib.sha256(raw).hexdigest() != reference_bundle_sha256:
@@ -171,6 +188,7 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
     model = draccus.encode(SnowballConfig(max_seq_len=CONTEXT, moe_implementation="sonic", moe_capacity_factor=1))
     model.pop("type", None)
     return {
+        **json.loads((StoragePath(prepared) / "initializer.json").read_text()),
         "profile": "snowball_exp3",
         "data": data,
         "evaluation_data": data,
@@ -236,9 +254,16 @@ def run_initializer_smoke(*, output: str, prepared: str, artifact_version: str, 
 @click.option("--source-revision", required=True)
 @click.option("--reference-bundle", required=True)
 @click.option("--reference-bundle-sha256", required=True)
+@click.option("--initializer-receipt", required=True)
+@click.option("--initializer-receipt-sha256", required=True)
 @rl_build_options
 def main(
-    h100_hour_limit: float, source_revision: str, reference_bundle: str, reference_bundle_sha256: str
+    h100_hour_limit: float,
+    source_revision: str,
+    reference_bundle: str,
+    reference_bundle_sha256: str,
+    initializer_receipt: str,
+    initializer_receipt_sha256: str,
 ) -> ArtifactStep:
     configure_coreweave_s3()
     if get_job_info() is None:
@@ -252,6 +277,8 @@ def main(
         output=OUT,
         reference_bundle=reference_bundle,
         reference_bundle_sha256=reference_bundle_sha256,
+        initializer_receipt=initializer_receipt,
+        initializer_receipt_sha256=initializer_receipt_sha256,
     )
     trained = apply(
         "long-loop-exp3/initializer-proof",

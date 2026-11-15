@@ -139,6 +139,7 @@ Use `verified-copy` when consumers require a complete, verified prefix, especial
 cross-backend artifacts such as checkpoint exports where the transfer may be interrupted. Use
 `cp -r` for ordinary recursive copies where partial destination contents are acceptable, or
 `rsync` when the destination should track later source changes.
+Local file symlinks are copied as their target bytes under the snapshot-relative file names.
 
 `verified-copy` uploads objects under a sibling `<DST>.verified-copy-staging` prefix. After every
 object has been verified, it promotes them to `<DST>` with within-store copies, removes the staged
