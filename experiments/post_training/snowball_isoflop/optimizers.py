@@ -13,7 +13,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.snowball_isoflop.budget import budgeted_map
 from experiments.post_training.snowball_isoflop.config import INPUTS, PREFIX, SIZES, VERSION
 from experiments.post_training.snowball_isoflop.measurements import read_json
-from experiments.post_training.snowball_isoflop.probes import Probe, at_budget
+from experiments.post_training.snowball_isoflop.probes import Probe, at_budget, build_probe_pod
 from experiments.post_training.snowball_isoflop.run_probes import run_probe
 
 OPTIMIZERS = ("grug_moe_muonh_v1", "adam")
@@ -49,21 +49,46 @@ def final_loss(report: dict) -> float:
     return float(final[0]["eval/loss"])
 
 
-def sweep(size: int, selection_path: str, trial_phase: str = "D") -> dict:
+def completed_trial_report(selected: Probe, optimizer: str, lr: float, trial_phase: str) -> dict | None:
+    """Return a completed equal-budget trial report from an earlier attempt, or None.
+
+    Preempted D attempts leave dispatched trial directories behind; a rerun with
+    fresh identities would redo that work. When an earlier attempt's trial for
+    this geometry completed, reuse its probe-result report instead.
+    """
+    probe = at_budget(replace(selected, optimizer=optimizer, learning_rate=lr, seed=0), 3e18, trial_phase)
+    root = StoragePath(build_probe_pod(probe).output_path)
+    if not (root / "probe-result.json").exists():
+        return None
+    report = read_json(str(root / "probe-result.json"))
+    if report.get("status") != "complete":
+        return None
+    return report
+
+
+def sweep(size: int, selection_path: str, trial_phase: str = "D", prior_trial_phases: tuple[str, ...] = ()) -> dict:
     selected = selected_layout(size, selection_path)
     results = []
     winners = {}
     for optimizer in OPTIMIZERS:
-        reports = [
-            run_probe(
-                at_budget(
-                    replace(selected, optimizer=optimizer, learning_rate=lr, seed=0),
-                    3e18,
-                    trial_phase,
-                )
+        reports = []
+        for lr in lr_candidates(size, optimizer):
+            reused = next(
+                (
+                    report
+                    for phase in prior_trial_phases
+                    if (report := completed_trial_report(selected, optimizer, lr, phase)) is not None
+                ),
+                None,
             )
-            for lr in lr_candidates(size, optimizer)
-        ]
+            if reused is None:
+                reports.append(
+                    run_probe(
+                        at_budget(replace(selected, optimizer=optimizer, learning_rate=lr, seed=0), 3e18, trial_phase)
+                    )
+                )
+            else:
+                reports.append(reused)
         if any(report["status"] != "complete" for report in reports):
             raise ValueError("Every optimizer requires three valid equal-budget LR trials")
         # The primary metric is assistant-token micro cross entropy; preserve
@@ -96,6 +121,11 @@ def main():
         # Attempt-scoped identity prefix: preempted trials keep their dispatch
         # markers, so each D attempt needs fresh probe identities.
         help="Attempt-scoped identity prefix for D trial probes; required to run D",
+    )
+    parser.add_argument(
+        "--prior-trial-phases",
+        default="",
+        help="Comma-separated earlier trial phases whose completed trials are reused instead of rerun",
     )
     parser.add_argument("--h100-hour-limit", type=float, required=True)
     parser.add_argument("--max-concurrent", type=int, choices=range(1, 9), default=3)
@@ -130,7 +160,9 @@ def main():
         )
         budgeted_map(
             {str(size): size for size in SIZES},
-            lambda size: sweep(size, args.selection, args.trial_phase),
+            lambda size: sweep(
+                size, args.selection, args.trial_phase, tuple(filter(None, args.prior_trial_phases.split(",")))
+            ),
             manager,
             args.h100_hour_limit,
             min(3, args.max_concurrent),
