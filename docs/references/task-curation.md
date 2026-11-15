@@ -28,8 +28,10 @@ owns reusable source importers and the corpus publisher.
 License permission is the first ingest check, before conversion, actor census,
 oracle execution, model review or other QA spend. QUICK, SAMPLE, FULL, native
 imports and evaluation publication require an exact-pin `LicenseReceipt`.
-New admission publication checks it again. Existing published admissions remain
-unchanged during the backfill audit; a missing receipt is not a retroactive ban.
+New admission publication checks it again. Archived declarations remain unchanged;
+the versioned source-ban registry controls current eligibility. Missing metadata
+on a repackaged release must be traced to its upstream pin; unresolved upstream
+permission is banned under the current ruling.
 
 The single policy table is
 [`finestore.rl.licenses`](https://github.com/marin-community/marin/blob/atlas-env-audit/lib/finestore/src/finestore/rl/licenses.py),
@@ -74,6 +76,16 @@ uv run python -m experiments.post_training.task_curation.driver \
   --source <name> --mode quick --license-receipts /path/to/reviewed-licenses.json \
   --output-root /path/to/output --run
 ```
+
+**Current source bans (2026-11-15).** The user bans every source whose upstream
+permission is missing, unknown, restricted or unresolved, including evaluation
+sources and untraceable private lineage. The versioned registry is
+`infra/marina/apps/rl_data_catalog/server/license_registry.py`.
+Its decisions bind ingest, new admission, source selection and served admission
+counts. Archived source declarations, assessments, task data and earlier app
+revisions remain intact. A lift requires new primary permissive evidence and a
+record in the same issue; changing an input pin or attaching an exception does
+not lift an active source-wide ban.
 
 **Exceptions and bans.** Keep the evidence and decision in the
 [blocked-source registry](https://github.com/marin-community/marin/issues/11497).

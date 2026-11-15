@@ -12,6 +12,7 @@ from huggingface_hub import HfApi
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation import license_binding
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
+from infra.marina.apps.rl_data_catalog.server import licensing
 
 
 @pytest.fixture(autouse=True)
@@ -49,3 +50,7 @@ def reviewed_evaluation_licenses(tmp_path_factory, monkeypatch):
     path = tmp_path_factory.mktemp("reviewed-license-registry") / "licenses.json"
     path.write_text(json.dumps(receipts))
     monkeypatch.setattr(license_binding, "LICENSE_REGISTRY", path)
+    monkeypatch.setattr(licensing, "LICENSE_BANS", '{"version":"fixture","bans":[]}')
+    licensing.license_bans.cache_clear()
+    yield
+    licensing.license_bans.cache_clear()

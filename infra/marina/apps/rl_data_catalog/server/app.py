@@ -29,6 +29,7 @@ from .duplicate_folding import (
 )
 from .filtration import filtration
 from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
+from .licensing import license_projection
 from .quality import intended_use, issue_rate, quality_display, result
 from .schema import SCHEMA_SQL
 from .source_counts import SourceCounts
@@ -233,7 +234,9 @@ def create_api(services: AppletServices) -> FastAPI:
             inventory = []
             for retained_row in rows:
                 row = canonical_source_record(dict(retained_row))
-                row["declaration"] = contract_projection(row["declaration"], contracts.get(row["id"], []))
+                row["declaration"] = license_projection(
+                    contract_projection(row["declaration"], contracts.get(row["id"], []))
+                )
                 display = quality_display(row["declaration"], row["curation"], row["assessment_key"])
                 inventory.append(
                     {
@@ -499,7 +502,7 @@ def create_api(services: AppletServices) -> FastAPI:
             difficulty = difficulty_summary(
                 source["declaration"], difficulty_records(connection, source_id).get(canonical_source_id(source_id), [])
             )
-        declaration = source["declaration"]
+        declaration = license_projection(source["declaration"])
         review = summaries.get("admitted")
         display = quality_display(declaration, source["curation"], source["assessment_key"])
         return {

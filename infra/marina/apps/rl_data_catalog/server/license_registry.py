@@ -1,0 +1,580 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Versioned user decisions; Python packaging preserves this registry in hosted backends."""
+
+LICENSE_BANS = r'''
+{
+  "version": "2026.11.15.1",
+  "bans": [
+    {
+      "source_id": "ASDiv:asdiv",
+      "upstream_id": "chaochun/nlu-asdiv-dataset",
+      "upstream_revision": "de6a5ba9542b6411897b4ca4658759374942037a",
+      "classification": "unknown",
+      "license_ids": [
+        "unknown"
+      ],
+      "reason": "Primary license and immutable upstream lineage remain unresolved.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/datasets/skyrl/math.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574598+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "AllenAI:rlvr_math",
+      "upstream_id": "allenai/RLVR-MATH",
+      "upstream_revision": "bd2a93551b503a395fadd1a740d957559cfe6f3c",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/allenai/RLVR-MATH/resolve/bd2a93551b503a395fadd1a740d957559cfe6f3c/README.md"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574606+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "Evalchemy:aime24",
+      "upstream_id": "aime24",
+      "upstream_revision": "2dfe4f134aee7989cd9978218ca914b3c3db4685ea06d841560ec1391ba0a409",
+      "classification": "unknown",
+      "reason": "No declared primary license or verified upstream origin pin for the bundled benchmark.",
+      "evidence_urls": [
+        "https://raw.githubusercontent.com/marin-community/marin/623134de90723e7f189036da005067f36817b6e7/vendor/evalchemy/eval/chat_benchmarks/AIME24/data/aime24.json"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218480+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "unknown"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:aime25",
+      "upstream_id": "aime25",
+      "upstream_revision": "9affac318c4dd399482a67226936e229f954628567c7d7b7ee8f1360c15d6f7c",
+      "classification": "unknown",
+      "reason": "No declared primary license or verified upstream origin pin for the bundled benchmark.",
+      "evidence_urls": [
+        "https://raw.githubusercontent.com/marin-community/marin/623134de90723e7f189036da005067f36817b6e7/vendor/evalchemy/eval/chat_benchmarks/AIME25/data/aime25.json"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218481+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "unknown"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:amc23",
+      "upstream_id": "amc23",
+      "upstream_revision": "02ae54425741562778916b5fa8f6ff07749689cfcd7a53e65e1d88a89e5065f9",
+      "classification": "unknown",
+      "reason": "No declared primary license or verified upstream origin pin for the bundled benchmark.",
+      "evidence_urls": [
+        "https://raw.githubusercontent.com/marin-community/marin/623134de90723e7f189036da005067f36817b6e7/vendor/evalchemy/eval/chat_benchmarks/AMC23/data/amc23.json"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218481+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "unknown"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:boolq",
+      "upstream_id": "aps/super_glue",
+      "upstream_revision": "3de24cf8022e94f4ee4b9d55a6f539891524d646",
+      "classification": "unknown",
+      "reason": "Pinned upstream license is custom or unknown; no permissive grant established.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/aps/super_glue/resolve/3de24cf8022e94f4ee4b9d55a6f539891524d646/README.md"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218478+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "other"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:financebench",
+      "upstream_id": "PatronusAI/financebench",
+      "upstream_revision": "e04404e3a97f69f79c14d42f24981a1c9c3bcd18",
+      "classification": "restricted",
+      "reason": "Publisher dataset card declares CC-BY-NC-4.0.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/PatronusAI/financebench/blob/e04404e3a97f69f79c14d42f24981a1c9c3bcd18/README.md"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218368+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "cc-by-nc-4.0"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:hellaswag",
+      "upstream_id": "Rowan/hellaswag",
+      "upstream_revision": "218ec52e09a7e7462a5400043bb9a69a41d06b76",
+      "classification": "missing",
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/Rowan/hellaswag/resolve/218ec52e09a7e7462a5400043bb9a69a41d06b76/README.md"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218475+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "missing"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:ifbench",
+      "upstream_id": "allenai/IFBench_test",
+      "upstream_revision": "2e8a48de45ff3bf41242f927254ca81b59ca3ae2",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/allenai/IFBench_test/resolve/2e8a48de45ff3bf41242f927254ca81b59ca3ae2/README.md"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574578+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "Evalchemy:lambada_openai",
+      "upstream_id": "EleutherAI/lambada_openai",
+      "upstream_revision": "900124bf3b8235c6daf21033af9948b3f07346c4",
+      "classification": "permissive",
+      "reason": "Explicit source ban remains in force pending the recorded inheritance/provenance review.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/EleutherAI/lambada_openai/resolve/900124bf3b8235c6daf21033af9948b3f07346c4/README.md"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218477+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "mit"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:math500",
+      "upstream_id": "HuggingFaceH4/MATH-500",
+      "upstream_revision": "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/HuggingFaceH4/MATH-500/resolve/6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be/README.md"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574582+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "Evalchemy:olympiadbench",
+      "upstream_id": "olympiadbench",
+      "upstream_revision": "bcafaabc0128adfeef69c830d1682254428887d4e1b96b5b1b03fb5d3818f958",
+      "classification": "unknown",
+      "reason": "No declared primary license or verified upstream origin pin for the bundled benchmark.",
+      "evidence_urls": [
+        "https://raw.githubusercontent.com/marin-community/marin/623134de90723e7f189036da005067f36817b6e7/vendor/evalchemy/eval/chat_benchmarks/OlympiadBench/data/olympiadbench.jsonl"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218482+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "unknown"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:olympiadbenchdeterministic",
+      "upstream_id": "olympiadbenchdeterministic",
+      "upstream_revision": "bcafaabc0128adfeef69c830d1682254428887d4e1b96b5b1b03fb5d3818f958",
+      "classification": "unknown",
+      "reason": "No declared primary license or verified upstream origin pin for the bundled benchmark.",
+      "evidence_urls": [
+        "https://raw.githubusercontent.com/marin-community/marin/623134de90723e7f189036da005067f36817b6e7/vendor/evalchemy/eval/chat_benchmarks/OlympiadBench/data/olympiadbench.jsonl"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218482+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "unknown"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:openbookqa",
+      "upstream_id": "allenai/openbookqa",
+      "upstream_revision": "388097ea7776314e93a529163e0fea805b8a6454",
+      "classification": "unknown",
+      "reason": "Pinned upstream license is custom or unknown; no permissive grant established.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/allenai/openbookqa/resolve/388097ea7776314e93a529163e0fea805b8a6454/README.md"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218479+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "unknown"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:piqa",
+      "upstream_id": "baber/piqa",
+      "upstream_revision": "142f6d7367fd9877f0fb3b5734ea6a545f54cdd1",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/api/datasets/baber/piqa/tree/142f6d7367fd9877f0fb3b5734ea6a545f54cdd1?recursive=true"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574383+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "Evalchemy:triviaqa",
+      "upstream_id": "mandarjoshi/trivia_qa",
+      "upstream_revision": "0f7faf33a3908546c6fd5b73a660e0f8ff173c2f",
+      "classification": "unknown",
+      "reason": "Pinned upstream license is custom or unknown; no permissive grant established.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/mandarjoshi/trivia_qa/resolve/0f7faf33a3908546c6fd5b73a660e0f8ff173c2f/README.md"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218479+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "unknown"
+      ]
+    },
+    {
+      "source_id": "Evalchemy:winogrande",
+      "upstream_id": "allenai/winogrande",
+      "upstream_revision": "01e74176c63542e6b0bcb004dcdea22d94fb67b5",
+      "classification": "missing",
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/allenai/winogrande/resolve/01e74176c63542e6b0bcb004dcdea22d94fb67b5/README.md"
+      ],
+      "decided_at": "2026-11-15T17:12:29.218477+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "license_ids": [
+        "missing"
+      ]
+    },
+    {
+      "source_id": "Harbor Hub:skill2env/skill2env",
+      "upstream_id": "unverified-origin:587210ec6d25",
+      "upstream_revision": "6198459210ab98e0c9c4e021b20f50e93c41b9d4",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574669+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "HuggingFaceH4:aime24",
+      "upstream_id": "HuggingFaceH4/aime_2024",
+      "upstream_revision": "2fe88a2f1091d5048c0f36abc874fb997b3dd99a",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/HuggingFaceH4/aime_2024/resolve/2fe88a2f1091d5048c0f36abc874fb997b3dd99a/README.md"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574595+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "HuggingFaceH4:math500",
+      "upstream_id": "HuggingFaceH4/MATH-500",
+      "upstream_revision": "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/HuggingFaceH4/MATH-500/resolve/6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be/README.md"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574604+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "Marin:thoughtcrime",
+      "upstream_id": "unverified-origin:77d991d82b67",
+      "upstream_revision": "231751144c48b5553d5b921054b196e5e2d073f9",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574658+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "Open-R1:verifiable_code",
+      "upstream_id": "open-r1/verifiable-coding-problems-python",
+      "upstream_revision": "b761a24a95fa03289a231d2d31c183636ffb9833",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/open-r1/verifiable-coding-problems-python/resolve/b761a24a95fa03289a231d2d31c183636ffb9833/README.md"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574608+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "OpenAthena:structure-closure",
+      "upstream_id": "unverified-origin:d9e5f81ad5b0",
+      "upstream_revision": "194f25bd9b10eea55a3a8dd2f17229c89af21b7d",
+      "classification": "unknown",
+      "license_ids": [
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574652+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "OpenAthena:structure-closure/validation",
+      "upstream_id": "unverified-origin:abaae0c5c68e",
+      "upstream_revision": "186e83734e9b655236007203e4aaab45d2b93d83",
+      "classification": "unknown",
+      "license_ids": [
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574655+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "Reasoning Gym:reasoning_gym",
+      "upstream_id": "reasoning-gym@0.1.25",
+      "upstream_revision": "7f17a3eddb13c015d7d4a755ed576a061df889faf9468bcc2cca334ebe9e0435",
+      "classification": "unknown",
+      "license_ids": [
+        "unknown"
+      ],
+      "reason": "PyPI declares Apache-2.0, but exact archived wheel lineage has not been verified.",
+      "evidence_urls": [
+        "https://pypi.org/pypi/reasoning-gym/0.1.25/json"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574617+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TaskTrove:GAIR__OpenSWE__openswe_oss",
+      "upstream_id": "unverified-origin:2ac88a442692",
+      "upstream_revision": "dc6df1f3f949439ad1fdd27ffa034a913184405c",
+      "classification": "unknown",
+      "license_ids": [
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574674+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TaskTrove:GAIR__OpenSWE__openswe_other",
+      "upstream_id": "unverified-origin:7ec063219ea6",
+      "upstream_revision": "aec964ce07a928fbd7c6ba21e5c1dfbd54e38285",
+      "classification": "unknown",
+      "license_ids": [
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574676+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TaskTrove:R2E-Gym__R2E-Gym-V1",
+      "upstream_id": "unverified-origin:fda7e5457b14",
+      "upstream_revision": "5197693cd08583c7540ab59d11889962da4f81a3",
+      "classification": "unknown",
+      "license_ids": [
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574685+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TaskTrove:SWE-Gym__SWE-Gym",
+      "upstream_id": "unverified-origin:34756fc0a4c6",
+      "upstream_revision": "203ad7878edd71b3a836c7cd414be3ff75acb89c",
+      "classification": "unknown",
+      "license_ids": [
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574687+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general",
+      "upstream_id": "unverified-origin:17e9cc3c116e",
+      "upstream_revision": "d9a644247b0eeb0c02ab646b66be5ad45a92410b",
+      "classification": "unknown",
+      "license_ids": [
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574706+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music",
+      "upstream_id": "unverified-origin:f01e9d445e5a",
+      "upstream_revision": "c90333fe822a670c241f6e3649552abc01d948a8",
+      "classification": "unknown",
+      "license_ids": [
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574713+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TaskTrove:smartie-calibforge-shared-v2",
+      "upstream_id": "unverified-origin:ae2f0359c549",
+      "upstream_revision": "bcfae8cd9d8a82338122945afdd843d46ca18b7e",
+      "classification": "unknown",
+      "license_ids": [
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574665+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "TaskTrove:smartie-swesmith-admitted",
+      "upstream_id": "unverified-origin:8d9c31294094",
+      "upstream_revision": "25cdd6a2737be2f500027ecd2c6dbb1fb96ae377",
+      "classification": "unknown",
+      "license_ids": [
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
+      "evidence_urls": [
+        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574667+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "source_id": "pafitis:hardmath",
+      "upstream_id": "pafitis/HARDMath_processed_training",
+      "upstream_revision": "937e9f10356e31e854f6efb9a2507f1e200c8b25",
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "reason": "No license declaration in pinned upstream primary evidence.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/pafitis/HARDMath_processed_training/resolve/937e9f10356e31e854f6efb9a2507f1e200c8b25/README.md"
+      ],
+      "decided_at": "2026-11-15T17:27:51.574601+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    }
+  ]
+}
+'''

@@ -12,11 +12,23 @@ from .admission import (
     require_lexical_qualification,
     require_population_admission,
 )
+from .licensing import license_bans
 from .source_counts import SourceCountEvidence
 
 
 def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None = None) -> dict[str, Any]:
     """Project exact-input private filtration or no-oracle static count evidence."""
+    if ban := license_bans().get(declaration["id"]):
+        count = declaration["within_source_dedup"]["unique_count"]
+        return {
+            "example_count": 0,
+            "state": "excluded",
+            "admitted_count": 0,
+            "population_count": count,
+            "excluded_count": count,
+            "source_status": "Excluded",
+            "reason": f"License ban: {ban.reason} ({ban.issue_url})",
+        }
     pending = {
         "example_count": None,
         "state": "pending",

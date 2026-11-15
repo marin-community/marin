@@ -17,6 +17,8 @@ from finestore.rl.curation import (
 )
 from finestore.rl.licenses import require_license
 
+from .licensing import license_bans, require_unbanned
+
 MISSING_GRADER_REASON = "No executable grader is declared"
 
 
@@ -41,6 +43,7 @@ def population_admission_blocker(
 
 def require_declaration_admission(declaration: SourceDeclaration) -> None:
     """Require license permission before admitting a newly published source revision."""
+    require_unbanned(declaration.id)
     require_license(
         declaration.license_receipt,
         declaration.id,
@@ -118,3 +121,10 @@ def require_lexical_qualification(
         or (evidence.input_dataset_id, evidence.input_dataset_revision) != (dataset_id, dataset_revision)
     ):
         raise ValueError("Evaluation requires a measured lexical receipt for the current dataset pin")
+
+
+def require_catalog_declaration(declaration: SourceDeclaration) -> None:
+    """Allow a versioned ban to be published while continuing to reject admission."""
+    if declaration.id in license_bans() and declaration.status == "Excluded":
+        return
+    require_declaration_admission(declaration)

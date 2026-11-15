@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -18,7 +19,10 @@ from experiments.post_training.task_curation.pipeline import process_rows
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import NUMBERS_DATASET, number_source
-from infra.marina.apps.rl_data_catalog.server.admission import require_declaration_admission
+from infra.marina.apps.rl_data_catalog.server import licensing
+from infra.marina.apps.rl_data_catalog.server.admission import require_catalog_declaration, require_declaration_admission
+from infra.marina.apps.rl_data_catalog.server.filtration import filtration
+from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence
 
 
 @pytest.mark.parametrize(
@@ -158,3 +162,41 @@ def test_new_admission_requires_permission_even_with_complete_population_evidenc
     with pytest.raises(ValueError, match="License evidence is missing"):
         require_declaration_admission(declaration.model_copy(update={"license_receipt": None}))
     assert declaration.license_receipt.revision == declaration.dataset_revision
+
+
+def test_user_ban_blocks_ingestion_and_counts_but_preserves_archived_evidence(tmp_path, monkeypatch):
+
+    source = with_admission_census(number_source(tmp_path / "input.txt"))
+    archived = source.declaration.model_dump(mode="json")
+    before_bytes = json.dumps(archived, sort_keys=True)
+    counts = count_evidence(source.declaration, 0, 0)
+    assert filtration(archived, counts)["admitted_count"] == 1
+    ban = {
+        "source_id": source.info.id,
+        "upstream_id": "fixture/source",
+        "upstream_revision": "a" * 40,
+        "classification": "unknown",
+        "license_ids": ["unknown"],
+        "reason": "Upstream task-data permission has not been established.",
+        "evidence_urls": ["https://example.test/terms"],
+        "decided_at": "2026-11-15T17:00:00+00:00",
+        "decision_by": "user via coordinator",
+        "issue_url": BANNED_SOURCES_ISSUE,
+    }
+    monkeypatch.setattr(licensing, "LICENSE_BANS", json.dumps({"version": "fixture-2", "bans": [ban]}))
+    licensing.license_bans.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="License banned"):
+            source.require_license()
+        with pytest.raises(ValueError, match="License banned"):
+            require_declaration_admission(source.declaration)
+        excluded = source.declaration
+        require_catalog_declaration(excluded)
+        projected = licensing.license_projection(archived)
+        assert projected["status"] == excluded.status == "Excluded"
+        assert projected["license_ban"]["issue_url"] == BANNED_SOURCES_ISSUE
+        assert filtration(archived, counts)["admitted_count"] == 0
+        assert json.dumps(archived, sort_keys=True) == before_bytes
+        assert archived["task_count"] == excluded.task_count == 1
+    finally:
+        licensing.license_bans.cache_clear()

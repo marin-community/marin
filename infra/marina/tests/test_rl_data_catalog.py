@@ -81,6 +81,7 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
+from experiments.post_training.task_curation.tests.license_fixtures import isolated_license_bans as isolated_license_bans
 from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog

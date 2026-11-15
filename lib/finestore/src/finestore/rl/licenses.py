@@ -227,3 +227,20 @@ def require_license(
     ):
         if flagged and kind not in decisions:
             raise ValueError(f"License {kind.value} requires a recorded decision: {source_id}")
+
+
+class LicenseBan(BaseModel):
+    """A source-wide user decision; lifting it requires a new recorded permissive grant."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: str = Field(min_length=1)
+    upstream_id: str = Field(min_length=1)
+    upstream_revision: str = Field(min_length=1)
+    classification: LicenseClass
+    license_ids: list[str] = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    evidence_urls: list[str] = Field(min_length=1)
+    decided_at: str = Field(min_length=1)
+    decision_by: str = Field(min_length=1)
+    issue_url: str = Field(pattern=r"^https://github.com/marin-community/marin/issues/11497(?:#.*)?$")

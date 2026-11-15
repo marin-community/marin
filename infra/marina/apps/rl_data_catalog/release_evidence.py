@@ -21,6 +21,7 @@ from .server.duplicate_folding import (
 )
 from .server.filtration import filtration
 from .server.identity_measurements import IDENTITY_REVIEWS_SQL
+from .server.licensing import license_projection
 from .server.source_counts import SourceCounts
 
 SqlQuery = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -80,7 +81,10 @@ def admission_text(totals: TaskTotals) -> str:
 def projected_sources(data: dict[str, Any], counts: SourceCounts) -> dict[str, Any]:
     """Bind count expectations to catalog inputs, never to a previous release's totals."""
     observations = {row.source_id: row for row in counts.sources}
-    rows = [{**row, "filtration": filtration(row, observations.get(row["id"]))} for row in data["sources"]]
+    rows = [
+        {**license_projection(row), "filtration": filtration(row, observations.get(row["id"]))}
+        for row in data["sources"]
+    ]
     if len({row["id"] for row in rows}) != len(rows):
         raise ValueError("The catalog contains duplicate source IDs")
     task_totals(rows)

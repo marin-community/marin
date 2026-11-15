@@ -23,7 +23,18 @@ def canonical_declaration(declaration: SourceDeclaration) -> SourceDeclaration:
         declaration.origin, declaration.upstream_dataset, declaration.subset, declaration.variant
     ):
         raise ValueError("Source ID differs from generated identity")
-    return declaration.model_copy(update={"id": identifier})
+    receipt = declaration.license_receipt
+    if receipt is not None:
+        receipt = receipt.model_copy(
+            update={
+                "source_id": canonical_source_id(receipt.source_id),
+                "decisions": [
+                    decision.model_copy(update={"source_id": canonical_source_id(decision.source_id)})
+                    for decision in receipt.decisions
+                ],
+            }
+        )
+    return declaration.model_copy(update={"id": identifier, "license_receipt": receipt})
 
 
 def canonical_snapshot_source(source: SnapshotSource) -> SnapshotSource:

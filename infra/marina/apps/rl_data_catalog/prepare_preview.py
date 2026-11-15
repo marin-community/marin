@@ -22,11 +22,13 @@ APP_SOURCE = Path("infra/marina/apps/rl_data_catalog")
 PRODUCTION_APP_ID = "fb11c931-5861-4878-8bb5-a964d652b45f"
 PREVIEW_APP_ID = "c9742a15-fb46-4d56-bc88-aa916351ebd3"
 MODEL_SOURCES = {
+    "licenses.py": "lib/finestore/src/finestore/rl/licenses.py",
     "curation.py": "lib/finestore/src/finestore/rl/curation.py",
     "difficulty.py": "lib/finestore/src/finestore/rl/difficulty.py",
     "source_fingerprints.py": "lib/taskcompendium/src/taskcompendium/source_fingerprints.py",
 }
 IMPORT_RELOCATIONS = {
+    "from finestore.rl.licenses import ": "from .bundled.licenses import ",
     "from finestore.rl.curation import ": "from .bundled.curation import ",
     "from finestore.rl.difficulty import ": "from .bundled.difficulty import ",
     "from taskcompendium.source_fingerprints import ": "from .bundled.source_fingerprints import ",
@@ -34,6 +36,7 @@ IMPORT_RELOCATIONS = {
 
 RELOCATED_SERVER_FILES = (
     "server/app.py",
+    "server/licensing.py",
     "server/admission.py",
     "server/duplicate_folding.py",
     "server/curriculum.py",
@@ -117,6 +120,7 @@ def prepare_preview(
         raw = (checkout / relative).read_bytes()
         digest = hashlib.sha256(raw).hexdigest()
         packaged = raw.replace(b"from finestore.rl.curation import ", b"from .curation import ")
+        packaged = packaged.replace(b"from finestore.rl.licenses import ", b"from .licenses import ")
         (bundled / name).write_bytes(packaged)
         modules.append(
             {

@@ -54,8 +54,8 @@ from experiments.post_training.task_curation.retirement import retired_admission
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from infra.marina.apps.rl_data_catalog.server.admission import (
+    require_catalog_declaration,
     require_content_result,
-    require_declaration_admission,
 )
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
@@ -265,7 +265,7 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                 and row.declaration.pipeline is not None
             )
             for declaration in declarations:
-                require_declaration_admission(declaration)
+                require_catalog_declaration(declaration)
             completed = set(catalog.view.keys(ASSESSMENTS))
             rows = []
             for declaration in declarations:
@@ -393,7 +393,7 @@ def _refresh_snapshot(
             ]
             for row in rows:
                 source = SnapshotSource.model_validate(row)
-                require_declaration_admission(source.declaration)
+                require_catalog_declaration(source.declaration)
                 require_content_result(source.declaration, source.curation, source.assessment_key)
             snapshot = CatalogSnapshot(
                 snapshot_id=snapshot_id, created_at=datetime.now(UTC).isoformat(), source_count=len(rows)

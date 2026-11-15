@@ -7,6 +7,12 @@ const resultClasses = {GOOD: 'good', SOME_ISSUES: 'some_issues', BAD: 'bad', UNK
 
 // Object-store URLs get a Filer link beside the raw URL, which stays available for CLI use.
 function licenseEvidence(declaration) {
+  if (declaration.license_ban) {
+    const ban = declaration.license_ban;
+    const line = node('span', `${ban.license_ids.join(', ')} · BANNED`);
+    line.append(' · ', pointer(ban.issue_url, 'Decision ↗'));
+    return line;
+  }
   const receipt = declaration.license_receipt;
   if (!receipt) return 'Unresolved';
   const ids = [...new Set(receipt.evidence.flatMap(item => item.license_ids))];
