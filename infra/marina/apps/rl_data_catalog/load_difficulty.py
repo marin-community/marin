@@ -22,7 +22,7 @@ def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) 
         raise ValueError("Duplicate difficulty measurement IDs")
     inserted = 0
     for record in records:
-        payload = record.model_dump(mode="json")
+        payload = record.model_dump(mode="json", exclude={"blocked_tasks"} if record.blocked_tasks == 0 else None)
         result = query(
             """
             INSERT INTO atlas_difficulty (measurement_id, source_id, protocol_id, created_at, measurement)
@@ -54,10 +54,7 @@ def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) 
 def main(catalog_root: str, applet_id: str, marina_url: str, receipt: Path) -> None:
     configure_coreweave_s3()
     view = ReadView(catalog_root)
-    records = [
-        DifficultyMeasurement.model_validate(row)
-        for row in view.iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields))
-    ]
+    records = [DifficultyMeasurement.model_validate(row) for row in view.iter_rows(MEASUREMENTS)]
     result = load_measurements(records, applet_query(marina_url, applet_id))
     receipt.write_text(json.dumps({"catalog_root": catalog_root, **result}, indent=2) + "\n")
     click.echo(json.dumps(result))

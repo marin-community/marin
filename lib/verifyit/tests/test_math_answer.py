@@ -166,6 +166,7 @@ def test_backend_timeout_removes_prior_positive_reward(monkeypatch, tmp_path, op
     monkeypatch.setattr(math_verify, operation, expired)
     result = run(spec_path, tmp_path)
     assert (result.status, result.reward) == (Status.INFRA_ERROR, 0.0)
+    assert result.detail["code"] == grade_math.MATH_VERIFIER_DEADLINE
     write_reward(logs, result)
     assert not (logs / "reward.txt").exists()
     assert not (logs / "reward.json").exists()

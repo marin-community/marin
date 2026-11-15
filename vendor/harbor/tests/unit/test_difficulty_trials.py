@@ -3,8 +3,9 @@
 
 """Difficulty CLI receipts retain the distinction between scores and execution blockers."""
 
-import json
 import hashlib
+import json
+import shutil
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,21 +23,136 @@ from harbor.utils.logger import logger as harbor_logger
 from harbor.llms.vllm_tokenization import completion_budget_from_count, tokenize_url
 from finestore.rl.difficulty import (
     MEASUREMENTS,
+    PROTOCOL_ID,
     SOLVER_MODELS,
     DifficultyMeasurement,
     DifficultySample,
     SamplingSettings,
     Solver,
     SolverIdentity,
+    measurement_from_attempts,
 )
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.harbor.runtime import TaskSpecRuntimeBinding
+from verifyit.modes.grade_math import MATH_VERIFIER_DEADLINE
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation import difficulty_relay, difficulty_trials
 from experiments.post_training.task_curation.difficulty_config import CandidateRun, JudgeRun
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource, PreparedTask
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters
 from experiments.post_training.task_curation.difficulty_provider import ProviderLimits
+from experiments.post_training.task_curation.difficulty_recovery import PreviousCampaign, recovered_source
+
+
+def test_math_verifier_deadline_stops_trials_and_accounts_for_blocked_task(tmp_path, monkeypatch):
+    runtime = {"task_machine": {"network": "allow"}, "verifier_machine": {"network": "allow"}}
+    runtime_sha256 = canonical_sha256(runtime)
+    directory = tmp_path / "source-task"
+    directory.mkdir()
+    (directory / "source-runtime.json").write_text(TaskSpecRuntimeBinding(
+        task_sha256="d" * 64, runtime_sha256=runtime_sha256, runtime=runtime,
+    ).model_dump_json())
+    task = PreparedTask(
+        task_id="hardmath", runtime_sha256=runtime_sha256, path=str(directory),
+        workload="task_spec", backend="local", reason=None, judge_model=None,
+    )
+    settings = SamplingSettings(
+        context_tokens=65536, input_tokens=49152, output_tokens=16384,
+        temperature=0.7, top_p=0.95, top_k=20, min_p=0,
+        repetition_penalty=1, presence_penalty=0, frequency_penalty=0,
+        thinking="low", deviations=[],
+    )
+    config = SimpleNamespace(
+        attempts_per_task=6, settings=settings, environment_options={},
+        identity=SimpleNamespace(model="fixture", revision="pin"), api_model="fixture",
+    )
+    executions = []
+
+    async def deadline_trial(configuration, _authentication):
+        executions.append(configuration)
+        trial_dir = configuration.trials_dir / "candidate"
+        verifier_dir = trial_dir / "verifier"
+        verifier_dir.mkdir(parents=True)
+        (verifier_dir / "verdict.json").write_text(json.dumps({
+            "status": "infra_error", "reward": 0.0,
+            "detail": {"code": MATH_VERIFIER_DEADLINE, "error": "math verifier deadline exhausted"},
+        }))
+        (trial_dir / "network-policy.json").write_text(json.dumps({
+            "source_runtime_sha256": runtime_sha256,
+            "actor_declared": "allow", "verifier_declared": "allow", "actor_required": True,
+            "actor_effective": "allow", "verifier_effective": "allow",
+        }))
+        result = SimpleNamespace(
+            finished_at=datetime.now(UTC), completion="completed", verifier_result=None,
+            exception_info=None, model_dump=lambda **_kwargs: {"verifier_result": None},
+        )
+        trial = SimpleNamespace(paths=SimpleNamespace(trial_dir=trial_dir, verifier_dir=verifier_dir))
+        return trial, result
+
+    monkeypatch.setattr(difficulty_trials, "execute_trial", deadline_trial)
+    output = tmp_path / "receipts"
+    outcome = difficulty_trials.run_task(
+        task, config, "https://fixture.invalid", tmp_path / "local" / "source", str(output), None, 0
+    )
+    assert len(executions) == difficulty_trials.MATH_DEADLINE_LIMIT
+    assert [attempt.status for attempt in outcome.attempts] == ["infrastructure", "infrastructure", "blocked"]
+    assert all(attempt.reward is None for attempt in outcome.attempts)
+    receipts = sorted(output.glob("*/*/attempt.json"))
+    assert len(receipts) == difficulty_trials.MATH_DEADLINE_LIMIT
+    assert all(json.loads(path.read_text())["reason"] == MATH_VERIFIER_DEADLINE for path in receipts)
+
+    sample = DifficultySample(
+        source_id="fixture:hardmath", release={"repo": "fixture", "revision": "pin", "url": "https://fixture.invalid/pin"},
+        converter_version="fixture", converter_revision="a" * 40, population_count=1,
+        task_specs_sha256="b" * 64, drop_manifest={"uri": "fixture:drop", "sha256": "c" * 64},
+        seed=0, pre_oracle_filter=False, resample_after_oracle_filter=False,
+        tasks=[{"task_id": "hardmath", "task_sha256": "d" * 64}],
+    )
+    identity = SolverIdentity(
+        model=SOLVER_MODELS[Solver.HOSTED], revision="unexposed:fixture-pin",
+        tokenizer=SOLVER_MODELS[Solver.HOSTED], tokenizer_revision="a" * 40,
+        chat_template_sha256="f" * 64,
+        serving_receipt={"uri": "fixture:serving", "sha256": "0" * 64},
+    )
+    measurement = DifficultyMeasurement(
+        measurement_id="fixture", protocol_id="atlas-difficulty-v3", created_at=datetime.now(UTC).isoformat(),
+        source_id=sample.source_id, release=sample.release, converter_version=sample.converter_version,
+        solver=Solver.HOSTED, status="pending", reason="Awaiting scored coverage", sample=sample,
+        sample_receipt={"uri": "fixture:sample", "sha256": "e" * 64}, model=identity, settings=settings,
+        n=0, solved=0, wilson_95=None, infrastructure_attempts=0, pending_tasks=1,
+        attempts_receipt={"uri": "fixture:attempts", "sha256": "1" * 64},
+        gpu_hours=0, input_tokens=0, output_tokens=0,
+    )
+    final = measurement_from_attempts(measurement, outcome.attempts)
+    assert (final.status, final.n, final.pending_tasks, final.blocked_tasks, final.infrastructure_attempts) == (
+        "blocked", 0, 0, 1, difficulty_trials.MATH_DEADLINE_LIMIT,
+    )
+
+    campaign = tmp_path / "campaign"
+    source_key = hashlib.sha256(sample.source_id.encode()).hexdigest()
+    shutil.copytree(output, campaign / "trials" / source_key / "attempts")
+    source = PreparedSource(sample=sample, sample_receipt=measurement.sample_receipt, tasks=[task])
+    previous = PreviousCampaign(
+        root=StoragePath(str(campaign)), sources={sample.source_id: source},
+        serving={
+            "protocol": PROTOCOL_ID, "solver": Solver.HOSTED.value, "model": identity.model,
+            "tools_thinking_probe": {"completion": {"system_fingerprint": "fixture-pin"}},
+            "tokenizer_revision": identity.tokenizer_revision,
+            "chat_template_sha256": identity.chat_template_sha256,
+            "sampling": request_parameters(settings),
+        },
+        parent=None,
+    )
+    recovered = recovered_source(previous, source, Solver.HOSTED, identity, settings, request_parameters(settings), None)
+    assert recovered.math_deadline_streaks == {"hardmath": difficulty_trials.MATH_DEADLINE_LIMIT}
+    assert recovered.attempts[-1].status == "blocked"
+
+    resumed = difficulty_trials.run_task(
+        task, config, "https://fixture.invalid", tmp_path / "continued" / "source",
+        str(tmp_path / "continued-receipts"), None, prior_math_deadlines=2,
+    )
+    assert len(resumed.attempts) == 1 and resumed.attempts[0].status == "blocked"
 
 
 @pytest.mark.parametrize("graded_reward,upstream_failure,workload,legacy_buffer,with_judge", [

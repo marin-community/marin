@@ -43,6 +43,7 @@ from rigging.filesystem.transfer import copy
 from rigging.secrets import require_secret
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
+from verifyit.modes.grade_math import MATH_VERIFIER_DEADLINE
 
 from experiments.post_training.task_curation.difficulty_config import CandidateRun
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
@@ -65,6 +66,7 @@ PROVIDER_WAIT_REASON = "Awaiting shared model provider capacity; provider waits 
 MISSING_PREPARED_IMAGE_REASON = "missing_environment_artifact:prepared_image"
 UNSUPPORTED_COMPOSE_DOCUMENT_REASON = "unsupported_compose_document"
 NETWORK_POLICY_REASON = "network_policy_violation"
+MATH_DEADLINE_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,19 @@ def scored_reward(result, trial: Trial) -> float | None:
     return float(reward)
 
 
+def has_math_verifier_deadline(trial: Trial) -> bool:
+    path = trial.paths.verifier_dir / "verdict.json"
+    if not path.exists():
+        return False
+    verdict = json.loads(path.read_text())
+    detail = verdict.get("detail")
+    return (
+        verdict.get("status") == "infra_error"
+        and isinstance(detail, dict)
+        and detail.get("code") == MATH_VERIFIER_DEADLINE
+    )
+
+
 async def execute_trial(configuration: TrialConfig, authentication: dict[str, str]):
     trial = await Trial.create(
         configuration,
@@ -201,7 +216,13 @@ async def execute_trial(configuration: TrialConfig, authentication: dict[str, st
 
 
 def run_task(
-    task: PreparedTask, config: CandidateRun, base_url: str, root: Path, output: str, judge_url: str | None
+    task: PreparedTask,
+    config: CandidateRun,
+    base_url: str,
+    root: Path,
+    output: str,
+    judge_url: str | None,
+    prior_math_deadlines: int,
 ) -> TaskOutcome:
     key = hashlib.sha256(task.task_id.encode()).hexdigest()
     destination = StoragePath(output) / key
@@ -210,6 +231,7 @@ def run_task(
         return TaskOutcome([DifficultyAttempt(task_id=task.task_id, status="pending", reward=None)], task.reason)
     attempts = []
     pending_reason = None
+    math_deadlines = prior_math_deadlines
     # A resumed run continues after a killed attempt's durable per-attempt
     # evidence instead of colliding with it.
     existing = sorted(int(path.name) for path in (destination / "*").glob() if path.name.isdigit())
@@ -367,22 +389,33 @@ def run_task(
                 # grade is invalid but the condition belongs to the task, not the fleet.
                 reward = None
                 pending_reason = NETWORK_POLICY_REASON
+        deadline = reward is None and not (unserved or provider_wait) and has_math_verifier_deadline(trial)
+        math_deadlines = math_deadlines + 1 if deadline else 0
+        terminal_deadline = deadline and math_deadlines >= MATH_DEADLINE_LIMIT
         attempt = DifficultyAttempt(
             task_id=task.task_id,
-            status="pending" if unserved or provider_wait else ("scored" if reward is not None else "infrastructure"),
+            status=(
+                "pending"
+                if unserved or provider_wait
+                else "scored" if reward is not None else "blocked" if terminal_deadline else "infrastructure"
+            ),
             reward=reward,
         )
         write_json_evidence(
             destination / f"{number:02d}" / "attempt.json",
             {
                 **attempt.model_dump(mode="json"),
-                "reason": "input_budget_unserved" if unserved else ("provider_wait" if provider_wait else None),
+                "reason": (
+                    "input_budget_unserved"
+                    if unserved
+                    else "provider_wait" if provider_wait else MATH_VERIFIER_DEADLINE if deadline else None
+                ),
                 **raw_receipt,
                 "judge_temperature": JUDGE_TEMPERATURE if task.judge_model is not None else None,
             },
         )
         attempts.append(attempt)
-        if reward is not None or unserved or provider_wait:
+        if reward is not None or unserved or provider_wait or terminal_deadline:
             break
     return TaskOutcome(attempts, pending_reason)
 
@@ -492,9 +525,9 @@ def main() -> None:
                     else None
                 )
                 old_attempts = recovered.attempts if recovered is not None else []
-                scored = {attempt.task_id for attempt in old_attempts if attempt.status == "scored"}
+                terminal = {attempt.task_id for attempt in old_attempts if attempt.status in {"scored", "blocked"}}
                 selected_tasks = source.tasks if config.task_limit is None else source.tasks[: config.task_limit]
-                tasks = [task for task in selected_tasks if task.task_id not in scored]
+                tasks = [task for task in selected_tasks if task.task_id not in terminal]
                 futures = [
                     executor.submit(
                         run_task,
@@ -504,6 +537,7 @@ def main() -> None:
                         args.local_root / source_key,
                         str(output / source_key / "attempts"),
                         judge_relay,
+                        0 if recovered is None else recovered.math_deadline_streaks.get(task.task_id, 0),
                     )
                     for task in tasks
                 ]
@@ -637,10 +671,14 @@ def main() -> None:
                     task.task_id
                     for task, outcome in zip(tasks, outcomes, strict=True)
                     if outcome.pending_reason
-                    in {MISSING_PREPARED_IMAGE_REASON, UNSUPPORTED_COMPOSE_DOCUMENT_REASON, NETWORK_POLICY_REASON}
+                    in {
+                        MISSING_PREPARED_IMAGE_REASON,
+                        UNSUPPORTED_COMPOSE_DOCUMENT_REASON,
+                        NETWORK_POLICY_REASON,
+                    }
                 )
                 blocked = sorted({pending_reasons[task_id] for task_id in blocked_tasks})
-                if not scored and tasks and len(blocked_tasks) == len(tasks):
+                if not terminal and tasks and len(blocked_tasks) == len(tasks):
                     measurement = DifficultyMeasurement.model_validate(
                         {
                             **measurement.model_dump(mode="json"),
