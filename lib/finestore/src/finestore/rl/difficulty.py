@@ -294,6 +294,8 @@ def measurement_from_attempts(
     for attempt in attempts:
         if attempt.task_id not in selected:
             raise ValueError(f"Attempt is outside the selected sample: {attempt.task_id}")
+        if attempt.task_id in scored and attempt.status == AttemptStatus.SCORED:
+            raise ValueError(f"Multiple scored attempts would count a task twice: {attempt.task_id}")
         if attempt.task_id in blocked or attempt.task_id in scored:
             raise ValueError(f"Attempt follows a terminal result: {attempt.task_id}")
         if attempt.status in {AttemptStatus.INFRASTRUCTURE, AttemptStatus.BLOCKED}:
