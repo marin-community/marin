@@ -1,0 +1,21 @@
+{
+  "repository": "NVIDIA-NeMo/Gym",
+  "revision": "39d2bde61e426f93e4bc00c0255fc1d839f859e6",
+  "files": [
+    {
+      "upstream_path": "resources_servers/mcqa/app.py",
+      "upstream_sha256": "818357efa48316629d08f61f9e465113118f26d8aa56db21d4db66d92965f0b1",
+      "extraction_sha256": "e352a03ce0727211ab82a0ce071f6fe6351d23de43cc2dd2067e8265946a525d"
+    },
+    {
+      "upstream_path": "resources_servers/structured_outputs/app.py",
+      "upstream_sha256": "37939b338d664606bd5bfb3cf620350e96fe77795cdebd264c405baf2938de3f",
+      "extraction_sha256": "6374234a18eed8f4a0bab51f7eeafe892173f1343e1036a367ba9044748ba8ad"
+    },
+    {
+      "upstream_path": "resources_servers/math_with_judge/app.py",
+      "upstream_sha256": "db63185e4767fdfb4c67a4f1a1f3f775a54c0ed19cd8a6125baf2e2a831462b1",
+      "extraction_sha256": "eba0fcaedf69e2cb0b2fd7f4034674cd1537c83c3f30d620d8c7e6a86c452ea7"
+    }
+  ]
+}

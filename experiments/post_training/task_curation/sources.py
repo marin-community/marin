@@ -16,6 +16,7 @@ from experiments.post_training.task_curation.datasets import (
     thoughtcrime,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
+from experiments.post_training.task_curation.datasets.cascade import tasks as cascade
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.derived_contract_measurements import derived_contract_receipts
 from experiments.post_training.task_curation.datasets.evalchemy import code as eval_code
@@ -83,6 +84,7 @@ from experiments.post_training.task_curation.within_source_binding import bind_w
 
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
 PENDING_MEASUREMENT_SOURCES = (
+    *cascade.sources(),
     *ifbench.sources(),
     *lean_proofs.sources(),
     *lean_numina.sources(),
