@@ -14,18 +14,12 @@ import subprocess
 import time
 from pathlib import Path
 
-PROVENANCE_FILES = (
-    "experiments/tool_normalization/driver.py",
-    "experiments/tool_normalization/model.py",
-    "experiments/tool_normalization/pipeline.py",
-    "experiments/tool_normalization/preflight.py",
-    "experiments/tool_normalization/review_real.py",
-    "experiments/tool_normalization/contract_pilot.py",
-    "experiments/tool_normalization/environments.json",
-    "experiments/tool_normalization/opencode-tools.json",
+REQUIRED_PROVENANCE_FILES = (
     "experiments/glm_tool_serving/scale_production.py",
     "experiments/glm_tool_serving/ortet_production.py",
     "experiments/glm_tool_serving/provenance.py",
+    "experiments/tool_normalization/environments.json",
+    "experiments/tool_normalization/opencode-tools.json",
     "experiments/glm_tool_serving/production_data/rule-approval-v3.json",
 )
 
@@ -42,10 +36,16 @@ def write_provenance(app_root: Path, root: Path, catalog_sha256: str) -> dict:
     """Write root/provenance.json before the batch loop; returns the document."""
     root.mkdir(parents=True, exist_ok=True)
     files = {}
-    for relative in PROVENANCE_FILES:
+    missing = []
+    for relative in REQUIRED_PROVENANCE_FILES:
         path = app_root / relative
         if path.exists():
             files[relative] = _file_sha256(path)
+        else:
+            missing.append(relative)
+    for pattern in ("experiments/tool_normalization/*.py", "experiments/tool_normalization/*.json"):
+        for path in sorted(app_root.glob(pattern)):
+            files[path.relative_to(app_root).as_posix()] = _file_sha256(path)
     head = None
     source = "unavailable"
     try:
@@ -62,9 +62,11 @@ def write_provenance(app_root: Path, root: Path, catalog_sha256: str) -> dict:
         "git_head": head,
         "git_head_source": source,
         "files_sha256": files,
+        "missing_required_files": missing,
         "catalog_sha256": catalog_sha256,
         "generated_at": time.time(),
-        "note": "per-file hashes are authoritative; git_head is a label (pod workspaces may lack .git)",
+        "note": "per-file hashes are authoritative; git_head is a label (pod workspaces may lack .git); "
+        "missing_required_files entries recorded explicitly when a required file is absent",
     }
     (root / "provenance.json").write_text(json.dumps(document, indent=2, sort_keys=True))
     return document
