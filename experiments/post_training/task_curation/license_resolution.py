@@ -24,6 +24,17 @@ LICENSE_FILENAME = re.compile(r"^(licen[cs]e|copying|terms)([._-].*)?$", re.IGNO
 DEPENDENCY_DIRECTORIES = frozenset({"node_modules", "vendor", ".venv", "venv", "site-packages", ".git"})
 TASK_MARKERS = frozenset({"task.toml", "task.yaml", "task.yml", "task.json", "instruction.md", "instructions.md"})
 TASK_CONTENT_LICENSE = re.compile(r"^(?:licen[cs]e|copying|terms)[._-](?:content|data|tasks?)(?:[._-]|$)", re.I)
+LICENSE_SECTION_HEADINGS = frozenset(
+    {
+        "license",
+        "licence",
+        "licensing",
+        "licensing information",
+        "copyright",
+        "terms of use",
+        "terms and conditions",
+    }
+)
 RESTRICTIVE_TERMS = re.compile(
     r"\bcc[- ]by[- ](?:nc|nd)\b|non[- ]?commercial|non[- ]?derivatives|research[- ]only|"
     r"no[- ](?:commercial|derivatives|model[- ]training)|not (?:be )?(?:used|use).{0,80}"
@@ -177,7 +188,7 @@ def license_evidence(url: str, content: bytes, kind: str) -> LicenseEvidence:
         relevant = [
             (i, line)
             for i, line in _readme_license_lines(text)
-            if not line.lstrip().startswith("#")
+            if line.strip().lstrip("#").strip().lower() not in LICENSE_SECTION_HEADINGS
             and not re.search(r"more information needed|^\s*(?:TODO|TBD)\b", line, re.I)
         ]
     elif kind == "readme_notice":

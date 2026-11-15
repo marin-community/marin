@@ -49,6 +49,8 @@ def test_readme_scope_does_not_make_descriptions_or_yaml_a_conflicting_license()
         }
     )
     assert check_license(receipt).verdict is LicenseCheckVerdict.PASS
+    title = license_evidence(url, b"## MIT License\n", "readme_license")
+    assert check_license(receipt.model_copy(update={"evidence": [title]})).verdict is LicenseCheckVerdict.PASS
     terms = license_evidence(url, text + b"\n## License\nMay not be used to train models.\n", "readme_license")
     assert check_license(receipt.model_copy(update={"evidence": [*receipt.evidence, terms]})).rule_id.value == "F1"
 
