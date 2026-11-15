@@ -23,6 +23,7 @@ from finestore.rl.curation import (
 )
 from huggingface_hub import HfApi, hf_hub_download
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.execution_applicability import is_nonagentic_task
@@ -219,7 +220,7 @@ def bind_oracle_admitted_release(
             reviewed=receipt.sample.review.attempted_count,
             admitted=evidence.admitted_count,
             verification=(
-                f"Full original oracles and workspace no-op controls: {evidence.oracle_filter.uri}; "
+                f"Full original-oracle outcomes and applicable controls: {evidence.oracle_filter.uri}; "
                 f"fresh private-pin census and native consumer: {receipt.consumer.uri}; "
                 f"seed-zero SAMPLE content: {receipt.sample.review.path}."
             ),
@@ -233,7 +234,7 @@ def bind_oracle_admitted_release(
         daytona_run_evidence=evidence.validation.uri,
         tags=tuple(tag for tag in source.info.tags if tag not in {"excluded", "deprecated"}),
         notes=(
-            f"Oracle/control filtration retained {evidence.admitted_count}/{evidence.original_count}. "
+            f"Original-oracle filtration retained {evidence.admitted_count}/{evidence.original_count}. "
             f"Typed exclusions: {dict(evidence.exclusion_counts)}. "
             "Original source and prior retention evidence remain archived in the release receipt. " + source.info.notes
         ),
@@ -290,6 +291,7 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
+    configure_coreweave_s3()
     # Source declarations import the installed oracle-release binders.
     from experiments.post_training.task_curation.sources import sources_before_oracle_filtration  # noqa: PLC0415
 
