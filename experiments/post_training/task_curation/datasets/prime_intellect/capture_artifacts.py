@@ -84,6 +84,7 @@ class CapturedArtifacts(Artifact):
     tasks: int
     manifest_uri: str
     manifest_sha256: str
+    placement_uri: str
 
 
 @dataclass(frozen=True)
@@ -230,8 +231,17 @@ def capture_artifacts(config: CaptureConfig) -> CapturedArtifacts:
         interceptors=endpoint.credentials.interceptors() if endpoint.credentials is not None else (),
     )
     task = client.get_task_status(job.task_id)
-    backends = [backend for backend in client.list_backends() if backend.backend_id == task.backend_id]
-    if task.cluster != "local" or len(backends) != 1:
+    attempts = [attempt for attempt in task.attempts if attempt.attempt_id == job.attempt_id]
+    if task.cluster != "local" or len(attempts) != 1 or not attempts[0].node_name or not attempts[0].pod_name:
+        raise ValueError("Capture placement requires the current local task attempt's pod and node")
+    attempt = attempts[0]
+    backends = [
+        backend
+        for backend in client.list_backends()
+        if backend.kind == "kubernetes"
+        and any(node.name == attempt.node_name for node in backend.detail.kubernetes.nodes)
+    ]
+    if len(backends) != 1:
         raise ValueError("Capture placement must resolve to one local controller backend")
     backend = backends[0]
     regions = tuple(backend.advertised_attributes["region"].values)
@@ -245,6 +255,9 @@ def capture_artifacts(config: CaptureConfig) -> CapturedArtifacts:
     placement = {
         "task_id": job.task_id.to_wire(),
         "attempt_id": job.attempt_id,
+        "attempt_uid": attempt.attempt_uid,
+        "pod_name": attempt.pod_name,
+        "node_name": attempt.node_name,
         "backend_id": backend.backend_id,
         "backend_name": backend.name,
         "region": regions[0],
@@ -252,7 +265,15 @@ def capture_artifacts(config: CaptureConfig) -> CapturedArtifacts:
         "bucket_region": bucket.signing_region,
         "evidence": "Current task and backend records from its submitting Iris controller",
     }
-    (output / "placement.json").write_text(json.dumps(placement, indent=2) + "\n", auto_mkdir=True)
+    placement_key = hashlib.sha256(f"{job.task_id.to_wire()}:{attempt.attempt_uid}".encode()).hexdigest()
+    placement_path = output / "placements" / placement_key / "placement.json"
+    encoded_placement = json.dumps(placement, indent=2) + "\n"
+    if placement_path.exists() and placement_path.read_text() != encoded_placement:
+        raise ValueError("Capture attempt already has different placement evidence")
+    if not placement_path.exists():
+        placement_path.write_text(encoded_placement, auto_mkdir=True)
+    if not (output / "placement.json").exists():
+        (output / "placement.json").write_text(encoded_placement, auto_mkdir=True)
     raw = StoragePath(config.input_path).read_bytes()
     if hashlib.sha256(raw).hexdigest() != config.input_sha256:
         raise ValueError("Frozen source image index changed")
@@ -281,6 +302,7 @@ def capture_artifacts(config: CaptureConfig) -> CapturedArtifacts:
         tasks=len(task_ids),
         manifest_uri=str(destination),
         manifest_sha256=hashlib.sha256(manifest).hexdigest(),
+        placement_uri=str(placement_path),
     )
 
 
