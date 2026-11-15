@@ -353,6 +353,8 @@ def certify_smoke(
     (StoragePath(output) / "smoke-proof.json").write_text(json.dumps(proof, indent=2))
     inputs = [
         ArchiveInput(prefix_join(trained, "consumed-config.json"), "consumed-config.json", "config"),
+        ArchiveInput(prefix_join(trained, "guard/policy.json"), "stage-policy.json", "config"),
+        ArchiveInput(prefix_join(trained, "guard-result.json"), "stage-guard-result.json", "timing"),
         ArchiveInput(prefix_join(prepared, "source-receipts.json"), "source-receipts.json", "dataset"),
         ArchiveInput(prefix_join(prepared, "source-loss.json"), "source-loss.json", "dataset"),
         ArchiveInput(prefix_join(prepared, reference_filename), reference_filename, "config"),

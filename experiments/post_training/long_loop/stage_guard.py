@@ -69,6 +69,7 @@ def run_guarded_stage(request: JobRequest, policy: StageGuard, output: str) -> d
         raise ValueError("The H100-hour guard requires explicit H100 resources")
     root = StoragePath(output)
     root.mkdirs(exist_ok=True)
+    (root / "policy.json").write_text(json.dumps(vars(policy), sort_keys=True, indent=2))
     completed_hours = 0.0
     attempts = []
     for retry in range(policy.stall_retries + 1):
