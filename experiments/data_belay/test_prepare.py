@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from finestore.rl.licenses import LicenseVerdict
 from marin.processing.tokenize.cache_stats import TokenizedCacheStats
 
-from experiments.data_belay.intake import IntakeReport, LicenseVerdict, RungNeed, SampleStats
+from experiments.data_belay.intake import IntakeReport, RungNeed, SampleStats
 from experiments.data_belay.prepare import MANIFEST_NAME, CacheManifest, CachePlan, PreparedCache
 
 

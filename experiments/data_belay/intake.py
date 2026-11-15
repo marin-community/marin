@@ -17,9 +17,9 @@ from typing import Any
 import pyarrow.parquet as pq
 import requests
 from datasets import load_dataset, load_dataset_builder
+from finestore.rl.licenses import LicenseVerdict, license_verdict
 from huggingface_hub import HfApi, HfFileSystem, get_token
 from levanter.tokenizers import MarinTokenizer
-from finestore.rl.licenses import LicenseVerdict, license_verdict
 
 DATASETS_SERVER_SIZE_URL = "https://datasets-server.huggingface.co/size"
 SAMPLE_ROWS = 2000
