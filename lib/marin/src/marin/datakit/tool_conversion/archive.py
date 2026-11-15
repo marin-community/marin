@@ -1,0 +1,94 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Immutable archives compatible with the tool-conversion receipt index."""
+
+import gzip
+import io
+import json
+import subprocess
+import tarfile
+import time
+from pathlib import Path
+
+from rigging.filesystem.buckets import filesystem_for
+
+from marin.datakit.tool_conversion.export import digest
+
+
+def json_bytes(value: object) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n").encode()
+
+
+def provenance(catalog_sha256: str, tokenizer_sha256: str) -> dict:
+    directory = Path(__file__).parent
+    git = subprocess.run(["git", "rev-parse", "HEAD"], cwd=directory, capture_output=True, text=True, check=False)
+    return {
+        "git_head": git.stdout.strip() if git.returncode == 0 else None,
+        "git_head_source": "git" if git.returncode == 0 else "unavailable",
+        "files_sha256": {p.name: digest(p.read_bytes()) for p in sorted(directory.iterdir()) if p.is_file()},
+        "missing_required_files": [],
+        "catalog_sha256": catalog_sha256,
+        "tokenizer_sha256": tokenizer_sha256,
+        "generated_at": time.time(),
+        "note": "Per-file hashes are authoritative. Historical observations were not reexecuted.",
+    }
+
+
+def read_json(url: str) -> dict:
+    fs, path = filesystem_for(url)
+    with fs.open(path, "rb") as stream:
+        return json.load(stream)
+
+
+def write_immutable(url: str, content: bytes) -> None:
+    fs, path = filesystem_for(url)
+    if fs.exists(path):
+        with fs.open(path, "rb") as stream:
+            if stream.read() != content:
+                raise ValueError(f"Existing immutable artifact differs: {url}")
+        return
+    parent = path.rsplit("/", 1)[0]
+    fs.makedirs(parent, exist_ok=True)
+    with fs.open(path, "wb") as stream:
+        stream.write(content)
+
+
+def archive_bytes(files: dict[str, bytes]) -> bytes:
+    """Pack stable members without retaining local copies or deleting artifacts."""
+    output = io.BytesIO()
+    with gzip.GzipFile(fileobj=output, mode="wb", compresslevel=1, mtime=0) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w") as archive:
+            for name, content in sorted(files.items()):
+                member = tarfile.TarInfo(name)
+                member.size = len(content)
+                member.mtime = 0
+                archive.addfile(member, io.BytesIO(content))
+    return output.getvalue()
+
+
+def commit_batch(
+    prefix: str, name: str, files: dict[str, bytes], catalog_sha256: str, cursor: dict, run_provenance: dict
+) -> dict:
+    """Upload an archive, then its receipt; consumers admit only receipted batches."""
+    data = archive_bytes(files)
+    archive_uri = f"{prefix}/batches/{name}.tar.gz"
+    write_immutable(archive_uri, data)
+    # Receipt is the immutable commit point. This independent path has no GLM
+    # claims or uncertain network requests to reconcile or replay.
+    cursor = {**cursor, "artifact_bytes": cursor.get("artifact_bytes_before_batch", 0) + len(data)}
+    receipt = {
+        "batch": name,
+        "archive_uri": archive_uri,
+        "archive_sha256": digest(data),
+        "archive_bytes": len(data),
+        "catalog_sha256": catalog_sha256,
+        "post_commit_cursor": cursor,
+        "provenance": run_provenance,
+        "at": time.time(),
+    }
+    write_immutable(f"{prefix}/receipts/{name}.json", json_bytes(receipt))
+    fs, path = filesystem_for(f"{prefix}/cursor.json")
+    with fs.open(path, "wb") as stream:
+        stream.write(json_bytes(cursor))
+    return receipt
