@@ -224,18 +224,10 @@ TASKS_SQL = (
     SAMPLE_SQL
     + """
                 , eligible AS (
-                SELECT t.source_id,t.task_id,t.content_hash,LEFT(d.detail->>'task_preview',600) AS task_preview,
-                    (SELECT jsonb_agg(jsonb_build_object(
-                        'subject_id',m->>'subject_id','membership_similarity',m->'membership_similarity',
-                        'candidates',jsonb_build_array(jsonb_build_object(
-                            'capability_id',m->'candidates'->0->>'capability_id',
-                            'similarity',m->'candidates'->0->'similarity'))))
-                        FROM jsonb_array_elements(d.detail->'matches'->'subjects') m) AS matches,
-                    t.description_status,
+                SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status,
                     CASE WHEN :scope='unlisted' THEN 'subject_only' ELSE s.outcome END AS outcome,
                     ROW_NUMBER() OVER (PARTITION BY t.source_id ORDER BY t.task_id) AS sample_rank
                 FROM selected_tasks t JOIN states s USING (source_id,task_id,content_hash)
-                JOIN curriculum_tasks d USING (load_id,source_id,task_id)
                 WHERE (:node_id='' OR EXISTS (SELECT 1 FROM placements p
                     WHERE p.source_id=t.source_id AND p.task_id=t.task_id
                         AND p.subject_id=:subject_id AND p.node_id=:node_id))
@@ -243,10 +235,21 @@ TASKS_SQL = (
                     AND (:scope='all' OR NOT EXISTS (SELECT 1 FROM placements p
                         WHERE p.source_id=t.source_id AND p.task_id=t.task_id
                             AND p.subject_id=:subject_id AND p.node_id=ANY(CAST(:children AS TEXT[]))))
-                )
+                ), selected_page AS (
                 SELECT * FROM eligible
                 WHERE (sample_rank,source_id,task_id)>(:after_rank,:after_source,:after_task)
                 ORDER BY sample_rank,source_id,task_id LIMIT :limit
+                )
+                SELECT p.source_id,p.task_id,p.content_hash,LEFT(d.detail->>'task_preview',600) AS task_preview,
+                    (SELECT jsonb_agg(jsonb_build_object(
+                        'subject_id',m->>'subject_id','membership_similarity',m->'membership_similarity',
+                        'candidates',jsonb_build_array(jsonb_build_object(
+                            'capability_id',m->'candidates'->0->>'capability_id',
+                            'similarity',m->'candidates'->0->'similarity'))))
+                        FROM jsonb_array_elements(d.detail->'matches'->'subjects') m) AS matches,
+                    p.description_status,p.outcome,p.sample_rank
+                FROM selected_page p JOIN curriculum_tasks d USING (load_id,source_id,task_id)
+                ORDER BY p.sample_rank,p.source_id,p.task_id
             """
 )
 

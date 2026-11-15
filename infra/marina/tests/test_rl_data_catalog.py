@@ -781,6 +781,7 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         assert [(row["source_id"], row["task_id"]) for row in source_tasks["tasks"]] == [("Marin:b", "one")]
         diverse = client.get("/curriculum/tasks", params={"limit": 2}).json()
         remainder = client.get("/curriculum/tasks", params={"limit": 2, "cursor": diverse["next_cursor"]}).json()
+        assert diverse["tasks"] + remainder["tasks"] == client.get("/curriculum/tasks").json()["tasks"]
         assert [(row["source_id"], row["task_id"]) for row in diverse["tasks"] + remainder["tasks"]] == [
             ("Marin:a", "one"),
             ("Marin:b", "one"),

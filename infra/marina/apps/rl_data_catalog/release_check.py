@@ -282,7 +282,11 @@ def browser_checks(
                 parsed = urlsplit(route.request.url)
                 path = parsed.path[len(urlsplit(root).path) :]
                 if path.startswith("api/"):
-                    data = reader.get(path + ("?" + parsed.query if parsed.query else ""))
+                    try:
+                        data = reader.get(path + ("?" + parsed.query if parsed.query else ""))
+                    except Exception as error:
+                        # Playwright reconstructs callback errors; custom constructors can mask the cause.
+                        raise RuntimeError(f"Release API {path}: {error}") from error
                     if local and path == "api/source":
                         row = next(item for item in expected["sources"] if item["id"] == data["declaration"]["id"])
                         data = {
