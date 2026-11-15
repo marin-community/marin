@@ -191,7 +191,8 @@ def test_initializer_coordinator_validates_concrete_worker_config_before_dispatc
 
 
 @pytest.mark.multidevice
-def test_initializer_recipe_runs_forward_with_expert_and_context_parallelism(prepared_sources):
+@pytest.mark.parametrize("context_parallelism", [2, 4])
+def test_initializer_recipe_runs_forward_with_expert_and_context_parallelism(prepared_sources, context_parallelism):
     recipe = initializer_recipe(
         prepared=str(prepared_sources),
         output=str(prepared_sources / "output"),
@@ -204,7 +205,7 @@ def test_initializer_recipe_runs_forward_with_expert_and_context_parallelism(pre
         hidden_dim=16,
         intermediate_dim=16,
         shared_expert_intermediate_dim=16,
-        num_experts=16,
+        num_experts=32,
         num_layers=2,
         num_heads=2,
         num_kv_heads=1,
@@ -214,9 +215,9 @@ def test_initializer_recipe_runs_forward_with_expert_and_context_parallelism(pre
         attention_implementation="reference",
     )
     # The full initializer previously loaded all weights before Sonic rejected EP8.
-    with use_test_devices(16) as devices:
+    with use_test_devices(8 * context_parallelism) as devices:
         mesh = Mesh(
-            np.asarray(devices).reshape(1, 1, 8, 2, 1, 1),
+            np.asarray(devices).reshape(1, 1, 8, context_parallelism, 1, 1),
             ("replica_dcn", "data", "expert", "context", "replica", "model"),
             axis_types=(AxisType.Explicit,) * 6,
         )

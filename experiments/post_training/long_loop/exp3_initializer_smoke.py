@@ -49,10 +49,10 @@ COMPILATION_CACHE = "s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache"
 CONTEXT = 262144
 REFERENCE_LOSS = 2.3137418889651173
 REFERENCE_TOLERANCE = 0.5
-RESOURCES = ResourceConfig.with_gpu("H100", count=8, replicas=2, cpu=64, ram="512GB", disk="512GB")
+RESOURCES = ResourceConfig.with_gpu("H100", count=8, replicas=4, cpu=64, ram="512GB", disk="512GB")
 MESH = MeshConfig(
     axes={"data": 1, "expert": 8, "model": 1, "replica": 1},
-    dcn_axes={"context": 2, "replica_dcn": 1},
+    dcn_axes={"context": 4, "replica_dcn": 1},
     compute_mapping={"batch": ["replica_dcn", "data", "expert"], "position": "context"},
 )
 
@@ -216,6 +216,8 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
                 max_eval_batches=0,
                 offload_opt_state=True,
                 jax_compilation_cache_dir=COMPILATION_CACHE,
+                log_jaxprs=False,
+                log_xla_hlo=False,
                 watch=replace(tiny.trainer.watch, include_per_parameter_norms=False),
                 checkpointer=CheckpointerConfig(save_interval=None, keep=None),
                 progress_watchdog=ProgressWatchdogConfig(

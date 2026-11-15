@@ -897,7 +897,8 @@ class Trainer:
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
         if self.journal is not None and name not in self._compiled_journal_variants:
             with phase(self.journal, "compile", step=int(args[0].step)):
-                fn.lower(*args, **kwargs).compile()
+                compiled = fn.lower(*args, **kwargs).compile()
+                logger.info("Compiled %s memory analysis: %s", name, compiled.memory_analysis())
             self._compiled_journal_variants.add(name)
         logged = False
         if self.config.log_jaxprs and name not in self._logged_jaxprs:
