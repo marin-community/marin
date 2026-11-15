@@ -181,7 +181,7 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
             tier=JudgeTier.LIGHT,
             model_config=MODEL_CONFIG,
             context_window_tokens=32768,
-            accelerator=AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=2),
+            accelerator=AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=1),
             priority=job_pb2.PRIORITY_BAND_BATCH,
             env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-02a"},
             worker_timeout=Duration.from_seconds(259200),
@@ -198,7 +198,7 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
             "runtime_reported_region": info.worker_region,
             "placement_requirement": "cw-us-east-02a",
             "child_placement": "same_controller",
-            "accelerator": {"type": "H100", "count": 2},
+            "accelerator": {"type": "H100", "count": 1},
             "priority": "batch",
         }
         (output / "backend-identity.json").write_text(json.dumps(identity, indent=2))
