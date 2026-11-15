@@ -25,7 +25,7 @@ owns reusable source importers and the corpus publisher.
 
 ## Current admission policy
 
-These rules include the admission display policy for Atlas preview revision 18 (2026-11-14). When a
+These rules include the admission display policy for Atlas preview revision 19 (2026-11-15). When a
 later section of this reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
