@@ -43,8 +43,11 @@ def classify_probe_failure(signals: str, phase: str, watchdog_exit: bool) -> str
     """
     if "RESOURCE_EXHAUSTED" in signals or "out of memory" in signals:
         return "memory_limit"
-    # Exit code 124 is the levanter progress-watchdog's stall signature.
-    if watchdog_exit and phase.startswith("B"):
+    # Exit code 124 is the levanter progress-watchdog's stall signature. Batch
+    # searches treat it as a bounded observation, and so do D optimizer sweeps:
+    # the d1024 ring mb2 geometry stalled once (r3) and later completed (r7),
+    # so a first-update stall is attempt-specific, not a geometry verdict.
+    if watchdog_exit and phase.startswith(("B", "D")):
         return "stall_limit"
     return None
 

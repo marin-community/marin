@@ -72,6 +72,7 @@ def sweep(size: int, selection_path: str, trial_phase: str = "D", prior_trial_ph
     winners = {}
     for optimizer in OPTIMIZERS:
         reports = []
+        excluded = []
         for lr in lr_candidates(size, optimizer):
             reused = next(
                 (
@@ -81,20 +82,36 @@ def sweep(size: int, selection_path: str, trial_phase: str = "D", prior_trial_ph
                 ),
                 None,
             )
-            if reused is None:
-                reports.append(
-                    run_probe(
-                        at_budget(replace(selected, optimizer=optimizer, learning_rate=lr, seed=0), 3e18, trial_phase)
-                    )
-                )
-            else:
+            if reused is not None:
                 reports.append(reused)
-        if any(report["status"] != "complete" for report in reports):
-            raise ValueError("Every optimizer requires three valid equal-budget LR trials")
+                continue
+            report = run_probe(
+                at_budget(replace(selected, optimizer=optimizer, learning_rate=lr, seed=0), 3e18, trial_phase)
+            )
+            if report["status"] == "complete":
+                reports.append(report)
+            else:
+                # A stalled or memory-limited LR candidate is a recorded
+                # observation, not a tree-fatal error: the sweep picks the LR
+                # winner among the candidates that ran.
+                excluded.append(report)
+        if not reports:
+            raise ValueError(f"Every LR candidate failed for {optimizer} on d{size}")
         # The primary metric is assistant-token micro cross entropy; preserve
         # macro/source curves alongside it so tradeoffs remain inspectable.
         winner = min(reports, key=final_loss)
-        winners[optimizer] = {"probe": winner["probe"], "final_loss": final_loss(winner)}
+        winners[optimizer] = {
+            "probe": winner["probe"],
+            "final_loss": final_loss(winner),
+            "excluded": [
+                {
+                    "learning_rate": report["probe"]["learning_rate"],
+                    "status": report["status"],
+                    "error": report.get("error"),
+                }
+                for report in excluded
+            ],
+        }
         results.extend(reports)
     return {"size": size, "selection": selection_path, "trials": results, "winners": winners}
 
