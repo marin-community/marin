@@ -31,6 +31,7 @@ from levanter.data.text.datasets import DatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 from levanter.data.text.serialized_chat import mask_serialized_chat
+from levanter.distributed import DistributedConfig
 from levanter.eval_audit import InitialEvalMatchConfig
 from levanter.main.eval_lm import EvalLmConfig
 from levanter.main.eval_lm import main as evaluate
@@ -216,6 +217,7 @@ def prepare_smoke(*, output: str) -> None:
                 per_device_parallelism=1,
                 per_device_eval_parallelism=1,
                 require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
                 max_eval_batches=1,
                 tracker=WandbConfig(mode="disabled"),
                 mesh=MeshConfig(axes={"data": 1, "expert": 1, "context": 1, "model": 1, "replica": 1}),
