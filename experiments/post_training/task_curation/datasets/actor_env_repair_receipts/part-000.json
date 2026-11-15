@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "3b5051ed7cc3d222aea4f7ae5c0839621a502b73",
+  "path": "experiments/post_training/task_curation/datasets/actor_env_repair_receipts/part-000.json",
+  "sha256": "7cb388c012af7188db0c87d74e7452935be148a5fa393dc885a5d861ac8f99d7"
+}
