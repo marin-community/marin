@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import inspect
 from collections.abc import Callable
 from functools import partial
@@ -11,7 +12,7 @@ from typing import Any
 from marin.execution.artifact import write_artifact
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, materialized_config
-from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRun
+from marin.rl.skyrl import SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
@@ -49,22 +50,27 @@ def _probe_step(artifact_root: Path, **settings: Any) -> ArtifactStep[SkyRLRun]:
     )
 
 
-def _mochi_step(artifact_root: Path, resume: bool) -> ArtifactStep[SkyRLRun]:
-    model = ArtifactStep.adopt("inputs/mochi-model", VERSION, str(artifact_root / "model"), kind=LevanterCheckpoint)
-    tasks = ArtifactStep.adopt("inputs/mochi-tasks", VERSION, str(artifact_root / "tasks"))
-    checkpoint = (
-        ArtifactStep.adopt("inputs/mochi-resume", VERSION, str(artifact_root / "native/global_step_2"))
-        if resume
-        else None
-    )
-    return mochi.build_run(
-        profile=mochi.PROFILES["one-rack"],
-        name="checkpoints/mochi-census",
-        version=VERSION,
-        model=ArtifactHfModel(model, "Qwen/Qwen2.5-0.5B-Instruct", "pinned", relative_path=""),
-        train_data=(ArtifactDataSource(tasks, "train.parquet"),),
-        max_steps=3,
-        resume=checkpoint,
+def _mochi_step(artifact_root: Path, resume: bool, profile: str, response_tokens: int) -> ArtifactStep[SkyRLRun]:
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    data = artifact_root / "train.parquet"
+    data.write_bytes(b"pinned mixed tasks")
+    return inspect.unwrap(mochi.main.callback)(
+        profile=profile,
+        model_uri=str(artifact_root / "model"),
+        tokenizer_uri=None,
+        tokenizer_revision="pinned",
+        input_version=VERSION,
+        data_uri=(str(artifact_root),),
+        data_file="train.parquet",
+        data_sha256=hashlib.sha256(data.read_bytes()).hexdigest() if mochi.PROFILES[profile].data_namespace else None,
+        name=None,
+        max_steps=7 if resume else 2,
+        max_new_tokens=response_tokens,
+        job_timeout_hours=None,
+        resume_uri=str(artifact_root / "native/global_step_5") if resume else None,
+        checkpoint_count=2,
+        ttl_days=3,
+        config_output=None,
     )
 
 
@@ -119,8 +125,10 @@ def launch_builders(
         settings=("context_budget.request_window_tokens=256", "context_budget.max_new_tokens_per_turn=128"),
     )
     builders["canary/seed-identity"] = partial(canary.build_run, preset="dry", version=VERSION, seed=18)
-    for resume in (False, True):
-        builders[f"mochi/resume={resume}"] = partial(_mochi_step, artifact_root, resume)
+    for profile, resume, response_tokens in product(mochi.PROFILES, (False, True), (8192, 1024)):
+        builders[f"mochi/{profile}/resume={resume}/response={response_tokens}"] = partial(
+            _mochi_step, artifact_root, resume, profile, response_tokens
+        )
     builders["inventory/train"] = partial(_inventory_step, artifact_root)
     for stage in ("train", "resume"):
         builders[f"port-smoke/{stage}"] = partial(_port_smoke_step, stage)
