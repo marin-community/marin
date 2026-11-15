@@ -759,6 +759,24 @@ terminal pivot preserves frozen next-action replies and its declared NeMo
 string-only scorer; it has no terminal actor. These conversions remain pending
 the applicable census, deduplication, lexical, oracle and SAMPLE receipts.
 
+Multi-SWE's image-resident private grading files must be captured before its
+converter runs. Freeze an exact `CaptureInput` image index (the wire models are in
+`datasets/prime_intellect/capture_models.py`) with immutable image digests and
+every source task ID. Run the licensed producer in a regional Iris CPU job:
+
+```bash
+uv run python -m experiments.post_training.task_curation.datasets.prime_intellect.capture_artifacts \
+  --images REGIONAL_FROZEN_INDEX --images-sha256 INDEX_SHA256 --cluster REGIONAL_CLUSTER \
+  --concurrency 16 --artifact-root REGIONAL_ARTIFACT_ROOT \
+  --artifact-version YYYY.MM.DD.N --output capture-result.json --run
+```
+
+It verifies complete task coverage, controller-derived same-region placement,
+archive SHA-256 values, and original member bytes, modes and mtimes. Completed
+per-image receipts can be reused only for identical image/task bindings and
+verified archive bytes. Preserve earlier artifacts and use a new version after
+changing producer identity. Acquisition supplies no task execution qualification.
+
 Prepare the standard lexical population from a completed pending-source QUICK
 run without reconverting its rows:
 

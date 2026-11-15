@@ -11,7 +11,7 @@ import json
 import logging
 import tarfile
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,9 +22,7 @@ from iris.cli.connect import connect_controller
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.rpc import job_pb2
-from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
-from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.cluster_config import data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -32,6 +30,12 @@ from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
 
+from experiments.post_training.task_curation.datasets.prime_intellect.capture_models import (
+    CaptureConfig,
+    CapturedArtifacts,
+    CaptureInput,
+    ImageBinding,
+)
 from experiments.post_training.task_curation.license_binding import LICENSE_REGISTRY, read_license_receipts
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 
@@ -54,47 +58,6 @@ tar --null -C /home -czf /tmp/multiswe_grading_artifacts.tar.gz -T "$manifest"
 rm -f "$manifest"
 sha256sum /tmp/multiswe_grading_artifacts.tar.gz
 """
-
-
-class ImageBinding(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    original_references: tuple[str, ...] = Field(min_length=1)
-    pinned_reference: str = Field(pattern=r"^[^@\s]+@sha256:[0-9a-f]{64}$")
-    task_ids: tuple[str, ...] = Field(min_length=1)
-
-
-class CaptureInput(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    source_id: str
-    dataset_id: str
-    revision: str
-    taskset_revision: str
-    images: tuple[ImageBinding, ...] = Field(min_length=1)
-    raw_files: dict[str, str]
-
-
-class CapturedArtifacts(Artifact):
-    source_id: str
-    dataset_id: str
-    revision: str
-    input_sha256: str
-    images: int
-    tasks: int
-    manifest_uri: str
-    manifest_sha256: str
-    placement_uri: str
-
-
-@dataclass(frozen=True)
-class CaptureConfig:
-    input_path: str
-    input_sha256: str
-    cluster: str
-    concurrency: int
-    license_receipt_json: str
-    output_path: str
 
 
 def archive_members(data: bytes) -> list[dict]:
