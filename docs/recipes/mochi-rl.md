@@ -11,8 +11,11 @@ with TP1/PP1/DP12/EP12. Iris keeps this 15-host GB200 gang in one NVLink domain.
 The role planner checks counts and parallelism; other layouts need their own
 placement check.
 Each host requests 120 CPUs, 900 GiB RAM and 2 TiB disk. Loading uses an 8 GiB
-buffer and four requests per inference worker. Compilation and piecewise CUDA
-graphs remain enabled with the required ShortConv exclusions.
+buffer and four requests per inference worker. This example uses LA1's qualified
+runtime: Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4 on GB200. Compilation mode 3
+remains enabled. CUDA graphs use `NONE` because graph replay failed after weight
+publication with DP12/EP12 `allgather_reducescatter`. The cause and full-model
+performance cost remain unmeasured.
 
 The recipe retains Long Loop's eight-response RLOO-N groups, with two prompts
 per update, the reasoning-marker penalty and error masking. It selects Hero
@@ -22,13 +25,13 @@ Each response turn can generate up to 8,192 tokens, with at most four turns.
 
 ## Prerequisites and inputs
 
-This entrypoint requires [cross-host planning #11299](https://github.com/marin-community/marin/pull/11299),
-[Hero MuonH #11301](https://github.com/marin-community/marin/pull/11301), the
-[qualified GPU runtime #11307](https://github.com/marin-community/marin/pull/11307),
-[Harbor harness binding #11324](https://github.com/marin-community/marin/pull/11324)
-and the shared [native checkpoint support](../references/rl-launching.md#native-checkpoint-inputs).
-Until these changes merge, use a revision containing all of them. The entrypoint
-PR records the combined revision used for validation.
+Planning, Hero MuonH, Harbor harness binding and
+[native checkpoint support](../references/rl-launching.md#native-checkpoint-inputs)
+are on main. The draft also includes the
+[qualified GPU runtime #11307](https://github.com/marin-community/marin/pull/11307)
+and [turn-terminator fix #11232](https://github.com/marin-community/marin/pull/11232)
+while they remain unmerged. Its PR body pins the combined revision. This is a
+runnable example kept in draft while loop unification is discussed.
 
 Provide Iris and regional S3 credentials, W&B access, and `DAYTONA_RL_API_KEY`
 and `DAYTONA_EVAL_API_KEY`. Supply HF credentials if any selected input requires
@@ -84,7 +87,8 @@ uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
 
 Inspect it, then add `--run`. `--max-steps` is the absolute stopping step, so it
 must exceed the restored step. Native continuation restores model, optimizer,
-scheduler, trainer counter and available rollout state. It writes new checkpoints
+scheduler and trainer counters. The initial import starts the configured data
+from the beginning; recovery restores this continuation's saved data state. It writes new checkpoints
 under the new output version. Recover an interrupted continuation by repeating
 its command with the same version and inputs, including `--resume-uri`.
 See [native checkpoint recovery](../references/rl-launching.md#native-checkpoint-inputs)
@@ -106,4 +110,5 @@ the regional three-day TTL, with two rolling checkpoints. `--ttl-days` and
 `--data-uri` for more task artifacts; `--data-file` defaults to `train.parquet`.
 `--tokenizer-uri` selects a separate pinned tokenizer artifact. Python callers
 can supply another topology, Megatron geometry, recipe and execution configuration
-to `build_run`; this profile qualifies the one-rack layout only.
+to `build_run`. The reused GPU evidence covers the one-rack layout at its pinned
+source. The PR body records that boundary; these CPU checks do not qualify arbitrary overrides.

@@ -397,9 +397,8 @@ def _refresh_target_owned_weights(model: nn.Module, capture_dir: Path) -> None:
         model.embed_tokens.weight.copy_(embedding)
         model.lm_head.weight.copy_(draft_head)
         model.verifier_lm_head.weight.copy_(draft_head)
+    # Captured head inputs are already normalized by the target model.
     model.verifier_norm = nn.Identity()
-    model.verifier_gate_down = None
-    model.verifier_gate_up = None
 
 
 def _configure_exact_mask_attention(config: Any) -> None:
@@ -615,9 +614,11 @@ def _evaluate(
 
 def _candidate_state(model: nn.Module, *, serving_dtype: torch.dtype) -> dict[str, torch.Tensor]:
     trainable_names = {name for name, parameter in model.named_parameters() if parameter.requires_grad}
+    # Vocabulary maps are persistent buffers needed to reload an embedding-free draft.
+    buffer_names = {name for name, _ in model.named_buffers()}
     state = {}
     for name, value in model.state_dict().items():
-        if name in trainable_names:
+        if name in trainable_names or name in buffer_names:
             if value.is_floating_point() and value.dtype != serving_dtype:
                 raise ValueError(
                     f"Online EAGLE candidate tensor {name} has dtype {value.dtype}, expected {serving_dtype}"

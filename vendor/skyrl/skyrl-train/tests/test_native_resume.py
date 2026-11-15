@@ -7,10 +7,12 @@ import pytest
 import ray
 import torch
 import torch.distributed as dist
-from omegaconf import OmegaConf
 
 from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE
+from skyrl_train.config.utils import get_default_config
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
+from skyrl_train.rollouts.context import TrainingContextState
+from skyrl_train.rollouts.loader import PromptLoaderState, SeededPasses
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.utils.trainer_utils import ResumeMode
 from tests.cpu.tiny_training.cpu_backend import CPUStrategy
@@ -36,12 +38,16 @@ class LocalPolicyGroup:
         self.strategy.backward(loss, self.model, self.optimizer)
         self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler)
 
-    def save(self, root: Path, step: int) -> Path:
+    def save(self, root: Path, step: int, *, data_position: int = 1) -> Path:
         checkpoint = root / f"global_step_{step}"
         self.strategy.save_checkpoint(self.model, str(checkpoint / "policy"), 0, self.optimizer, self.scheduler)
         torch.save(
             {"global_step": step, "distillation_scored_tokens_total": step * 17},
             checkpoint / TRAINER_STATE_FILENAME,
+        )
+        torch.save(
+            TrainingContextState(PromptLoaderState({"epoch": 0, "position": data_position}, []), [], None),
+            checkpoint / "data.pt",
         )
         (root / LATEST_CHECKPOINT_FILE).write_text(str(step))
         return checkpoint
@@ -53,23 +59,20 @@ def trainer_factory(tmp_path, monkeypatch):
     # Keep the RPC boundary local; checkpoint serialization and restoration are real.
     monkeypatch.setattr(ray, "get", lambda result: result)
 
-    def make(output: Path, seed: Path | None = None, mode: str = "latest"):
+    def make(output: Path, seed: Path | None = None, mode: str = "latest", *, reset: bool = False):
         trainer = RayPPOTrainer.__new__(RayPPOTrainer)
-        trainer.cfg = OmegaConf.create(
-            {
-                "trainer": {
-                    "ckpt_path": str(output),
-                    "resume_path": str(seed) if seed else None,
-                    "ckpt_interval": 1,
-                    "restore_dataloader_state": False,
-                }
-            }
-        )
+        trainer.cfg = get_default_config()
+        trainer.cfg.trainer.ckpt_path = str(output)
+        trainer.cfg.trainer.resume_path = str(seed) if seed else None
+        trainer.cfg.trainer.ckpt_interval = 1
+        trainer.cfg.trainer.reset_global_step_on_resume = reset
+        trainer.cfg.trainer.reset_distillation_token_count_on_resume = reset
         trainer.resume_mode = ResumeMode(mode)
         trainer.colocate_all = True
         trainer.policy_model = LocalPolicyGroup()
         trainer.critic_model = None
         trainer._domain_balancer = None
+        trainer._restored_rollout_state = None
         trainer.distillation_scored_tokens_total = 0
         return trainer
 
@@ -77,77 +80,81 @@ def trainer_factory(tmp_path, monkeypatch):
     dist.destroy_process_group()
 
 
-def test_continuation_recovers_own_progress_and_next_update(tmp_path, trainer_factory):
+def next_prompt_index(trainer) -> int:
+    order = SeededPasses(2, seed=0, shuffle=False)
+    if trainer._restored_rollout_state is not None:
+        order.load_state_dict(trainer._restored_rollout_state.loader.order)
+    return order.next_index()
+
+
+@pytest.mark.parametrize("reset", [False, True])
+def test_continuation_recovers_own_progress_and_next_update(tmp_path, trainer_factory, reset):
     original = trainer_factory(tmp_path / "seed")
+    assert original.load_checkpoints() == (0, None)
     for _ in range(2):
         original.policy_model.update()
-    seed = original.policy_model.save(tmp_path / "seed", 2)
+    # The starting run's cursor lies beyond the continuation's smaller dataset.
+    seed = original.policy_model.save(tmp_path / "seed", 2, data_position=3)
     output = tmp_path / "continuation"
 
-    continuation = trainer_factory(output, seed)
-    assert continuation.load_checkpoints() == (2, str(seed))
-    assert continuation.distillation_scored_tokens_total == 34
+    continuation = trainer_factory(output, seed, reset=reset)
+    assert continuation.load_checkpoints() == (0 if reset else 2, str(seed))
+    assert continuation.distillation_scored_tokens_total == (0 if reset else 34)
+    assert next_prompt_index(continuation) == 0
     for _ in range(3):
+        original.policy_model.update()
         continuation.policy_model.update()
-    own = continuation.policy_model.save(output, 5)
+    own_step = 3 if reset else 5
+    own = continuation.policy_model.save(output, own_step)
 
-    recovered = trainer_factory(output, seed)
-    assert recovered.load_checkpoints() == (5, str(own))
-    assert recovered.distillation_scored_tokens_total == 85
-    assert recovered.policy_model.scheduler.last_epoch == 5
-    assert recovered.policy_model.scheduler.get_last_lr() == continuation.policy_model.scheduler.get_last_lr()
+    recovered = trainer_factory(output, seed, reset=reset)
+    assert recovered.load_checkpoints() == (own_step, str(own))
+    assert recovered.distillation_scored_tokens_total == own_step * 17
+    assert next_prompt_index(recovered) == 1
+    original.policy_model.update()
     for policy in (continuation.policy_model, recovered.policy_model):
         policy.update()
-    torch.testing.assert_close(recovered.policy_model.model.weight, continuation.policy_model.model.weight, rtol=0, atol=0)
-    for recovered_state, expected_state in zip(
-        recovered.policy_model.optimizer.state.values(), continuation.policy_model.optimizer.state.values(), strict=True
-    ):
-        torch.testing.assert_close(recovered_state["momentum_buffer"], expected_state["momentum_buffer"], rtol=0, atol=0)
+        torch.testing.assert_close(policy.model.state_dict(), original.policy_model.model.state_dict(), rtol=0, atol=0)
+        torch.testing.assert_close(
+            policy.optimizer.state_dict(), original.policy_model.optimizer.state_dict(), rtol=0, atol=0
+        )
+        assert policy.scheduler.state_dict() == original.policy_model.scheduler.state_dict()
 
 
 @pytest.mark.parametrize(
-    ("mode", "own_step", "seed_exists", "expected_step"),
-    [("latest", None, False, 0), ("latest", 5, False, 5), ("from_path", 5, True, 2), ("none", 5, True, 0)],
+    ("mode", "seed_exists", "expected_step", "expected_path"),
+    [
+        ("latest", False, 5, "continuation/global_step_5"),
+        ("from_path", True, 2, "seed/global_step_2"),
+        ("none", True, 0, None),
+    ],
 )
-def test_resume_modes_preserve_selection(tmp_path, trainer_factory, mode, own_step, seed_exists, expected_step):
+def test_resume_modes_preserve_selection(tmp_path, trainer_factory, mode, seed_exists, expected_step, expected_path):
     output = tmp_path / "continuation"
     seed = tmp_path / "seed/global_step_2"
     writer = trainer_factory(tmp_path / "writer")
     if seed_exists:
         writer.policy_model.save(seed.parent, 2)
-    if own_step:
-        writer.policy_model.save(output, own_step)
-    selected = trainer_factory(output, seed if mode != "latest" or own_step else None, mode)
-
-    step, path = selected.load_checkpoints()
-
-    assert step == expected_step
-    assert selected.distillation_scored_tokens_total == expected_step * 17
-    assert path == (str(seed if mode == "from_path" else output / f"global_step_{own_step}") if step else None)
+    writer.policy_model.save(output, 5)
+    selected = trainer_factory(output, seed, mode)
+    assert selected.load_checkpoints() == (expected_step, str(tmp_path / expected_path) if expected_path else None)
 
 
 @pytest.mark.parametrize(
-    ("corruption", "error"),
+    ("path", "contents", "error"),
     [
-        ("marker", ValueError),
-        ("missing", FileNotFoundError),
-        ("inconsistent", ValueError),
-        ("policy", pickle.UnpicklingError),
+        (LATEST_CHECKPOINT_FILE, b"not-a-step", ValueError),
+        (LATEST_CHECKPOINT_FILE, b"99", FileNotFoundError),
+        (LATEST_CHECKPOINT_FILE, b"1", ValueError),
+        ("global_step_5/policy/rank_0.pt", b"corrupt", pickle.UnpicklingError),
     ],
 )
-def test_bad_own_checkpoint_never_falls_back_to_seed(tmp_path, trainer_factory, corruption, error):
+def test_bad_own_checkpoint_never_falls_back_to_seed(tmp_path, trainer_factory, path, contents, error):
     writer = trainer_factory(tmp_path / "writer")
     seed = writer.policy_model.save(tmp_path / "seed", 2)
     output = tmp_path / "continuation"
-    own = writer.policy_model.save(output, 5)
-    if corruption == "marker":
-        (output / LATEST_CHECKPOINT_FILE).write_text("not-a-step")
-    elif corruption == "missing":
-        (output / LATEST_CHECKPOINT_FILE).write_text("99")
-    elif corruption == "inconsistent":
-        (output / LATEST_CHECKPOINT_FILE).write_text("1")
-    else:
-        (own / "policy/rank_0.pt").write_bytes(b"corrupt")
+    writer.policy_model.save(output, 5)
+    (output / path).write_bytes(contents)
 
     with pytest.raises(error):
         trainer_factory(output, seed).load_checkpoints()

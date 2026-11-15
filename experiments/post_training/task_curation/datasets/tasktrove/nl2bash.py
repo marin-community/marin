@@ -10,26 +10,22 @@ source's ``solution/solve.sh``.
 """
 
 
-from finestore.rl.curation import DaytonaSafety
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, ImportRejection, IntendedUse, NormalizedTask, RawRow
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.code import ANSWERABILITY_CRITERIA
+from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import (
+    archive_requirements,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.executable import (
     solve_script,
     tasktrove_archive_task,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.nl2bash import OUTPUT_PATH, convert_nl2bash
-from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import CurationRecipe, environment_requirements, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-
-AGENT_IMAGE = Environment(
-    image="ghcr.io/marin-community/iris-task@sha256:66cba7cb3eb682f9a53e444876ef2468670336a71e03559de85b5b2b5d4cdde6"
-)
-"""The nl2bash image the agent's shell runs in."""
+from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 CONFIG = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
 
@@ -52,7 +48,7 @@ def convert_nl2bash_task(row: RawRow, context: ConversionContext) -> NormalizedT
     return tasktrove_archive_task(
         row,
         convert=convert_nl2bash,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=archive_requirements(row.data),
         grader_environment=required_grader_environment(context),
         output_paths=(OUTPUT_PATH,),
     )
@@ -70,13 +66,13 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 tags=("agentic", "multi-turn", "language:bash"),
                 count=1498,
                 notes="Semantic output comparison against an oracle command run in the same sandbox.",
-                daytona_safety=DaytonaSafety.SAFE,
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
             config=CurationRecipe(
                 name="tasktrove-nl2bash",
                 source=tasktrove_source(CONFIG),
                 convert=TaskTroveConverter(CONFIG, convert_nl2bash_task),
-                version="2",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=NL2BASH_RUBRIC,
                 controls=Controls(golden=solve_script),

@@ -31,6 +31,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.cluster_config import marin_prefix
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
+from skyrlrecipe.locality import RoleTopologyMode
 
 RECIPE_PATH = Path(__file__).with_name("recipe.yaml")
 SEED = 20261020
@@ -77,6 +78,7 @@ EXECUTION = IrisSkyRLExecution(
     wandb_entity="marin-community",
     required_env_vars=("DAYTONA_RL_API_KEY", "DAYTONA_EVAL_API_KEY", "MARIN_PREFIX"),
     container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    role_topology=RoleTopologyMode.NVLINK_DOMAIN,
 )
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2, temporary_storage_ttl_days=3)
 

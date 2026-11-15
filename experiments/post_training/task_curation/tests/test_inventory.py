@@ -150,10 +150,10 @@ def recipe(tmp_path: Path) -> SelectionRecipe:
     )
 
 
-def admitted_source(root: Path, tasks: list[TaskSpec], intended_use: str = "train") -> ArtifactStep:
+def admitted_source(root: Path, tasks: list[TaskSpec], intended_use: str = "train", mode: str = "full") -> ArtifactStep:
     (root / "final").mkdir(parents=True)
     (root / "normalize").mkdir()
-    (root / "manifest.json").write_text(json.dumps({"intended_use": intended_use, "mode": "full"}))
+    (root / "manifest.json").write_text(json.dumps({"intended_use": intended_use, "mode": mode}))
     pq.write_table(
         pa.Table.from_pylist([{"task_json": task.model_dump_json()} for task in tasks]),
         root / "final/part-00000.parquet",
@@ -169,7 +169,8 @@ def read_tasks(path: Path) -> list[TaskSpec]:
     return [TaskSpec.model_validate_json(row["task_spec"]) for row in pq.read_table(path).to_pylist()]
 
 
-def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path):
+@pytest.mark.parametrize("mode", ["sample", "full"])
+def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path, mode):
     settings = recipe(tmp_path)
     leaked = [
         validation_task(row, {}).model_copy(update={"id": f"changed-id-{index}", "answer_format": Boxed()})
@@ -187,8 +188,8 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
     )
     original = source_task("training-a")
     duplicate = original.model_copy(update={"id": "alias"})
-    first = admitted_source(tmp_path / "first", [original, source_task("training-b"), *leaked])
-    second = admitted_source(tmp_path / "second", [duplicate, source_task("training-c")])
+    first = admitted_source(tmp_path / "first", [original, source_task("training-b"), *leaked], mode=mode)
+    second = admitted_source(tmp_path / "second", [duplicate, source_task("training-c")], mode=mode)
     curated = {"fixture:first": first, "fixture:second": second}
     artifact = run(task_selection_step(curated, settings))[0]
     output = Path(artifact.path)

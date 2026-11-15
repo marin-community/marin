@@ -206,7 +206,9 @@ def cli() -> None:
     show_default=True,
     help="Maximum concurrent evaluators sharing inference.",
 )
-@click.option("--seed", type=int, default=None, help="Override the Evalchemy sampling seed for this launch.")
+@click.option(
+    "--seed", type=int, default=None, help="Run seed for curated evaluations. Default: 0, or unseeded on TPU vLLM."
+)
 @click.option(
     "--version",
     "version",
