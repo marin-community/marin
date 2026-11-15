@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Optional dashboard ``web_search`` tool backed by Parallel's search API (https://docs.parallel.ai).
+"""Optional dashboard ``web_search`` and ``web_extract`` tools backed by Parallel (https://docs.parallel.ai).
 
-The dashboard server holds the API key, so the browser never receives it. Parallel's balance endpoint
-accepts only OAuth account tokens, not API keys, so availability comes from search responses instead:
-HTTP 402 means the account has no credit and 401/403 that the key was rejected. The server probes once at
-start-up, updates availability from every search, and re-probes while search is unavailable.
+``web_search`` calls Parallel's Search API; ``web_extract`` calls its Extract API to read pages the model
+names. The dashboard server holds the API key, so the browser never receives it. Parallel's balance
+endpoint accepts only OAuth account tokens, not API keys, so availability comes from Parallel's responses
+instead: HTTP 402 means the account has no credit and 401/403 that the key was rejected. The server probes
+once at start-up, updates availability from every call, and re-probes while search is unavailable.
 """
 
 import asyncio
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from rigging.secrets import get_secret
 from starlette.datastructures import State
 from starlette.requests import Request
@@ -34,6 +35,12 @@ PROBE_SEARCH = {
     "search_queries": ["web search availability"],
     "advanced_settings": {"max_results": 1},
 }
+
+
+# Bounds on one web_extract call: excerpts total at most WEB_EXTRACT_MAX_CHARS (about 10K tokens), and the
+# optional page text gets the same budget split across the URLs.
+WEB_EXTRACT_MAX_URLS = 5
+WEB_EXTRACT_MAX_CHARS = 40_000
 
 
 class WebSearchAvailability(StrEnum):
@@ -57,6 +64,26 @@ class WebSearchArguments(BaseModel):
 
     objective: str
     search_queries: list[str]
+
+
+class WebExtractArguments(BaseModel):
+    """Arguments of one ``web_extract`` call. Unknown fields are dropped; callers cannot set other Parallel options."""
+
+    urls: list[str] = Field(min_length=1, max_length=WEB_EXTRACT_MAX_URLS)
+    objective: str
+    full_content: bool = False
+
+    def parallel_request(self) -> dict[str, object]:
+        """Parallel ``/v1/extract`` body: focused excerpts, plus page text split across the URLs when requested."""
+        body: dict[str, object] = {
+            "urls": self.urls,
+            "objective": self.objective,
+            "max_chars_total": WEB_EXTRACT_MAX_CHARS,
+        }
+        if self.full_content:
+            per_url = WEB_EXTRACT_MAX_CHARS // len(self.urls)
+            body["advanced_settings"] = {"full_content": {"max_chars_per_result": per_url}}
+        return body
 
 
 def availability_from_status(status_code: int) -> WebSearchAvailability | None:
@@ -111,28 +138,43 @@ def parallel_web_search_from_secret() -> ParallelWebSearch | None:
     return ParallelWebSearch(api_key) if api_key else None
 
 
+async def _forward_to_parallel(request: Request, path: str, body: dict[str, object]) -> Response:
+    """POST ``body`` to Parallel ``path`` with the server's key and return Parallel's response unchanged."""
+    search: ParallelWebSearch = request.app.state.web_search
+    client: httpx.AsyncClient = request.app.state.web_search_client
+    try:
+        response = await client.post(
+            f"{search.base_url}/{path}",
+            json=body,
+            headers={"x-api-key": search.api_key},
+            timeout=PARALLEL_REQUEST_TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("Parallel %s request failed: %s", path, type(exc).__name__)
+        return JSONResponse({"error": f"Parallel {path} request failed: {type(exc).__name__}"}, status_code=502)
+    if not response.is_success:
+        logger.warning("Parallel %s returned HTTP %d", path, response.status_code)
+    _record_availability(request.app.state, availability_from_status(response.status_code))
+    return Response(response.content, status_code=response.status_code, media_type="application/json")
+
+
 async def web_search_response(request: Request) -> Response:
     """Run one ``web_search`` call against Parallel ``/v1/search`` and return Parallel's response unchanged."""
-    search: ParallelWebSearch | None = request.app.state.web_search
-    if search is None:
+    if request.app.state.web_search is None:
         return JSONResponse({"error": "web search is not configured on this server"}, status_code=404)
     try:
         arguments = WebSearchArguments.model_validate_json(await request.body())
     except ValidationError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
+    return await _forward_to_parallel(request, "search", arguments.model_dump())
 
-    client: httpx.AsyncClient = request.app.state.web_search_client
+
+async def web_extract_response(request: Request) -> Response:
+    """Run one ``web_extract`` call against Parallel ``/v1/extract`` and return Parallel's response unchanged."""
+    if request.app.state.web_search is None:
+        return JSONResponse({"error": "web search is not configured on this server"}, status_code=404)
     try:
-        response = await client.post(
-            f"{search.base_url}/search",
-            json=arguments.model_dump(),
-            headers={"x-api-key": search.api_key},
-            timeout=PARALLEL_REQUEST_TIMEOUT,
-        )
-    except httpx.HTTPError as exc:
-        logger.warning("Parallel search request failed: %s", type(exc).__name__)
-        return JSONResponse({"error": f"Parallel search request failed: {type(exc).__name__}"}, status_code=502)
-    if not response.is_success:
-        logger.warning("Parallel search returned HTTP %d", response.status_code)
-    _record_availability(request.app.state, availability_from_status(response.status_code))
-    return Response(response.content, status_code=response.status_code, media_type="application/json")
+        arguments = WebExtractArguments.model_validate_json(await request.body())
+    except ValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    return await _forward_to_parallel(request, "extract", arguments.parallel_request())

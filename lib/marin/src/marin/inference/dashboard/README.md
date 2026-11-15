@@ -239,15 +239,24 @@ credential.
 
 ## Web search
 
-The **Web search** checkbox above the Chat composer adds a `web_search` tool,
-backed by Parallel's search API, to the request's `tools` field. It is shown
-only when the serving job holds the Iris secret `PARALLEL_API_KEY`. The
-dashboard server adds the key to each call, so the browser never receives it.
-Each search is billed to the account that owns the key.
+The **Web search** checkbox above the Chat composer adds two tools, backed by
+Parallel, to the request's `tools` field:
+
+- `web_search` sends search queries to Parallel's Search API and returns ranked
+  URLs with excerpts.
+- `web_extract` reads one to five pages with Parallel's Extract API. It returns
+  the parts of each page relevant to the call's objective, and, with
+  `full_content`, the page text from the top. The server caps excerpts at 40,000
+  characters per call and gives the page text the same budget, split across
+  the URLs.
+
+The checkbox is shown only when the serving job holds the Iris secret
+`PARALLEL_API_KEY`. The dashboard server adds the key to each call, so the
+browser never receives it. Each call is billed to the account that owns the key.
 
 Parallel's balance endpoint does not accept API keys, so the server judges
 availability from search responses. It sends one minimal search at start-up and
-records the outcome of every user search. HTTP 402 means the account has no
+records the outcome of every user call. HTTP 402 means the account has no
 credit, and HTTP 401 or 403 means Parallel rejected the key. While either
 holds, `/info` reports it in `web_search_availability` (`no_credit` or
 `key_rejected`; `available` otherwise). The checkbox is then disabled, and its

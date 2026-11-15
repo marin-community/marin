@@ -4,6 +4,7 @@ import {
   fetchToolDefinitions,
   invokeShell,
   invokeTool,
+  invokeWebExtract,
   invokeWebSearch,
   isAbortError,
   requestCompletion,
@@ -21,7 +22,12 @@ import {
   parseWorkspaceFiles,
 } from '../lib/shell_workspace'
 import { splitThinking } from '../lib/thinking'
-import { WEB_SEARCH_TOOL_DEFINITION, WEB_SEARCH_TOOL_NAME } from '../lib/web_search'
+import {
+  WEB_EXTRACT_TOOL_DEFINITION,
+  WEB_EXTRACT_TOOL_NAME,
+  WEB_SEARCH_TOOL_DEFINITION,
+  WEB_SEARCH_TOOL_NAME,
+} from '../lib/web_search'
 import { requestDebugData, vllmDebugStreamOptions } from '../lib/vllm_debug'
 import type { VllmRequestDebug } from '../lib/vllm_debug'
 import {
@@ -179,10 +185,13 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       tools.push(BASH_TOOL_DEFINITION)
     }
     if (conversation.webSearch && webSearchUsable.value) {
-      if (tools.some((tool) => tool.function.name === WEB_SEARCH_TOOL_NAME)) {
-        throw new Error(`Python tool name ${JSON.stringify(WEB_SEARCH_TOOL_NAME)} is reserved for web search`)
+      for (const definition of [WEB_SEARCH_TOOL_DEFINITION, WEB_EXTRACT_TOOL_DEFINITION]) {
+        const name = definition.function.name
+        if (tools.some((tool) => tool.function.name === name)) {
+          throw new Error(`Python tool name ${JSON.stringify(name)} is reserved for web search`)
+        }
+        tools.push(definition)
       }
-      tools.push(WEB_SEARCH_TOOL_DEFINITION)
     }
     const templateFields = chatTemplateRequestFields(
       conversation.thinkingMode,
@@ -251,9 +260,10 @@ async function executeToolCall(
       const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal, props.baseUrl)
       result = shellResult
       if (shellResult.stop_reason === null) workspace.history.push(command)
-    } else if (call.name === WEB_SEARCH_TOOL_NAME) {
+    } else if (call.name === WEB_SEARCH_TOOL_NAME || call.name === WEB_EXTRACT_TOOL_NAME) {
       if (!conversation.webSearch || !webSearchUsable.value) throw new Error(props.webSearchUnavailableReason ?? 'Web search is not enabled')
-      result = await invokeWebSearch(call.arguments, signal, props.baseUrl)
+      const invoke = call.name === WEB_SEARCH_TOOL_NAME ? invokeWebSearch : invokeWebExtract
+      result = await invoke(call.arguments, signal, props.baseUrl)
     } else {
       result = await invokeTool(call.name, pythonTools, call.arguments, signal, props.baseUrl)
     }
@@ -439,7 +449,7 @@ async function complete(
               v-if="webSearchAvailable"
               class="flex items-center gap-2 text-xs font-medium text-text-muted"
               :class="webSearchUsable ? { 'cursor-pointer': true, 'text-accent': conversation.webSearch } : 'cursor-not-allowed opacity-50'"
-              :title="webSearchUnavailableReason ?? 'Give the model a web_search tool backed by Parallel search'"
+              :title="webSearchUnavailableReason ?? 'Give the model web_search and web_extract tools backed by Parallel'"
             >
               <input
                 :checked="conversation.webSearch && webSearchUsable"

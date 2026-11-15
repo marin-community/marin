@@ -62,6 +62,7 @@ from marin.inference.web_search import (
     ParallelWebSearch,
     WebSearchAvailability,
     monitor_web_search_availability,
+    web_extract_response,
     web_search_response,
 )
 
@@ -180,7 +181,7 @@ def build_dashboard_app(
         info: Static serving metadata returned from ``/info``.
         request_timeout_seconds: Per-request timeout for upstream proxying.
         shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
-        web_search: Parallel credentials for the optional ``web_search`` tool; None disables it.
+        web_search: Parallel credentials for the optional ``web_search`` and ``web_extract`` tools; None disables them.
         feedback_prefix: Storage prefix for model-feedback reports; None disables ``/feedback``.
         web_search_recheck_seconds: Interval between availability probes while web search is unavailable.
     """
@@ -284,6 +285,7 @@ def build_dashboard_app(
             Route("/shell", shell_workspace_response, methods=["POST"]),
             Route("/shell/repository", repository_snapshot_response, methods=["POST"]),
             Route("/web-search", web_search_response, methods=["POST"]),
+            Route("/web-extract", web_extract_response, methods=["POST"]),
             Route("/metrics", proxy, methods=["GET"]),
             Route("/tokenize", proxy, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),

@@ -25,7 +25,7 @@ from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, b
 from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
 from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
-from marin.inference.web_search import PROBE_SEARCH, ParallelWebSearch
+from marin.inference.web_search import PROBE_SEARCH, WEB_EXTRACT_MAX_CHARS, ParallelWebSearch
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -547,7 +547,9 @@ def _fake_parallel_app(
             return JSONResponse({"type": "error", "error": {"message": "Insufficient credit"}}, status_code=code)
         return JSONResponse(PARALLEL_RESULTS)
 
-    return Starlette(routes=[Route("/v1/search", search, methods=["POST"])])
+    return Starlette(
+        routes=[Route("/v1/search", search, methods=["POST"]), Route("/v1/extract", search, methods=["POST"])]
+    )
 
 
 def _wait_for_availability(client: TestClient, expected: str, timeout: float = 10.0) -> None:
@@ -591,6 +593,39 @@ def test_dashboard_web_search_forwards_only_search_arguments_with_server_key():
         assert client.get("/info").json()["web_search"] is False
         assert client.get("/info").json()["web_search_availability"] is None
         assert client.post("/web-search", json={"objective": "x", "search_queries": ["x"]}).status_code == 404
+
+
+def test_dashboard_web_extract_forwards_a_bounded_request_with_server_key():
+    info = ServingInfo("fake-model", "vllm", 1, 4096, "bfloat16", True, "/serve/fake")
+    received: list[tuple[str | None, dict[str, object]]] = []
+    parallel_sock = bind_serving_socket("127.0.0.1", 0)
+    parallel_url = f"http://127.0.0.1:{parallel_sock.getsockname()[1]}/v1"
+    app = build_dashboard_app(
+        upstream_base_url="http://127.0.0.1:1",
+        model_id="fake-model",
+        info=info,
+        web_search=ParallelWebSearch("test-key", base_url=parallel_url),
+    )
+    urls = ["https://example.com/a", "https://example.com/b"]
+    with serve_app_background(_fake_parallel_app(received), parallel_sock), TestClient(app) as client:
+        _wait_for_availability(client, "available")
+        excerpts = client.post("/web-extract", json={"urls": urls, "objective": "Find x", "max_chars_total": 10**9})
+        full = client.post("/web-extract", json={"urls": urls, "objective": "Find x", "full_content": True})
+        too_many = client.post("/web-extract", json={"urls": urls * 3, "objective": "Find x"})
+
+    assert (excerpts.status_code, full.status_code, too_many.status_code) == (200, 200, 422)
+    assert received[1:] == [
+        ("test-key", {"urls": urls, "objective": "Find x", "max_chars_total": WEB_EXTRACT_MAX_CHARS}),
+        (
+            "test-key",
+            {
+                "urls": urls,
+                "objective": "Find x",
+                "max_chars_total": WEB_EXTRACT_MAX_CHARS,
+                "advanced_settings": {"full_content": {"max_chars_per_result": WEB_EXTRACT_MAX_CHARS // 2}},
+            },
+        ),
+    ]
 
 
 def test_dashboard_reports_web_search_unavailable_until_parallel_accepts_searches_again():

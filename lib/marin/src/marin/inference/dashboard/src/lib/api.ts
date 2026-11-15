@@ -70,6 +70,14 @@ export async function invokeWebSearch(
   return postJsonResult('web-search', arguments_, signal, 'web search', baseUrl)
 }
 
+export async function invokeWebExtract(
+  arguments_: Record<string, unknown>,
+  signal: AbortSignal,
+  baseUrl?: string,
+): Promise<unknown> {
+  return postJsonResult('web-extract', arguments_, signal, 'web extract', baseUrl)
+}
+
 export interface RepositorySnapshot {
   files: Record<string, string>
   commits: ImportedGitCommit[]
