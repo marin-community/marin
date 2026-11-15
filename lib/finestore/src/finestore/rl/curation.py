@@ -127,6 +127,7 @@ class SourceOrigin(StrEnum):
     PRIME_INTELLECT = "PrimeIntellect"
     PROJECT_NUMINA = "project-numina"
     REASONING_GYM = "Reasoning Gym"
+    RST = "RST"
     TRL = "TRL"
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"
