@@ -3100,6 +3100,18 @@ hash and the plan's count. Dataset cards and manifests carry the original pin,
 duplicate and lexical evidence, combined exclusions and counts. Public training
 inputs with lexical exclusions also receive a private original archive.
 
+Both `remediation_publish` and `native_quick` require exact-input stage-0
+receipts before reading task payloads. Pass `--license-receipts RECEIPTS.json`
+when the receipts are not in the canonical registry. Their shared
+`license_publication` helper preserves the checked upstream license fields,
+original card and notices, and pinned evidence URLs. `license_source` identifies
+the checked dataset grant; `license_input` separately records the physical input
+pin. Every new private pin must pass its own license check before its publication
+receipt is returned. Run Hugging Face writes under the shared
+`~/.local/share/atlas-push/registry.lock`; these commands create new repositories
+and refuse existing destinations. `native_quick` requires an explicit new
+`--version` suffix.
+
 ```bash
 uv run iris --config lib/iris/config/marin.yaml job run \
   --target-cluster cw-us-east-02a --cpu 8 --memory 64G --disk 200G \

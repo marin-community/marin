@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import LexicalUse
+from finestore.rl.licenses import LicenseReceipt, require_license
 from huggingface_hub import HfApi, hf_hub_download
 from pydantic import ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -23,8 +24,16 @@ from taskcompendium.evaluation.corpus import file_sha256
 
 from experiments.post_training.task_curation.calibforge_publish import publish
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
+from experiments.post_training.task_curation.license_binding import LICENSE_REGISTRY, read_license_receipts
+from experiments.post_training.task_curation.license_publication import (
+    LicensePublication,
+    check_publication,
+    licensed_dataset_card,
+    prepare_license_publication,
+)
 from experiments.post_training.task_curation.native_quick import source_slug
 from experiments.post_training.task_curation.retention_plan import RetentionPlan
+from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LOGGER = logging.getLogger(__name__)
@@ -143,9 +152,10 @@ def verify_retained(tasks: Path, expected: dict[str, tuple[str, str]]) -> str:
     return digest.hexdigest()
 
 
-def dataset_card(plan: ReleasePlan, *, population: str, count: int, evidence_root: str) -> str:
-    return (
-        "---\npretty_name: Atlas TaskCompendium retention release\n---\n\n"
+def dataset_card(
+    plan: ReleasePlan, *, population: str, count: int, evidence_root: str, publication: LicensePublication
+) -> str:
+    body = (
         f"# {plan.source_id}\n\n"
         f"Private TaskCompendium {population}; {count:,} tasks. Use: {plan.lexical_use.value}.\n\n"
         f"Source pin: `{plan.source_dataset_id}@{plan.source_revision}`. "
@@ -160,13 +170,17 @@ def dataset_card(plan: ReleasePlan, *, population: str, count: int, evidence_roo
         f"Plan evidence: `{plan.evidence_url}`; publication evidence: `{evidence_root}`. "
         "The accompanying manifest records the lexical measurement and drop manifest.\n\n"
         "Retained TaskSpec and runtime bytes are unchanged. Readback verifies every retained content hash "
-        "and count. This mechanical selection supplies no new oracle, execution or quality qualification. "
-        "Upstream licenses and third-party asset terms continue to apply.\n"
+        "and count. This mechanical selection supplies no new oracle, execution or quality qualification.\n"
     )
+    return licensed_dataset_card(body, publication, pretty_name="Atlas TaskCompendium retention release")
 
 
-def publish_plan(plan: ReleasePlan, version: str, evidence_root: str) -> dict:
+def publish_plan(plan: ReleasePlan, version: str, evidence_root: str, license_receipt: LicenseReceipt) -> dict:
     """Publish one approved selection and its immutable regional readback receipt."""
+    require_license(
+        license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value
+    )
+    require_unbanned(plan.source_id, plan.source_dataset_id, license_receipt)
     output = StoragePath(evidence_root) / hashlib.sha256(plan.source_id.encode()).hexdigest()[:20]
     result_path = output / "result.json"
     if result_path.exists():
@@ -178,7 +192,7 @@ def publish_plan(plan: ReleasePlan, version: str, evidence_root: str) -> dict:
             raise ValueError(f"Completed release readback differs: {plan.source_id}")
         if not HfApi().repo_info(result["repo"], repo_type="dataset", revision=result["revision"]).private:
             raise ValueError(f"Completed release is not private: {plan.source_id}")
-        return result
+        return {**result, "license_check": check_publication(plan.source_id, result["repo"], result["revision"])}
     metadata = json.loads((StoragePath(plan.input_artifact) / ".artifact.json").read_text())["result"]
     for name, expected in (
         ("dataset_id", plan.source_dataset_id),
@@ -197,6 +211,7 @@ def publish_plan(plan: ReleasePlan, version: str, evidence_root: str) -> dict:
         raise ValueError(f"Frozen lexical measurement differs: {plan.source_id}")
     with TemporaryDirectory(prefix="atlas-retention-") as scratch:
         root = Path(scratch)
+        publication = prepare_license_publication(license_receipt, root)
         tasks = root / "tasks.parquet"
         snapshot_required = (
             plan.lexical_use is LexicalUse.TRAIN
@@ -221,19 +236,42 @@ def publish_plan(plan: ReleasePlan, version: str, evidence_root: str) -> dict:
         original_pin = {"repo": plan.source_dataset_id, "revision": plan.source_revision}
         if original is not None:
             card.write_text(
-                dataset_card(plan, population="original archive", count=plan.raw_count, evidence_root=str(output))
+                dataset_card(
+                    plan,
+                    population="original archive",
+                    count=plan.raw_count,
+                    evidence_root=str(output),
+                    publication=publication,
+                )
             )
             original_repo = repo.replace("-retained-", "-original-")
-            original_revision = publish(original, card, original_repo, evidence_files=(manifest,))
+            original_revision = publish(
+                original, card, original_repo, evidence_files=(manifest, *publication.notice_files)
+            )
+            original_license = check_publication(plan.source_id, original_repo, original_revision)
             original_pin = {"repo": original_repo, "revision": original_revision}
-            (output / "original-pin.json").write_text(json.dumps(original_pin) + "\n", auto_mkdir=True)
+            (output / "original-pin.json").write_text(
+                json.dumps({**original_pin, "license_check": original_license}) + "\n", auto_mkdir=True
+            )
         card.write_text(
-            dataset_card(plan, population="retained release", count=plan.retained_count, evidence_root=str(output))
+            dataset_card(
+                plan,
+                population="retained release",
+                count=plan.retained_count,
+                evidence_root=str(output),
+                publication=publication,
+            )
         )
         duplicate_manifest, combined_manifest = root / "duplicates.parquet", root / "combined-drops.parquet"
         copy(plan.drop_manifest_uri, str(duplicate_manifest))
         copy(plan.combined_drop_manifest_uri, str(combined_manifest))
-        revision = publish(tasks, card, repo, evidence_files=(manifest, duplicate_manifest, combined_manifest))
+        revision = publish(
+            tasks,
+            card,
+            repo,
+            evidence_files=(manifest, duplicate_manifest, combined_manifest, *publication.notice_files),
+        )
+        final_license = check_publication(plan.source_id, repo, revision)
         downloaded = Path(hf_hub_download(repo, "tasks.parquet", repo_type="dataset", revision=revision))
         if verify_retained(downloaded, hashes) != content_sha256:
             raise ValueError(f"Readback content digest differs: {plan.source_id}")
@@ -254,6 +292,7 @@ def publish_plan(plan: ReleasePlan, version: str, evidence_root: str) -> dict:
             "specs_output_dir": str(output / "specs"),
             "evidence_url": str(result_path),
             "lexical": measurement,
+            "license_check": final_license,
         }
         result_path.write_text(json.dumps(result, indent=2) + "\n", auto_mkdir=True)
     LOGGER.info("Verified private release %s@%s: %d retained", repo, revision, plan.retained_count)
@@ -268,13 +307,25 @@ def main() -> None:
     parser.add_argument("--evidence-root", required=True)
     parser.add_argument("--workers", type=int, required=True)
     parser.add_argument("--exclude-source", action="append", default=[])
+    parser.add_argument("--license-receipts", type=Path, default=LICENSE_REGISTRY)
     args = parser.parse_args()
     configure_coreweave_s3()
     plans = [ReleasePlan.model_validate(row) for row in json.loads(StoragePath(args.plans).read_text())]
     plans = [p for p in plans if p.combined_drop_count and p.source_id not in args.exclude_source]
     plans.sort(key=lambda plan: -plan.raw_count)
+    receipts = read_license_receipts(args.license_receipts)
+    for plan in plans:
+        require_license(
+            receipts.get(plan.source_id),
+            plan.source_id,
+            plan.source_dataset_id,
+            plan.source_revision,
+            plan.lexical_use.value,
+        )
     with ProcessPoolExecutor(max_workers=args.workers, initializer=configure_coreweave_s3) as pool:
-        futures = [pool.submit(publish_plan, plan, args.version, args.evidence_root) for plan in plans]
+        futures = [
+            pool.submit(publish_plan, plan, args.version, args.evidence_root, receipts[plan.source_id]) for plan in plans
+        ]
         results = [future.result() for future in as_completed(futures)]
     results.sort(key=lambda row: row["source_id"])
     (StoragePath(args.evidence_root) / "releases.json").write_text(json.dumps(results, indent=2) + "\n", auto_mkdir=True)

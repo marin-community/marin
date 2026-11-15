@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.licenses import LicenseReceipt, require_license
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from huggingface_hub import HfApi, hf_hub_download
@@ -25,8 +26,15 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode, run_
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.datasets.native_harbor import VERSION, hub_rows, native_task, unpack_native
+from experiments.post_training.task_curation.license_binding import LICENSE_REGISTRY, read_license_receipts
+from experiments.post_training.task_curation.license_publication import (
+    check_publication,
+    licensed_dataset_card,
+    prepare_license_publication,
+)
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_SOURCE_IDS
+from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 LOGGER = logging.getLogger(__name__)
@@ -53,8 +61,10 @@ def source_slug(source_id: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", original_source_id(source_id).lower()).strip("-")
 
 
-def publish_quick(entry: dict, output: Path, repo: str) -> dict:
+def publish_quick(entry: dict, output: Path, repo: str, license_receipt: LicenseReceipt) -> dict:
     """Publish conversion evidence and validate every TaskSpec and uploaded byte stream."""
+    require_license(license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], "train")
+    require_unbanned(entry["id"], entry["dataset_id"], license_receipt)
     manifest = json.loads((output / "manifest.json").read_text())
     destination = output / "tasks.parquet"
     with pq.ParquetWriter(destination, TASK_SCHEMA) as writer:
@@ -78,8 +88,8 @@ def publish_quick(entry: dict, output: Path, repo: str) -> dict:
         raise ValueError("Published row count differs from QUICK conversion")
     if manifest["converted_rows"] == 0:
         return {"id": entry["id"], "status": "no_faithful_tasks", "manifest": manifest}
-    (output / "README.md").write_text(
-        "---\npretty_name: Native Harbor QUICK inspection release\n---\n\n"
+    publication = prepare_license_publication(license_receipt, output)
+    body = (
         f"# {entry['display_name']}\n\n"
         "Private research artifact. QUICK conversion is unreviewed and is not training admission. "
         "TaskCompendium TaskSpecs retain the native Harbor task.toml, environment and verifier files. "
@@ -89,23 +99,26 @@ def publish_quick(entry: dict, output: Path, repo: str) -> dict:
         f"Converted: {manifest['converted_rows']}; input: {manifest['input_rows']}. "
         f"Mechanical exclusions: {json.dumps(manifest['rejections'], sort_keys=True)}. "
         "No quality result or oracle execution is claimed. Lexical decontamination and fingerprint "
-        "coverage are pending the combined backend pass; SAMPLE/FULL must wait for its pinned receipt. "
-        "Upstream licenses and third-party asset terms apply; this conversion grants no new rights.\n\n"
+        "coverage are pending the combined backend pass; SAMPLE/FULL must wait for its pinned receipt.\n\n"
         f"Preserved source warnings: {entry['notes'].split(' Admission blocked:')[0]}\n"
     )
+    (output / "README.md").write_text(
+        licensed_dataset_card(body, publication, pretty_name="Native Harbor QUICK inspection release")
+    )
     api = HfApi()
-    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
+    api.create_repo(repo, repo_type="dataset", private=True, exist_ok=False)
     if not api.repo_info(repo, repo_type="dataset").private:
         raise ValueError("Conversion destination must be private")
+    filenames = ["tasks.parquet", "manifest.json", "README.md", *(path.name for path in publication.notice_files)]
     commit = api.upload_folder(
         repo_id=repo,
         repo_type="dataset",
         folder_path=output,
-        allow_patterns=["tasks.parquet", "manifest.json", "README.md"],
+        allow_patterns=filenames,
         commit_message="Publish native Harbor QUICK conversion",
     )
     hashes = {}
-    for filename in ("tasks.parquet", "manifest.json", "README.md"):
+    for filename in filenames:
         uploaded = Path(hf_hub_download(repo, filename, repo_type="dataset", revision=commit.oid))
         digest = file_sha256(StoragePath(str(output / filename)))
         if file_sha256(StoragePath(str(uploaded))) != digest:
@@ -118,10 +131,13 @@ def publish_quick(entry: dict, output: Path, repo: str) -> dict:
         "revision": commit.oid,
         "manifest": manifest,
         "file_hashes": hashes,
+        "license_check": check_publication(entry["id"], repo, commit.oid),
     }
 
 
-def run_entry(entry: dict, root: Path, hub_input: str | None) -> dict:
+def run_entry(entry: dict, root: Path, hub_input: str | None, license_receipt: LicenseReceipt, version: str) -> dict:
+    require_license(license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], "train")
+    require_unbanned(entry["id"], entry["dataset_id"], license_receipt)
     slug = source_slug(entry["id"])
     output = root / slug
     input_root = root / "inputs" / slug
@@ -183,7 +199,7 @@ def run_entry(entry: dict, root: Path, hub_input: str | None) -> dict:
         + "-"
         + hashlib.sha256(original_source_id(entry["id"]).encode()).hexdigest()[:8]
     )
-    return publish_quick(entry, output, f"open-athena/{repo_slug}-taskcompendium-20261112")
+    return publish_quick(entry, output, f"open-athena/{repo_slug}-taskcompendium-{version}", license_receipt)
 
 
 def main() -> None:
@@ -192,14 +208,20 @@ def main() -> None:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--evidence-root", required=True)
     parser.add_argument("--hub-input")
+    parser.add_argument("--version", required=True, help="New immutable private repository version")
+    parser.add_argument("--license-receipts", type=Path, default=LICENSE_REGISTRY)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     entries = {entry["id"]: entry for entry in read_registry_json(RETIRED)["entries"]}
+    receipts = read_license_receipts(args.license_receipts)
     args.root.mkdir(parents=True, exist_ok=True)
     for requested in args.source:
         source_id = canonical_source_id(requested)
         entry = entries[source_id]
-        result = run_entry(entry, args.root, args.hub_input)
+        receipt = receipts.get(entry["id"])
+        require_license(receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], "train")
+        assert receipt is not None
+        result = run_entry(entry, args.root, args.hub_input, receipt, args.version)
         slug = source_slug(source_id)
         artifact_root = StoragePath(args.evidence_root).parent / "artifacts" / slug
         if result["status"] == "quick_converted":
