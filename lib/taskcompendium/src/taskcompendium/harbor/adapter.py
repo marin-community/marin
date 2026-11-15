@@ -10,6 +10,7 @@ from pathlib import Path
 
 import tomlkit
 
+from taskcompendium.browsecomp import BROWSECOMP_ACTION_INTERFACE, browsecomp_state, browsecomp_tools
 from taskcompendium.grading_environment import GradingEnvironmentMode, assess_grading_environment
 from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.models import (
@@ -70,10 +71,14 @@ def unsupported_harbor_contract(task: TaskSpec) -> str | None:
         return "no_executable_task_spec_grader"
     if task.answer_type == AnswerType.STATE:
         return "task_spec_state_capture_required"
-    for requirement in task.environment_requirements.tool_providers.values():
-        if requirement.action_interface != SHELL_ACTION_INTERFACE:
-            return "task_spec_tool_provider_required"
     try:
+        for requirement in task.environment_requirements.tool_providers.values():
+            if requirement.action_interface == BROWSECOMP_ACTION_INTERFACE:
+                tools = browsecomp_tools(browsecomp_state(requirement))
+                if task.tool_bindings or task.interaction_tools != tools:
+                    return "task_spec_provider_contract_invalid"
+            elif requirement.action_interface != SHELL_ACTION_INTERFACE:
+                return "task_spec_tool_provider_required"
         state = repository_shell_environment(task.environment_requirements)
     except ValueError:
         return "task_spec_provider_contract_invalid"

@@ -129,6 +129,7 @@ class SourceOrigin(StrEnum):
     REASONING_GYM = "Reasoning Gym"
     TRL = "TRL"
     TASKTROVE = "TaskTrove"
+    TEVATRON = "Tevatron"
     AGENTICA_ORG = "agentica-org"
     DI_ZHANG_FDU = "di-zhang-fdu"
     PAFITIS = "pafitis"

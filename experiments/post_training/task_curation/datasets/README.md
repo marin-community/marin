@@ -61,6 +61,7 @@ ones stay out of `final/`.
 
 | Module | Sources |
 | --- | --- |
+| [browsecomp/](browsecomp/README.md) | Evaluation-only BrowseComp-Plus task-directory preparation with the pinned offline BM25 retrieval protocol; admission remains pending exact-pin receipts. |
 | [skyrl/math.py](skyrl/math.py) | MarinSkyRL math and numeric-answer sets, graded in process. |
 | [skyrl/code.py](skyrl/code.py) | APPS, Eurus-2 code, verifiable coding problems and Gretel text-to-SQL, graded by `apps_grade.py`, `lcb_grade.py` and `sql_grade.py`. |
 | [skyrl/ifeval.py](skyrl/ifeval.py) | Nemotron IF and RLVR IFEval, graded by `ifeval_grade.py` with the vendored SkyRL IFEval scorer; the only control is an empty reply, since the sources publish no passing replies. |
