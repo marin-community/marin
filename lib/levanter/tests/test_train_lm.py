@@ -6,6 +6,7 @@ import json
 import math
 import os
 import tempfile
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -55,8 +56,11 @@ def _assert_training_recorded(output_path: str) -> dict:
 
 @pytest.mark.tpu
 @pytest.mark.timeout(240)
-def test_train_lm(local_gpt2_tokenizer_path):
+def test_train_lm(local_gpt2_tokenizer_path, monkeypatch):
     with tempfile.TemporaryDirectory() as tmpdir:
+        task_outputs = Path(tmpdir) / "task-outputs"
+        task_outputs.mkdir()
+        monkeypatch.setenv("IRIS_OUTPUT_DIR", str(task_outputs))
         data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir, tokenizer=local_gpt2_tokenizer_path)
         config = train_lm.TrainLmConfig(
             data=data_config,
@@ -93,6 +97,8 @@ def test_train_lm(local_gpt2_tokenizer_path):
         )
         history_path = StoragePath(receipts[0]["source"]).parent / "history.jsonl"
         history = [json.loads(line) for line in history_path.read_text().splitlines()]
+        [local_history] = task_outputs.glob("training-journal-*/history.jsonl")
+        assert local_history.read_bytes() == history_path.read_bytes()
         losses = {row["step"]: row["metrics"]["train/loss"] for row in history if "train/loss" in row["metrics"]}
         assert set(losses) == {0, 1}
         assert all(math.isfinite(value) for value in losses.values())

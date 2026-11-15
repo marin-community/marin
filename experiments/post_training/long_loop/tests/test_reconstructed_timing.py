@@ -39,13 +39,12 @@ def test_running_occupancy_excludes_queue_and_missing_finish_stays_unknown():
     assert rows[1]["attempt_envelope_gpu_hours"] is None
 
 
-def test_worker_timing_is_uploaded_when_phase_fails(tmp_path, monkeypatch):
+def test_worker_timing_is_uploaded_when_phase_fails(tmp_path):
     task_outputs = tmp_path / "task-outputs"
     task_outputs.mkdir()
-    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(task_outputs))
     destination = tmp_path / "durable/events.jsonl"
     with pytest.raises(RuntimeError, match="work failed"):
-        with durable_event_log(str(destination), "run", "export", "attempt") as log:
+        with durable_event_log(str(destination), "run", "export", "attempt", local_directory=str(task_outputs)) as log:
             with log.span("upload"):
                 raise RuntimeError("work failed")
     events = [json.loads(line) for line in destination.read_text().splitlines()]

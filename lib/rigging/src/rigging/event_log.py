@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
 
@@ -92,9 +93,11 @@ class EventLog:
 
 
 @contextmanager
-def durable_event_log(destination: str, run: str, stage: str, attempt: str) -> Iterator[EventLog]:
-    """Keep a worker journal in task outputs and upload it on normal or exceptional exit."""
-    directory = Path(tempfile.mkdtemp(prefix="native-timing-", dir=os.environ.get("IRIS_OUTPUT_DIR")))
+def durable_event_log(
+    destination: str, run: str, stage: str, attempt: str, *, local_directory: str | None = None
+) -> Iterator[EventLog]:
+    """Keep a local worker journal and upload it on normal or exceptional exit."""
+    directory = Path(tempfile.mkdtemp(prefix="native-timing-", dir=local_directory))
     log = EventLog(directory / "events.jsonl", run, stage, attempt)
     try:
         yield log
@@ -102,4 +105,5 @@ def durable_event_log(destination: str, run: str, stage: str, attempt: str) -> I
         if log.path.exists():
             target = StoragePath(destination)
             target.parent.mkdirs(exist_ok=True)
-            target.write_bytes(log.path.read_bytes())
+            fs, key = filesystem_for(destination)
+            fs.pipe_file(key, log.path.read_bytes())

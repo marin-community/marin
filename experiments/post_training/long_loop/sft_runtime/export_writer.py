@@ -4,6 +4,7 @@
 """Export one pinned native Hero checkpoint as BF16 split-expert HF weights."""
 
 import gc
+import os
 import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -89,6 +90,7 @@ def export_weights(
             config.source_revision,
             "sft_export",
             export_id,
+            local_directory=os.environ.get("IRIS_OUTPUT_DIR"),
         ) as timing,
     ):
         with timing.span("checkpoint_restore"):

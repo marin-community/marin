@@ -296,7 +296,10 @@ class BasePPOExp:
         if telemetry_root is not None:
             if not cfg.trainer.get("wandb_entity") or not cfg.trainer.project_name:
                 raise ValueError("Durable RL telemetry requires explicit W&B entity and project")
-            self.journal = TrainingJournal(telemetry_root, cfg.trainer.run_name, "rl", "trainer")
+            self.journal = TrainingJournal(
+                telemetry_root, cfg.trainer.run_name, "rl", "trainer",
+                local_directory=os.environ.get("IRIS_OUTPUT_DIR"),
+            )
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()

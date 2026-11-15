@@ -16,8 +16,8 @@ from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 SPEC = Path(__file__).parents[1] / "specs/round1.yaml"
 
 
-def produce(root, producer, stage, omit_phase=None):
-    journal = TrainingJournal(str(root), "cpu-fixture", stage, producer)
+def produce(root, producer, stage, omit_phase=None, local_directory=None):
+    journal = TrainingJournal(str(root), "cpu-fixture", stage, producer, local_directory=local_directory)
     phases = ("init", "data_load", "compile", "first_step", "steady_state", "checkpoint_save", "export")
     if stage == "rl":
         phases += ("inference_engine_init_and_compile", "save_checkpoints", "queue_hf_export")
@@ -33,12 +33,11 @@ def produce(root, producer, stage, omit_phase=None):
     return journal
 
 
-def test_archive_requires_every_producer_and_keeps_all_metric_calls(tmp_path, monkeypatch):
+def test_archive_requires_every_producer_and_keeps_all_metric_calls(tmp_path):
     outputs = tmp_path / "task-outputs"
     outputs.mkdir()
-    monkeypatch.setenv("IRIS_OUTPUT_DIR", str(outputs))
     sft, rl = tmp_path / "sft", tmp_path / "rl"
-    first = produce(sft, "rank-0", "sft")
+    first = produce(sft, "rank-0", "sft", local_directory=str(outputs))
     produce(rl, "trainer", "rl")
     produce(rl / "exports/step-2", "exporter", "rl_export")
     with pytest.raises(ValueError, match="producer coverage"):

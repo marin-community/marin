@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import signal
+import os
 import sys
 
 import ray
@@ -21,7 +22,8 @@ def run_checkpoint_export(cfg: DictConfig):
     if root is None:
         return checkpoint_exporter(cfg).run()
     journal = TrainingJournal(
-        root + f"/exports/step-{cfg.checkpoint_export.step}", cfg.trainer.run_name, "rl_export", "exporter"
+        root + f"/exports/step-{cfg.checkpoint_export.step}", cfg.trainer.run_name, "rl_export", "exporter",
+        local_directory=os.environ.get("IRIS_OUTPUT_DIR"),
     )
     status = "failed"
     try:

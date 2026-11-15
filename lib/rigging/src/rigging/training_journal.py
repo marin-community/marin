@@ -30,12 +30,13 @@ class TrainingJournal:
         producer: str,
         *,
         json_default: Callable[[object], object] | None = None,
+        local_directory: str | None = None,
     ):
         self.json_default = json_default
         self.attempt = uuid4().hex
         self.destination = StoragePath(root) / producer / self.attempt
         self.filesystem, self.destination_key = filesystem_for(str(self.destination))
-        self.directory = Path(tempfile.mkdtemp(prefix="training-journal-", dir=os.environ.get("IRIS_OUTPUT_DIR")))
+        self.directory = Path(tempfile.mkdtemp(prefix="training-journal-", dir=local_directory))
         self.history = self.directory / "history.jsonl"
         self.history.touch()
         self.events = EventLog(self.directory / "phases.jsonl", run, stage, self.attempt)

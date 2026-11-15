@@ -39,7 +39,7 @@ from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
-from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
+from levanter.eval import LossFnOutput, TaggedEvaluator, cb_tagged_evaluate, eval_model
 from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_REQUIRED_XLA_FLAGS
 from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds
 from levanter.grug.grug_moe import (
@@ -126,7 +126,6 @@ OFFLOAD_CARRY_SLOP_FACTOR = 105
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 XLA_HOST_MEMORY_OFFLOADING_FLAG = "--xla_gpu_enable_host_memory_offloading"
 XLA_DISABLE_ASYNC_COLLECTIVES_FLAG = "--xla_gpu_disable_async_collectives"
-# Every collective type runs synchronously, one at a time.
 SYNC_COLLECTIVES = "ALLCOLLECTIVES"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
 DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
@@ -619,7 +618,7 @@ def build_tagged_evaluator(
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
-    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+    def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> LossFnOutput:
         # Evaluate at the compute dtype, as the train step does at `mp.cast_to_compute(params)`.
         # Parameters are stored float32, and `gpu_fa4_cute` accepts only bf16/fp16, so without this
         # every eval raises `TypeError: ... supports only bf16/fp16, got float32` on Blackwell. The
@@ -1197,7 +1196,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         set_mesh(mesh),
         dashboard,
         ExitStack() as gc_resources,
-        durable_event_log(timing_uri, run_id, "sft", timing_attempt) as timing,
+        durable_event_log(
+            timing_uri, run_id, "sft", timing_attempt, local_directory=os.environ.get("IRIS_OUTPUT_DIR")
+        ) as timing,
     ):
         batch_schedule = trainer.batch_schedule
 

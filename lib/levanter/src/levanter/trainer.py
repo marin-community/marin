@@ -897,7 +897,12 @@ def _configured_tracker(config, run_id, native_telemetry_root) -> levanter.track
     journal = None
     if native_telemetry_root is not None:
         journal = TrainingJournal(
-            native_telemetry_root, run_id, "sft", f"rank-{jax.process_index()}", json_default=_to_jsonable
+            native_telemetry_root,
+            run_id,
+            "sft",
+            f"rank-{jax.process_index()}",
+            json_default=_to_jsonable,
+            local_directory=os.environ.get("IRIS_OUTPUT_DIR"),
         )
     with phase(journal, "tracker_init"):
         return levanter.tracker.CompositeTracker(

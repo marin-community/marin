@@ -6,6 +6,7 @@
 import hashlib
 import json
 import logging
+import os
 import re
 import struct
 from concurrent.futures import ThreadPoolExecutor
@@ -155,7 +156,9 @@ def _download_file(source: str, destination: Path, name: str, events: str) -> di
     before = file_identity(fs.info(key))
     destination.parent.mkdir(parents=True, exist_ok=True)
     event_path = prefix_join(events, hashlib.sha256(name.encode()).hexdigest() + ".jsonl")
-    with durable_event_log(event_path, source, "hf_upload", name) as log:
+    with durable_event_log(
+        event_path, source, "hf_upload", name, local_directory=os.environ.get("IRIS_OUTPUT_DIR")
+    ) as log:
         with log.span("source_download_and_sha256"):
             checksum = hashlib.sha256()
             size = 0
@@ -244,7 +247,9 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     ]
     if any(name.startswith(".cache/") or name.endswith(".distcp") for _, name in sources):
         raise ValueError("HF export source contains cache or native optimizer payloads")
-    with durable_event_log(timing_destination, config.repo_id, "hf_upload", "upload") as log:
+    with durable_event_log(
+        timing_destination, config.repo_id, "hf_upload", "upload", local_directory=os.environ.get("IRIS_OUTPUT_DIR")
+    ) as log:
         with log.span("parallel_export_staging"):
             with ThreadPoolExecutor(max_workers=config.workers) as pool:
                 records = list(
