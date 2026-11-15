@@ -27,7 +27,11 @@ from experiments.post_training.task_curation.sample_qc_artifacts import SamplePa
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
-from experiments.post_training.task_curation.tests.local_grader import LocalGraderMachines, local_grader_machines
+from experiments.post_training.task_curation.tests.local_grader import (
+    LEAN_KERNEL_GRADER_IMAGE,
+    LocalGraderMachines,
+    local_grader_machines,
+)
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
 from experiments.post_training.task_curation.tests.review_server import running_review_server
@@ -46,6 +50,12 @@ def offline_registry(request, monkeypatch):
 def machines() -> LocalGraderMachines:
     """Docker machines running the local grader image; requesting tests skip without Docker or the image."""
     return local_grader_machines()
+
+
+@pytest.fixture(scope="session")
+def lean_kernel_machines() -> LocalGraderMachines:
+    """Docker machines running the Lean grader image; requesting tests skip without it."""
+    return local_grader_machines(LEAN_KERNEL_GRADER_IMAGE)
 
 
 @pytest.fixture

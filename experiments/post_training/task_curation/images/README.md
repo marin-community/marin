@@ -46,6 +46,13 @@ Skills sandbox. It runs in a built image; the Nemotron Ultra Lean grader
 compiles proofs there through
 [`../datasets/nemotron_ultra/scorers/local_lean_sandbox.py`](../datasets/nemotron_ultra/scorers/local_lean_sandbox.py).
 
+`LEAN_KERNEL_GRADER_PACKAGES` adds the fragment
+[`../datasets/lean/lean.Dockerfile`](../datasets/lean/lean.Dockerfile), which installs elan, Lean, Mathlib with its
+prebuilt oleans under `/opt/lean/mathlib`, and Prime Intellect's `lean-export` and
+`lean-verify` under `/opt/lean/verify`, each pinned by checksum or commit. The Lean proof grader
+[`../datasets/lean/lean_grade.py`](../datasets/lean/lean_grade.py) runs `lean` directly with the `LEAN_PATH` the
+build records, so grading needs neither the network nor Lake.
+
 A `dockerfile` fragment is self-contained: it downloads what it installs inside
 its own `RUN` steps, so the build context carries only the lock, the placed
 files and the generated Dockerfile. Its lines follow the apt and files steps and

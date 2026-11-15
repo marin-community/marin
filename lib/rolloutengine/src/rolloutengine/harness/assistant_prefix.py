@@ -10,7 +10,7 @@ from taskcompendium.models import CONVERSATION_ANSWERS, PlainText, TaskSpec, Tex
 from taskcompendium.submission import conversation_messages
 
 from rolloutengine.harness.core import HarnessContext, ModelSession
-from rolloutengine.models import Prompt, RolloutLimits
+from rolloutengine.models import ContextRecovery, Prompt, RolloutLimits
 
 ASSISTANT_PREFIX_HARNESS = "assistant_prefix"
 
@@ -31,6 +31,8 @@ def assistant_prefix_prompt(task: TaskSpec) -> Prompt:
 @dataclass(frozen=True)
 class AssistantPrefixHarness:
     """Continue the final assistant message once, retaining raw text for grading."""
+
+    context_recovery = ContextRecovery.NEVER
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         assistant_prefix_prompt(task)

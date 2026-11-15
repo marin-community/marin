@@ -13,7 +13,7 @@ from cloud.iris.export_hf_checkpoint import (
     _run_export,
     checkpoint_export_launch_config,
 )
-from cloud.iris.launch_config import validate_iris_allocation
+from cloud.iris.launch_config import derive_launch_topology
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import HFModelSaveCallback
@@ -149,7 +149,7 @@ def test_checkpoint_export_allocation_excludes_unequal_reference_pool(policy_los
     request = replace(_request(), num_nodes=15, gpus_per_node=8)
     export = checkpoint_export_launch_config(training, request, _spec(request))
 
-    allocation = validate_iris_allocation(OmegaConf.to_container(export, resolve=True))
+    allocation = derive_launch_topology(OmegaConf.to_container(export, resolve=True))
 
     assert allocation.num_nodes * allocation.gpus_per_node == 120
     export_plan = derive_policy_export_role_plan(OmegaConf.to_container(export.skyrl, resolve=True))

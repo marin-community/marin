@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from finestore.rl.curation import DatasetRelease, OversightEvidence, OversightLevel
 
+from experiments.post_training.task_curation import sources as source_catalog
+from experiments.post_training.task_curation.datasets import native_releases
 from experiments.post_training.task_curation.source import (
     RlDataSource,
     SourceInfo,
@@ -18,6 +20,17 @@ from experiments.post_training.task_curation.source import (
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.sources import all_sources, require_accepted_task_format, runnable_sources
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+
+
+def test_proofnet_waits_for_measurement_before_entering_the_atlas_catalog(monkeypatch):
+    monkeypatch.setattr(native_releases, "read_registry_json", lambda path: {"entries": []})
+    pending = {source.info.id: source for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
+    proofnet = pending["marcusm117:ProofNet-Verified"]
+    assert proofnet.dataset.name == "marcusm117/ProofNet-Verified"
+    assert proofnet.info.actor_census_input is None
+    assert proofnet.info.within_source_dedup is None
+    assert proofnet.info.lexical_contamination is None
+    assert proofnet.info.id not in {source.info.id for source in source_catalog.configured_sources()}
 
 
 def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -> RlDataSource:

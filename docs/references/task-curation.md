@@ -671,6 +671,19 @@ directly. Atlas reads these facts without invoking or inspecting the callable.
 TaskCompendium does not import experiments, name datasets, or construct
 ArtifactSteps.
 
+## Pending source intake
+
+`sources.PENDING_MEASUREMENT_SOURCES` keeps converters awaiting admission
+measurements outside the Atlas catalog. ProofNet-Verified
+(`marcusm117:ProofNet-Verified`, pinned input
+`marcusm117/ProofNet-Verified@08d4c516eb92d2c1442612a1e5afd5d25d86f4e4`)
+has a Lean kernel-replay converter and remains pending
+[execution-environment census](#actor-census-registration),
+[within-source deduplication](#mandatory-within-source-duplicate-removal), and
+[lexical decontamination](#lexical-decontamination-before-publication). Register
+it only after these measurements and the [admission requirements](#current-admission-policy)
+cover its exact input pin, converter version, and resulting TaskSpec population.
+
 ## Declarations
 
 An `RlDataSource` binds source information, a typed configuration and a registered
@@ -1156,7 +1169,9 @@ the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
 `LEAN_GRADER_PACKAGES` adds the Lean 4 and Mathlib fragment
-`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image.
+`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image, and
+`LEAN_KERNEL_GRADER_PACKAGES` adds `datasets/lean/lean.Dockerfile`, which installs
+Lean, Mathlib and Prime Intellect's proof checker, built likewise.
 Converters declare agent requirements independently. A simulated shell requires
 explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
 Conversation-only tasks need no machine. Memory settings are advisory sizing hints.

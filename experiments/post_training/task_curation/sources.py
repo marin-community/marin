@@ -30,6 +30,7 @@ from experiments.post_training.task_curation.datasets.evalchemy import reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
 from experiments.post_training.task_curation.datasets.full_content_results import full_content_result_bindings
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
+from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
@@ -71,17 +72,13 @@ from experiments.post_training.task_curation.source import RlDataSource, TaskFor
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
+# Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
+PENDING_MEASUREMENT_SOURCES = tuple(lean_proofs.sources())
 
-def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
-    """Return configured populations before selecting oracle-filtered private pins."""
-    actor_receipts = actor_census_receipts()
-    lexical_receipts = lexical_measurements()
-    retained_receipts = retained_release_receipts()
-    grading_receipts = grading_census_receipts()
-    dedup_receipts = read_dedup_receipts(
-        Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
-    )
-    sources = [
+
+def configured_sources() -> list[RlDataSource]:
+    """Return source populations registered for Atlas evidence binding."""
+    return [
         *eval_code.sources(),
         *eval_harness.sources(),
         *eval_instructions.sources(),
@@ -118,6 +115,18 @@ def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
         *campaign_releases.sources(),
         *native_releases.sources(),
     ]
+
+
+def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
+    """Return configured populations before selecting oracle-filtered private pins."""
+    actor_receipts = actor_census_receipts()
+    lexical_receipts = lexical_measurements()
+    retained_receipts = retained_release_receipts()
+    grading_receipts = grading_census_receipts()
+    dedup_receipts = read_dedup_receipts(
+        Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
+    )
+    sources = configured_sources()
     sources = [bind_actor_census(source, actor_receipts.get(source.info.id)) for source in sources]
     sources = [
         bind_lexical_measurement(source, lexical_receipts.get(source.info.id), source_lexical_use(source))

@@ -65,8 +65,13 @@ pub fn plan(
             };
             for run in runs {
                 if run_bytes(&run) >= target || run.len() >= config.max_segments_per_level {
+                    let max_inputs = if level == 0 {
+                        config.max_l0_inputs
+                    } else {
+                        config.max_segments_per_level
+                    };
                     return Some(build_job(
-                        take_until_limit(&run, target, config.max_segments_per_level),
+                        take_until_limit(&run, target, max_inputs),
                         level + 1,
                     ));
                 }
@@ -190,6 +195,7 @@ mod tests {
         CompactionConfig {
             level_targets,
             max_segments_per_level,
+            max_l0_inputs: max_segments_per_level,
             ..Default::default()
         }
     }
@@ -224,6 +230,26 @@ mod tests {
         assert_eq!(job.output_level, 1);
         let mins: Vec<i64> = job.inputs.iter().map(|r| r.min_seq).collect();
         assert_eq!(mins, vec![1, 2, 3]);
+    }
+
+    /// The count trigger still fires at `max_segments_per_level`, but an L0 job
+    /// then takes up to `max_l0_inputs` so a flush backlog drains in few jobs.
+    /// Higher levels keep the trigger count as their input cap.
+    #[test]
+    fn plan_takes_up_to_max_l0_inputs_once_the_count_trigger_fires() {
+        let cfg = CompactionConfig {
+            max_l0_inputs: 5,
+            ..config(vec![1 << 30, 1 << 30], 3)
+        };
+        let l0: Vec<SegmentRow> = (1..=8).map(|seq| row(0, seq, seq, 128)).collect();
+        let job = plan(&cfg, &l0, UnpartitionedRunPolicy::SparseStream).unwrap();
+        assert_eq!(job.output_level, 1);
+        assert_eq!(job.inputs.len(), 5);
+
+        let l1: Vec<SegmentRow> = (1..=8).map(|seq| row(1, seq, seq, 128)).collect();
+        let job = plan(&cfg, &l1, UnpartitionedRunPolicy::SparseStream).unwrap();
+        assert_eq!(job.output_level, 2);
+        assert_eq!(job.inputs.len(), 3);
     }
 
     #[test]
