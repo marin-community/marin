@@ -51,6 +51,7 @@ from rigging.training_journal import TrainingJournal, phase
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
 from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
@@ -58,6 +59,7 @@ from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read
 from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
 from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, sorted_field_dtypes
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.model_cache import DEFAULT_COMPLETE_MARKER
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.byte_budget import HostByteBudget
@@ -1381,6 +1383,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 "pytorch_model.bin",
                 "pytorch_model-*.bin",
                 "pytorch_model.bin.index.json",
+                COMPLETION_MANIFEST,
+                DEFAULT_COMPLETE_MARKER,
             ]
         )
         if _is_url_like(repo):
