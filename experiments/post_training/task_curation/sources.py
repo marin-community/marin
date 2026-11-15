@@ -83,6 +83,7 @@ from experiments.post_training.task_curation.within_source_binding import bind_w
 
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
 PENDING_MEASUREMENT_SOURCES = (
+    *ifbench.sources(),
     *lean_proofs.sources(),
     *lean_numina.sources(),
     *prime_swe.sources(),
@@ -124,7 +125,6 @@ def configured_sources() -> list[RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
-        *ifbench.sources(),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
