@@ -6,10 +6,11 @@
 import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateGroupMember, DuplicateLabel, DuplicateReview
 
-from .source_identity import original_source_id
+from .source_identity import canonical_source_id, original_source_id
 
 CONTAINMENT_THRESHOLD = 0.95
 QUALITY_RANK = {"FULL": 2, "SAMPLE": 1, "QUICK": 0, None: -1}
@@ -19,6 +20,30 @@ QUALITY_RANK = {"FULL": 2, "SAMPLE": 1, "QUICK": 0, None: -1}
 class SourceStanding:
     task_count: int
     quality: str | None = None
+
+
+def canonical_duplicate_group(row: dict[str, Any]) -> dict[str, Any]:
+    return DuplicateGroup.model_validate(
+        {
+            **row,
+            "canonical_source_id": canonical_source_id(row["canonical_source_id"]),
+            "members": [{**member, "source_id": canonical_source_id(member["source_id"])} for member in row["members"]],
+        }
+    ).model_dump(mode="json")
+
+
+def canonical_duplicate_review(row: dict[str, Any]) -> dict[str, Any]:
+    similarity = row["similarity"]
+    return DuplicateReview.model_validate(
+        {
+            **row,
+            "similarity": {
+                **similarity,
+                "left": canonical_source_id(similarity["left"]),
+                "right": canonical_source_id(similarity["right"]),
+            },
+        }
+    ).model_dump(mode="json")
 
 
 def fold_groups(reviews: list[DuplicateReview], standings: Mapping[str, SourceStanding]) -> list[DuplicateGroup]:

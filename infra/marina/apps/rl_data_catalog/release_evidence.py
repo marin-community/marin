@@ -11,9 +11,14 @@ from typing import Any
 
 from taskcompendium.source_fingerprints import DuplicateReview
 
-from .server.app import canonical_duplicate_group, canonical_duplicate_review
 from .server.derived_contract import contract_projection
-from .server.duplicate_folding import SourceStanding, fold_groups, partial_overlap_notes
+from .server.duplicate_folding import (
+    SourceStanding,
+    canonical_duplicate_group,
+    canonical_duplicate_review,
+    fold_groups,
+    partial_overlap_notes,
+)
 from .server.filtration import filtration
 from .server.identity_measurements import IDENTITY_REVIEWS_SQL
 from .server.source_counts import SourceCounts

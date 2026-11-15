@@ -12,7 +12,7 @@ from finestore.rl.curation import DAYTONA_SAFE_SNAPSHOT_LIMIT
 from marina.applets import AppletServices
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateReview
+from taskcompendium.source_fingerprints import DuplicateReview
 
 from .contamination import contamination
 from .count_evidence import SOURCE_COUNTS
@@ -20,7 +20,13 @@ from .curriculum import register_curriculum_routes, source_coverage
 from .daytona import daytona
 from .derived_contract import contract_projection, contract_records
 from .difficulty import difficulty_records, difficulty_summary
-from .duplicate_folding import SourceStanding, fold_groups, partial_overlap_notes
+from .duplicate_folding import (
+    SourceStanding,
+    canonical_duplicate_group,
+    canonical_duplicate_review,
+    fold_groups,
+    partial_overlap_notes,
+)
 from .filtration import filtration
 from .identity_measurements import IDENTITY_REVIEWS_SQL, IDENTITY_SURVEY_SQL
 from .quality import intended_use, issue_rate, quality_display, result
@@ -72,30 +78,6 @@ def loaded_catalog(connection: Connection) -> dict[str, Any]:
     if row is None:
         raise HTTPException(503, "Load a curation catalog before opening Atlas")
     return dict(row)
-
-
-def canonical_duplicate_group(row: dict[str, Any]) -> dict[str, Any]:
-    return DuplicateGroup.model_validate(
-        {
-            **row,
-            "canonical_source_id": canonical_source_id(row["canonical_source_id"]),
-            "members": [{**member, "source_id": canonical_source_id(member["source_id"])} for member in row["members"]],
-        }
-    ).model_dump(mode="json")
-
-
-def canonical_duplicate_review(row: dict[str, Any]) -> dict[str, Any]:
-    similarity = row["similarity"]
-    return DuplicateReview.model_validate(
-        {
-            **row,
-            "similarity": {
-                **similarity,
-                "left": canonical_source_id(similarity["left"]),
-                "right": canonical_source_id(similarity["right"]),
-            },
-        }
-    ).model_dump(mode="json")
 
 
 def duplicate_projection(
