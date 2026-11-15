@@ -4,7 +4,7 @@ import type { ServerStatus, ServingInfo } from '../lib/types'
 
 const POLL_INTERVAL_MS = 15_000
 
-/** Load /info once (retrying until it answers) and poll /health for the status dot. */
+/** Poll /info (web search availability can change) and /health (the status dot). */
 export function useServing() {
   const info = ref<ServingInfo | null>(null)
   const status = ref<ServerStatus>('connecting')
@@ -34,7 +34,7 @@ export function useServing() {
     refreshHealth()
     const timer = setInterval(() => {
       refreshHealth()
-      if (!info.value) refreshInfo()
+      refreshInfo()
     }, POLL_INTERVAL_MS)
     onUnmounted(() => clearInterval(timer))
   })

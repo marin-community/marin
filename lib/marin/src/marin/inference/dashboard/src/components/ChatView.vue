@@ -53,6 +53,7 @@ const props = defineProps<{
   baseUrl?: string
   composerMode?: 'embedded' | 'external'
   webSearchAvailable?: boolean
+  webSearchUnavailableReason?: string | null
 }>()
 
 const emit = defineEmits<{ persist: [] }>()
@@ -64,6 +65,7 @@ const showWorkspace = ref(false)
 const showRawChat = ref(false)
 const showVllmDebug = ref(false)
 const rawChat = computed(() => plainTextChat(props.conversation))
+const webSearchUsable = computed(() => Boolean(props.webSearchAvailable) && !props.webSearchUnavailableReason)
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
 let abort: AbortController | null = null
@@ -176,7 +178,7 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       }
       tools.push(BASH_TOOL_DEFINITION)
     }
-    if (conversation.webSearch && props.webSearchAvailable) {
+    if (conversation.webSearch && webSearchUsable.value) {
       if (tools.some((tool) => tool.function.name === WEB_SEARCH_TOOL_NAME)) {
         throw new Error(`Python tool name ${JSON.stringify(WEB_SEARCH_TOOL_NAME)} is reserved for web search`)
       }
@@ -250,7 +252,7 @@ async function executeToolCall(
       result = shellResult
       if (shellResult.stop_reason === null) workspace.history.push(command)
     } else if (call.name === WEB_SEARCH_TOOL_NAME) {
-      if (!conversation.webSearch || !props.webSearchAvailable) throw new Error('Web search is not enabled')
+      if (!conversation.webSearch || !webSearchUsable.value) throw new Error(props.webSearchUnavailableReason ?? 'Web search is not enabled')
       result = await invokeWebSearch(call.arguments, signal, props.baseUrl)
     } else {
       result = await invokeTool(call.name, pythonTools, call.arguments, signal, props.baseUrl)
@@ -435,18 +437,19 @@ async function complete(
             </button>
             <label
               v-if="webSearchAvailable"
-              class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
-              :class="{ 'text-accent': conversation.webSearch }"
-              title="Give the model a web_search tool backed by Parallel search"
+              class="flex items-center gap-2 text-xs font-medium text-text-muted"
+              :class="webSearchUsable ? { 'cursor-pointer': true, 'text-accent': conversation.webSearch } : 'cursor-not-allowed opacity-50'"
+              :title="webSearchUnavailableReason ?? 'Give the model a web_search tool backed by Parallel search'"
             >
               <input
-                v-model="conversation.webSearch"
+                :checked="conversation.webSearch && webSearchUsable"
                 type="checkbox"
                 class="accent-accent"
-                :disabled="busy"
-                @change="persistConversation(conversation)"
+                :disabled="busy || !webSearchUsable"
+                @change="conversation.webSearch = ($event.target as HTMLInputElement).checked; persistConversation(conversation)"
               />
               Web search
+              <span v-if="!webSearchUsable" class="text-[0.65rem] uppercase tracking-wide">unavailable</span>
             </label>
           </div>
           <div class="flex flex-wrap items-center gap-x-4 gap-y-2">

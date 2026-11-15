@@ -35,7 +35,7 @@ import socket
 import threading
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 
 import httpx
@@ -57,7 +57,13 @@ from marin.inference.python_tool_routes import (
 )
 from marin.inference.repository_snapshot import repository_snapshot_response
 from marin.inference.shellsim_runtime import ToolRuntime
-from marin.inference.web_search import ParallelWebSearch, web_search_response
+from marin.inference.web_search import (
+    WEB_SEARCH_RECHECK_SECONDS,
+    ParallelWebSearch,
+    WebSearchAvailability,
+    monitor_web_search_availability,
+    web_search_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +170,7 @@ def build_dashboard_app(
     shellsim_catalog: str = shellsim.DEFAULT_PYPI_CATALOG,
     web_search: ParallelWebSearch | None = None,
     feedback_prefix: str | None = None,
+    web_search_recheck_seconds: float = WEB_SEARCH_RECHECK_SECONDS,
 ) -> Starlette:
     """Build the dashboard and reverse proxy for a local serving backend.
 
@@ -175,6 +182,7 @@ def build_dashboard_app(
         shellsim_catalog: Host-selected ports catalog for CPython and NumPy tools.
         web_search: Parallel credentials for the optional ``web_search`` tool; None disables it.
         feedback_prefix: Storage prefix for model-feedback reports; None disables ``/feedback``.
+        web_search_recheck_seconds: Interval between availability probes while web search is unavailable.
     """
     state: dict[str, httpx.AsyncClient] = {}
     chat_shares = _ChatShareStore()
@@ -188,17 +196,34 @@ def build_dashboard_app(
         )
         async with httpx.AsyncClient() as web_search_client:
             app.state.web_search_client = web_search_client
+            monitor = (
+                asyncio.create_task(
+                    monitor_web_search_availability(app.state, web_search, web_search_client, web_search_recheck_seconds)
+                )
+                if web_search is not None
+                else None
+            )
             try:
                 yield
             finally:
+                if monitor is not None:
+                    monitor.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await monitor
                 await state.pop("client").aclose()
 
     async def index(_request: Request) -> Response:
         return HTMLResponse(DASHBOARD_HTML)
 
-    async def serving_info(_request: Request) -> Response:
+    async def serving_info(request: Request) -> Response:
+        availability = request.app.state.web_search_availability
         return JSONResponse(
-            {**dataclasses.asdict(info), "web_search": web_search is not None, "feedback": feedback is not None}
+            {
+                **dataclasses.asdict(info),
+                "web_search": web_search is not None,
+                "web_search_availability": availability.value if availability is not None else None,
+                "feedback": feedback is not None,
+            }
         )
 
     async def health(_request: Request) -> Response:
@@ -267,6 +292,8 @@ def build_dashboard_app(
     )
     app.state.tool_runtime = ToolRuntime(shellsim_catalog)
     app.state.web_search = web_search
+    # Optimistic until the start-up probe answers.
+    app.state.web_search_availability = WebSearchAvailability.AVAILABLE if web_search is not None else None
     return app
 
 

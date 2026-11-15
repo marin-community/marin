@@ -10,6 +10,7 @@ import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
 import { createChatShare, fetchChatShare, type ReportInput, submitFeedback } from './lib/api'
 import { ThinkingMode } from './lib/chat_template'
+import { webSearchUnavailableReason } from './lib/web_search'
 import { loadComparison } from './lib/comparison_storage'
 import {
   conversationFromSharedChat,
@@ -267,6 +268,7 @@ function clearHistory() {
           :chat-template-protocol="info?.chat_template_protocol ?? null"
           :streaming="info ? info.streaming : true"
           :web-search-available="info?.web_search ?? false"
+          :web-search-unavailable-reason="webSearchUnavailableReason(info?.web_search_availability ?? null)"
           @persist="persist"
         />
         <CompareView

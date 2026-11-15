@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -24,7 +25,7 @@ from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, b
 from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
 from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
-from marin.inference.web_search import ParallelWebSearch
+from marin.inference.web_search import PROBE_SEARCH, ParallelWebSearch
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -533,13 +534,27 @@ def test_shell_workspace_python_starts_after_many_replayed_python_runs():
 PARALLEL_RESULTS = {"search_id": "search_1", "results": [{"url": "https://example.com", "excerpts": ["Example"]}]}
 
 
-def _fake_parallel_app(received: list[tuple[str | None, dict[str, object]]]) -> Starlette:
+def _fake_parallel_app(
+    received: list[tuple[str | None, dict[str, object]]], status: list[int] | None = None
+) -> Starlette:
+    """Parallel stand-in that answers every search with ``status[0]`` (200 when omitted)."""
+
     async def search(request: Request) -> JSONResponse:
         body = await request.json()
         received.append((request.headers.get("x-api-key"), body))
+        code = status[0] if status else 200
+        if code != 200:
+            return JSONResponse({"type": "error", "error": {"message": "Insufficient credit"}}, status_code=code)
         return JSONResponse(PARALLEL_RESULTS)
 
     return Starlette(routes=[Route("/v1/search", search, methods=["POST"])])
+
+
+def _wait_for_availability(client: TestClient, expected: str, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while (seen := client.get("/info").json()["web_search_availability"]) != expected:
+        assert time.monotonic() < deadline, f"web search stayed {seen!r}, expected {expected!r}"
+        time.sleep(0.02)
 
 
 def test_dashboard_web_search_forwards_only_search_arguments_with_server_key():
@@ -555,6 +570,7 @@ def test_dashboard_web_search_forwards_only_search_arguments_with_server_key():
     )
     with serve_app_background(_fake_parallel_app(received), parallel_sock), TestClient(app) as client:
         assert client.get("/info").json()["web_search"] is True
+        _wait_for_availability(client, "available")
         search = client.post(
             "/web-search",
             json={"objective": "Find an example", "search_queries": ["example"], "processor": "pro"},
@@ -564,9 +580,38 @@ def test_dashboard_web_search_forwards_only_search_arguments_with_server_key():
     assert search.status_code == 200
     assert search.json() == PARALLEL_RESULTS
     assert rejected.status_code == 422
-    assert received == [("test-key", {"objective": "Find an example", "search_queries": ["example"]})]
+    # The start-up availability probe, then the forwarded call.
+    assert received == [
+        ("test-key", PROBE_SEARCH),
+        ("test-key", {"objective": "Find an example", "search_queries": ["example"]}),
+    ]
 
     unconfigured = build_dashboard_app(upstream_base_url="http://127.0.0.1:1", model_id="fake-model", info=info)
     with TestClient(unconfigured) as client:
         assert client.get("/info").json()["web_search"] is False
+        assert client.get("/info").json()["web_search_availability"] is None
         assert client.post("/web-search", json={"objective": "x", "search_queries": ["x"]}).status_code == 404
+
+
+def test_dashboard_reports_web_search_unavailable_until_parallel_accepts_searches_again():
+    info = ServingInfo("fake-model", "vllm", 1, 4096, "bfloat16", True, "/serve/fake")
+    received: list[tuple[str | None, dict[str, object]]] = []
+    status = [402]
+    parallel_sock = bind_serving_socket("127.0.0.1", 0)
+    parallel_url = f"http://127.0.0.1:{parallel_sock.getsockname()[1]}/v1"
+    app = build_dashboard_app(
+        upstream_base_url="http://127.0.0.1:1",
+        model_id="fake-model",
+        info=info,
+        web_search=ParallelWebSearch("test-key", base_url=parallel_url),
+        web_search_recheck_seconds=0.05,
+    )
+    with serve_app_background(_fake_parallel_app(received, status), parallel_sock), TestClient(app) as client:
+        _wait_for_availability(client, "no_credit")
+        status[0] = 200  # Credit added: a re-probe restores search without a restart.
+        _wait_for_availability(client, "available")
+        status[0] = 402  # A user's search hits the empty account.
+        assert client.post("/web-search", json={"objective": "x", "search_queries": ["x"]}).status_code == 402
+        assert client.get("/info").json()["web_search_availability"] == "no_credit"
+        status[0] = 401
+        _wait_for_availability(client, "key_rejected")

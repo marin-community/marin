@@ -245,6 +245,15 @@ only when the serving job holds the Iris secret `PARALLEL_API_KEY`. The
 dashboard server adds the key to each call, so the browser never receives it.
 Each search is billed to the account that owns the key.
 
+Parallel's balance endpoint does not accept API keys, so the server judges
+availability from search responses. It sends one minimal search at start-up and
+records the outcome of every user search. HTTP 402 means the account has no
+credit, and HTTP 401 or 403 means Parallel rejected the key. While either
+holds, `/info` reports it in `web_search_availability` (`no_credit` or
+`key_rejected`; `available` otherwise). The checkbox is then disabled, and its
+tooltip gives the reason. The server repeats the probe every 10 minutes until
+Parallel accepts searches again. The dashboard reads `/info` every 15 seconds.
+
 ```bash
 uv run marin-serve iris MODEL --cluster marin --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
 ```

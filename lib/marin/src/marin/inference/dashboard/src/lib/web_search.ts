@@ -1,4 +1,5 @@
 import type { ToolDefinition } from './python_tools'
+import type { WebSearchAvailability } from './types'
 
 export const WEB_SEARCH_TOOL_NAME = 'web_search'
 
@@ -24,4 +25,16 @@ export const WEB_SEARCH_TOOL_DEFINITION: ToolDefinition = {
       additionalProperties: false,
     },
   },
+}
+
+/** Why the Web search option is disabled, or null when Parallel accepts searches (or search is not configured). */
+export function webSearchUnavailableReason(availability: WebSearchAvailability | null): string | null {
+  switch (availability) {
+    case 'no_credit':
+      return 'Web search is unavailable: the Parallel account has no credit.'
+    case 'key_rejected':
+      return "Web search is unavailable: Parallel rejected this server's API key."
+    default:
+      return null
+  }
 }

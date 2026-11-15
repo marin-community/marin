@@ -25,7 +25,11 @@ export interface ServingInfo {
   web_search: boolean
   /** The server saves model-feedback reports to Marin storage at /feedback. */
   feedback: boolean
+  /** Parallel's last answer to the server's key; null when web search is not configured. */
+  web_search_availability: WebSearchAvailability | null
 }
+
+export type WebSearchAvailability = 'available' | 'no_credit' | 'key_rejected'
 
 export type ServerStatus = 'connecting' | 'ok' | 'loading' | 'bad'
 

@@ -1190,6 +1190,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming_without_tool_catalog(
                 **dataclasses.asdict(info),
                 "web_search": False,
                 "feedback": False,
+                "web_search_availability": None,
             }
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
