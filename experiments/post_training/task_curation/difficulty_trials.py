@@ -228,7 +228,9 @@ def run_task(
     destination = StoragePath(output) / key
     if task.reason is not None or task.path is None:
         write_same_json_evidence(destination / "pending.json", {"task_id": task.task_id, "reason": task.reason})
-        return TaskOutcome([DifficultyAttempt(task_id=task.task_id, status="pending", reward=None)], task.reason)
+        return TaskOutcome(
+            [DifficultyAttempt(task_id=task.task_id, status="pending", reward=None, reason=task.reason)], task.reason
+        )
     attempts = []
     pending_reason = None
     math_deadlines = prior_math_deadlines
@@ -317,7 +319,9 @@ def run_task(
                     "message": message,
                 },
             )
-            attempts.append(DifficultyAttempt(task_id=task.task_id, status="pending", reward=None))
+            attempts.append(
+                DifficultyAttempt(task_id=task.task_id, status="pending", reward=None, reason=construction_reason)
+            )
             return TaskOutcome(attempts, construction_reason)
         get_artifact_writer().flush(timeout=300)
         archive = local / "trial-artifacts.tar.gz"
@@ -392,6 +396,7 @@ def run_task(
         deadline = reward is None and not (unserved or provider_wait) and has_math_verifier_deadline(trial)
         math_deadlines = math_deadlines + 1 if deadline else 0
         terminal_deadline = deadline and math_deadlines >= MATH_DEADLINE_LIMIT
+        reason = MATH_VERIFIER_DEADLINE if deadline else pending_reason if reward is None else None
         attempt = DifficultyAttempt(
             task_id=task.task_id,
             status=(
@@ -400,16 +405,12 @@ def run_task(
                 else "scored" if reward is not None else "blocked" if terminal_deadline else "infrastructure"
             ),
             reward=reward,
+            reason=reason,
         )
         write_json_evidence(
             destination / f"{number:02d}" / "attempt.json",
             {
                 **attempt.model_dump(mode="json"),
-                "reason": (
-                    "input_budget_unserved"
-                    if unserved
-                    else "provider_wait" if provider_wait else MATH_VERIFIER_DEADLINE if deadline else None
-                ),
                 **raw_receipt,
                 "judge_temperature": JUDGE_TEMPERATURE if task.judge_model is not None else None,
             },
@@ -666,8 +667,8 @@ def main() -> None:
                     output_tokens=output_tokens,
                 )
                 measurement = measurement_from_attempts(DifficultyMeasurement(**payload), attempts)
-                blocked_tasks = {task.task_id for task in tasks if task.reason is not None}
-                blocked_tasks.update(
+                environment_blocked_tasks = {task.task_id for task in tasks if task.reason is not None}
+                environment_blocked_tasks.update(
                     task.task_id
                     for task, outcome in zip(tasks, outcomes, strict=True)
                     if outcome.pending_reason
@@ -677,13 +678,13 @@ def main() -> None:
                         NETWORK_POLICY_REASON,
                     }
                 )
-                blocked = sorted({pending_reasons[task_id] for task_id in blocked_tasks})
-                if not terminal and tasks and len(blocked_tasks) == len(tasks):
+                environment_blockers = sorted({pending_reasons[task_id] for task_id in environment_blocked_tasks})
+                if not terminal and tasks and len(environment_blocked_tasks) == len(tasks):
                     measurement = DifficultyMeasurement.model_validate(
                         {
                             **measurement.model_dump(mode="json"),
                             "status": "not_measured",
-                            "reason": "; ".join(blocked),
+                            "reason": "; ".join(environment_blockers),
                         }
                     )
                 elif pending_reasons:

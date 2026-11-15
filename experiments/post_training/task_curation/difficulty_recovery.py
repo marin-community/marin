@@ -263,13 +263,13 @@ def recovered_source(
         if file_sha256(path) != ref.sha256:
             raise ValueError("Previous attempt evidence changed after publication")
         payload = json.loads(path.read_text())
-        attempt = DifficultyAttempt.model_validate({name: payload[name] for name in DifficultyAttempt.model_fields})
+        attempt = DifficultyAttempt.model_validate(
+            {name: payload[name] for name in DifficultyAttempt.model_fields if name in payload}
+        )
         if attempt.task_id not in selected:
             raise ValueError("Previous attempt is outside the selected sample")
         if attempt.task_id in terminal:
             raise ValueError("Previous campaign retried a task after its terminal result")
-        if attempt.status == "blocked" and payload.get("reason") != MATH_VERIFIER_DEADLINE:
-            raise ValueError("Blocked math attempt has no verifier deadline evidence")
         if attempt.status == "scored":
             task = tasks[attempt.task_id]
             if task.judge_model is not None:
@@ -313,9 +313,7 @@ def recovered_source(
             terminal.add(attempt.task_id)
         if attempt.status in {"infrastructure", "blocked"}:
             math_deadline_streaks[attempt.task_id] = (
-                math_deadline_streaks.get(attempt.task_id, 0) + 1
-                if payload.get("reason") == MATH_VERIFIER_DEADLINE
-                else 0
+                math_deadline_streaks.get(attempt.task_id, 0) + 1 if attempt.reason == MATH_VERIFIER_DEADLINE else 0
             )
         attempts.append(attempt)
     return RecoveredSource(

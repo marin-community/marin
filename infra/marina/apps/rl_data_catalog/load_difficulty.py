@@ -16,13 +16,21 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
+def read_measurements(view: ReadView) -> list[DifficultyMeasurement]:
+    """Read typed measurements without FineStore row metadata."""
+    return [
+        DifficultyMeasurement.model_validate(row)
+        for row in view.iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields))
+    ]
+
+
 def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) -> dict[str, Any]:
     """Insert each measurement once; reject an existing ID with different evidence."""
     if len({record.measurement_id for record in records}) != len(records):
         raise ValueError("Duplicate difficulty measurement IDs")
     inserted = 0
     for record in records:
-        payload = record.model_dump(mode="json", exclude={"blocked_tasks"} if record.blocked_tasks == 0 else None)
+        payload = record.model_dump(mode="json")
         result = query(
             """
             INSERT INTO atlas_difficulty (measurement_id, source_id, protocol_id, created_at, measurement)
@@ -41,7 +49,7 @@ def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) 
         stored = query(
             "SELECT measurement FROM atlas_difficulty WHERE measurement_id = :id", {"id": record.measurement_id}
         )["rows"]
-        if len(stored) != 1 or stored[0]["measurement"] != payload:
+        if len(stored) != 1 or DifficultyMeasurement.model_validate(stored[0]["measurement"]) != record:
             raise ValueError(f"Difficulty measurement ID already names different evidence: {record.measurement_id}")
     return {"inserted": inserted, "records": len(records)}
 
@@ -54,7 +62,7 @@ def load_measurements(records: list[DifficultyMeasurement], query: AppletQuery) 
 def main(catalog_root: str, applet_id: str, marina_url: str, receipt: Path) -> None:
     configure_coreweave_s3()
     view = ReadView(catalog_root)
-    records = [DifficultyMeasurement.model_validate(row) for row in view.iter_rows(MEASUREMENTS)]
+    records = read_measurements(view)
     result = load_measurements(records, applet_query(marina_url, applet_id))
     receipt.write_text(json.dumps({"catalog_root": catalog_root, **result}, indent=2) + "\n")
     click.echo(json.dumps(result))

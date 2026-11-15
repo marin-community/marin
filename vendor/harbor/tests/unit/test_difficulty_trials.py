@@ -98,6 +98,7 @@ def test_math_verifier_deadline_stops_trials_and_accounts_for_blocked_task(tmp_p
     assert len(executions) == difficulty_trials.MATH_DEADLINE_LIMIT
     assert [attempt.status for attempt in outcome.attempts] == ["infrastructure", "infrastructure", "blocked"]
     assert all(attempt.reward is None for attempt in outcome.attempts)
+    assert all(attempt.reason == MATH_VERIFIER_DEADLINE for attempt in outcome.attempts)
     receipts = sorted(output.glob("*/*/attempt.json"))
     assert len(receipts) == difficulty_trials.MATH_DEADLINE_LIMIT
     assert all(json.loads(path.read_text())["reason"] == MATH_VERIFIER_DEADLINE for path in receipts)

@@ -242,8 +242,10 @@ class DifficultyObservation(CatalogRecord):
             or self.wilson_95 is None
         ):
             raise ValueError("Measured results require complete scored coverage and attempt evidence")
-        if self.status == MeasurementStatus.BLOCKED and (self.pending_tasks or not self.blocked_tasks):
-            raise ValueError("Blocked results require terminal blocked tasks and no retryable pending tasks")
+        if self.status == MeasurementStatus.BLOCKED and (
+            self.pending_tasks or not self.blocked_tasks or not self.reason
+        ):
+            raise ValueError("Blocked results require a reason, blocked tasks and no retryable pending tasks")
         if self.wilson_95 is not None:
             low, high = self.wilson_95.low, self.wilson_95.high
             if not self.n or not 0 <= low <= self.solved / self.n <= high <= 1:
@@ -270,6 +272,7 @@ class DifficultyAttempt(CatalogRecord):
     task_id: str
     status: AttemptStatus
     reward: float | None = Field(strict=True)
+    reason: str | None = None
 
     @model_validator(mode="after")
     def _reward(self) -> "DifficultyAttempt":
@@ -278,6 +281,8 @@ class DifficultyAttempt(CatalogRecord):
                 raise ValueError("Scored attempts require a finite grader reward")
         elif self.reward is not None:
             raise ValueError("Unscored attempts cannot carry a solver reward")
+        if self.status == AttemptStatus.BLOCKED and not self.reason:
+            raise ValueError("Blocked attempts require a reason")
         return self
 
 
@@ -291,6 +296,7 @@ def measurement_from_attempts(
     scored = {}
     infrastructure = 0
     blocked = set()
+    blocked_reasons = set()
     for attempt in attempts:
         if attempt.task_id not in selected:
             raise ValueError(f"Attempt is outside the selected sample: {attempt.task_id}")
@@ -302,6 +308,8 @@ def measurement_from_attempts(
             infrastructure += 1
         if attempt.status == AttemptStatus.BLOCKED:
             blocked.add(attempt.task_id)
+            assert attempt.reason is not None
+            blocked_reasons.add(attempt.reason)
         if attempt.status == AttemptStatus.SCORED:
             scored[attempt.task_id] = attempt.reward
     n = len(scored)
@@ -329,7 +337,7 @@ def measurement_from_attempts(
                 None
                 if status is MeasurementStatus.MEASURED
                 else (
-                    "Verifier deadlines blocked selected tasks."
+                    "; ".join(sorted(blocked_reasons))
                     if status is MeasurementStatus.BLOCKED
                     else "Selected tasks still lack scored solver attempts."
                 )
