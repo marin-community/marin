@@ -13,6 +13,10 @@ reviewed SAMPLE/FULL campaigns and artifact outputs. Its
 [Current admission policy](../../../docs/references/task-curation.md#current-admission-policy)
 section states the current admission rules.
 
+Run the [stage-0 license checker](../../../docs/references/task-curation.md#stage-0-binding-license-gate)
+(`python -m experiments.post_training.task_curation.license_check`) before any
+conversion and pass its receipts to the driver with `--license-receipts`.
+
 Do not declare oversight levels, grader types or task-shape tags (agentic,
 multi-turn and similar) on a source. A late-stage ingestion step derives them from
 the final TaskSpecs and QA records, and a contradicting declaration fails

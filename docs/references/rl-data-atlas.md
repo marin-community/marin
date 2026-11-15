@@ -2,8 +2,10 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
-This reference was synced with Atlas v9.3 preview revision 19 (2026-11-15); the
+This reference was synced with Atlas v9.3 preview revision 19 and the stage-0 license gate (2026-11-15); the
 admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
+Every source passes the [stage-0 license gate](task-curation.md#stage-0-binding-license-gate)
+before ingestion; banned sources never appear in admitted counts.
 Curation owns source declarations, admission decisions, executed controls and
 sampled GLM judgments. Atlas displays those records and their task packets.
 

@@ -66,6 +66,10 @@ active ban's underlying evidence verdict so the user can review proposed changes
 Exit status is zero for PASS, FAIL and ESCALATE; execution/configuration errors
 are nonzero.
 
+Agents never edit license decisions or the ban registry by hand, and never trace
+lineage to justify a ban. They run the checker and send each ESCALATE to the
+coordinator.
+
 **Decisions and existing bans.** An ESCALATE is neither a ban nor permission.
 The user's explicit decision is a typed `LicenseDecision` on the receipt, with
 who, when, exact source/dataset/revision, TRAIN/EVAL scope, rationale, evidence
@@ -906,6 +910,11 @@ is an ingestion failure with its exact reason, not an empty successful source.
 The retained source set is the explicit inventory of the intended Atlas catalog
 snapshot, including grandfathered sources. It is fixed before per-task QA or
 lexical exclusions. Use that complete source set for DF filtering.
+To build it for new intake, take the current catalog minus the active bans in
+`license_registry.py`, and use each remaining source's census-bound
+`SourceTextPopulation` (`actor_census_input.input_artifact`) plus the candidate
+populations. Record the frozen inventory's SHA-256 in the intake receipts; an
+approved later ban or lift is applied as an incremental rescan.
 
 Before admitting a new or changed source:
 
