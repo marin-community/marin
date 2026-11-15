@@ -72,7 +72,7 @@ th.num button { justify-content: flex-end; }
 .source-table.resized-columns .source-name { max-width: 100%; }
 .source-name { border: 0; background: none; padding: 0; color: var(--muted); font-size: max(var(--type-min), 14px); font-weight: 550; text-align: left; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-name:hover { text-decoration: underline; }
-.use-cell { font-size: max(var(--type-min), 12px); color: var(--muted); }
+.use-cell { font-size: max(var(--type-min), 12px); color: var(--muted); white-space: nowrap; }
 .area-link { font-size: max(var(--type-min), 12px); line-height: 1.5; display: inline-block; }
 .muted { color: var(--muted); }
 .chip { display: inline-block; border-radius: 4px; padding: 4px 7px; font-size: max(var(--type-min), 12px); line-height: 1.5; white-space: nowrap; }

@@ -185,7 +185,8 @@ and all other secondary content belong in Evidence/detail views. Enum chips
 carry their label without secondary text underneath. The browser gates enforce
 both invariants at 1440/390 in light/dark themes before every publication.
 Table header labels stay on one line, including unsortable headers. The geometry
-gate rejects text that fits its cell only by stacking letters vertically.
+gate rejects text that fits its cell only by stacking letters vertically. Use
+labels also remain on one line.
 
 ## Intended measurement refreshes
 
