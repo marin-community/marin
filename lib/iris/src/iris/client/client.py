@@ -998,6 +998,8 @@ class IrisClient:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
         replicas = adjust_tpu_replicas(resources.device, replicas)
+        if coscheduling is not None:
+            coscheduling.validate(replicas)
 
         # iris is a dumb scheduler: it runs the entrypoint verbatim. Multi-process GPU
         # execution and profiling are composed into the command by the caller

@@ -281,6 +281,47 @@ def test_relaunch_changed_request_concurrency_preserves_identity(tmp_path, cache
     assert executed == []
 
 
+@pytest.mark.parametrize(
+    "platform, launch_seed, expected",
+    [
+        (Platform.GPU, None, {"default": 0, "configured": 5}),
+        (Platform.GPU, 7, {"default": 7, "configured": 7}),
+        # TPU vLLM rejects seeded sampling, so only an explicit seed is sent there.
+        (Platform.TPU, None, {"default": None, "configured": 5}),
+        (Platform.TPU, 7, {"default": 7, "configured": 7}),
+    ],
+)
+def test_run_seed_defaults_only_where_the_backend_accepts_request_seeds(tmp_path, platform, launch_seed, expected):
+    config = tmp_path / "custom.yaml"
+    config.write_text(
+        "evaluations:\n"
+        "  default:\n    benchmark: gsm8k\n"
+        "  configured:\n    benchmark: gsm8k\n    num_fewshot: 0\n    run:\n      seed: 5\n"
+    )
+    gpu = platform is Platform.GPU
+    spec = LaunchSpec(
+        evals=load_evaluations(config),
+        model=models()["qwen3-8b"],
+        platform=platform,
+        accelerator="H100x1" if gpu else None,
+        limit=None,
+        seed=launch_seed,
+        records_prefix=str(tmp_path / "records"),
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a" if gpu else None,
+        priority_band=0,
+        run_id="seed-defaults",
+    )
+
+    batch = prepare_evaluation_batch(spec)
+
+    seeds = {
+        evaluation.identity.eval_ref.name: evaluation.identity.eval_ref.curated.settings.seed
+        for evaluation in batch.evaluations
+    }
+    assert seeds == expected
+
+
 def _pipeline_spec(tmp_path):
     return LaunchSpec(
         evals=resolve_evaluations("gsm8k-smoke,arc-easy"),
