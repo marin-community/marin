@@ -173,6 +173,7 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
     return {
         "profile": "snowball_exp3",
         "data": data,
+        "evaluation_data": data,
         "source_loss_metadata": prefix_join(prepared, "source-loss.json"),
         "source_loss_metadata_sha256": (
             hashlib.sha256((StoragePath(prepared) / "source-loss.json").read_bytes()).hexdigest()

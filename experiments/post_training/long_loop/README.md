@@ -74,7 +74,8 @@ uv run python -m experiments.post_training.long_loop.exp3_initializer_smoke \
 
 The `snowball_exp3` SFT profile requires a hash-pinned supervision sidecar,
 explicit trainer/model/mesh configuration, initial-evaluation gate and stage
-guard. It uses retained FP32 parameters, BF16 computation, MuonH5e-5 with
+guard. Scheduled SFT validation data is explicit and separate from the upstream
+initialization gate's heldout data. It uses retained FP32 parameters, BF16 computation, MuonH5e-5 with
 AdamLR3/13 of that, clipping1, z-loss1e-4 and the unchanged4750-step schedule.
 Packing binds the sidecar's precomputed prediction weights for every source.
 The full candidate catalog and recipe require separate approval before launch.

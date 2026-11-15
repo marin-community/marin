@@ -100,7 +100,7 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         snowball_sft=exp3_controls(),
         token_weighted_accumulation=True,
         initial_eval_match=gate,
-        evaluation_data=gate.data,
+        evaluation_data=draccus.decode(LmDataConfig, recipe["evaluation_data"]),
         data_seed=recipe["data_seed"],
         tensorstore_cache_bytes=recipe["tensorstore_cache_bytes"],
         mesh=mesh,
