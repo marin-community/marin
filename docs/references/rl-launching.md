@@ -206,7 +206,8 @@ The [Mochi three-rack example](../recipes/mochi-rl.md#262k-three-rack-example)
 uses 64 trainer GPUs and two 64-GPU inference replicas in separate NVLink domains.
 Its context window is 262,144 tokens with an 8,192-token response default.
 It uses completed SFT exports or native RL checkpoints and submits no SFT job.
-The example stays in draft; its PR records the integration and GPU-evidence boundaries.
+The [draft PR](https://github.com/marin-community/marin/pull/11353) records the
+integration and GPU-evidence boundaries.
 
 ## Artifact and runtime boundaries
 

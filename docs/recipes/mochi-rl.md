@@ -115,7 +115,8 @@ source. The PR body records that boundary; these CPU checks do not qualify arbit
 
 ## 262K three-rack example
 
-`experiments.post_training.mochi_three_rack` uses the same recipe at a
+`experiments.post_training.mochi_three_rack`
+([draft #11353](https://github.com/marin-community/marin/pull/11353)) uses the same recipe at a
 262,144-token context window. It requests 64 trainer GPUs at TP1/PP16/CP4/EP4
 and two 64-GPU inference replicas at TP1/PP1/DP64/EP64. Mandatory NVLink placement
 keeps these three roles in separate domains. The trainer retains activation

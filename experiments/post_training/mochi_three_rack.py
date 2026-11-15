@@ -4,7 +4,7 @@
 """Run Mochi RL at full context with one trainer rack and two inference racks."""
 
 import hashlib
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path, PurePosixPath
 
 import click
@@ -20,6 +20,7 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    MegatronGeometry,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
@@ -50,13 +51,13 @@ ROLE_PLAN = SkyRLRolePlan(
     micro_train_batch_size_per_gpu=1,
     n_samples_per_prompt=8,
 )
-MEGATRON_GEOMETRY = {
-    "tensor_model_parallel_size": 1,
-    "pipeline_model_parallel_size": 16,
-    "context_parallel_size": 4,
-    "expert_model_parallel_size": 4,
-    "expert_tensor_parallel_size": 1,
-}
+MEGATRON_GEOMETRY = MegatronGeometry(
+    tensor_model_parallel_size=1,
+    pipeline_model_parallel_size=16,
+    context_parallel_size=4,
+    expert_model_parallel_size=4,
+    expert_tensor_parallel_size=1,
+)
 
 
 def build_run(
@@ -72,9 +73,9 @@ def build_run(
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     resume_uri: str | None = None,
 ) -> ArtifactStep[SkyRLRun]:
-    if 48 % MEGATRON_GEOMETRY["pipeline_model_parallel_size"]:
+    if 48 % MEGATRON_GEOMETRY.pipeline_model_parallel_size:
         raise ValueError("Mochi's 48 layers must divide evenly across pipeline stages")
-    if 12 % MEGATRON_GEOMETRY["context_parallel_size"]:
+    if 12 % MEGATRON_GEOMETRY.context_parallel_size:
         raise ValueError("Mochi's sliding-window all-to-all attention requires CP to divide its 12 KV heads")
     resume_step = (
         int(PurePosixPath(resume_uri.rstrip("/")).name.removeprefix("global_step_")) if resume_uri is not None else 0
@@ -114,7 +115,7 @@ def build_run(
         # Keep per-peer communication buffers small beside the full-context backward graph.
         role_config["nccl_buffer_size_bytes"] = 262144
         megatron = role_config.setdefault("megatron_config", {})
-        megatron.update(MEGATRON_GEOMETRY)
+        megatron.update(asdict(MEGATRON_GEOMETRY))
         # The unfused expert SwiGLU exhausted memory during 261K backward recomputation.
         # Earlier pipeline stages also need their checkpoint inputs in pinned host memory.
         megatron.setdefault("transformer_config_kwargs", {}).update(
