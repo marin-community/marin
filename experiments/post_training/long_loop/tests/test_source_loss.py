@@ -51,8 +51,7 @@ def test_pinned_source_modes_preserve_chat_and_full_token_weights_and_accounting
     rows = []
     for name, component in data.components.items():
         dataset = dataset_for_component(
-            component, Axis("position", 8), caches[name],
-            eos_id=None, block_cross_document_attention=True
+            component, Axis("position", 8), caches[name], eos_id=None, block_cross_document_attention=True
         )
         example = blocking_wait(dataset.get_batch([0]))[0]
         np.testing.assert_array_equal(example.loss_weight, expected[name] + [0] * 4)
@@ -60,8 +59,15 @@ def test_pinned_source_modes_preserve_chat_and_full_token_weights_and_accounting
         assert origin.is_sft == (name == "chat")
         with pytest.raises(ValueError, match="explicit source loss mode"):
             blocking_wait(sample_origin(dataset, 0))
-        rows.append({"real_tokens": 4, "original_tokens": 4, "loss_tokens": sum(expected[name]),
-                     "is_sft": origin.is_sft, "documents": [{"real_tokens": 4, "original_tokens": 4}]})
+        rows.append(
+            {
+                "real_tokens": 4,
+                "original_tokens": 4,
+                "loss_tokens": sum(expected[name]),
+                "is_sft": origin.is_sft,
+                "documents": [{"real_tokens": 4, "original_tokens": 4}],
+            }
+        )
     stats = sequence_statistics(rows, 8, 2, 1.0, max_segments=256)
     assert stats["pad_fraction"] == 0.5
     assert stats["loss_bearing_assistant_tokens"] == 2

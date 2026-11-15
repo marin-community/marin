@@ -6,9 +6,8 @@
 import hashlib
 import json
 import os
-import subprocess
 from dataclasses import replace
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import click
 import draccus
@@ -24,6 +23,7 @@ from rigging.timing import Duration
 
 from experiments.post_training.long_loop.archive_stage import archive_graph_run
 from experiments.post_training.long_loop.bixbench import merge_verifier_recovery
+from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.runtime_timing import write_report
 from experiments.post_training.long_loop.sft_accounting import write_sft_accounting
 from experiments.post_training.long_loop.spec_pipeline import runtime_execution
@@ -174,11 +174,10 @@ def main(plan_uri: str, plan_sha256: str) -> ArtifactStep:
         raise ValueError("Original resolved run specification changed")
     resolved = json.loads(raw)
     if get_job_info() is None:
-        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        if revision != plan["postprocessing_revision"]:
-            raise ValueError("Checked-out revision differs from the postprocessing plan")
-        if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], text=True).strip():
-            raise ValueError("Postprocessing requires a clean tracked checkout")
+        require_clean_revision(Path(__file__).resolve().parents[3], plan["postprocessing_revision"])
+    resolved["runtime_source"] = runtime_source_manifest(
+        Path(__file__).resolve().parents[3], plan["postprocessing_revision"]
+    )
     os.environ["MARIN_PREFIX"] = resolved["storage"]["output_prefix"]
     os.environ["MARIN_TEMP_PREFIX"] = resolved["storage"]["temporary_prefix"]
     version = resolve_version(resolved["name"], None)

@@ -30,6 +30,7 @@ from experiments.post_training.long_loop.archive_stage import (
 )
 from experiments.post_training.long_loop.graph import execute_local_graph
 from experiments.post_training.long_loop.hf_archive import file_identity, upload_checkpoint
+from experiments.post_training.long_loop.recipe_bundle import runtime_source_manifest, verify_recipe_bundle
 from experiments.post_training.long_loop.tests.test_hf_archive import upload_config
 
 
@@ -146,6 +147,11 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
             },
         },
     }
+    workspace = tmp_path / "runtime"
+    workspace.mkdir()
+    (workspace / "recipe.py").write_text("BATCH = 256\n")
+    monkeypatch.setattr(archive_stage, "RUNTIME_WORKSPACE", workspace)
+    plan["runtime_source"] = runtime_source_manifest(workspace, "a" * 40)
     if incomplete:
         plan["provenance"]["missing_evidence"] = {"timing": "Native journal coverage incomplete"}
         plan["provenance"]["cleanup_blockers"] = ["Native journal coverage incomplete"]
@@ -236,7 +242,10 @@ def test_archive_postscript_runs_without_training_and_keeps_verbatim_inputs(
     execute_local_graph(stage)
     root = stage.path()
     archive_selected_run(output=root, plan=plan, trained=trained_path, completed_report=str(report))
-    assert {item["category"] for item in verify_archive(root)["objects"]} == REQUIRED_CATEGORIES
+    sealed = verify_archive(root)
+    assert {item["category"] for item in sealed["objects"]} == REQUIRED_CATEGORIES | {"recipe"}
+    recipe = sealed["provenance"]["recipe_bundle"]
+    assert verify_recipe_bundle(str(Path(root) / "objects/recipe"), recipe["manifest_sha256"]) == recipe
     manifest = verify_archive(root)
     assert manifest["provenance"]["hf_checkpoint"]["revision"] == hub.revision
     assert manifest["provenance"]["checkpoint_inventory"]["ttl"] == "14d"
@@ -371,7 +380,13 @@ def test_runtime_plan_uses_consumed_paths_and_preserves_missing_evidence(
             ),
         },
     )
-    spec = {"marin_revision": "a" * 40, "name": "test", "datasets": {"rows": "pinned"}, "rl": {"execution": {}}}
+    spec = {
+        "marin_revision": "a" * 40,
+        "name": "test",
+        "datasets": {"rows": "pinned"},
+        "rl": {"execution": {}},
+        "runtime_source": {"schema": 1, "marin_revision": "a" * 40, "files": []},
+    }
     plan = derive_archive_plan(
         output=str(tmp_path / "archive"),
         settings=settings,

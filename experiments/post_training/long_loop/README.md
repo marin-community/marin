@@ -26,6 +26,39 @@ pin `marin_revision` to the clean code commit; Iris bundles those explicit input
 Use a relative or cluster-local validation output path for a remote run.
 A printed blocked plan is not a successful dry-run or permission to launch.
 
+## Exp3 smoke and recipe capture
+
+Production entrypoints refuse both tracked and untracked source changes. Commit
+the complete runtime before resolving or submitting a production spec. The
+archive automatically writes `recipe-bundle/recipe.tar.gz`, its SHA-pinned
+manifest, and a verification receipt. It includes the canonical Iris workspace
+files, consumed configurations and dataset referents. Source bytes must still
+match the snapshot captured while constructing the graph. The archive verifies
+every bundle member before sealing and retains the bundle in its object inventory.
+
+The explicitly approved Exp3 wiring smoke uses 8 H100, three updates of a tiny
+Snowball model, and complete short documents from the frozen Exp1 caches. It
+checks CPU/GPU initialization parity, retained FP32 parameters, update norms,
+chat/full-token masks, lookahead padding and native telemetry. It does not measure
+the 67B initializer's upstream loss or qualify production throughput.
+
+```bash
+uv run python -m experiments.post_training.long_loop.exp3_smokes \
+  --source-revision "$(git rev-parse HEAD)" --h100-hour-limit 4 \
+  --version YYYY.MM.DD.N
+```
+
+Inspect the printed graph before adding `--run --max-concurrent 1`. The stage
+guard charges timestamped build and worker allocation, excludes queue time,
+retries watchdog stalls at most twice with fresh child names, and cancels only
+the active stage when its required H100-hour ceiling is reached. Other failures
+are reported without replay. Its ledger records observed spend and the ceiling.
+
+Historical recipe backfills use the CPU-only `backfill_recipe` entrypoint with
+an exact archive-manifest hash, full source commit SHAs and a fresh output path.
+It reads only recipe categories, verifies their archived bytes, and records
+reconstruction limits. It does not execute producers or modify the sealed archive.
+
 ## Shared SFT and historical reproduction
 
 New SFT stages use `experiments.sft.launcher.SFTSpec` and the checked-in

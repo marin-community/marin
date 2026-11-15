@@ -16,6 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval import TaggedEvaluator
 from levanter.layers.attention import AttentionMask
+from levanter.utils.thread_utils import blocking_wait
 
 
 @dataclass(frozen=True)
@@ -37,9 +38,15 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
     positions = 0
     scored_tokens = 0.0
     counts = {str(token): 0 for token in special_token_ids}
+    remaining = blocking_wait(evaluator.dataset.async_len())
     for batch, _tags in evaluator.loader:
         tokens = np.asarray(multihost_utils.process_allgather(batch.tokens.array, tiled=True), dtype=np.int32)
         weights = np.asarray(multihost_utils.process_allgather(batch.loss_weight.array, tiled=True), dtype=np.float32)
+        # Loader padding depends on the physical batch size. It is not part of
+        # the frozen evaluation stream, unlike padding inside a real sequence.
+        count = min(remaining, len(tokens))
+        tokens, weights = tokens[:count], weights[:count]
+        remaining -= count
         tokens_hash.update(tokens.tobytes())
         weights_hash.update(weights.tobytes())
         if not isinstance(batch.attn_mask, AttentionMask):
@@ -50,7 +57,7 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
             if segment_ids is None
             else np.stack(
                 [
-                    np.asarray(multihost_utils.process_allgather(ids.array, tiled=True), dtype=np.int64)
+                    np.asarray(multihost_utils.process_allgather(ids.array, tiled=True), dtype=np.int64)[:count]
                     for ids in segment_ids
                 ],
                 axis=-1,

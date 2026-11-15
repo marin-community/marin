@@ -6,7 +6,6 @@
 import hashlib
 import json
 import os
-import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -23,6 +22,7 @@ from rigging.secrets import require_secret
 
 from experiments.post_training.long_loop.eval_runtime.judge import JudgedEvaluation
 from experiments.post_training.long_loop.launch_validation import validate_launch
+from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.run_spec import resolve_spec, stage_blockers
 from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
 
@@ -88,9 +88,8 @@ def main(
     resolved["active_stage_blockers"] = stage_blockers(resolved, through)
     # Iris ships the validated workspace bundle without Git metadata.
     if get_job_info() is None:
-        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        if revision != resolved["marin_revision"]:
-            resolved["active_stage_blockers"].append("Run spec's Marin revision differs from the checked-out code")
+        require_clean_revision(Path(__file__).resolve().parents[3], resolved["marin_revision"])
+    resolved["runtime_source"] = runtime_source_manifest(Path(__file__).resolve().parents[3], resolved["marin_revision"])
     validation_output.mkdir(parents=True, exist_ok=True)
     plan = validation_output / "resolved-plan.json"
     plan.write_text(json.dumps(resolved, indent=2))

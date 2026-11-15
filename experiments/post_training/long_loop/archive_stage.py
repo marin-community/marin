@@ -46,6 +46,7 @@ from experiments.post_training.long_loop.hf_archive import (
     upload_checkpoint,
     verify_hf_checkpoint,
 )
+from experiments.post_training.long_loop.recipe_bundle import verify_recipe_bundle, write_recipe_bundle
 from experiments.post_training.long_loop.rl_selection import VALIDATION_EMA_WINDOW
 from experiments.post_training.long_loop.sft_accounting import sft_accounting_inputs
 from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
@@ -53,6 +54,7 @@ from vendor.skyrl.marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME
 REQUIRED_CATEGORIES = {"source", "config", "dataset", "timing", "eval_trace", "wandb"}
 INCOMPLETE_HISTORY_EXCEPTION = "wandb.apis.public.runhistory.downloads.IncompleteRunHistoryError"
 EXPORT_ERROR_TAIL_BYTES = 8192
+RUNTIME_WORKSPACE = Path(__file__).resolve().parents[3]
 
 
 def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
@@ -73,6 +75,11 @@ def archive_run(*, output: str, plan: dict, completed_report: str) -> None:
         raise ValueError("Archive plan misstates evaluation completeness")
     if not evaluation["all_verified"] and "evaluation" not in declared_missing:
         raise ValueError("Unscored evaluation attempts must block cleanup")
+    recipe_root = prefix_join(output, "recipe-bundle")
+    recipe_inputs, recipe_receipt = write_recipe_bundle(recipe_root, inputs, plan["runtime_source"], RUNTIME_WORKSPACE)
+    verify_recipe_bundle(recipe_root, recipe_receipt["manifest_sha256"])
+    inputs.extend(recipe_inputs)
+    provenance["recipe_bundle"] = recipe_receipt
     receipt_fs, receipt_key = filesystem_for(prefix_join(output, "hf-checkpoint.json"))
     if receipt_fs.exists(receipt_key):
         receipt = json.loads(receipt_fs.cat_file(receipt_key))
@@ -645,6 +652,7 @@ def derive_archive_plan(
     version = records["rl"]["version"]
     return {
         "inputs": inputs,
+        "runtime_source": resolved_spec["runtime_source"],
         "hf_upload": {
             "source": run.hf_model_uri,
             "repo_id": settings["hf_upload"]["repo_prefix"] + "-" + version,

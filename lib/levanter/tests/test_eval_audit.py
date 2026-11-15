@@ -142,7 +142,7 @@ def test_reference_match_survives_batch_changes_and_rejects_changed_tokens(tmp_p
                 hax.named(jnp.arange(i, i + 8, dtype=jnp.int32), pos),
                 segment_ids=hax.named(jnp.asarray([0, 0, 0, 0, 1, 1, 1, 1]), pos),
             )
-            for i in range(4)
+            for i in range(3)
         ]
         model = ToyLmHeadModel.init(hax.Axis("vocab", 32), ToyLmConfig(), key=jax.random.key(0))
         results = []
@@ -170,7 +170,7 @@ def test_reference_match_survives_batch_changes_and_rejects_changed_tokens(tmp_p
             json.loads(path.read_text()), results[1]["metrics"], results[1]["input_audit"], 1e-5
         )
         assert match["passed"]
-        assert match["input_audit"]["special_token_counts"] == {"7": 4}
+        assert match["input_audit"]["special_token_counts"] == {"7": 3}
         changed_audit = dict(results[1]["input_audit"], tokens_sha256="different-corpus")
         with pytest.raises(ValueError, match="inputs do not match"):
             initial_eval_match(results[0], results[1]["metrics"], changed_audit, 1e-5)
