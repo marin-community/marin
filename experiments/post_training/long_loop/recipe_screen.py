@@ -23,6 +23,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig  # noqa: F401 -- historical optimizer plugin
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.post_training.long_loop.sft_runtime.train import GrugRunConfig, _run_grug_local
 
 SECRET_NAMES = ("CW_KEY_ID", "CW_KEY_SECRET", "WANDB_API_KEY")
@@ -77,6 +78,7 @@ def train_arm(config: GrugRunConfig, runtime: dict) -> None:
                 {
                     "step": step,
                     "checkpoint": checkpoint,
+                    "metadata_digest": digest(metadata),
                     "metadata_sha256": (
                         hashlib.sha256((StoragePath(checkpoint) / "metadata.json").read_bytes()).hexdigest()
                     ),
