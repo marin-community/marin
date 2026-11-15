@@ -759,6 +759,21 @@ terminal pivot preserves frozen next-action replies and its declared NeMo
 string-only scorer; it has no terminal actor. These conversions remain pending
 the applicable census, deduplication, lexical, oracle and SAMPLE receipts.
 
+Terminal-Pivot preserves the source's single-reference keystroke reward. Its
+0.9 `SequenceMatcher` threshold can reject valid alternative command strings:
+in a controlled check on 54 sampled issue tasks, every original gold scored 1,
+while prefixing the same shell commands with a long harmless comment scored 0.
+This check does not execute alternative commands in a terminal. The V3
+SAMPLE-100 result remains BAD: 54 issues among 97 reviewed tasks, with three
+unavailable structured responses. The source-specific user decision permits
+admission with that grader unchanged after the normal execution, decontamination,
+current-pin review and admission requirements pass. Preserve the original BAD
+result and the weak-grader evidence in the source's admission record; the
+quality score does not establish execution qualification. The
+[decision and hashed observations](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-rno2a%2Fmarin%2Frl-data%2Fatlas%2Fingest-a%2F2026.11.15.1%2Fpivot-weak-grader-v1%2Fevidence.json)
+are stored at
+`s3://marin-rno2a/marin/rl-data/atlas/ingest-a/2026.11.15.1/pivot-weak-grader-v1/evidence.json`.
+
 Multi-SWE's image-resident private grading files must be captured before its
 converter runs. Freeze an exact `CaptureInput` image index (the wire models are in
 `datasets/prime_intellect/capture_models.py`) with immutable image digests and

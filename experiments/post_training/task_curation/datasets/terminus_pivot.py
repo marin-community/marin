@@ -83,7 +83,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 task_format=TaskFormat.TASKCOMPENDIUM,
                 notes=(
                     "Frozen next-action replies with the native string-only NeMo scorer. "
-                    "No terminal environment is executed."
+                    "No terminal environment is executed. The 0.9 keystroke-similarity reward can reject valid "
+                    "alternative command strings; adding a harmless shell comment to gold commands changes "
+                    "reward from 1 to 0. Evidence: s3://marin-rno2a/marin/rl-data/atlas/ingest-a/"
+                    "2026.11.15.1/pivot-weak-grader-v1/evidence.json."
                 ),
             ),
             config=CurationRecipe(
