@@ -749,6 +749,49 @@ ArtifactSteps.
 
 ## Pending source intake
 
+Name pending sources explicitly with the driver to run their licensed intake
+pipelines before catalog measurements exist. They remain excluded from default
+selection and Atlas publication:
+
+```bash
+uv run python -m experiments.post_training.task_curation.driver \
+  --source scale-swe-verified --source swe-lego-real-data-verified \
+  --source nemotron-terminal-pivot --mode quick \
+  --output-root /private/atlas-intake-NEW_VERSION --run
+```
+
+`scale-swe-verified` and `swe-lego-real-data-verified` preserve the source images, public setup,
+private patches and original scoring in native Harbor packages. The Nemotron
+terminal pivot preserves frozen next-action replies and its declared NeMo
+string-only scorer; it has no terminal actor. These conversions remain pending
+the applicable census, deduplication, lexical, oracle and SAMPLE receipts.
+
+Prepare the standard lexical population from a completed pending-source QUICK
+run without reconverting its rows:
+
+```bash
+uv run python -m experiments.post_training.task_curation.intake_population \
+  --source scale-swe-verified --quick /private/atlas-intake-NEW_VERSION/scale-swe-verified \
+  --converter-revision CONVERTER_COMMIT --artifact-root /private/atlas-measurements \
+  --artifact-version NEW_VERSION --output population.json --run
+```
+
+The adapter verifies the declaration, manifest and normalization hashes, then
+uses the shared exact-deduplication and public-text writer. Its
+`SourceTextPopulation` record feeds `published_census` and `lexical_scan`.
+Use the full retained-source inventory for document-frequency filtering;
+the newly converted sources alone are a pilot population.
+Build `populations.json` from the current retained catalog's actor-census input
+artifacts, including grandfathered sources, and append each new intake population.
+For each existing source, resolve `actor_census_input.evidence_url` to its census
+artifact and follow `input_artifact` to the `SourceTextPopulation`. Verify the
+source ID, dataset pin, converter version, task count and task-spec hash against
+both records. Freeze the catalog commit and versioned license-ban snapshot with
+the inventory. Account separately for sealed zero-task releases by verifying
+their release parquet hashes and zero row counts. Supply the resulting JSON list
+as `lexical_scan --populations populations.json` and its matching ID list as
+`--source-ids source-ids.json`; retain the provenance and zero-task proofs beside it.
+
 `sources.PENDING_MEASUREMENT_SOURCES` keeps converters awaiting admission
 measurements outside the Atlas catalog. ProofNet-Verified
 (`marcusm117:ProofNet-Verified`, pinned input

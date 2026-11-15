@@ -58,6 +58,15 @@ from lib.taskcompendium.tests.decontamination_fixtures import decontamination_ev
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 
+def test_pending_intake_requires_explicit_selection(monkeypatch):
+    source = source_catalog.PENDING_MEASUREMENT_SOURCES[-1]
+    monkeypatch.setattr(driver, "all_sources", lambda: {})
+    monkeypatch.setattr(driver, "runnable_sources", lambda: {})
+    monkeypatch.setattr(driver, "PENDING_MEASUREMENT_SOURCES", (source,))
+    assert driver._selected_sources((), SourceProcessingMode.QUICK) == {}
+    assert driver._selected_sources((source.name,), SourceProcessingMode.QUICK) == {source.name: source}
+
+
 def math500() -> CurationRecipe:
     recipe = cast(CurationRecipe, next(source.config for source in skyrl_math.sources() if source.name == "math500"))
     return resource_recipe(replace(recipe, source=replace(recipe.source, repo="open-athena/math500-fixture")))

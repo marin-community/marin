@@ -12,6 +12,7 @@ from experiments.post_training.task_curation.datasets import (
     crosscode_python_repair,
     native_releases,
     structure_closure,
+    terminus_pivot,
     thoughtcrime,
 )
 from experiments.post_training.task_curation.datasets.arc import arc
@@ -36,6 +37,7 @@ from experiments.post_training.task_curation.datasets.lexical_measurements impor
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
 from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
+from experiments.post_training.task_curation.datasets.prime_intellect import swe as prime_swe
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
 from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
 from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
@@ -79,7 +81,12 @@ from experiments.post_training.task_curation.source_policy import GRANDFATHERED_
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
-PENDING_MEASUREMENT_SOURCES = (*lean_proofs.sources(), *lean_numina.sources())
+PENDING_MEASUREMENT_SOURCES = (
+    *lean_proofs.sources(),
+    *lean_numina.sources(),
+    *prime_swe.sources(),
+    *terminus_pivot.sources(),
+)
 
 
 def configured_sources() -> list[RlDataSource]:

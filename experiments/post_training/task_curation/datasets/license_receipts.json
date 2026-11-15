@@ -1,1 +1,440 @@
-{}
+{
+  "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified": {
+    "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+    "dataset_id": "PrimeIntellect/Scale-SWE-Verified",
+    "revision": "2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6",
+    "resolved_at": "2026-11-15T17:22:18.267902+00:00",
+    "resolver_version": "atlas-license-v1",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Scale-SWE-Verified/resolve/2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6/README.md",
+        "kind": "dataset_card",
+        "sha256": "2047000abfffc6709f759f3427a6358cffe4ce42c94ab8b1f2237001cbb7835f",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L4: license: cc-by-4.0",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: pretty_name: Scale-SWE-Verified",
+          "L8: tags:",
+          "L9: - software-engineering",
+          "L10: - code",
+          "L11: - swe",
+          "L12: - rl"
+        ],
+        "restrictive_terms": false
+      },
+      {
+        "url": "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/resolve/a7e62ac04ecb2c0a54d736dc46601c5606cf10a6/LICENSE",
+        "kind": "license_file",
+        "sha256": "f2c6c602815669d292889e5be8c802f2ed950653b77999b1584e8e6aed25d040",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L1: MIT License",
+          "L3: Copyright (c) 2023 DeepSeek",
+          "L5: Permission is hereby granted, free of charge, to any person obtaining a copy",
+          "L6: of this software and associated documentation files (the \"Software\"), to deal",
+          "L7: in the Software without restriction, including without limitation the rights",
+          "L8: to use, copy, modify, merge, publish, distribute, sublicense, and/or sell",
+          "L9: copies of the Software, and to permit persons to whom the Software is",
+          "L10: furnished to do so, subject to the following conditions:",
+          "L12: The above copyright notice and this permission notice shall be included in all",
+          "L13: copies or substantial portions of the Software.",
+          "L15: THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR",
+          "L16: IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,"
+        ],
+        "restrictive_terms": false
+      },
+      {
+        "url": "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/resolve/a7e62ac04ecb2c0a54d736dc46601c5606cf10a6/README.md",
+        "kind": "dataset_card",
+        "sha256": "22b9f57e1ece2df27f9de0e71377e19481f7a6892eca8bc23e73fcdffe1d845c",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: license: mit",
+          "L3: library_name: transformers",
+          "L4: base_model:",
+          "L5:   - deepseek-ai/DeepSeek-V3.2-Exp-Base",
+          "L6: base_model_relation: finetune",
+          "L7: ---",
+          "L8: # DeepSeek-V3.2: Efficient Reasoning & Agentic AI",
+          "L10: <!-- markdownlint-disable first-line-h1 -->",
+          "L11: <!-- markdownlint-disable html -->",
+          "L12: <!-- markdownlint-disable no-duplicate-header -->",
+          "L14: <div align=\"center\">"
+        ],
+        "restrictive_terms": false
+      }
+    ],
+    "bundled_third_party": true,
+    "model_generated_outputs": true,
+    "decisions": [
+      {
+        "kind": "bundled_third_party",
+        "approved": true,
+        "who": "User direct ruling license-doubt-standard-dataset-level-20261115.md",
+        "when": "2026-11-15T17:37:13.912033+00:00",
+        "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+        "dataset_id": "PrimeIntellect/Scale-SWE-Verified",
+        "revision": "2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "DeepSeek-V3.2 MIT; dataset CC BY 4.0. User dataset-level ruling accepts underlying OSS repository licenses.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/PrimeIntellect/Scale-SWE-Verified/resolve/2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6/README.md",
+          "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/resolve/a7e62ac04ecb2c0a54d736dc46601c5606cf10a6/LICENSE",
+          "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/resolve/a7e62ac04ecb2c0a54d736dc46601c5606cf10a6/README.md"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      },
+      {
+        "kind": "model_generated_outputs",
+        "approved": true,
+        "who": "User direct ruling license-doubt-standard-dataset-level-20261115.md",
+        "when": "2026-11-15T17:37:13.912253+00:00",
+        "source_id": "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified",
+        "dataset_id": "PrimeIntellect/Scale-SWE-Verified",
+        "revision": "2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "DeepSeek-V3.2 MIT; dataset CC BY 4.0. User dataset-level ruling accepts underlying OSS repository licenses.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/PrimeIntellect/Scale-SWE-Verified/resolve/2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6/README.md",
+          "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/resolve/a7e62ac04ecb2c0a54d736dc46601c5606cf10a6/LICENSE",
+          "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/resolve/a7e62ac04ecb2c0a54d736dc46601c5606cf10a6/README.md"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      }
+    ]
+  },
+  "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified": {
+    "source_id": "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified",
+    "dataset_id": "PrimeIntellect/Multi-SWE-RL-Verified",
+    "revision": "64b3ebf62750b1373e26106cfc658a1861809d0f",
+    "resolved_at": "2026-11-15T17:22:59.403341+00:00",
+    "resolver_version": "atlas-license-v1",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Multi-SWE-RL-Verified/resolve/64b3ebf62750b1373e26106cfc658a1861809d0f/README.md",
+        "kind": "dataset_card",
+        "sha256": "adac6ad9e5b4ff00c73ba51e3932e27e60166821b173d755ece6c6549835908b",
+        "license_ids": [
+          "other"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L4: license: other",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: pretty_name: Multi-SWE-RL-Verified",
+          "L8: license_name: cc0-with-bytedance-notice",
+          "L9: license_link: https://huggingface.co/datasets/ByteDance-Seed/Multi-SWE-RL",
+          "L10: tags:",
+          "L11: - software-engineering",
+          "L12: - code"
+        ],
+        "restrictive_terms": false
+      }
+    ],
+    "bundled_third_party": true,
+    "model_generated_outputs": false,
+    "decisions": [
+      {
+        "kind": "bundled_third_party",
+        "approved": true,
+        "who": "User direct ruling license-doubt-standard-dataset-level-20261115.md",
+        "when": "2026-11-15T17:37:13.914133+00:00",
+        "source_id": "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified",
+        "dataset_id": "PrimeIntellect/Multi-SWE-RL-Verified",
+        "revision": "64b3ebf62750b1373e26106cfc658a1861809d0f",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "User explicitly approves dataset CC0 with ByteDance notice and underlying OSS repository licenses under the dataset-level standard. The other/custom resolver class is a recognized-terms parsing limitation, not unresolved permission.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/PrimeIntellect/Multi-SWE-RL-Verified/resolve/64b3ebf62750b1373e26106cfc658a1861809d0f/README.md"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      },
+      {
+        "kind": "exception",
+        "approved": true,
+        "who": "User direct ruling license-doubt-standard-dataset-level-20261115.md",
+        "when": "2026-11-15T17:37:13.914149+00:00",
+        "source_id": "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified",
+        "dataset_id": "PrimeIntellect/Multi-SWE-RL-Verified",
+        "revision": "64b3ebf62750b1373e26106cfc658a1861809d0f",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "User explicitly approves dataset CC0 with ByteDance notice and underlying OSS repository licenses under the dataset-level standard. The other/custom resolver class is a recognized-terms parsing limitation, not unresolved permission.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/PrimeIntellect/Multi-SWE-RL-Verified/resolve/64b3ebf62750b1373e26106cfc658a1861809d0f/README.md"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      }
+    ]
+  },
+  "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": {
+    "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+    "dataset_id": "PrimeIntellect/SWE-Lego-Real-Data-Verified",
+    "revision": "0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d",
+    "resolved_at": "2026-11-15T17:23:15.030206+00:00",
+    "resolver_version": "atlas-license-v1",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/SWE-Lego-Real-Data-Verified/resolve/0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d/README.md",
+        "kind": "dataset_card",
+        "sha256": "1b9cc85506c4d823df7f72630573ed239f6e0d1d959cb71007faaf8a88d6ad10",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L4: license: apache-2.0",
+          "L5: task_categories:",
+          "L6: - text-generation",
+          "L7: pretty_name: SWE-Lego-Real-Data-Verified",
+          "L8: tags:",
+          "L9: - software-engineering",
+          "L10: - code",
+          "L11: - swe",
+          "L12: - rl"
+        ],
+        "restrictive_terms": false
+      },
+      {
+        "url": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct/resolve/9d90cf8fca1bf7b7acca42d3fc9ae694a2194069/LICENSE",
+        "kind": "license_file",
+        "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e",
+        "license_ids": [
+          "Apache-2.0"
+        ],
+        "quoted_lines": [
+          "L2:                                  Apache License",
+          "L3:                            Version 2.0, January 2004",
+          "L4:                         http://www.apache.org/licenses/",
+          "L6:    TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+          "L8:    1. Definitions.",
+          "L10:       \"License\" shall mean the terms and conditions for use, reproduction,",
+          "L11:       and distribution as defined by Sections 1 through 9 of this document.",
+          "L13:       \"Licensor\" shall mean the copyright owner or entity authorized by",
+          "L14:       the copyright owner that is granting the License.",
+          "L16:       \"Legal Entity\" shall mean the union of the acting entity and all",
+          "L17:       other entities that control, are controlled by, or are under common",
+          "L18:       control with that entity. For the purposes of this definition,"
+        ],
+        "restrictive_terms": false
+      },
+      {
+        "url": "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct/resolve/9d90cf8fca1bf7b7acca42d3fc9ae694a2194069/README.md",
+        "kind": "dataset_card",
+        "sha256": "435afee9137a46ceb1e510fb8d2cef921d69ca1f5f7d5a1d9252ba22ebe21149",
+        "license_ids": [
+          "apache-2.0"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: library_name: transformers",
+          "L3: license: apache-2.0",
+          "L4: license_link: https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct/blob/main/LICENSE",
+          "L5: pipeline_tag: text-generation",
+          "L6: ---",
+          "L8: # Qwen3-Coder-480B-A35B-Instruct",
+          "L9: <a href=\"https://chat.qwen.ai/\" target=\"_blank\" style=\"margin: 2px;\">",
+          "L10:     <img alt=\"Chat\" src=\"https://img.shields.io/badge/%F0%9F%92%9C%EF%B8%8F%20Qwen%20Chat%20-536af5\" style=\"display: inline-block; vertical-align: middle;\"/>",
+          "L11: </a>",
+          "L13: ## Highlights",
+          "L15: Today, we're announcing **Qwen3-Coder**, our most agentic code model to date. **Qwen3-Coder** is available in multiple sizes, but we're excited to introduce its most powerful variant first: **Qwen3-Coder-480B-A35B-Instruct**. featuring the following key enhancements:  "
+        ],
+        "restrictive_terms": false
+      }
+    ],
+    "bundled_third_party": true,
+    "model_generated_outputs": true,
+    "decisions": [
+      {
+        "kind": "bundled_third_party",
+        "approved": true,
+        "who": "User direct ruling license-doubt-standard-dataset-level-20261115.md",
+        "when": "2026-11-15T17:37:13.915263+00:00",
+        "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+        "dataset_id": "PrimeIntellect/SWE-Lego-Real-Data-Verified",
+        "revision": "0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "Dataset Apache-2.0; named Qwen3-Coder-480B-A35B-Instruct teacher Apache-2.0. User dataset-level ruling accepts SWE-rebench underlying OSS repository licenses.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/PrimeIntellect/SWE-Lego-Real-Data-Verified/resolve/0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d/README.md",
+          "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct/resolve/9d90cf8fca1bf7b7acca42d3fc9ae694a2194069/LICENSE",
+          "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct/resolve/9d90cf8fca1bf7b7acca42d3fc9ae694a2194069/README.md"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      },
+      {
+        "kind": "model_generated_outputs",
+        "approved": true,
+        "who": "User direct ruling license-doubt-standard-dataset-level-20261115.md",
+        "when": "2026-11-15T17:37:13.915276+00:00",
+        "source_id": "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+        "dataset_id": "PrimeIntellect/SWE-Lego-Real-Data-Verified",
+        "revision": "0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "Dataset Apache-2.0; named Qwen3-Coder-480B-A35B-Instruct teacher Apache-2.0. User dataset-level ruling accepts SWE-rebench underlying OSS repository licenses.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/PrimeIntellect/SWE-Lego-Real-Data-Verified/resolve/0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d/README.md",
+          "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct/resolve/9d90cf8fca1bf7b7acca42d3fc9ae694a2194069/LICENSE",
+          "https://huggingface.co/Qwen/Qwen3-Coder-480B-A35B-Instruct/resolve/9d90cf8fca1bf7b7acca42d3fc9ae694a2194069/README.md"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      }
+    ]
+  },
+  "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1": {
+    "source_id": "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+    "dataset_id": "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+    "revision": "eaef26944643644c8a3dbbf361ce6128142f5976",
+    "resolved_at": "2026-11-15T17:23:43.303448+00:00",
+    "resolver_version": "atlas-license-v1",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
+        "kind": "dataset_card",
+        "sha256": "fe5aff159810518e5854ef5aba7c3539288a4eb5c76aa70b2af4c660f8eff0a3",
+        "license_ids": [
+          "cc-by-4.0"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: license:",
+          "L3: - cc-by-4.0",
+          "L4: language:",
+          "L5: - en",
+          "L6: task_categories:",
+          "L7: - text-generation",
+          "L8: pretty_name: Nemotron-RL-Agentic-Terminal-Pivot-v1",
+          "L9: tags:",
+          "L10: - text",
+          "L11: - agentic",
+          "L12: - code"
+        ],
+        "restrictive_terms": false
+      },
+      {
+        "url": "https://huggingface.co/zai-org/GLM-5.1/resolve/26e1bd6e011feb778d25ae34b09b07074139d92d/LICENSE",
+        "kind": "license_file",
+        "sha256": "f4a18c6ae40b0a8e7d2b7667f52f6e1994e54a46430d2e172b73cb8c9b5eb0d7",
+        "license_ids": [
+          "MIT"
+        ],
+        "quoted_lines": [
+          "L1: MIT License",
+          "L3: Copyright (c) 2026 Zhipu AI",
+          "L5: Permission is hereby granted, free of charge, to any person obtaining a copy",
+          "L6: of this software and associated documentation files (the \"Software\"), to deal",
+          "L7: in the Software without restriction, including without limitation the rights",
+          "L8: to use, copy, modify, merge, publish, distribute, sublicense, and/or sell",
+          "L9: copies of the Software, and to permit persons to whom the Software is",
+          "L10: furnished to do so, subject to the following conditions:",
+          "L12: The above copyright notice and this permission notice shall be included in all",
+          "L13: copies or substantial portions of the Software.",
+          "L15: THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR",
+          "L16: IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,"
+        ],
+        "restrictive_terms": false
+      },
+      {
+        "url": "https://huggingface.co/zai-org/GLM-5.1/resolve/26e1bd6e011feb778d25ae34b09b07074139d92d/README.md",
+        "kind": "dataset_card",
+        "sha256": "2cb148b732f596716f8c9366edf072e35746de6d06fe69c92301ddb492557077",
+        "license_ids": [
+          "mit"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: language:",
+          "L3: - en",
+          "L4: - zh",
+          "L5: library_name: transformers",
+          "L6: license: mit",
+          "L7: pipeline_tag: text-generation",
+          "L8: ---",
+          "L10: # GLM-5.1",
+          "L12: <div align=\"center\">",
+          "L13: <img src=https://raw.githubusercontent.com/zai-org/GLM-5/refs/heads/main/resources/logo.svg width=\"15%\"/>",
+          "L14: </div>"
+        ],
+        "restrictive_terms": false
+      }
+    ],
+    "bundled_third_party": false,
+    "model_generated_outputs": true,
+    "decisions": [
+      {
+        "kind": "bundled_third_party",
+        "approved": true,
+        "who": "User direct ruling license-doubt-standard-dataset-level-20261115.md",
+        "when": "2026-11-15T17:37:13.916398+00:00",
+        "source_id": "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+        "dataset_id": "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+        "revision": "eaef26944643644c8a3dbbf361ce6128142f5976",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "User explicitly APPROVED CC BY 4.0 dataset, NVIDIA-authored/vendor ATCB content and named GLM-5.1 teacher with primary MIT evidence.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
+          "https://huggingface.co/zai-org/GLM-5.1/resolve/26e1bd6e011feb778d25ae34b09b07074139d92d/LICENSE",
+          "https://huggingface.co/zai-org/GLM-5.1/resolve/26e1bd6e011feb778d25ae34b09b07074139d92d/README.md"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      },
+      {
+        "kind": "model_generated_outputs",
+        "approved": true,
+        "who": "User direct ruling license-doubt-standard-dataset-level-20261115.md",
+        "when": "2026-11-15T17:37:13.916411+00:00",
+        "source_id": "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+        "dataset_id": "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+        "revision": "eaef26944643644c8a3dbbf361ce6128142f5976",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "User explicitly APPROVED CC BY 4.0 dataset, NVIDIA-authored/vendor ATCB content and named GLM-5.1 teacher with primary MIT evidence.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
+          "https://huggingface.co/zai-org/GLM-5.1/resolve/26e1bd6e011feb778d25ae34b09b07074139d92d/LICENSE",
+          "https://huggingface.co/zai-org/GLM-5.1/resolve/26e1bd6e011feb778d25ae34b09b07074139d92d/README.md"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      }
+    ]
+  }
+}
