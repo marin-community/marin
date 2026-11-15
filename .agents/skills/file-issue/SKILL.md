@@ -8,8 +8,8 @@ description: File a GitHub issue only when explicitly requested or delegated by 
 Before drafting, read `AGENTS.md` and:
 
 - `docs/dev-guide/writing-style/index.md`
+- `docs/dev-guide/writing-style/drafting.md`
 - `docs/dev-guide/writing-style/issues.md`
-- `docs/dev-guide/writing-style/ai-writing-donts.md`
 
 ## Issue Kinds and Body Structure
 

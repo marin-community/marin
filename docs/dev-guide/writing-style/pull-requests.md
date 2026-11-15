@@ -80,7 +80,7 @@ Before committing or calling `gh pr create` or `gh pr edit`:
 2. Count the title characters. Inspect the body length as a signal, not a gate:
    shorten text that narrates the diff, but retain evidence and caveats a future
    reader needs.
-3. Apply [ai-writing-donts.md](ai-writing-donts.md). Delete every sentence that
+3. Apply the [prose review](review-prose.md). Delete every sentence that
    does not add behavior, motivation, evidence, a caveat, or an issue link.
 4. Check that the title, opening sentence, and issue link agree with the actual
    branch scope.
