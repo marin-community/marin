@@ -767,6 +767,8 @@ def initialize_snowball_sft(
         loaded.params,
         (loaded.params.stacked_blocks.stacked.shared,),
     )
+    # Checkpoint storage dtype can differ from the requested fresh-training policy.
+    params = config.trainer.mp.cast_to_param(params)
     params = reseed_lm_head(params, config.special_token_ids, config.anchor_token_ids)
     return dataclasses.replace(loaded, params=params, ema_params=params if state.ema_params is not None else None)
 
