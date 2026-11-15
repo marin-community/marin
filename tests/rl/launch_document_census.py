@@ -58,6 +58,7 @@ def _mochi_step(artifact_root: Path, resume: bool) -> ArtifactStep[SkyRLRun]:
         else None
     )
     return mochi.build_run(
+        profile=mochi.PROFILES["one-rack"],
         name="checkpoints/mochi-census",
         version=VERSION,
         model=ArtifactHfModel(model, "Qwen/Qwen2.5-0.5B-Instruct", "pinned", relative_path=""),
