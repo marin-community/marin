@@ -202,8 +202,9 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
-The [Mochi three-rack example](../recipes/mochi-rl.md#262k-three-rack-example)
-uses 64 trainer GPUs and two 64-GPU inference replicas in separate NVLink domains.
+The [Mochi three-rack profile](../recipes/mochi-rl.md#262k-three-rack-example)
+uses `experiments.post_training.mochi_rl.launch --profile three-rack`,
+with 64 trainer GPUs and two 64-GPU inference replicas in separate NVLink domains.
 Its context window is 262,144 tokens with an 8,192-token response default.
 It uses completed SFT exports or native RL checkpoints and submits no SFT job.
 The [draft PR](https://github.com/marin-community/marin/pull/11353) records the

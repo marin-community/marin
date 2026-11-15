@@ -1,9 +1,11 @@
-# Run Mochi RL at 65K context
+# Run Mochi RL with named profiles
 
 `experiments.post_training.mochi_rl.launch` starts RL directly from a completed
 schema-3 BF16 SFT export, or continues a native RL checkpoint. It constructs one
 training artifact. The context limit is 65,536 attended tokens across the prompt,
 responses and tool observations; masked padding does not count.
+Select `--profile one-rack` for this layout, or
+[`--profile three-rack`](#262k-three-rack-example) for 262K. Both use the same builder and CLI.
 
 The allocation is 15 four-GPU GB200 hosts in `cw-us-east-08a`, at production
 priority: 48 trainer GPUs with TP1/PP12/CP4/EP4 and one 12-GPU inference engine
@@ -117,8 +119,8 @@ source and the CPU checks; those checks do not qualify other layouts.
 
 ## 262K three-rack example
 
-`experiments.post_training.mochi_three_rack`
-([draft #11353](https://github.com/marin-community/marin/pull/11353)) uses the same recipe at a
+`--profile three-rack`
+([draft #11353](https://github.com/marin-community/marin/pull/11353)) uses the same launcher and recipe at a
 262,144-token context window. It requests 64 trainer GPUs at TP1/PP16/CP4/EP4
 and two 64-GPU inference replicas at TP1/PP1/DP64/EP64. Mandatory NVLink placement
 keeps these three roles in separate domains. The trainer retains activation
@@ -135,18 +137,19 @@ DATA_SHA256='<train.parquet-sha256>'
 THREE_RACK_VERSION='<new-three-rack-version>'
 THREE_RACK_RESUME_VERSION='<new-three-rack-continuation-version>'
 NATIVE_262K='<completed-TP1-PP16-CP4-EP4-checkpoint-directory>'
-THREE_RACK=(--model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
-            --input-version "$INPUT_VERSION" --data-root "$TASKS" --data-sha256 "$DATA_SHA256")
-uv run python -m experiments.post_training.mochi_three_rack "${THREE_RACK[@]}" \
-  --version "$THREE_RACK_VERSION" --updates 2 --config-output mochi-262k.yaml
-uv run python -m experiments.post_training.mochi_three_rack "${THREE_RACK[@]}" \
-  --version "$THREE_RACK_RESUME_VERSION" --updates 2 --resume-uri "$NATIVE_262K" \
+THREE_RACK=(--profile three-rack --model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
+            --input-version "$INPUT_VERSION" --data-uri "$TASKS" --data-sha256 "$DATA_SHA256")
+uv run python -m experiments.post_training.mochi_rl.launch "${THREE_RACK[@]}" \
+  --version "$THREE_RACK_VERSION" --max-steps 2 --config-output mochi-262k.yaml
+uv run python -m experiments.post_training.mochi_rl.launch "${THREE_RACK[@]}" \
+  --version "$THREE_RACK_RESUME_VERSION" --max-steps 7 --resume-uri "$NATIVE_262K" \
   --config-output mochi-262k-resume.yaml
 ```
 
 Use a completed native checkpoint with matching TP1/PP16/CP4/EP4 geometry for
-`NATIVE_262K`. Here `--updates` counts additional updates: checkpoint 5 with two
-updates sets the final target to 7. Repeat the same version and command after
+`NATIVE_262K`. Both profiles use absolute `--max-steps`: checkpoint 5 with
+`--max-steps 7` requests two further updates. This replaces the former three-rack
+`--updates 2` command without changing its target. Repeat the same version and command after
 interruption to recover this continuation's progress. Add `--run` only after
 checking the configurations and retained inputs. Responses default to 8,192
 tokens; `--max-new-tokens 1024` retains the short-smoke option.

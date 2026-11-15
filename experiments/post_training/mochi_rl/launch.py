@@ -34,7 +34,7 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath
-from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
+from skyrlrecipe import ContextBudget, RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import CheckpointCallback
 from skyrlrecipe.locality import RoleTopologyMode
 
@@ -93,7 +93,64 @@ class MochiProfile:
     checkpoint_at_target: bool = False
 
 
-PROFILES = MappingProxyType({"one-rack": MochiProfile("checkpoints/mochi-rl-65k", ROLE_PLAN, MEGATRON, EXECUTION)})
+PROFILES = MappingProxyType(
+    {
+        "one-rack": MochiProfile("checkpoints/mochi-rl-65k", ROLE_PLAN, MEGATRON, EXECUTION),
+        "three-rack": MochiProfile(
+            name="checkpoints/mochi-three-rack",
+            role_plan=replace(
+                ROLE_PLAN,
+                policy_num_nodes=16,
+                num_inference_engines=2,
+                inference_engine_data_parallel_size=64,
+                inference_engine_expert_parallel_size=64,
+            ),
+            megatron=replace(MEGATRON, pipeline_model_parallel_size=16),
+            execution=replace(EXECUTION, job_timeout_seconds=6 * 3600),
+            data_namespace="documents/mochi-three-rack",
+            checkpoint_at_target=True,
+            patch=RecipePatch(
+                context_budget=ContextBudget(request_window_tokens=262144, max_new_tokens_per_turn=8192, max_turns=4),
+                trainer=sections.Trainer(
+                    project_name="mochi-three-rack",
+                    policy=sections.Policy(
+                        nccl_buffer_size_bytes=262144,
+                        megatron_config=sections.PolicyMegatronConfig(
+                            transformer_config_kwargs={
+                                "bias_activation_fusion": True,
+                                "grug_checkpoint_cpu_offload": True,
+                            }
+                        ),
+                    ),
+                    ref=sections.Ref(
+                        nccl_buffer_size_bytes=262144,
+                        megatron_config=sections.RefMegatronConfig(
+                            transformer_config_kwargs={
+                                "bias_activation_fusion": True,
+                                "grug_checkpoint_cpu_offload": True,
+                            }
+                        ),
+                    ),
+                ),
+                generator=sections.Generator(
+                    expert_block_sync=sections.ExpertBlockSync(verify=True, timeout_seconds=1800),
+                    # The 0.75 KV budget missed the full-context startup requirement by 0.47 GiB.
+                    gpu_memory_utilization=0.80,
+                    trajectory_retention=sections.TrajectoryRetention(
+                        max_bytes_per_step=256 * 1024**2, max_bytes_per_run=1024**3
+                    ),
+                ),
+                extra_env={
+                    "NCCL_NET": "IB",
+                    "NCCL_IB_DISABLE": "0",
+                    "NCCL_IB_HCA": "ibp",
+                    "NCCL_DEBUG": "INFO",
+                    "NCCL_DEBUG_SUBSYS": "INIT,NET",
+                },
+            ),
+        ),
+    }
+)
 
 
 def build_run(
