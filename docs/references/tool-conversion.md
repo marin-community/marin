@@ -53,6 +53,11 @@ omitted IDs, exported messages use deterministic positional IDs.
 
 ## Run a pinned selection
 
+The CLI bootstraps CoreWeave S3 credentials for TensorStore and requires a
+configured CoreWeave account, including when the selection/tokenizer files are
+local. This entry point targets regional CoreWeave caches; it is not a generic
+GCS launcher.
+
 Input shards are Levanter TreeStores with an `input_ids` field containing
 complete serialized conversation rows. The input JSON contains
 `tokenizer_sha256` and a `sources` list. Each entry has
@@ -92,6 +97,6 @@ status alone does not establish that calls changed. The overlay replaces accepte
 input, apply each replacement once, then rerun the consumer's quality and mask
 checks. `mapping_unresolved` records preserve the original locator for residual
 processing; `dropped_no_equivalent` is a proposed exclusion. Skipped sources and
-`tool_free`/`previously_processed` rows receive no replacement. This runner
+`tool_free`/`real_tools_only` rows receive no replacement. This runner
 never edits or deletes the input dataset. Corpus counts by tool overlap; exact document counts must come
 from the row dispositions rather than summing per-tool counts.

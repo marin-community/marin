@@ -11,7 +11,7 @@ import tarfile
 import numpy as np
 import pytest
 from marin.datakit.tool_conversion.archive import archive_bytes, commit_batch, read_json, write_immutable
-from marin.datakit.tool_conversion.convert import Disposition, convert_trace
+from marin.datakit.tool_conversion.convert import Disposition, convert_trace, parse_trace
 from marin.datakit.tool_conversion.export import digest, export_conversion
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
@@ -76,7 +76,7 @@ def test_python_stdout_command_executes_exact_quoted_code(tmp_path):
         ("plain", "<|start_header_id|>assistant<|end_header_id|>hello<|eot_id|>", Disposition.NO_CALLS),
         (
             "agenttrove",
-            '<|start_header_id|>assistant<|end_header_id|>{"commands":[{"keystrokes":"ls"}]}<|eot_id|>',
+            "excluded even without terminal syntax",
             Disposition.EXCLUDED,
         ),
     ],
@@ -122,6 +122,18 @@ def test_think_becomes_reasoning_and_archives_acknowledgement():
     assert not result.messages[2]["tool_calls"]
     assert result.changes[0].removed_acknowledgement == 3
     assert not any(m["role"] == "tool" for m in result.messages)
+
+
+def test_think_reasoning_precedes_existing_visible_content():
+    original = trace(
+        [{"name": "think", "arguments": {"thought": "Check the sign."}}], ["Your thought has been logged."], name="think"
+    ).replace("<tool_call>", "Let me think.<tool_call>")
+    result = convert_trace("swe", original, "think-prefix")
+    assert result.disposition == Disposition.VERIFIED
+    body = parse_trace(result.text)[1][2].body.strip()
+    message = result.messages[2]
+    assert body == "<|start_think|>" + message["reasoning_content"] + "<|end_think|>" + message["content"].strip()
+    assert message["content"].strip() == "Let me think."
 
 
 def test_final_finish_and_submit_become_native_completion():

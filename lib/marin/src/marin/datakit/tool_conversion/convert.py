@@ -70,12 +70,12 @@ BASH_TOOL = {
 
 
 class Disposition(StrEnum):
-    EXCLUDED = "excluded"
-    NO_CALLS = "no_calls"
-    UNCHANGED = "real_tools_unchanged"
-    VERIFIED = "verified"
-    RESIDUAL = "residual"
-    DROP = "drop"
+    EXCLUDED = "out_of_scope"
+    NO_CALLS = "tool_free"
+    UNCHANGED = "real_tools_only"
+    VERIFIED = "rule_converted_adapter_checked"
+    RESIDUAL = "mapping_unresolved"
+    DROP = "dropped_no_equivalent"
 
 
 @dataclass
@@ -110,7 +110,11 @@ class Conversion:
 
 def excluded_source(source: str) -> bool:
     parts = source.lower().split("/")
-    return "nemotron" in source.lower() and any(p in {"interactive_agent", "tool_calling"} for p in parts)
+    return (
+        "terminus" in source.lower()
+        or source == "agenttrove"
+        or ("nemotron" in source.lower() and any(p in {"interactive_agent", "tool_calling"} for p in parts))
+    )
 
 
 def parse_trace(text: str) -> tuple[str, list[Turn]]:
@@ -221,9 +225,7 @@ def convert_trace(source: str, text: str, identity: str) -> Conversion:
     of historical results. No input program is executed by this function.
     """
     if excluded_source(source):
-        return Conversion(Disposition.EXCLUDED, "dropped source", text)
-    if "terminus" in source.lower():
-        return Conversion(Disposition.EXCLUDED, "Terminus protocol", text)
+        return Conversion(Disposition.EXCLUDED, "excluded dataset source", text)
     try:
         return _convert(text, identity)
     except (ValueError, KeyError, TypeError, SyntaxError, jsonschema.ValidationError) as error:
@@ -259,6 +261,7 @@ def _convert(text: str, identity: str) -> Conversion:
     mappings = {}
     removed_results = set()
     kernel_started = False
+    reasoning_prefixes = {}
     result_ids = {}
     if len(names & KERNEL_ARGUMENTS.keys()) > 1:
         raise ValueError("Multiple notebook tools may own separate sessions")
@@ -357,7 +360,11 @@ def _convert(text: str, identity: str) -> Conversion:
                         raise ValueError("Completion carries environment effects or substantive result")
                     if result:
                         raise ValueError("Completion result must be retained outside assistant completion")
-                edits.setdefault(i, []).append((match.start(), match.end(), replacement))
+                if name == "think":
+                    reasoning_prefixes[i] = replacement
+                    edits.setdefault(i, []).append((match.start(), match.end(), ""))
+                else:
+                    edits.setdefault(i, []).append((match.start(), match.end(), replacement))
                 if observation is not None:
                     removed_results.add(observation)
                 changes.append(Change(i, k, call, None, replacement, observation))
@@ -380,6 +387,10 @@ def _convert(text: str, identity: str) -> Conversion:
             mappings[(i, k)] = mapped
     for i, replacements in edits.items():
         turns[i].body = _replace(turns[i].body, replacements)
+        if i in reasoning_prefixes:
+            body = turns[i].body
+            leading = len(body) - len(body.lstrip())
+            turns[i].body = body[:leading] + reasoning_prefixes[i] + body[leading:]
     used = {c["name"] for c in mappings.values() if c is not None}
     tools = _rewrite_declarations(turns, used, definitions, {change.before["name"] for change in changes}, rules)
     output = prefix + "".join(t.header + t.body + t.ending for i, t in enumerate(turns) if i not in removed_results)
@@ -437,6 +448,8 @@ def _structured_turns(
         if turn.role == "assistant":
             matches = visible_calls(turn.body)
             reasoning = THOUGHT.findall(turn.body)
+            if reasoning and (len(reasoning) != 1 or not turn.body.lstrip().startswith("<|start_think|>")):
+                raise ValueError("Reasoning must precede assistant content")
             content = CALL.sub("", THOUGHT.sub("", turn.body))
             actions = [json.loads(m[1]) for m in matches]
             message.update(

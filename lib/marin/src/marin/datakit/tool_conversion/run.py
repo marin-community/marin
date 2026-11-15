@@ -66,10 +66,10 @@ def convert_record(
         "input_ids_sha256": digest(ids.tobytes()),
         "tokens": len(ids),
     }
-    if excluded_source(row["source"]) or "terminus" in row["source"].lower() or row["source"] == "agenttrove":
-        return {**item, "status": "out_of_scope", "reason": "dropped source or Terminus"}, {}
+    if excluded_source(row["source"]):
+        return {**item, "status": Disposition.EXCLUDED, "reason": "dropped source or Terminus"}, {}
     if not has_native_calls(ids):
-        return {**item, "status": "tool_free"}, {}
+        return {**item, "status": Disposition.NO_CALLS}, {}
     text = tokenizer.decode(ids.tolist(), skip_special_tokens=False)
     item["text_sha256"] = digest(text.encode())
     converted = convert_trace(row["source"], text, identity)
@@ -85,7 +85,6 @@ def convert_record(
         )
     except (ValueError, KeyError, TypeError) as error:
         item["tool_parse_error"] = str(error)
-    item["disposition"] = converted.disposition
     files = {}
     record_prefix = f"{name}/run/records/{identity}/"
     if converted.disposition == Disposition.VERIFIED:
@@ -93,7 +92,6 @@ def convert_record(
             exported = export_conversion(converted, tokenizer, tokenizer_sha)
         except ValueError as error:
             converted = Conversion(Disposition.RESIDUAL, str(error), text)
-            item["disposition"] = converted.disposition
         else:
             source_name = f"{name}/sources/{identity}/source.json"
             source = {**item, "text": text}
@@ -107,7 +105,7 @@ def convert_record(
             for filename, content in exported.files.items():
                 files[record_prefix + "export/" + filename] = content
             result = {
-                "status": "rule_converted_adapter_checked",
+                "status": Disposition.VERIFIED,
                 "rule_version": "deterministic-v1",
                 "rule_ids": converted.rules,
                 "verification": {
@@ -123,14 +121,7 @@ def convert_record(
             }
             files[record_prefix + "result.json"] = json_bytes(result)
             return {**item, **result}, files
-    statuses = {
-        Disposition.NO_CALLS: "tool_free",
-        Disposition.EXCLUDED: "out_of_scope",
-        Disposition.UNCHANGED: "previously_processed",
-        Disposition.DROP: "dropped_no_equivalent",
-        Disposition.RESIDUAL: "mapping_unresolved",
-    }
-    return {**item, "status": statuses[converted.disposition], "reason": converted.reason}, files
+    return {**item, "status": converted.disposition, "reason": converted.reason}, files
 
 
 def run(
@@ -175,8 +166,8 @@ def run(
     started = time.monotonic()
     for shard_index in range(shard_start, min(shard_stop, len(selection["sources"]))):
         shard = selection["sources"][shard_index]
-        if excluded_source(shard["source"]) or "terminus" in shard["source"].lower() or shard["source"] == "agenttrove":
-            counts["out_of_scope"] += shard["expected_rows"]
+        if excluded_source(shard["source"]):
+            counts[Disposition.EXCLUDED] += shard["expected_rows"]
             continue
         store = TreeStore.open(
             {"input_ids": np.zeros(0, dtype=np.int32)}, shard["input_path"], mode="r", cache_metadata=True
@@ -284,6 +275,7 @@ def main() -> None:
         ("<|start_header_id|>", HEADER_ID),
         ("<|end_header_id|>", HEADER_END_ID),
         ("<tool_call>", CALL_ID),
+        ("assistant", ASSISTANT_ID),
     ]:
         if tokenizer.token_to_id(token) != expected:
             raise ValueError("Unexpected tokenizer special tokens")
