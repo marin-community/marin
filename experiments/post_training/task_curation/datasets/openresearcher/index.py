@@ -125,7 +125,8 @@ def build_index(config: IndexConfig) -> BM25Index:
     subprocess.run(
         [
             config.runtime_python,
-            str(Path(__file__).with_name("verify_index.py")),
+            "-m",
+            "experiments.post_training.task_curation.datasets.openresearcher.verify_index",
             "--index",
             str(index),
             "--database",

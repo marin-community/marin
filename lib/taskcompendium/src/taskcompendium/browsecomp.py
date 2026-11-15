@@ -3,6 +3,8 @@
 
 """The pinned offline BrowseComp-Plus BM25 action interface."""
 
+from typing import Protocol
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from taskcompendium.models import FunctionDefinition, ProviderRequirement
@@ -31,7 +33,18 @@ def browsecomp_state(requirement: ProviderRequirement) -> BrowseCompState:
     return BrowseCompState.model_validate(requirement.initial_state)
 
 
-def browsecomp_tools(state: BrowseCompState) -> tuple[FunctionDefinition, ...]:
+class OfflineSearchSettings(Protocol):
+    @property
+    def top_k(self) -> int: ...
+
+    @property
+    def snippet_max_tokens(self) -> int: ...
+
+    @property
+    def include_get_document(self) -> bool: ...
+
+
+def browsecomp_tools(state: OfflineSearchSettings) -> tuple[FunctionDefinition, ...]:
     search = FunctionDefinition(
         name="search",
         description=f"Perform a search on a knowledge source. Returns top-{state.top_k} hits with docid, score, "

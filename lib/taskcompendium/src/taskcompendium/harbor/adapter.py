@@ -21,6 +21,7 @@ from taskcompendium.models import (
     TaskResource,
     TaskSpec,
 )
+from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE, openresearcher_state
 from taskcompendium.repository_shell import SHELL_ACTION_INTERFACE, SHELL_TOOL, repository_shell_environment
 from taskcompendium.runtime.resources import resource_bytes
 from taskcompendium.submission import conversation_messages
@@ -75,6 +76,10 @@ def unsupported_harbor_contract(task: TaskSpec) -> str | None:
         for requirement in task.environment_requirements.tool_providers.values():
             if requirement.action_interface == BROWSECOMP_ACTION_INTERFACE:
                 tools = browsecomp_tools(browsecomp_state(requirement))
+                if task.tool_bindings or task.interaction_tools != tools:
+                    return "task_spec_provider_contract_invalid"
+            elif requirement.action_interface == OPENRESEARCHER_ACTION_INTERFACE:
+                tools = browsecomp_tools(openresearcher_state(requirement))
                 if task.tool_bindings or task.interaction_tools != tools:
                     return "task_spec_provider_contract_invalid"
             elif requirement.action_interface != SHELL_ACTION_INTERFACE:

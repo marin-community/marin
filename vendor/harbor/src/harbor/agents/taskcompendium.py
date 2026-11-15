@@ -13,7 +13,7 @@ from openai import AsyncOpenAI
 from rolloutengine.chat import ChatModel
 from rolloutengine.harness.shell import ShellHarness, task_prompt
 from rolloutengine.harness.repository_shell import RepositoryShellProvider
-from rolloutengine.harness.browsecomp import BrowseCompProvider
+from rolloutengine.harness.browsecomp import BrowseCompProvider, OpenResearcherProvider
 from rolloutengine.models import (
     ModelRequest,
     ModelTurn,
@@ -43,6 +43,7 @@ from taskcompendium.runtime.oracle import (
 from taskcompendium.runtime.shell import upload_resources
 from taskcompendium.repository_shell import SHELL_ACTION_INTERFACE
 from taskcompendium.browsecomp import BROWSECOMP_ACTION_INTERFACE
+from taskcompendium.openresearcher import OPENRESEARCHER_ACTION_INTERFACE
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
@@ -147,6 +148,7 @@ class TaskSpecChatAgent(TaskSpecAgent):
                     tools={
                         SHELL_ACTION_INTERFACE: RepositoryShellProvider(command_timeout=None),
                         BROWSECOMP_ACTION_INTERFACE: BrowseCompProvider(command_timeout=None),
+                        OPENRESEARCHER_ACTION_INTERFACE: OpenResearcherProvider(command_timeout=None),
                     },
                 ),
                 task,
