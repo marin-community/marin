@@ -158,8 +158,8 @@ interruption to recover the latest completed checkpoint of this continuation. Ad
 checking the configurations and retained inputs. Responses default to 8,192
 tokens; `--max-new-tokens 1024` retains the short-smoke option.
 This profile saves checkpoints at the target step and at normal training end.
-An interruption before a new checkpoint completes restarts from the supplied
-checkpoint, or from SFT for a fresh run. The GPU job limit is six hours, with a
+An interruption before the target can leave no completed checkpoint in this
+version. Recovery then uses the supplied checkpoint, or SFT for a fresh run. The GPU job limit is six hours, with a
 72-hour coordinator limit for queueing and setup. `--job-timeout-hours` also
 applies to this profile.
 
