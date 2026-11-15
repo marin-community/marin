@@ -19,6 +19,7 @@ import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import load_model_config
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -47,7 +48,7 @@ MODEL = "Qwen/Qwen3-30B-A3B-Instruct-2507"
 MODEL_REVISION = "0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe"
 API_MODEL = "openresearcher-grounding-qwen3-30b-a3b"
 MODEL_CONFIG = Path(__file__).with_name("grounding-model.yaml")
-WORKER_TRANSPORT_ENV = {"MARIN_TEMP_PREFIX": "s3://marin-us-east-02a", "HF_HUB_DISABLE_XET": "1"}
+WORKER_TRANSPORT_ENV = {"MARIN_TEMP_PREFIX": "s3://marin-us-east-02a"}
 
 
 class GroundedQuestions(Artifact):
@@ -202,6 +203,7 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
             "accelerator": {"type": "H100", "count": 1},
             "priority": "batch",
             "worker_transport_environment": WORKER_TRANSPORT_ENV,
+            "worker_hf_hub_disable_xet": load_model_config(MODEL_CONFIG).serve.hf_hub_disable_xet,
         }
         (output / "backend-identity.json").write_text(json.dumps(identity, indent=2))
         decisions = asyncio.run(grounded_rows(config, rows, connection, tokenizer, output))
