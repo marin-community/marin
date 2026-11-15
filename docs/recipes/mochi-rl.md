@@ -135,7 +135,9 @@ Check out the head of #11353 for this profile; it includes the one-rack launcher
 and the same pinned prerequisites.
 
 The input is a completed BF16 SFT export; no SFT job is built. Select retained
-model, tokenizer and mixed-task inputs as above. Supply the SHA-256 of `train.parquet` from its artifact manifest, or compute
+model and tokenizer inputs as above. This profile accepts one task artifact
+and requires its file's SHA-256; repeated `--data-uri` is available only without
+a checksum in the one-rack profile. Supply the SHA-256 of `train.parquet` from its artifact manifest, or compute
 it from that exact immutable file before running the command. The launcher checks
 it before submitting training. These
 commands only render configurations:
@@ -147,9 +149,9 @@ THREE_RACK_RESUME_VERSION='<new-three-rack-continuation-version>'
 NATIVE_262K='<completed-TP1-PP16-CP4-EP4-checkpoints>/global_step_5'
 THREE_RACK=(--profile three-rack --model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
             --input-version "$INPUT_VERSION" --data-uri "$TASKS" --data-sha256 "$DATA_SHA256")
-uv run python -m experiments.post_training.mochi_rl.launch "${THREE_RACK[@]}" \
+"${LAUNCH[@]}" "${THREE_RACK[@]}" \
   --version "$THREE_RACK_VERSION" --max-steps 2 --config-output mochi-262k.yaml
-uv run python -m experiments.post_training.mochi_rl.launch "${THREE_RACK[@]}" \
+"${LAUNCH[@]}" "${THREE_RACK[@]}" \
   --version "$THREE_RACK_RESUME_VERSION" --max-steps 7 --resume-uri "$NATIVE_262K" \
   --config-output mochi-262k-resume.yaml
 ```
@@ -176,8 +178,9 @@ completed versions.
 
 [#11353](https://github.com/marin-community/marin/pull/11353) records the older
 three-rack GPU proof, which used TE 2.19/FA2 and a 1,024-token response cap.
-It established near-262K backward and native continuation. Its later nonzero
-gradient proof was an offline replay. The aligned FA4/TE 2.21 example and its
+It established near-262K backward and native continuation with zero gradients.
+The later nonzero-gradient proof was an offline replay of older samples.
+The aligned FA4/TE 2.21 example and its
 8,192-token response default have CPU validation only. Fresh on-policy learning
 at these settings remains unverified. Endurance, task/batch tuning and performance experiments remain outside this
 launcher refactor.
