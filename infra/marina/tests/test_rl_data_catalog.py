@@ -86,7 +86,7 @@ from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
 from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
-from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements
+from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements, read_measurements
 from infra.marina.apps.rl_data_catalog.load_identity import load_identity
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
 from infra.marina.apps.rl_data_catalog.release_curriculum import check_curriculum_document
@@ -1587,6 +1587,29 @@ def test_historical_curriculum_alias_keeps_counts_samples_and_pagination(catalog
             assert detail["source_id"] == current and detail["task_preview"]
 
 
+def test_difficulty_archive_reader_excludes_finestore_metadata(tmp_path):
+    declaration = with_declaration_admission_census(contamination_declarations()[0][1])
+    measurement = difficulty_measurement(declaration, Solver.SMALL)
+    archive = str(tmp_path / "difficulty")
+    with DataStore.open(archive) as store:
+        register_difficulty(store)
+        with store.transaction() as transaction:
+            transaction.table(MEASUREMENTS).add(measurement.model_dump(mode="json"))
+
+    assert read_measurements(ReadView(archive)) == [measurement]
+
+
+def test_difficulty_loader_accepts_existing_measurement_without_blocked_count():
+    declaration = with_declaration_admission_census(contamination_declarations()[0][1])
+    measurement = difficulty_measurement(declaration, Solver.SMALL)
+    stored = measurement.model_dump(mode="json", exclude={"blocked_tasks"})
+
+    def query(sql: str, _parameters: dict[str, Any]) -> dict[str, Any]:
+        return {"rows": [{"measurement": stored}]} if sql.lstrip().startswith("SELECT") else {"row_count": 0}
+
+    assert load_measurements([measurement], query) == {"inserted": 0, "records": 1}
+
+
 @pytest.mark.parametrize("changed_input", ["release", "population"])
 def test_difficulty_archive_load_and_source_pin_change_preserve_history(
     catalog_database, catalog_query, tmp_path, changed_input
@@ -1603,10 +1626,7 @@ def test_difficulty_archive_load_and_source_pin_change_preserve_history(
         with store.transaction() as transaction:
             transaction.table(MEASUREMENTS).add(measurement.model_dump(mode="json"))
             transaction.table(MEASUREMENTS).add(older.model_dump(mode="json"))
-    records = [
-        DifficultyMeasurement.model_validate(row)
-        for row in ReadView(archive).iter_rows(MEASUREMENTS, columns=list(DifficultyMeasurement.model_fields))
-    ]
+    records = read_measurements(ReadView(archive))
     assert {record.measurement_id for record in records} == {measurement.measurement_id, older.measurement_id}
     assert load_measurements(records, catalog_query)["inserted"] == 2
     assert load_measurements(records, catalog_query)["inserted"] == 0

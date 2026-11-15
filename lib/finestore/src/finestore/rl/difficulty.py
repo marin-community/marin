@@ -75,6 +75,7 @@ SOLVER_THINKING = PROTOCOLS[PROTOCOL_ID].thinking
 class MeasurementStatus(StrEnum):
     MEASURED = "measured"
     PENDING = "pending"
+    BLOCKED = "blocked"
     NOT_MEASURED = "not_measured"
 
 
@@ -190,6 +191,7 @@ class DifficultyObservation(CatalogRecord):
     wilson_95: ConfidenceInterval | None
     infrastructure_attempts: int = Field(ge=0)
     pending_tasks: int = Field(ge=0)
+    blocked_tasks: int = Field(default=0, ge=0)
     attempts_receipt: ContentEvidenceReference | None
     gpu_hours: float = Field(ge=0)
     input_tokens: int = Field(ge=0)
@@ -230,12 +232,20 @@ class DifficultyObservation(CatalogRecord):
             self.sample.converter_version,
         ):
             raise ValueError("Measurement and sample identify different source contracts")
-        if self.n + self.pending_tasks != min(100, self.sample.population_count):
-            raise ValueError("Every selected task must be scored or pending")
+        if self.n + self.pending_tasks + self.blocked_tasks != min(100, self.sample.population_count):
+            raise ValueError("Every selected task must be scored, pending or blocked")
         if self.status == MeasurementStatus.MEASURED and (
-            self.pending_tasks or self.n == 0 or self.attempts_receipt is None or self.wilson_95 is None
+            self.pending_tasks
+            or self.blocked_tasks
+            or self.n == 0
+            or self.attempts_receipt is None
+            or self.wilson_95 is None
         ):
             raise ValueError("Measured results require complete scored coverage and attempt evidence")
+        if self.status == MeasurementStatus.BLOCKED and (
+            self.pending_tasks or not self.blocked_tasks or not self.reason
+        ):
+            raise ValueError("Blocked results require a reason, blocked tasks and no retryable pending tasks")
         if self.wilson_95 is not None:
             low, high = self.wilson_95.low, self.wilson_95.high
             if not self.n or not 0 <= low <= self.solved / self.n <= high <= 1:
@@ -253,6 +263,7 @@ class AttemptStatus(StrEnum):
     SCORED = "scored"
     INFRASTRUCTURE = "infrastructure"
     PENDING = "pending"
+    BLOCKED = "blocked"
 
 
 class DifficultyAttempt(CatalogRecord):
@@ -261,6 +272,7 @@ class DifficultyAttempt(CatalogRecord):
     task_id: str
     status: AttemptStatus
     reward: float | None = Field(strict=True)
+    reason: str | None = None
 
     @model_validator(mode="after")
     def _reward(self) -> "DifficultyAttempt":
@@ -269,6 +281,8 @@ class DifficultyAttempt(CatalogRecord):
                 raise ValueError("Scored attempts require a finite grader reward")
         elif self.reward is not None:
             raise ValueError("Unscored attempts cannot carry a solver reward")
+        if self.status == AttemptStatus.BLOCKED and not self.reason:
+            raise ValueError("Blocked attempts require a reason")
         return self
 
 
@@ -281,14 +295,22 @@ def measurement_from_attempts(
     selected = {task.task_id for task in measurement.sample.tasks}
     scored = {}
     infrastructure = 0
+    blocked = set()
+    blocked_reasons = set()
     for attempt in attempts:
         if attempt.task_id not in selected:
             raise ValueError(f"Attempt is outside the selected sample: {attempt.task_id}")
-        if attempt.status == AttemptStatus.INFRASTRUCTURE:
+        if attempt.task_id in scored and attempt.status == AttemptStatus.SCORED:
+            raise ValueError(f"Multiple scored attempts would count a task twice: {attempt.task_id}")
+        if attempt.task_id in blocked or attempt.task_id in scored:
+            raise ValueError(f"Attempt follows a terminal result: {attempt.task_id}")
+        if attempt.status in {AttemptStatus.INFRASTRUCTURE, AttemptStatus.BLOCKED}:
             infrastructure += 1
+        if attempt.status == AttemptStatus.BLOCKED:
+            blocked.add(attempt.task_id)
+            assert attempt.reason is not None
+            blocked_reasons.add(attempt.reason)
         if attempt.status == AttemptStatus.SCORED:
-            if attempt.task_id in scored:
-                raise ValueError(f"Multiple scored attempts would count a task twice: {attempt.task_id}")
             scored[attempt.task_id] = attempt.reward
     n = len(scored)
     solved = sum(reward == 1.0 for reward in scored.values())
@@ -303,14 +325,27 @@ def measurement_from_attempts(
             "low": 0.0 if solved == 0 else max(0.0, center - margin),
             "high": 1.0 if solved == n else min(1.0, center + margin),
         }
+    pending = len(selected) - n - len(blocked)
+    status = MeasurementStatus.PENDING
+    if not pending:
+        status = MeasurementStatus.BLOCKED if blocked else MeasurementStatus.MEASURED
     return DifficultyMeasurement.model_validate(
         {
             **measurement.model_dump(mode="json"),
-            "status": MeasurementStatus.MEASURED if n == len(selected) and n else MeasurementStatus.PENDING,
-            "reason": None if n == len(selected) else "Selected tasks still lack scored solver attempts.",
+            "status": status,
+            "reason": (
+                None
+                if status is MeasurementStatus.MEASURED
+                else (
+                    "; ".join(sorted(blocked_reasons))
+                    if status is MeasurementStatus.BLOCKED
+                    else "Selected tasks still lack scored solver attempts."
+                )
+            ),
             "n": n,
             "solved": solved,
-            "pending_tasks": len(selected) - n,
+            "pending_tasks": pending,
+            "blocked_tasks": len(blocked),
             "infrastructure_attempts": infrastructure,
             "wilson_95": interval,
         }

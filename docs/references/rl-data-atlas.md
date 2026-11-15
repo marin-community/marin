@@ -1139,8 +1139,13 @@ an infrastructure-failed task, is sealed under `trials/judge/`.
 
 Inspect `serving.json`, `prepared.json`, `trials/*/measurement.json` and
 `completion.json` in the new run prefix. A completed coordinator can still have
-pending or unmeasured sources. Each infrastructure retry receives a fresh trial
-directory. Keep existing run prefixes immutable.
+pending, blocked or unmeasured sources. Each infrastructure retry receives a
+fresh trial directory. Three consecutive attempts with a typed
+`math_verifier_deadline` verdict block that task. The third attempt remains
+unscored, and its receipt records the reason. The measurement counts blocked
+tasks separately from pending tasks and excludes them from `n` and `solved`.
+When no retryable tasks remain, the source status is `blocked`. Keep existing
+run prefixes immutable.
 
 To continue a campaign after its worker has stopped and sealed
 `trials/model-requests-final.json`, select a new output prefix and add
@@ -1149,7 +1154,7 @@ Use the same frozen source queue. The worker verifies the source selection,
 model revision, tokenizer, template, sampling and runtime before reading the
 previous attempt receipts. It verifies each scored archive and rechecks TaskSpec
 network qualification. A task's first valid score, including zero, is retained;
-only unfinished tasks execute. Individual attempt receipts also survive a source
+blocked tasks are not retried. Individual attempt receipts also survive a source
 aggregate interrupted by a framework failure. Every continuation writes a new
 catalog and retains references to the previous attempts.
 A continuation records its parent serving and source-queue bindings before

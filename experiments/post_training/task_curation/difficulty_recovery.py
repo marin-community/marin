@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
+from verifyit.modes.grade_math import MATH_VERIFIER_DEADLINE
 
 from experiments.post_training.task_curation.difficulty_prepared import PreparedSource
 
@@ -33,6 +34,7 @@ class RecoveredSource:
     attempts: list[DifficultyAttempt]
     attempt_receipts: list[ContentEvidenceReference]
     measurement: DifficultyMeasurement | None
+    math_deadline_streaks: dict[str, int]
     # Token totals already recorded in a prior aggregate of this same run
     # version, when the killed attempt aggregated the source but died before
     # writing its measurement. Zero for evidence inherited from earlier
@@ -254,17 +256,20 @@ def recovered_source(
             refs.append(ref)
     attempts = []
     selected = {task.task_id for task in source.sample.tasks}
-    scored = set()
+    terminal = set()
+    math_deadline_streaks: dict[str, int] = {}
     for ref in refs:
         path = StoragePath(ref.uri)
         if file_sha256(path) != ref.sha256:
             raise ValueError("Previous attempt evidence changed after publication")
         payload = json.loads(path.read_text())
-        attempt = DifficultyAttempt.model_validate({name: payload[name] for name in DifficultyAttempt.model_fields})
+        attempt = DifficultyAttempt.model_validate(
+            {name: payload[name] for name in DifficultyAttempt.model_fields if name in payload}
+        )
         if attempt.task_id not in selected:
             raise ValueError("Previous attempt is outside the selected sample")
-        if attempt.task_id in scored:
-            raise ValueError("Previous campaign retried a task after its first scored result")
+        if attempt.task_id in terminal:
+            raise ValueError("Previous campaign retried a task after its terminal result")
         if attempt.status == "scored":
             task = tasks[attempt.task_id]
             if task.judge_model is not None:
@@ -304,12 +309,18 @@ def recovered_source(
                         or not network_policy_qualified(binding, policy)
                     ):
                         raise ValueError("Previous scored trial does not qualify against the original source runtime")
-            scored.add(attempt.task_id)
+        if attempt.status in {"scored", "blocked"}:
+            terminal.add(attempt.task_id)
+        if attempt.status in {"infrastructure", "blocked"}:
+            math_deadline_streaks[attempt.task_id] = (
+                math_deadline_streaks.get(attempt.task_id, 0) + 1 if attempt.reason == MATH_VERIFIER_DEADLINE else 0
+            )
         attempts.append(attempt)
     return RecoveredSource(
         attempts,
         refs,
         measurement,
+        math_deadline_streaks,
         prior_input_tokens,
         prior_output_tokens,
         prior_judge_input_tokens,

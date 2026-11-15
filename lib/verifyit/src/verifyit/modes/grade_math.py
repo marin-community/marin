@@ -45,6 +45,7 @@ SET_TYPES = frozenset({MathType.SET, MathType.INTERVAL})
 
 CLOSERS = {"(": ")", "[": "]", "{": "}"}
 SIZE_COMMANDS = ("\\left", "\\right", "\\big", "\\Big", "\\bigg", "\\Bigg")
+MATH_VERIFIER_DEADLINE = "math_verifier_deadline"
 TIMEOUT = 5
 """Seconds math-verify may spend parsing or comparing one expression. Its timeout arms
 ``signal.alarm``, which only the main thread may do, so a worker thread runs without it."""
@@ -315,7 +316,7 @@ def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         return _grade_math_candidate(spec, candidate)
     except TimeoutException as error:
         # This backend exception inherits BaseException, unlike Python's TimeoutError.
-        raise GradingInfraError("math verifier deadline exhausted") from error
+        raise GradingInfraError("math verifier deadline exhausted", code=MATH_VERIFIER_DEADLINE) from error
 
 
 def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
