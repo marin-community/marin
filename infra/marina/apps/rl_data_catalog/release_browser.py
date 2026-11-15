@@ -227,7 +227,7 @@ def check_evidence(page: Page) -> None:
         raise ValueError(f"Evidence overlap at {page.url}: {failures}")
 
 
-def evidence_cases(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def evidence_cases(sources: list[dict[str, Any]], pending_ids: set[str] | None = None) -> list[dict[str, Any]]:
     """Select each observed admission, quality and execution presentation."""
     cases = {}
     for row in sources:
@@ -245,16 +245,27 @@ def evidence_cases(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
             tuple(model["status"] for model in row["difficulty"]["models"]),
         )
         cases.setdefault(key, row)
-    return list(cases.values())
+    selected = {row["id"]: row for row in cases.values()}
+    selected.update({row["id"]: row for row in sources if row["id"] in (pending_ids or set())})
+    return list(selected.values())
+
+
+def pending_release_ids(page: Page, root: str) -> set[str]:
+    """Read candidate presentations from this package without changing catalog inputs."""
+    manifest = page.evaluate(
+        "async root => (await fetch(new URL('measurements/pending-filtered-releases.json', root))).json()", root
+    )
+    return {row["source_id"] for row in manifest["sources"]}
 
 
 def evidence_sweep(page: Page, root: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Exercise source/backend evidence for every observed admission/QA/actor state."""
     results = []
+    candidates = evidence_cases(sources, pending_release_ids(page, root))
     for theme, width in LAYOUTS:
         page.emulate_media(color_scheme=theme)
         page.set_viewport_size({"width": width, "height": 1000})
-        for row in evidence_cases(sources):
+        for row in candidates:
             for view in ("source", "backends"):
                 page.goto(root + view + ".html#" + urlencode({"source_id": row["id"]}))
                 expect(page.locator("#title")).to_have_text(row["display_name"])

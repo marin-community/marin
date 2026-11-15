@@ -277,3 +277,9 @@ receipt. For the focused command these live under
 the receipt artifacts directory: `journeys/rl_data_catalog/readability/` for the
 fixture walk and `screenshots/readability/` for the frozen-input walk. Failed runs retain their completed states for diagnosis. Do not waive a
 failure by removing a layout, lowering a threshold or filtering a selector.
+
+Pending filtered-private candidates remain Evidence-only. The sweeps read their
+source IDs from the package's pinned candidate manifest and include each candidate
+card, even when its source duplicates another QA/admission presentation. Verify
+the pin and filtered count while preserving the selected catalog, Examples and
+Quality; a private publication alone does not qualify Atlas admission.

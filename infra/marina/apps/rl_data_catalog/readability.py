@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlsplit
 from playwright.sync_api import Page, expect
 
 from .release_browser import LAYOUTS as RELEASE_LAYOUTS
-from .release_browser import evidence_cases
+from .release_browser import evidence_cases, pending_release_ids
 
 AUDIT = Path(__file__).with_suffix(".js").read_text()
 CONTROLS = 'a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex="-1"])'
@@ -142,6 +142,7 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
     visit("", "#rows tr")
     root = page.url.split("#")[0].split("?")[0]
     sources = page.evaluate("async() => (await (await fetch('api/sources')).json()).sources")
+    pending_ids = pending_release_ids(page, root)
     capture("sources", focus=True)
     # Exercise every filter value; captures include selected/empty states.
     for field in ["#use", "#quality", "#result", "#grader", "#difficulty-model"]:
@@ -189,7 +190,7 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
             page.locator("#reviews a").first.click()
             expect(page.locator("#selected")).not_to_be_empty()
             capture("archive-record")
-    for index, candidate in enumerate(evidence_cases(sources)):
+    for index, candidate in enumerate(evidence_cases(sources, pending_ids)):
         if candidate["id"] == source["id"]:
             continue
         for view in ("source", "backends"):

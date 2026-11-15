@@ -80,6 +80,26 @@ async function render(data, sourceId) {
   difficulty.insertBefore(AtlasDifficulty.comparison(data.difficulty), difficulty.children[1] || null);
   sections.push(difficulty);
   sections.push(card('Filtration ledger', filtrationRows({...d, filtration: data.filtration, contamination_status: data.contamination_status, oracle_inventory: data.oracle_inventory}), 'Examples requires complete current-pin filtration and admission proof. A source filtered to zero is excluded. Pre-filtration retained counts are shown separately.'));
+  for (const candidate of data.pending_filtered_releases.sources.filter(item => item.source_id === d.id)) {
+    const evidence = candidate.filtration, release = evidence.filtered_release;
+    const section = card('Filtered private release, pending qualification', [
+      ['Candidate pin', pointer(release.url, `${release.repo} @ ${release.revision}`)],
+      ['Oracle-filtered tasks', `${number.format(evidence.admitted_count)} of ${number.format(evidence.original_count)}`],
+      ['Typed filter exclusions', Object.keys(evidence.exclusion_counts).length ? evidence.exclusion_counts : '0 tasks'],
+      ['Qualification pending', candidate.qualification_pending.map(name => name.replaceAll('_', ' ')).join(', ')],
+      ['Original candidate input', pointer(evidence.original_release.url, `${evidence.original_release.repo} @ ${evidence.original_release.revision}`)],
+      ['Oracle filter receipt', pointer(evidence.oracle_filter.uri)],
+      ['Oracle filter SHA-256', evidence.oracle_filter.sha256],
+      ['Published TaskSpecs', pointer(evidence.tasks_parquet.uri)],
+      ['Published TaskSpecs SHA-256', evidence.tasks_parquet.sha256],
+      ['Validation receipt', pointer(evidence.validation.uri)],
+      ['Validation SHA-256', evidence.validation.sha256],
+      ['Candidate handoff', pointer(data.pending_filtered_releases.handoff.uri)],
+      ['Handoff SHA-256', data.pending_filtered_releases.handoff.sha256],
+    ], 'This candidate is not selected or admitted to Atlas. Qualification is pending for this exact pin; its earlier QC is not inherited. The catalog release and Examples remain unchanged.');
+    section.classList.add('pending-filtered-release');
+    sections.push(section);
+  }
   sections.push(card('Backend fit by role', [['Measured tasks', data.backend_capabilities?.task_count], ['Fit and blockers', backendDetails(data)]], 'Supported requires all present task/roles to be supported. Otherwise the backend is Unsupported; N/A is only for absent roles. Affected task counts are per role and may overlap. The Daytona safety label covers the actor only.'));
   sections.push(card('Grader profile', [['Grader', graderChip(d)], ['Per-type task counts', d.grader_type_counts], ['Judge rubrics', d.judge_rubric_counts], ['Judge tasks with reference', d.judge_reference_count], ['Judge tasks without reference', d.judge_no_reference_count], ['Current-input census receipt', d.derived_contract_receipt && pointer(d.derived_contract_receipt.uri)], ['Census binding', d.derived_contract_receipt?.input], ['Scanned TaskSpec bytes', d.derived_contract_receipt?.scanned_task_specs_sha256]], 'Derived from the measured task contracts. Unbound or changed inputs remain Pending.'));
   sections.push(card('Grading environment', [['Required boundary', gradingChips(d)], ['Census', d.grading_environment]], 'SHARED grades in the task environment; SEPARATE uses an independent grading environment. Mismatches remain explicit.'));
@@ -248,7 +268,7 @@ async function render(data, sourceId) {
 const sourceId = new URLSearchParams(location.hash.slice(1)).get('source_id');
 window.addEventListener('hashchange', () => location.reload());
 if (!sourceId) $('message').textContent = 'Open a source from the Atlas to see its evidence.';
-else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json'), json('measurements/oracle-inventory.json'), json('api/source-labels')])
-  .then(([data, progress, inventory, labels]) => render({...data, source_labels: labels.sources, content_progress: boundProgress(data.declaration, progress), oracle_inventory: boundOracleInventory(data.declaration, inventory)}, sourceId)).catch(error => {
+else Promise.all([json(`api/source?${new URLSearchParams({source_id: sourceId})}`), json('measurements/content-progress.json'), json('measurements/oracle-inventory.json'), json('api/source-labels'), json('measurements/pending-filtered-releases.json')])
+  .then(([data, progress, inventory, labels, pending]) => render({...data, source_labels: labels.sources, pending_filtered_releases: pending, content_progress: boundProgress(data.declaration, progress), oracle_inventory: boundOracleInventory(data.declaration, inventory)}, sourceId)).catch(error => {
   $('title').textContent = 'Source evidence'; $('message').textContent = error.message; $('message').classList.add('error');
 });

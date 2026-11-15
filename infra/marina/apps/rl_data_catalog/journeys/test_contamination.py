@@ -5,12 +5,14 @@
 
 import json
 import re
+from pathlib import Path
 from urllib.parse import urlencode
 
 import pytest
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
+from infra.marina.apps.rl_data_catalog.readability import inspect_state
 from infra.marina.apps.rl_data_catalog.release_browser import (
     TABLE_BOUNDS,
     check_evidence,
@@ -18,6 +20,52 @@ from infra.marina.apps.rl_data_catalog.release_browser import (
     curriculum_sweep,
     evidence_sweep,
 )
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("width", [1440, 390, 320])
+def test_pending_private_filter_evidence_keeps_catalog_admission_and_quality(
+    journey: Journey, theme: str, width: int
+) -> None:
+    page = journey.page
+    page.emulate_media(color_scheme=theme)
+    page.set_viewport_size({"width": width, "height": 1000})
+    root = f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/"
+    page.goto(root)
+    expect(page.locator("#rows tr").first).to_be_visible()
+    root = page.url
+    before = page.locator(".metrics").inner_text()
+    detail = page.evaluate("async()=> (await fetch('api/source?source_id=Marin%3Aclean')).json()")
+    manifest = json.loads((Path(__file__).parents[1] / "dist/measurements/pending-filtered-releases.json").read_text())
+    candidate = manifest["sources"][0]
+    candidate["source_id"] = "Marin:clean"
+    page.route(
+        "**/measurements/pending-filtered-releases.json",
+        lambda route: route.fulfill(json={**manifest, "sources": [candidate]}),
+    )
+    page.goto(root + "source.html#source_id=Marin%3Aclean")
+    card = page.locator(".pending-filtered-release")
+    expect(card).to_have_count(1)
+    expect(card.get_by_role("heading")).to_have_text("Filtered private release, pending qualification")
+    release = candidate["filtration"]["filtered_release"]
+    expect(card.get_by_role("link", name=f"{release['repo']} @ {release['revision']}")).to_have_attribute(
+        "href", release["url"]
+    )
+    expect(card.locator(".field").filter(has=page.get_by_text("Oracle-filtered tasks", exact=True))).to_contain_text(
+        "2,699 of 2,699"
+    )
+    expect(card).to_contain_text("not selected or admitted to Atlas")
+    expect(card).to_contain_text("earlier QC is not inherited")
+    expect(page.locator("#labels .level")).to_have_text(f"Quality {detail['quality']}")
+    current_pin = page.locator(".field").filter(has=page.get_by_text("Current release pin", exact=True))
+    current = detail["declaration"]["current_release"]
+    expect(current_pin).to_contain_text(f"{current['repo']} @ {current['revision']}")
+    check_evidence(page)
+    assert not inspect_state(page)["findings"]
+    card.screenshot(path=str(journey.shots / f"pending-filtered-{theme}-{width}.png"))
+    page.goto(root)
+    expect(page.locator("#rows tr").first).to_be_visible()
+    assert page.locator(".metrics").inner_text() == before
 
 
 def test_filtering_canonical_keeps_unmeasured_siblings_separate(journey: Journey) -> None:
