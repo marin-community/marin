@@ -10,12 +10,14 @@ import logging
 import os
 import time
 from collections import Counter
+from dataclasses import asdict
 
 import numpy as np
 from levanter.store.tree_store import TreeStore
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
+from rigging.filesystem.storage_path import prefix_join
 from tokenizers import Tokenizer
 
 from marin.datakit.tool_conversion.archive import commit_batch, json_bytes, provenance, read_json, write_immutable
@@ -100,7 +102,7 @@ def convert_record(
                 {"id": identity, "path": source_name, "sha256": digest(files[source_name])}
             )
             files[record_prefix + "candidate.json"] = json_bytes(converted.candidate)
-            files[record_prefix + "changes.json"] = json_bytes(converted.changes)
+            files[record_prefix + "changes.json"] = json_bytes([asdict(change) for change in converted.changes])
             for filename, content in exported.files.items():
                 files[record_prefix + "export/" + filename] = content
             result = {
@@ -151,20 +153,20 @@ def run(
         "row_limit": row_limit,
         "converter": "deterministic-v1",
     }
-    write_immutable(prefix + "/config.json", json_bytes(config))
-    write_immutable(prefix + "/selection.json", json_bytes(selection))
-    fs, path = filesystem_for(prefix + "/provenance.json")
+    write_immutable(prefix_join(prefix, "config.json"), json_bytes(config))
+    write_immutable(prefix_join(prefix, "selection.json"), json_bytes(selection))
+    fs, path = filesystem_for(prefix_join(prefix, "provenance.json"))
     current = provenance(catalog_sha, tokenizer_sha)
     if fs.exists(path):
-        current_run = read_json(prefix + "/provenance.json")
+        current_run = read_json(prefix_join(prefix, "provenance.json"))
         if current_run["files_sha256"] != current["files_sha256"]:
             raise ValueError("Converter changed; use a new output prefix")
     else:
         current_run = current
-        write_immutable(prefix + "/provenance.json", json_bytes(current_run))
-    completed_fs, completed_path = filesystem_for(prefix + "/completed.json")
+        write_immutable(prefix_join(prefix, "provenance.json"), json_bytes(current_run))
+    completed_fs, completed_path = filesystem_for(prefix_join(prefix, "completed.json"))
     if completed_fs.exists(completed_path):
-        return read_json(prefix + "/completed.json")
+        return read_json(prefix_join(prefix, "completed.json"))
     counts = Counter()
     batches = 0
     artifact_bytes = 0
@@ -184,7 +186,7 @@ def run(
         for start in range(0, limit, batch_size):
             stop = min(start + batch_size, limit)
             name = f"shard-{shard_index:05d}-rows-{start:08d}-{stop:08d}"
-            receipt_url = prefix + f"/receipts/{name}.json"
+            receipt_url = prefix_join(prefix, f"receipts/{name}.json")
             fs, path = filesystem_for(receipt_url)
             if fs.exists(path):
                 receipt = read_json(receipt_url)
@@ -247,7 +249,7 @@ def run(
         "rows_processed_this_run": processed,
         "rows": sum(counts.values()),
     }
-    write_immutable(prefix + "/completed.json", json_bytes(summary))
+    write_immutable(prefix_join(prefix, "completed.json"), json_bytes(summary))
     return summary
 
 

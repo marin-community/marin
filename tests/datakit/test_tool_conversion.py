@@ -46,7 +46,7 @@ def test_notebook_conversion_preserves_cells_observations_and_pairing():
     assert [m["tool_call_id"] for m in result.messages if m["role"] == "tool"] == ["first", "second"]
     assert [m["tool_calls"][0]["id"] for m in result.messages if m.get("tool_calls")] == ["first", "second"]
     assert result.text.count("<|start_header_id|>") == original.count("<|start_header_id|>")
-    commands = [c["after"]["arguments"]["command"] for c in result.changes]
+    commands = [c.after["arguments"]["command"] for c in result.changes]
     assert [re.search(r"<<'CELL_[^']+'\n(.*)\nCELL_[^\n]+$", c, re.S)[1] for c in commands] == [
         "x = [1, 2]\nx",
         "x.append(3)\nx",
@@ -63,7 +63,7 @@ def test_python_stdout_command_executes_exact_quoted_code(tmp_path):
     )
     result = convert_trace("science", original, "quote")
     assert result.disposition == Disposition.VERIFIED
-    command = result.changes[0]["after"]["arguments"]["command"]
+    command = result.changes[0].after["arguments"]["command"]
     actual = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True, check=True)
     expected = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert actual.stdout == expected.stdout
@@ -121,7 +121,7 @@ def test_think_becomes_reasoning_and_archives_acknowledgement():
     assert result.disposition == Disposition.VERIFIED
     assert result.messages[2]["reasoning_content"] == "Check the sign."
     assert not result.messages[2]["tool_calls"]
-    assert result.changes[0]["removed_acknowledgement"] == 3
+    assert result.changes[0].removed_acknowledgement == 3
     assert not any(m["role"] == "tool" for m in result.messages)
 
 
@@ -144,7 +144,7 @@ def test_shell_rename_preserves_command_but_holds_session_mutation():
     )
     result = convert_trace("swe", original, "shell")
     assert result.disposition == Disposition.VERIFIED
-    assert result.changes[0]["after"]["arguments"] == {"command": "printf hello"}
+    assert result.changes[0].after["arguments"] == {"command": "printf hello"}
     for command in ["cd /workspace", "x=1", "export X=1", 'eval "cd /workspace"', 'python3 -c "print(1)" &']:
         source = original.replace("printf hello", command.replace('"', '\\"'))
         held = convert_trace("swe", source, command)
@@ -156,7 +156,7 @@ def test_archive_receipt_binds_payload_and_refuses_overwrite(tmp_path):
     files = {"batch/dispositions.json": b"[]", "provenance.json": b"{}"}
     packed = archive_bytes(files)
     assert packed == archive_bytes(files)
-    receipt = commit_batch(str(tmp_path), "batch", files, "catalog", {"shard": 0, "row": 2}, {"files_sha256": {}})
+    receipt = commit_batch(str(tmp_path) + "/", "batch", files, "catalog", {"shard": 0, "row": 2}, {"files_sha256": {}})
     actual = (tmp_path / "batches/batch.tar.gz").read_bytes()
     assert receipt["archive_sha256"] == digest(actual)
     assert receipt["archive_bytes"] == len(actual)

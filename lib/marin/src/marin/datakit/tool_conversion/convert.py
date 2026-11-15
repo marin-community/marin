@@ -87,13 +87,23 @@ class Turn:
 
 
 @dataclass
+class Change:
+    message: int
+    call: int
+    before: dict[str, Any]
+    after: dict[str, Any] | None
+    replacement: str | None = None
+    removed_acknowledgement: int | None = None
+
+
+@dataclass
 class Conversion:
     disposition: Disposition
     reason: str
     text: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     tools: list[dict[str, Any]] = field(default_factory=list)
-    changes: list[dict[str, Any]] = field(default_factory=list)
+    changes: list[Change] = field(default_factory=list)
     rules: list[str] = field(default_factory=list)
     candidate: dict[str, Any] = field(default_factory=dict)
 
@@ -215,12 +225,12 @@ def convert_trace(source: str, text: str, identity: str) -> Conversion:
     if "terminus" in source.lower():
         return Conversion(Disposition.EXCLUDED, "Terminus protocol", text)
     try:
-        return _convert(source, text, identity)
+        return _convert(text, identity)
     except (ValueError, KeyError, TypeError, SyntaxError, jsonschema.ValidationError) as error:
         return Conversion(Disposition.RESIDUAL, str(error), text)
 
 
-def _convert(source: str, text: str, identity: str) -> Conversion:
+def _convert(text: str, identity: str) -> Conversion:
     prefix, original = parse_trace(text)
     if any(t.role == "assistant" and re.search(r'"keystrokes"\s*:', THOUGHT.sub("", t.body)) for t in original):
         return Conversion(Disposition.EXCLUDED, "Terminus protocol", text)
@@ -350,16 +360,7 @@ def _convert(source: str, text: str, identity: str) -> Conversion:
                 edits.setdefault(i, []).append((match.start(), match.end(), replacement))
                 if observation is not None:
                     removed_results.add(observation)
-                changes.append(
-                    {
-                        "message": i,
-                        "call": k,
-                        "before": call,
-                        "after": None,
-                        "replacement": replacement,
-                        "removed_acknowledgement": observation,
-                    }
-                )
+                changes.append(Change(i, k, call, None, replacement, observation))
                 mappings[(i, k)] = None
                 rules.add(name + "-to-assistant-v1")
                 continue
@@ -375,12 +376,37 @@ def _convert(source: str, text: str, identity: str) -> Conversion:
                     turns[observation].body = (
                         result[1].replace('name="' + name + '"', 'name="' + mapped["name"] + '"') + result[3] + result[4]
                     )
-                changes.append({"message": i, "call": k, "before": call, "after": mapped})
+                changes.append(Change(i, k, call, mapped))
             mappings[(i, k)] = mapped
     for i, replacements in edits.items():
         turns[i].body = _replace(turns[i].body, replacements)
-    # Replace only explicit tool declarations, retaining all other system content.
     used = {c["name"] for c in mappings.values() if c is not None}
+    tools = _rewrite_declarations(turns, used, definitions, rules)
+    output = prefix + "".join(t.header + t.body + t.ending for i, t in enumerate(turns) if i not in removed_results)
+    if output == text or not changes:
+        raise ValueError("No actual tool change")
+    messages, candidates = _structured_turns(turns, removed_results, result_ids)
+    parse_trace(output)
+    for change in changes:
+        after = change.after
+        if after is not None:
+            jsonschema.validate(after["arguments"], BASH_TOOL["function"]["parameters"])
+    return Conversion(
+        Disposition.VERIFIED,
+        "deterministic adapter checks; historical observations not reexecuted",
+        output,
+        messages,
+        tools,
+        changes,
+        sorted(rules),
+        {"decision": "convert", "turns": candidates},
+    )
+
+
+def _rewrite_declarations(
+    turns: list[Turn], used: set[str], definitions: dict[str, dict], rules: set[str]
+) -> list[dict]:
+    # Replace only explicit tool declarations, retaining all other system content.
     tools = [definitions[n] for n in sorted(used) if n != "bash" and n in definitions]
     if used - definitions.keys() - {"bash"}:
         raise ValueError("Missing declared schema for unchanged real tool")
@@ -396,9 +422,12 @@ def _convert(source: str, text: str, identity: str) -> Conversion:
                 turn.body,
                 flags=re.DOTALL,
             )
-    output = prefix + "".join(t.header + t.body + t.ending for i, t in enumerate(turns) if i not in removed_results)
-    if output == text or not changes:
-        raise ValueError("No actual tool change")
+    return tools
+
+
+def _structured_turns(
+    turns: list[Turn], removed_results: set[int], result_ids: dict[int, str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     messages = []
     candidates = []
     for i, turn in enumerate(turns):
@@ -436,18 +465,4 @@ def _convert(source: str, text: str, identity: str) -> Conversion:
                 raise ValueError("Malformed result")
             message.update(role="tool", content=result[3], name=result[2], tool_call_id=result_ids[i])
         messages.append(message)
-    parse_trace(output)
-    for change in changes:
-        after = change["after"]
-        if after is not None:
-            jsonschema.validate(after["arguments"], BASH_TOOL["function"]["parameters"])
-    return Conversion(
-        Disposition.VERIFIED,
-        "deterministic adapter checks; historical observations not reexecuted",
-        output,
-        messages,
-        tools,
-        changes,
-        sorted(rules),
-        {"decision": "convert", "turns": candidates},
-    )
+    return messages, candidates

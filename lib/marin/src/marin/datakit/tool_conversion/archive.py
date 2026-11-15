@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.datakit.tool_conversion.export import digest
 
@@ -72,7 +73,7 @@ def commit_batch(
 ) -> dict:
     """Upload an archive, then its receipt; consumers admit only receipted batches."""
     data = archive_bytes(files)
-    archive_uri = f"{prefix}/batches/{name}.tar.gz"
+    archive_uri = prefix_join(prefix, f"batches/{name}.tar.gz")
     write_immutable(archive_uri, data)
     # Receipt is the immutable commit point. This independent path has no GLM
     # claims or uncertain network requests to reconcile or replay.
@@ -87,8 +88,8 @@ def commit_batch(
         "provenance": run_provenance,
         "at": time.time(),
     }
-    write_immutable(f"{prefix}/receipts/{name}.json", json_bytes(receipt))
-    fs, path = filesystem_for(f"{prefix}/cursor.json")
+    write_immutable(prefix_join(prefix, f"receipts/{name}.json"), json_bytes(receipt))
+    fs, path = filesystem_for(prefix_join(prefix, "cursor.json"))
     with fs.open(path, "wb") as stream:
         stream.write(json_bytes(cursor))
     return receipt
