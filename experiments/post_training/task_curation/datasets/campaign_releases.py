@@ -132,7 +132,28 @@ PUZZLES_QA_NOTES = (
     "Full-population oracle filter through the production in-process grading path: 6,921/6,921 "
     "admitted, zero typed exclusions, empty-submission controls 0.0 on every task. Full-population "
     "fidelity against the canonical cohort: 6,921/6,921 content-equal. Lexical 13-gram "
-    "decontamination: 0 of 6,921 contaminated. SAMPLE content QC pending."
+    "decontamination: 0 of 6,921 contaminated. SAMPLE content QC recorded 22 issues among 97 "
+    "conclusive reviews (3 unavailable; 22.68% issue rate, SOME_ISSUES); QC reports issues and never "
+    "rejects tasks, and source-wide conclusions wait on FULL coverage."
+)
+PUZZLES_QA_RECIPE_QA = RecipeQAHistoricalNotes(
+    campaign="RL Data Atlas",
+    recipe_revision=f"datasets/tasktrove/puzzles_qa.py v1; {PUZZLES_QA_REPAIR_REVISION[:12]}",
+    verification=(
+        "All 6,926 rows converted through the production recipe with zero rejections; 5 exact "
+        "duplicates collapse under the pipeline dedup key, 6,921 retained. Every reference is "
+        "mechanically extracted from the task's original solution/solve.sh oracle (single-printf "
+        "literal template) and cross-checked member-for-member against the declared tests/gold.json "
+        "key. Full-population oracle filter through the production in-process grading path: "
+        "6,921/6,921 admitted, zero typed exclusions, empty-submission controls 0.0 on every task. "
+        "Full-population fidelity against the canonical cohort: 6,921/6,921 content-equal. Lexical "
+        "13-gram decontamination: 0 of 6,921 contaminated. SAMPLE content QC on the seed-0 100-task "
+        "panel through the pinned V3 reviewer (GLM-5.3, temperature 0.7): 97/100 reviewed, 3 "
+        "unavailable, 22 issues (22.68% issue rate, SOME_ISSUES) — source-content defects recorded "
+        "for FULL review; panel coverage is incomplete, so source-wide conclusions wait on FULL."
+    ),
+    reviewed=100,
+    admitted=6921,
 )
 
 
@@ -151,6 +172,7 @@ def _puzzles_qa_release() -> RlDataSource[PrebuiltCohort]:
             family="math-answer",
             tags=("rlvr", "single-turn", "qa-format-repair", "campaign-release", "converted"),
             oracle_validation=OracleValidation.VERIFIER_EXECUTED,
+            recipe_qa_history=PUZZLES_QA_RECIPE_QA,
             notes=PUZZLES_QA_NOTES,
         ),
     )
