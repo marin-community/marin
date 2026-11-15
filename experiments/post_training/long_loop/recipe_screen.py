@@ -17,6 +17,7 @@ from iris.cli.connect import open_iris_client
 from iris.jax.compile_cache import configure_jax_compilation_cache
 from iris.rpc.proto_display import priority_band_value
 from levanter.checkpoint import load_checkpoint_metadata
+from levanter.tracker.json_logger import JsonLoggerConfig  # noqa: F401 -- raw scalar evidence tracker
 from marin.training.training import resolve_training_env
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
