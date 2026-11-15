@@ -46,7 +46,7 @@ from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 MAX_BATCH_BYTES = 1_000_000
 PACKET_READ_BATCH = 512
 DEFAULT_CATALOG_ROOT = "s3://marin-us-east-02a/marin/rl-data/catalog/production"
-REVIEW_COMPLETENESS_VERSION = 5
+REVIEW_COMPLETENESS_VERSION = 6
 
 
 class CatalogDisplayPolicy(StrEnum):

@@ -1059,7 +1059,8 @@ def test_unchanged_catalog_refreshes_pre_completeness_load(catalog_database, cat
     publish_sample(root, "sample", admitted_verdicts=("good", "good"), oversight=OversightLevel.SAMPLE)
     catalog = CurationCatalog(root)
     load_catalog(catalog, catalog_query)
-    catalog_query("UPDATE atlas_loads SET review_completeness_version=0", {})
+    # Version 5 cached SAMPLE finality before the missing-review tolerance.
+    catalog_query("UPDATE atlas_loads SET review_completeness_version=5", {})
     catalog_query("UPDATE atlas_sources SET review_completeness=NULL", {})
     assert load_catalog(catalog, catalog_query)["changed"] is True
     assert load_catalog(catalog, catalog_query)["changed"] is False
