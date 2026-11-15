@@ -85,12 +85,17 @@ before launching. A source shortfall fails instead of borrowing from another
 source. Source or selection changes require a new recipe version; preserve
 published versions for comparisons.
 
+The checked-in Snowball recipe is version `2026.11.10.1`. The launcher still
+defaults to the earlier published selection `2026.11.04`, so pass the path
+printed by the campaign as `--selection-uri` when training this recipe.
+
 The artifact contains `train.parquet`, `validation.parquet` and
 `full_validation.parquet`. The fixed validation panel samples 20 tasks per
-family from the original 910-task development set. All 910 are excluded from
-training by ID, public semantics and exact conversation context. This reused
-development set is a hillclimbing signal; use a separate benchmark for final
-claims. See [selection semantics](../references/task-curation.md#final-task-selection)
+family from the pinned 910-task development set. The recipe also excludes a
+pinned 1,500-task EvalLite panel from training. Both panels are excluded by
+task ID, exact conversation context, and normalized final user statement. The
+reused development set is a hillclimbing signal; use a separate benchmark for
+final claims. See [selection semantics](../references/task-curation.md#final-task-selection)
 for deduplication and task serialization.
 
 ## Train and evaluate
