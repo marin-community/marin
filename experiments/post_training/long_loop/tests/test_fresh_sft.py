@@ -18,7 +18,11 @@ from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.post_training.long_loop.sft import SMOKE_CONFIG, fresh_sft_config
 from experiments.post_training.long_loop.sft_runtime.export_writer import ExportConfig, export_weights
 from experiments.post_training.long_loop.sft_runtime.model import grugmoe_inference_state_dict
-from experiments.post_training.long_loop.sft_runtime.train import initial_state, initialize_snowball_sft
+from experiments.post_training.long_loop.sft_runtime.train import (
+    initial_sft_state_from_checkpoint,
+    initial_state,
+    initialize_snowball_sft,
+)
 
 
 def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
@@ -79,6 +83,12 @@ def test_fresh_sft_loads_base_without_resume_manifest_lookup(tmp_path):
             template_for_candidate=forbidden_manifest_lookup,
         )
         actual = initialize_snowball_sft(restored, config.trainer.trainer.initialize_from, mesh, trainer)
+        direct_trainer = replace(trainer, trainer=replace(trainer.trainer, mp=kwargs["mp"]), offload_opt_state=False)
+        direct = initial_sft_state_from_checkpoint(
+            replace(config, model=model, trainer=direct_trainer), optax.adam(0.001), mesh, jax.random.key(3)
+        )
+        for a, b in zip(jax.tree.leaves(actual), jax.tree.leaves(direct), strict=True):
+            np.testing.assert_array_equal(a, b)
         np.testing.assert_array_equal(actual.params.token_embed, base.params.token_embed)
         np.testing.assert_array_equal(actual.params.output_proj[:, 30], base.params.output_proj[:, 2])
         for a, b in zip(jax.tree.leaves(actual.opt_state), jax.tree.leaves(fresh.opt_state), strict=True):

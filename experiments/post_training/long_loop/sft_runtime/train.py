@@ -6,6 +6,7 @@ import functools
 import gc
 import importlib.metadata
 import itertools
+import json
 import logging
 import math
 import os
@@ -25,6 +26,7 @@ import levanter.tracker
 import numpy as np
 import optax
 from fray.cluster import ResourceConfig
+from fray.types import TpuConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
 from jax._src import config as jax_config
@@ -62,7 +64,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.mesh import MeshConfig
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
 
 from experiments.grug.checkpointing import (
@@ -458,6 +460,7 @@ class GrugRunConfig:
     # long schedule requires the two to differ. None runs the whole schedule.
     stop_after_steps: int | None = None
     first_checkpoint_restore_step: int | None = None
+    record_compiled_memory: bool = False
     native_timing_root: str | None = None
     flops_baseline: FlopsBaseline | None = None
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
@@ -830,6 +833,67 @@ def initial_state(
         opt_state=opt_state,
         ema_params=params if ema_beta is not None else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+    )
+
+
+def write_compiled_memory_report(compiled: jax.stages.Compiled, config: GrugRunConfig, stage: str) -> None:
+    """Keep compiler memory estimates with the native timing artifacts for each rank."""
+    stats = compiled.memory_analysis()
+    if stats is None:
+        raise RuntimeError(f"Compiler memory analysis unavailable for {stage}")
+    report = {
+        "stage": stage,
+        "rank": jax.process_index(),
+        "platform": jax.default_backend(),
+        "device_kind": jax.local_devices()[0].device_kind,
+        "argument_bytes": stats.argument_size_in_bytes,
+        "output_bytes": stats.output_size_in_bytes,
+        "alias_bytes": stats.alias_size_in_bytes,
+        "temporary_bytes": stats.temp_size_in_bytes,
+    }
+    root = config.native_timing_root
+    if root is None:
+        raise ValueError("Compiled memory capture requires native_timing_root")
+    (StoragePath(root) / f"compiled-memory-rank-{jax.process_index()}-{stage}.json").write_text(json.dumps(report))
+
+
+def initial_sft_state_from_checkpoint(
+    config: GrugRunConfig, optimizer: optax.GradientTransformation, mesh: Mesh, key: PRNGKeyArray
+) -> GrugTrainState:
+    """Restore fresh SFT weights without allocating the random model being replaced."""
+    trainer = config.trainer.trainer
+    if trainer.initialize_from is None:
+        raise ValueError("Snowball SFT requires an explicit base checkpoint")
+    params = eqx.filter_eval_shape(Transformer.init, config.model, key=key)
+    state = GrugTrainState(
+        step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
+        params=params,
+        master_params=None,
+        opt_state=(),
+        ema_params=None,
+        pending_qb_betas=jax.sharding.reshard(
+            jnp.zeros((config.model.num_layers, config.model.num_experts), dtype=jnp.float32), P()
+        ),
+    )
+    state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
+    params = trainer.mp.cast_to_param(state.params)
+
+    def init_optimizer(values):
+        opt_state = optimizer.init(values)
+        if config.trainer.offload_opt_state:
+            opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+        return opt_state
+
+    compiled_init = jax.jit(init_optimizer).lower(params).compile()
+    logger.info("Fresh optimizer init compiled memory per device: %s", compiled_init.memory_analysis())
+    if config.record_compiled_memory:
+        write_compiled_memory_report(compiled_init, config, "optimizer-init")
+    opt_state = compiled_init(params)
+    return dataclasses.replace(
+        state,
+        params=params,
+        opt_state=opt_state,
+        ema_params=params if config.trainer.ema_beta is not None else None,
     )
 
 
@@ -1214,7 +1278,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             )
 
         with timing.span("model_initialization_and_restore"):
-            state = _init_state(model_key)
+            fresh_tpu_start = trainer.load_checkpoint is False and isinstance(config.resources.device, TpuConfig)
+            state = (
+                initial_sft_state_from_checkpoint(config, optimizer, mesh, model_key)
+                if fresh_tpu_start
+                else _init_state(model_key)
+            )
             released_initial_state = trainer.load_checkpoint is not False and not trainer.allow_partial_checkpoint
             if released_initial_state:
                 state = restore_template_from(state)
@@ -1233,7 +1302,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state = take_master_as_params(state)
             if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
                 state = _init_state(model_key)
-            if int(state.step) == 0:
+            if int(state.step) == 0 and not fresh_tpu_start:
                 if trainer.initialize_from is None:
                     raise ValueError("Snowball SFT requires an explicit base checkpoint")
                 state = initialize_snowball_sft(state, trainer.initialize_from, mesh, config.trainer)
@@ -1470,9 +1539,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     watch_stats = None
                 step_start = time.perf_counter()
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
-                if config.first_checkpoint_restore_step is not None and current_step == 0:
+                if current_step == 0 and (
+                    config.first_checkpoint_restore_step is not None or config.record_compiled_memory
+                ):
                     with timing.span("first_step_compile", step=current_step):
-                        train_step.lower(state, batch).compile()
+                        compiled_step = train_step.lower(state, batch).compile()
+                        logger.info("First train step compiled memory per device: %s", compiled_step.memory_analysis())
+                        if config.record_compiled_memory:
+                            write_compiled_memory_report(compiled_step, config, "first-train-step")
                 with timing.span("train_step", step=current_step):
                     state, metrics, inline_watch_stats = train_step(state, batch)
                     if inline_watch_stats is not None and watch_due:
