@@ -468,8 +468,7 @@ configured `iris-cpu` flavor and hostname-only `iris-cpu-hostname` Topology.
 CoreWeave's `node-metadata-controller.compute.coreweave.com` owns the fabric,
 superpod and leafgroup labels; their live values on CPU Nodes are empty.
 Kueue v0.18.3 accepts empty topology label values;
-missing keys exclude a Node. The old label-repair command was removed after
-its first live application failed readback.
+missing keys exclude a Node. Do not patch those provider-owned labels.
 
 `provisioning.coreweave.kueue.cpu_scale_group: cpu-erapids` enables this path
 only on 08a. IaC creates the hostname Topology and CPU ResourceFlavor, then
@@ -513,8 +512,8 @@ Kueue to account for transient overlap during migration. Verify a separately
 authorized CPU SANDBOX canary receives an `iris-cpu` assignment, starts its
 process and exits successfully; admission alone does not verify the runtime.
 
-The failed label repair left `ds.coreweave.com/nvlink.domain=iris-cpu-only`
-on `g8faade`. Remove that synthetic label after the CPU flavor is available,
+CPU Node `g8faade` carries a stray synthetic
+`ds.coreweave.com/nvlink.domain=iris-cpu-only` label. Remove that synthetic label after the CPU flavor is available,
 checking first that no admitted `cw-tas` Workload has a hostname assignment to
 that Node. Removing a topology level can invalidate such an assignment and
 requeue work. With approval for that cleanup, the command is:
@@ -529,10 +528,6 @@ Inspect `status.admission.podSetAssignments[].topologyAssignment` on Workloads,
 including admitted Workloads whose Pods have not started. A Pod list alone is
 insufficient for this check. The cleanup affects one label on one CPU Node;
 it must not change physical labels on GPU Nodes.
-
-The earlier `region` constraint correction requires a separately approved Iris
-controller deployment. Existing Pods retain their original `iris.region`
-selectors until replaced; this Kueue substrate change cannot repair them.
 
 ### Public LoadBalancer reachability
 

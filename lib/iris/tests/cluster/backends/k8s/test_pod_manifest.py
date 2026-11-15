@@ -744,12 +744,14 @@ def test_region_constraint_matches_backend_without_using_kubernetes_region_label
     assert "nodeSelector" not in pod["spec"]
 
 
-def test_preferred_region_does_not_reject_dispatch():
+def test_preferred_region_mismatch_does_not_reject_dispatch():
     req = make_run_req("/my-job/task-0")
-    add_eq_constraint(req, "region", "US-EAST-08A")
+    add_eq_constraint(req, "region", "US-WEST-04A")
     req.constraints[0].mode = job_pb2.CONSTRAINT_MODE_PREFERRED
-    manifest = _build_pod_manifest(req, pod_config())
-    assert "nodeSelector" not in manifest["spec"]
+    updates, resources = _dispatch(req, pod_config(), regions=("US-EAST-08A",))
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    assert "nodeSelector" not in pod["spec"]
 
 
 def test_constraints_to_node_selector_multiple():
