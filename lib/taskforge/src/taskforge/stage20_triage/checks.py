@@ -44,6 +44,8 @@ EXECUTABLE_CHECK = re.compile(
 )
 # Evidence of a judged rubric.
 RUBRIC = re.compile(r"\brubric\b|\bjudge[ds]?\b|\bcriteri(?:on|a)\b", re.IGNORECASE)
+RUBRIC_KINDS = frozenset({Verification.DECISION_MODEL, Verification.LLM_AS_JUDGE})
+"""Verification kinds whose grader applies a rubric."""
 # Evidence of an exact, numeric, or choice match.
 SIMPLE_MATCH = re.compile(
     r"\bexact\b|\bmatch(?:es|ing)?\b|\btolerance\b|\bnumeric(?:al)?\b|\bnormali[sz]", re.IGNORECASE
@@ -105,7 +107,7 @@ def word_count(text: str) -> int:
 # or a "recompute", and a code file among the resources counts as evidence too.
 # Expected false negatives: the vocabulary is broad ("parse", "criteria"), so a judge-only design
 # that parses the answer passes as code, and keywords cannot read negation ("no rubric is used").
-# Advisory for that reason.
+# A composite needs the evidence of each of its parts. Advisory for that reason.
 def grader_matches_verification(p: TaskProposal) -> Outcome:
     if is_null(p):
         return CheckStatus.SKIP, "null proposal"
@@ -115,12 +117,13 @@ def grader_matches_verification(p: TaskProposal) -> Outcome:
     executable = EXECUTABLE_CHECK.search(grader) is not None or any(CODE_FILE.search(r) for r in p.header.resources)
     rubric = RUBRIC.search(grader) is not None
     verification = p.header.verification
+    kinds = {part.kind for part in p.header.composite} if verification is Verification.COMPOSITE else {verification}
     missing: list[str] = []
-    if verification in (Verification.CODE, Verification.COMPOSITE) and not executable:
+    if Verification.CODE in kinds and not executable:
         missing.append("an executable check (a code file, script, program, or test)")
-    if verification in (Verification.JUDGE, Verification.COMPOSITE) and not rubric:
-        missing.append("a judge rubric or criteria")
-    if verification is Verification.SIMPLE and SIMPLE_MATCH.search(grader) is None:
+    if kinds & RUBRIC_KINDS and not rubric:
+        missing.append("a rubric or criteria")
+    if Verification.ANSWER_IN_BOX in kinds and SIMPLE_MATCH.search(grader) is None:
         missing.append("an exact, numeric, or choice match rule")
     if missing:
         return CheckStatus.FAIL, f"verification is {verification} but the grader section names no {' or '.join(missing)}"

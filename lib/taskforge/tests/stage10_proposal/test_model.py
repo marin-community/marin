@@ -67,6 +67,7 @@ def proposal():
             build=(BuildItem("fixtures", "30 matrices"), BuildItem("grader", "check.py")),
             resources=("fixtures/data.json", "grader/*.py"),
             null_reason=None,
+            composite=(),
         ),
         BODY,
     )
@@ -187,6 +188,27 @@ def test_generation_schema_pins_identity(proposal):
     raw["header"]["source"]["hash"] = "wrong hash"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(raw, schema)
+
+
+def test_composite_round_trip_remains_readable_but_is_not_offered_to_generation(proposal):
+    raw = json.loads(render(proposal))
+    raw["header"].update(
+        verification="composite",
+        composite=[
+            {"kind": "code", "weight": 0.25},
+            {"kind": "decision_model", "weight": 0.75},
+        ],
+    )
+    composite = parse(json.dumps(raw))
+    assert composite.header.verification is Verification.COMPOSITE
+    assert [part.weight for part in composite.header.composite] == [0.25, 0.75]
+    assert parse(render(composite)) == composite
+    schema = document_request_fields(PROPOSAL_ID, SOURCE)["response_format"]["json_schema"]["schema"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(raw, schema)
+    raw["header"]["composite"][0]["weight"] = 0.5
+    with pytest.raises(ProposalFormatError, match="not 1"):
+        parse(json.dumps(raw))
 
 
 @pytest.mark.parametrize(

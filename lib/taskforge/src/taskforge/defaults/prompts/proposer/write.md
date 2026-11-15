@@ -6,7 +6,7 @@ Format rules:
 - Reply with the JSON object only, without a surrounding code fence.
 - Copy header.id, header.source and header.grounding exactly as shown. header.null_reason is
   null for a proposed task. Include every header field, including empty lists.
-- Encode newlines, quotes and backslashes with standard JSON escapes.
+- composite: always []. Encode newlines, quotes and backslashes with standard JSON escapes.
 - {solver_machine_rule}
 - research_need decides whether building this task requires looking anything up. It is
 {research_criterion}
@@ -28,9 +28,13 @@ Format rules:
 What each section must contain:
 - Task: the realistic user request as the solver sees it; the concrete visible inputs and
   deliverables; constraints; what makes it difficult; and how it exercises the capability. The
-  solver-visible text states the deliverable and its format only; grading belongs in 'Grader design
-  and controls', never in Task (no 'graded', 'checked', 'parsed', 'ignored', credit or tolerances in
-  solver-visible text).
+  solver-visible text states the deliverable the way a real requester would. When the answer is values,
+  labels or decisions, the task specifies the exact structure to return (field names, types, units
+  fields, allowed labels), as a requester integrating the result into a system would; it states that
+  structure as a requirement, never as how it is graded. Never add an answer block or fields that serve
+  nothing but grading when the deliverable is prose; an answer_in_box task states its one-value format.
+  Grading belongs in 'Grader design and controls', never in Task (no 'graded', 'checked', 'parsed',
+  'ignored', credit or tolerances in solver-visible text).
 - Realism and workflow: who does this work and why, the workflow it reproduces, why this
   environment, solver machine and verification fit (justify any change from the planned slot),
   and what a real user can see and do versus what stays evaluator-only.
@@ -42,9 +46,10 @@ What each section must contain:
   artifacts and acceptance checks; for shellsim, the simulator semantics and executable
   compatibility tests; for container, dependencies, reset and seed strategy, isolation, and
   resource estimates (to be measured).
-- Grader design and controls: the observable success condition; the grader design (for judge or
-  composite: anchored criteria, disqualifiers, weights, critical gates, and the exact aggregation
-  formula); positive and negative controls with the reward band each must receive (the build
+- Grader design and controls: the observable success condition; the verification kind and why the
+  rule above selects it; the grader design (for decision_model and llm_as_judge: the rubric items
+  with intent, pass criterion, equivalences, negation handling, weights, gates and caps);
+  positive and negative controls with the reward band each must receive (the build
   computes exact values); anti-shortcut and
   prompt-injection controls; and how hidden evidence stays private (no answer leakage).
 - Risks and null conditions: each risk with a mitigation and an abandon-if condition; data

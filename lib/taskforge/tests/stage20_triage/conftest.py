@@ -28,6 +28,11 @@ def document(verification: str = "code", resources: str = '["grader/check.py", "
         proposal_id="d01.cap/1",
         source={"kind": "capability", "ref": "d01.cap", "hash": "abc"},
         verification=verification,
+        composite=(
+            [{"kind": "decision_model", "weight": 0.5}, {"kind": "code", "weight": 0.5}]
+            if verification == "composite"
+            else []
+        ),
         research_need="needed",
         research_reason="the deliverable is modeled on real lab handouts",
         research=[{"kind": "web", "purpose": "two real lab handouts to model the deliverable on"}],
