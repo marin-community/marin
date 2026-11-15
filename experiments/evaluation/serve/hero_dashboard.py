@@ -20,6 +20,7 @@ Example::
 
 import json
 import logging
+import socket
 import tarfile
 import time
 from dataclasses import dataclass, replace
@@ -141,6 +142,9 @@ FAST_COMPILATION_CONFIG = {
 FLASHINFER_CUBINS = "s3://marin-us-east-02a/marin/users/rav/hero-serving/flashinfer-cubins-0.6.18.post1.tgz"
 FLASHINFER_CUBIN_DIR = Path.home() / ".cache" / "flashinfer" / "cubins"
 SMOKE_PROMPT = "What is 2 + 2? Answer briefly."
+EPHEMERAL_PORT_RANGE = "/proc/sys/net/ipv4/ip_local_port_range"
+DP_RPC_PORT_SEARCH = 1000
+MIN_UNPRIVILEGED_PORT = 1024
 
 
 class Quantization(StrEnum):
@@ -239,6 +243,27 @@ def _release_tag(config: HeroDashboardConfig) -> str:
     return VLLM_GPU_RELEASE.release_tag
 
 
+def _dp_rpc_port(host: str, requested: int) -> int:
+    """A port for vLLM's DP RPC socket that survives the gap between reserving and binding it.
+
+    On Kubernetes, Iris assigns port 0. The kernel then hands the launcher the lowest free ephemeral port,
+    and once the launcher releases it, vLLM's own get_open_port() calls take the same port first
+    ("Address already in use" on the RPC bind). Ports below the ephemeral range are never assigned
+    by the kernel, so one of those stays free until vLLM binds it.
+    """
+    if requested:
+        return requested
+    floor = int(Path(EPHEMERAL_PORT_RANGE).read_text().split()[0])
+    for port in range(floor - 1, max(floor - DP_RPC_PORT_SEARCH, MIN_UNPRIVILEGED_PORT) - 1, -1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind((host, port))
+            except OSError:
+                continue
+        return port
+    raise RuntimeError(f"No free port below the ephemeral range floor {floor} on {host}")
+
+
 def _api_servers(config: HeroDashboardConfig) -> int:
     return FAST_API_SERVERS if config.decode_stack is DecodeStack.FAST else 1
 
@@ -294,7 +319,8 @@ def serve(config: HeroDashboardConfig) -> None:
     )
     ctx = iris_ctx()
     # Hold the leader's DP RPC port until the gang actor publishes it, then release it for vLLM.
-    with bind_serving_socket(info.advertise_host, ctx.get_port("dp_rpc")) as rendezvous_socket:
+    dp_rpc_port = _dp_rpc_port(info.advertise_host, ctx.get_port("dp_rpc"))
+    with bind_serving_socket(info.advertise_host, dp_rpc_port) as rendezvous_socket:
         rendezvous_socket.listen(1)
         primary = f"{info.advertise_host}:{rendezvous_socket.getsockname()[1]}"
         with iris_gang_coordinator(identity, info.advertise_host, primary) as primary_address:
