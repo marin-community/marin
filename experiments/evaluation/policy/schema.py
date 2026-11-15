@@ -94,7 +94,7 @@ class EvalPolicy:
         _require_unique("candidate", [candidate.name for candidate in self.candidates])
         _require_unique("evaluation", [evaluation.name for evaluation in self.in_distribution])
         _require_unique("exception for", [f"{item.candidate.name} on {item.evaluation.name}" for item in exceptions])
-        # Comparing whole definitions, not names, rejects an exception built from a stale copy.
+        # Full-value comparison rejects exceptions built from stale definitions.
         for item in exceptions:
             if item.candidate not in self.candidates or item.evaluation not in self.in_distribution:
                 raise ValueError(f"exception for {item.candidate.name} on {item.evaluation.name} is not in this policy")

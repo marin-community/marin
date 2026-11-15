@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Policy declarations and their resolution into per-candidate settings."""
-
 from dataclasses import replace
 from pathlib import Path
 
