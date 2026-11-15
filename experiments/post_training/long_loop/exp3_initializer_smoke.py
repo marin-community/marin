@@ -326,7 +326,7 @@ def main(
         completed_updates=2,
         reference_scope="Full67B initializer; estimated C4-en reference at262144 context; two2048-token updates.",
         reference_filename="c4-reference.json",
-        producers=("rank-0", "rank-1"),
+        producers=tuple(f"rank-{rank}" for rank in range(RESOURCES.replicas)),
     )
     execution = IrisSkyRLExecution(
         cluster="cw-rno2a",
