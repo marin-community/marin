@@ -37,25 +37,30 @@ class LowValuePin:
     calibration_sha256: str
 
 
-def _load_bundle(
-    pin: LowValuePin, model_dir: str, target: float
-) -> tuple[LowValueModel, OperatingPoint, MarinTokenizer]:
+@dataclass(frozen=True)
+class ScoringBundle:
+    model: LowValueModel
+    operating_point: OperatingPoint
+    tokenizer: MarinTokenizer
+
+
+def _load_bundle(pin: LowValuePin, model_dir: str, target: float) -> ScoringBundle:
     model = load_model(prefix_join(model_dir, "model.json"), pin.model_sha256)
     operating_point = load_operating_point(
         prefix_join(model_dir, "calibration.json"), pin.calibration_sha256, pin.model_sha256, target
     )
-    return model, operating_point, load_model_tokenizer(model)
+    return ScoringBundle(model, operating_point, load_model_tokenizer(model))
 
 
 _bundle = cache(_load_bundle)
 
 
 def _score_shard(
-    batches: Iterator[pa.RecordBatch], shard: ShardInfo, *, source: str, pin: LowValuePin, model_dir: str, target: float
+    batches: Iterator[pa.RecordBatch], _shard: ShardInfo, *, source: str, pin: LowValuePin, model_dir: str, target: float
 ) -> Iterator[pa.RecordBatch]:
-    model, operating_point, tokenizer = _bundle(pin, model_dir, target)
+    bundle = _bundle(pin, model_dir, target)
     for batch in score_batches(
-        batches, source=source, tokenizer=tokenizer, model=model, operating_point=operating_point
+        batches, source=source, tokenizer=bundle.tokenizer, model=bundle.model, operating_point=bundle.operating_point
     ):
         counters.pipeline.update_counter("low_value/documents", len(batch))
         counters.pipeline.update_counter("low_value/flagged", sum(batch.column("is_low_value").to_pylist()))

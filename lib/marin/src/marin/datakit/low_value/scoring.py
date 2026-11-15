@@ -10,6 +10,7 @@ import numpy as np
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.jagged_array import JaggedArrayStore
 from levanter.tokenizers import MarinTokenizer
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.datakit.low_value.features import document_features
 from marin.datakit.low_value.model import LowValueModel, OperatingPoint
@@ -93,7 +94,7 @@ def score_token_cache(
     """
     if cache_tokenizer_sha256 != model.tokenizer_sha256:
         raise ValueError("Cache tokenizer differs from the classifier window tokenizer")
-    store = JaggedArrayStore.open(cache_dir.rstrip("/") + "/input_ids", mode="r", dtype=np.int32)
+    store = JaggedArrayStore.open(prefix_join(cache_dir, "input_ids"), mode="r", dtype=np.int32)
     for start in range(0, len(indices), batch_size):
         batch = indices[start : start + batch_size]
         documents = [cache_views(store, index, tokenizer, model.window_tokens) for index in batch]

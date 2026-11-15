@@ -35,7 +35,7 @@ _ESCAPED_NEWLINE = re.compile(r"\\[nr]")
 _JSON_KEY = re.compile(r'"[^"\n]{1,60}"\s*:')
 _MARKUP = re.compile(r"<[^<>]{1,400}>")
 # Tabs and semicolons count only between fields, so indentation and statement ends do not.
-# Pipes are left to the per-line rule: a report's markdown tables are not a data dump.
+# Pipe-separated structure is measured separately by the per-line feature.
 _SEPARATOR = re.compile(r",|(?<=\S)\t(?=\S)|;(?=\S)")
 _CODE_LINE_END = re.compile(r"[;{}]\s*$")
 # A short key and at most three words of value. Statements ending in ``;`` or ``{`` are code, not records.
@@ -51,7 +51,12 @@ _URL = re.compile(r"https?://[^\s\"'<>),|]+")
 
 @dataclass(frozen=True)
 class ChunkFeatures:
-    """Measurements of one chunk of text. Shares are of the chunk's characters unless stated."""
+    """Measurements of one text chunk.
+
+    Line shares use nonempty lines. Digit, letter and separator shares use
+    non-space characters; other shares use all characters. Counts and rates
+    are named separately.
+    """
 
     binary_share: float
     encoded_share: float
