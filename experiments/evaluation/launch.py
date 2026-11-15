@@ -38,7 +38,7 @@ from marin.evaluation.harbor.driver_config import (
     preflight_harbor_configs,
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
-from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
+from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
@@ -80,6 +80,7 @@ from rigging.secrets import SecretSpec, resolve_secret_spec
 from zephyr.context import ZephyrContext
 
 from experiments.evaluation.curated import (
+    DEFAULT_RUN_SEED,
     corpus_key,
     corpus_steps,
     pinned_model,
@@ -265,6 +266,7 @@ def _resolve_definitions(
     model: ModelConfig,
     limit: int | None,
     seed: int | None,
+    default_seed: int | None,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
@@ -285,7 +287,7 @@ def _resolve_definitions(
             protocol = resolve_selection(
                 definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
             )
-            settings = settings_for(definition, model, limit, seed)
+            settings = settings_for(definition, model, limit, seed, default_seed)
             resolved.append(
                 (
                     name,
@@ -400,11 +402,15 @@ def build_evaluation_batch(
         isinstance(definition, HarborDefinition) for _, definition in requested_definitions
     ):
         model = replace(model, serve=resolved_serve_config(model))
+    seeded = supports_request_seed(accelerator.platform, model.serve.backend)
+    if not seeded and has_curated_definitions and spec.seed is None:
+        logger.info("TPU vLLM rejects seeded sampling; runs without an explicit seed are unseeded")
     definitions = _resolve_definitions(
         requested_definitions,
         model,
         spec.limit,
         spec.seed,
+        DEFAULT_RUN_SEED if seeded else None,
         spec.retry_unscored_harbor_trials,
         judge.model if judge is not None else None,
     )

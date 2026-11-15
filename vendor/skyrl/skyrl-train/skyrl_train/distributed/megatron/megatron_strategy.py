@@ -1,4 +1,3 @@
-import gc
 import os
 import math
 import random
@@ -38,10 +37,6 @@ from skyrl_train.distributed.megatron.checkpoint_restore import (
     defer_model_weights_to_optimizer,
     restore_model_weights_from_optimizer,
 )
-from skyrl_train.distributed.megatron.optimizer_checkpoint import (
-    restore_hybrid_adam_bucket_steps,
-    restore_in_host_order,
-)
 from marinskyrl.remote_io import abort_multipart_uploads
 
 from megatron.core.dist_checkpointing.strategies import base as ckpt_base
@@ -56,7 +51,6 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
 )
 from transformers import PreTrainedTokenizer
 from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
-from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
 from megatron.core.optimizer.clip_grads import clip_grad_by_total_norm_fp32
 from skyrl_train.distributed.step_policy import (
     NonfiniteStepPolicy,
@@ -497,32 +491,17 @@ class MegatronStrategy(DistributedStrategy):
             )
             if muonh:
                 _muonh_fp32_groups_as_lists(state_dict["optimizer"])
-
-            def restore_optimizer():
-                optimizer.load_state_dict(state_dict.pop("optimizer"))
-                if muonh:
-                    _restore_muonh_adamh_step(optimizer, common_state["optimizer_recipe_step"])
-                restore_offloaded_optimizer_state(optimizer)
-                load_megatron_grads_to_gpu(model)
-                # Release replaced pinned copies before the next local worker restores.
-                torch.cuda.synchronize()
-                torch.accelerator.memory.empty_host_cache()
-
-            children = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
-            if (
-                not muonh
-                and saved_type == "dp_reshardable"
-                and any(isinstance(child.optimizer, HybridDeviceOptimizer) for child in children)
-            ):
-                if str(self.optimizer_config.optimizer).lower() in ("adam", "adamw"):
-                    restore_hybrid_adam_bucket_steps(state_dict["optimizer"])
-                # dp_reshardable bucket restore is rank-local. HDO rebuilds pinned
-                # copies; doing all four tray workers together exceeded host RAM.
-                restore_in_host_order(restore_optimizer)
-            else:
-                restore_optimizer()
+            optimizer.load_state_dict(state_dict.pop("optimizer"))
+            if muonh:
+                _restore_muonh_adamh_step(optimizer, common_state["optimizer_recipe_step"])
+            restore_offloaded_optimizer_state(optimizer)
             if model_weights_from_optimizer:
                 restore_model_weights_from_optimizer(optimizer, model)
+            load_megatron_grads_to_gpu(model)
+            # Restoring a CPU-offloaded optimizer rebuilds its pinned host copies, and PyTorch keeps the
+            # replaced blocks cached for reuse that never comes, so the next save would need that much more host memory.
+            torch.cuda.synchronize()
+            torch.accelerator.memory.empty_host_cache()
             self.log("Loaded optimizer state dict.")
 
         if scheduler and load_training_state:
@@ -544,14 +523,6 @@ class MegatronStrategy(DistributedStrategy):
             states = extra_state.get("client_state", {}) or {}
             self.log("Loaded client state from checkpoint.")
 
-        # The sharded descriptors retain the replaced optimizer storage until
-        # this frame exits. Drop them before returning cached pinned blocks to
-        # the host, so the first resumed update has room for CPU gradients.
-        del sharded_state_dict, model_sharded_state_dict, state_dict
-        if optimizer and load_training_state:
-            gc.collect()
-            torch.cuda.synchronize()
-            torch.accelerator.memory.empty_host_cache()
         return ckpt_dir, states
 
     def save_hf_model(self, bridge, model: MegatronModelWrapper, output_dir: str, tokenizer=None, **kwargs) -> None:

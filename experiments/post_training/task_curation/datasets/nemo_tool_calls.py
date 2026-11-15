@@ -11,7 +11,7 @@ from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, RawRow
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 
 
 def convert(row: RawRow, _context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -33,6 +33,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 origin="NeMo",
                 family="function-calling",
                 tags=("eval", "agentic", "single-turn", "license:cc-by-4.0"),
+                task_format=TaskFormat.TASKCOMPENDIUM,
                 notes="Exact function and JSON argument matching; alternative valid calls receive zero.",
             ),
             config=CurationRecipe(

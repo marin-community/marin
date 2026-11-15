@@ -130,7 +130,7 @@ class OpenAIModel(OpenRouterModel):
 
 
 class ContextLimitedModel(OpenAIModel):
-    """Preserve native actions and stop cleanly when the context is exhausted."""
+    """Preserve native actions and stop cleanly at context or engine limits."""
 
     def __init__(
         self,
@@ -171,17 +171,17 @@ class ContextLimitedModel(OpenAIModel):
                 )
             return super()._query(messages, **{**kwargs, "max_tokens": max_tokens})
         except (ContextBudgetExceeded, openai.BadRequestError) as error:
+            exit_status = "ContextLimit"
             if isinstance(error, openai.BadRequestError):
-                details = error.body
-                if isinstance(details, dict):
-                    details = details.get("error", details)
-                if not isinstance(details, dict) or details.get("type") != "context_length_exceeded":
+                if error.type == "generation_stopped":
+                    exit_status = "LimitsExceeded"
+                elif "context_length_exceeded" not in (error.type, error.code):
                     raise
             raise LimitsExceeded(
                 {
                     "role": "exit",
                     "content": str(error),
-                    "extra": {"exit_status": "ContextLimit", "submission": ""},
+                    "extra": {"exit_status": exit_status, "submission": ""},
                 }
             ) from error
 

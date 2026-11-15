@@ -129,7 +129,7 @@ def _worker_args(tmp_path):
         ray_spill_backend=task_runtime.RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
         cluster_join_timeout=1,
-        ray_resources={},
+        ray_labels={},
     )
 
 

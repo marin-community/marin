@@ -48,11 +48,11 @@ def test_supervisors_share_worker_diagnostics_with_uploader(
     )
     args = Namespace(
         ray_log_dir=None,
-        ray_resources={},
         rendezvous_dir=str(tmp_path),
         rendezvous_timeout=1,
         ray_spill_backend=RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
+        ray_labels={},
     )
     task_runtime.write_rendezvous(args.rendezvous_dir, "192.0.2.1", iris_ray_ports[RayPort.HEAD], "test-gang")
 

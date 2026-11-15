@@ -144,7 +144,7 @@ class MegatronWorker:
         flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
         transformer_config_kwargs["attention_backend"] = (
-            AttnBackend.flash if flash_attn else (AttnBackend.fused if bf16 else AttnBackend.unfused)
+            AttnBackend.flash if flash_attn else AttnBackend.auto
         )
 
         if not self.cfg.trainer.gradient_checkpointing:
@@ -164,11 +164,12 @@ class MegatronWorker:
             expert_model_parallel_size=megatron_config.expert_model_parallel_size,
             expert_tensor_parallel_size=megatron_config.expert_tensor_parallel_size,
             bf16=bf16,
-            attention_backend="flash" if flash_attn else "fused",
         )
 
         for k, v in transformer_config_kwargs.items():
             setattr(provider, k, v)
+        if hf_config.model_type == GRUG_MOE_MODEL_TYPE:
+            provider.grug_batch_invariant_experts = self.cfg.trainer.algorithm.batch_invariant
         provider.finalize()
 
         self.provider = provider

@@ -165,20 +165,13 @@ other configured counts with valid Megatron geometry, with no rack-size cap. Run
 for this cross-host path covers the 48/12 layout within one NVLink domain. Other layouts,
 including engines that share or partly fill a host, need separate runtime qualification.
 
-Resource-count validation does not ensure that an expert-parallel group stays within one
-NVLink domain. Iris places the combined policy and rollout allocation, and Ray assigns workers
-within it. An expert group may communicate across the interconnect between hosts or racks.
+Resource-count validation alone does not keep an expert-parallel group within one
+NVLink domain. Without a locality policy, Iris places the combined policy and rollout
+allocation, and Ray assigns workers within it. An expert group may communicate across
+the interconnect between hosts or racks. To keep the trainer and each engine local,
+enable [NVLink role placement](../dev-guide/skyrl.md#keep-each-model-group-within-one-nvlink-domain).
 Check placement and communication-backend support before running a new layout. Accepting a
 72-GPU policy in the planner does not establish a full-rack NVL72 trainer with inference elsewhere.
-
-The [Mochi full-context experiment](https://github.com/marin-community/marin/blob/main/experiments/post_training/mochi_three_rack.py)
-requests 64 trainer GPUs and two 64-GPU inference engines in three separate NVLink domains.
-It supports fresh Hero MuonH state and native checkpoint continuation within a 262,144-token
-prompt-plus-response window. The CLI and `build_run()` default to 8,192 response tokens per turn.
-Pass `--max-new-tokens 1024` to the launcher for a short smoke run. Each response is capped by
-the requested budget and the context space left after its prompt.
-Its inputs use a pinned artifact prefix with three-day retention; check their identity and expiry before launch.
-The [one-rack recipe](https://github.com/marin-community/marin/blob/main/experiments/post_training/mochi_one_rack/README.md) remains available.
 
 Engines that fit on one host retain whole-engine packing: each host holds
 `floor(GPUs per host / engine ranks)` engines. Other disaggregated engines must still fit
@@ -209,10 +202,16 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+The [Mochi three-rack example](../recipes/mochi-rl.md#262k-three-rack-example)
+uses 64 trainer GPUs and two 64-GPU inference replicas in separate NVLink domains.
+Its context window is 262,144 tokens with an 8,192-token response default.
+It uses completed SFT exports or native RL checkpoints and submits no SFT job.
+The example stays in draft; its PR records the integration and GPU-evidence boundaries.
+
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
-data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
+data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 
@@ -259,6 +258,38 @@ After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
 runtime. Reuse a version across runtime changes only after establishing checkpoint compatibility or
 selecting a fresh checkpoint root.
+
+### Native checkpoint inputs
+
+Set `SkyRLSpec.starting_checkpoint` to an artifact handle for a completed
+`global_step_N` directory. Give the checkpoint artifact an immutable name and
+version. Give the continuation a new RL artifact version when changing that
+input; reusing an existing run version with a different starting checkpoint fails.
+The launch document records the starting checkpoint's URI and artifact identity
+(`name@version:fingerprint`) under `inputs.starting_checkpoint`; the trainer reads native state directly.
+The input requires `resume_mode=latest`; omit any recipe `trainer.resume_path`.
+Completed immutable SkyRL artifact versions also reject configuration drift instead of
+returning a cached result.
+
+Automatic `resume_mode=latest` first uses the current run's latest checkpoint.
+If that run has no checkpoint marker, it uses the supplied starting checkpoint,
+or starts fresh if none was supplied. Repeat the same continuation command to
+recover its progress. A corrupt marker, missing checkpoint or load error still
+fails; it never silently falls back to older state. A continuation writes to
+its own output root, leaving the starting run's checkpoints unchanged. Without
+`starting_checkpoint`, the trainer's explicit `from_path` and `none` modes remain available.
+
+The initial import starts the configured dataset from the beginning. Leave
+`restore_dataloader_state=true` to recover this run's data position and queued
+rollouts after interruption. Optional `reset_global_step_on_resume` and
+`reset_distillation_token_count_on_resume` apply only to the initial import;
+recovery preserves the counters saved by this run.
+
+Training limits use the absolute trainer step. To apply two more updates from
+`global_step_500`, set `max_steps=502` and enough `epochs` to reach that target.
+A checkpoint already at or beyond the target completes without another update.
+Set `reset_global_step_on_resume=true` to count a new stage from zero instead;
+this leaves the restored optimizer and scheduler state intact.
 
 ## Pre-launch review
 

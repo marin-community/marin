@@ -13,18 +13,20 @@ import tempfile
 import tomllib
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
 
 import fsspec
 import yaml
+from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, SCHEDULABLE_RACK_NODES, is_rack_based
 from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from skyrlrecipe.locality import RoleTopologyMode, plan_nvlink_roles
 
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
@@ -82,7 +84,8 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
     # (ETP, EP, expert-DP, PP) grids. CP ranks also participate in the expert grid.
     if num_gpus % (tp * pp * cp) or num_gpus % (etp * ep * pp):
         raise ValueError(
-            f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
+            f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
+            "GPUs must be divisible by TP*PP*CP and ETP*EP*PP"
         )
 
 
@@ -265,6 +268,12 @@ class ResolvedModelLocator:
 
 
 @dataclass(frozen=True)
+class ResolvedNativeCheckpoint:
+    uri: str
+    identity: str
+
+
+@dataclass(frozen=True)
 class ResolvedDirectoryDataSource:
     uri: str
     identity: str
@@ -438,6 +447,7 @@ class SkyRLSpec:
     topology: SkyRLTopology
     retention: SkyRLRetentionPolicy
     seed: int
+    starting_checkpoint: ArtifactStep[Artifact] | None = None
 
     def __post_init__(self) -> None:
         _validate_skyrl_recipe(self.config_yaml, self.topology)
@@ -461,7 +471,7 @@ class IrisSkyRLExecution:
     job_timeout_seconds: int = 0
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
-    role_topology: str | None = None
+    role_topology: RoleTopologyMode | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -854,9 +864,29 @@ def _launch_config_yaml(
     train_data: tuple[ResolvedDataSource, ...],
     validation_data: tuple[ResolvedDataSource, ...],
     output: SkyRLOutputPaths,
+    starting_checkpoint: ResolvedNativeCheckpoint | None,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
+    num_nodes = spec.topology.num_nodes
+    if execution.role_topology is not None:
+        if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
+            raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
+        plan = spec.topology.role_plan
+        locality = plan_nvlink_roles(
+            policy_gpus=plan.policy_num_nodes * plan.policy_num_gpus_per_node,
+            num_inference_engines=plan.num_inference_engines,
+            tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
+            pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
+            data_parallel_size=plan.inference_engine_data_parallel_size,
+            expert_parallel_size=plan.inference_engine_expert_parallel_size,
+            inference_backend=cast(str, _declared_config_value(recipe, "generator.backend")),
+            colocate_all=plan.colocate_all,
+            colocate_policy_ref=plan.colocate_policy_ref,
+            gpus_per_node=spec.topology.gpus_per_node,
+            max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
+        )
+        num_nodes = locality.num_nodes
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")
@@ -881,9 +911,9 @@ def _launch_config_yaml(
             "cluster_config": execution.cluster_config,
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
             "wandb_entity": execution.wandb_entity,
-            "role_topology": execution.role_topology,
+            "role_topology": execution.role_topology.value if execution.role_topology is not None else None,
             "allocation": {
-                "num_nodes": spec.topology.num_nodes,
+                "num_nodes": num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,
                 "gpu_variant": spec.topology.gpu_variant,
                 "cpu": execution.cpu,
@@ -921,6 +951,8 @@ def _launch_config_yaml(
         },
         "skyrl": recipe,
     }
+    if starting_checkpoint is not None:
+        launch["inputs"]["starting_checkpoint"] = asdict(starting_checkpoint)
     if execution.container_profile is not None:
         launch["iris"]["container_profile"] = job_pb2.ContainerProfile.Name(execution.container_profile)
     return yaml.safe_dump(launch, sort_keys=False)
@@ -940,6 +972,7 @@ def skyrl_step(
                 *spec.model.deps(),
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
+                *((spec.starting_checkpoint,) if spec.starting_checkpoint is not None else ()),
             )
         )
     )
@@ -973,6 +1006,14 @@ def skyrl_step(
         model = spec.model.resolve(ctx)
         train_data = tuple(source.resolve(ctx) for source in spec.train_data)
         validation_data = tuple(source.resolve(ctx) for source in spec.validation_data)
+        starting_checkpoint = (
+            ResolvedNativeCheckpoint(
+                uri=ctx.artifact_path(spec.starting_checkpoint),
+                identity=artifact_identity(spec.starting_checkpoint),
+            )
+            if spec.starting_checkpoint is not None
+            else None
+        )
         execution = (
             _FINGERPRINT_EXECUTION if ctx.is_fingerprint else cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION))
         )
@@ -987,6 +1028,7 @@ def skyrl_step(
                 train_data=train_data,
                 validation_data=validation_data,
                 output=output,
+                starting_checkpoint=starting_checkpoint,
             ),
             run_id=run_id,
             attempt_id=attempt_id,
@@ -996,7 +1038,7 @@ def skyrl_step(
             draft_checkpoint_root=draft_checkpoint_root,
         )
 
-    return ArtifactStep(
+    step = ArtifactStep(
         name=step_name,
         version=spec.version,
         artifact_type=SkyRLRun,
@@ -1005,3 +1047,5 @@ def skyrl_step(
         deps=deps,
         runtime_args={_EXECUTION: execution},
     )
+    # A completed training version must not serve another continuation's cached result.
+    return replace(step, expected_fingerprint=step.fingerprint())

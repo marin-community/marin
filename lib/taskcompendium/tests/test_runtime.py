@@ -528,7 +528,7 @@ async def test_private_fixture_archive_removed_before_grading_or_grader_never_ru
         assert archive.is_file()
         assert not (tmp_path / "logs/verifier/verdict.json").exists()
     else:
-        assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+        assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
         assert not archive.exists()
 
 
@@ -613,7 +613,7 @@ def test_native_action_judge_exact_gate_receives_the_semantic_action(shell_task)
         attempt,
     )
 
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
 
 
 @pytest.mark.parametrize("state,reward", [('{"ready":true}', 1.0), ('{"ready":false}', 0.0)])
@@ -745,7 +745,7 @@ async def test_grader_setup_uses_prepared_cwd_before_explicit_grader_command(she
     )
     task = shell_task.model_copy(update={"grader": grader, "output_paths": ()})
     result = await grade_in_sandbox(task, GradingAttempt(finished(task)), LocalGradingMachines(tmp_path), GRADER_MACHINE)
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
 
 
 @pytest.mark.asyncio
@@ -903,4 +903,25 @@ async def test_episode_stops_at_ejection_without_executing_or_continuing():
     assert rollout.events == (*task.context.events, ejection)
     assert rollout.evidence().files == {}
     result = grade_task(task, grading_attempt(ConversationTrace(events=rollout.events), rollout.evidence()))
-    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error
+
+
+@pytest.mark.asyncio
+async def test_grader_setup_cannot_overwrite_captured_candidate_files(shell_task, tmp_path):
+    grader = ScriptGrader(
+        argv=("sh", "-c", 'test "$(cat solution.txt)" = solved'),
+        cwd="/app",
+        answer_path=None,
+        reward=ExitCodeReward(),
+        environment=GRADER_ENVIRONMENT.model_copy(
+            update={"working_directory": "/app", "setup_commands": ("echo initial > solution.txt",)}
+        ),
+    )
+    task = shell_task.model_copy(update={"grader": grader, "output_paths": ("/app/solution.txt",)})
+    result = await grade_in_sandbox(
+        task,
+        GradingAttempt(finished(task), files={"/app/solution.txt": b"solved\n"}),
+        LocalGradingMachines(tmp_path),
+        GRADER_MACHINE,
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result.error

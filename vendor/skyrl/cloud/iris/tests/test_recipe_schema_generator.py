@@ -7,14 +7,13 @@ from types import ModuleType
 import pytest
 import skyrlrecipe as schema
 from skyrlrecipe.model import Section, thaw
-from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS
+from skyrlrecipe.ownership import OWNER_MESSAGES
 
 from scripts import generate_recipe_schema as generator
 from scripts.recipe_schema_sidecar import OPEN
 
 ROOT = Path(__file__).resolve().parents[3]
 
-BUNDLED_NORMALIZATION = {"trainer.max_ckpts_to_keep": frozenset({"snowball_mopd_ultra_32k", "snowball_mopd_ultra_async_32k_smoke"})}
 BASE = """defaults:
   - _self_
 trainer:
@@ -48,7 +47,7 @@ NAMES = {"trainer.policy.model": "PolicyModel", "trainer.critic.model": "CriticM
 
 
 def _skipped(path, value):
-    return path in DERIVED_PATHS | LAUNCH_PATHS or generator.following_source(value) is not None
+    return path in frozenset(OWNER_MESSAGES) or generator.following_source(value) is not None
 
 
 def _author_document(document):
@@ -99,12 +98,6 @@ def test_repository_generation_matches_hydra_author_defaults_and_all_group_optio
     paths = sorted((ROOT / "cloud/iris/configs").glob("*.yaml"))
     recipes = generator.recipe_documents(ROOT / "cloud/iris/configs", generator.CONFIG_DIR, sources.groups)
     for path, document in zip(paths, recipes, strict=True):
-        for key, names in BUNDLED_NORMALIZATION.items():
-            if path.stem in names:
-                parent = document
-                for part in key.split(".")[:-1]:
-                    parent = parent.get(part, {})
-                parent.pop(key.rsplit(".", 1)[-1], None)
         assert schema.SkyRLRecipe.from_document(document).to_skyrl() == document, path.name
 
 

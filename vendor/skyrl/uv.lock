@@ -1491,45 +1491,36 @@ wheels = [
 ]
 
 [[package]]
-name = "flash-attn"
-version = "2.8.3.post2+marin.fa2.cu132torch2141.1"
-source = { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_aarch64.whl" }
-resolution-markers = [
-    "platform_machine == 'aarch64' and sys_platform == 'linux'",
-]
-dependencies = [
-    { name = "einops", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
-    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
-]
-wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_aarch64.whl", hash = "sha256:dd24518f6ee7a5ed7e48a7b3b9bbda075171c4784f4a47ede3167bfef527c069" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "einops" },
-    { name = "torch" },
-]
-
-[[package]]
-name = "flash-attn"
-version = "2.8.3.post2+marin.fa2.cu132torch2141.1"
-source = { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_x86_64.whl" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
+name = "flash-attn-3"
+version = "3.0.1"
+source = { registry = "https://download.pytorch.org/whl/cu132" }
 dependencies = [
     { name = "einops", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "ninja", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "packaging", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_x86_64.whl", hash = "sha256:4af19af95cca1955d03714d1995479a3684eff887c3cebc7b6aa0424394e5847" },
+    { url = "https://download.pytorch.org/whl/cu132/flash_attn_3-3.0.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:772e7a1802396bf48aba17fe6597776301a903414f828a03608d255cf21cdce4", upload-time = "2026-10-20T12:38:42Z" },
+    { url = "https://download.pytorch.org/whl/cu132/flash_attn_3-3.0.1-cp310-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:eb36d3704bef166123428eb3e2c2912154315c9a3a603cf6a5198d1f8b3ce306", upload-time = "2026-10-20T12:39:02Z" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "einops" },
-    { name = "torch" },
+[[package]]
+name = "flash-attn-4"
+version = "4.0.0b39"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "apache-tvm-ffi", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "einops", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cutlass-dsl", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "quack-kernels", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch-c-dlpack-ext", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c7/15/5ee14b3cc844f60a05a7c3dba63d67a5d75e11190834e861c795472978bb/flash_attn_4-4.0.0b39.tar.gz", hash = "sha256:ac081e2aeb79c5171538d322552fa4573effb91d33b1b313a301c431d5bb64bf", size = 534758, upload-time = "2026-11-11T08:12:51.003Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/4a/7a6580328219c5effeb51a97a753919ca7075089ee37a00ee84d73933ab1/flash_attn_4-4.0.0b39-py3-none-any.whl", hash = "sha256:9c5e6f4479d81317a0d7da84d0cc33fe942f78d64c60a01bc409fc78d6aa8ea3", size = 563466, upload-time = "2026-11-11T08:12:49.175Z" },
 ]
 
 [[package]]
@@ -2105,6 +2096,7 @@ provides-extras = ["runtime", "qemu", "shellsim", "sotopia", "analysis", "archiv
 test = [
     { name = "anthropic", specifier = ">=1.11.0" },
     { name = "harbor", extras = ["shellsim"] },
+    { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
     { name = "mini-swe-agent", specifier = "==2.1.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },
@@ -2150,11 +2142,20 @@ wheels = [
 
 [[package]]
 name = "hs-connectors"
-version = "0.8.1a16"
-source = { git = "https://github.com/marin-community/speculators.git?subdirectory=hs_connectors&rev=ecac1b16278063e9640004135153882c02de5801#ecac1b16278063e9640004135153882c02de5801" }
+version = "0.8.0+marin.1"
+source = { url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/hs_connectors-0.8.0%2Bmarin.1-py3-none-any.whl" }
 dependencies = [
     { name = "safetensors", marker = "sys_platform == 'linux'" },
     { name = "torch", version = "2.14.1+cu132", source = { registry = "https://download.pytorch.org/whl/cu132" }, marker = "sys_platform == 'linux'" },
+]
+wheels = [
+    { url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/hs_connectors-0.8.0%2Bmarin.1-py3-none-any.whl", hash = "sha256:e17ca747e9dc616f0ae54cfb402b28a933e11737f00833262ebb649d038fc195" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "safetensors" },
+    { name = "torch" },
 ]
 
 [[package]]
@@ -3198,6 +3199,7 @@ test = [
     { name = "pytest-json-report", specifier = ">=1.5" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "setuptools" },
 ]
 
 [[package]]
@@ -3285,8 +3287,8 @@ megatron = [
     { name = "accelerate", marker = "sys_platform == 'linux'" },
     { name = "causal-conv1d", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "cuda-toolkit", version = "13.2.2", source = { registry = "https://pypi.org/simple" }, extra = ["cccl", "nvcc"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "flash-attn", version = "2.8.3.post2+marin.fa2.cu132torch2141.1", source = { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "flash-attn", version = "2.8.3.post2+marin.fa2.cu132torch2141.1", source = { url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "flash-attn-3", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "flash-attn-4", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
     { name = "flash-linear-attention", marker = "sys_platform == 'linux'" },
     { name = "harbor", marker = "sys_platform == 'linux'" },
     { name = "mamba-ssm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -3300,8 +3302,8 @@ megatron = [
     { name = "torchvision", marker = "sys_platform == 'linux'" },
     { name = "transformer-engine", extra = ["pytorch"], marker = "(sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
     { name = "transformer-engine-cu13", marker = "sys_platform == 'linux'" },
-    { name = "transformer-engine-torch", version = "2.19.0", source = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "transformer-engine-torch", version = "2.19.0", source = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
 ]
 telemetry = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
@@ -3324,8 +3326,8 @@ vllm = [
     { name = "torchcodec", marker = "sys_platform == 'linux'" },
     { name = "torchdata", marker = "sys_platform == 'linux'" },
     { name = "torchvision", marker = "sys_platform == 'linux'" },
-    { name = "vllm", version = "0.0.0.dev20261110+marin.3004cd8f1632.cu132", source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "vllm", version = "0.0.0.dev20261110+marin.3004cd8f1632.cu132", source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "vllm", version = "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132", source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "vllm", version = "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132", source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
 ]
 
 [package.dev-dependencies]
@@ -3377,9 +3379,8 @@ requires-dist = [
     { name = "debugpy", specifier = "==1.8.0" },
     { name = "fastapi" },
     { name = "filelock", specifier = ">=3.16" },
-    { name = "flash-attn", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_aarch64.whl" },
-    { name = "flash-attn", marker = "platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.8.3.post2+marin.fa2.cu132torch2141.1" },
-    { name = "flash-attn", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/marin/releases/download/fa2-only-cu132-torch2141-20261113-28d50657/flash_attn-2.8.3.post2+marin.fa2.cu132torch2141.1-cp312-cp312-linux_x86_64.whl" },
+    { name = "flash-attn-3", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==3.0.1", index = "https://download.pytorch.org/whl/cu132" },
+    { name = "flash-attn-4", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==4.0.0b39" },
     { name = "flash-linear-attention", marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.4.2" },
     { name = "flashinfer-cubin", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.6.18.post1", index = "https://flashinfer.ai/whl" },
     { name = "flashinfer-python", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.6.18.post1" },
@@ -3387,7 +3388,7 @@ requires-dist = [
     { name = "func-timeout" },
     { name = "harbor", marker = "sys_platform == 'linux' and extra == 'megatron'", editable = "../harbor" },
     { name = "hf-transfer" },
-    { name = "hs-connectors", marker = "sys_platform == 'linux' and extra == 'vllm'", git = "https://github.com/marin-community/speculators.git?subdirectory=hs_connectors&rev=ecac1b16278063e9640004135153882c02de5801" },
+    { name = "hs-connectors", marker = "sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/hs_connectors-0.8.0%2Bmarin.1-py3-none-any.whl" },
     { name = "huggingface-hub", specifier = ">=0.34.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "ijson", specifier = ">=3.5" },
@@ -3435,7 +3436,7 @@ requires-dist = [
     { name = "runai-model-streamer", extras = ["gcs", "s3"], marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.16.1" },
     { name = "s3fs" },
     { name = "smart-open" },
-    { name = "speculators", marker = "sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/speculators-0.9.0a16.post1-py3-none-any.whl" },
+    { name = "speculators", marker = "sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/speculators-0.8.0%2Bmarin.1-py3-none-any.whl" },
     { name = "tensorboard" },
     { name = "tensordict", marker = "sys_platform == 'linux' and extra == 'cuda'" },
     { name = "tensordict", marker = "sys_platform == 'linux' and extra == 'megatron'" },
@@ -3457,17 +3458,17 @@ requires-dist = [
     { name = "torchvision", marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.29.1", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "marinskyrl", extra = "megatron" } },
     { name = "torchvision", marker = "sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.29.1", index = "https://download.pytorch.org/whl/cu132", conflict = { package = "marinskyrl", extra = "vllm" } },
     { name = "tqdm", specifier = ">=4.66" },
-    { name = "transformer-engine", extras = ["pytorch"], marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.19.0" },
-    { name = "transformer-engine-cu13", marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.19.0" },
-    { name = "transformer-engine-torch", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl" },
-    { name = "transformer-engine-torch", marker = "platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.19.0" },
-    { name = "transformer-engine-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl" },
+    { name = "transformer-engine", extras = ["pytorch"], marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.21.0" },
+    { name = "transformer-engine-cu13", marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.21.0" },
+    { name = "transformer-engine-torch", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl" },
+    { name = "transformer-engine-torch", marker = "platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==2.21.0" },
+    { name = "transformer-engine-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl" },
     { name = "transformers", specifier = "==5.16.1" },
     { name = "uvicorn" },
     { name = "verifiable-instructions", git = "https://github.com/abukharin-nv/verifiable-instructions.git?rev=f46a5ac87b1400a4f8973039844b6be9b56e3faf" },
-    { name = "vllm", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" },
-    { name = "vllm", marker = "platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.0.0.dev20261110+marin.3004cd8f1632.cu132" },
-    { name = "vllm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" },
+    { name = "vllm", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" },
+    { name = "vllm", marker = "platform_machine != 'aarch64' and platform_machine != 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", specifier = "==0.0.0.dev20261113+marin.0ac9dcb157ee.cu132" },
+    { name = "vllm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" },
     { name = "wandb" },
     { name = "xmltodict" },
 ]
@@ -6479,8 +6480,8 @@ wheels = [
 
 [[package]]
 name = "speculators"
-version = "0.9.0a16.post1"
-source = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/speculators-0.9.0a16.post1-py3-none-any.whl" }
+version = "0.8.0+marin.1"
+source = { url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/speculators-0.8.0%2Bmarin.1-py3-none-any.whl" }
 dependencies = [
     { name = "aiohttp", marker = "sys_platform == 'linux'" },
     { name = "click", marker = "sys_platform == 'linux'" },
@@ -6505,7 +6506,7 @@ dependencies = [
     { name = "typer", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-trimmed-candidate-20261007-604f2c14/speculators-0.9.0a16.post1-py3-none-any.whl", hash = "sha256:cbaa579efdfdac7b67eef2a062bfa8e52f030629ea9a002cda6f57d2d026306b" },
+    { url = "https://github.com/marin-community/speculators/releases/download/v0.8.0%2Bmarin.1/speculators-0.8.0%2Bmarin.1-py3-none-any.whl", hash = "sha256:3d3c85117f89b5812c3df0ca2f169eab3abcfb62fc115cd7ba5ac01e8a2d0fad" },
 ]
 
 [package.metadata]
@@ -6514,7 +6515,7 @@ requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "click" },
     { name = "datasets", specifier = ">=4.0.0,<=5.0.1" },
-    { name = "hs-connectors", specifier = ">0.7.0,<=0.9.0a16.post1" },
+    { name = "hs-connectors", specifier = "==0.8.0+marin.1" },
     { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "loguru", specifier = ">=0.7.2,<=0.7.3" },
@@ -6564,7 +6565,7 @@ requires-dist = [
     { name = "torchaudio" },
     { name = "torchvision" },
     { name = "tqdm", specifier = ">=4.66.3,<=4.70.0" },
-    { name = "transformers", specifier = ">=5.0.0,<5.17.0" },
+    { name = "transformers", specifier = ">=5.0.0,<=5.18.0" },
     { name = "typer", specifier = ">=0.12.0" },
     { name = "types-click", marker = "extra == 'dev'", specifier = "~=7.1.8" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = "~=6.0.12" },
@@ -7254,21 +7255,21 @@ wheels = [
 
 [[package]]
 name = "transformer-engine"
-version = "2.19.0"
+version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/22/09e9ed5e69ee0c8c955bb6ee6d81748e4384f0cd24308ff1580387d09f7c/transformer_engine-2.19.0-py3-none-any.whl", hash = "sha256:965d78429d287f7db6978bf299cfcecf68c730247f05cc830ecc6983a123bbc7", size = 1135745, upload-time = "2026-09-11T16:18:37.173Z" },
+    { url = "https://files.pythonhosted.org/packages/83/e8/b7483b8fb8b337c9ba3d80d19f274f20f3fd5916a7b2e208ca54878231e7/transformer_engine-2.21.0-py3-none-any.whl", hash = "sha256:54dae3468629157688456d536dff071cbd978e59bd80ef39b1c7813469c06470", size = 1295101, upload-time = "2026-11-10T21:19:18.854Z" },
 ]
 
 [package.optional-dependencies]
 pytorch = [
-    { name = "transformer-engine-torch", version = "2.19.0", source = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
-    { name = "transformer-engine-torch", version = "2.19.0", source = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl" }, marker = "(platform_machine != 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
+    { name = "transformer-engine-torch", version = "2.21.0", source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl" }, marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-10-marinskyrl-cpu') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-cuda') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-megatron') or (extra == 'extra-10-marinskyrl-cpu' and extra == 'extra-10-marinskyrl-vllm')" },
 ]
 
 [[package]]
 name = "transformer-engine-cu13"
-version = "2.19.0"
+version = "2.21.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "importlib-metadata", marker = "sys_platform == 'linux'" },
@@ -7276,14 +7277,14 @@ dependencies = [
     { name = "pydantic", marker = "sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/87/8bf198c7ec3ec60b021b0b6dadb387d93eb08acfd251872b7c46e59ec723/transformer_engine_cu13-2.19.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:54dd7a38437cc3d80b94cf6fb91780d7dc5c34d80e62d79f6d892919f80e40a3", size = 242765590, upload-time = "2026-09-11T00:37:09.465Z" },
-    { url = "https://files.pythonhosted.org/packages/86/3f/d70c96b4e3f2d19cf79ae644a9f8ff451d4c3288a367222d3fa8f0c53ea6/transformer_engine_cu13-2.19.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:31a3afd47832160c64653ac4b7b34dfbb3b06a84681eb9474a501b2cd1912756", size = 244604595, upload-time = "2026-09-11T00:36:36.079Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/00/77344fb8c987a3cbb441576536fe70ccef05a64ecfb342a652dfeb3e52d1/transformer_engine_cu13-2.21.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:1bab3f1dc4f2c56a1ee930f98ca086749148f1b76fc2bf3cdd3008eb632ae0a5", size = 279207002, upload-time = "2026-11-10T19:37:27.603Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/0f/81d4df1c5eb3a8f5c512e87446bbb2e2623827538161ee4723e48daa2717/transformer_engine_cu13-2.21.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:171fc1826da3e9deb67044fbf447f5f47bc7be582183f3d9a6b0841735b06e49", size = 279824018, upload-time = "2026-11-10T19:36:07.855Z" },
 ]
 
 [[package]]
 name = "transformer-engine-torch"
-version = "2.19.0"
-source = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl" }
+version = "2.21.0"
+source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl" }
 resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
@@ -7299,26 +7300,26 @@ dependencies = [
     { name = "transformer-engine-cu13", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl", hash = "sha256:e670d1183cb99c55377620dc49f41e365abc9e7d43fb8358963ef61385ba0887" },
+    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_aarch64.whl", hash = "sha256:f59dc6c28d6cb16f61d853f5e1a72769dcfd1dfbb71c820ebee7132d10a9d0a4" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "einops" },
     { name = "nvdlfw-inspect" },
-    { name = "nvidia-cudnn-frontend", specifier = ">=1.28.0" },
+    { name = "nvidia-cudnn-frontend", specifier = ">=1.29.0" },
     { name = "onnx" },
     { name = "onnxscript" },
     { name = "packaging" },
     { name = "pydantic" },
     { name = "torch", specifier = ">=2.1" },
-    { name = "transformer-engine-cu13", specifier = "==2.19.0" },
+    { name = "transformer-engine-cu13", specifier = "==2.21.0" },
 ]
 
 [[package]]
 name = "transformer-engine-torch"
-version = "2.19.0"
-source = { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl" }
+version = "2.21.0"
+source = { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl" }
 resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
@@ -7334,20 +7335,20 @@ dependencies = [
     { name = "transformer-engine-cu13", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/trainer-native-cu132-torch2141-20261004-db1a32ca/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl", hash = "sha256:4d690ac5af7cfcfdf6868749d7a4f2a80def9fa4686bf8d98e5471248f91ab8b" },
+    { url = "https://github.com/marin-community/marin/releases/download/skyrl-native-te221-cu132torch2141-20261113-0821e3af/transformer_engine_torch-2.21.0-cp312-cp312-linux_x86_64.whl", hash = "sha256:7dfcc0a441a39aab79ccc1cb6efe42742be9caba352a3f5687d3bb1e673af672" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "einops" },
     { name = "nvdlfw-inspect" },
-    { name = "nvidia-cudnn-frontend", specifier = ">=1.28.0" },
+    { name = "nvidia-cudnn-frontend", specifier = ">=1.29.0" },
     { name = "onnx" },
     { name = "onnxscript" },
     { name = "packaging" },
     { name = "pydantic" },
     { name = "torch", specifier = ">=2.1" },
-    { name = "transformer-engine-cu13", specifier = "==2.19.0" },
+    { name = "transformer-engine-cu13", specifier = "==2.21.0" },
 ]
 
 [[package]]
@@ -7558,8 +7559,8 @@ wheels = [
 
 [[package]]
 name = "vllm"
-version = "0.0.0.dev20261110+marin.3004cd8f1632.cu132"
-source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" }
+version = "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132"
+source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl" }
 resolution-markers = [
     "platform_machine == 'aarch64' and sys_platform == 'linux'",
 ]
@@ -7641,7 +7642,7 @@ dependencies = [
     { name = "xgrammar", marker = "platform_machine != 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:267aeb03bea44339882d277c9b5044cfcce19397c5ac244b48a7981112f9c366" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e0a2b9e2bb6b16ba6d4e1821770123cc74f04b86128536c2744e91b59c6e4b6a" },
 ]
 
 [package.metadata]
@@ -7751,8 +7752,8 @@ provides-extras = ["zen", "bench", "tensorizer", "fastsafetensors", "instanttens
 
 [[package]]
 name = "vllm"
-version = "0.0.0.dev20261110+marin.3004cd8f1632.cu132"
-source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" }
+version = "0.0.0.dev20261113+marin.0ac9dcb157ee.cu132"
+source = { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl" }
 resolution-markers = [
     "platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
@@ -7834,7 +7835,7 @@ dependencies = [
     { name = "xgrammar", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261110-3004cd8f1632/vllm-0.0.0.dev20261110+marin.3004cd8f1632.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:0d034503a2756fe55f4791095f395b45933e39b825607fa0f84c30bd1986a30a" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b8897bde70bf353a08f37450fb89fca5ebf50d768d6756807a43867ef11134f4" },
 ]
 
 [package.metadata]

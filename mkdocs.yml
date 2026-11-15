@@ -70,6 +70,7 @@ nav:
       - Training on Cloud GPUs: tutorials/cloud-gpu.md
       - Fine-tune Snowball on Your H100 Cluster: tutorials/run-snowball-sft-on-h100.md
       - Quick RL Loop: recipes/quick-rl-loop.md
+      - Mochi RL at 65K: recipes/mochi-rl.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Publishing an Analysis Site: tutorials/publish-analysis-site.md
       - Training an LM: tutorials/train-an-lm.md
@@ -124,6 +125,7 @@ nav:
       - Building Marina apps: references/marina.md
       - Task rollouts: references/task-rollouts.md
       - Training Configuration: references/train-config.md
+      - Gated DeltaNet-2 TPU kernel: references/gdn2-kernels.md
       - HBM Optimization: references/hbm-optimization.md
       - Hero Pipeline on H100: references/hero-pipeline-h100.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
