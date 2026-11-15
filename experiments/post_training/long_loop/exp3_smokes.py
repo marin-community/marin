@@ -92,7 +92,7 @@ def smoke_model() -> SnowballConfig:
     )
 
 
-def prepare_smoke(*, output: str) -> None:
+def prepare_smoke_sources(*, output: str) -> None:
     """Freeze complete short documents; record every selected source row and byte hash."""
     configure_coreweave_s3()
     credentials = s3_credential_options()
@@ -191,6 +191,11 @@ def prepare_smoke(*, output: str) -> None:
     )
     (StoragePath(output) / "data.json").write_text(json.dumps(draccus.encode(data), indent=2))
     (StoragePath(output) / "source-receipts.json").write_text(json.dumps(receipts, indent=2))
+
+
+def prepare_smoke_initializer(*, output: str) -> None:
+    """Create the tiny initializer and its independent single-process evaluation."""
+    data = draccus.decode(LmDataConfig, json.loads((StoragePath(output) / "data.json").read_text()))
     axes = ("data", "expert", "context", "model", "replica", "replica_dcn")
     mesh = Mesh(
         np.asarray(jax.devices("cpu")[:1]).reshape((1,) * len(axes)), axes, axis_types=(AxisType.Explicit,) * len(axes)
@@ -222,6 +227,11 @@ def prepare_smoke(*, output: str) -> None:
             result_path=prefix_join(output, "tiny-reference.json"),
         )
     )
+
+
+def prepare_smoke(*, output: str) -> None:
+    prepare_smoke_sources(output=output)
+    prepare_smoke_initializer(output=output)
 
 
 def smoke_train_config(data: LmDataConfig, *, output: str, prepared: str, artifact_version: str) -> TrainLmConfig:

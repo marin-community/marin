@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import signal
 import os
+import signal
 import sys
 
 import ray
 from loguru import logger
 from omegaconf import DictConfig
+from rigging.filesystem.storage_path import prefix_join
 from rigging.training_journal import TrainingJournal
 
 from skyrl_train.checkpoint_exporter import checkpoint_exporter
@@ -22,7 +23,10 @@ def run_checkpoint_export(cfg: DictConfig):
     if root is None:
         return checkpoint_exporter(cfg).run()
     journal = TrainingJournal(
-        root + f"/exports/step-{cfg.checkpoint_export.step}", cfg.trainer.run_name, "rl_export", "exporter",
+        prefix_join(root, "exports", f"step-{cfg.checkpoint_export.step}"),
+        cfg.trainer.run_name,
+        "rl_export",
+        "exporter",
         local_directory=os.environ.get("IRIS_OUTPUT_DIR"),
     )
     status = "failed"

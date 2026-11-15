@@ -37,7 +37,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.long_loop.exp3_recipe import TOKEN_IDS, exp3_sft_spec
-from experiments.post_training.long_loop.exp3_smokes import certify_smoke, prepare_smoke, smoke_train_config
+from experiments.post_training.long_loop.exp3_smokes import certify_smoke, prepare_smoke_sources, smoke_train_config
 from experiments.post_training.long_loop.recipe_bundle import require_clean_revision, runtime_source_manifest
 from experiments.post_training.long_loop.stage_guard import StageGuard, run_guarded_stage
 from experiments.sft.launcher import HFModel, levanter_train_request
@@ -54,9 +54,8 @@ MESH = MeshConfig(
 )
 
 
-def prepare_initializer_smoke(*, output: str) -> None:
-    """Freeze a bounded native C4 token stream and its estimated reference before GPU allocation."""
-    prepare_smoke(output=output)
+def freeze_c4_reference(*, output: str) -> None:
+    """Freeze a bounded C4 stream from a CPU host with access to the original native cache."""
     cache = TreeCache.load(C4_CACHE, {"input_ids": np.empty(0, dtype=np.int32)})
     rows, selected, count = [], [], 0
     for first in range(0, cache.ledger.total_num_rows, 64):
@@ -91,6 +90,30 @@ def prepare_initializer_smoke(*, output: str) -> None:
         },
         auto_build_caches=False,
     )
+    audit = c4_input_audit(data)
+    reference = {
+        "metrics": {"eval/loss": REFERENCE_LOSS},
+        "input_audit": audit,
+        "reference_kind": "estimate, not the inaccessible upstream final loss",
+        "absolute_tolerance": REFERENCE_TOLERANCE,
+        "proxy_run": "marin_moe/moe_67b_a2b_d2560_ctxext_qk175_skew8_step157k_paloma_lm_eval_rolling4096",
+        "derivation": {"c4_en_bits_per_byte": 0.6971565402567951, "measured_bytes_per_token": 4.788055130168453},
+        "limitations": (
+            "Proxy uses rolling4096 and different sampling; tolerance is provisional, not a confidence interval."
+        ),
+        "native_input": {
+            "cache": C4_CACHE,
+            "source_rows": selected,
+            "source_tokens_read": count,
+            "selected_tokens": CONTEXT,
+        },
+    }
+    (StoragePath(output) / "c4-reference.json").write_text(json.dumps(reference, indent=2))
+    (StoragePath(output) / "c4-data.json").write_text(json.dumps(draccus.encode(data), indent=2))
+
+
+def c4_input_audit(data: LmDataConfig) -> dict:
+    """Hash the actual evaluation loader without loading a model or allocating GPUs."""
     axes = ("data", "expert", "context", "model", "replica", "replica_dcn")
     mesh = Mesh(
         np.asarray(jax.devices("cpu")[:1]).reshape((1,) * len(axes)), axes, axis_types=(AxisType.Explicit,) * len(axes)
@@ -106,24 +129,33 @@ def prepare_initializer_smoke(*, output: str) -> None:
             axis_mapping={"batch": "data"},
             max_examples_per_dataset=1,
         )
-        audit = evaluation_input_audit(evaluator, TOKEN_IDS)
-    reference = {
-        "metrics": {"eval/loss": REFERENCE_LOSS},
-        "input_audit": audit,
-        "reference_kind": "estimate, not the inaccessible upstream final loss",
-        "absolute_tolerance": REFERENCE_TOLERANCE,
-        "proxy_run": "marin_moe/moe_67b_a2b_d2560_ctxext_qk175_skew8_step157k_paloma_lm_eval_rolling4096",
-        "derivation": {"c4_en_bits_per_byte": 0.6971565402567951, "measured_bytes_per_token": 4.788055130168453},
-        "limitations": (
-            "Proxy uses rolling4096 context and different sampling. Tolerance is provisional, not a confidence interval."
-        ),
-        "native_input": {
-            "cache": C4_CACHE,
-            "source_rows": selected,
-            "source_tokens_read": count,
-            "selected_tokens": CONTEXT,
+        return evaluation_input_audit(evaluator, TOKEN_IDS)
+
+
+def prepare_initializer_smoke(*, output: str, reference_bundle: str, reference_bundle_sha256: str) -> None:
+    """Adopt an inventoried regional reference; production workers never fetch the GCS source."""
+    prepare_smoke_sources(output=output)
+    raw = StoragePath(reference_bundle).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != reference_bundle_sha256:
+        raise ValueError("C4 reference bundle manifest SHA256 mismatch")
+    manifest = json.loads(raw)
+    for item in manifest["files"]:
+        content = StoragePath(item["uri"]).read_bytes()
+        if len(content) != item["bytes"] or hashlib.sha256(content).hexdigest() != item["sha256"]:
+            raise ValueError(f"C4 reference bundle member changed: {item['uri']}")
+    reference = json.loads(StoragePath(manifest["reference_uri"]).read_text())
+    data = LmDataConfig(
+        tokenizer=prefix_join(output, "tokenizer"),
+        components={
+            "c4_en": DatasetComponent(
+                cache_dir=manifest["cache_uri"], format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights")
+            )
         },
-    }
+        auto_build_caches=False,
+    )
+    if c4_input_audit(data) != reference["input_audit"]:
+        raise ValueError("Regional C4 token stream differs from the frozen reference")
+    reference["regional_bundle"] = {"uri": reference_bundle, "sha256": reference_bundle_sha256, "manifest": manifest}
     (StoragePath(output) / "c4-reference.json").write_text(json.dumps(reference, indent=2))
     (StoragePath(output) / "c4-data.json").write_text(json.dumps(draccus.encode(data), indent=2))
 
@@ -153,6 +185,7 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
                 num_train_steps=2,
                 mesh=MESH,
                 max_eval_batches=0,
+                offload_opt_state=True,
                 checkpointer=CheckpointerConfig(save_interval=None, keep=None),
             )
         ),
@@ -200,14 +233,25 @@ def run_initializer_smoke(*, output: str, prepared: str, artifact_version: str, 
 @click.command(help=__doc__)
 @click.option("--h100-hour-limit", type=float, required=True)
 @click.option("--source-revision", required=True)
+@click.option("--reference-bundle", required=True)
+@click.option("--reference-bundle-sha256", required=True)
 @rl_build_options
-def main(h100_hour_limit: float, source_revision: str) -> ArtifactStep:
+def main(
+    h100_hour_limit: float, source_revision: str, reference_bundle: str, reference_bundle_sha256: str
+) -> ArtifactStep:
     configure_coreweave_s3()
     if get_job_info() is None:
         require_clean_revision(Path(__file__).resolve().parents[3], source_revision)
     source = runtime_source_manifest(Path(__file__).resolve().parents[3], source_revision)
     version = resolve_version("long-loop-exp3/initializer-proof", None)
-    prepared = apply("long-loop-exp3/initializer-proof-inputs", prepare_initializer_smoke, version=version, output=OUT)
+    prepared = apply(
+        "long-loop-exp3/initializer-proof-inputs",
+        prepare_initializer_smoke,
+        version=version,
+        output=OUT,
+        reference_bundle=reference_bundle,
+        reference_bundle_sha256=reference_bundle_sha256,
+    )
     trained = apply(
         "long-loop-exp3/initializer-proof",
         run_initializer_smoke,

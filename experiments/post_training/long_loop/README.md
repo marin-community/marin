@@ -60,11 +60,15 @@ Its provisional reference is an explicitly labeled estimate, 2.313741889 nats
 per token with absolute tolerance 0.5. The frozen input audit must match before
 the loss comparison. Raw and token-reseeded initialization are checked separately.
 The proof keeps capacity factor 1.0 and reports route drops, as in the baseline.
-Only the final native checkpoint is saved; time-policy saves are disabled.
+Optimizer state is offloaded between steps, as in Exp1. Only the final native
+checkpoint is saved; time-policy saves are disabled. A complete hash-pinned
+regional C4 bundle is required; workers do not read the original GCS cache.
 
 ```bash
 uv run python -m experiments.post_training.long_loop.exp3_initializer_smoke \
   --source-revision "$(git rev-parse HEAD)" --h100-hour-limit 12 \
+  --reference-bundle s3://REGIONAL-PREFIX/manifest.json \
+  --reference-bundle-sha256 MANIFEST_SHA256 \
   --version YYYY.MM.DD.N
 ```
 

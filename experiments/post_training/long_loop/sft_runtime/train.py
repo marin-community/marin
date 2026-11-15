@@ -1172,7 +1172,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
-    # Keep the mesh compact so the batch pspec derived by `_batch_spec(mesh)` spans slices directly.
+    # The fixed batch pspec uses the compact mesh's replica and expert axes.
     # replica_axis_size=None lets compact_grug_mesh default to jax.process_count() (full
     # cross-slice replication); set it to 1 on GrugTrainerConfig for cross-slice FSDP.
     mesh = compact_grug_mesh(
