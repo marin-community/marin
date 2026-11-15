@@ -3,6 +3,7 @@
 import asyncio
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -141,6 +142,7 @@ async def test_run_after_cleanup_starts_a_new_terminal_and_retains_phase_files(
             await adapter.stop(delete=True)
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Requires Linux /proc process-group lifecycle semantics")
 @pytest.mark.parametrize(
     "foreground_kind", ["external", "builtin", "zombie-descendant"]
 )
