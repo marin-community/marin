@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Per-run provenance and per-batch commit receipts.
 
 Added 2026-11-15 at the independent indexer's proposal (fleet-owner reviewed):
@@ -7,12 +10,15 @@ receipts/<batch>.json with the archive URI, SHA-256, and post-commit cursor.
 Purely additive: historical archives predate receipts, and the indexer falls back
 to scanning when a receipt is absent (including crashes after the cursor commit).
 """
+
 import hashlib
 import json
 import os
 import subprocess
 import time
 from pathlib import Path
+
+import fsspec
 
 REQUIRED_PROVENANCE_FILES = (
     "experiments/glm_tool_serving/scale_production.py",
@@ -49,9 +55,7 @@ def write_provenance(app_root: Path, root: Path, catalog_sha256: str) -> dict:
     head = None
     source = "unavailable"
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=app_root, capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=app_root, capture_output=True, text=True, timeout=10)
         if result.returncode == 0 and result.stdout.strip():
             head, source = result.stdout.strip(), "git"
     except (OSError, subprocess.SubprocessError):
@@ -65,8 +69,10 @@ def write_provenance(app_root: Path, root: Path, catalog_sha256: str) -> dict:
         "missing_required_files": missing,
         "catalog_sha256": catalog_sha256,
         "generated_at": time.time(),
-        "note": "per-file hashes are authoritative; git_head is a label (pod workspaces may lack .git); "
-        "missing_required_files entries recorded explicitly when a required file is absent",
+        "note": (
+            "per-file hashes are authoritative; git_head is a label (pod workspaces may lack .git); "
+            "missing_required_files entries recorded explicitly when a required file is absent"
+        ),
     }
     (root / "provenance.json").write_text(json.dumps(document, indent=2, sort_keys=True))
     return document
@@ -89,8 +95,6 @@ def emit_receipt(prefix: str, name: str, archive: Path, catalog_sha256: str, cur
             "provenance": provenance,
             "at": time.time(),
         }
-        import fsspec
-
         with fsspec.open(f"{prefix}/receipts/{name}.json", "w") as stream:
             json.dump(receipt, stream)
         print(json.dumps({"phase": "receipt_emitted", "batch": name, "sha256": receipt["archive_sha256"]}), flush=True)
