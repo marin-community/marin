@@ -39,7 +39,9 @@ from experiments.post_training.task_curation.sample_qc_binding import SampleQCRe
 from experiments.post_training.task_curation.source import TaskFormat
 from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input, grading_evidence
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from infra.marina.apps.rl_data_catalog.release_evidence import projected_sources, task_totals
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
+from infra.marina.apps.rl_data_catalog.server.source_counts import SourceCounts
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
@@ -175,6 +177,28 @@ def test_native_filtered_pin_is_selectable_with_fresh_qualification(admitted_rel
 
     unqualified = replace(bound, info=replace(bound.info, actor_census_input=None))
     assert filtration(unqualified.declaration.model_dump(mode="json"))["example_count"] is None
+
+
+@pytest.mark.parametrize("missing_grading", [False, True])
+def test_served_oracle_rows_keep_real_qualification_independent_of_display_fields(admitted_release, missing_grading):
+    source, receipt = admitted_release
+    bound = bind_derived_oversight(bind_oracle_admitted_release(source, receipt), receipt.sample, None)
+    declaration = bound.declaration.model_dump(mode="json")
+    served = {
+        **declaration,
+        "quality": "QUICK",  # A display label cannot grant or remove admission.
+        "curation": None,
+        "filtration": {"state": "pending"},
+        "derived_contract_receipt": {"uri": "memory://fixture/derived-contract"},
+    }
+    if missing_grading:
+        served["grading_environment"] = None
+    projected = projected_sources({"sources": [served]}, SourceCounts(sources=()))
+    totals = task_totals(projected["sources"])
+    assert totals.population == 1
+    assert totals.admitted == (0 if missing_grading else 1)
+    assert totals.unmeasured == (1 if missing_grading else 0)
+    assert projected["sources"][0]["filtration"]["state"] == ("pending" if missing_grading else "complete")
 
 
 def test_old_pin_sample_cannot_qualify_filtered_native_population(admitted_release):

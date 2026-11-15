@@ -385,6 +385,7 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             "--no-sync",
             "pytest",
             "infra/marina/tests/test_rl_data_catalog.py",
+            "experiments/post_training/task_curation/tests/test_oracle_admitted_release.py",
             str(APP_SOURCE / "tests"),
             "-q",
         ],

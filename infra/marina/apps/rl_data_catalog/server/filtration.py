@@ -56,7 +56,10 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
     ):
         return pending
     try:
-        qualified = SourceDeclaration.model_validate(declaration)
+        # Served rows also carry display projections, which cannot assert qualification.
+        qualified = SourceDeclaration.model_validate(
+            {key: value for key, value in declaration.items() if key in SourceDeclaration.model_fields}
+        )
         require_declaration_admission(qualified)
         require_content_result(qualified, None, None)
         if qualified.intended_use is None:
