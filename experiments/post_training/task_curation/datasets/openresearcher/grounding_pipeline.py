@@ -250,8 +250,7 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    if not (args.artifact_root.rstrip("/") + "/").startswith(REGIONAL_PREFIX):
-        raise ValueError("Grounding must read the approved corpus storage region")
+    StoragePath(args.artifact_root).relative_to(StoragePath(REGIONAL_PREFIX))
     configure_coreweave_s3()
     config = GroundingConfig(
         args.question_receipt,

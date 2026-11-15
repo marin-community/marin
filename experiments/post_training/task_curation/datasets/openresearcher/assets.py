@@ -139,8 +139,7 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    if not (args.artifact_root.rstrip("/") + "/").startswith(REGIONAL_PREFIX):
-        raise ValueError("OpenResearcher assets require the approved US-EAST-02A S3 artifact root")
+    StoragePath(args.artifact_root).relative_to(StoragePath(REGIONAL_PREFIX))
     if args.run and not os.environ.get("IRIS_TASK_ID"):
         raise RuntimeError("Launch this preparation through Iris in the same region as the S3 artifact root")
     configure_coreweave_s3()

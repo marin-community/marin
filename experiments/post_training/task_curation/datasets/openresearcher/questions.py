@@ -133,8 +133,7 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    if not (args.artifact_root.rstrip("/") + "/").startswith(REGIONAL_PREFIX):
-        raise ValueError("Read the release in the approved storage region")
+    StoragePath(args.artifact_root).relative_to(StoragePath(REGIONAL_PREFIX))
     configure_coreweave_s3()
     with artifact_prefix(args.artifact_root):
         step = ArtifactStep(
