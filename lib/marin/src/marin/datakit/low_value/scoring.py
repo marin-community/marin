@@ -1,0 +1,102 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Select bounded token views and score text or jagged replay caches."""
+
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
+
+import numpy as np
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.store.jagged_array import JaggedArrayStore
+from levanter.tokenizers import MarinTokenizer
+
+from marin.datakit.low_value.features import document_features
+from marin.datakit.low_value.model import LowValueModel, OperatingPoint
+from marin.processing.tokenize._core import text_preprocessor
+
+
+@dataclass(frozen=True)
+class DocumentViews:
+    tokens: int
+    intervals: tuple[tuple[int, int], ...]
+    windows: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DocumentScore:
+    id: str
+    tokens: int
+    low_value_score: float
+    is_low_value: bool
+
+
+def window_intervals(tokens: int, window_tokens: int) -> tuple[tuple[int, int], ...]:
+    """Merge overlapping head, middle and tail views without repeating tokens."""
+    starts = sorted({0, max(0, (tokens - window_tokens) // 2), max(0, tokens - window_tokens)})
+    intervals: list[tuple[int, int]] = []
+    for start in starts:
+        end = min(tokens, start + window_tokens)
+        if intervals and start <= intervals[-1][1]:
+            intervals[-1] = (intervals[-1][0], end)
+        else:
+            intervals.append((start, end))
+    return tuple(intervals)
+
+
+def text_views(text: str, tokenizer: MarinTokenizer, window_tokens: int) -> DocumentViews:
+    """Tokenize text once, then select the same views used by cache scoring."""
+    processor = text_preprocessor(TextLmDatasetFormat(), tokenizer)
+    ids = processor([{"text": text}])[0]["input_ids"]
+    intervals = window_intervals(len(ids), window_tokens)
+    windows = tuple(tokenizer.decode(ids[start:end], skip_special_tokens=False) for start, end in intervals)
+    return DocumentViews(len(ids), intervals, windows)
+
+
+def cache_views(store: JaggedArrayStore, index: int, tokenizer: MarinTokenizer, window_tokens: int) -> DocumentViews:
+    """Read offsets and bounded windows without materializing a giant cache row."""
+    start = int(store.offsets[index].read().result()) if index else 0
+    end = int(store.offsets[index + 1].read().result())
+    intervals = window_intervals(end - start, window_tokens)
+    windows = tuple(
+        tokenizer.decode(
+            np.asarray(store.data[start + left : start + right].read().result()).tolist(),
+            skip_special_tokens=False,
+        )
+        for left, right in intervals
+    )
+    return DocumentViews(end - start, intervals, windows)
+
+
+def score_views(documents: Sequence[DocumentViews], model: LowValueModel) -> np.ndarray:
+    """Score ordered document views using the structural model contract."""
+    if not documents:
+        return np.empty(0, dtype=np.float64)
+    structural = np.stack([document_features(document.windows, document.tokens) for document in documents])
+    return model.predict(structural)
+
+
+def score_token_cache(
+    cache_dir: str,
+    *,
+    cache_tokenizer_sha256: str,
+    tokenizer: MarinTokenizer,
+    model: LowValueModel,
+    operating_point: OperatingPoint,
+    indices: Sequence[int],
+    batch_size: int = 128,
+) -> Iterator[DocumentScore]:
+    """Score selected cache rows, emitting their original row indices as IDs.
+
+    The caller supplies the cache's tokenizer JSON digest. This entrypoint
+    supports the deployed structural tree model.
+    """
+    if cache_tokenizer_sha256 != model.tokenizer_sha256:
+        raise ValueError("Cache tokenizer differs from the classifier window tokenizer")
+    store = JaggedArrayStore.open(cache_dir.rstrip("/") + "/input_ids", mode="r", dtype=np.int32)
+    for start in range(0, len(indices), batch_size):
+        batch = indices[start : start + batch_size]
+        documents = [cache_views(store, index, tokenizer, model.window_tokens) for index in batch]
+        scores = score_views(documents, model)
+        for index, document, score, drop in zip(batch, documents, scores, operating_point.drop(scores), strict=True):
+            yield DocumentScore(str(index), document.tokens, float(score), bool(drop))
