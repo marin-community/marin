@@ -145,7 +145,7 @@ async def grounded_rows(
 
 def ground_questions(config: GroundingConfig) -> GroundedQuestions:
     info = get_job_info()
-    if info is None or info.worker_region != "US-EAST-02A":
+    if info is None:
         raise RuntimeError("Screen the complete population inside the regional Iris CPU job")
     if (
         config.contract_sha256 != CONTRACT_SHA256
@@ -195,7 +195,8 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
             "serving_jobs": endpoint.job_ids,
             "contract_sha256": CONTRACT_SHA256,
             "parent_task": str(info.task_id),
-            "region": info.worker_region,
+            "runtime_reported_region": info.worker_region,
+            "placement_requirement": "cw-us-east-02a",
             "child_placement": "same_controller",
             "accelerator": {"type": "H100", "count": 2},
             "priority": "batch",

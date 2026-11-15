@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+from experiments.post_training.task_curation.datasets.openresearcher import image_context
 from experiments.post_training.task_curation.datasets.openresearcher.document_verification import verify_corpus_documents
 
 
@@ -31,3 +32,21 @@ def test_index_agreement_requires_every_original_document_exactly_once(tmp_path,
     else:
         with pytest.raises((ValueError, sqlite3.IntegrityError)):
             verify_corpus_documents(rows, str(database), 2)
+
+
+def test_layer_partition_preserves_nested_index_files_under_the_registry_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr(image_context, "MAX_LAYER_BYTES", 8)
+    source, context = tmp_path / "index", tmp_path / "context"
+    original = {"one.cfs": b"123456", "nested/two.tim": b"abcdef", "three.si": b"xx"}
+    for name, content in original.items():
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    sizes = image_context.index_layers(source, context)
+    restored = {}
+    for layer in context.iterdir():
+        for path in layer.rglob("*"):
+            if path.is_file():
+                restored[path.relative_to(layer).as_posix()] = path.read_bytes()
+    assert restored == original
+    assert sum(sizes) == sum(map(len, original.values())) and max(sizes) <= 8
