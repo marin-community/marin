@@ -49,7 +49,7 @@ def final_loss(report: dict) -> float:
     return float(final[0]["eval/loss"])
 
 
-def sweep(size: int, selection_path: str) -> dict:
+def sweep(size: int, selection_path: str, trial_phase: str = "D") -> dict:
     selected = selected_layout(size, selection_path)
     results = []
     winners = {}
@@ -59,7 +59,7 @@ def sweep(size: int, selection_path: str) -> dict:
                 at_budget(
                     replace(selected, optimizer=optimizer, learning_rate=lr, seed=0),
                     3e18,
-                    "D",
+                    trial_phase,
                 )
             )
             for lr in lr_candidates(size, optimizer)
@@ -90,6 +90,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=("D", "Q5"), required=True)
     parser.add_argument("--selection")
+    parser.add_argument(
+        "--trial-phase",
+        default=None,
+        help="Attempt-scoped identity prefix for D trial probes; required to run D after a preemption burns earlier trial identities",
+    )
     parser.add_argument("--h100-hour-limit", type=float, required=True)
     parser.add_argument("--max-concurrent", type=int, choices=range(1, 9), default=3)
     parser.add_argument("--run", action="store_true")
@@ -105,6 +110,8 @@ def main():
         if not args.run:
             print(json.dumps({"selected": {key: asdict(p) for key, p in selections.items()}}))
             return
+        if args.trial_phase is None:
+            parser.error("Running D requires --trial-phase: prior attempt identities keep their dispatch markers")
         (manager / "registered-grid.json").write_text(
             json.dumps(
                 {
@@ -121,7 +128,7 @@ def main():
         )
         budgeted_map(
             {str(size): size for size in SIZES},
-            lambda size: sweep(size, args.selection),
+            lambda size: sweep(size, args.selection, args.trial_phase),
             manager,
             args.h100_hour_limit,
             min(3, args.max_concurrent),
