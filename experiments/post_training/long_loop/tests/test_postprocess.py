@@ -4,11 +4,14 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from experiments.post_training.long_loop import postprocess
 from experiments.post_training.long_loop.graph import execute_local_graph
 
 
-def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("adopt_report", [False, True])
+def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monkeypatch, adopt_report):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "outputs"))
     roots = {}
     for key in ("inputs", "sft", "sft_adoption", "export", "rl", "finalization", "eval_inputs", "eval"):
@@ -16,15 +19,27 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
         directory.mkdir(parents=True)
         (directory / "producer.txt").write_text(f"original-{key}")
         roots[key] = str(directory)
+    if adopt_report:
+        for key, filename, content in (
+            ("recovered_eval", "view.txt", "recovered view"),
+            ("report", "report.txt", "qualified report"),
+        ):
+            directory = tmp_path / "original" / key
+            directory.mkdir()
+            (directory / filename).write_text(content)
+            (directory / "producer.txt").write_text(f"original-{key}")
+            roots[key] = str(directory)
     calls = []
 
     def merge(*, output, original, selection, **kwargs):
+        assert not adopt_report
         assert original == roots["eval"]
         assert selection == roots["eval_inputs"]
         calls.append("merge")
         Path(output, "view.txt").write_text("recovered view")
 
     def report(*, output, stages, rl_terminal, **kwargs):
+        assert not adopt_report
         assert rl_terminal == roots["rl"]
         assert Path(stages[-1], "view.txt").read_text() == "recovered view"
         assert stages[:-1] == [roots[key] for key in ("inputs", "sft_adoption", "export", "rl", "eval_inputs", "eval")]
@@ -33,7 +48,7 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
 
     def accounting(*, output, trained, settings):
         assert trained == roots["sft"]
-        assert calls == ["merge", "report"]
+        assert calls == ([] if adopt_report else ["merge", "report"])
         calls.append("accounting")
         Path(output, "accounting.txt").write_text("original SFT consumption")
 
@@ -84,7 +99,7 @@ def test_tail_graph_adopts_producers_and_runs_only_postprocessing(tmp_path, monk
     }
     terminal = postprocess.build_postprocessing_graph(plan, resolved)
     execute_local_graph(terminal)
-    assert calls == ["merge", "report", "accounting", "archive"]
+    assert calls == (["accounting", "archive"] if adopt_report else ["merge", "report", "accounting", "archive"])
     assert Path(terminal.path(), "archive.txt").read_text() == "evidence archive"
     for key, root in roots.items():
         assert Path(root, "producer.txt").read_text() == f"original-{key}"

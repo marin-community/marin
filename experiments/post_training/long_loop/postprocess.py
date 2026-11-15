@@ -81,37 +81,40 @@ def build_postprocessing_graph(plan: dict, resolved_spec: dict) -> ArtifactStep:
         "additional_evidence": [*resolved_spec["archive"]["additional_evidence"], *plan["additional_evidence"]],
     }
     accepted = plan["accepted_unscored_attempts"]
-    merged = apply(
-        f"{name}/recovered-evaluation",
-        merge_verifier_recovery,
-        version=version,
-        output=OUT,
-        original=handles["eval"],
-        selection=handles["eval_inputs"],
-        recovery=plan["recovery"]["uri"],
-        recovery_manifest_sha256=plan["recovery"]["manifest_sha256"],
-        accepted_unscored_attempts=accepted,
-    )
-    stages = [handles[key] for key in ("inputs", "sft_adoption", "export")]
-    if "endpoint" in handles:
-        stages.append(handles["endpoint"])
-    stages.extend([handles["rl"], handles["eval_inputs"], handles["eval"], merged])
-    additional = settings["additional_evidence"] + resolved_spec["adopted_sft"].get("additional_evidence", [])
-    report = apply(
-        "long-loop/report",
-        write_report,
-        version=version,
-        output=OUT,
-        stages=stages,
-        expected_rollouts=resolved_spec["evaluation"]["expected_rollouts"],
-        evaluation_selection=handles["eval_inputs"],
-        additional_timing=[
-            item for item in additional if item["category"] == "timing" and item["source"].endswith(".jsonl")
-        ],
-        accepted_unscored_attempts=accepted,
-        sft_geometry=plan["sft_geometry"],
-        rl_terminal=handles["rl"],
-    )
+    if "recovered_eval" in handles:
+        merged, report = handles["recovered_eval"], handles["report"]
+    else:
+        merged = apply(
+            f"{name}/recovered-evaluation",
+            merge_verifier_recovery,
+            version=version,
+            output=OUT,
+            original=handles["eval"],
+            selection=handles["eval_inputs"],
+            recovery=plan["recovery"]["uri"],
+            recovery_manifest_sha256=plan["recovery"]["manifest_sha256"],
+            accepted_unscored_attempts=accepted,
+        )
+        stages = [handles[key] for key in ("inputs", "sft_adoption", "export")]
+        if "endpoint" in handles:
+            stages.append(handles["endpoint"])
+        stages.extend([handles["rl"], handles["eval_inputs"], handles["eval"], merged])
+        additional = settings["additional_evidence"] + resolved_spec["adopted_sft"].get("additional_evidence", [])
+        report = apply(
+            "long-loop/report",
+            write_report,
+            version=version,
+            output=OUT,
+            stages=stages,
+            expected_rollouts=resolved_spec["evaluation"]["expected_rollouts"],
+            evaluation_selection=handles["eval_inputs"],
+            additional_timing=[
+                item for item in additional if item["category"] == "timing" and item["source"].endswith(".jsonl")
+            ],
+            accepted_unscored_attempts=accepted,
+            sft_geometry=plan["sft_geometry"],
+            rl_terminal=handles["rl"],
+        )
     archive_resources = resolved_spec["execution"]["archive"]
     resources = ResourceConfig(
         **{**archive_resources, "device": draccus.decode(DeviceConfig, archive_resources["device"])}

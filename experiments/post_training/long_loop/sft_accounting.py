@@ -49,12 +49,12 @@ async def sample_origin(dataset, index: int, *, child: str = "") -> SampleOrigin
     if isinstance(dataset, SlicedAsyncDataset):
         return await sample_origin(dataset.dataset, index + dataset.start_index, child=child)
     if isinstance(dataset, ConcatDataset):
-        for name, source in dataset.datasets.items():
-            length = await source.async_len()
-            if index < length:
-                return await sample_origin(source, index, child=name)
-            index -= length
-        raise IndexError("SFT accounting index exceeds the concatenated source")
+        await dataset._ensure_initialized()
+        child_index = int(np.searchsorted(dataset._cumulative_lengths, index, side="right"))
+        if child_index >= len(dataset._children):
+            raise IndexError("SFT accounting index exceeds the concatenated source")
+        offset = int(dataset._cumulative_lengths[child_index - 1]) if child_index else 0
+        return await sample_origin(dataset._children[child_index], index - offset, child=dataset._names[child_index])
     if isinstance(dataset, PackedTokenDataset):
         packed = dataset.packed
         if packed.slice_strategy != "left":
@@ -192,13 +192,20 @@ async def sampled_rows(config: TrainLmConfig, steps: int):
     for first in range(0, total, 64):
         indices = list(range(first, min(first + 64, total)))
         examples = await mixture.get_batch(indices)
-        for index, example in zip(indices, examples, strict=True):
+        source_rows = defaultdict(list)
+        for position, index in enumerate(indices):
             block_id, slot = divmod(index, mixture.block_size)
             source_id, source_index = mixture._index_into_dataset_for_id(mixture._get_block(block_id)[slot], block_id)
             source_name = mixture.dataset_index[source_id]
+            source_rows[source_name].append((position, source_index))
+        origins: dict[int, tuple[str, SampleOrigin]] = {}
+        for source_name, positions in source_rows.items():
             source = mixture.datasets[source_name]
-            source_index = (await mixture._remap_indices(source, [source_index]))[0]
-            origin = await sample_origin(source, source_index)
+            remapped = await mixture._remap_indices(source, [index for _, index in positions])
+            for (position, _), source_index in zip(positions, remapped, strict=True):
+                origins[position] = (source_name, await sample_origin(source, source_index))
+        for position, (index, example) in enumerate(zip(indices, examples, strict=True)):
+            source_name, origin = origins[position]
             tokens = np.asarray(example.tokens)
             yield {
                 "global_index": index,

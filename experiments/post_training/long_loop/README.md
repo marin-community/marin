@@ -181,6 +181,10 @@ Inspect the dry plan before adding `--run`. This entrypoint adopts all producing
 stages and runs only the recovered view, report, SFT accounting and CPU archive.
 It archives the original native rows and aggregate alongside the scored view.
 The original CPU resources, deadlines and checkpoint-retention controls apply.
+To recover only accounting/archive, include the committed `recovered_eval` and
+`report` roots in the plan's adopted artifacts; those transformations are then
+reused. Accounting resolves concatenation offsets and remaps mixture indices
+in batches without changing sample order, token hashes or supervision masks.
 
 If the strict W&B exporter reports `IncompleteRunHistoryError`, the archive
 confirms that typed provider error and automatically streams every row from
