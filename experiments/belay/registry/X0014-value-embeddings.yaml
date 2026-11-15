@@ -529,11 +529,12 @@ events:
   note: 'Not in the Belay Ckpt Oct 20 2026 config: value_embeds=none'
   checkpoint: belay-ckpt-2026-10-20
 potential:
-  score: 7
-  rationale: -0.0112 speedrun (step +1%); ladder d512 -0.0066, d768 -0.0050, d1024/d1280 still running; MFU not run -> 7
+  score: 4
+  rationale: -0.0112 speedrun; ladder win fades with scale (d512 -0.0066 to d1280 -0.0015), projected +0.0005 at hero; MFU
+    not run -> 4
   model: claude-opus-5-5
-  date: '2026-11-14'
-  inputs_digest: e88b806b09a7
+  date: '2026-11-15'
+  inputs_digest: 6b8f8568c4b9
 code_commits:
 - 5d80c0d63230db7b1f9da938d7875a071fc5cba0
 projection:
