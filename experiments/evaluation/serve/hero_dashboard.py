@@ -13,18 +13,21 @@ Example::
     PARALLEL_API_KEY=... uv run python -m experiments.evaluation.serve.hero_dashboard \\
       --weights s3://marin-us-east-02a/marin/exports/... --model-id hero-sft-step400407 \\
       --name hero-sft-step400407-bf16 --nodes 4 --max-model-len 262144 --quantization none --default-thinking enabled \\
+      --decode-stack fast \\
       --tokenizer marin-community/marin-tokenizer-tools --tokenizer-revision <commit> \\
       --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
 """
 
 import json
 import logging
+import tarfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
 import click
+import fsspec
 import requests
 from fray.iris_backend import convert_constraints, convert_resources, resolve_coscheduling
 from fray.types import ResourceConfig
@@ -34,7 +37,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, Entrypoint, EnvironmentSpec
 from iris.rpc import job_pb2
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from marin.external_dependencies import VLLM_GPU_RELEASE
+from marin.external_dependencies import VLLM_GPU_RELEASE, VllmGpuRelease, VllmGpuWheel
 from marin.inference.backend import ModelSpec
 from marin.inference.chat_template_protocol import protocol_for_chat_template
 from marin.inference.config import VllmEngineConfig, VllmLauncherType, VllmSource
@@ -86,6 +89,57 @@ COMPILATION_CONFIG = {
 }
 # Each rank streams its own expert shards; the memory limit bounds host RAM per rank.
 LOADER_CONFIG = {"distributed": True, "concurrency": 4, "memory_limit": 16 * 1024**3}
+
+# The fast decode stack (Loom decode-notebook, E7: 11.2 ms/token at batch 1 against ~55 ms on 4 nodes, with
+# the marin#11430 correctness gates passing). It runs fork release 0ac9dcb with a Python overlay wheel:
+# FULL_AND_PIECEWISE decode graphs (vllm#130), lean ShortConv (marin#11430 R19), fused same-input
+# projections, -1 expert ids for padding rows, and a fused Triton router, each enabled by FAST_ENV.
+FAST_WHEEL = (
+    "s3://marin-us-east-02a/marin/users/rav/hero-serving/leanopt-5822d380/"
+    "vllm-0.0.0.dev20261113+marin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_aarch64.whl"
+)
+FAST_WHEEL_SHA256 = "5822d380e25f29c6ef2f73d9dc3289906b0a13612703301151d1c25d3acda2d8"
+FAST_BASE_RELEASE = VllmGpuRelease(
+    release_tag="marin-vllm-gpu-20261113-0ac9dcb157ee",
+    source_commit="0ac9dcb157ee86ccb447bc717259159c41ad456a",
+    version="0.0.0.dev20261113+marin.0ac9dcb157ee.cu132",
+    torch_backend="cu132",
+    torch_version="2.14.1+cu132",
+    wheels=(
+        VllmGpuWheel("aarch64", ("10.0",), FAST_WHEEL, FAST_WHEEL_SHA256),
+        VllmGpuWheel(
+            "x86_64",
+            ("9.0",),
+            "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20261113-0ac9dcb157ee/"
+            "vllm-0.0.0.dev20261113%2Bmarin.0ac9dcb157ee.cu132-cp38-abi3-manylinux_2_28_x86_64.whl",
+            "b8897bde70bf353a08f37450fb89fca5ebf50d768d6756807a43867ef11134f4",
+        ),
+    ),
+)
+# A presigned URL outlives every start-up, including infrastructure retries, because each start signs anew.
+FAST_WHEEL_URL_SECONDS = 24 * 3600
+FAST_ENV = {
+    "VLLM_USE_NCCL_SYMM_MEM": "1",
+    "VLLM_GRUG_FUSE_PROJECTIONS": "1",
+    "VLLM_GRUG_SKIP_PADDING_EXPERTS": "1",
+    "VLLM_GRUG_FUSED_ROUTER": "1",
+}
+FAST_MAX_NUM_SEQS = 128
+FAST_API_SERVERS = 4
+# Uniform decode batches replay one full CUDA graph; prefill and mixed batches stay piecewise.
+FAST_COMPILATION_CONFIG = {
+    "cudagraph_mode": "FULL_AND_PIECEWISE",
+    "splitting_ops": COMPILATION_CONFIG["splitting_ops"],
+    "inductor_compile_config": {
+        "enable_auto_functionalized_v2": False,
+        "combo_kernels": True,
+        "benchmark_combo_kernel": True,
+    },
+}
+# FlashInfer's TRT-LLM attention and MoE kernels otherwise download these cubins from NVIDIA at start-up;
+# concurrent downloads have stalled a gang's first forward for over 20 minutes.
+FLASHINFER_CUBINS = "s3://marin-us-east-02a/marin/users/rav/hero-serving/flashinfer-cubins-0.6.18.post1.tgz"
+FLASHINFER_CUBIN_DIR = Path.home() / ".cache" / "flashinfer" / "cubins"
 SMOKE_PROMPT = "What is 2 + 2? Answer briefly."
 
 
@@ -95,6 +149,15 @@ class Quantization(StrEnum):
     NONE = "none"
     # Online FP8 (vllm#112): projections and experts in FP8; the FP32 QB router stays unquantized.
     FP8 = "fp8"
+
+
+class DecodeStack(StrEnum):
+    """Serving configuration for the decode path."""
+
+    # The promoted fork release with PIECEWISE CUDA graphs and all-gather/reduce-scatter MoE collectives.
+    PIECEWISE = "piecewise"
+    # Full decode graphs, the MNNVL two-sided all-to-all and the decode overlay (see FAST_WHEEL).
+    FAST = "fast"
 
 
 class DefaultThinking(StrEnum):
@@ -123,6 +186,7 @@ class HeroDashboardConfig:
     lifetime_hours: float | None
     quantization: Quantization
     default_thinking: DefaultThinking
+    decode_stack: DecodeStack
 
     @property
     def data_parallel_size(self) -> int:
@@ -141,7 +205,7 @@ def _vllm_args(config: HeroDashboardConfig, task_index: int, primary_host: str, 
         primary_port,
         "--enable-expert-parallel",
         "--compilation-config",
-        json.dumps(COMPILATION_CONFIG),
+        json.dumps(FAST_COMPILATION_CONFIG if config.decode_stack is DecodeStack.FAST else COMPILATION_CONFIG),
         "--model-loader-extra-config",
         json.dumps(LOADER_CONFIG),
         "--gpu-memory-utilization",
@@ -152,8 +216,13 @@ def _vllm_args(config: HeroDashboardConfig, task_index: int, primary_host: str, 
         # The dashboard's Request stats panel shows TTFT, queue and decode timings only with this flag.
         "--enable-per-request-metrics",
         "--api-server-count",
-        "1" if task_index == 0 else "0",
+        str(_api_servers(config)) if task_index == 0 else "0",
     )
+    if config.decode_stack is DecodeStack.FAST:
+        # FAST_ENV changes the traced graph, but neither compile-cache key sees environment variables;
+        # additional_config is in both keys and ignored by the CUDA platform.
+        overlay = json.dumps({"grug_overlay": sorted(f"{k}={v}" for k, v in FAST_ENV.items())})
+        args += ("--all2all-backend", "flashinfer_nvlink_two_sided", "--additional-config", overlay)
     if config.quantization is Quantization.FP8:
         args += ("--quantization", "fp8")
     if config.default_thinking is not DefaultThinking.TEMPLATE:
@@ -162,6 +231,32 @@ def _vllm_args(config: HeroDashboardConfig, task_index: int, primary_host: str, 
     if task_index:
         args += ("--headless", "--data-parallel-start-rank", str(task_index * GPUS_PER_NODE))
     return args
+
+
+def _release_tag(config: HeroDashboardConfig) -> str:
+    if config.decode_stack is DecodeStack.FAST:
+        return f"{FAST_BASE_RELEASE.release_tag}+overlay-{FAST_WHEEL_SHA256[:8]}"
+    return VLLM_GPU_RELEASE.release_tag
+
+
+def _api_servers(config: HeroDashboardConfig) -> int:
+    return FAST_API_SERVERS if config.decode_stack is DecodeStack.FAST else 1
+
+
+def _fast_release() -> VllmGpuRelease:
+    """The fast stack's release with a freshly presigned overlay-wheel URL; call inside the task."""
+    url = fsspec.filesystem("s3").url(FAST_WHEEL.removeprefix("s3://"), expires=FAST_WHEEL_URL_SECONDS)
+    wheels = tuple(
+        replace(wheel, url=url) if wheel.architecture == "aarch64" else wheel for wheel in FAST_BASE_RELEASE.wheels
+    )
+    return replace(FAST_BASE_RELEASE, wheels=wheels)
+
+
+def _stage_flashinfer_cubins() -> None:
+    FLASHINFER_CUBIN_DIR.mkdir(parents=True, exist_ok=True)
+    with fsspec.open(FLASHINFER_CUBINS, "rb") as source, tarfile.open(fileobj=source, mode="r:gz") as archive:
+        archive.extractall(FLASHINFER_CUBIN_DIR, filter="data")
+    logger.info("Staged FlashInfer cubins from %s in %s", FLASHINFER_CUBINS, FLASHINFER_CUBIN_DIR)
 
 
 def _smoke_test(server_url: str, model_id: str) -> dict:
@@ -205,12 +300,16 @@ def serve(config: HeroDashboardConfig) -> None:
         with iris_gang_coordinator(identity, info.advertise_host, primary) as primary_address:
             rendezvous_socket.close()
             primary_host, primary_port = primary_address.rsplit(":", 1)
+            fast = config.decode_stack is DecodeStack.FAST
+            if fast:
+                _stage_flashinfer_cubins()
             engine = VllmEngineConfig(
                 launcher=VllmLauncherType.CUDA,
                 source=VllmSource.MARIN_FORK,
+                gpu_release=_fast_release() if fast else None,
                 startup_timeout_seconds=STARTUP_TIMEOUT_SECONDS,
                 max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
-                max_num_seqs=MAX_NUM_SEQS,
+                max_num_seqs=FAST_MAX_NUM_SEQS if fast else MAX_NUM_SEQS,
                 extra_args=_vllm_args(config, info.task_index, primary_host, primary_port),
             )
             spec = ModelSpec(
@@ -228,7 +327,8 @@ def serve(config: HeroDashboardConfig) -> None:
                 "VLLM_HOST_IP": info.advertise_host,
                 "GLOO_SOCKET_IFNAME": interface_for_ipv4(info.advertise_host),
             }
-            with VllmBackend(engine).start(spec, subprocess_env=network) as environment:
+            subprocess_env = network | (FAST_ENV if fast else {})
+            with VllmBackend(engine).start(spec, subprocess_env=subprocess_env) as environment:
                 if info.task_index:
                     wait_for_iris_vllm_shutdown(identity, environment.check_alive)
                 else:
@@ -272,6 +372,7 @@ def _serve_dashboard(config: HeroDashboardConfig, environment: VllmEnvironment, 
         "max_model_len": str(config.max_model_len),
         "quantization": config.quantization.value,
         "default_thinking": config.default_thinking.value,
+        "decode_stack": config.decode_stack.value,
         "streaming": "true",
         PROXY_TIMEOUT_METADATA_KEY: str(REQUEST_TIMEOUT_SECONDS),
     }
@@ -287,7 +388,7 @@ def _serve_dashboard(config: HeroDashboardConfig, environment: VllmEnvironment, 
             config.model_id,
             config.data_parallel_size,
             web_search is not None,
-            VLLM_GPU_RELEASE.release_tag,
+            _release_tag(config),
         )
         deadline = None if config.lifetime_hours is None else time.monotonic() + config.lifetime_hours * 3600
         while deadline is None or time.monotonic() < deadline:
@@ -329,6 +430,12 @@ _PRIORITIES = {
     required=True,
     help="enable_thinking for chat requests that omit it; 'template' leaves it to the chat template.",
 )
+@click.option(
+    "--decode-stack",
+    type=click.Choice([stack.value for stack in DecodeStack]),
+    required=True,
+    help="'fast': full decode graphs, MNNVL all-to-all and the decode overlay; 'piecewise': the promoted release.",
+)
 @click.option("--lifetime-hours", type=float, help="Serve this long, then exit; omit to serve until cancelled.")
 @click.option("--cluster", default="marin", show_default=True)
 @click.option("--target-cluster", default="cw-us-east-08a", show_default=True)
@@ -351,6 +458,7 @@ def main(
     tokenizer_revision: str,
     quantization: str,
     default_thinking: str,
+    decode_stack: str,
     lifetime_hours: float | None,
     cluster: str,
     target_cluster: str,
@@ -373,6 +481,7 @@ def main(
         lifetime_hours=lifetime_hours,
         quantization=Quantization(quantization),
         default_thinking=DefaultThinking(default_thinking),
+        decode_stack=DecodeStack(decode_stack),
     )
     resources = ResourceConfig.with_gpu(
         "GB200",
@@ -389,9 +498,7 @@ def main(
     if lifetime_hours is not None:
         task_timeout = Duration.from_seconds(lifetime_hours * 3600 + STARTUP_TIMEOUT_SECONDS)
     click.echo(f"config: {config}")
-    click.echo(
-        f"export schema: {hf_config.get('grugmoe_artifact_schema_version')}; vLLM: {VLLM_GPU_RELEASE.release_tag}"
-    )
+    click.echo(f"export schema: {hf_config.get('grugmoe_artifact_schema_version')}; vLLM: {_release_tag(config)}")
     click.echo(f"resources: {nodes} x GB200x{GPUS_PER_NODE}; coscheduling: {coscheduling}; secrets: {sorted(secrets)}")
     if dry_run:
         return

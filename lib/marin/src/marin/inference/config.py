@@ -17,6 +17,8 @@ from typing import Any
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
 from rigging.filesystem.storage_path import StoragePath
 
+from marin.external_dependencies import VllmGpuRelease
+
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
 WORKER_PYTHON_VERSION = "3.12"
@@ -273,6 +275,8 @@ class VllmEngineConfig:
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
     extra_requirements: tuple[str, ...] = ()
+    gpu_release: VllmGpuRelease | None = None
+    """Marin fork release override; ``None`` uses the promoted ``VLLM_GPU_RELEASE``."""
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
     startup_timeout_seconds: int = 1800
     max_num_batched_tokens: int | None = None
