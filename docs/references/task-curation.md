@@ -684,6 +684,13 @@ has a Lean kernel-replay converter and remains pending
 it only after these measurements and the [admission requirements](#current-admission-policy)
 cover its exact input pin, converter version, and resulting TaskSpec population.
 
+NuminaMath-LEAN (`project-numina:NuminaMath-LEAN`, pinned input
+`project-numina/NuminaMath-LEAN@51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94`)
+is also pending these measurements. Its converter and human-reference proof
+controls remain available for intake; Atlas catalog registration requires the
+same evidence. Numina intake must verify its source license before running
+those measurements.
+
 ## Declarations
 
 An `RlDataSource` binds source information, a typed configuration and a registered

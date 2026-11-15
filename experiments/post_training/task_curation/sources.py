@@ -30,6 +30,7 @@ from experiments.post_training.task_curation.datasets.evalchemy import reasoning
 from experiments.post_training.task_curation.datasets.evalchemy import simpleqa as eval_simpleqa
 from experiments.post_training.task_curation.datasets.full_content_results import full_content_result_bindings
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
+from experiments.post_training.task_curation.datasets.lean import numina as lean_numina
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
@@ -73,7 +74,7 @@ from experiments.post_training.task_curation.source_policy import GRANDFATHERED_
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
-PENDING_MEASUREMENT_SOURCES = tuple(lean_proofs.sources())
+PENDING_MEASUREMENT_SOURCES = (*lean_proofs.sources(), *lean_numina.sources())
 
 
 def configured_sources() -> list[RlDataSource]:

@@ -123,6 +123,7 @@ class SourceOrigin(StrEnum):
     OPENAI = "OpenAI"
     OPENATHENA = "OpenAthena"
     PRIME_RL = "PRIME-RL"
+    PROJECT_NUMINA = "project-numina"
     REASONING_GYM = "Reasoning Gym"
     TRL = "TRL"
     TASKTROVE = "TaskTrove"

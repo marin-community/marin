@@ -22,15 +22,22 @@ from experiments.post_training.task_curation.sources import all_sources, require
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 
-def test_proofnet_waits_for_measurement_before_entering_the_atlas_catalog(monkeypatch):
+@pytest.mark.parametrize(
+    "source_id,dataset",
+    [
+        ("marcusm117:ProofNet-Verified", "marcusm117/ProofNet-Verified"),
+        ("project-numina:NuminaMath-LEAN", "project-numina/NuminaMath-LEAN"),
+    ],
+)
+def test_new_lean_sources_wait_for_measurement_before_entering_the_atlas_catalog(monkeypatch, source_id, dataset):
     monkeypatch.setattr(native_releases, "read_registry_json", lambda path: {"entries": []})
     pending = {source.info.id: source for source in source_catalog.PENDING_MEASUREMENT_SOURCES}
-    proofnet = pending["marcusm117:ProofNet-Verified"]
-    assert proofnet.dataset.name == "marcusm117/ProofNet-Verified"
-    assert proofnet.info.actor_census_input is None
-    assert proofnet.info.within_source_dedup is None
-    assert proofnet.info.lexical_contamination is None
-    assert proofnet.info.id not in {source.info.id for source in source_catalog.configured_sources()}
+    source = pending[source_id]
+    assert source.dataset.name == dataset
+    assert source.info.actor_census_input is None
+    assert source.info.within_source_dedup is None
+    assert source.info.lexical_contamination is None
+    assert source.info.id not in {source.info.id for source in source_catalog.configured_sources()}
 
 
 def _agentic(task_format: TaskFormat | None, source_id: str = "Marin:agentic") -> RlDataSource:
