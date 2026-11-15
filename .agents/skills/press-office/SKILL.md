@@ -134,8 +134,15 @@ Keep the article self-contained. Immediately after the lead, link directly
 to the original Marin issues and logbook issues when they exist. Link the
 canonical public evidence for specific claims and use the notebook for deeper
 reproduction details. Return the Markdown draft for review. When preparing a
-Research Note for the website, set the front-matter `date` to today's date in
-`YYYY-MM-DD` format and omit `authors`. Follow the
+Research Note for the website, use the date the source PR merged or the
+coordinating issue closed. Choose the event that records the finding covered
+by the note, and link it in the editorial handoff. Set `date` in `YYYY-MM-DD`
+format. If the finding has no merge or close event yet, leave the date open
+for the editor.
+
+Set `tags` to a list with the note's main topic. Use `engineering` for systems
+and implementation, `modeling` for model, training, or evaluation results,
+and `data` for datasets and data curation. Omit `authors`. Follow the
 [website's native post guide](https://github.com/marin-community/marin-community.github.io/blob/main/docs/blog-authoring.md).
 Publication is a separate editorial decision.
 
