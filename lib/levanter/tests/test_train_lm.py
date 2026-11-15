@@ -56,11 +56,10 @@ def _assert_training_recorded(output_path: str) -> dict:
 
 @pytest.mark.tpu
 @pytest.mark.timeout(240)
-def test_train_lm(local_gpt2_tokenizer_path, monkeypatch):
+def test_train_lm(local_gpt2_tokenizer_path):
     with tempfile.TemporaryDirectory() as tmpdir:
         task_outputs = Path(tmpdir) / "task-outputs"
         task_outputs.mkdir()
-        monkeypatch.setenv("IRIS_OUTPUT_DIR", str(task_outputs))
         data_config, _ = tiny_corpus.construct_small_data_cache(tmpdir, tokenizer=local_gpt2_tokenizer_path)
         config = train_lm.TrainLmConfig(
             data=data_config,
@@ -79,6 +78,7 @@ def test_train_lm(local_gpt2_tokenizer_path, monkeypatch):
             trainer=train_lm.TrainerConfig(
                 id="template-export",
                 native_telemetry_root=os.path.join(tmpdir, "telemetry"),
+                log_dir=task_outputs,
                 num_train_steps=2,
                 train_batch_size=len(jax.devices()),
                 max_eval_batches=1,

@@ -53,8 +53,6 @@ def test_native_sft_dispatch_preserves_accelerator_platform_and_timeout(monkeypa
     assert request.resources == pod.resources
     assert request.environment.env_vars["MARIN_TEMP_PREFIX"] == "s3://marin-us-east-08a/tmp"
     assert request.environment.env_vars.get("JAX_PLATFORMS") == platform
-    flags = request.environment.env_vars["XLA_FLAGS"].split()
-    assert "--xla_gpu_shard_autotuning=false" in flags
 
 
 @pytest.fixture

@@ -320,7 +320,9 @@ class Trainer:
             self.tracker = levanter.tracker.current_tracker()
         except RuntimeError:
             # No global tracker set, create one
-            self.tracker = _configured_tracker(config.tracker, self.run_id, config.native_telemetry_root)
+            self.tracker = _configured_tracker(
+                config.tracker, self.run_id, config.native_telemetry_root, config.log_dir
+            )
         self.journal = self.tracker.training_journal
 
         if add_default_hooks:
@@ -929,16 +931,17 @@ def _compose_with_telemetry(config: TrackerConfig | Sequence[TrackerConfig]) -> 
     return configs
 
 
-def _configured_tracker(config, run_id, native_telemetry_root) -> levanter.tracker.Tracker:
+def _configured_tracker(config, run_id, native_telemetry_root, log_directory: Path) -> levanter.tracker.Tracker:
     journal = None
     if native_telemetry_root is not None:
+        log_directory.mkdir(parents=True, exist_ok=True)
         journal = TrainingJournal(
             native_telemetry_root,
             run_id,
             "sft",
             f"rank-{jax.process_index()}",
             json_default=_to_jsonable,
-            local_directory=os.environ.get("IRIS_OUTPUT_DIR"),
+            local_directory=str(log_directory),
         )
     with phase(journal, "tracker_init"):
         return levanter.tracker.CompositeTracker(
@@ -946,8 +949,8 @@ def _configured_tracker(config, run_id, native_telemetry_root) -> levanter.track
         )
 
 
-def _initialize_global_tracker(config, run_id, native_telemetry_root):
-    levanter.tracker.set_global_tracker(_configured_tracker(config, run_id, native_telemetry_root))
+def _initialize_global_tracker(config, run_id, native_telemetry_root, log_directory: Path):
+    levanter.tracker.set_global_tracker(_configured_tracker(config, run_id, native_telemetry_root, log_directory))
 
 
 @dataclass
@@ -1125,7 +1128,7 @@ class TrainerConfig:
 
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
-        _initialize_global_tracker(self.tracker, id, self.native_telemetry_root)
+        _initialize_global_tracker(self.tracker, id, self.native_telemetry_root, self.log_dir)
         levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
 
         if self.shutdown_at_exit is not False:

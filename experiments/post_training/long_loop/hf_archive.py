@@ -6,7 +6,6 @@
 import hashlib
 import json
 import logging
-import os
 import re
 import struct
 from concurrent.futures import ThreadPoolExecutor
@@ -151,14 +150,12 @@ def _local_record(path: Path, name: str) -> dict:
     return {"path": name, "size": path.stat().st_size, "sha256": checksum}
 
 
-def _download_file(source: str, destination: Path, name: str, events: str) -> dict:
+def _download_file(source: str, destination: Path, name: str, events: str, journal_directory: Path) -> dict:
     fs, key = filesystem_for(source)
     before = file_identity(fs.info(key))
     destination.parent.mkdir(parents=True, exist_ok=True)
     event_path = prefix_join(events, hashlib.sha256(name.encode()).hexdigest() + ".jsonl")
-    with durable_event_log(
-        event_path, source, "hf_upload", name, local_directory=os.environ.get("IRIS_OUTPUT_DIR")
-    ) as log:
+    with durable_event_log(event_path, source, "hf_upload", name, local_directory=str(journal_directory)) as log:
         with log.span("source_download_and_sha256"):
             checksum = hashlib.sha256()
             size = 0
@@ -248,13 +245,15 @@ def upload_checkpoint(config: HfUpload, *, timing_destination: str) -> dict:
     if any(name.startswith(".cache/") or name.endswith(".distcp") for _, name in sources):
         raise ValueError("HF export source contains cache or native optimizer payloads")
     with durable_event_log(
-        timing_destination, config.repo_id, "hf_upload", "upload", local_directory=os.environ.get("IRIS_OUTPUT_DIR")
+        timing_destination, config.repo_id, "hf_upload", "upload", local_directory=str(root.parent)
     ) as log:
         with log.span("parallel_export_staging"):
             with ThreadPoolExecutor(max_workers=config.workers) as pool:
                 records = list(
                     pool.map(
-                        lambda item: _download_file(fs.unstrip_protocol(item[0]), root / item[1], item[1], events),
+                        lambda item: _download_file(
+                            fs.unstrip_protocol(item[0]), root / item[1], item[1], events, root.parent
+                        ),
                         sources,
                     )
                 )
