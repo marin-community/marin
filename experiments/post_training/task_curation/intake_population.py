@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from marin.execution.lazy import ArtifactStep, StepContext, run
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
@@ -97,6 +98,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
+    configure_coreweave_s3()
     source = licensed_source(next(source for source in PENDING_MEASUREMENT_SOURCES if source.name == args.source))
     dataset = source.dataset
     assert dataset is not None and dataset.revision is not None

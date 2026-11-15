@@ -779,6 +779,16 @@ uv run python -m experiments.post_training.task_curation.intake_population \
 The adapter verifies the declaration, manifest and normalization hashes, then
 uses the shared exact-deduplication and public-text writer. Its
 `SourceTextPopulation` record feeds `published_census` and `lexical_scan`.
+For a native Harbor population, run the census with its configuration models
+and Daytona mapping dependencies available (the census makes no provider calls):
+
+```bash
+uv run --prerelease allow --with-editable './vendor/harbor[daytona]' python -m \
+  experiments.post_training.task_curation.published_census \
+  --populations populations.json --artifact-root ARTIFACT_ROOT \
+  --artifact-version YYYY.MM.DD.N --output census.json --run
+```
+
 Use the full retained-source inventory for document-frequency filtering;
 the newly converted sources alone are a pilot population.
 Build `populations.json` from the current retained catalog's actor-census input
