@@ -78,7 +78,7 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
         block_cross_document_attention=pack,
     )
     config = TrainLmConfig(
-        data=data, train_seq_len=16, data_seed=31, trainer=TrainerConfig(seed=17, train_batch_size=2, num_train_steps=8)
+        data=data, train_seq_len=16, data_seed=31, trainer=TrainerConfig(seed=17, train_batch_size=40, num_train_steps=8)
     )
     native = tmp_path / "trained"
     checkpoint = native / "checkpoints/step-7"
@@ -113,7 +113,7 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
     rows = [json.loads(line) for line in (output / "realized-samples.jsonl").read_text().splitlines()]
     # Compare the manifest against the real NamedLmDataset boundary consumed by train_lm.
     actual = data.train_set(Axis("position", 16), config.trainer.batch_schedule, key=jax.random.PRNGKey(31))
-    examples = blocking_wait(actual.get_batch(list(range(16))))
+    examples = blocking_wait(actual.get_batch(list(range(320))))
     for row, example in zip(rows, examples, strict=True):
         tokens = np.asarray(example.tokens.array)
         assert row["retained_tokens_sha256"] == hashlib.sha256(tokens[: row["real_tokens"]].tobytes()).hexdigest()
@@ -124,14 +124,38 @@ def test_committed_native_samples_and_population_reports_survive_in_archive(tmp_
             assert row["original_tokens"] == sum(map(len, originals))
             np.testing.assert_array_equal(tokens[: row["real_tokens"]], np.concatenate([doc[:16] for doc in originals]))
     report = json.loads((output / "realized-truncation-padding.json").read_text())
-    assert report["overall"]["sequences"] == 16
-    assert report["overall"]["positions"] == 256
+    assert report["overall"]["sequences"] == 320
+    assert report["overall"]["positions"] == 5120
     assert report["overall"]["left_truncated_traces"] > 0
     assert report["overall"]["pad_tokens"] > 0
-    assert report["overall"]["real_tokens"] + report["overall"]["pad_tokens"] == 256
+    assert report["overall"]["real_tokens"] + report["overall"]["pad_tokens"] == 5120
     replay = [row for row in rows if not row["is_sft"]]
     assert report["overall"]["replay"]["loss_tokens"] == sum(row["loss_tokens"] for row in replay)
     assert report["overall"]["replay"]["fraction_of_positions"] == len(replay) / len(rows)
+    prefix = tmp_path / "partial-samples.jsonl"
+    prefix.write_bytes(b"".join((output / "realized-samples.jsonl").read_bytes().splitlines(keepends=True)[:37]))
+    resumed = tmp_path / "resumed"
+    resume_pin = {
+        "source": str(prefix),
+        "sha256": hashlib.sha256(prefix.read_bytes()).hexdigest(),
+        "rows": 37,
+        "consumed_config_sha256": hashlib.sha256((native / "consumed-config.json").read_bytes()).hexdigest(),
+        "checkpoint_metadata_sha256": hashlib.sha256((checkpoint / "metadata.json").read_bytes()).hexdigest(),
+    }
+    write_sft_accounting(
+        output=str(resumed),
+        trained=str(native),
+        settings={
+            "pinned_evidence": pins,
+            "measured_step_seconds": 2.0,
+            "timing_source": "tiny CPU fixture",
+            "pack": pack,
+            "resume_samples": resume_pin,
+        },
+    )
+    assert (resumed / "realized-samples.jsonl").read_bytes() == (output / "realized-samples.jsonl").read_bytes()
+    resumed_report = json.loads((resumed / "realized-truncation-padding.json").read_text())
+    assert resumed_report == {**report, "resumed_prefix": resume_pin}
     inputs, receipt = sft_accounting_inputs(str(output))
     archive = tmp_path / "archive"
     seal_archive(str(archive), inputs, {"sft_data_accounting": receipt})

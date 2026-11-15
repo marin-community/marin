@@ -133,7 +133,7 @@ def build_postprocessing_graph(plan: dict, resolved_spec: dict) -> ArtifactStep:
         version=version,
         output=OUT,
         trained=handles["sft"],
-        settings=settings["sft_data_accounting"],
+        settings={**settings["sft_data_accounting"], "resume_samples": plan.get("accounting_resume")},
     )
     accounting = replace(accounting, deps=(*accounting.deps, report))
     terminal = apply(

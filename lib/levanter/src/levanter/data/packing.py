@@ -438,20 +438,10 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
                     # Read the slice from the underlying data.
                     out_data.append(store.data[token_start:token_end].read())
 
-                    # Create segment IDs for this pack
-                    segment_ids = []
-                    for doc_idx in range(len(dr)):
-                        doc_start = offsets[dr.start + doc_idx] if dr.start + doc_idx > 0 else 0
-                        doc_end = offsets[dr.start + doc_idx + 1]
-                        doc_length = doc_end - doc_start
-                        # Use the global document index as the segment ID
-                        global_doc_idx = dr.start + doc_idx
-                        # If this is a sliced document, adjust the segment IDs to match the sliced portion
-                        if doc_length > allowed and self.slice_strategy != "raise":
-                            segment_ids.extend([global_doc_idx] * allowed)
-                        else:
-                            segment_ids.extend([global_doc_idx] * doc_length)
-                    out_segment_ids.append(np.array(segment_ids))
+                    segment_lengths = np.diff(offsets[dr.start : dr.stop + 1])
+                    if self.slice_strategy != "raise":
+                        segment_lengths = np.minimum(segment_lengths, allowed)
+                    out_segment_ids.append(np.repeat(np.arange(dr.start, dr.stop), segment_lengths))
 
             # Await all reads concurrently.
             out_data = await asyncio.gather(*out_data)

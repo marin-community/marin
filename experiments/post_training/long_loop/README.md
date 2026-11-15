@@ -185,6 +185,10 @@ To recover only accounting/archive, include the committed `recovered_eval` and
 `report` roots in the plan's adopted artifacts; those transformations are then
 reused. Accounting resolves concatenation offsets and remaps mixture indices
 in batches without changing sample order, token hashes or supervision masks.
+An `accounting_resume` pin can reuse a contiguous initial JSONL sample range:
+declare its `source`, `sha256`, `rows`, `consumed_config_sha256` and
+`checkpoint_metadata_sha256`. The checkpoint and config must match, and only
+the remaining global indices are reconstructed. The report records the prefix.
 
 If the strict W&B exporter reports `IncompleteRunHistoryError`, the archive
 confirms that typed provider error and automatically streams every row from

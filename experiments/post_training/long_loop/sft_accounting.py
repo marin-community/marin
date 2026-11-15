@@ -24,6 +24,8 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.long_loop.archive import ArchiveInput, digest, write_once
 
+ACCOUNTING_READ_BATCH_SIZE = 256
+
 
 @dataclass(frozen=True)
 class DocumentOrigin:
@@ -176,10 +178,13 @@ def sequence_statistics(
     }
 
 
-async def sampled_rows(config: TrainLmConfig, steps: int):
+async def sampled_rows(config: TrainLmConfig, steps: int, *, start_index: int = 0):
     """Replay precisely the global sample range consumed by committed native updates."""
     if config.data.prior_context_phases or config.data.mixture_start_step is not None:
         raise ValueError("SFT accounting requires the experiment's fresh, fixed-context run")
+    total = config.trainer.batch_schedule.global_data_offset_by_step(steps)
+    if not 0 <= start_index <= total:
+        raise ValueError("Accounting prefix exceeds the committed global sample range")
     jax.config.update("jax_threefry_partitionable", config.trainer.jax_config["jax_threefry_partitionable"])
     data_key = jax.random.split(jax.random.PRNGKey(config.trainer.seed), 4)[0]
     if config.data_seed is not None:
@@ -188,9 +193,8 @@ async def sampled_rows(config: TrainLmConfig, steps: int):
     mixture = config.data.train_mixture(Axis("position", length), config.trainer.batch_schedule, key=data_key)
     if not isinstance(mixture, MixtureDataset):
         raise TypeError("SFT accounting requires the native mixture loader")
-    total = config.trainer.batch_schedule.global_data_offset_by_step(steps)
-    for first in range(0, total, 64):
-        indices = list(range(first, min(first + 64, total)))
+    for first in range(start_index, total, ACCOUNTING_READ_BATCH_SIZE):
+        indices = list(range(first, min(first + ACCOUNTING_READ_BATCH_SIZE, total)))
         examples = await mixture.get_batch(indices)
         source_rows = defaultdict(list)
         for position, index in enumerate(indices):
@@ -241,12 +245,27 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         write_once(str(StoragePath(output) / name), content)
         files.append({"name": name, "sha256": pin["sha256"]})
     rows = []
+    resume = settings.get("resume_samples")
+    prefix = b""
+    if resume is not None:
+        if (
+            resume["consumed_config_sha256"] != hashlib.sha256(consumed).hexdigest()
+            or resume["checkpoint_metadata_sha256"] != hashlib.sha256(metadata).hexdigest()
+        ):
+            raise ValueError("Accounting prefix belongs to another consumed configuration or checkpoint")
+        prefix = StoragePath(resume["source"]).read_bytes()
+        if hashlib.sha256(prefix).hexdigest() != resume["sha256"] or not prefix.endswith(b"\n"):
+            raise ValueError("Accounting prefix changed or has an incomplete final record")
+        rows = [json.loads(line) for line in prefix.splitlines()]
+        if len(rows) != resume["rows"] or any(row["global_index"] != index for index, row in enumerate(rows)):
+            raise ValueError("Accounting prefix must cover the contiguous initial global sample range")
     with TemporaryDirectory(prefix="sft-sample-manifest-") as temporary:
         manifest = Path(temporary) / "realized-samples.jsonl"
 
         async def collect():
             with manifest.open("w") as stream:
-                async for row in sampled_rows(config, steps):
+                stream.write(prefix.decode())
+                async for row in sampled_rows(config, steps, start_index=len(rows)):
                     stream.write(json.dumps(row, sort_keys=True) + "\n")
                     rows.append(row)
 
@@ -271,6 +290,7 @@ def write_sft_accounting(*, output: str, trained: str, settings: dict) -> None:
         "batch_size": batch,
         "step_seconds": settings["measured_step_seconds"],
         "timing_source": settings["timing_source"],
+        "resumed_prefix": resume,
         "limitations": (
             "Padding compute/MFU share assumes cost proportional to positions; not a hardware MFU measurement. "
             "Repacking combines retained sampled documents into one counterfactual pool at the configured cap; "
