@@ -7,6 +7,7 @@ from typing import Any
 
 from finestore.rl.curation import LexicalContaminationEvidence, SourceDeclaration
 
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -82,6 +83,7 @@ def contamination_declarations() -> list[tuple[str, SourceDeclaration]]:
             (
                 expected,
                 SourceDeclaration(
+                    license_receipt=fixture_license(f"Marin:{name}", "fixture", revision),
                     id=f"Marin:{name}",
                     name=name,
                     display_name=name,

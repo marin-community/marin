@@ -5,6 +5,7 @@
 
 from finestore.rl.curation import SourceDeclaration
 
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 
 
@@ -14,6 +15,7 @@ def pending_review_declaration() -> SourceDeclaration:
         {
             **base,
             "id": "Marin:review-pending",
+            "license_receipt": fixture_license("Marin:review-pending", base["dataset_id"], base["dataset_revision"]),
             "name": "review-pending",
             "display_name": "review-pending",
             "upstream_dataset": "review-pending",
@@ -50,6 +52,7 @@ def review_declarations() -> list[tuple[bool, SourceDeclaration]]:
                 {
                     **base,
                     "id": f"Marin:{name}",
+                    "license_receipt": fixture_license(f"Marin:{name}", base["dataset_id"], base["dataset_revision"]),
                     "name": name,
                     "display_name": name,
                     "upstream_dataset": name,

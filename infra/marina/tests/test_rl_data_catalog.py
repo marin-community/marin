@@ -80,6 +80,7 @@ from experiments.post_training.task_curation.tests.admission_fixtures import (
 from experiments.post_training.task_curation.tests.admission_fixtures import (
     isolated_admission_census as isolated_admission_census,
 )
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load import load_catalog as load_surveyed_catalog
@@ -371,6 +372,7 @@ def publish_sample(
     oversight: OversightLevel = OversightLevel.NONE,
 ) -> None:
     declaration = SourceDeclaration(
+        license_receipt=fixture_license(source_id, "fixture", "1"),
         id=source_id,
         name="Marin:math",
         display_name="Math",
@@ -715,15 +717,16 @@ def test_retired_curriculum_is_rejected_before_idempotency_or_sql(tmp_path, monk
 def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
     catalog_database, catalog_query, tmp_path, monkeypatch, unavailable_status
 ):
-    monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load.MAX_BATCH_BYTES", 3500)
     monkeypatch.setattr("infra.marina.apps.rl_data_catalog.load_curriculum.DELETE_BATCH_SIZE", 1)
     engine = catalog_database
     query = catalog_query
 
     path = curriculum_release(tmp_path, unavailable_status)
     coverage_path = tmp_path / "coverage.json"
-    assert load_curriculum(str(path), str(coverage_path), query)["counts"]["tasks"] == 4
-    assert load_curriculum(str(path), str(coverage_path), query)["changed"] is False
+    with monkeypatch.context() as chunking:
+        chunking.setattr("infra.marina.apps.rl_data_catalog.load.MAX_BATCH_BYTES", 3500)
+        assert load_curriculum(str(path), str(coverage_path), query)["counts"]["tasks"] == 4
+        assert load_curriculum(str(path), str(coverage_path), query)["changed"] is False
     catalog_root = str(tmp_path / "catalog")
     publish_sample(catalog_root, "graded", source_id="Marin:a", duplicates=1)
     load_catalog(CurationCatalog(catalog_root), query)
@@ -1095,7 +1098,15 @@ def test_loaded_lexical_evidence_drives_contamination_states(catalog_database, c
         (
             "NOT MEASURED",
             SourceDeclaration.model_validate(
-                {**historical, "id": "Marin:historical", "upstream_dataset": "historical", "is_benchmark": True}
+                {
+                    **historical,
+                    "id": "Marin:historical",
+                    "upstream_dataset": "historical",
+                    "is_benchmark": True,
+                    "license_receipt": fixture_license(
+                        "Marin:historical", historical["dataset_id"], historical["dataset_revision"]
+                    ),
+                }
             ),
         )
     )

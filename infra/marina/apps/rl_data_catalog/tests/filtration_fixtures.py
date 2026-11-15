@@ -5,6 +5,7 @@
 
 from finestore.rl.curation import SourceDeclaration
 
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
 from infra.marina.apps.rl_data_catalog.server.source_counts import NO_ORACLE_POLICY_SHA256, SourceCountEvidence
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -36,6 +37,7 @@ def filtered_declaration(retained: int) -> SourceDeclaration:
         {
             **original.model_dump(mode="json"),
             "id": f"Marin:{name}",
+            "license_receipt": fixture_license(f"Marin:{name}", dataset, revision),
             "name": name,
             "display_name": name,
             "upstream_name": name,
