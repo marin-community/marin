@@ -3156,11 +3156,13 @@ it cannot substitute for the raw source snapshot.
 
 Produce raw archive receipts with `raw_source_publish`, after completing the
 standard [`download_step` acquisition](../../experiments/post_training/task_curation/pipeline.py)
-for the **entire** pinned Hugging Face repository. Supply its `HfSource.files`
-with the complete inventory. Acquire and hash large inputs on an Iris CPU worker
-in the target bucket's region, writing directly to regional S3. Build the inventory from
+for the **entire** pinned Hugging Face repository. Set `HfSource.files=()` to
+use recursive repository listing. Independently build the expected inventory from
 `HfApi().dataset_info(DATASET, revision=PIN).siblings`, rather than from a
-converter's selected Parquet files. Hash each acquired file. Run publication on
+converter's selected Parquet files. Compare every acquired path with that
+inventory and hash each acquired file; a completed download artifact alone does
+not prove full coverage. Acquire and hash large inputs on an Iris CPU worker
+in the target bucket's region, writing directly to regional S3. Run publication on
 an Iris CPU job in the source artifacts' region; use a new repository version
 and evidence root. Snapshot `revision` must be the full upstream commit SHA,
 not a branch or tag. The staged snapshot list has this shape:
