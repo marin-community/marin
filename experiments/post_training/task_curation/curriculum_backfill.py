@@ -195,10 +195,13 @@ def prepare_sources(sources: list[FrozenCoverageSource], output_root: str, worke
             key = canonical_sha256(source.model_dump(mode="json"))
             if not (root / "sources" / key / "manifest.json").exists():
                 raise ValueError("Completed corpus is missing a source manifest")
-    with ProcessPoolExecutor(
-        max_workers=workers, mp_context=get_context("spawn"), initializer=initialize_preparation_worker
-    ) as pool:
-        results = list(pool.map(partial(prepare_source, output_root=output_root), sources))
+    if workers == 1:
+        results = [prepare_source(source, output_root) for source in sources]
+    else:
+        with ProcessPoolExecutor(
+            max_workers=workers, mp_context=get_context("spawn"), initializer=initialize_preparation_worker
+        ) as pool:
+            results = list(pool.map(partial(prepare_source, output_root=output_root), sources))
     paths = []
     for result in results:
         # A completed per-source manifest can be reused after a coordinator interruption.
