@@ -66,13 +66,16 @@
     contrast(e, color(s.outlineColor), 3, 'focus-element-contrast');
     contrast(e.parentElement, color(s.outlineColor), 3, 'focus-backdrop-contrast', {control: selector(e)});
     const r = e.getBoundingClientRect();
-    const left = Math.max(0, r.left), right = Math.min(innerWidth, r.right);
-    const top = Math.max(0, r.top), bottom = Math.min(innerHeight, r.bottom);
     let exposed = false;
-    if (right > left && bottom > top) {
-      for (const x of [.1,.5,.9]) for (const y of [.1,.5,.9]) {
-        const hit = document.elementFromPoint(left+(right-left)*x, top+(bottom-top)*y);
-        exposed ||= !!hit && e.contains(hit);
+    // A wrapped inline link's union box includes gaps between its actual fragments.
+    for (const fragment of e.getClientRects()) {
+      const left = Math.max(0, fragment.left), right = Math.min(innerWidth, fragment.right);
+      const top = Math.max(0, fragment.top), bottom = Math.min(innerHeight, fragment.bottom);
+      if (right > left && bottom > top) {
+        for (const x of [.1,.5,.9]) for (const y of [.1,.5,.9]) {
+          const hit = document.elementFromPoint(left+(right-left)*x, top+(bottom-top)*y);
+          exposed ||= !!hit && e.contains(hit);
+        }
       }
     }
     check(e, 'focus-obscured', exposed ? 1 : 0, 1, {bounds: {left:r.left,top:r.top,right:r.right,bottom:r.bottom}});

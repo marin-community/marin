@@ -61,3 +61,25 @@ def test_focus_checker_distinguishes_partial_and_complete_occlusion(journey: Jou
     page.locator("#overlay").evaluate("e=>{e.style.top='0';e.style.height='200px';}")
     complete = page.evaluate(AUDIT, {"mode": "focus"})
     assert any(row["rule"] == "focus-obscured" for row in complete["findings"])
+
+
+def test_focus_checker_measures_disjoint_wrapped_link_fragments(journey: Journey) -> None:
+    page = journey.page
+    page.set_viewport_size({"width": 300, "height": 200})
+    page.set_content(
+        """<style>
+        body {margin:0;width:300px;background:white;color:black;font:16px/24px monospace;}
+        .prefix {display:inline-block;width:280px;}
+        a {outline:3px solid black;outline-offset:3px;}
+        #overlay {display:none;position:fixed;background:white;z-index:10;}
+        </style><span class="prefix">Prefix</span><a href="#">X Y</a><div id="overlay"></div>"""
+    )
+    page.keyboard.press("Tab")
+    exposed = page.evaluate(AUDIT, {"mode": "focus"})
+    assert not any(row["rule"] == "focus-obscured" for row in exposed["findings"])
+    page.locator("#overlay").evaluate("e=>{e.style.cssText+='display:block;left:270px;top:0;width:30px;height:24px;';}")
+    partial = page.evaluate(AUDIT, {"mode": "focus"})
+    assert not any(row["rule"] == "focus-obscured" for row in partial["findings"])
+    page.locator("#overlay").evaluate("e=>{e.style.left='0';e.style.width='300px';e.style.height='80px';}")
+    covered = page.evaluate(AUDIT, {"mode": "focus"})
+    assert any(row["rule"] == "focus-obscured" for row in covered["findings"])
