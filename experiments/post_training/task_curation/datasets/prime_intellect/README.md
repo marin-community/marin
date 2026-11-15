@@ -61,7 +61,11 @@ First generate an exact source-ID/pin receipt with the documented
 Supply its JSON registry with `--license-receipts RECEIPTS.json`, or use the
 canonical checked-in registry. `PRIVATE_REGIONAL_ROOT` is a private `s3://` prefix
 in the acquisition region; for CW RNO2A, use a new prefix under
-`s3://marin-rno2a/`. Preserve its artifact version when resuming identical inputs.
+`s3://marin-rno2a/`. Run full capture inside a trusted Iris CPU job on that
+regional controller. The stage checks the worker region against the S3 bucket
+and inherits its parent's controller for child sandboxes. Keep large source
+inputs and image data in-region; the Mac may hold small indexes and receipts.
+Preserve the artifact version when resuming identical inputs.
 
 ```bash
 uv run python -m experiments.post_training.task_curation.datasets.prime_intellect.capture_artifacts \

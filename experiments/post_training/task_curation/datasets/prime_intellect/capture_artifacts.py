@@ -18,10 +18,12 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from finestore.rl.licenses import LicenseReceipt, require_license
+from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, run
 from pydantic import BaseModel, ConfigDict, Field
+from rigging.filesystem.cluster_config import data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.iris.machine import IrisMachineFactory
@@ -177,8 +179,11 @@ async def capture_one(binding: ImageBinding, config: CaptureConfig, factory: Iri
 
 
 async def capture_all(inputs: CaptureInput, config: CaptureConfig) -> list[dict]:
+    job = get_job_info()
+    if job is None or job.controller_address is None:
+        raise ValueError("Full image capture requires a trusted regional Iris CPU parent")
     factory = IrisMachineFactory(
-        cluster=config.cluster,
+        controller_url=job.controller_address,
         job_ttl=259200,
         scheduling_timeout=900,
         disk_mb=10240,
@@ -212,6 +217,18 @@ def capture_artifacts(config: CaptureConfig) -> CapturedArtifacts:
     require_license(
         LicenseReceipt.model_validate_json(config.license_receipt_json), SOURCE_ID, DATASET, REVISION, "train"
     )
+    job = get_job_info()
+    output = StoragePath(config.output_path)
+    bucket = data_buckets().get(output.bucket)
+    if (
+        job is None
+        or not job.worker_region
+        or output.scheme != "s3"
+        or bucket is None
+        or bucket.signing_region is None
+        or job.worker_region.casefold() != bucket.signing_region.casefold()
+    ):
+        raise ValueError("Full capture must write directly from a regional Iris CPU job to its same-region S3 bucket")
     raw = StoragePath(config.input_path).read_bytes()
     if hashlib.sha256(raw).hexdigest() != config.input_sha256:
         raise ValueError("Frozen source image index changed")
