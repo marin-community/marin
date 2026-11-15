@@ -31,10 +31,11 @@ from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from tokenizers import Tokenizer
 
+from experiments.glm_tool_serving.provenance import emit_receipt, write_provenance
 from experiments.tool_normalization.acquire import acquire_shard
 from experiments.tool_normalization.driver import run
-from experiments.glm_tool_serving.provenance import emit_receipt, write_provenance
 from experiments.tool_normalization.preflight import classify
+from experiments.tool_normalization.scope import terminus_source
 
 DESTINATION = "s3://marin-us-east-08a/marin/users/benfeuer/tool-normalization/ortet-24-20261112"
 RELAY_JOB = "/muchanem/glm53-relay-rno2a-g-20261027T0414Z"
@@ -227,13 +228,22 @@ def main() -> None:
             index = acquire_shard(source_rows, tokenizer, batch / "sources")
             selected = []
             dispositions = []
+            terminus = terminus_source(shard.get("source", ""))
             for item in index:
                 source_file = batch / "sources" / item["id"] / "source.json"
                 source = json.loads(source_file.read_text())
-                result = {"status": "previously_processed"} if item["id"] in skip else classify(source, packages)
-                # Open-SWE needs outcome provenance before entering review; never infer success.
-                if item["source"].startswith("open_swe_traces/"):
-                    result = {"status": "requires_resolved_outcome_provenance"}
+                if terminus:
+                    result = {
+                        "status": "out_of_scope_terminus",
+                        "reason": (
+                            "terminus-2-class terminal-JSON trace; out of scope per the 2026-11-15 campaign refocus"
+                        ),
+                    }
+                else:
+                    result = {"status": "previously_processed"} if item["id"] in skip else classify(source, packages)
+                    # Open-SWE needs outcome provenance before entering review; never infer success.
+                    if item["source"].startswith("open_swe_traces/"):
+                        result = {"status": "requires_resolved_outcome_provenance"}
                 dispositions.append({**item, **result})
                 counts[result["status"]] += 1
                 if item["id"] in preserved:
