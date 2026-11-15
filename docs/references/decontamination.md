@@ -6,7 +6,7 @@ the mandatory `atlas-eval-coverage-v2` supplement. Outputs resolve beneath the
 active regional `MARIN_PREFIX`.
 
 The supplement pins every source file by dataset commit and SHA-256 in
-[`reference_catalog.json`](../../experiments/datakit/decontam/reference_catalog.json).
+[`reference_catalog.json`](https://github.com/marin-community/marin/blob/main/experiments/datakit/decontam/reference_catalog.json).
 It contains all 210 tasks in the pinned Micro210 release, the SWE-bench full,
 Verified and Lite **test** splits, and the 120 long-loop validation holdouts.
 Micro210 has 21 benchmark labels; excluding tau3 gives 200 tasks across 20 labels.
