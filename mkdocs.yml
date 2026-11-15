@@ -116,6 +116,7 @@ nav:
   - Technical Reference:
       - Task Curation: references/task-curation.md
       - Evaluation tasks: references/evaluation-tasks.md
+      - Datakit evaluation references: references/decontamination.md
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
       - Launching RL experiments: references/rl-launching.md

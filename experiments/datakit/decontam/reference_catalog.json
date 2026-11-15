@@ -1,0 +1,3412 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "name": "micro210-cruxeval",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-cruxeval"
+      ],
+      "benchmark": "cruxeval"
+    },
+    {
+      "name": "micro210-bixbench-pi",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-bixbench-pi"
+      ],
+      "benchmark": "bixbench-pi"
+    },
+    {
+      "name": "micro210-humanevalplus",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-humanevalplus"
+      ],
+      "benchmark": "humanevalplus"
+    },
+    {
+      "name": "micro210-tb2-recovery",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-tb2-recovery"
+      ],
+      "benchmark": "tb2-recovery"
+    },
+    {
+      "name": "micro210-ot-tblite-recovery",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-ot-tblite-recovery"
+      ],
+      "benchmark": "ot-tblite-recovery"
+    },
+    {
+      "name": "micro210-gsm8k-0shot",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-gsm8k-0shot"
+      ],
+      "benchmark": "gsm8k-0shot"
+    },
+    {
+      "name": "micro210-ds-1000-local",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-ds-1000-local"
+      ],
+      "benchmark": "ds-1000-local"
+    },
+    {
+      "name": "micro210-ifbench",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-ifbench"
+      ],
+      "benchmark": "ifbench"
+    },
+    {
+      "name": "micro210-bfclparity-pi",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-bfclparity-pi"
+      ],
+      "benchmark": "bfclparity-pi"
+    },
+    {
+      "name": "micro210-truthfulqa",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-truthfulqa"
+      ],
+      "benchmark": "truthfulqa"
+    },
+    {
+      "name": "micro210-olympiadbench",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-olympiadbench"
+      ],
+      "benchmark": "olympiadbench"
+    },
+    {
+      "name": "micro210-triviaqa",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-triviaqa"
+      ],
+      "benchmark": "triviaqa"
+    },
+    {
+      "name": "micro210-tau3-pi",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-tau3-pi"
+      ],
+      "benchmark": "tau3-pi"
+    },
+    {
+      "name": "micro210-aime24",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-aime24"
+      ],
+      "benchmark": "aime24"
+    },
+    {
+      "name": "micro210-gpqa-diamond",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-gpqa-diamond"
+      ],
+      "benchmark": "gpqa-diamond"
+    },
+    {
+      "name": "micro210-math500",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-math500"
+      ],
+      "benchmark": "math500"
+    },
+    {
+      "name": "micro210-mrcr",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-mrcr"
+      ],
+      "benchmark": "mrcr"
+    },
+    {
+      "name": "micro210-NUPA",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-NUPA"
+      ],
+      "benchmark": "NUPA"
+    },
+    {
+      "name": "micro210-mmlu-pro",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-mmlu-pro"
+      ],
+      "benchmark": "mmlu-pro"
+    },
+    {
+      "name": "micro210-swebench-verified",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-swebench-verified"
+      ],
+      "benchmark": "swebench-verified"
+    },
+    {
+      "name": "micro210-mbppplus",
+      "repository": "open-athena/Marin-Micro-Eval-210",
+      "revision": "4564ed081c316bc3231ae5c3a53a46b39248c819",
+      "files": [
+        {
+          "path": "data/validation.parquet",
+          "sha256": "cde0bc0bda40c24f7d653e282660fac9f8637fa57b809cec9a13e629a632e794"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "micro210-mbppplus"
+      ],
+      "benchmark": "mbppplus"
+    },
+    {
+      "name": "swe-bench",
+      "repository": "princeton-nlp/SWE-bench",
+      "revision": "e48e2bd1e9fecd5bbd641e9414ac59da9f2e69f6",
+      "files": [
+        {
+          "path": "data/test-00000-of-00001.parquet",
+          "sha256": "db4f70ef735b3162c74801ddcdf8d7bae8d704193788c6d844f898c20b571cbb"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "problem_statement"
+      ],
+      "configured_tasks": [
+        "swe-bench"
+      ]
+    },
+    {
+      "name": "swe-bench-verified",
+      "repository": "princeton-nlp/SWE-bench_Verified",
+      "revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+      "files": [
+        {
+          "path": "data/test-00000-of-00001.parquet",
+          "sha256": "a45b1fe4e2f0c8390b2b2938ac83e92ed5979000856808f3679c07812e9e6dcd"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "problem_statement"
+      ],
+      "configured_tasks": [
+        "swe-bench-verified"
+      ]
+    },
+    {
+      "name": "swe-bench-lite",
+      "repository": "princeton-nlp/SWE-bench_Lite",
+      "revision": "6ec7bb89b9342f664a54a6e0a6ea6501d3437cc2",
+      "files": [
+        {
+          "path": "data/test-00000-of-00001.parquet",
+          "sha256": "7a21f37b8bc179c7db5beeb14e88ac538ba283455c776e6b2535bbfb6e3551b4"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "problem_statement"
+      ],
+      "configured_tasks": [
+        "swe-bench-lite"
+      ]
+    },
+    {
+      "name": "long-loop-holdouts",
+      "repository": "s3://marin-us-east-08a/marin/users/benfeuer/long-loop/rl-data/swe-verified-20261112-v4/release",
+      "revision": "sha256:8601f26d9b16467efdfb022166367a1c413adfa4118f5110a76b12258e254838",
+      "files": [
+        {
+          "path": "validation.parquet",
+          "sha256": "8601f26d9b16467efdfb022166367a1c413adfa4118f5110a76b12258e254838"
+        }
+      ],
+      "policy": "task_spec",
+      "fields": [],
+      "configured_tasks": [
+        "long-loop-holdouts"
+      ]
+    },
+    {
+      "name": "anli_r1",
+      "repository": "facebook/anli",
+      "revision": "8201971a1f6ffff992ba0b46cff1dd20a9e31ffc",
+      "files": [
+        {
+          "path": "plain_text/test_r1/0000.parquet",
+          "sha256": "c4a3d304c4671941d6bad5a07632a79713c5a1be485ccf75b81b6df93f61045e"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "hypothesis"
+      ],
+      "configured_tasks": [
+        "anli_r1"
+      ]
+    },
+    {
+      "name": "anli_r2",
+      "repository": "facebook/anli",
+      "revision": "8201971a1f6ffff992ba0b46cff1dd20a9e31ffc",
+      "files": [
+        {
+          "path": "plain_text/test_r2/0000.parquet",
+          "sha256": "df5daccdd5623cfcaa34be0100721783485f4181a42796b1d0ac0cd7601e7acb"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "hypothesis"
+      ],
+      "configured_tasks": [
+        "anli_r2"
+      ]
+    },
+    {
+      "name": "anli_r3",
+      "repository": "facebook/anli",
+      "revision": "8201971a1f6ffff992ba0b46cff1dd20a9e31ffc",
+      "files": [
+        {
+          "path": "plain_text/test_r3/0000.parquet",
+          "sha256": "3232c4217979da00b2cd6ed97d099a8a8edf04530193ea52e3c8d69190de92a2"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "hypothesis"
+      ],
+      "configured_tasks": [
+        "anli_r3"
+      ]
+    },
+    {
+      "name": "arithmetic_1dc",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_1dc/validation/0000.parquet",
+          "sha256": "6bcac7dd65ea21a94d45793f649c049528714cf62c3b4dcc8c35e4c9bb41c97e"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_1dc"
+      ]
+    },
+    {
+      "name": "arithmetic_2da",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_2da/validation/0000.parquet",
+          "sha256": "6a604a254eb66f56ebe9eeb714b72e17907208715dd7a78f1508bf527fec330d"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_2da"
+      ]
+    },
+    {
+      "name": "arithmetic_2dm",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_2dm/validation/0000.parquet",
+          "sha256": "67d32ad162e11cdfbba26861a5e117d656afabd6111326e117c5bf80f370a05f"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_2dm"
+      ]
+    },
+    {
+      "name": "arithmetic_2ds",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_2ds/validation/0000.parquet",
+          "sha256": "4f1af0c0f43e83871a226d6d314e02d47254f282caa17bcb6f816a5ff87936a8"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_2ds"
+      ]
+    },
+    {
+      "name": "arithmetic_3da",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_3da/validation/0000.parquet",
+          "sha256": "a78c0509a9def329d17158bf80b6eb5a355f5f5a1525dd8b0ce80e5ae8c106c8"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_3da"
+      ]
+    },
+    {
+      "name": "arithmetic_3ds",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_3ds/validation/0000.parquet",
+          "sha256": "0303651f367bcf4e98beec0965e118041cab68471795ccabdb782ab0759c684c"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_3ds"
+      ]
+    },
+    {
+      "name": "arithmetic_4da",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_4da/validation/0000.parquet",
+          "sha256": "a526ce1248020d51781558742ad13170f9ae2557f9cb56e6fb65eb2ef261a05c"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_4da"
+      ]
+    },
+    {
+      "name": "arithmetic_4ds",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_4ds/validation/0000.parquet",
+          "sha256": "2ff5d9144fa64e7679d33e29d8c72ae2cb8a6cf00686431106dbd9de400609a2"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_4ds"
+      ]
+    },
+    {
+      "name": "arithmetic_5da",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_5da/validation/0000.parquet",
+          "sha256": "091f546e9f3ced8e9daec91dc34877e2b48c972c778804bea423f10052abbe73"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_5da"
+      ]
+    },
+    {
+      "name": "arithmetic_5ds",
+      "repository": "EleutherAI/arithmetic",
+      "revision": "14413db3567723ff76bc468508333b5c7a9dcf5d",
+      "files": [
+        {
+          "path": "arithmetic_5ds/validation/0000.parquet",
+          "sha256": "90035eaf99afe69484fc6cd7445b5cdf5d85e8d0528f77030dc6ea212d5c806c"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "completion"
+      ],
+      "configured_tasks": [
+        "arithmetic_5ds"
+      ]
+    },
+    {
+      "name": "boolq",
+      "repository": "aps/super_glue",
+      "revision": "fd77e85946ac3435f3864f2a34bae3947c1561d0",
+      "files": [
+        {
+          "path": "boolq/validation/0000.parquet",
+          "sha256": "f46438b8cce048184552a2bfcdb8252eadb3a2602f0c22334caccd9b6ea547d6"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question"
+      ],
+      "configured_tasks": [
+        "boolq"
+      ]
+    },
+    {
+      "name": "copa",
+      "repository": "aps/super_glue",
+      "revision": "fd77e85946ac3435f3864f2a34bae3947c1561d0",
+      "files": [
+        {
+          "path": "copa/validation/0000.parquet",
+          "sha256": "247a7f586c5cc706eb18a15ad20f1a5b543b9c7af0df4161df138a25edc95d67"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "premise",
+        "choice1",
+        "choice2"
+      ],
+      "configured_tasks": [
+        "copa"
+      ]
+    },
+    {
+      "name": "crows_pairs_english",
+      "repository": "BigScienceBiasEval/crows_pairs_multilingual",
+      "revision": "428bb32696756be1d096e34a3878b342e3f81e1b",
+      "files": [
+        {
+          "path": "english/test/0000.parquet",
+          "sha256": "fc6601a2a628e79d2bdcdf10f4634c7de0d8c929248547dc9344d4b990f6e077"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "sent_more",
+        "sent_less"
+      ],
+      "configured_tasks": [
+        "crows_pairs_english_age",
+        "crows_pairs_english_autre",
+        "crows_pairs_english_disability",
+        "crows_pairs_english_gender",
+        "crows_pairs_english_nationality",
+        "crows_pairs_english_physical_appearance",
+        "crows_pairs_english_race_color",
+        "crows_pairs_english_religion",
+        "crows_pairs_english_sexual_orientation",
+        "crows_pairs_english_socioeconomic"
+      ]
+    },
+    {
+      "name": "ethics_cm",
+      "repository": "EleutherAI/hendrycks_ethics",
+      "revision": "4ea087e182233973480bd2329176fda2201da5ef",
+      "files": [
+        {
+          "path": "commonsense/test/0000.parquet",
+          "sha256": "233fd10826ad9becdfe9933ed6df92437905b0c49efc3d718bf20da5d8e6f5ed"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "input"
+      ],
+      "configured_tasks": [
+        "ethics_cm"
+      ]
+    },
+    {
+      "name": "ethics_deontology",
+      "repository": "EleutherAI/hendrycks_ethics",
+      "revision": "4ea087e182233973480bd2329176fda2201da5ef",
+      "files": [
+        {
+          "path": "deontology/test/0000.parquet",
+          "sha256": "1491956f3b38cc430f4873d84026067a8ebd0016c12397a643da0d1c64070d2d"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "scenario",
+        "excuse"
+      ],
+      "configured_tasks": [
+        "ethics_deontology"
+      ]
+    },
+    {
+      "name": "ethics_justice",
+      "repository": "EleutherAI/hendrycks_ethics",
+      "revision": "4ea087e182233973480bd2329176fda2201da5ef",
+      "files": [
+        {
+          "path": "justice/test/0000.parquet",
+          "sha256": "3753979792a50ccf269dfbed540b2aa0aff7b4f945d0e8fb6b75720aa275f311"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "scenario"
+      ],
+      "configured_tasks": [
+        "ethics_justice"
+      ]
+    },
+    {
+      "name": "ethics_utilitarianism",
+      "repository": "EleutherAI/hendrycks_ethics",
+      "revision": "4ea087e182233973480bd2329176fda2201da5ef",
+      "files": [
+        {
+          "path": "utilitarianism/test/0000.parquet",
+          "sha256": "0c8a28593fa7cbecf4f7818560c8365f7809aa2787b73a5be33e199c7becff2b"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "activity",
+        "baseline"
+      ],
+      "configured_tasks": [
+        "ethics_utilitarianism"
+      ]
+    },
+    {
+      "name": "ethics_virtue",
+      "repository": "EleutherAI/hendrycks_ethics",
+      "revision": "4ea087e182233973480bd2329176fda2201da5ef",
+      "files": [
+        {
+          "path": "virtue/test/0000.parquet",
+          "sha256": "031bd0a3e0333fda306817497e40dfe3b24c90903ca561664a2964c2bbe2851e"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "scenario"
+      ],
+      "configured_tasks": [
+        "ethics_virtue"
+      ]
+    },
+    {
+      "name": "gsm8k",
+      "repository": "openai/gsm8k",
+      "revision": "a05f38c23a0e9ab0b71de8a2b4947e20f74f68f7",
+      "files": [
+        {
+          "path": "main/test/0000.parquet",
+          "sha256": "ee7b8da9e381df27b9e3f7758a159ab2bdaa4dbaa910546cbbc47e0cb44e4f59"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "answer"
+      ],
+      "configured_tasks": [
+        "gsm8k",
+        "gsm8k_cot"
+      ]
+    },
+    {
+      "name": "ifeval",
+      "repository": "google/IFEval",
+      "revision": "bcf1317fc23a04c4e7a238d35b28355ef4a18b0e",
+      "files": [
+        {
+          "path": "default/train/0000.parquet",
+          "sha256": "5c1cc7f32d6c6fe249a89b4271b4f6110b6eb87db3af06c0bc6aa7e526c6866b"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "prompt"
+      ],
+      "configured_tasks": [
+        "ifeval",
+        "leaderboard_ifeval"
+      ]
+    },
+    {
+      "name": "include_base_44_albanian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Albanian/test/0000.parquet",
+          "sha256": "728958d16df23d55f54a99047a8fcb402351d3d9143b463d95b8ce7fef9eea38"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_albanian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_arabic_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Arabic/test/0000.parquet",
+          "sha256": "68cab8d12c41095202d6949fe140d23e4f4dde7729b0fc5121b2c68ae04440e5"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_arabic_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_armenian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Armenian/test/0000.parquet",
+          "sha256": "21cf3745cfc3adf21c5fb8b340e9170d1dc2a8ef0abb19019a511ab8c5918a05"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_armenian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_azerbaijani_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Azerbaijani/test/0000.parquet",
+          "sha256": "c793f94977f0629240c845208c6248bfddcac18e361f62e8ff9ea08afb4ae08a"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_azerbaijani_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_basque_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Basque/test/0000.parquet",
+          "sha256": "6eabaf7e5666645151b0fcbbf6ffedd8a6754a704930b9362345cee9befc03b0"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_basque_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_belarusian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Belarusian/test/0000.parquet",
+          "sha256": "44e7b99f47fd5d3a8d84b8ecf432b28a64e856cb9bd5ec1d5fff5b1f32ea213d"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_belarusian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_bengali_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Bengali/test/0000.parquet",
+          "sha256": "e226c52f265617f02d8e36ce469c181cc7a6bf7f641481d5436698818eafdfe0"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_bengali_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_bulgarian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Bulgarian/test/0000.parquet",
+          "sha256": "5532515dd8a4ece548b57ee53c8f56d67a5e438de1c1e9b58ba603690ea68d35"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_bulgarian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_chinese_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Chinese/test/0000.parquet",
+          "sha256": "3a08fbcadd182344691abdeb2d9b86b38866d6f05f7c89530b83046a8e14e596"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_chinese_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_croatian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Croatian/test/0000.parquet",
+          "sha256": "83346df0d13ea92ba71ee3ebb633c8767f0760d678778ed802c96f31ff82f3d9"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_croatian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_dutch_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Dutch/test/0000.parquet",
+          "sha256": "d1c91afaa357825e07de28717671dddffee7cb4e9c8c6b998e9157c18547757f"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_dutch_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_finnish_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Finnish/test/0000.parquet",
+          "sha256": "ecc9415ad07d1d65245327701bd2ced6ac17dbe532e3723ad6e0d7c2e374cfa4"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_finnish_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_french_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "French/test/0000.parquet",
+          "sha256": "6ab5ba6b2f483b2601adfdc2b886e6a4a8f408025d27917070fdac515410f42f"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_french_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_georgian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Georgian/test/0000.parquet",
+          "sha256": "379524c68dcef3a829da035120e25d58c62e47d4bb108e061188c02b84c497d1"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_georgian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_german_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "German/test/0000.parquet",
+          "sha256": "d49263cd57d8f5ac7504ba972917502e7c283c0df80b6f435275a0116dce003e"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_german_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_greek_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Greek/test/0000.parquet",
+          "sha256": "718415a000f0e52e6d1c93925ff6c5fa028330feaa3b75b032b145ba52de224a"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_greek_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_hebrew_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Hebrew/test/0000.parquet",
+          "sha256": "b574be4611b744be56877f266bfd9d15dda1c68cc00a348119ef4584d6401021"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_hebrew_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_hindi_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Hindi/test/0000.parquet",
+          "sha256": "b694570d8ce03a2f223e0422eac199b90e10fd0b0b980c23c1a35ce8fc7476ec"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_hindi_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_hungarian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Hungarian/test/0000.parquet",
+          "sha256": "7bddfb7af4951b87142718f5fdc38702876c0c45cd4becbf4ea5a8bec0cf9d99"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_hungarian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_indonesian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Indonesian/test/0000.parquet",
+          "sha256": "440fe82bd73185200538ca834d7cb8d8db316113611c3024f05262a748079270"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_indonesian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_italian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Italian/test/0000.parquet",
+          "sha256": "3b593c9ae9b42a59a651c5acdf3062626257dc52e87ef2e09a2ddb75131d8b12"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_italian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_japanese_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Japanese/test/0000.parquet",
+          "sha256": "7b26cc9198b55ff0ba86babf6095dafba4ed7deab0fbf86509cf02d927e85615"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_japanese_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_kazakh_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Kazakh/test/0000.parquet",
+          "sha256": "7936befd8368560e8b1b57556a44f676e269c2c616dfa2e5bb121870b13593b8"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_kazakh_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_korean_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Korean/test/0000.parquet",
+          "sha256": "2e6c5c460bdec21e9c72a878a938d51b270a328d8384a0908bbc640bbe3de2b9"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_korean_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_lithuanian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Lithuanian/test/0000.parquet",
+          "sha256": "501940d2473231ee0904dc20892a812af298439b7519d1bb02b904d767c407ab"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_lithuanian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_malay_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Malay/test/0000.parquet",
+          "sha256": "e9d04babb616c2697537599c4ac29156d4316ba04a48f6750440dd11fabf41d5"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_malay_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_nepali_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Nepali/test/0000.parquet",
+          "sha256": "377e5035b2d97f0a75b5d90e4c6abf1b268e658bae649c7fc86ccd2f328855c0"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_nepali_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_north macedonian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "North Macedonian/test/0000.parquet",
+          "sha256": "cafd7f067195739db60f718cde8dea8b14f5261b84bb9c04e459aa535772ee07"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_north macedonian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_persian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Persian/test/0000.parquet",
+          "sha256": "198b57d702fcc784b27f9999d6cb32b511f4daebbb8515471af211e9cd38ca05"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_persian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_portuguese_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Portuguese/test/0000.parquet",
+          "sha256": "8fb80ebb509e638a1aeec12a4a5949a0c3c203d123ef2ded15b160c21ef2b7fe"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_portuguese_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_russian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Russian/test/0000.parquet",
+          "sha256": "d367f3218c772dea51d21fa932b66e15eda485002d83512a80b4d4878be0fc98"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_russian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_serbian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Serbian/test/0000.parquet",
+          "sha256": "545b5c17677fceb6af0054596e05eb4f41cabc2999eb7551d83a21c6f34b218d"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_serbian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_spanish_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Spanish/test/0000.parquet",
+          "sha256": "a99d5db9bb677b27d3ce9cee6ec9e156e16b29f9e2186c797b5fcaf8ff54808b"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_spanish_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_tagalog_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Tagalog/test/0000.parquet",
+          "sha256": "0a10f3a252a8bc86c7c13cec100f889e99109f54da42b6e74a4d0985d4294e3c"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_tagalog_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_tamil_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Tamil/test/0000.parquet",
+          "sha256": "e417ba60a6b734f07d906e53af3da2113a5e4eeecf9396a7eee794d7157eb8d6"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_tamil_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_telugu_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Telugu/test/0000.parquet",
+          "sha256": "51bde5e46ade71c1b761785f4e2bdc44e7a290188a12e7fc492c38cd58704aa0"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_telugu_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_turkish_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Turkish/test/0000.parquet",
+          "sha256": "b6aea9c2c45ea7bb15b903ddb4b813eb5f92353e383be2df3754bfd14db21e63"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_turkish_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_ukrainian_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Ukrainian/test/0000.parquet",
+          "sha256": "de2f691929a5fba93b5bdd272dd10b71287b8a4c4e7779a20756e7aa64242e25"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_ukrainian_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_uzbek_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Uzbek/test/0000.parquet",
+          "sha256": "ca4e597a2657a8b31920049da765873c06a74f7bd96492286a1696fcf1aaaf68"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_uzbek_few_shot_og"
+      ]
+    },
+    {
+      "name": "include_base_44_vietnamese_few_shot_og",
+      "repository": "CohereForAI/include-base-44",
+      "revision": "2653cc954213edb016a32cf874bd3d687fb298c6",
+      "files": [
+        {
+          "path": "Vietnamese/test/0000.parquet",
+          "sha256": "51a33bd0e0309ab003aa177167355cce72c8e22acd614746b13cbc92365b961a"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "option_a",
+        "option_b",
+        "option_c",
+        "option_d"
+      ],
+      "configured_tasks": [
+        "include_base_44_vietnamese_few_shot_og"
+      ]
+    },
+    {
+      "name": "mmmlu_ar_xy",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "AR_XY/test/0000.parquet",
+          "sha256": "4faafe5c58e31d393ffdb44f755dff8b1e77009e24736a0d7884a5057651551d"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_ar_xy"
+      ]
+    },
+    {
+      "name": "mmmlu_bn_bd",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "BN_BD/test/0000.parquet",
+          "sha256": "73880bced15d3c7696df14ed9ee5144ed6fde6bdcbc38999496c340138bb785d"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_bn_bd"
+      ]
+    },
+    {
+      "name": "mmmlu_de_de",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "DE_DE/test/0000.parquet",
+          "sha256": "3eb21fb57a161850d1519f7b411c7abcb7f0a6499c8faa95f30997fb4ad8f22b"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_de_de"
+      ]
+    },
+    {
+      "name": "mmmlu_es_la",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "ES_LA/test/0000.parquet",
+          "sha256": "cca6b69e63da29fc3bc8b41eaeed63a093e4b2f9f4abe5da63f2dcdf31b9fb7f"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_es_la"
+      ]
+    },
+    {
+      "name": "mmmlu_fr_fr",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "FR_FR/test/0000.parquet",
+          "sha256": "3a58fc2c39a3e3fe5633c57f4256becf16c18319832d72307286027a66e7cb9a"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_fr_fr"
+      ]
+    },
+    {
+      "name": "mmmlu_hi_in",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "HI_IN/test/0000.parquet",
+          "sha256": "0f06d1e40543f1a3bf9144c531081b9afd506929b04163020e49472e21410d4b"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_hi_in"
+      ]
+    },
+    {
+      "name": "mmmlu_id_id",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "ID_ID/test/0000.parquet",
+          "sha256": "a5995b372ddd6def42c76ce0ecdb02ce82c407ae5b9e919071747ecf28834cc2"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_id_id"
+      ]
+    },
+    {
+      "name": "mmmlu_it_it",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "IT_IT/test/0000.parquet",
+          "sha256": "110c88a5fc77cb24d22c65f2ba7e9512b6cbfaee6feb3ec63f773bb0b61d16e7"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_it_it"
+      ]
+    },
+    {
+      "name": "mmmlu_ja_jp",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "JA_JP/test/0000.parquet",
+          "sha256": "0820bfe36fa020cc073855c8b3d9c97737905bb10d3e6df57172db789381f415"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_ja_jp"
+      ]
+    },
+    {
+      "name": "mmmlu_ko_kr",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "KO_KR/test/0000.parquet",
+          "sha256": "2c828be3927b6aff570b7ae71401157ff42d45af27580c78280ba340acdb8527"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_ko_kr"
+      ]
+    },
+    {
+      "name": "mmmlu_pt_br",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "PT_BR/test/0000.parquet",
+          "sha256": "0d83b6051e34a3167a998e9f221503a4ac48db956bd48f3062563e3843ae401d"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_pt_br"
+      ]
+    },
+    {
+      "name": "mmmlu_sw_ke",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "SW_KE/test/0000.parquet",
+          "sha256": "4ea72a21aad518e02005dfe0428308e4ff16cf9e276dc031f378758b62da0878"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_sw_ke"
+      ]
+    },
+    {
+      "name": "mmmlu_yo_ng",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "YO_NG/test/0000.parquet",
+          "sha256": "7be4937af8bd7fa0c8a0611634a0177a66e2d910608a0fdb2dc934bb8dd965d5"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_yo_ng"
+      ]
+    },
+    {
+      "name": "mmmlu_zh_cn",
+      "repository": "openai/MMMLU",
+      "revision": "4100de15ef82c8b7735afda2e880c2b76ce76c1d",
+      "files": [
+        {
+          "path": "ZH_CN/test/0000.parquet",
+          "sha256": "315d17659c41433b560fd2477a723f1fa824339a4eac0b84b413dfebf755b480"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "mmmlu_zh_cn"
+      ]
+    },
+    {
+      "name": "leaderboard_math_hard",
+      "repository": "DigitalLearningGmbH/MATH-lighteval",
+      "revision": "e05a4685c7a909a88d3747c38c92c424caeb5352",
+      "files": [
+        {
+          "path": "default/test/0000.parquet",
+          "sha256": "7dca8d6e41af88ecf82f2b5f36eb5530e083aaaa86ee325f62bd5c31535178c6"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "problem",
+        "solution"
+      ],
+      "configured_tasks": [
+        "leaderboard_math_hard"
+      ]
+    },
+    {
+      "name": "logiqa",
+      "repository": "EleutherAI/logiqa",
+      "revision": "fcd80241270118cd52c96dc517dc38804025f3f5",
+      "files": [
+        {
+          "path": "logiqa/test/0000.parquet",
+          "sha256": "86f8a453cf23670e394960054d2bafc20e672bc39518b5de31fde6826e56cf9e"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "question",
+        "options"
+      ],
+      "configured_tasks": [
+        "logiqa"
+      ]
+    },
+    {
+      "name": "mathqa",
+      "repository": "allenai/math_qa",
+      "revision": "fafb9f7ee5b9ec4da9499f9c4177a4c91389f2d6",
+      "files": [
+        {
+          "path": "default/test/0000.parquet",
+          "sha256": "8e0a1ba23c37d0a543b219d535a766c5459b8c4ba14b4ed5f78a7aa1b508340c"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Problem",
+        "options",
+        "Rationale"
+      ],
+      "configured_tasks": [
+        "mathqa"
+      ]
+    },
+    {
+      "name": "mc_taco",
+      "repository": "CogComp/mc_taco",
+      "revision": "991693763bea0a5906d534ea8855be19cf338deb",
+      "files": [
+        {
+          "path": "plain_text/test/0000.parquet",
+          "sha256": "7e832d53eabb336dd37796bc0a8d3d01dc58952da6e611202af712adadf1a0a1"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "answer"
+      ],
+      "configured_tasks": [
+        "mc_taco"
+      ]
+    },
+    {
+      "name": "medmcqa",
+      "repository": "openlifescienceai/medmcqa",
+      "revision": "75fdef2909a643a9270e3d7cfa1317dacccaa66b",
+      "files": [
+        {
+          "path": "default/validation/0000.parquet",
+          "sha256": "b768a1ea34afc9f80d3106d9b21f80fa8a00ec450a1f6cd641af72ca9e591021"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "opa",
+        "opb",
+        "opc",
+        "opd"
+      ],
+      "configured_tasks": [
+        "medmcqa"
+      ]
+    },
+    {
+      "name": "minerva_math",
+      "repository": "EleutherAI/hendrycks_math",
+      "revision": "fe39eaeb3783a7dd5d7e305da9a8db9b0c4e6b93",
+      "files": [
+        {
+          "path": "algebra/test/0000.parquet",
+          "sha256": "0e04a850dac9cfc758eac0c80afd2d0cc65e29ea72f916c8ac1045b12af937f5"
+        },
+        {
+          "path": "counting_and_probability/test/0000.parquet",
+          "sha256": "c324818949c75a6227c0328a8499d58023cbbf6757cfc1736f5ab24cc8d87966"
+        },
+        {
+          "path": "geometry/test/0000.parquet",
+          "sha256": "98720f3a8134ad9784fd8951195245264495df03ffc5c9485a9a54ff5ae2431a"
+        },
+        {
+          "path": "intermediate_algebra/test/0000.parquet",
+          "sha256": "e859f72486c951c2017da880541ca729940eaa986b0364eb23e238983df9bfeb"
+        },
+        {
+          "path": "number_theory/test/0000.parquet",
+          "sha256": "ba156c9c9fa2040836ba12135fd964e6e67d6bccd8c469ec4a3ad941f8f6fbe9"
+        },
+        {
+          "path": "prealgebra/test/0000.parquet",
+          "sha256": "301e5d8ade5c7b5038032532e498bdc9dca799e7f1061a63f2e7d980803240cc"
+        },
+        {
+          "path": "precalculus/test/0000.parquet",
+          "sha256": "da37474ba3761ae5727af3844a7ba963a735bd6a14c65e6137593669a4fe3b9c"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "problem",
+        "solution"
+      ],
+      "configured_tasks": [
+        "minerva_math"
+      ]
+    },
+    {
+      "name": "mmlu",
+      "repository": "cais/mmlu",
+      "revision": "d183e18c31b6d5563d00fb87257819c64e76b985",
+      "files": [
+        {
+          "path": "all/test/0000.parquet",
+          "sha256": "74a41822ce7d3def56e1682f958469c04642a5336a5ce912fa375fdb90fb25d7"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "choices"
+      ],
+      "configured_tasks": [
+        "mmlu"
+      ]
+    },
+    {
+      "name": "moral_stories",
+      "repository": "demelin/moral_stories",
+      "revision": "967df9976da45ee092189c769753b6c330bd3e9f",
+      "files": [
+        {
+          "path": "full/train/0000.parquet",
+          "sha256": "2c46727a6e403beeeb0dc435fc2dc5e65e231131abd57740c999da0f6aa47e6f"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "norm",
+        "situation",
+        "intention",
+        "moral_action",
+        "moral_consequence",
+        "immoral_action",
+        "immoral_consequence"
+      ],
+      "configured_tasks": [
+        "moral_stories"
+      ]
+    },
+    {
+      "name": "mutual",
+      "repository": "EleutherAI/mutual",
+      "revision": "7d17faac465aedb828171dc7580b5ad71c0d3666",
+      "files": [
+        {
+          "path": "mutual/validation/0000.parquet",
+          "sha256": "3675f675db7d0cbd2d30e4a06e7634a03a79ea7b558d5a2555d97fcb2db68b03"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "article",
+        "options"
+      ],
+      "configured_tasks": [
+        "mutual"
+      ]
+    },
+    {
+      "name": "mutual_plus",
+      "repository": "EleutherAI/mutual",
+      "revision": "7d17faac465aedb828171dc7580b5ad71c0d3666",
+      "files": [
+        {
+          "path": "mutual_plus/validation/0000.parquet",
+          "sha256": "a2779f83f9f2756a3673b1a1445313ce38bc718834095376098449190827db44"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "article",
+        "options"
+      ],
+      "configured_tasks": [
+        "mutual_plus"
+      ]
+    },
+    {
+      "name": "nq_open",
+      "repository": "google-research-datasets/nq_open",
+      "revision": "5314128a9455765af1164e870dc1d7b233da8bcc",
+      "files": [
+        {
+          "path": "nq_open/validation/0000.parquet",
+          "sha256": "b074bed0bccb56fa1551a8ac1c9c51ce89bc11c7fbb6a9c713b2c33a98531e12"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "answer"
+      ],
+      "configured_tasks": [
+        "nq_open"
+      ]
+    },
+    {
+      "name": "openbookqa",
+      "repository": "allenai/openbookqa",
+      "revision": "ff32d06f3b17a43c2042765b39a22ba55a0d41f9",
+      "files": [
+        {
+          "path": "main/test/0000.parquet",
+          "sha256": "cd5483e366daa230c1c87bbdc512d8b7229f14f6dd04d19fc8b1a3855aaaa8a3"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question_stem",
+        "choices"
+      ],
+      "configured_tasks": [
+        "openbookqa"
+      ]
+    },
+    {
+      "name": "prost",
+      "repository": "corypaik/prost",
+      "revision": "0e475b574d98e7d79de2064252dd2fb75bcaa0a8",
+      "files": [
+        {
+          "path": "default/test/0000.parquet",
+          "sha256": "cb1f50d0794e5dc1af345d3177b1aa84c13ba87dab27326c4be3add322945f57"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "context",
+        "question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "prost"
+      ]
+    },
+    {
+      "name": "pubmedqa",
+      "repository": "bigbio/pubmed_qa",
+      "revision": "13a7d15476092370cbabb6475390e7e69b74d2f2",
+      "files": [
+        {
+          "path": "pubmed_qa_labeled_fold0_source/test/0000.parquet",
+          "sha256": "51fb39bafac59a7a63138c9d0f0967f95f84f92cfb6cf3d88fcc25d6c4f84985"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "QUESTION",
+        "final_decision"
+      ],
+      "configured_tasks": [
+        "pubmedqa"
+      ]
+    },
+    {
+      "name": "qasper",
+      "repository": "allenai/qasper",
+      "revision": "06806e4608976fc2fac0a090ac425d5b2b29caf4",
+      "files": [
+        {
+          "path": "qasper/validation/0000.parquet",
+          "sha256": "089781b91c337d348dd9e8b57cc8adc100ed2d9cab84a6127402bcccf1559222"
+        }
+      ],
+      "policy": "qas",
+      "fields": [],
+      "configured_tasks": [
+        "qasper_bool",
+        "qasper_freeform"
+      ]
+    },
+    {
+      "name": "sciq",
+      "repository": "allenai/sciq",
+      "revision": "fe5e87d205330055013e07e9d40377da385c6dc1",
+      "files": [
+        {
+          "path": "default/test/0000.parquet",
+          "sha256": "3a719356a29b127fc54ef3c7f51a034db4bd105d5717215e8c85d2aa58d60667"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "correct_answer",
+        "distractor1",
+        "distractor2",
+        "distractor3"
+      ],
+      "configured_tasks": [
+        "sciq"
+      ]
+    },
+    {
+      "name": "social_iqa",
+      "repository": "allenai/social_i_qa",
+      "revision": "537a2ec8ec565adc0b70b70752893e59e024df26",
+      "files": [
+        {
+          "path": "default/validation/0000.parquet",
+          "sha256": "23c22ee065bf57b77b775f1c90e7a277a39fd39d386bd7bcc9e3f212e3f35197"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "answerA",
+        "answerB",
+        "answerC"
+      ],
+      "configured_tasks": [
+        "social_iqa"
+      ]
+    },
+    {
+      "name": "squadv2",
+      "repository": "rajpurkar/squad_v2",
+      "revision": "4866f961e7af023d9a9e7c9e951f34fd7f152818",
+      "files": [
+        {
+          "path": "squad_v2/validation/0000.parquet",
+          "sha256": "0560174ab095c5ac0a8c8dc8da05f1625453c45a77e4ce9cabc6947ddfdd24cb"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "answers"
+      ],
+      "configured_tasks": [
+        "squadv2"
+      ]
+    },
+    {
+      "name": "swag",
+      "repository": "allenai/swag",
+      "revision": "f78468c6848c5cb43dab55341cd9183331b2a55f",
+      "files": [
+        {
+          "path": "regular/validation/0000.parquet",
+          "sha256": "647853ce22228033dd6bbcc79c93d50620c62a66c1a9ad1ec115129aa574bba0"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "sent1",
+        "sent2",
+        "ending0",
+        "ending1",
+        "ending2",
+        "ending3"
+      ],
+      "configured_tasks": [
+        "swag"
+      ]
+    },
+    {
+      "name": "triviaqa",
+      "repository": "mandarjoshi/trivia_qa",
+      "revision": "bd67746ffd85804fdc6b2ec5b00222ea26f8117e",
+      "files": [
+        {
+          "path": "rc.nocontext/validation/0000.parquet",
+          "sha256": "48a5005c0eb4f8a4ae5b9868644297fd5bf1e694aeb3dc9c8ab958cac0d5b201"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "answer"
+      ],
+      "configured_tasks": [
+        "triviaqa"
+      ]
+    },
+    {
+      "name": "truthfulqa",
+      "repository": "truthfulqa/truthful_qa",
+      "revision": "6cce8afb9c379a6745ce8bbcb33e99f46390ec49",
+      "files": [
+        {
+          "path": "generation/validation/0000.parquet",
+          "sha256": "dfb1004b8ab83b22e8e476c76d5ac6074ff35c43946a724e810de3d83c3e21a5"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "best_answer",
+        "correct_answers",
+        "incorrect_answers"
+      ],
+      "configured_tasks": [
+        "truthfulqa_gen",
+        "truthfulqa_mc1",
+        "truthfulqa_mc2"
+      ]
+    },
+    {
+      "name": "webqs",
+      "repository": "stanfordnlp/web_questions",
+      "revision": "a5a3ddfb591f15fb8b08707a4a090c887dc60af8",
+      "files": [
+        {
+          "path": "default/test/0000.parquet",
+          "sha256": "3c81463f22162f645bdbdc0d501cfee9ad7d31bee819b3226f734523741c9faa"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question",
+        "answers"
+      ],
+      "configured_tasks": [
+        "webqs"
+      ]
+    },
+    {
+      "name": "winogrande",
+      "repository": "allenai/winogrande",
+      "revision": "546d5aa0e42fc0fa9ad2c13260322ec969e083ee",
+      "files": [
+        {
+          "path": "winogrande_xl/validation/0000.parquet",
+          "sha256": "f9d914d1818c0aba98cabdf8af2bc4bd943c462b9c5e7062647e05c2ce3315d1"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "sentence",
+        "option1",
+        "option2"
+      ],
+      "configured_tasks": [
+        "winogrande"
+      ]
+    },
+    {
+      "name": "wsc273",
+      "repository": "ErnestSDavis/winograd_wsc",
+      "revision": "24cdebf4993560f25ff220b171e40f1027f3d9e6",
+      "files": [
+        {
+          "path": "wsc273/test/0000.parquet",
+          "sha256": "42eebbefbce68086e8c316789a90d824b81a5d4c7a72c575b3a9d60629a95d01"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "text",
+        "options"
+      ],
+      "configured_tasks": [
+        "wsc273"
+      ]
+    },
+    {
+      "name": "cmmlu",
+      "repository": "haonan-li/cmmlu",
+      "revision": "efcc940752ea4a1ea94d2727f11f83858d64fc8e",
+      "files": [
+        {
+          "path": "cmmlu_v1_0_1.zip",
+          "sha256": "22ecf70b28bef447ee7d8aa5fe144f56996762f901a8537b03b7693773c672a6"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "Question",
+        "A",
+        "B",
+        "C",
+        "D"
+      ],
+      "configured_tasks": [
+        "cmmlu"
+      ]
+    },
+    {
+      "name": "qa4mre_2011",
+      "repository": "community-datasets/qa4mre",
+      "revision": "a6ba3ed66833455732993c7d2daeb2f397785be0",
+      "files": [
+        {
+          "path": "2011.main.EN/train-00000-of-00001.parquet",
+          "sha256": "3a64c84ab73fb1b48840ae1fc3b911a66d4a41516b1d287f265a156199bb74e6"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question_str",
+        "answer_options"
+      ],
+      "configured_tasks": [
+        "qa4mre_2011"
+      ]
+    },
+    {
+      "name": "qa4mre_2012",
+      "repository": "community-datasets/qa4mre",
+      "revision": "a6ba3ed66833455732993c7d2daeb2f397785be0",
+      "files": [
+        {
+          "path": "2012.main.EN/train-00000-of-00001.parquet",
+          "sha256": "e2227166a11b42fb27ac3247437680d5e408f6ce3df52f44596a16451b28c6ca"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question_str",
+        "answer_options"
+      ],
+      "configured_tasks": [
+        "qa4mre_2012"
+      ]
+    },
+    {
+      "name": "qa4mre_2013",
+      "repository": "community-datasets/qa4mre",
+      "revision": "a6ba3ed66833455732993c7d2daeb2f397785be0",
+      "files": [
+        {
+          "path": "2013.main.EN/train-00000-of-00001.parquet",
+          "sha256": "db60dfab47e38ef692ff3c42b0eee61d5269c01890d1e2d81c6b679d483a0d85"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "question_str",
+        "answer_options"
+      ],
+      "configured_tasks": [
+        "qa4mre_2013"
+      ]
+    },
+    {
+      "name": "logiqa2",
+      "repository": "https://raw.githubusercontent.com/csitfun/LogiQA2.0",
+      "revision": "955e1d3df6c59d9bfb44d9913da1e1a27ec14e18",
+      "files": [
+        {
+          "path": "logiqa/DATA/LOGIQA/test.txt",
+          "sha256": "71940b37ae0184b677c253a148d57ad4e75d6113447b1563c2ca82483e4e4f8d"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "text",
+        "question",
+        "options"
+      ],
+      "configured_tasks": [
+        "logiqa2"
+      ]
+    },
+    {
+      "name": "logieval",
+      "repository": "https://raw.githubusercontent.com/csitfun/LogiEval",
+      "revision": "df87f82002c2d2c7266a593c872f565253b5fa9e",
+      "files": [
+        {
+          "path": "Data/logiqa.jsonl",
+          "sha256": "be65ce2e2057030057aade73b3058ee3cead8d5e014f79ea63c8dfb57267ae97"
+        }
+      ],
+      "policy": "fields",
+      "fields": [
+        "input"
+      ],
+      "configured_tasks": [
+        "logieval"
+      ]
+    }
+  ],
+  "previous_failures": [
+    {
+      "task": "anli_r1",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/anli@8e4813d81f46d313dac7892e1c28076917cfcdf9/.huggingface.yaml'. Repository id must be 'namespace/name', got 'anli'.",
+      "reference_family": "anli_r1"
+    },
+    {
+      "task": "anli_r2",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/anli@8e4813d81f46d313dac7892e1c28076917cfcdf9/.huggingface.yaml'. Repository id must be 'namespace/name', got 'anli'.",
+      "reference_family": "anli_r2"
+    },
+    {
+      "task": "anli_r3",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/anli@8e4813d81f46d313dac7892e1c28076917cfcdf9/.huggingface.yaml'. Repository id must be 'namespace/name', got 'anli'.",
+      "reference_family": "anli_r3"
+    },
+    {
+      "task": "arithmetic_1dc",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_1dc"
+    },
+    {
+      "task": "arithmetic_2da",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_2da"
+    },
+    {
+      "task": "arithmetic_2dm",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_2dm"
+    },
+    {
+      "task": "arithmetic_2ds",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_2ds"
+    },
+    {
+      "task": "arithmetic_3da",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_3da"
+    },
+    {
+      "task": "arithmetic_3ds",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_3ds"
+    },
+    {
+      "task": "arithmetic_4da",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_4da"
+    },
+    {
+      "task": "arithmetic_4ds",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_4ds"
+    },
+    {
+      "task": "arithmetic_5da",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_5da"
+    },
+    {
+      "task": "arithmetic_5ds",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found arithmetic.py",
+      "reference_family": "arithmetic_5ds"
+    },
+    {
+      "task": "boolq",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/super_glue@3de24cf8022e94f4ee4b9d55a6f539891524d646/.huggingface.yaml'. Repository id must be 'namespace/name', got 'super_glue'.",
+      "reference_family": "boolq"
+    },
+    {
+      "task": "cmmlu",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found cmmlu.py",
+      "reference_family": "cmmlu"
+    },
+    {
+      "task": "copa",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/super_glue@3de24cf8022e94f4ee4b9d55a6f539891524d646/.huggingface.yaml'. Repository id must be 'namespace/name', got 'super_glue'.",
+      "reference_family": "copa"
+    },
+    {
+      "task": "crows_pairs_english_age",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_autre",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_disability",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_gender",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_nationality",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_physical_appearance",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_race_color",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_religion",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_sexual_orientation",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "crows_pairs_english_socioeconomic",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found crows_pairs_multilingual.py",
+      "reference_family": "crows_pairs_english"
+    },
+    {
+      "task": "ethics_cm",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found hendrycks_ethics.py",
+      "reference_family": "ethics_cm"
+    },
+    {
+      "task": "ethics_deontology",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found hendrycks_ethics.py",
+      "reference_family": "ethics_deontology"
+    },
+    {
+      "task": "ethics_justice",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found hendrycks_ethics.py",
+      "reference_family": "ethics_justice"
+    },
+    {
+      "task": "ethics_utilitarianism",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found hendrycks_ethics.py",
+      "reference_family": "ethics_utilitarianism"
+    },
+    {
+      "task": "ethics_virtue",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found hendrycks_ethics.py",
+      "reference_family": "ethics_virtue"
+    },
+    {
+      "task": "gsm8k",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/gsm8k@740312add88f781978c0658806c59bc2815b9866/.huggingface.yaml'. Repository id must be 'namespace/name', got 'gsm8k'.",
+      "reference_family": "gsm8k"
+    },
+    {
+      "task": "gsm8k_cot",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/gsm8k@740312add88f781978c0658806c59bc2815b9866/.huggingface.yaml'. Repository id must be 'namespace/name', got 'gsm8k'.",
+      "reference_family": "gsm8k"
+    },
+    {
+      "task": "ifeval",
+      "root_cause": "metric_dependency",
+      "previous_error": "load: No module named 'langdetect'",
+      "reference_family": "ifeval"
+    },
+    {
+      "task": "include_base_44_albanian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_albanian_few_shot_og'",
+      "reference_family": "include_base_44_albanian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_arabic_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_arabic_few_shot_og'",
+      "reference_family": "include_base_44_arabic_few_shot_og"
+    },
+    {
+      "task": "include_base_44_armenian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_armenian_few_shot_og'",
+      "reference_family": "include_base_44_armenian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_azerbaijani_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_azerbaijani_few_shot_og'",
+      "reference_family": "include_base_44_azerbaijani_few_shot_og"
+    },
+    {
+      "task": "include_base_44_basque_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_basque_few_shot_og'",
+      "reference_family": "include_base_44_basque_few_shot_og"
+    },
+    {
+      "task": "include_base_44_belarusian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_belarusian_few_shot_og'",
+      "reference_family": "include_base_44_belarusian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_bengali_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_bengali_few_shot_og'",
+      "reference_family": "include_base_44_bengali_few_shot_og"
+    },
+    {
+      "task": "include_base_44_bulgarian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_bulgarian_few_shot_og'",
+      "reference_family": "include_base_44_bulgarian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_chinese_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_chinese_few_shot_og'",
+      "reference_family": "include_base_44_chinese_few_shot_og"
+    },
+    {
+      "task": "include_base_44_croatian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_croatian_few_shot_og'",
+      "reference_family": "include_base_44_croatian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_dutch_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_dutch_few_shot_og'",
+      "reference_family": "include_base_44_dutch_few_shot_og"
+    },
+    {
+      "task": "include_base_44_finnish_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_finnish_few_shot_og'",
+      "reference_family": "include_base_44_finnish_few_shot_og"
+    },
+    {
+      "task": "include_base_44_french_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_french_few_shot_og'",
+      "reference_family": "include_base_44_french_few_shot_og"
+    },
+    {
+      "task": "include_base_44_georgian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_georgian_few_shot_og'",
+      "reference_family": "include_base_44_georgian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_german_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_german_few_shot_og'",
+      "reference_family": "include_base_44_german_few_shot_og"
+    },
+    {
+      "task": "include_base_44_greek_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_greek_few_shot_og'",
+      "reference_family": "include_base_44_greek_few_shot_og"
+    },
+    {
+      "task": "include_base_44_hebrew_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_hebrew_few_shot_og'",
+      "reference_family": "include_base_44_hebrew_few_shot_og"
+    },
+    {
+      "task": "include_base_44_hindi_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_hindi_few_shot_og'",
+      "reference_family": "include_base_44_hindi_few_shot_og"
+    },
+    {
+      "task": "include_base_44_hungarian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_hungarian_few_shot_og'",
+      "reference_family": "include_base_44_hungarian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_indonesian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_indonesian_few_shot_og'",
+      "reference_family": "include_base_44_indonesian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_italian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_italian_few_shot_og'",
+      "reference_family": "include_base_44_italian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_japanese_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_japanese_few_shot_og'",
+      "reference_family": "include_base_44_japanese_few_shot_og"
+    },
+    {
+      "task": "include_base_44_kazakh_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_kazakh_few_shot_og'",
+      "reference_family": "include_base_44_kazakh_few_shot_og"
+    },
+    {
+      "task": "include_base_44_korean_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_korean_few_shot_og'",
+      "reference_family": "include_base_44_korean_few_shot_og"
+    },
+    {
+      "task": "include_base_44_lithuanian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_lithuanian_few_shot_og'",
+      "reference_family": "include_base_44_lithuanian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_malay_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_malay_few_shot_og'",
+      "reference_family": "include_base_44_malay_few_shot_og"
+    },
+    {
+      "task": "include_base_44_nepali_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_nepali_few_shot_og'",
+      "reference_family": "include_base_44_nepali_few_shot_og"
+    },
+    {
+      "task": "include_base_44_north macedonian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_north macedonian_few_shot_og'",
+      "reference_family": "include_base_44_north macedonian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_persian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_persian_few_shot_og'",
+      "reference_family": "include_base_44_persian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_portuguese_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_portuguese_few_shot_og'",
+      "reference_family": "include_base_44_portuguese_few_shot_og"
+    },
+    {
+      "task": "include_base_44_russian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_russian_few_shot_og'",
+      "reference_family": "include_base_44_russian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_serbian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_serbian_few_shot_og'",
+      "reference_family": "include_base_44_serbian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_spanish_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_spanish_few_shot_og'",
+      "reference_family": "include_base_44_spanish_few_shot_og"
+    },
+    {
+      "task": "include_base_44_tagalog_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_tagalog_few_shot_og'",
+      "reference_family": "include_base_44_tagalog_few_shot_og"
+    },
+    {
+      "task": "include_base_44_tamil_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_tamil_few_shot_og'",
+      "reference_family": "include_base_44_tamil_few_shot_og"
+    },
+    {
+      "task": "include_base_44_telugu_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_telugu_few_shot_og'",
+      "reference_family": "include_base_44_telugu_few_shot_og"
+    },
+    {
+      "task": "include_base_44_turkish_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_turkish_few_shot_og'",
+      "reference_family": "include_base_44_turkish_few_shot_og"
+    },
+    {
+      "task": "include_base_44_ukrainian_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_ukrainian_few_shot_og'",
+      "reference_family": "include_base_44_ukrainian_few_shot_og"
+    },
+    {
+      "task": "include_base_44_uzbek_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_uzbek_few_shot_og'",
+      "reference_family": "include_base_44_uzbek_few_shot_og"
+    },
+    {
+      "task": "include_base_44_vietnamese_few_shot_og",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'include_base_44_vietnamese_few_shot_og'",
+      "reference_family": "include_base_44_vietnamese_few_shot_og"
+    },
+    {
+      "task": "leaderboard_ifeval",
+      "root_cause": "metric_dependency",
+      "previous_error": "load: No module named 'langdetect'",
+      "reference_family": "ifeval"
+    },
+    {
+      "task": "leaderboard_math_hard",
+      "root_cause": "metric_dependency",
+      "previous_error": "load: `math-verify`, `sympy>=1.12`, and antlr4-python3-runtime==4.11 is required for generating translation task prompt templates. please install via pip install lm-eval[math] or pip install -e .[math]",
+      "reference_family": "leaderboard_math_hard"
+    },
+    {
+      "task": "logieval",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found logiqa2.py",
+      "reference_family": "logieval"
+    },
+    {
+      "task": "logiqa",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found logiqa.py",
+      "reference_family": "logiqa"
+    },
+    {
+      "task": "logiqa2",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found logiqa2.py",
+      "reference_family": "logiqa2"
+    },
+    {
+      "task": "mathqa",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found math_qa.py",
+      "reference_family": "mathqa"
+    },
+    {
+      "task": "mc_taco",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found mc_taco.py",
+      "reference_family": "mc_taco"
+    },
+    {
+      "task": "medmcqa",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/medmcqa@91c6572c454088bf71b679ad90aa8dffcd0d5868/.huggingface.yaml'. Repository id must be 'namespace/name', got 'medmcqa'.",
+      "reference_family": "medmcqa"
+    },
+    {
+      "task": "minerva_math",
+      "root_cause": "metric_dependency",
+      "previous_error": "load: `sympy`, `math_verify` and `antlr4-python3-runtime==4.11` are required for generating translation task prompt templates. Please install the required packages via pip install lm-eval[math] or pip install -e .[math]",
+      "reference_family": "minerva_math"
+    },
+    {
+      "task": "mmlu",
+      "root_cause": "transient_download",
+      "previous_error": "load: Server disconnected without sending a response.",
+      "reference_family": "mmlu"
+    },
+    {
+      "task": "mmmlu_ar_xy",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_ar_xy'",
+      "reference_family": "mmmlu_ar_xy"
+    },
+    {
+      "task": "mmmlu_bn_bd",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_bn_bd'",
+      "reference_family": "mmmlu_bn_bd"
+    },
+    {
+      "task": "mmmlu_de_de",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_de_de'",
+      "reference_family": "mmmlu_de_de"
+    },
+    {
+      "task": "mmmlu_es_la",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_es_la'",
+      "reference_family": "mmmlu_es_la"
+    },
+    {
+      "task": "mmmlu_fr_fr",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_fr_fr'",
+      "reference_family": "mmmlu_fr_fr"
+    },
+    {
+      "task": "mmmlu_hi_in",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_hi_in'",
+      "reference_family": "mmmlu_hi_in"
+    },
+    {
+      "task": "mmmlu_id_id",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_id_id'",
+      "reference_family": "mmmlu_id_id"
+    },
+    {
+      "task": "mmmlu_it_it",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_it_it'",
+      "reference_family": "mmmlu_it_it"
+    },
+    {
+      "task": "mmmlu_ja_jp",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_ja_jp'",
+      "reference_family": "mmmlu_ja_jp"
+    },
+    {
+      "task": "mmmlu_ko_kr",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_ko_kr'",
+      "reference_family": "mmmlu_ko_kr"
+    },
+    {
+      "task": "mmmlu_pt_br",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_pt_br'",
+      "reference_family": "mmmlu_pt_br"
+    },
+    {
+      "task": "mmmlu_sw_ke",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_sw_ke'",
+      "reference_family": "mmmlu_sw_ke"
+    },
+    {
+      "task": "mmmlu_yo_ng",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_yo_ng'",
+      "reference_family": "mmmlu_yo_ng"
+    },
+    {
+      "task": "mmmlu_zh_cn",
+      "root_cause": "stale_task_name",
+      "previous_error": "load: 'mmmlu_zh_cn'",
+      "reference_family": "mmmlu_zh_cn"
+    },
+    {
+      "task": "moral_stories",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found moral_stories.py",
+      "reference_family": "moral_stories"
+    },
+    {
+      "task": "mutual",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found mutual.py",
+      "reference_family": "mutual"
+    },
+    {
+      "task": "mutual_plus",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found mutual.py",
+      "reference_family": "mutual_plus"
+    },
+    {
+      "task": "nq_open",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/nq_open@5dd9790a83002ad084ddeb7c420dc716852c6f28/.huggingface.yaml'. Repository id must be 'namespace/name', got 'nq_open'.",
+      "reference_family": "nq_open"
+    },
+    {
+      "task": "openbookqa",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/openbookqa@388097ea7776314e93a529163e0fea805b8a6454/.huggingface.yaml'. Repository id must be 'namespace/name', got 'openbookqa'.",
+      "reference_family": "openbookqa"
+    },
+    {
+      "task": "prost",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found prost.py",
+      "reference_family": "prost"
+    },
+    {
+      "task": "pubmedqa",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found pubmed_qa.py",
+      "reference_family": "pubmedqa"
+    },
+    {
+      "task": "qa4mre_2011",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/qa4mre@a6ba3ed66833455732993c7d2daeb2f397785be0/.huggingface.yaml'. Repository id must be 'namespace/name', got 'qa4mre'.",
+      "reference_family": "qa4mre_2011"
+    },
+    {
+      "task": "qa4mre_2012",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/qa4mre@a6ba3ed66833455732993c7d2daeb2f397785be0/.huggingface.yaml'. Repository id must be 'namespace/name', got 'qa4mre'.",
+      "reference_family": "qa4mre_2012"
+    },
+    {
+      "task": "qa4mre_2013",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/qa4mre@a6ba3ed66833455732993c7d2daeb2f397785be0/.huggingface.yaml'. Repository id must be 'namespace/name', got 'qa4mre'.",
+      "reference_family": "qa4mre_2013"
+    },
+    {
+      "task": "qasper_bool",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found qasper.py",
+      "reference_family": "qasper"
+    },
+    {
+      "task": "qasper_freeform",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found qasper.py",
+      "reference_family": "qasper"
+    },
+    {
+      "task": "sciq",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/sciq@2c94ad3e1aafab77146f384e23536f97a4849815/.huggingface.yaml'. Repository id must be 'namespace/name', got 'sciq'.",
+      "reference_family": "sciq"
+    },
+    {
+      "task": "social_iqa",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found social_i_qa.py",
+      "reference_family": "social_iqa"
+    },
+    {
+      "task": "squadv2",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/squad_v2@3ffb306f725f7d2ce8394bc1873b24868140c412/.huggingface.yaml'. Repository id must be 'namespace/name', got 'squad_v2'.",
+      "reference_family": "squadv2"
+    },
+    {
+      "task": "swag",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/swag@dc48148372b3853a9c7bae7bb06c161b46d8364a/.huggingface.yaml'. Repository id must be 'namespace/name', got 'swag'.",
+      "reference_family": "swag"
+    },
+    {
+      "task": "triviaqa",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/trivia_qa@0f7faf33a3908546c6fd5b73a660e0f8ff173c2f/.huggingface.yaml'. Repository id must be 'namespace/name', got 'trivia_qa'.",
+      "reference_family": "triviaqa"
+    },
+    {
+      "task": "truthfulqa_gen",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/truthful_qa@741b8276f2d1982aa3d5b832d3ee81ed3b896490/.huggingface.yaml'. Repository id must be 'namespace/name', got 'truthful_qa'.",
+      "reference_family": "truthfulqa"
+    },
+    {
+      "task": "truthfulqa_mc1",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/truthful_qa@741b8276f2d1982aa3d5b832d3ee81ed3b896490/.huggingface.yaml'. Repository id must be 'namespace/name', got 'truthful_qa'.",
+      "reference_family": "truthfulqa"
+    },
+    {
+      "task": "truthfulqa_mc2",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/truthful_qa@741b8276f2d1982aa3d5b832d3ee81ed3b896490/.huggingface.yaml'. Repository id must be 'namespace/name', got 'truthful_qa'.",
+      "reference_family": "truthfulqa"
+    },
+    {
+      "task": "webqs",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/web_questions@0e473cbe21d1e91ec18da343644498be6a3f5454/.huggingface.yaml'. Repository id must be 'namespace/name', got 'web_questions'.",
+      "reference_family": "webqs"
+    },
+    {
+      "task": "winogrande",
+      "root_cause": "legacy_hf_namespace",
+      "previous_error": "load: Invalid HF URI 'hf://datasets/winogrande@01e74176c63542e6b0bcb004dcdea22d94fb67b5/.huggingface.yaml'. Repository id must be 'namespace/name', got 'winogrande'.",
+      "reference_family": "winogrande"
+    },
+    {
+      "task": "wsc273",
+      "root_cause": "removed_script_loader",
+      "previous_error": "load: Dataset scripts are no longer supported, but found winograd_wsc.py",
+      "reference_family": "wsc273"
+    }
+  ]
+}
