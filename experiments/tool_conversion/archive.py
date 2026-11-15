@@ -11,8 +11,7 @@ import tarfile
 import time
 from pathlib import Path
 
-from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.tool_conversion.export import digest
 
@@ -37,22 +36,17 @@ def provenance(catalog_sha256: str, tokenizer_sha256: str) -> dict:
 
 
 def read_json(url: str) -> dict:
-    fs, path = filesystem_for(url)
-    with fs.open(path, "rb") as stream:
-        return json.load(stream)
+    return json.loads(StoragePath(url).read_bytes())
 
 
 def write_immutable(url: str, content: bytes) -> None:
-    fs, path = filesystem_for(url)
-    if fs.exists(path):
-        with fs.open(path, "rb") as stream:
-            if stream.read() != content:
-                raise ValueError(f"Existing immutable artifact differs: {url}")
+    path = StoragePath(url)
+    if path.exists():
+        if path.read_bytes() != content:
+            raise ValueError(f"Existing immutable artifact differs: {url}")
         return
-    parent = path.rsplit("/", 1)[0]
-    fs.makedirs(parent, exist_ok=True)
-    with fs.open(path, "wb") as stream:
-        stream.write(content)
+    path.parent.mkdirs()
+    path.write_bytes(content)
 
 
 def archive_bytes(files: dict[str, bytes]) -> bytes:
@@ -87,7 +81,5 @@ def commit_batch(
         "at": time.time(),
     }
     write_immutable(prefix_join(prefix, f"receipts/{name}.json"), json_bytes(receipt))
-    fs, path = filesystem_for(prefix_join(prefix, "cursor.json"))
-    with fs.open(path, "wb") as stream:
-        stream.write(json_bytes(cursor))
+    StoragePath(prefix_join(prefix, "cursor.json")).write_bytes(json_bytes(cursor))
     return receipt

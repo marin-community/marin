@@ -17,10 +17,9 @@ from dataclasses import asdict
 
 import numpy as np
 from levanter.store.tree_store import TreeStore
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
 from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from tokenizers import Tokenizer
 
 from experiments.tool_conversion.archive import commit_batch, json_bytes, provenance, read_json, write_immutable
@@ -181,17 +180,16 @@ def run(
     }
     write_immutable(prefix_join(prefix, "config.json"), json_bytes(config))
     write_immutable(prefix_join(prefix, "selection.json"), json_bytes(selection))
-    fs, path = filesystem_for(prefix_join(prefix, "provenance.json"))
+    path = StoragePath(prefix_join(prefix, "provenance.json"))
     current = provenance(catalog_sha, tokenizer_sha)
-    if fs.exists(path):
+    if path.exists():
         current_run = read_json(prefix_join(prefix, "provenance.json"))
         if current_run["files_sha256"] != current["files_sha256"]:
             raise ValueError("Converter changed; use a new output prefix")
     else:
         current_run = current
         write_immutable(prefix_join(prefix, "provenance.json"), json_bytes(current_run))
-    completed_fs, completed_path = filesystem_for(prefix_join(prefix, "completed.json"))
-    if completed_fs.exists(completed_path):
+    if StoragePath(prefix_join(prefix, "completed.json")).exists():
         return read_json(prefix_join(prefix, "completed.json"))
     counts = Counter()
     batches = 0
@@ -213,8 +211,7 @@ def run(
             stop = min(start + batch_size, limit)
             name = f"shard-{shard_index:05d}-rows-{start:08d}-{stop:08d}"
             receipt_url = prefix_join(prefix, f"receipts/{name}.json")
-            fs, path = filesystem_for(receipt_url)
-            if fs.exists(path):
+            if StoragePath(receipt_url).exists():
                 receipt = read_json(receipt_url)
                 if (
                     receipt["catalog_sha256"] != catalog_sha
@@ -298,9 +295,7 @@ def main() -> None:
     os.environ["AWS_ACCESS_KEY_ID"], os.environ["AWS_SECRET_ACCESS_KEY"] = credentials
     os.environ["AWS_REGION"] = os.environ["AWS_DEFAULT_REGION"] = region
     selection = read_json(args.selection)
-    fs, path = filesystem_for(args.tokenizer)
-    with fs.open(path, "rb") as stream:
-        tokenizer_bytes = stream.read()
+    tokenizer_bytes = StoragePath(args.tokenizer).read_bytes()
     tokenizer_sha = digest(tokenizer_bytes)
     if tokenizer_sha != TOKENIZER_SHA256:
         raise CampaignScopeError(f"Unsupported tokenizer; see {SCOPE_GUIDE}")
