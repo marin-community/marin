@@ -19,6 +19,7 @@ from taskcompendium.evaluation.spec import (
 )
 from taskcompendium.importers.evalchemy.grader import scorer_revision
 from taskcompendium.importers.longbench_v2 import (
+    LONGBENCH_V2_LENGTH_LABEL,
     LONGBENCH_V2_LENGTHS,
     LONGBENCH_V2_POPULATION,
     LONGBENCH_V2_TOKEN_BUDGETS,
@@ -40,7 +41,7 @@ LONGBENCH_V2_REVISION = "2b48e494f2c7a2f0af81aae178e05c7e1dde0fe9"
 LONGBENCH_V2_RESOURCE_BYTES = 128 * 1024 * 1024
 # A limited run takes short, medium and long items in turn.
 LONGBENCH_V2_COHORT = CohortPolicy(
-    groups=tuple(TaskGroup(labels={"longbench.length": length}) for length in LONGBENCH_V2_LENGTHS),
+    groups=tuple(TaskGroup(labels={LONGBENCH_V2_LENGTH_LABEL: length}) for length in LONGBENCH_V2_LENGTHS),
     order=CohortOrder.ROUND_ROBIN,
 )
 # Upstream samples at temperature 0.1 with 128 output tokens. Greedy decoding needs no request

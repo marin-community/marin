@@ -15,15 +15,14 @@ identical prompts.
 
 import re
 from collections.abc import Iterator
-from functools import cache
 
 from rigging.filesystem.storage_path import StoragePath
 
-from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import ChatGeneration, ChatPromptVariant, EvaluationItem
 from taskcompendium.importers.evalchemy.grader import source_package
+from taskcompendium.importers.evalchemy.long_context import official_tokenizer
 from taskcompendium.importers.evalchemy.scorers.longbench_v2 import LONGBENCH_V2_CHOICES
 from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -31,6 +30,9 @@ from taskcompendium.pipeline.models import RawRow
 
 LONGBENCH_V2_POPULATION = 503
 LONGBENCH_V2_LENGTHS = ("short", "medium", "long")
+LONGBENCH_V2_LENGTH_LABEL = "longbench.length"
+LONGBENCH_V2_DIFFICULTY_LABEL = "longbench.difficulty"
+LONGBENCH_V2_DOMAIN_LABEL = "longbench.domain"
 LONGBENCH_V2_PROMPT = (
     "Please read the following text and answer the question below.\n\n"
     "<text>\n{context}\n</text>\n\n"
@@ -41,14 +43,6 @@ LONGBENCH_V2_PROMPT = (
 # Upstream truncates to 120,000 tokens for 128K-context models. Rungs step by 1.25 around it,
 # so a model whose tokenizer and output budget miss one rung loses at most a fifth of its window.
 LONGBENCH_V2_TOKEN_BUDGETS = tuple(round(120_000 * 1.25**exponent) for exponent in range(-12, 10))
-
-
-@cache
-def reference_tokenizer():
-    # o200k is a curation dependency; runs measure the selected variant with the served tokenizer.
-    from tiktoken import get_encoding  # noqa: PLC0415
-
-    return get_encoding("o200k_base")
 
 
 def read_longbench_v2(path: StoragePath, _context: ConversionContext) -> Iterator[dict]:
@@ -90,9 +84,9 @@ def convert_longbench_v2(row: RawRow, context: ConversionContext) -> TaskSpec:
         update={
             "tags": ("eval", "source:longbench-v2", "benchmark:LongBenchV2", "long-context"),
             "labels": {
-                "longbench.length": data["length"],
-                "longbench.difficulty": data["difficulty"],
-                "longbench.domain": _slug(data["domain"]),
+                LONGBENCH_V2_LENGTH_LABEL: data["length"],
+                LONGBENCH_V2_DIFFICULTY_LABEL: data["difficulty"],
+                LONGBENCH_V2_DOMAIN_LABEL: _slug(data["domain"]),
             },
         }
     )
@@ -105,7 +99,7 @@ def longbench_v2_item(task: TaskSpec, *, budgets: tuple[int, ...]) -> Evaluation
     is the final fallback.
     """
     [message] = task.context.events
-    tokenizer = reference_tokenizer()
+    tokenizer = official_tokenizer()
     ids = tokenizer.encode(message.content, disallowed_special=())
     truncated = [
         tokenizer.decode(ids[: budget // 2] + ids[len(ids) - budget // 2 :])
@@ -121,7 +115,6 @@ def longbench_v2_item(task: TaskSpec, *, budgets: tuple[int, ...]) -> Evaluation
         ),
         ChatPromptVariant(context=task.context, fewshot=len(truncated)),
     )
-    evidence = source_evidence(task)
     return chat_item(task).model_copy(
         update={
             "operation": ChatGeneration(
@@ -130,9 +123,9 @@ def longbench_v2_item(task: TaskSpec, *, budgets: tuple[int, ...]) -> Evaluation
                 variants=variants,
             ),
             "groups": {
-                "length": evidence["length"],
-                "difficulty": evidence["difficulty"],
-                "domain": _slug(evidence["domain"]),
+                "length": task.labels[LONGBENCH_V2_LENGTH_LABEL],
+                "difficulty": task.labels[LONGBENCH_V2_DIFFICULTY_LABEL],
+                "domain": task.labels[LONGBENCH_V2_DOMAIN_LABEL],
             },
         }
     )

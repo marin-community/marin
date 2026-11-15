@@ -8,7 +8,8 @@ import json
 from fray.local_backend import LocalClient
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
-from taskcompendium.importers.longbench_v2 import LONGBENCH_V2_TOKEN_BUDGETS, reference_tokenizer
+from taskcompendium.importers.evalchemy.long_context import official_tokenizer
+from taskcompendium.importers.longbench_v2 import LONGBENCH_V2_TOKEN_BUDGETS
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from zephyr.context import ZephyrContext
@@ -57,7 +58,7 @@ def test_publication_compiles_middle_truncated_variants_smallest_first(tmp_path)
     cases = {case.task.source.row.rsplit(":", 1)[1]: case for case in evaluation_cases(str(output))}
     long_case, short_case = cases["0"], cases["1"]
 
-    tokenizer = reference_tokenizer()
+    tokenizer = official_tokenizer()
     [full] = long_case.task.context.events
     full_tokens = len(tokenizer.encode(full.content))
     budgets = [budget for budget in LONGBENCH_V2_TOKEN_BUDGETS if budget < full_tokens]
