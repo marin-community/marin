@@ -39,6 +39,7 @@ from skyrlrecipe.declared import CheckpointCallback
 from skyrlrecipe.locality import RoleTopologyMode
 
 RECIPE_PATH = Path(__file__).with_name("recipe.yaml")
+DEFAULT_MAX_NEW_TOKENS = 8192
 SEED = 20261020
 COORDINATOR_QUEUE_ALLOWANCE_HOURS = 48
 ROLE_PLAN = SkyRLRolePlan(
@@ -163,7 +164,7 @@ def build_run(
     max_steps: int,
     resume: ArtifactStep[Artifact] | None = None,
     recipe_path: Path = RECIPE_PATH,
-    max_new_tokens: int = 8192,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     data_sha256: str | None = None,
     execution: IrisSkyRLExecution | None = None,
     retention: SkyRLRetentionPolicy = RETENTION,
@@ -251,7 +252,7 @@ def build_run(
 @click.option(
     "--max-new-tokens",
     type=click.IntRange(min=1),
-    default=8192,
+    default=DEFAULT_MAX_NEW_TOKENS,
     show_default=True,
     help="Response tokens per turn; use 1024 for a short smoke.",
 )

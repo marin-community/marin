@@ -122,8 +122,8 @@ generator:
       memory_limit: 8589934592
     compilation_config:
       mode: 3
-      # The qualified DP12/EP12 profile in #11307 keeps compilation and disables graphs.
-      # Graph replay failed after publication; the full-model cost is unmeasured.
+      # DP12/EP12 allgather_reducescatter graph replay failed after weight publication.
+      # The full-model cost of disabling graphs is unmeasured.
       cudagraph_mode: NONE
       splitting_ops:
       - vllm::unified_attention_with_output

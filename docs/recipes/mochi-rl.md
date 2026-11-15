@@ -34,8 +34,8 @@ are on main. The draft also includes the
 [qualified GPU runtime #11307](https://github.com/marin-community/marin/pull/11307)
 and [turn-terminator fix #11232](https://github.com/marin-community/marin/pull/11232)
 while they remain unmerged. [Draft #11321](https://github.com/marin-community/marin/pull/11321)
-pins the combined revision. This is a
-runnable example kept in draft while loop unification is discussed.
+pins the combined revision. Check out its head for the one-rack example.
+It stays in draft while loop unification is discussed.
 
 Provide Iris and regional S3 credentials, W&B access, and `DAYTONA_RL_API_KEY`
 and `DAYTONA_EVAL_API_KEY`. Supply HF credentials if any selected input requires
@@ -43,7 +43,8 @@ Hub access. Harbor tasks use the configured privileged container profile, which
 requires Iris admin authorization. See [RL launching](../references/rl-launching.md).
 
 Choose a completed schema-3 BF16 SFT export with its portable-model manifest,
-and a tokenizer artifact pinned to the revision used by that export. Select
+and the tokenizer revision used by that export. By default, the tokenizer is
+loaded from the model export; `--tokenizer-uri` selects a separate artifact. Select
 ordinary mixed-task Parquet data compatible with this recipe, including its
 Harbor harness mapping. The model, tokenizer and tasks must remain available
 through the planned run and recovery window. Adoption does not extend storage
@@ -75,8 +76,8 @@ uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
 
 Inspect the model/data locators, role allocation, context budget and checkpoint
 paths, then add `--run` to submit the same graph. The checkpoint callback saves
-at training end, so this smoke produces `global_step_2` when it completes. A new
-output version starts fresh MuonH state. Repeating an interrupted run with the same version recovers
+at training end, so this smoke produces `global_step_2` when it completes. Starting from the SFT export
+without `--resume-uri` under a new output version starts fresh MuonH state. Repeating an interrupted run with the same version recovers
 its latest completed native checkpoint when one exists.
 
 To continue from a completed checkpoint under a new output version, set `NATIVE` to the exact
@@ -91,8 +92,8 @@ uv run python -m experiments.post_training.mochi_rl.launch "${COMMON[@]}" \
 
 Inspect it, then add `--run`. `--max-steps` is the absolute stopping step, so it
 must exceed the restored step. Native continuation restores model, optimizer,
-scheduler and trainer counters. The initial import starts the configured data
-from the beginning; recovery restores this continuation's saved data state. It writes new checkpoints
+scheduler and trainer counters. The first native import under a new continuation version starts the selected
+data from the beginning. Recovery of that version restores its saved data state. It writes new checkpoints
 under the new output version. Recover an interrupted continuation by repeating
 its command with the same version and inputs, including `--resume-uri`.
 See [native checkpoint recovery](../references/rl-launching.md#native-checkpoint-inputs)
