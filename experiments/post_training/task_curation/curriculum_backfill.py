@@ -196,6 +196,7 @@ def prepare_sources(sources: list[FrozenCoverageSource], output_root: str, worke
             if not (root / "sources" / key / "manifest.json").exists():
                 raise ValueError("Completed corpus is missing a source manifest")
     if workers == 1:
+        configure_coreweave_s3()
         results = [prepare_source(source, output_root) for source in sources]
     else:
         with ProcessPoolExecutor(
