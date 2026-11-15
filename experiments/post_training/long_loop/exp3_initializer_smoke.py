@@ -250,6 +250,8 @@ def run_initializer_smoke(*, output: str, prepared: str, artifact_version: str, 
             trainer=replace(train_config.trainer, native_telemetry_root=prefix_join(output, "telemetry")),
         ),
     )
+    # Exercise the worker wire boundary on the regional CPU coordinator before allocating GPUs.
+    config = draccus.decode(type(config), json.loads(json.dumps(draccus.encode(config))))
     request = levanter_train_request(config, task_timeout_seconds=259200, priority=priority_band_value("production"))
     receipt = run_guarded_stage(request, policy, prefix_join(output, "guard"))
     (StoragePath(output) / "guard-result.json").write_text(json.dumps(receipt, indent=2))
