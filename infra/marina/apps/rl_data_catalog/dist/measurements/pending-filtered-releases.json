@@ -1,251 +1,38 @@
 {
-  "version": 1,
-  "as_of": "2026-11-14T23:59:52.626125+00:00",
-  "handoff": {
-    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.158-preview-five-filtered-artifact-handoff/handoff.json",
-    "sha256": "10e0af57903e770a60236fe9bf21ff448461bc504e0d425d46d41c86cd60ff87"
-  },
+  "version": 2,
+  "as_of": "2026-11-15T13:24:36.199405+00:00",
   "sources": [
     {
-      "source_id": "TaskTrove:laion__nemotron-gym-agent-calendar-v2",
-      "filtration": {
-        "original_release": {
-          "repo": "open-athena/task-trove-laion-nemotron-gym-agent-calendar-v2-71f57c8d-oracle-repair-20261113-v1",
-          "revision": "bd3067275be449ca4eb0dd53dc7799d1279f1297",
-          "url": "https://huggingface.co/datasets/open-athena/task-trove-laion-nemotron-gym-agent-calendar-v2-71f57c8d-oracle-repair-20261113-v1/tree/bd3067275be449ca4eb0dd53dc7799d1279f1297"
-        },
-        "original_cohort": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.16-calendar-candidate/candidate/71f57c8da42a8b89e527/population/specs/part-000000.parquet",
-          "sha256": "edd58c5c234cb1da14ab03425610c8a9ac863b10aee53a59fde30d092d5ba61a"
-        },
-        "original_count": 2699,
-        "oracle_filter": {
-          "uri": "https://huggingface.co/datasets/open-athena/calendar-71f57c8d-oracle-filter-20261114-v1/resolve/d885672abbb489b64ee04e2cb1ac60c0901b56f1/oracle-filter.json",
-          "sha256": "5294b7366f18d024474f64d89c1a43f27252e7e06bb9cabefeacae4e27638bad"
-        },
-        "oracle_filter_version": 4,
-        "filtered_release": {
-          "repo": "open-athena/calendar-71f57c8d-oracle-filter-20261114-v1",
-          "revision": "d885672abbb489b64ee04e2cb1ac60c0901b56f1",
-          "url": "https://huggingface.co/datasets/open-athena/calendar-71f57c8d-oracle-filter-20261114-v1/tree/d885672abbb489b64ee04e2cb1ac60c0901b56f1"
-        },
-        "private": true,
-        "tasks_parquet": {
-          "uri": "https://huggingface.co/datasets/open-athena/calendar-71f57c8d-oracle-filter-20261114-v1/resolve/d885672abbb489b64ee04e2cb1ac60c0901b56f1/tasks.parquet",
-          "sha256": "07527f7026242a89fead468af9ae5a03d2355a7fd037d3eb76809ced43e2b8d3"
-        },
-        "admitted_count": 2699,
-        "exclusion_counts": {},
-        "validation": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.122-calendar-whole-source-collection/collection-v2/collection-seal.json",
-          "sha256": "8f5c55d944044264d9e5bc57d3719c23f6760620e0990a7a38285fbc94360bf4"
-        }
+      "source_id": "TaskTrove:laion__all-puzzles-v2",
+      "candidate_source_id": "TaskTrove:tasktrove-puzzles-qa",
+      "release": {
+        "repo": "open-athena/tasktrove-puzzles-taskcompendium-20261114",
+        "revision": "adfcbd4a8ddefc9e69febc91931c08ba03372bad",
+        "url": "https://huggingface.co/datasets/open-athena/tasktrove-puzzles-taskcompendium-20261114/tree/adfcbd4a8ddefc9e69febc91931c08ba03372bad"
       },
+      "original_tasks": 6921,
+      "filtered_tasks": 6921,
       "qualification_pending": [
-        "actor_census",
-        "within_source_dedup_census",
-        "grading_census",
-        "lexical_scan",
-        "native_consumer_qualification",
-        "sample_qc",
-        "full_qc",
-        "oracle_admitted_release_receipt",
-        "declaration_registration"
-      ]
-    },
-    {
-      "source_id": "TaskTrove:DCAgent__exp_rpt_unitsyn-python-v4",
-      "filtration": {
-        "original_release": {
-          "repo": "open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-v4-4e461906-oracle-repair-20261113-v1",
-          "revision": "7686fdad94fbe420c9a71edae6215e4953c9c99c",
-          "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-exp-rpt-unitsyn-python-v4-4e461906-oracle-repair-20261113-v1/tree/7686fdad94fbe420c9a71edae6215e4953c9c99c"
+        "complete retained grading census",
+        "clean or remediated decontamination publication receipt",
+        "current-pin admission receipt"
+      ],
+      "sample": {
+        "receipt": {
+          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.14.1/ac2a4f24b9a765b71fbc/attempts/a9da2b1a00a0462bb2a983bccfdbcd62/.artifact.json",
+          "sha256": "4e7295632a8cbb74c2b9f32105bb52eb531f57561aab40015eefd88d3116a161"
         },
-        "original_cohort": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/4e46190654f9df9c72cc/population/specs/part-000000.parquet",
-          "sha256": "ee526f6019bf7845045c345f2c2ddc674d23589a384a12501ce3e1ca40f8062c"
-        },
-        "original_count": 491,
-        "oracle_filter": {
-          "uri": "https://huggingface.co/datasets/open-athena/unitsyn-python-4e461906-oracle-filter-20261114-v1/resolve/8ecfda4d934131068163ba45e7a59f15d2f722bc/oracle-filter.json",
-          "sha256": "160165be53b8e5e4fbf3384fbdd7618a7cd0a767fd3bbac17d5906404fa0a08a"
-        },
-        "oracle_filter_version": 4,
-        "filtered_release": {
-          "repo": "open-athena/unitsyn-python-4e461906-oracle-filter-20261114-v1",
-          "revision": "8ecfda4d934131068163ba45e7a59f15d2f722bc",
-          "url": "https://huggingface.co/datasets/open-athena/unitsyn-python-4e461906-oracle-filter-20261114-v1/tree/8ecfda4d934131068163ba45e7a59f15d2f722bc"
-        },
-        "private": true,
-        "tasks_parquet": {
-          "uri": "https://huggingface.co/datasets/open-athena/unitsyn-python-4e461906-oracle-filter-20261114-v1/resolve/8ecfda4d934131068163ba45e7a59f15d2f722bc/tasks.parquet",
-          "sha256": "9f12203d6f17808ad8426c752043047981d8ed22900f3f9ec76134808eb81d2a"
-        },
-        "admitted_count": 487,
-        "exclusion_counts": {
-          "oracle_failed": 4
-        },
-        "validation": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.138-small-source-whole-collection/collection-v1/4e46190654f9df9c72cc/collection-seal.json",
-          "sha256": "5b1edff909abe9d76998e7ae5e73d3a0157b5821806c0cc97627af39b3dc4e16"
-        }
+        "selected": 100,
+        "reviewed": 97,
+        "unavailable": 3,
+        "uncertain": 0,
+        "issues": 22
       },
-      "qualification_pending": [
-        "actor_census",
-        "within_source_dedup_census",
-        "grading_census",
-        "lexical_scan",
-        "native_consumer_qualification",
-        "sample_qc",
-        "full_qc",
-        "oracle_admitted_release_receipt",
-        "declaration_registration"
-      ]
-    },
-    {
-      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-v3",
-      "filtration": {
-        "original_release": {
-          "repo": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-v3-6c371a42-oracle-repair-20261113-v1",
-          "revision": "859e17f4c2893a038ecd5bb727c86f66eb090d92",
-          "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-exp-rpt-pymethods2test-v3-6c371a42-oracle-repair-20261113-v1/tree/859e17f4c2893a038ecd5bb727c86f66eb090d92"
-        },
-        "original_cohort": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/6c371a420a064bef5946/population/specs/part-000000.parquet",
-          "sha256": "c3c7d0aad78f923a373f852ca2bfec2c918798bc21412179853c363d7feab4a2"
-        },
-        "original_count": 500,
-        "oracle_filter": {
-          "uri": "https://huggingface.co/datasets/open-athena/pymethods-python-6c371a42-oracle-filter-20261114-v1/resolve/abf6368f9988a3a97745684fb6c3aa488f2ffa40/oracle-filter.json",
-          "sha256": "5a9172bb19832128d82e4cca48c5d74af3419f565a153354c14a38ee6949f951"
-        },
-        "oracle_filter_version": 4,
-        "filtered_release": {
-          "repo": "open-athena/pymethods-python-6c371a42-oracle-filter-20261114-v1",
-          "revision": "abf6368f9988a3a97745684fb6c3aa488f2ffa40",
-          "url": "https://huggingface.co/datasets/open-athena/pymethods-python-6c371a42-oracle-filter-20261114-v1/tree/abf6368f9988a3a97745684fb6c3aa488f2ffa40"
-        },
-        "private": true,
-        "tasks_parquet": {
-          "uri": "https://huggingface.co/datasets/open-athena/pymethods-python-6c371a42-oracle-filter-20261114-v1/resolve/abf6368f9988a3a97745684fb6c3aa488f2ffa40/tasks.parquet",
-          "sha256": "737c3a827705177f6155c6d9a2d0bdf53b114e08a810c2242414754e5519cb31"
-        },
-        "admitted_count": 496,
-        "exclusion_counts": {
-          "oracle_failed": 4
-        },
-        "validation": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.138-small-source-whole-collection/collection-v1/6c371a420a064bef5946/collection-seal.json",
-          "sha256": "cd5832693534e26d1a643647f26a0d9ce0057671b95b5a62f254ee3d6820c93d"
-        }
+      "verification": {
+        "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.154-puzzles-qa-replacement-verification/seal.json",
+        "sha256": "0e882dac5804628bcd90ed406cae935c6e8fc7b3d492fe0cfab006eacf910102"
       },
-      "qualification_pending": [
-        "actor_census",
-        "within_source_dedup_census",
-        "grading_census",
-        "lexical_scan",
-        "native_consumer_qualification",
-        "sample_qc",
-        "full_qc",
-        "oracle_admitted_release_receipt",
-        "declaration_registration"
-      ]
-    },
-    {
-      "source_id": "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2",
-      "filtration": {
-        "original_release": {
-          "repo": "open-athena/task-trove-dcagent-exp-rpt-pymethods2test-large-72ea1618-oracle-repair-20261113-v1",
-          "revision": "a6ac7e7a5c37fe75637213a81367eb70ca639555",
-          "url": "https://huggingface.co/datasets/open-athena/task-trove-dcagent-exp-rpt-pymethods2test-large-72ea1618-oracle-repair-20261113-v1/tree/a6ac7e7a5c37fe75637213a81367eb70ca639555"
-        },
-        "original_cohort": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.13.3/candidates/72ea16180a238d201038/population/specs/part-000000.parquet",
-          "sha256": "69a482bb0c3a92e3a402b3f20504c2605ac3dbeb0bf61cec70518f1e5c2704b4"
-        },
-        "original_count": 4990,
-        "oracle_filter": {
-          "uri": "https://huggingface.co/datasets/open-athena/pymethods-large-72ea1618-oracle-filter-20261114-v1/resolve/9bb2b58153faa81e9ef156425be4054cffefe0e4/oracle-filter.json",
-          "sha256": "0ddbc96d3019a29bed10259b184814d37581edd2ca0a67a898735a6b411fbe5f"
-        },
-        "oracle_filter_version": 4,
-        "filtered_release": {
-          "repo": "open-athena/pymethods-large-72ea1618-oracle-filter-20261114-v1",
-          "revision": "9bb2b58153faa81e9ef156425be4054cffefe0e4",
-          "url": "https://huggingface.co/datasets/open-athena/pymethods-large-72ea1618-oracle-filter-20261114-v1/tree/9bb2b58153faa81e9ef156425be4054cffefe0e4"
-        },
-        "private": true,
-        "tasks_parquet": {
-          "uri": "https://huggingface.co/datasets/open-athena/pymethods-large-72ea1618-oracle-filter-20261114-v1/resolve/9bb2b58153faa81e9ef156425be4054cffefe0e4/tasks.parquet",
-          "sha256": "fabeede41923266ecdbcfa2e14a81f77d2394c2c8a87172398de8fd06c8e8e0c"
-        },
-        "admitted_count": 4951,
-        "exclusion_counts": {
-          "oracle_failed": 39
-        },
-        "validation": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.143-pymethods-large-whole-collection/collection-v1/72ea16180a238d201038/collection-seal.json",
-          "sha256": "3652cde90233234b0de4cdc99febd95e2c8bdabcd9b27f425cfc2545e164efbb"
-        }
-      },
-      "qualification_pending": [
-        "actor_census",
-        "within_source_dedup_census",
-        "grading_census",
-        "lexical_scan",
-        "native_consumer_qualification",
-        "sample_qc",
-        "full_qc",
-        "oracle_admitted_release_receipt",
-        "declaration_registration"
-      ]
-    },
-    {
-      "source_id": "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2",
-      "filtration": {
-        "original_release": {
-          "repo": "open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2",
-          "revision": "80dff00099e5613961ca360009669a9bf487a43f",
-          "url": "https://huggingface.co/datasets/open-athena/crosscode-python-b3fb68e4-encoding-repair-20261114-v2/tree/80dff00099e5613961ca360009669a9bf487a43f"
-        },
-        "original_cohort": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.56-crosspy-encoding-candidate/publication/population/specs/part-000000.parquet",
-          "sha256": "406e5bf8963bbce7cc20d0b4642bd26a1242a1245fe0e8dec9a3e4a651ad6028"
-        },
-        "original_count": 500,
-        "oracle_filter": {
-          "uri": "https://huggingface.co/datasets/open-athena/crosscode-python-b3fb68e4-oracle-filter-20261114-v1/resolve/5c1270d7d2ec851e65d360e8efe752c556fe14ea/oracle-filter.json",
-          "sha256": "59924b515f971c22e1678498719548d3e71f7b5b9bcdc6384980578547f3c360"
-        },
-        "oracle_filter_version": 4,
-        "filtered_release": {
-          "repo": "open-athena/crosscode-python-b3fb68e4-oracle-filter-20261114-v1",
-          "revision": "5c1270d7d2ec851e65d360e8efe752c556fe14ea",
-          "url": "https://huggingface.co/datasets/open-athena/crosscode-python-b3fb68e4-oracle-filter-20261114-v1/tree/5c1270d7d2ec851e65d360e8efe752c556fe14ea"
-        },
-        "private": true,
-        "tasks_parquet": {
-          "uri": "https://huggingface.co/datasets/open-athena/crosscode-python-b3fb68e4-oracle-filter-20261114-v1/resolve/5c1270d7d2ec851e65d360e8efe752c556fe14ea/tasks.parquet",
-          "sha256": "4939b01a9323a8891637211f84f39da42ca697a7be680da33ab3a238ae79992a"
-        },
-        "admitted_count": 500,
-        "exclusion_counts": {},
-        "validation": {
-          "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.14.152-crosspy-whole-collection/collection-v1/b3fb68e474a864d2f59c/collection-seal.json",
-          "sha256": "273e1b11ee747e6b8ebb578113411dfb1cf230833653609c0665b43f4a4da164"
-        }
-      },
-      "qualification_pending": [
-        "actor_census",
-        "within_source_dedup_census",
-        "grading_census",
-        "lexical_scan",
-        "native_consumer_qualification",
-        "sample_qc",
-        "full_qc",
-        "oracle_admitted_release_receipt",
-        "declaration_registration"
-      ]
+      "original_harbor_trials_claimed": 0
     }
   ]
 }

@@ -81,22 +81,23 @@ async function render(data, sourceId) {
   sections.push(difficulty);
   sections.push(card('Filtration ledger', filtrationRows({...d, filtration: data.filtration, contamination_status: data.contamination_status, oracle_inventory: data.oracle_inventory}), 'Examples requires complete current-pin filtration and admission proof. A source filtered to zero is excluded. Pre-filtration retained counts are shown separately.'));
   for (const candidate of data.pending_filtered_releases.sources.filter(item => item.source_id === d.id)) {
-    const evidence = candidate.filtration, release = evidence.filtered_release;
+    const release = candidate.release, sample = candidate.sample;
     const section = card('Filtered private release, pending qualification', [
+      ['Candidate source', candidate.candidate_source_id],
       ['Candidate pin', pointer(release.url, `${release.repo} @ ${release.revision}`)],
-      ['Oracle-filtered tasks', `${number.format(evidence.admitted_count)} of ${number.format(evidence.original_count)}`],
-      ['Typed filter exclusions', Object.keys(evidence.exclusion_counts).length ? evidence.exclusion_counts : '0 tasks'],
+      ['Oracle-filtered tasks', `${number.format(candidate.filtered_tasks)} of ${number.format(candidate.original_tasks)}`],
       ['Qualification pending', candidate.qualification_pending.map(name => name.replaceAll('_', ' ')).join(', ')],
-      ['Original candidate input', pointer(evidence.original_release.url, `${evidence.original_release.repo} @ ${evidence.original_release.revision}`)],
-      ['Oracle filter receipt', pointer(evidence.oracle_filter.uri)],
-      ['Oracle filter SHA-256', evidence.oracle_filter.sha256],
-      ['Published TaskSpecs', pointer(evidence.tasks_parquet.uri)],
-      ['Published TaskSpecs SHA-256', evidence.tasks_parquet.sha256],
-      ['Validation receipt', pointer(evidence.validation.uri)],
-      ['Validation SHA-256', evidence.validation.sha256],
-      ['Candidate handoff', pointer(data.pending_filtered_releases.handoff.uri)],
-      ['Handoff SHA-256', data.pending_filtered_releases.handoff.sha256],
-    ], 'This candidate is not selected or admitted to Atlas. Qualification is pending for this exact pin; its earlier QC is not inherited. The catalog release and Examples remain unchanged.');
+      ['SAMPLE selected', sample.selected],
+      ['SAMPLE reviewed', sample.reviewed],
+      ['SAMPLE unavailable', sample.unavailable],
+      ['SAMPLE uncertain', sample.uncertain],
+      ['SAMPLE issues', sample.issues],
+      ['SAMPLE receipt', pointer(sample.receipt.uri)],
+      ['SAMPLE receipt SHA-256', sample.receipt.sha256],
+      ['Verification receipt', pointer(candidate.verification.uri)],
+      ['Verification SHA-256', candidate.verification.sha256],
+      ['Original Harbor trials claimed', candidate.original_harbor_trials_claimed],
+    ], 'This candidate is not selected or admitted to Atlas. Its SAMPLE receipt describes only the candidate pin. The catalog release, Examples and Quality remain unchanged.');
     section.classList.add('pending-filtered-release');
     sections.push(section);
   }

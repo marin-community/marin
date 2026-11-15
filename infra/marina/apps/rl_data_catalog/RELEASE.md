@@ -150,6 +150,11 @@ or retained curriculum manifests. Follow the separate staged catalog-loader
 procedure in [Updating Atlas](../../../../docs/references/rl-data-atlas.md#updating-atlas);
 never use this option to excuse unexplained drift.
 
+Catalog selection retains earlier loads, including their source declarations,
+backend and overlap evidence, assessments and packet bytes. The staged loader
+does not garbage-collect them after switching the current pointer. Retained app
+revisions and release receipts can therefore still refer to the original load.
+
 Eyeball the hosted screenshots, then report the immutable URL, revision, landed
 SHA, package hash, changelog, exact rendered headers and both checker receipt paths
 to the coordinator. Include any remaining unmeasured evidence. The coordinator
@@ -281,7 +286,9 @@ the receipt artifacts directory: `journeys/rl_data_catalog/readability/` for the
 fixture walk and `screenshots/readability/` for the frozen-input walk. Failed runs retain their completed states for diagnosis. Do not waive a
 failure by removing a layout, lowering a threshold or filtering a selector.
 
-Pending filtered-private candidates remain Evidence-only. The sweeps read their
+Pending filtered-private candidates and their current-pin SAMPLE receipts remain
+Evidence-only. Remove a pending card when its release is qualified and selected;
+preserve its earlier package and receipts as history. The sweeps read candidate
 source IDs from the package's pinned candidate manifest and include each candidate
 card, even when its source duplicates another QA/admission presentation. Verify
 the pin and filtered count while preserving the selected catalog, Examples and

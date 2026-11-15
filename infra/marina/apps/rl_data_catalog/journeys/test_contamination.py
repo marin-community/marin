@@ -6,7 +6,7 @@
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import pytest
 from marina.journeys import Journey
@@ -47,13 +47,22 @@ def test_pending_private_filter_evidence_keeps_catalog_admission_and_quality(
     card = page.locator(".pending-filtered-release")
     expect(card).to_have_count(1)
     expect(card.get_by_role("heading")).to_have_text("Filtered private release, pending qualification")
-    release = candidate["filtration"]["filtered_release"]
+    release = candidate["release"]
     expect(card.get_by_role("link", name=f"{release['repo']} @ {release['revision']}")).to_have_attribute(
         "href", release["url"]
     )
     expect(card.locator(".field").filter(has=page.get_by_text("Oracle-filtered tasks", exact=True))).to_contain_text(
-        "2,699 of 2,699"
+        f"{candidate['filtered_tasks']:,} of {candidate['original_tasks']:,}"
     )
+    sample = candidate["sample"]
+    receipt = card.locator(".field").filter(has=page.get_by_text("SAMPLE receipt", exact=True))
+    expect(receipt.get_by_role("link")).to_have_attribute(
+        "href", "https://filer.marina.oa.dev/#" + quote(sample["receipt"]["uri"], safe="")
+    )
+    reviewed = card.locator(".field").filter(has=page.get_by_text("SAMPLE reviewed", exact=True))
+    unavailable = card.locator(".field").filter(has=page.get_by_text("SAMPLE unavailable", exact=True))
+    expect(reviewed.locator("dd")).to_have_text(str(sample["reviewed"]))
+    expect(unavailable.locator("dd")).to_have_text(str(sample["unavailable"]))
     expect(page.locator("#labels .level")).to_have_text(f"Quality {detail['quality']}")
     current_pin = page.locator(".field").filter(has=page.get_by_text("Current release pin", exact=True))
     current = detail["declaration"]["current_release"]

@@ -170,9 +170,8 @@ def load_catalog(
     ):
         return {"changed": False, "snapshot_id": snapshot.snapshot_id}
     expected_load_id = current[0]["load_id"] if current else None
-    obsolete_load_ids = json.dumps([row["load_id"] for row in query("SELECT load_id FROM atlas_loads", {})["rows"]])
     load_id = uuid.uuid4().hex
-    requests = 2
+    requests = 1
 
     def execute(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         nonlocal requests
@@ -325,14 +324,6 @@ def load_catalog(
     )
     if selected["row_count"] != 1:
         raise RuntimeError("Atlas selection changed during import; retry the load")
-    # Only collect loads observed before staging. A loader starting after our cutover may still succeed.
-    for table in [*TABLE_COLUMNS, "loads"]:
-        execute(
-            f"DELETE FROM atlas_{table} WHERE load_id IN "
-            "(SELECT jsonb_array_elements_text(CAST(:obsolete_load_ids AS JSONB))) "
-            "AND load_id NOT IN (SELECT load_id FROM atlas_current WHERE load_id IS NOT NULL)",
-            {"obsolete_load_ids": obsolete_load_ids},
-        )
     return {
         "changed": True,
         "load_id": load_id,

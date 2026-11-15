@@ -126,6 +126,9 @@ def test_release_gate_preserves_archived_packets_even_during_an_explicit_catalog
     publish_sample(root, "after")
     load_catalog(CurationCatalog(root), catalog_query)
     after = catalog_state(catalog_query)
+    retained = {row["load_id"]: row for row in after["archives"]}
+    for archive in before["archives"]:
+        assert retained[archive["load_id"]] == archive
     with pytest.raises(ValueError):
         verify_preservation(before, after)
     verify_preservation(before, after, refresh_snapshot="after")
