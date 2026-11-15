@@ -35,7 +35,8 @@ def test_cli_renders_direct_training_and_native_continuation(
     """
     first_tasks.mkdir()
     (first_tasks / "train.parquet").write_bytes(b"pinned mixed tasks")
-    if PROFILES[profile].data_namespace:
+    use_checksum = response_tokens is not None or PROFILES[profile].data_namespace is not None
+    if use_checksum:
         digest = hashlib.sha256((first_tasks / "train.parquet").read_bytes()).hexdigest()
         args += f" --data-sha256 {digest}"
         data_uris = {str(first_tasks)}
@@ -51,6 +52,7 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert result.exit_code == 0, result.output
     launch = yaml.safe_load(config_path.read_text())
     trainer = launch["skyrl"]["trainer"]
+    assert launch["skyrl"]["context_budget"]["max_new_tokens_per_turn"] == (response_tokens or 8192)
 
     inputs = launch["inputs"]
     assert (inputs["model"]["uri"], inputs["model"]["tokenizer_uri"]) == (str(model), str(tokenizer))
@@ -62,7 +64,7 @@ def test_cli_renders_direct_training_and_native_continuation(
     assert trainer["resume_mode"] == "latest"
     if resume_step is not None:
         assert inputs["starting_checkpoint"]["uri"] == str(native)
-    if PROFILES[profile].data_namespace:
+    if use_checksum:
         (first_tasks / "train.parquet").write_bytes(b"changed after pinning")
         corrupted = CliRunner().invoke(main, args)
         assert isinstance(corrupted.exception, ValueError)
