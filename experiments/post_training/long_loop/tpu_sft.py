@@ -20,6 +20,7 @@ from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.rpc.proto_display import priority_band_value
 from marin.training.training import resolve_training_env
+from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
@@ -193,7 +194,8 @@ def main(data_config: Path, data_sha256: str, output: str, run_id: str, plan_out
     )
     click.echo(f"Plan: {plan_output}; {config.resources.chip_count()} chips; production; retries 0")
     if run:
-        with open_iris_client(config_file=Path("lib/iris/config/marin.yaml")) as client:
+        workspace = find_project_root()
+        with open_iris_client(config_file=workspace / "lib/iris/config/marin.yaml", workspace=workspace) as client:
             job = FrayIrisClient.from_iris_client(client).submit(request, adopt_existing=False)
         click.echo(f"Submitted: {job.job_id}")
 
