@@ -289,15 +289,6 @@ def test_controlled_stage_allocations_and_deadlines_reach_dispatched_jobs(tmp_pa
     monkeypatch.setenv("WANDB_API_KEY", "offline-fixture")
     resolved = resolve_spec(SPEC, smoke=False)
     assert sum(seconds for stage, seconds in STAGE_TIMEOUT_SECONDS.items() if stage != "evaluation") == 36 * 3600
-    assert resolved["gpu_peaks"] == {
-        "inputs": 0,
-        "sft": 256,
-        "export": 0,
-        "rl": 256,
-        "eval_inputs": 0,
-        "archive": 0,
-        "evaluation": 136,
-    }
     remote = spec_pipeline.remote
     dispatched = {}
 

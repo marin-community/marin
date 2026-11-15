@@ -1,0 +1,117 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Explicit Exp3 SFT controls, independent of the historical shared defaults."""
+
+import math
+from dataclasses import replace
+
+import draccus
+import jax.numpy as jnp
+from fray.types import GpuConfig, ResourceConfig
+from iris.rpc.proto_display import priority_band_value
+from levanter.data.text.datasets import LmDataConfig
+from levanter.eval_audit import InitialEvalMatchConfig
+from levanter.models.snowball import SnowballConfig
+from levanter.models.snowball_sft import SnowballSftConfig
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+
+from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
+from experiments.post_training.long_loop.sft import BASE_MODEL, BASE_REVISION
+from experiments.post_training.long_loop.source_loss import prepared_supervision_data, source_loss_metadata
+from experiments.post_training.long_loop.stage_guard import StageGuard
+from experiments.sft.launcher import HFModel, SFTSpec
+
+# Exp1's LR anchor and schedule; the ratio and regularization restore the
+# 67B pretrain recipe at 92514c5358e9cd99c89bdd4a6600ac7bbeddc147.
+TOKEN_IDS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
+ANCHOR_IDS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
+
+
+def exp3_optimizer(*, weight_decay: float) -> GrugMoeMuonHConfig:
+    return GrugMoeMuonHConfig(
+        learning_rate=5e-5,
+        adam_lr=5e-5 * 3 / 13,
+        beta1=0.9062,
+        beta2=0.95,
+        epsilon=3.8339433005718795e-15,
+        weight_decay=weight_decay,
+        max_grad_norm=None,
+        warmup=0,
+        decay=475,
+        min_lr_ratio=0.1,
+        lr_schedule="linear",
+    )
+
+
+def exp3_controls() -> SnowballSftConfig:
+    return SnowballSftConfig(TOKEN_IDS, ANCHOR_IDS, math.sqrt(32), True, True)
+
+
+def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
+    """Bind a pinned candidate and required gate, trainer and budget before allocation."""
+    StageGuard(**recipe["stage_guard"])
+    metadata = source_loss_metadata(recipe["source_loss_metadata"], recipe["source_loss_metadata_sha256"])
+    data = prepared_supervision_data(
+        draccus.decode(LmDataConfig, recipe["data"]),
+        metadata,
+        packing_cap=recipe["packing_cap"],
+        lookahead=recipe["packing_lookahead"],
+    )
+    trainer = draccus.decode(TrainerConfig, recipe["trainer"])
+    if trainer.mp.param_dtype != jnp.float32 or trainer.mp.compute_dtype != jnp.bfloat16:
+        raise ValueError("Exp3 requires retained FP32 parameters and BF16 computation")
+    if not recipe["wandb_entity"] or not recipe["wandb_project"]:
+        raise ValueError("Exp3 requires an explicit W&B entity and project")
+    if recipe["packing_cap"] != 256:
+        raise ValueError("Exp3 retains the 256-document packing cap")
+    resources = draccus.decode(ResourceConfig, recipe["resources"])
+    if not isinstance(resources.device, GpuConfig) or resources.device.variant.upper() != "H100":
+        raise ValueError("Exp3 requires explicit H100 resources")
+    mesh = draccus.decode(MeshConfig, recipe["mesh"])
+    mesh.axis_shapes(resources.device.count * resources.replicas, resources.replicas)
+    gate = draccus.decode(InitialEvalMatchConfig, recipe["initial_eval_match"])
+    return SFTSpec(
+        name=name,
+        version=version,
+        model=HFModel(
+            model_ref=f"{BASE_MODEL}@{BASE_REVISION}",
+            tokenizer_path=data.tokenizer,
+            model_type="snowball",
+            eos_token_ids=(128001, 128009),
+            task_timeout_seconds=recipe["task_timeout_seconds"],
+            priority=priority_band_value("production"),
+        ),
+        chat_template=MARIN_CHAT_TEMPLATE,
+        datasets=(),
+        prepared_data=data,
+        model_config=draccus.decode(SnowballConfig, recipe["model"]),
+        trainer_config=replace(
+            trainer,
+            tracker=WandbConfig(entity=recipe["wandb_entity"], project=recipe["wandb_project"], tags=["exp3", "sft"]),
+        ),
+        optimizer=exp3_optimizer(weight_decay=recipe["weight_decay"]),
+        optimizer_num_train_steps=4750,
+        z_loss_weight=1e-4,
+        global_gradient_clip=1,
+        snowball_sft=exp3_controls(),
+        token_weighted_accumulation=True,
+        initial_eval_match=gate,
+        evaluation_data=gate.data,
+        data_seed=recipe["data_seed"],
+        tensorstore_cache_bytes=recipe["tensorstore_cache_bytes"],
+        mesh=mesh,
+        seq_len=recipe["seq_len"],
+        batch_size=recipe["batch_size"],
+        per_device_parallelism=recipe["per_device_parallelism"],
+        num_train_steps=recipe["stop_after_steps"],
+        checkpointer=trainer.checkpointer,
+        pack=True,
+        hf_save_dtype="bfloat16",
+        wandb_project=recipe["wandb_project"],
+        wandb_entity=recipe["wandb_entity"],
+        xla_flags=tuple(recipe["xla_flags"]),
+    )

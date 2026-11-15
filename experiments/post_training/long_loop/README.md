@@ -54,6 +54,27 @@ retries watchdog stalls at most twice with fresh child names, and cancels only
 the active stage when its required H100-hour ceiling is reached. Other failures
 are reported without replay. Its ledger records observed spend and the ceiling.
 
+The separately approved initializer proof runs two short updates of the pinned
+67B model on two eight-H100 nodes (EP8/CP2), after a 262,144-context C4-en check.
+Its provisional reference is an explicitly labeled estimate, 2.313741889 nats
+per token with absolute tolerance 0.5. The frozen input audit must match before
+the loss comparison. Raw and token-reseeded initialization are checked separately.
+The proof keeps capacity factor 1.0 and reports route drops, as in the baseline.
+Only the final native checkpoint is saved; time-policy saves are disabled.
+
+```bash
+uv run python -m experiments.post_training.long_loop.exp3_initializer_smoke \
+  --source-revision "$(git rev-parse HEAD)" --h100-hour-limit 12 \
+  --version YYYY.MM.DD.N
+```
+
+The `snowball_exp3` SFT profile requires a hash-pinned supervision sidecar,
+explicit trainer/model/mesh configuration, initial-evaluation gate and stage
+guard. It uses retained FP32 parameters, BF16 computation, MuonH5e-5 with
+AdamLR3/13 of that, clipping1, z-loss1e-4 and the unchanged4750-step schedule.
+Packing binds the sidecar's precomputed prediction weights for every source.
+The full candidate catalog and recipe require separate approval before launch.
+
 Historical recipe backfills use the CPU-only `backfill_recipe` entrypoint with
 an exact archive-manifest hash, full source commit SHAs and a fresh output path.
 It reads only recipe categories, verifies their archived bytes, and records
@@ -61,7 +82,7 @@ reconstruction limits. It does not execute producers or modify the sealed archiv
 
 ## Shared SFT and historical reproduction
 
-New SFT stages use `experiments.sft.launcher.SFTSpec` and the checked-in
+The historical `snowball_h100` adapter uses `experiments.sft.launcher.SFTSpec` and the checked-in
 `experiments/sft/configs/snowball_h100.py` defaults: native Levanter Snowball,
 Adam, 32,768 positions, batch eight and one transcript per sequence. The run
 spec supplies the prepared data, training budget, execution resources and

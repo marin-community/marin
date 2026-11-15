@@ -37,7 +37,6 @@ from levanter.main.eval_lm import EvalLmConfig
 from levanter.main.eval_lm import main as evaluate
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.snowball import SnowballConfig
-from levanter.models.snowball_sft import SnowballSftConfig
 from levanter.store.cache import SerialCacheWriter, TreeCache
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -55,8 +54,8 @@ from rigging.timing import Duration
 from rigging.training_journal import verify_training_journals
 from transformers import AutoTokenizer
 
-from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.post_training.long_loop.archive import ArchiveInput, seal_archive
+from experiments.post_training.long_loop.exp3_recipe import TOKEN_IDS, exp3_controls, exp3_optimizer
 from experiments.post_training.long_loop.recipe_bundle import (
     require_clean_revision,
     runtime_source_manifest,
@@ -66,8 +65,6 @@ from experiments.post_training.long_loop.sft import TOKENIZER_REPO, TOKENIZER_RE
 from experiments.post_training.long_loop.source_loss import prepared_supervision_data, source_loss_metadata
 from experiments.post_training.long_loop.stage_guard import StageGuard, run_guarded_stage
 
-TOKEN_IDS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
-ANCHOR_IDS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
 SOURCES = {
     "chat": "s3://marin-us-east-02a/marin/datakit/store/sft/nemotron_sft_v3/safety_v2/train_89506f41/train",
     "replay": "s3://marin-us-east-02a/marin/grug-sft/sft-pipe-repro/replay/c00q1-train/2026.10.24.1/lte_64k",
@@ -93,10 +90,6 @@ def smoke_model() -> SnowballConfig:
         max_seq_len=SEQUENCE_LENGTH,
         sliding_window=128,
     )
-
-
-def controls() -> SnowballSftConfig:
-    return SnowballSftConfig(TOKEN_IDS, ANCHOR_IDS, math.sqrt(32), True, True)
 
 
 def prepare_smoke(*, output: str) -> None:
@@ -224,7 +217,7 @@ def prepare_smoke(*, output: str) -> None:
                 use_explicit_mesh_axes=True,
                 mp=jmp.get_policy("p=f32,c=bfloat16"),
             ),
-            snowball_sft=controls(),
+            snowball_sft=exp3_controls(),
             audit_token_ids=TOKEN_IDS,
             result_path=prefix_join(output, "tiny-reference.json"),
         )
@@ -256,23 +249,11 @@ def smoke_train_config(data: LmDataConfig, *, output: str, prepared: str, artifa
         model=smoke_model(),
         trainer=trainer,
         train_seq_len=SEQUENCE_LENGTH,
-        optimizer=GrugMoeMuonHConfig(
-            learning_rate=5e-5,
-            adam_lr=5e-5 * 3 / 13,
-            beta1=0.9062,
-            beta2=0.95,
-            epsilon=3.8339433005718795e-15,
-            weight_decay=0,
-            max_grad_norm=None,
-            warmup=0,
-            decay=475,
-            min_lr_ratio=0.1,
-            lr_schedule="linear",
-        ),
+        optimizer=exp3_optimizer(weight_decay=0),
         optimizer_num_train_steps=4750,
         z_loss_weight=1e-4,
         global_gradient_clip=1,
-        snowball_sft=controls(),
+        snowball_sft=exp3_controls(),
         token_weighted_accumulation=True,
         initialize_model_from_checkpoint_path=prefix_join(prepared, "initializer/checkpoints/step-0"),
         initial_eval_match=InitialEvalMatchConfig(
@@ -305,13 +286,23 @@ def run_native_smoke(*, output: str, prepared: str, artifact_version: str, polic
     (StoragePath(output) / "guard-result.json").write_text(json.dumps(receipt, indent=2))
 
 
-def certify_smoke(*, output: str, trained: str, prepared: str, source: dict) -> None:
+def certify_smoke(
+    *,
+    output: str,
+    trained: str,
+    prepared: str,
+    source: dict,
+    completed_updates: int,
+    reference_scope: str,
+    reference_filename: str,
+    producers: tuple[str, ...],
+) -> None:
     telemetry = verify_training_journals(
         prefix_join(trained, "telemetry"),
-        {"rank-0"},
+        set(producers),
         {"init", "compile", "first_step", "steady_state", "checkpoint_drain"},
     )
-    checkpoint = prefix_join(trained, "checkpoints/step-2")
+    checkpoint = prefix_join(trained, f"checkpoints/step-{completed_updates - 1}")
     manifest = read_manifest(checkpoint)
     if manifest is None:
         raise ValueError("Smoke checkpoint has no array manifest")
@@ -326,7 +317,7 @@ def certify_smoke(*, output: str, trained: str, prepared: str, source: dict) -> 
             if row["step"] is not None:
                 histories.setdefault(row["step"], {}).update(row["metrics"])
     ratios = []
-    for step in range(3):
+    for step in range(completed_updates):
         metrics = histories[step]
         ratio = metrics["updates/norm/total"] / metrics["params/norm/total"]
         if not math.isfinite(ratio) or not 0 < ratio < 0.01:
@@ -339,12 +330,14 @@ def certify_smoke(*, output: str, trained: str, prepared: str, source: dict) -> 
                 "padding_positions": metrics["train/padding_positions"],
                 "padding_fraction": metrics["train/padding_positions"] / metrics["train/positions"],
                 "scored_tokens": metrics["train/scored_tokens"],
+                "sender_dropped_assignments": metrics["train/moe/sender_dropped"],
+                "receiver_dropped_assignments": metrics["train/moe/receiver_dropped"],
             }
         )
     proof = {
         "fp32_parameter_arrays": len(parameters),
         "update_ratios": ratios,
-        "reference_scope": "Independent CPU evaluation of the tiny initializer; not the upstream67B loss.",
+        "reference_scope": reference_scope,
         "initial_evaluation": json.loads((StoragePath(trained) / "initial-eval-match.json").read_text()),
     }
     (StoragePath(output) / "smoke-proof.json").write_text(json.dumps(proof, indent=2))
@@ -352,7 +345,7 @@ def certify_smoke(*, output: str, trained: str, prepared: str, source: dict) -> 
         ArchiveInput(prefix_join(trained, "consumed-config.json"), "consumed-config.json", "config"),
         ArchiveInput(prefix_join(prepared, "source-receipts.json"), "source-receipts.json", "dataset"),
         ArchiveInput(prefix_join(prepared, "source-loss.json"), "source-loss.json", "dataset"),
-        ArchiveInput(prefix_join(prepared, "tiny-reference.json"), "tiny-reference.json", "config"),
+        ArchiveInput(prefix_join(prepared, reference_filename), reference_filename, "config"),
         ArchiveInput(prefix_join(output, "smoke-proof.json"), "smoke-proof.json", "config"),
     ]
     recipe, receipt = write_recipe_bundle(
@@ -364,7 +357,7 @@ def certify_smoke(*, output: str, trained: str, prepared: str, source: dict) -> 
         {
             "recipe_bundle": receipt,
             "telemetry": telemetry,
-            "scope": "Tiny-model runtime wiring; upstream67B initialization gate remains separate.",
+            "scope": reference_scope,
         },
     )
 
@@ -397,6 +390,10 @@ def main(h100_hour_limit: float, source_revision: str) -> ArtifactStep:
         trained=trained,
         prepared=prepared,
         source=source,
+        completed_updates=3,
+        reference_scope="Independent CPU evaluation of the tiny initializer; not the upstream67B loss.",
+        reference_filename="tiny-reference.json",
+        producers=("rank-0",),
     )
     execution = IrisSkyRLExecution(
         cluster="cw-rno2a",

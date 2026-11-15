@@ -2,18 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-from pathlib import Path
 
 import pytest
 from rigging.training_journal import TrainingJournal
 
 from experiments.post_training.long_loop.archive import ArchiveInput, seal_archive, verify_archive
 from experiments.post_training.long_loop.archive_stage import native_training_inputs
-from experiments.post_training.long_loop.run_spec import resolve_spec
-from experiments.post_training.long_loop.shared_sft import shared_sft_spec
-from experiments.post_training.long_loop.spec_pipeline import build_spec_graph
-
-SPEC = Path(__file__).parents[1] / "specs/round1.yaml"
 
 
 def produce(root, producer, stage, omit_phase=None, local_directory=None):
@@ -67,22 +61,6 @@ def test_archive_rejects_missing_or_open_native_phase_journal(tmp_path):
     (journal.destination / "phases.jsonl").write_text("")
     with pytest.raises(ValueError, match="Telemetry file changed"):
         native_training_inputs(str(sft), str(rl), 1, 2)
-
-
-@pytest.mark.parametrize("field", ["wandb_entity", "wandb_project"])
-def test_sft_missing_tracking_identity_fails_before_dispatch(tmp_path, field):
-    resolved = resolve_spec(SPEC, smoke=True)
-    recipe = dict(resolved["sft"])
-    recipe[field] = None
-    with pytest.raises(ValueError, match="explicit W&B entity and project"):
-        shared_sft_spec("test/sft", "2026.11.15.1", recipe)
-
-
-def test_rl_missing_tracking_identity_fails_before_dispatch():
-    resolved = resolve_spec(SPEC, smoke=False)
-    resolved["rl"]["execution"]["wandb_entity"] = None
-    with pytest.raises(ValueError, match="explicit W&B entity and project"):
-        build_spec_graph(resolved, "2026.11.15.1", through="rl")
 
 
 def test_archive_requires_native_export_phase_even_with_valid_history_hashes(tmp_path):

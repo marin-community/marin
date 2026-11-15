@@ -11,15 +11,18 @@ from dataclasses import dataclass, replace
 
 import draccus
 from fray.types import GpuConfig, ResourceConfig
+from iris.rpc.proto_display import priority_band_value
 from levanter.data.text.datasets import LmDataConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from experiments.post_training.long_loop.exp3_recipe import exp3_sft_spec
 from experiments.post_training.long_loop.sft import fresh_sft_config, read_json, sft_run
+from experiments.post_training.long_loop.stage_guard import StageGuard, run_guarded_stage
 from experiments.sft.configs.snowball_h100 import SPEC as SNOWBALL_SFT
-from experiments.sft.launcher import DeprecatedSFTSpec, SFTSpec, sft_step
+from experiments.sft.launcher import DeprecatedSFTSpec, HFModel, SFTSpec, levanter_train_request, sft_step
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,8 @@ def legacy_sft_step(
 
 def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
     """Use the checked-in Snowball defaults with the pinned historical sources."""
+    if recipe["profile"] == "snowball_exp3":
+        return exp3_sft_spec(name, version, recipe)
     if recipe["profile"] != "snowball_h100":
         raise ValueError("The long-loop shared SFT adapter requires the snowball_h100 profile")
     if not recipe.get("wandb_entity") or not recipe.get("wandb_project"):
@@ -104,6 +109,7 @@ def shared_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
             child["pack"] = recipe["pack"]
     data["block_cross_document_attention"] = bool(recipe["pack"])
     data_config = draccus.decode(LmDataConfig, data)
+    assert isinstance(SNOWBALL_SFT.model, HFModel)
     return replace(
         SNOWBALL_SFT,
         name=name,
@@ -145,7 +151,16 @@ def native_sft_step(name: str, version: str, recipe: dict) -> ArtifactStep:
     run = trained.run
 
     def execute(config):
-        run(config)
+        if recipe["profile"] == "snowball_exp3":
+            request = levanter_train_request(
+                config, task_timeout_seconds=recipe["task_timeout_seconds"], priority=priority_band_value("production")
+            )
+            receipt = run_guarded_stage(
+                request, StageGuard(**recipe["stage_guard"]), prefix_join(config.output_path, "guard")
+            )
+            (StoragePath(config.output_path) / "guard-result.json").write_text(json.dumps(receipt, indent=2))
+        else:
+            run(config)
         select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
 
     return replace(trained, run=execute, build_config=build_config)

@@ -297,14 +297,14 @@ def _levanter_pod_config(
     )
 
 
-def _levanter_train_job(
+def levanter_train_request(
     pod_config: TrainLmOnPodConfig,
     *,
     task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS,
     processes_per_task: int = 1,
     priority: int = 0,
-) -> None:
-    """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
+) -> JobRequest:
+    """Record the consumed configuration and construct the canonical training request."""
     environment = resolve_training_env(pod_config.env_vars, pod_config.resources)
     environment.update(
         {
@@ -335,16 +335,32 @@ def _levanter_train_job(
                 indent=2,
             )
         )
+    return JobRequest(
+        name=f"sft-{pod_config.train_config.trainer.id}",
+        entrypoint=Entrypoint.from_callable(run_levanter_train_lm, args=[pod_config]),
+        resources=pod_config.resources,
+        environment=create_environment(extras=extras_for_resources(pod_config.resources), env_vars=environment),
+        timeout=Duration.from_seconds(task_timeout_seconds),
+        processes_per_task=processes_per_task,
+        priority=priority,
+        max_retries_preemption=0,
+    )
+
+
+def _levanter_train_job(
+    pod_config: TrainLmOnPodConfig,
+    *,
+    task_timeout_seconds: int = DEFAULT_SFT_TASK_TIMEOUT_SECONDS,
+    processes_per_task: int = 1,
+    priority: int = 0,
+) -> None:
+    """Dispatch a Levanter ``train_lm`` config as its own Fray training job."""
     job = current_client().submit(
-        JobRequest(
-            name=f"sft-{pod_config.train_config.trainer.id}",
-            entrypoint=Entrypoint.from_callable(run_levanter_train_lm, args=[pod_config]),
-            resources=pod_config.resources,
-            environment=create_environment(extras=extras_for_resources(pod_config.resources), env_vars=environment),
-            timeout=Duration.from_seconds(task_timeout_seconds),
+        levanter_train_request(
+            pod_config,
+            task_timeout_seconds=task_timeout_seconds,
             processes_per_task=processes_per_task,
             priority=priority,
-            max_retries_preemption=0,
         )
     )
     if pod_config.output_path is not None:
