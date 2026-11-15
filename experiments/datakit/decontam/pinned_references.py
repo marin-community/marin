@@ -198,7 +198,7 @@ def prepare_references(output_root: str, sources: tuple[ReferenceSource, ...]) -
             raise ValueError(f"{source.name}: expected {source.expected_records} records, extracted {len(records)}")
         if any(not _record_feature_status(record["text"], ngram)[1] for record in records):
             raise ValueError(f"{source.name}: a benchmark record cannot match itself")
-        artifact = f"{source.name}/eval.parquet"
+        artifact = prefix_join(source.name, "eval.parquet")
         output_path = prefix_join(output_root, artifact)
         _write_parquet(output_path, iter(records))
         with StoragePath(output_path).open("rb") as stream:
