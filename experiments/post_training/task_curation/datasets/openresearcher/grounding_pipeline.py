@@ -7,7 +7,6 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import shutil
 import subprocess
 from collections import Counter
@@ -17,6 +16,7 @@ from pathlib import Path, PurePosixPath
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from iris.cluster.client.job_info import get_job_info
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.execution.artifact import Artifact
@@ -144,7 +144,8 @@ async def grounded_rows(
 
 
 def ground_questions(config: GroundingConfig) -> GroundedQuestions:
-    if not os.environ.get("IRIS_TASK_ID"):
+    info = get_job_info()
+    if info is None or info.worker_region != "US-EAST-02A":
         raise RuntimeError("Screen the complete population inside the regional Iris CPU job")
     if (
         config.contract_sha256 != CONTRACT_SHA256
@@ -180,7 +181,7 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
             tier=JudgeTier.LIGHT,
             model_config=MODEL_CONFIG,
             context_window_tokens=32768,
-            accelerator=AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=2, target_cluster="cw-us-east-02a"),
+            accelerator=AcceleratorChoice(Platform.GPU, gpu_type="H100", gpu_count=2),
             priority=job_pb2.PRIORITY_BAND_BATCH,
             env_vars={"MARIN_TEMP_PREFIX": "s3://marin-us-east-02a"},
             worker_timeout=Duration.from_seconds(259200),
@@ -189,7 +190,16 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
     )
     tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=MODEL_REVISION)
     with endpoint.connect() as connection:
-        identity = {**endpoint.identity, "serving_jobs": endpoint.job_ids, "contract_sha256": CONTRACT_SHA256}
+        identity = {
+            **endpoint.identity,
+            "serving_jobs": endpoint.job_ids,
+            "contract_sha256": CONTRACT_SHA256,
+            "parent_task": str(info.task_id),
+            "region": info.worker_region,
+            "child_placement": "same_controller",
+            "accelerator": {"type": "H100", "count": 2},
+            "priority": "batch",
+        }
         (output / "backend-identity.json").write_text(json.dumps(identity, indent=2))
         decisions = asyncio.run(grounded_rows(config, rows, connection, tokenizer, output))
     if len(decisions) != len(rows) or any(decision["status"] != "screened" for decision in decisions):
