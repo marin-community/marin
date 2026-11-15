@@ -493,7 +493,7 @@ class Checkpointer:
         debug: CheckpointDebugConfig | None = None,
         write_config: TensorStoreWriteConfig | None = None,
         metadata: Mapping[str, Any] | None = None,
-        async_timeout_seconds: float = DEFAULT_ASYNC_TIMEOUT_SECONDS,
+        async_timeout_seconds: int = DEFAULT_ASYNC_TIMEOUT_SECONDS,
         training_journal: TrainingJournal | None = None,
     ):
         """
@@ -1293,7 +1293,7 @@ def _get_fs_and_plain_path(path, fs=None):
 @dataclass
 class CheckpointerConfig:
     base_path: str = "checkpoints/"
-    async_timeout_seconds: float = DEFAULT_ASYNC_TIMEOUT_SECONDS
+    async_timeout_seconds: int = DEFAULT_ASYNC_TIMEOUT_SECONDS
     temporary_base_path: Optional[str] = None
     """Separate base path for temporary (time-policy) checkpoints. When set, temporary checkpoints
     are written here instead of base_path, allowing use of region-local storage with lifecycle TTL."""
