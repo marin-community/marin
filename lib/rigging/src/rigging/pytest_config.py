@@ -4,6 +4,7 @@
 """Pytest isolation for consumers of Rigging cluster configuration."""
 
 import pytest
+
 import rigging.filesystem.cluster_config as cluster_config
 from rigging.config_discovery import find_project_root
 
