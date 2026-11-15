@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Normalize supported calls without executing source code or inventing observations."""
+"""Normalize this campaign's calls without executing source programs.
+
+Read README.md, "Scope and limits — read before reuse", before invoking this module.
+"""
 
 import ast
 import copy
@@ -14,7 +17,7 @@ from typing import Any
 
 import jsonschema
 
-from marin.datakit.tool_conversion.kernel import kernel_command
+from experiments.tool_conversion.kernel import kernel_command
 
 HEADER = re.compile(r"<\|start_header_id\|>(system|user|assistant|tool|ipython)<\|end_header_id\|>")
 CALL = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
@@ -28,6 +31,7 @@ KERNEL_ARGUMENTS = {
 }
 PYTHON_TOOLS = frozenset(KERNEL_ARGUMENTS) | {"evaluate_code", "arc_python_executor"}
 CONTROL_TOOLS = frozenset({"think", "submit", "finish"})
+SCOPE_GUIDE = "experiments/tool_conversion/README.md: Scope and limits — read before reuse"
 REAL_TOOLS = frozenset(
     {
         "bash",
@@ -67,6 +71,16 @@ BASH_TOOL = {
         "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]},
     },
 }
+CAMPAIGN_TOOLS = (
+    REAL_TOOLS
+    | PYTHON_TOOLS
+    | CONTROL_TOOLS
+    | {"execute_bash", "web-search", "commit_solution", "explicit_solution_with_augmentations"}
+)
+
+
+class CampaignScopeError(RuntimeError):
+    """An input lies outside the reviewed campaign boundary."""
 
 
 class Disposition(StrEnum):
@@ -75,7 +89,6 @@ class Disposition(StrEnum):
     UNCHANGED = "real_tools_only"
     VERIFIED = "rule_converted_adapter_checked"
     RESIDUAL = "mapping_unresolved"
-    DROP = "dropped_no_equivalent"
 
 
 @dataclass
@@ -226,6 +239,9 @@ def convert_trace(source: str, text: str, identity: str) -> Conversion:
     """
     if excluded_source(source):
         return Conversion(Disposition.EXCLUDED, "excluded dataset source", text)
+    first_header = HEADER.search(text)
+    if first_header is None or text[: first_header.start()].strip() not in {"", "<|begin_of_text|>"}:
+        raise CampaignScopeError(f"Unsupported chat format; see {SCOPE_GUIDE}")
     try:
         return _convert(text, identity)
     except (ValueError, KeyError, TypeError, SyntaxError, jsonschema.ValidationError) as error:
@@ -242,18 +258,16 @@ def _convert(text: str, identity: str) -> Conversion:
     if not calls:
         return Conversion(Disposition.NO_CALLS, "no native tool calls", text)
     names = {c["name"] for _, _, c in calls}
+    definitions = tool_definitions(original)
+    unknown = (names | definitions.keys()) - CAMPAIGN_TOOLS
+    if unknown:
+        raise CampaignScopeError(f"Unsupported tool set: {', '.join(sorted(unknown))}; see {SCOPE_GUIDE}")
     targets = names - REAL_TOOLS
     if not targets:
         return Conversion(Disposition.UNCHANGED, "only real harness tools", text)
     unsupported = targets - PYTHON_TOOLS - CONTROL_TOOLS - {"execute_bash"}
     if unsupported:
-        disposition = (
-            Disposition.RESIDUAL
-            if unsupported <= {"web-search", "commit_solution", "explicit_solution_with_augmentations"}
-            else Disposition.DROP
-        )
-        return Conversion(disposition, "no grounded mapping: " + ", ".join(sorted(unsupported)), text)
-    definitions = tool_definitions(original)
+        return Conversion(Disposition.RESIDUAL, "no grounded mapping: " + ", ".join(sorted(unsupported)), text)
     turns = copy.deepcopy(original)
     changes = []
     rules = set()
@@ -269,6 +283,8 @@ def _convert(text: str, identity: str) -> Conversion:
     for i, match, call in calls:
         by_turn.setdefault(i, []).append((match, call))
     for i, group in by_turn.items():
+        if len(group) != 1:
+            raise ValueError("Multiple native calls in one assistant turn are outside this mapping")
         next_assistant = next(
             (j for j in range(i + 1, len(original)) if original[j].role in {"assistant", "user"}), len(original)
         )

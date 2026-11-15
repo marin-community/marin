@@ -1,6 +1,42 @@
 # Deterministic tool conversion
 
-`marin.datakit.tool_conversion.run` converts pinned serialized conversations into
+## Scope and limits — read before reuse
+
+This is a tool-calling SFT campaign experiment, not a general conversion library.
+It supports only:
+
+- The campaign's pinned Exp3 selection, additional-source selection, and full-corpus
+  target selection. `run.py` checks their canonical JSON SHA-256 values before
+  reading shards or writing outputs; edited catalogs and unknown schemas fail.
+- The pinned Llama-3-style chat serialization and tokenizer, SHA-256
+  `6a61ca2105a54e9984169b409581f31cc50330d1b47104af13c221b05e462e45`.
+  Required IDs are `<|start_header_id|>` = 128006, `<|end_header_id|>` = 128007,
+  `<tool_call>` = 128005 and `assistant` = 78191. The reviewed tokenizer supplies
+  the remaining message, response and reasoning delimiters.
+- The tool names and argument contracts in the mapping table below, including
+  `stateful_python_code_exec` / `execute_bash` → `bash` and `think` / `submit` /
+  `finish` → native reasoning or completion. The preserved real-tool set is the
+  explicit `REAL_TOOLS` allowlist in `convert.py`.
+- CoreWeave `marin-us-east-02a` credential/signing-region configuration, with the
+  campaign's pinned input caches and separate receipt outputs. This is not a
+  general storage or cluster launcher.
+- The hardcoded source exclusions: names containing `terminus`, exact
+  `agenttrove`, and Nemotron path components `interactive_agent` or `tool_calling`.
+
+It does **not** support other chat templates or tokenizers, other harness tool
+sets, Terminus-2 conversion, ARC evaluation, multiple or parallel native calls
+within one assistant turn, mixed-order call/reasoning cases, rich notebook output,
+or any operation left residual by the mapping rules. Sequential notebook cells
+across turns remain supported and share one persistent kernel. Recognized but
+unsupported campaign traces remain residual; unknown formats, tool sets,
+tokenizers and selection schemas raise `CampaignScopeError` with a pointer here.
+Explicitly excluded sources and tool-free rows receive no conversion.
+
+Do not reuse for other datasets; write a new converter, or generalize this one in a reviewed PR first.
+
+## Conversion contract
+
+`experiments.tool_conversion.run` converts pinned serialized conversations into
 separate, receipt-bound archives. It never executes source programs or asks an
 LLM to verify a deterministic change. Acceptance means that the operation mapping,
 argument shape, call/result pairing, serialization and assistant mask passed the
@@ -29,7 +65,7 @@ original trace in the residual selection; no partially converted row is accepted
 | `arc_python_executor(code)` | Residual | The source contract tests `transform(grid)` against task grids and reports metrics; a bare Python command cannot reproduce it |
 | `commit_solution`, `explicit_solution_with_augmentations` | Residual | Require grounded ARC evaluator, task inputs and selection state |
 | `web-search(query)` | Residual | Requires an actual configured search backend and a compatible response contract |
-| Unrecognized service operations | Drop candidate | No documented runtime or honest equivalent; retain the disposition and original locator |
+| Unrecognized tool sets | Error | Outside the pinned campaign contract; see the scope section |
 
 The notebook mapping writes a visible Python client and starts one local IPython
 kernel inside the first Bash call. Later Bash calls connect to that same kernel.
@@ -57,6 +93,9 @@ The CLI bootstraps CoreWeave S3 credentials for TensorStore and requires a
 configured CoreWeave account, including when the selection/tokenizer files are
 local. This entry point targets regional CoreWeave caches; it is not a generic
 GCS launcher.
+Run from the repository's experiment environment. Its `marin-verifyit[schema]`
+dependency supplies JSON Schema validation; this experiment adds no dependency
+to the Marin library package.
 
 Input shards are Levanter TreeStores with an `input_ids` field containing
 complete serialized conversation rows. The input JSON contains
@@ -69,7 +108,7 @@ selection owner must supply the accepted repair cache paths. Converting the
 older source would restore unrepaired text or excluded examples.
 
 ```bash
-uv run python -m marin.datakit.tool_conversion.run \
+uv run python -m experiments.tool_conversion.run \
   --selection selection.json --tokenizer tokenizer.json \
   --output s3://BUCKET/NEW-PREFIX/r0 \
   --shard-start 0 --shard-stop 1 --batch-size 128
@@ -96,7 +135,7 @@ status alone does not establish that calls changed. The overlay replaces accepte
 `shard`, `row`, and `input_ids_sha256` from batch dispositions to the original
 input, apply each replacement once, then rerun the consumer's quality and mask
 checks. `mapping_unresolved` records preserve the original locator for residual
-processing; `dropped_no_equivalent` is a proposed exclusion. Skipped sources and
+processing. Skipped sources and
 `tool_free`/`real_tools_only` rows receive no replacement. This runner
 never edits or deletes the input dataset. Corpus counts by tool overlap; exact document counts must come
 from the row dispositions rather than summing per-tool counts.

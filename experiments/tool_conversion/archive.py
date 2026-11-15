@@ -14,7 +14,7 @@ from pathlib import Path
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-from marin.datakit.tool_conversion.export import digest
+from experiments.tool_conversion.export import digest
 
 
 def json_bytes(value: object) -> bytes:

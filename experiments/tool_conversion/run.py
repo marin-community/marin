@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run deterministic conversion over explicitly pinned source shards."""
+"""Run conversion over this campaign's pinned source shards.
+
+Read README.md, "Scope and limits — read before reuse", before using this entry point.
+"""
 
 import argparse
 import hashlib
@@ -20,8 +23,10 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from rigging.filesystem.storage_path import prefix_join
 from tokenizers import Tokenizer
 
-from marin.datakit.tool_conversion.archive import commit_batch, json_bytes, provenance, read_json, write_immutable
-from marin.datakit.tool_conversion.convert import (
+from experiments.tool_conversion.archive import commit_batch, json_bytes, provenance, read_json, write_immutable
+from experiments.tool_conversion.convert import (
+    SCOPE_GUIDE,
+    CampaignScopeError,
     Conversion,
     Disposition,
     convert_trace,
@@ -29,13 +34,37 @@ from marin.datakit.tool_conversion.convert import (
     parse_trace,
     visible_calls,
 )
-from marin.datakit.tool_conversion.export import digest, export_conversion
+from experiments.tool_conversion.export import digest, export_conversion
 
 LOGGER = logging.getLogger(__name__)
 HEADER_ID = 128006
 HEADER_END_ID = 128007
 CALL_ID = 128005
 ASSISTANT_ID = 78191
+TOKENIZER_SHA256 = "6a61ca2105a54e9984169b409581f31cc50330d1b47104af13c221b05e462e45"
+SELECTION_SHA256 = frozenset(
+    {
+        "a3a614704c0af8baf5c20de4d57e9071ef80a77a7479a0223be8966335356058",
+        "64e8bdbe70b2f50d99281e7c0dfb420e7a664659d1b09aa2b33700db544af342",
+        "8fd6c1959ec3970e1841a5ec3e8ec59f9b8fc73afe078a1a562d50d667e2f846",
+    }
+)
+
+
+def validate_campaign(selection: dict, tokenizer: Tokenizer, tokenizer_sha: str) -> None:
+    """Reject unreviewed catalogs and tokenizers before reading shards or writing outputs."""
+    if digest(json_bytes(selection)) not in SELECTION_SHA256:
+        raise CampaignScopeError(f"Unsupported pinned selection or selection schema; see {SCOPE_GUIDE}")
+    if tokenizer_sha != TOKENIZER_SHA256 or selection["tokenizer_sha256"] != tokenizer_sha:
+        raise CampaignScopeError(f"Unsupported tokenizer; see {SCOPE_GUIDE}")
+    for token, expected in [
+        ("<|start_header_id|>", HEADER_ID),
+        ("<|end_header_id|>", HEADER_END_ID),
+        ("<tool_call>", CALL_ID),
+        ("assistant", ASSISTANT_ID),
+    ]:
+        if tokenizer.token_to_id(token) != expected:
+            raise CampaignScopeError(f"Unsupported tokenizer special-token IDs; see {SCOPE_GUIDE}")
 
 
 def has_native_calls(ids: np.ndarray) -> bool:
@@ -68,6 +97,10 @@ def convert_record(
     }
     if excluded_source(row["source"]):
         return {**item, "status": Disposition.EXCLUDED, "reason": "dropped source or Terminus"}, {}
+    if tokenizer_sha != TOKENIZER_SHA256:
+        raise CampaignScopeError(f"Unsupported tokenizer; see {SCOPE_GUIDE}")
+    if not np.any(ids == HEADER_ID):
+        raise CampaignScopeError(f"Unsupported chat format; see {SCOPE_GUIDE}")
     if not has_native_calls(ids):
         return {**item, "status": Disposition.NO_CALLS}, {}
     text = tokenizer.decode(ids.tolist(), skip_special_tokens=False)
@@ -135,6 +168,7 @@ def run(
     batch_size: int,
     row_limit: int | None,
 ) -> dict:
+    validate_campaign(selection, tokenizer, tokenizer_sha)
     catalog_sha = digest(json_bytes(selection))
     config = {
         "catalog_sha256": catalog_sha,
@@ -268,17 +302,9 @@ def main() -> None:
     with fs.open(path, "rb") as stream:
         tokenizer_bytes = stream.read()
     tokenizer_sha = digest(tokenizer_bytes)
-    if tokenizer_sha != selection["tokenizer_sha256"]:
-        raise ValueError("Tokenizer differs from pinned selection")
+    if tokenizer_sha != TOKENIZER_SHA256:
+        raise CampaignScopeError(f"Unsupported tokenizer; see {SCOPE_GUIDE}")
     tokenizer = Tokenizer.from_str(tokenizer_bytes.decode())
-    for token, expected in [
-        ("<|start_header_id|>", HEADER_ID),
-        ("<|end_header_id|>", HEADER_END_ID),
-        ("<tool_call>", CALL_ID),
-        ("assistant", ASSISTANT_ID),
-    ]:
-        if tokenizer.token_to_id(token) != expected:
-            raise ValueError("Unexpected tokenizer special tokens")
     LOGGER.info(
         "complete %s",
         run(

@@ -53,7 +53,6 @@ dependencies = [
     "marin-zephyr",
     "openai-harmony>=0.0.8",
     "tokenizers",
-    "jsonschema>=4.23.0",
 ]
 
 [project.license]

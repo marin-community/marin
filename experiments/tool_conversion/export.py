@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import numpy as np
 from tokenizers import Tokenizer
 
-from marin.datakit.tool_conversion.convert import HEADER, Conversion, Disposition, parse_trace
+from experiments.tool_conversion.convert import HEADER, Conversion, Disposition, parse_trace
 
 
 def digest(content: bytes) -> str:

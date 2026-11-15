@@ -11,11 +11,13 @@ import tarfile
 import numpy as np
 import pytest
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from marin.datakit.tool_conversion.archive import archive_bytes, commit_batch, read_json, write_immutable
-from marin.datakit.tool_conversion.convert import Disposition, convert_trace, parse_trace
-from marin.datakit.tool_conversion.export import digest, export_conversion
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 from transformers.utils.chat_template_utils import render_jinja_template
+
+from experiments.tool_conversion.archive import archive_bytes, commit_batch, read_json, write_immutable
+from experiments.tool_conversion.convert import CampaignScopeError, Disposition, convert_trace, parse_trace
+from experiments.tool_conversion.export import digest, export_conversion
+from experiments.tool_conversion.run import run
 
 
 def trace(
@@ -47,11 +49,13 @@ def test_notebook_conversion_preserves_cells_observations_and_pairing():
     assert [m["tool_call_id"] for m in result.messages if m["role"] == "tool"] == ["first", "second"]
     assert [m["tool_calls"][0]["id"] for m in result.messages if m.get("tool_calls")] == ["first", "second"]
     assert result.text.count("<|start_header_id|>") == original.count("<|start_header_id|>")
-    commands = [c.after["arguments"]["command"] for c in result.changes]
-    assert [re.search(r"<<'CELL_[^']+'\n(.*)\nCELL_[^\n]+$", c, re.S)[1] for c in commands] == [
-        "x = [1, 2]\nx",
-        "x.append(3)\nx",
-    ]
+    commands = [c.after["arguments"]["command"] for c in result.changes if c.after is not None]
+    cells = []
+    for command in commands:
+        match = re.search(r"<<'CELL_[^']+'\n(.*)\nCELL_[^\n]+$", command, re.S)
+        assert match is not None
+        cells.append(match[1])
+    assert cells == ["x = [1, 2]\nx", "x.append(3)\nx"]
 
 
 def test_python_stdout_command_executes_exact_quoted_code(tmp_path):
@@ -64,6 +68,7 @@ def test_python_stdout_command_executes_exact_quoted_code(tmp_path):
     )
     result = convert_trace("science", original, "quote")
     assert result.disposition == Disposition.VERIFIED
+    assert result.changes[0].after is not None
     command = result.changes[0].after["arguments"]["command"]
     actual = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True, check=True)
     expected = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
@@ -114,6 +119,49 @@ def test_timeout_and_malformed_calls_never_export_partial_conversion():
     assert convert_trace("math", malformed, "bad").disposition == Disposition.RESIDUAL
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "<|im_start|>assistant\nNo tools here.<|im_end|>",
+        trace([{"name": "unreviewed_runtime", "arguments": {}}], ["result"], name="unreviewed_runtime"),
+    ],
+)
+def test_unreviewed_formats_and_tools_fail_instead_of_becoming_skips(text):
+    with pytest.raises(CampaignScopeError, match=r"README\.md: Scope and limits"):
+        convert_trace("math", text, "outside-campaign")
+
+
+def test_unreviewed_selection_is_rejected_before_creating_outputs(tmp_path):
+    tokenizer = Tokenizer(models.BPE())
+    with pytest.raises(CampaignScopeError, match=r"selection schema.*README\.md"):
+        run(
+            {"sources": []},
+            tokenizer,
+            "unreviewed",
+            str(tmp_path / "output"),
+            shard_start=0,
+            shard_stop=1,
+            batch_size=128,
+            row_limit=None,
+        )
+    assert not (tmp_path / "output").exists()
+
+
+def test_parallel_notebook_calls_do_not_imply_cell_execution_order():
+    original = trace(
+        [
+            {"name": "stateful_python_code_exec", "arguments": {"code": "x = 1"}},
+            {"name": "stateful_python_code_exec", "arguments": {"code": "x + 1"}},
+        ],
+        ["", "2"],
+    )
+    prefix, turns = parse_trace(original)
+    turns[2].body += turns[4].body
+    parallel = prefix + "".join(turns[i].header + turns[i].body + turns[i].ending for i in [0, 1, 2, 3, 5, 6])
+    result = convert_trace("math", parallel, "parallel")
+    assert (result.disposition, result.text, result.changes) == (Disposition.RESIDUAL, parallel, [])
+
+
 def test_think_becomes_reasoning_and_archives_acknowledgement():
     original = trace(
         [{"name": "think", "arguments": {"thought": "Check the sign."}}], ["Your thought has been logged."], name="think"
@@ -160,6 +208,7 @@ def test_shell_rename_preserves_command_but_holds_session_mutation():
     )
     result = convert_trace("swe", original, "shell")
     assert result.disposition == Disposition.VERIFIED
+    assert result.changes[0].after is not None
     assert result.changes[0].after["arguments"] == {"command": "printf hello"}
     for command in ["cd /workspace", "x=1", "export X=1", 'eval "cd /workspace"', 'python3 -c "print(1)" &']:
         source = original.replace("printf hello", command.replace('"', '\\"'))

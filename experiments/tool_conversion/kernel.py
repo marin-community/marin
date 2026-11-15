@@ -16,7 +16,7 @@ def kernel_command(code: str, identity: str, *, initialize: bool) -> str:
         delimiter += "_"
     command = ""
     if initialize:
-        client = Path(__file__).with_name("kernel_client.py.txt").read_text()
+        client = Path(__file__).with_name("kernel_client.py").read_text()
         command = (
             "set -e\n"
             f"mkdir {shlex.quote(directory)}\n"

@@ -6,6 +6,7 @@
 This executes stdin in a real local IPython kernel. It is not a model-facing
 tool and is not silently installed: a converted demonstration must include its
 file creation and kernel startup before invoking it through Bash.
+Read README.md, "Scope and limits — read before reuse", before using this entry point.
 """
 
 import sys
