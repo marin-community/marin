@@ -228,7 +228,7 @@ def initializer_recipe(*, prepared: str, output: str, artifact_version: str, pol
         "stop_after_steps": 2,
         "wandb_entity": "marin-community",
         "wandb_project": "marin-long-loop",
-        "xla_flags": [],
+        "xla_flags": ["--xla_gpu_shard_autotuning=false"],
         "task_timeout_seconds": 259200,
         "stage_guard": vars(policy),
     }
