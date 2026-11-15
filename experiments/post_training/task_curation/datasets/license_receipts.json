@@ -436,5 +436,111 @@
         "issue_url": "https://github.com/marin-community/marin/issues/11497"
       }
     ]
+  },
+  "kernelbot-data": {
+    "source_id": "kernelbot-data",
+    "dataset_id": "GPUMODE/kernelbot-data",
+    "revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
+    "resolved_at": "2026-11-15T17:57:23.601005+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/resolve/4159cf6b2c6bab208be6dda885d6d87631cc16df/LICENSE",
+        "kind": "license_file",
+        "sha256": "e9c7d8cf283139aca41c6b9594009e6aede6eba7f99b89058e7455afac79366c",
+        "license_ids": [
+          "custom"
+        ],
+        "quoted_lines": [
+          "L1: June 9 Researcher Reciprocity License",
+          "L2: Version 1.0",
+          "L132: For Training Use, the use-based restriction in Attachment A must be included as",
+          "L133: an enforceable provision in any legal agreement, terms of use, acceptable use",
+          "L134: policy, license, or other terms governing the use or Distribution of a Covered",
+          "L135: Model or Derivatives of a Covered Model. You must give notice to subsequent",
+          "L136: users that the Covered Model or Derivatives of the Covered Model are subject to",
+          "L137: Attachment A."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/resolve/4159cf6b2c6bab208be6dda885d6d87631cc16df/README.md",
+        "kind": "dataset_card",
+        "sha256": "7023200c741adfd5cb4df4b50371d1d6141f8e989bb95b99fb7d83c279a7fefe",
+        "license_ids": [
+          "other"
+        ],
+        "quoted_lines": [
+          "L23: license: other",
+          "L1: ---",
+          "L2: configs:",
+          "L3: - config_name: amd_submissions",
+          "L4:   data_files: \"submissions.parquet\"",
+          "L5: - config_name: amd_successful_submissions",
+          "L6:   data_files: \"successful_submissions.parquet\"",
+          "L7: - config_name: amd_1_1m_competition",
+          "L8:   data_files: \"amd_1_1m_competition_submissions.parquet\"",
+          "L9: - config_name: helion_b200_nebius",
+          "L10:   data_files: \"helion_b200_nebius_submissions.parquet\"",
+          "L11: - config_name: trimul_submissions",
+          "L12:   data_files: \"trimul_submissions.parquet\""
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/resolve/4159cf6b2c6bab208be6dda885d6d87631cc16df/README.md",
+        "kind": "readme_license",
+        "sha256": "7023200c741adfd5cb4df4b50371d1d6141f8e989bb95b99fb7d83c279a7fefe",
+        "license_ids": [
+          "custom"
+        ],
+        "quoted_lines": [
+          "L112: ## License",
+          "L114: This dataset is licensed under the [June 9 Researcher Reciprocity License](LICENSE).",
+          "L118: This license adapts the Open RAIL-D structure and adds one specific use restriction: training, fine-tuning, distillation, synthetic-data generation for training, embedding for training, or otherwise using this dataset to improve an AI model or AI service requires Researcher Reciprocity.",
+          "L116: You are free to use, share, analyze, transform, and redistribute the material for research, education, benchmarking, publication, commercial analysis, and other lawful purposes, provided you give appropriate credit.",
+          "L120: > If you train on it, you let us generate.",
+          "L122: Covered AI model and service providers may not use this dataset while imposing terms that prevent GPU Mode, dataset contributors, or authorized researchers from generating outputs, evaluating models, benchmarking, publishing research, or exploring their own research ideas on materially equal terms to ordinary users.",
+          "L124: **Attribution:** Please cite GPU Mode and link to this dataset. For academic papers, use the citation below."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/resolve/4159cf6b2c6bab208be6dda885d6d87631cc16df/README.md",
+        "kind": "readme_notice",
+        "sha256": "7023200c741adfd5cb4df4b50371d1d6141f8e989bb95b99fb7d83c279a7fefe",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": true,
+    "model_generated_outputs": true,
+    "decisions": [
+      {
+        "kind": "ban",
+        "approved": false,
+        "who": "user via coordinator",
+        "when": "2026-11-15T18:11:47.897581+00:00",
+        "source_id": "kernelbot-data",
+        "dataset_id": "GPUMODE/kernelbot-data",
+        "revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
+        "scope": [
+          "train",
+          "eval"
+        ],
+        "rationale": "User rejected the required model-license reciprocity condition for plain OpenMDW-1.1 releases.",
+        "evidence_urls": [
+          "https://huggingface.co/datasets/GPUMODE/kernelbot-data/blob/4159cf6b2c6bab208be6dda885d6d87631cc16df/LICENSE"
+        ],
+        "issue_url": "https://github.com/marin-community/marin/issues/11497"
+      }
+    ]
   }
 }

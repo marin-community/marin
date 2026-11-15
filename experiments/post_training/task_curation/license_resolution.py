@@ -21,8 +21,12 @@ from huggingface_hub import HfApi, get_token
 MAX_EVIDENCE_BYTES = 1024 * 1024
 HTTP_TIMEOUT = 30
 LICENSE_FILENAME = re.compile(r"^(licen[cs]e|copying|terms)([._-].*)?$", re.IGNORECASE)
+DEPENDENCY_DIRECTORIES = frozenset({"node_modules", "vendor", ".venv", "venv", "site-packages", ".git"})
+TASK_MARKERS = frozenset({"task.toml", "task.yaml", "task.yml", "task.json", "instruction.md", "instructions.md"})
+TASK_CONTENT_LICENSE = re.compile(r"^(?:licen[cs]e|copying|terms)[._-](?:content|data|tasks?)(?:[._-]|$)", re.I)
 RESTRICTIVE_TERMS = re.compile(
-    r"non[- ]commercial|research[- ]only|no[- ]derivatives|not (?:be )?(?:used|use).{0,80}"
+    r"\bcc[- ]by[- ](?:nc|nd)\b|non[- ]?commercial|non[- ]?derivatives|research[- ]only|"
+    r"no[- ](?:commercial|derivatives|model[- ]training)|not (?:be )?(?:used|use).{0,80}"
     r"(?:train|redistribut)|(?:train|redistribut).{0,80}(?:prohibited|forbidden|not permitted)",
     re.IGNORECASE,
 )
@@ -30,6 +34,17 @@ MODEL_OUTPUT_TERMS = re.compile(
     r"synthetic|model.generated|generated (?:by|with|using)|gpt[- ]?[345]|claude", re.IGNORECASE
 )
 THIRD_PARTY_TERMS = re.compile(r"third.party|bundled|mixture|compilation|aggregat(?:e|ed|ion)", re.IGNORECASE)
+SEPARATE_TERMS = re.compile(
+    r"(?:subject to|governed by|under|respect).{0,80}(?:separate|third.party|upstream|respective).{0,80}"
+    r"(?:terms|licen[cs]es)|(?:separate|third.party|upstream|respective).{0,50}(?:terms|licen[cs]es).{0,50}(?:apply|govern)",
+    re.IGNORECASE,
+)
+CC_LICENSE_TITLE = re.compile(
+    r"\b(?:cc[- ]by|(?:creative commons )?attribution)"
+    r"(?P<conditions>(?:[- ](?:nc|nd|sa|noncommercial|noderivatives|sharealike))*)"
+    r"[- ]+(?P<version>[1-4]\.\d)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -49,17 +64,40 @@ def _license_ids(text: str, kind: str) -> list[str]:
         if len(parts) < 3:
             return ["missing"]
         metadata = yaml.safe_load(parts[1]) or {}
+        if not isinstance(metadata, dict):
+            raise ValueError("Dataset-card YAML must contain a mapping")
         value = metadata.get("license")
         if value is None:
             return ["missing"]
-        return [str(item) for item in value] if isinstance(value, list) else [str(value)]
+        if value == "other" and _license_alias(str(metadata.get("license_name", ""))) == "cc0-1.0":
+            return ["cc0-1.0"]
+        values = [str(item) for item in value] if isinstance(value, list) else [str(value)]
+        return [_license_alias(value) for value in values]
+    if kind == "package_metadata":
+        return [json.loads(text)["info"].get("license_expression") or "missing"]
+    if kind in {"repository_tree", "github_license_api", "readme_notice"}:
+        return []
     spdx = re.findall(r"SPDX-License-Identifier:\s*([^\n]+)", text)
     if spdx:
-        return [value.strip() for value in spdx]
+        return [_license_alias(value.strip()) for value in spdx]
     lowered = text.lower()
+    if cc := CC_LICENSE_TITLE.search(text):
+        conditions = cc["conditions"].lower()
+        for word, abbreviation in (("noncommercial", "nc"), ("noderivatives", "nd"), ("sharealike", "sa")):
+            conditions = conditions.replace(word, abbreviation)
+        suffix = conditions.replace(" ", "-")
+        return [f"cc-by{suffix}-{cc['version']}"]
+    if re.search(r"\bodc[- ]by\b|open data commons attribution licen[cs]e", lowered):
+        return ["odc-by"]
+    if re.search(r"\bcc0(?:[- ]1\.0)?\b", lowered) or "creativecommons.org/publicdomain/zero/1.0" in lowered:
+        return ["CC0-1.0"]
     if "apache license" in lowered and "version 2.0" in lowered:
         return ["Apache-2.0"]
+    if re.search(r"\bapache(?: license)?[- ,]*(?:version )?2\.0\b|apache.org/licenses/license-2.0", lowered):
+        return ["Apache-2.0"]
     if "permission is hereby granted, free of charge" in lowered:
+        return ["MIT"]
+    if re.search(r"\bmit licen[cs]e(?:d)?\b|\blicen[cs]ed under (?:the )?mit\b", lowered):
         return ["MIT"]
     if "bsd 3-clause" in lowered or "bsd-3-clause" in lowered:
         return ["BSD-3-Clause"]
@@ -71,7 +109,48 @@ def _license_ids(text: str, kind: str) -> list[str]:
             return [f"cc-{match[1]}-{match[2]}"]
     if "creativecommons.org/publicdomain/zero/1.0" in lowered:
         return ["CC0-1.0"]
+    if not text.strip():
+        return ["missing"]
     return ["custom"]
+
+
+def _license_alias(value: str) -> str:
+    if value.strip().lower() in {
+        "cc0",
+        "cc0-with-notice",
+        "cc0-1.0-with-notice",
+        "cc0 with notice",
+        "cc0-with-bytedance-notice",
+    }:
+        return "cc0-1.0"
+    return value
+
+
+def _readme_license_lines(text: str) -> list[tuple[int, str]]:
+    selected = []
+    section = False
+    frontmatter = text.startswith("---")
+    fenced = False
+    for index, line in enumerate(text.splitlines(), 1):
+        if frontmatter:
+            if index > 1 and line.strip() == "---":
+                frontmatter = False
+            continue
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+        if fenced and not section:
+            continue
+        if line.lstrip().startswith("#"):
+            section = bool(re.search(r"\blicen[cs]e|\blicensing|terms (?:of use|and conditions)|copyright", line, re.I))
+        statement = re.search(
+            r"\b(?:licenses|licensed|licenced|released|distributed|available)\b.{0,50}\b(?:under|license|licence|terms)\b"
+            r"|^\s*licen[cs]e\s*(?::|mirrors)",
+            line,
+            re.I,
+        )
+        if section or statement:
+            selected.append((index, line))
+    return selected
 
 
 def _restrictive_lines(text: str) -> list[tuple[int, str]]:
@@ -88,16 +167,47 @@ def _restrictive_lines(text: str) -> list[tuple[int, str]]:
 def license_evidence(url: str, content: bytes, kind: str) -> LicenseEvidence:
     """Keep content hashes and bounded quotations, including restrictive clauses."""
     text = content.decode("utf-8")
-    lines = text.splitlines()
-    selected = [f"L{i}: {line[:500]}" for i, line in _restrictive_lines(text)]
-    selected += [f"L{i}: {line[:500]}" for i, line in enumerate(lines, 1) if line.strip()][:12]
+    lines = list(enumerate(text.splitlines(), 1))
+    relevant = lines
+    unidentified = []
+    if kind == "dataset_card":
+        closing = next((i for i, line in lines[1:] if line.strip() == "---"), 0) if text.startswith("---") else 0
+        relevant = [(i, line) for i, line in lines if i <= closing]
+    elif kind == "readme_license":
+        relevant = [
+            (i, line)
+            for i, line in _readme_license_lines(text)
+            if not line.lstrip().startswith("#")
+            and not re.search(r"more information needed|^\s*(?:TODO|TBD)\b", line, re.I)
+        ]
+    elif kind == "readme_notice":
+        unidentified = [
+            (i, line)
+            for i, line in lines
+            if SEPARATE_TERMS.search(line)
+            and not re.search(r"https?://", line)
+            and _license_ids(line, "license_file") == ["custom"]
+        ]
+        relevant = unidentified
+    relevant_text = "\n".join(line for _, line in relevant)
+    restrictions = _restrictive_lines(relevant_text) if kind != "readme_notice" else []
+    restricted_content = {line for _, line in restrictions}
+    selected = [f"L{i}: {line[:500]}" for i, line in relevant if line in restricted_content]
+    selected += [f"L{i}: {line[:500]}" for i, line in relevant if re.search(r"licen[cs]|cc[- ]?by|cc0|odc", line, re.I)][
+        :12
+    ]
+    selected += [f"L{i}: {line[:500]}" for i, line in relevant if line.strip()][:12]
+    if kind == "package_metadata":
+        selected = [f"JSON /info/license_expression: {json.dumps(json.loads(text)['info'].get('license_expression'))}"]
     return LicenseEvidence(
         url=url,
         kind=kind,
         sha256=hashlib.sha256(content).hexdigest(),
-        license_ids=_license_ids(text, kind),
-        quoted_lines=list(dict.fromkeys(selected)) or ["(empty file)"],
-        restrictive_terms=bool(_restrictive_lines(text)),
+        license_ids=_license_ids(text if kind in {"dataset_card", "package_metadata"} else relevant_text, kind),
+        quoted_lines=list(dict.fromkeys(selected))
+        or ["(no license statement in this document)" if text else "(empty file)"],
+        restrictive_terms=bool(restrictions),
+        unidentified_third_party_terms=bool(unidentified),
     )
 
 
@@ -119,6 +229,21 @@ def _github_json(path: str) -> dict:
     return json.loads(result.stdout)
 
 
+def _license_files(filenames: list[str]) -> set[str]:
+    task_roots = {Path(name).parent for name in filenames if Path(name).name in TASK_MARKERS}
+    return {
+        name
+        for name in filenames
+        if LICENSE_FILENAME.match(Path(name).name)
+        and not DEPENDENCY_DIRECTORIES.intersection(Path(name).parts)
+        and (
+            Path(name).parent == Path(".")
+            or Path(name).parent in task_roots
+            or TASK_CONTENT_LICENSE.match(Path(name).name)
+        )
+    }
+
+
 def resolve_license(target: LicenseTarget) -> LicenseReceipt:
     """Read HF card and license files, GitHub pinned license, or an explicit terms URL.
 
@@ -133,14 +258,19 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
         if info.sha != target.revision:
             raise ValueError(f"License resolution requires an immutable dataset commit: {target.dataset_id}")
         filenames = [item.rfilename for item in info.siblings or ()]
+        license_files = _license_files(filenames)
         for filename in filenames:
             kind = "dataset_card" if filename == "README.md" else "license_file"
-            if kind == "license_file" and not LICENSE_FILENAME.match(Path(filename).name):
+            if kind == "license_file" and filename not in license_files:
                 continue
+            if kind == "license_file" and "/" in filename:
+                kind = "task_license_file"
             url = f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/{quote(filename)}"
             content = _fetch(url, huggingface=True)
             documents.append(content.decode("utf-8"))
             evidence.append(license_evidence(url, content, kind))
+            if filename == "README.md":
+                evidence.extend(license_evidence(url, content, item) for item in ("readme_license", "readme_notice"))
         # The pinned repository tree is evidence of absent card/license files too.
         if not evidence:
             url = f"https://huggingface.co/api/datasets/{target.dataset_id}/tree/{target.revision}?recursive=true"
@@ -154,6 +284,7 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
         tree = _github_json(f"repos/{repo}/git/trees/{target.revision}?recursive=1")
         if tree.get("truncated"):
             raise ValueError(f"GitHub license tree is truncated: {repo}")
+        license_files = _license_files([entry["path"] for entry in tree["tree"] if entry["type"] == "blob"])
         # Current API metadata is evidence, never authority for the pinned verdict.
         for path, document, kind in (
             (f"repos/{repo}/git/trees/{target.revision}?recursive=1", tree, "repository_tree"),
@@ -163,7 +294,8 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
             item = license_evidence(f"https://api.github.com/{path}", metadata, kind)
             evidence.append(item.model_copy(update={"license_ids": [], "restrictive_terms": False}))
         for entry in tree["tree"]:
-            if entry["type"] != "blob" or not LICENSE_FILENAME.match(Path(entry["path"]).name):
+            filename = entry["path"]
+            if entry["type"] != "blob" or not (filename in license_files or filename == "README.md"):
                 continue
             if entry["size"] > MAX_EVIDENCE_BYTES:
                 raise ValueError(f"License evidence exceeds size limit: {entry['path']}")
@@ -171,7 +303,25 @@ def resolve_license(target: LicenseTarget) -> LicenseReceipt:
             content = base64.b64decode(blob["content"])
             url = f"https://github.com/{repo}/blob/{target.revision}/{quote(entry['path'])}"
             documents.append(content.decode("utf-8"))
-            evidence.append(license_evidence(url, content, "license_file"))
+            if filename == "README.md":
+                evidence.extend(
+                    license_evidence(url, content, item) for item in ("dataset_card", "readme_license", "readme_notice")
+                )
+            else:
+                evidence.append(
+                    license_evidence(url, content, "task_license_file" if "/" in filename else "license_file")
+                )
+    elif parts.hostname == "files.pythonhosted.org" and parts.path.endswith(".whl"):
+        filename = Path(parts.path).name
+        package, version, _ = filename.split("-", 2)
+        url = f"https://pypi.org/pypi/{package}/{version}/json"
+        content = _fetch(url)
+        metadata = json.loads(content)
+        if not any(
+            item["filename"] == filename and item["digests"]["sha256"] == target.revision for item in metadata["urls"]
+        ):
+            raise ValueError("Package metadata does not bind the selected wheel SHA-256")
+        evidence.append(license_evidence(url, content, "package_metadata"))
     elif target.license_url:
         content = _fetch(target.license_url)
         documents.append(content.decode("utf-8"))

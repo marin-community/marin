@@ -5,7 +5,7 @@
 
 LICENSE_BANS = r"""
 {
-  "version": "2026.11.15.2",
+  "version": "2026.11.15.4",
   "bans": [
     {
       "source_id": "ASDiv:asdiv",
@@ -540,6 +540,56 @@ LICENSE_BANS = r"""
         "https://huggingface.co/datasets/pafitis/HARDMath_processed_training/resolve/937e9f10356e31e854f6efb9a2507f1e200c8b25/README.md"
       ],
       "decided_at": "2026-11-15T17:27:51.574601+00:00",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497"
+    },
+    {
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "decided_at": "2026-11-15",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "source_id": "MAI-Gym:tasks",
+      "upstream_id": "Tongyi-MAI/MAI-Gym",
+      "upstream_revision": "dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
+      "reason": "No license grant for the apps or task data at the pinned repository.",
+      "evidence_urls": [
+        "https://github.com/Tongyi-MAI/MAI-Gym/tree/dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
+        "https://github.com/marin-community/marin/issues/10231#issuecomment-6231071121"
+      ]
+    },
+    {
+      "classification": "missing",
+      "license_ids": [
+        "missing"
+      ],
+      "decided_at": "2026-11-15",
+      "decision_by": "user via coordinator",
+      "issue_url": "https://github.com/marin-community/marin/issues/11497",
+      "source_id": "OpenGCUA:trajectories",
+      "upstream_id": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+      "upstream_revision": "no published trajectory pin",
+      "reason": "No trajectory-data license; Apache-2.0 applies to the harness code.",
+      "evidence_urls": [
+        "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+        "https://github.com/Tongyi-MAI/OpenGCUA/tree/55c33aea792b48b9c1330a514bfcc8f6d3ecc704"
+      ]
+    },
+    {
+      "source_id": "kernelbot-data",
+      "upstream_id": "GPUMODE/kernelbot-data",
+      "upstream_revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
+      "classification": "unknown",
+      "license_ids": [
+        "custom"
+      ],
+      "reason": "User rejected the required model-license reciprocity condition for plain OpenMDW-1.1 releases.",
+      "evidence_urls": [
+        "https://huggingface.co/datasets/GPUMODE/kernelbot-data/blob/4159cf6b2c6bab208be6dda885d6d87631cc16df/LICENSE"
+      ],
+      "decided_at": "2026-11-15T18:11:47.896163+00:00",
       "decision_by": "user via coordinator",
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
     }

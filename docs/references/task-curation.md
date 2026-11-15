@@ -25,78 +25,57 @@ owns reusable source importers and the corpus publisher.
 
 ## Stage 0: binding license gate
 
-License permission is the first ingest check, before conversion, actor census,
-oracle execution, model review or other QA spend. QUICK, SAMPLE, FULL, native
-imports and evaluation publication require an exact-pin `LicenseReceipt`.
-New admission publication checks it again. Archived declarations remain unchanged;
-the versioned source-ban registry controls current eligibility. Missing metadata
-on a repackaged release must be traced to its upstream pin; unresolved upstream
-permission is banned under the current ruling.
-
-The single policy table is
-[`finestore.rl.licenses`](https://github.com/marin-community/marin/blob/atlas-env-audit/lib/finestore/src/finestore/rl/licenses.py),
-shared with Data Belay intake. It reuses Data Belay's Blue Oak Council v16
-permissive SPDX list and its data-license additions.
-
-| Class | Evidence | New ingest and admission |
-|---|---|---|
-| PERMISSIVE | Accepted Blue Oak IDs (including Apache-2.0, MIT, BSD and CC0), CC BY/CC BY-SA versions 1.0–4.0, ODC-By/PDDL, OpenMDW matching the canonical pattern | Pass, subject to provenance decisions below |
-| RESTRICTED | NC or ND identifiers; research-only terms; terms forbidding training or redistribution, including applicable model-output terms | Fail without an explicit scoped exception |
-| UNKNOWN | Custom or unrecognized license, ambiguous applicability, or unresolved primary evidence | Fail without an explicit scoped exception |
-| MISSING | No declared license at the pin | Fail without an explicit scoped exception |
-
-Every listed identifier must be accepted. A permissive card cannot override a
-restrictive LICENSE file. A repository's code license does not establish rights
-in separately hosted task data. The resolver records pinned primary URLs, each
-evidence file's SHA-256 and quoted lines, resolution time and resolver version.
-It reads HF card YAML and license files at the dataset commit, or GitHub license
-files at the commit; GitHub's current API license is informational. Other sources
-require an explicit primary license URL. Transport or authentication errors stay
-unresolved and block the gate; the resolver never infers permission.
-
-`bundled_third_party` and `model_generated_outputs` are conservative review flags.
-Each true flag requires its own human/coordinator decision, even for a permissive
-license. Automated flags and unresolved audit findings are hypotheses for review;
-they are not bans or legal determinations.
-
-Resolve the catalog without downloading task payloads or changing admissions:
+Run the deterministic checker before conversion, census, oracle or QA spend; never interpret licenses by hand. It checks only the pinned dataset's card, root/task LICENSE files and README license statements. **PASS** permits ingest; **FAIL** stops it; **ESCALATE** goes to the coordinator and user for a recorded decision. Do not trace upstream lineage, teacher models, source repositories or mixtures. The checker never changes admissions or the ban registry from its findings.
 
 ```bash
-uv run python -m experiments.post_training.task_curation.license_backfill \
-  --output /tmp/atlas-license-audit --workers 2
-```
+uv run python -m experiments.post_training.task_curation.license_check \
+  'https://huggingface.co/datasets/<owner>/<dataset>@<commit>' \
+  --source-id '<declared Atlas source ID>' \
+  --output /tmp/license-check.json --receipts-output /tmp/license-receipts.json
 
-The output contains resumable receipts, `report.json` and `table.md`. Review
-primary evidence, record any provenance decisions, then add exact source-ID keys
-and typed receipts to `datasets/license_receipts.json` or supply a reviewed JSON
-registry explicitly:
-
-```bash
 uv run python -m experiments.post_training.task_curation.driver \
-  --source <name> --mode quick --license-receipts /path/to/reviewed-licenses.json \
+  --source <name> --mode quick --license-receipts /tmp/license-receipts.json \
   --output-root /path/to/output --run
 ```
 
-**Current source bans (2026-11-15).** The user bans every source whose upstream
-permission is missing, unknown, restricted or unresolved, including evaluation
-sources and untraceable private lineage. The versioned registry is
-`infra/marina/apps/rl_data_catalog/server/license_registry.py`.
-Its decisions bind ingest, new admission, source selection and served admission
-counts. Archived source declarations, assessments, task data and earlier app
-revisions remain intact. A lift requires new primary permissive evidence and a
-record in the same issue; changing an input pin or attaching an exception does
-not lift an active source-wide ban.
+The shared rule evaluator in `finestore.rl.licenses` binds QUICK, SAMPLE, FULL,
+native imports and evaluation publication to the same exact-pin result. Its
+canonical accepted list is Data Belay's Blue Oak Council v16 list plus the
+existing data-license additions; Data Belay imports that same table.
 
-**Exceptions and bans.** Keep the evidence and decision in the
-[blocked-source registry](https://github.com/marin-community/marin/issues/11497).
-An exception records the decision-maker, timestamp, source ID, dataset ID, exact
-revision, intended-use scope (`train` or `eval`), rationale, evidence URLs and
-issue link. Attach it as an approved `exception` decision on the receipt;
-third-party and generated-output decisions use their separate typed kinds.
-A negative decision or `ban` always blocks the applicable scope. Decisions do
-not transfer across source IDs, revisions or uses. Never generate approvals
-from the audit itself. Report already-admitted MISSING/RESTRICTED findings to
-the coordinator immediately; the user decides any admission changes.
+| Rule | Result | Pinned-source evidence |
+|---|---|---|
+| P1 | PASS | Accepted permissive license, including Apache, MIT, BSD, CC0, CC BY/CC BY-SA, ODC-By/PDDL and OpenMDW; no failing or uncertain signal |
+| F1 | FAIL | NC, ND, research-only, no-commercial or no-model-training restriction in the card, root/task license or README license statement |
+| F2 | FAIL | No license declaration, file or README license statement |
+| F3 | FAIL | Active source ban in the shared registry linked to #11497 |
+| E1 | ESCALATE | Custom, other, unknown or unmapped license |
+| E2 | ESCALATE | Conflicting permissive and unresolved license signals |
+| E3 | ESCALATE | The README explicitly defers content to unidentified separate third-party terms |
+| E4 | ESCALATE | Parser error or unreachable/invalid pin |
+
+Underlying OSS repository licenses and generated outputs alone are not doubt
+criteria. Resolver hints `bundled_third_party` and `model_generated_outputs`
+remain evidence metadata; they do not override PASS. Dependency folders such as
+`node_modules`, `vendor` and virtual environments are not task-license roots.
+
+Receipts retain evidence URLs, SHA-256, quoted statements, resolution time and
+resolver version. `--catalog` checks every current Atlas pin; `--input-manifest`
+adds a JSON array of `LicenseTarget` fields for a queue. The output includes each
+active ban's underlying evidence verdict so the user can review proposed changes.
+Exit status is zero for PASS, FAIL and ESCALATE; execution/configuration errors
+are nonzero.
+
+**Decisions and existing bans.** An ESCALATE is neither a ban nor permission.
+The user's explicit decision is a typed `LicenseDecision` on the receipt, with
+who, when, exact source/dataset/revision, TRAIN/EVAL scope, rationale, evidence
+URLs and the [decision issue](https://github.com/marin-community/marin/issues/11497).
+A scoped approval uses `exception`; a negative decision blocks that scope.
+Decisions never transfer to another input pin. Current source-wide bans live in
+`infra/marina/apps/rl_data_catalog/server/license_registry.py` and bind ingest,
+selection and admission counts. A checker run cannot lift them: the user approves
+a recorded registry change. Earlier declarations, task artifacts and app revisions
+remain intact.
 
 ## Current admission policy
 

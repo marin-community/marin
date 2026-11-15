@@ -1,0 +1,138 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from click.testing import CliRunner
+from finestore.rl.licenses import LicenseBan, LicenseCheckVerdict, check_license, require_license
+from requests import HTTPError
+
+from experiments.post_training.task_curation import license_check, license_resolution
+from experiments.post_training.task_curation.license_resolution import LicenseTarget, license_evidence
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
+from infra.marina.apps.rl_data_catalog.server import licensing
+
+PINNED_CASES = json.loads(Path(__file__).with_name("fixtures").joinpath("license_checks.json").read_text())
+
+
+@pytest.mark.parametrize("case", PINNED_CASES, ids=lambda case: case["source_id"])
+def test_pinned_primary_license_excerpts(case):
+    receipt = fixture_license(case["source_id"], case["dataset_id"], case["revision"]).model_copy(
+        update={
+            "evidence": [license_evidence(doc["url"], doc["text"].encode(), doc["kind"]) for doc in case["documents"]],
+            "bundled_third_party": True,
+            "model_generated_outputs": True,
+        }
+    )
+    result = check_license(receipt)
+    assert (result.verdict.value, result.rule_id.value) == (case["verdict"], case["rule"])
+    assert result.evidence_url in {doc["url"] for doc in case["documents"]}
+    if result.verdict is LicenseCheckVerdict.PASS:
+        require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+    else:
+        with pytest.raises(ValueError, match="blocks ingest and admission"):
+            require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+
+
+def test_readme_scope_does_not_make_descriptions_or_yaml_a_conflicting_license():
+    url = "https://huggingface.co/datasets/Tevatron/browsecomp-plus/blob/144cff8e35b5eaef7e526346aa60774a9deb941f/README.md"
+    text = b"---\nlicense: mit\n---\n# Dataset\nSynthetic research-only examples are described here.\n"
+    receipt = fixture_license("fixture", "Tevatron/browsecomp-plus", "144cff8e35b5eaef7e526346aa60774a9deb941f")
+    receipt = receipt.model_copy(
+        update={
+            "evidence": [
+                license_evidence(url, text, kind) for kind in ("dataset_card", "readme_license", "readme_notice")
+            ]
+        }
+    )
+    assert check_license(receipt).verdict is LicenseCheckVerdict.PASS
+    terms = license_evidence(url, text + b"\n## License\nMay not be used to train models.\n", "readme_license")
+    assert check_license(receipt.model_copy(update={"evidence": [*receipt.evidence, terms]})).rule_id.value == "F1"
+
+
+def test_conflicting_custom_terms_and_unidentified_third_party_terms_escalate():
+    receipt = fixture_license("fixture", "fixture/data", "a" * 40)
+    custom = license_evidence(
+        "https://example.test/LICENSE", b"Contact the publisher for applicable terms.", "license_file"
+    )
+    assert check_license(receipt.model_copy(update={"evidence": [*receipt.evidence, custom]})).rule_id.value == "E2"
+    notice = license_evidence(
+        "https://example.test/README.md", b"Outputs are subject to separate third-party terms.", "readme_notice"
+    )
+    uncertain = receipt.model_copy(update={"evidence": [*receipt.evidence, notice]})
+    assert check_license(uncertain).rule_id.value == "E3"
+    with pytest.raises(ValueError, match="ESCALATE E3"):
+        require_license(uncertain, uncertain.source_id, uncertain.dataset_id, uncertain.revision, "train")
+
+
+def test_ban_wins_and_retains_the_underlying_evidence_verdict(monkeypatch):
+    receipt = fixture_license("fixture", "fixture/data", "a" * 40)
+    ban = LicenseBan(
+        source_id="fixture",
+        upstream_id="fixture/data",
+        upstream_revision="a" * 40,
+        classification="missing",
+        license_ids=["missing"],
+        reason="Previously recorded user ban",
+        evidence_urls=["https://example.test/LICENSE"],
+        decided_at="2026-11-15T00:00:00+00:00",
+        decision_by="user",
+        issue_url="https://github.com/marin-community/marin/issues/11497",
+    )
+    monkeypatch.setattr(license_check, "resolve_target", lambda *_: receipt)
+    monkeypatch.setattr(license_check, "target_ban", lambda *_: ban)
+    row = license_check.check_target(LicenseTarget("fixture", "fixture/data", "a" * 40, "https://example.test"), None)
+    assert (row["verdict"], row["rule_id"], row["evidence_verdict"]["verdict"]) == ("FAIL", "F3", "PASS")
+    assert check_license(receipt).verdict is LicenseCheckVerdict.PASS
+
+
+def test_unreachable_pin_is_a_normal_escalation_record_not_cli_failure(monkeypatch):
+    def unreachable(*_):
+        raise HTTPError("Pinned metadata is unreachable")
+
+    monkeypatch.setattr(license_check, "resolve_target", unreachable)
+    monkeypatch.setattr(license_check, "target_ban", lambda *_: None)
+    before = licensing.license_bans()
+    result = CliRunner().invoke(
+        license_check.main, ["EleutherAI/lambada_openai@900124bf3b8235c6daf21033af9948b3f07346c4"]
+    )
+    assert result.exit_code == 0, result.output
+    row = json.loads(result.output.splitlines()[0])
+    assert (row["verdict"], row["rule_id"]) == ("ESCALATE", "E4")
+    assert "Pinned metadata is unreachable" in row["quote"]
+    assert licensing.license_bans() == before
+
+
+def test_resolver_checks_task_content_without_following_source_or_teacher_repositories(monkeypatch):
+    pin = "ca483c6443f17a20ba7d6bac3d274859a1721e51"
+    files = {
+        "README.md": (
+            b"---\nlicense: apache-2.0\n---\nSee https://example.test/teacher and https://example.test/source.\n"
+        ),
+        "LICENSE": b"Apache License\nVersion 2.0\n",
+        "benchmark/task/task.toml": b"version = '1'\n",
+        "benchmark/task/LICENSE.content.md": b"Attribution-NonCommercial-ShareAlike 4.0 International\n",
+        "benchmark/task/src/COPYING": b"A source repository license is not a task-level grant.\n",
+        "node_modules/dependency/LICENSE": b"A dependency license is not a task-level grant.\n",
+    }
+    monkeypatch.setattr(
+        license_resolution.HfApi,
+        "dataset_info",
+        lambda *_args, **_kwargs: SimpleNamespace(sha=pin, siblings=[SimpleNamespace(rfilename=name) for name in files]),
+    )
+    fetched = []
+
+    def fetch(url, **_kwargs):
+        name = url.split(f"/{pin}/", 1)[1]
+        fetched.append(name)
+        return files[name]
+
+    monkeypatch.setattr(license_resolution, "_fetch", fetch)
+    receipt = license_resolution.resolve_license(
+        LicenseTarget("fixture", "fixture/tasks", pin, f"https://huggingface.co/datasets/fixture/tasks/tree/{pin}")
+    )
+    assert set(fetched) == {"README.md", "LICENSE", "benchmark/task/LICENSE.content.md"}
+    assert check_license(receipt).rule_id.value == "F1"

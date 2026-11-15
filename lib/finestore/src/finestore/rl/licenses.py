@@ -91,7 +91,7 @@ def _one_license_verdict(card_id: str) -> LicenseVerdict:
     return LicenseVerdict.NEEDS_REVIEW
 
 
-LICENSE_RESOLVER_VERSION = "atlas-license-v1"
+LICENSE_RESOLVER_VERSION = "atlas-license-v2"
 LICENSE_REGISTRY_ISSUE = "https://github.com/marin-community/marin/issues/11497"
 
 
@@ -111,6 +111,7 @@ class LicenseEvidence(BaseModel):
     license_ids: list[str]
     quoted_lines: list[str] = Field(min_length=1)
     restrictive_terms: bool = False
+    unidentified_third_party_terms: bool = False
 
 
 class LicenseDecisionKind(StrEnum):
@@ -219,14 +220,12 @@ def require_license(
     decisions = {item.kind: item for item in scoped}
     if any(not item.approved or item.kind is LicenseDecisionKind.BAN for item in scoped):
         raise ValueError(f"License decision bans this source: {source_id}")
-    if receipt.classification is not LicenseClass.PERMISSIVE and LicenseDecisionKind.EXCEPTION not in decisions:
-        raise ValueError(f"License {receipt.classification.value} blocks ingest and admission: {source_id}")
-    for flagged, kind in (
-        (receipt.bundled_third_party, LicenseDecisionKind.BUNDLED_THIRD_PARTY),
-        (receipt.model_generated_outputs, LicenseDecisionKind.MODEL_GENERATED_OUTPUTS),
-    ):
-        if flagged and kind not in decisions:
-            raise ValueError(f"License {kind.value} requires a recorded decision: {source_id}")
+    check = check_license(receipt)
+    if check.verdict is not LicenseCheckVerdict.PASS and LicenseDecisionKind.EXCEPTION not in decisions:
+        raise ValueError(
+            f"License {receipt.classification.value} blocks ingest and admission: {source_id}; "
+            f"{check.verdict.value} {check.rule_id.value}: {check.quote} ({check.evidence_url})"
+        )
 
 
 class LicenseBan(BaseModel):
@@ -244,3 +243,81 @@ class LicenseBan(BaseModel):
     decided_at: str = Field(min_length=1)
     decision_by: str = Field(min_length=1)
     issue_url: str = Field(pattern=r"^https://github.com/marin-community/marin/issues/11497(?:#.*)?$")
+
+
+class LicenseCheckVerdict(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    ESCALATE = "ESCALATE"
+
+
+class LicenseCheckRule(StrEnum):
+    PERMISSIVE = "P1"
+    RESTRICTED = "F1"
+    MISSING = "F2"
+    BANNED = "F3"
+    CUSTOM = "E1"
+    CONFLICT = "E2"
+    THIRD_PARTY = "E3"
+    UNREACHABLE = "E4"
+
+
+class LicenseCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: str
+    dataset_id: str
+    revision: str
+    verdict: LicenseCheckVerdict
+    rule_id: LicenseCheckRule
+    quote: str
+    evidence_url: str
+
+
+def check_license(receipt: LicenseReceipt, ban: LicenseBan | None = None) -> LicenseCheck:
+    """Apply the dataset-level rules to the resolver's pinned primary evidence."""
+    if ban is not None:
+        return LicenseCheck(
+            source_id=receipt.source_id,
+            dataset_id=receipt.dataset_id,
+            revision=receipt.revision,
+            verdict=LicenseCheckVerdict.FAIL,
+            rule_id=LicenseCheckRule.BANNED,
+            quote=ban.reason,
+            evidence_url=ban.issue_url,
+        )
+    evidence = receipt.evidence
+    restricted = next(
+        (
+            item
+            for item in evidence
+            if item.restrictive_terms or license_verdict(tuple(item.license_ids)) is LicenseVerdict.REJECTED
+        ),
+        None,
+    )
+    terms = next((item for item in evidence if item.unidentified_third_party_terms), None)
+    signals = [item for item in evidence if set(item.license_ids) - {"missing"}]
+    permissive = [item for item in signals if license_verdict(tuple(item.license_ids)) is LicenseVerdict.ALLOWED]
+    unknown = [item for item in signals if license_verdict(tuple(item.license_ids)) is not LicenseVerdict.ALLOWED]
+    dataset_permissive = [item for item in permissive if item.kind != "task_license_file"]
+    if restricted is not None:
+        verdict, rule, selected = LicenseCheckVerdict.FAIL, LicenseCheckRule.RESTRICTED, restricted
+    elif terms is not None:
+        verdict, rule, selected = LicenseCheckVerdict.ESCALATE, LicenseCheckRule.THIRD_PARTY, terms
+    elif not signals:
+        verdict, rule, selected = LicenseCheckVerdict.FAIL, LicenseCheckRule.MISSING, evidence[0]
+    elif dataset_permissive and unknown:
+        verdict, rule, selected = LicenseCheckVerdict.ESCALATE, LicenseCheckRule.CONFLICT, unknown[0]
+    elif dataset_permissive:
+        verdict, rule, selected = LicenseCheckVerdict.PASS, LicenseCheckRule.PERMISSIVE, dataset_permissive[0]
+    else:
+        verdict, rule, selected = LicenseCheckVerdict.ESCALATE, LicenseCheckRule.CUSTOM, signals[0]
+    return LicenseCheck(
+        source_id=receipt.source_id,
+        dataset_id=receipt.dataset_id,
+        revision=receipt.revision,
+        verdict=verdict,
+        rule_id=rule,
+        quote=selected.quoted_lines[0],
+        evidence_url=selected.url,
+    )

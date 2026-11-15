@@ -54,7 +54,7 @@ from infra.marina.apps.rl_data_catalog.server.admission import (
     population_admission_blocker,
     require_lexical_qualification,
 )
-from infra.marina.apps.rl_data_catalog.server.licensing import license_bans, require_unbanned
+from infra.marina.apps.rl_data_catalog.server.licensing import require_unbanned, source_license_ban
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 
@@ -241,8 +241,8 @@ class RlDataSource[ConfigT: CatalogConfig]:
 
     def require_license(self) -> None:
         """Require stage-0 permission at the current pin before constructing any work."""
-        require_unbanned(self.info.id)
         dataset = self.dataset
+        require_unbanned(self.info.id, dataset.name if dataset else None)
         require_license(
             self.info.license_receipt,
             self.info.id,
@@ -326,13 +326,13 @@ class RlDataSource[ConfigT: CatalogConfig]:
         info = self.info
         inherited_legacy_admission = info.id in GRANDFATHERED_MARINSKYRL_SOURCES and info.inherited_admission is not None
         blockers = []
-        if ban := license_bans().get(info.id):
+        dataset = self.dataset
+        if ban := source_license_ban(info.id, dataset.name if dataset else None):
             blockers.append(f"license ban: {ban.reason} ({ban.issue_url})")
         if info.oracle_filtration is not None and info.oracle_filtration.admitted_count == 0:
             blockers.append(
                 "oracle filtration retained no tasks: " + ", ".join(sorted(info.oracle_filtration.exclusion_counts))
             )
-        dataset = self.dataset
         actor = info.actor_census_input
         if actor is not None and (
             dataset is None
@@ -483,7 +483,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=(
                 "Excluded"
-                if info.id in license_bans()
+                if source_license_ban(info.id, dataset.name if dataset else None) is not None
                 else next(
                     (label for tag, label in (("deprecated", "Deprecated"), ("excluded", "Excluded")) if tag in tags),
                     "Not selectable" if self.admission_blockers else "Available",

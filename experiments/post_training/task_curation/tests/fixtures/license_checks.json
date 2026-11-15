@@ -1,0 +1,283 @@
+[
+  {
+    "source_id": "P0:PrimeIntellect/Scale-SWE-Verified",
+    "dataset_id": "PrimeIntellect/Scale-SWE-Verified",
+    "revision": "2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Scale-SWE-Verified/resolve/2c29b67e0ea4d7819f60d8a10d7475a7ad89ccd6/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: cc-by-4.0\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:PrimeIntellect/Multi-SWE-RL-Verified",
+    "dataset_id": "PrimeIntellect/Multi-SWE-RL-Verified",
+    "revision": "64b3ebf62750b1373e26106cfc658a1861809d0f",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/Multi-SWE-RL-Verified/resolve/64b3ebf62750b1373e26106cfc658a1861809d0f/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: other\nlicense_name: cc0-with-bytedance-notice\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:PrimeIntellect/SWE-Lego-Real-Data-Verified",
+    "dataset_id": "PrimeIntellect/SWE-Lego-Real-Data-Verified",
+    "revision": "0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/PrimeIntellect/SWE-Lego-Real-Data-Verified/resolve/0a1b227ec41f0e96cb8f5c7a1c225258a80edb8d/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: apache-2.0\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+    "dataset_id": "nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1",
+    "revision": "eaef26944643644c8a3dbbf361ce6128142f5976",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1/resolve/eaef26944643644c8a3dbbf361ce6128142f5976/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: cc-by-4.0\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:laion/rts-1k-rootless-apptainer",
+    "dataset_id": "laion/rts-1k-rootless-apptainer",
+    "revision": "6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/laion/rts-1k-rootless-apptainer/resolve/6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: cc-by-4.0\n---\n"
+      },
+      {
+        "url": "https://huggingface.co/datasets/laion/rts-1k-rootless-apptainer/resolve/6dbb24eedc0d7ffe5431e1b052b0de8e19eaf6fe/LICENSE",
+        "kind": "license_file",
+        "text": "Attribution 4.0 International\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:allenai/IF_multi_constraints_upto5",
+    "dataset_id": "allenai/IF_multi_constraints_upto5",
+    "revision": "2e3a77407b7fce69f95b248d64a884e3ae1c2423",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/resolve/2e3a77407b7fce69f95b248d64a884e3ae1c2423/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: odc-by\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:nvidia/Nemotron-Cascade-2-RL-data",
+    "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
+    "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/resolve/05bbaf03bac608e804efc86c5f8bf99844f2d197/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: odc-by\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:TIGER-AI-Lab/OpenResearcher",
+    "dataset_id": "TIGER-AI-Lab/OpenResearcher",
+    "revision": "785fd6ba5fcbc068daa4a2f07bbe0964f2983c86",
+    "documents": [
+      {
+        "url": "https://api.github.com/repos/TIGER-AI-Lab/OpenResearcher/git/trees/785fd6ba5fcbc068daa4a2f07bbe0964f2983c86?recursive=1",
+        "kind": "repository_tree",
+        "text": "No LICENSE or COPYING file in the pinned repository tree."
+      }
+    ],
+    "verdict": "FAIL",
+    "rule": "F2"
+  },
+  {
+    "source_id": "P0:OpenResearcher/OpenResearcher-Indexes",
+    "dataset_id": "OpenResearcher/OpenResearcher-Indexes",
+    "revision": "a4240938a009d3dc6a6f733439928cd7a112609c",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Indexes/resolve/a4240938a009d3dc6a6f733439928cd7a112609c/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: missing\n---\n"
+      }
+    ],
+    "verdict": "FAIL",
+    "rule": "F2"
+  },
+  {
+    "source_id": "P0:miromind-ai/MiroVerse-v0.1",
+    "dataset_id": "miromind-ai/MiroVerse-v0.1",
+    "revision": "11fbf325f6eda37b34f519d1ba7268f40f469ac6",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1/resolve/11fbf325f6eda37b34f519d1ba7268f40f469ac6/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: cc-by-nc-4.0\n---\n"
+      }
+    ],
+    "verdict": "FAIL",
+    "rule": "F1"
+  },
+  {
+    "source_id": "P0:Tevatron/browsecomp-plus",
+    "dataset_id": "Tevatron/browsecomp-plus",
+    "revision": "144cff8e35b5eaef7e526346aa60774a9deb941f",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/Tevatron/browsecomp-plus/resolve/144cff8e35b5eaef7e526346aa60774a9deb941f/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: mit\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:Tevatron/browsecomp-plus-corpus",
+    "dataset_id": "Tevatron/browsecomp-plus-corpus",
+    "revision": "b27b02bc3e45511b8b82a13e6f90ce761df726f6",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/Tevatron/browsecomp-plus-corpus/resolve/b27b02bc3e45511b8b82a13e6f90ce761df726f6/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: mit\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "P0:GPUMODE/kernelbot-data",
+    "dataset_id": "GPUMODE/kernelbot-data",
+    "revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/resolve/4159cf6b2c6bab208be6dda885d6d87631cc16df/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: other\n---\n"
+      },
+      {
+        "url": "https://huggingface.co/datasets/GPUMODE/kernelbot-data/resolve/4159cf6b2c6bab208be6dda885d6d87631cc16df/LICENSE",
+        "kind": "license_file",
+        "text": "June 9 Researcher Reciprocity License\n"
+      }
+    ],
+    "verdict": "ESCALATE",
+    "rule": "E1"
+  },
+  {
+    "source_id": "P0:andyzorigin/cybench",
+    "dataset_id": "andyzorigin/cybench",
+    "revision": "ca483c6443f17a20ba7d6bac3d274859a1721e51",
+    "documents": [
+      {
+        "url": "https://github.com/andyzorigin/cybench/blob/ca483c6443f17a20ba7d6bac3d274859a1721e51/LICENSE",
+        "kind": "license_file",
+        "text": "Apache License\nVersion 2.0\n"
+      },
+      {
+        "url": "https://github.com/andyzorigin/cybench/blob/ca483c6443f17a20ba7d6bac3d274859a1721e51/benchmark/project-sekai-ctf/sekaictf-2022/LICENSE.content.md",
+        "kind": "task_license_file",
+        "text": "# Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International\n"
+      }
+    ],
+    "verdict": "FAIL",
+    "rule": "F1"
+  },
+  {
+    "source_id": "P0:princeton-pli/hal-harness",
+    "dataset_id": "princeton-pli/hal-harness",
+    "revision": "16bb03ebc11577fb5ea6dc8bb6c968387085e6aa",
+    "documents": [
+      {
+        "url": "https://api.github.com/repos/princeton-pli/hal-harness/git/trees/16bb03ebc11577fb5ea6dc8bb6c968387085e6aa?recursive=1",
+        "kind": "repository_tree",
+        "text": "No LICENSE or COPYING file in the pinned repository tree."
+      }
+    ],
+    "verdict": "FAIL",
+    "rule": "F2"
+  },
+  {
+    "source_id": "Evalchemy:financebench",
+    "dataset_id": "PatronusAI/financebench",
+    "revision": "e04404e3a97f69f79c14d42f24981a1c9c3bcd18",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/PatronusAI/financebench/resolve/e04404e3a97f69f79c14d42f24981a1c9c3bcd18/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: cc-by-nc-4.0\n---\n"
+      }
+    ],
+    "verdict": "FAIL",
+    "rule": "F1"
+  },
+  {
+    "source_id": "Evalchemy:lambada_openai",
+    "dataset_id": "EleutherAI/lambada_openai",
+    "revision": "900124bf3b8235c6daf21033af9948b3f07346c4",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/EleutherAI/lambada_openai/resolve/900124bf3b8235c6daf21033af9948b3f07346c4/README.md",
+        "kind": "dataset_card",
+        "text": "---\nlicense: mit\n---\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  },
+  {
+    "source_id": "Evalchemy:hellaswag",
+    "dataset_id": "Rowan/hellaswag",
+    "revision": "218ec52e09a7e7462a5400043bb9a69a41d06b76",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/Rowan/hellaswag/resolve/218ec52e09a7e7462a5400043bb9a69a41d06b76/README.md",
+        "kind": "dataset_card",
+        "text": "# HellaSwag\n"
+      }
+    ],
+    "verdict": "FAIL",
+    "rule": "F2"
+  },
+  {
+    "source_id": "wildchat-origin",
+    "dataset_id": "allenai/WildChat-1M",
+    "revision": "7d6490e462285cf85d91eabea0f9a954fbddcd1f",
+    "documents": [
+      {
+        "url": "https://huggingface.co/datasets/allenai/WildChat-1M/resolve/7d6490e462285cf85d91eabea0f9a954fbddcd1f/LICENSE.md",
+        "kind": "license_file",
+        "text": "Open Data Commons Attribution License (ODC-By) v1.0\n"
+      }
+    ],
+    "verdict": "PASS",
+    "rule": "P1"
+  }
+]

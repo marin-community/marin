@@ -69,7 +69,7 @@ def test_restrictive_file_overrides_permissive_card_and_affirmative_terms_do_not
     assert receipt.model_copy(update={"evidence": [permitted]}).classification is LicenseClass.PERMISSIVE
 
 
-def test_scoped_exception_is_preserved_and_cannot_override_a_ban_or_review_flag():
+def test_scoped_exception_is_preserved_and_cannot_override_a_ban():
     receipt = fixture_license("Marin:fixture", "fixture/data", "a" * 40).model_copy(
         update={"evidence": [license_evidence("https://example.test/card", b"# No license declared", "dataset_card")]}
     )
@@ -93,11 +93,11 @@ def test_scoped_exception_is_preserved_and_cannot_override_a_ban_or_review_flag(
         require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "eval")
     with pytest.raises(ValueError, match="another source revision"):
         require_license(receipt, receipt.source_id, receipt.dataset_id, "b" * 40, "train")
+    # Informational provenance flags alone do not override a dataset-level grant or scoped user decision.
     for flag in ("bundled_third_party", "model_generated_outputs"):
-        with pytest.raises(ValueError, match="requires a recorded decision"):
-            require_license(
-                receipt.model_copy(update={flag: True}), receipt.source_id, receipt.dataset_id, receipt.revision, "train"
-            )
+        require_license(
+            receipt.model_copy(update={flag: True}), receipt.source_id, receipt.dataset_id, receipt.revision, "train"
+        )
     ban = approval.model_copy(update={"kind": LicenseDecisionKind.BAN, "approved": False})
     with pytest.raises(ValueError, match="bans this source"):
         require_license(
@@ -173,7 +173,7 @@ def test_user_ban_blocks_ingestion_and_counts_but_preserves_archived_evidence(tm
     assert filtration(archived, counts)["admitted_count"] == 1
     ban = {
         "source_id": source.info.id,
-        "upstream_id": "fixture/source",
+        "upstream_id": NUMBERS_DATASET.name,
         "upstream_revision": "a" * 40,
         "classification": "unknown",
         "license_ids": ["unknown"],
@@ -188,6 +188,16 @@ def test_user_ban_blocks_ingestion_and_counts_but_preserves_archived_evidence(tm
     try:
         with pytest.raises(ValueError, match="License banned"):
             source.require_license()
+        renamed = replace(
+            source,
+            info=replace(
+                source.info,
+                id="Marin:renamed",
+                license_receipt=fixture_license("Marin:renamed", NUMBERS_DATASET.name, NUMBERS_DATASET.revision),
+            ),
+        )
+        with pytest.raises(ValueError, match="License banned"):
+            renamed.require_license()
         with pytest.raises(ValueError, match="License banned"):
             require_declaration_admission(source.declaration)
         excluded = source.declaration
