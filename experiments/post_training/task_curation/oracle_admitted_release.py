@@ -32,7 +32,6 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.oracle_filter import OracleExclusionReason, require_oracle_filter
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
-from experiments.post_training.task_curation.decontamination import require_lexical_qualification
 from experiments.post_training.task_curation.full_content_binding import (
     bind_full_content_result,
     matches_full_content_input,
@@ -56,6 +55,7 @@ from experiments.post_training.task_curation.sample_qc_binding import (
     require_sample_qualification,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
 
 class OracleAdmittedReleaseReceipt(BaseModel):

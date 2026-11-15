@@ -84,7 +84,6 @@ from zephyr.runners import SubprocessRunner
 from experiments.post_training.glm import GLM_REQUEST_ATTEMPTS, GLM_REQUEST_TIMEOUT
 from experiments.post_training.task_curation.campaign import CampaignArtifact, CampaignRuntime, PipelineResult
 from experiments.post_training.task_curation.config import InputOverrides, PipelineOptions, RecipeSettings
-from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.environment import Environment, Placement, placement
 from experiments.post_training.task_curation.images.build import (
     EnvironmentArtifact,
@@ -92,6 +91,7 @@ from experiments.post_training.task_curation.images.build import (
     environment_artifact,
 )
 from experiments.post_training.task_curation.source import RlDataSource
+from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
 
 PIPELINE_VERSION = "2026.10.07.1"
 CURATION_VERSION = "2026.11.12.1"

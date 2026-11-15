@@ -22,7 +22,6 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
-from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.remediation_publish import ReleasePlan
 from experiments.post_training.task_curation.retained_grading import RetainedGradingReceipt
@@ -32,6 +31,7 @@ from experiments.post_training.task_curation.retained_release import (
     import_retained,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference, TaskFormat
+from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
 
 RETAINED_RECEIPTS_PER_SHARD = 16
 

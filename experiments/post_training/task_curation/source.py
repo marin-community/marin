@@ -42,14 +42,16 @@ from pydantic import Field
 from taskcompendium.derived_contract import DerivedContractSummary
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation.admission_binding import population_admission_blocker
 from experiments.post_training.task_curation.campaign import CampaignArtifact
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.decontamination import require_lexical_qualification
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.source_policy import (
     GRANDFATHERED_DAYTONA_EXEMPTION,
     GRANDFATHERED_MARINSKYRL_SOURCES,
+)
+from infra.marina.apps.rl_data_catalog.server.admission import (
+    population_admission_blocker,
+    require_lexical_qualification,
 )
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 

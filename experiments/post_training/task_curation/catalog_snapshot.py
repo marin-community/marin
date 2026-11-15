@@ -47,16 +47,16 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.assessment import assessment_inputs, assessment_judgments, validate_coverage
 from zephyr.readers import load_parquet
 
-from experiments.post_training.task_curation.admission_binding import (
-    require_content_result,
-    require_declaration_admission,
-)
 from experiments.post_training.task_curation.campaign import CampaignStatus
 from experiments.post_training.task_curation.catalog_identity import canonical_attempt, canonical_snapshot_source
 from experiments.post_training.task_curation.curation_catalog import RUNS
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
+from infra.marina.apps.rl_data_catalog.server.admission import (
+    require_content_result,
+    require_declaration_admission,
+)
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 

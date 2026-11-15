@@ -24,9 +24,9 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.decontamination import require_lexical_qualification
 from experiments.post_training.task_curation.prebuilt import require_runnable_grader
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
+from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
 RETAINED_IMPORT_VERSION = "2026.11.13.1"
 RETAINED_ADMISSION_VERSION = "2026.11.13.2"

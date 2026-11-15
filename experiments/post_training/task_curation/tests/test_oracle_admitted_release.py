@@ -39,6 +39,8 @@ from experiments.post_training.task_curation.sample_qc_binding import SampleQCRe
 from experiments.post_training.task_curation.source import TaskFormat
 from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input, grading_evidence
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
+from infra.marina.apps.rl_data_catalog.server.filtration import filtration
+from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 
@@ -165,6 +167,14 @@ def test_native_filtered_pin_is_selectable_with_fresh_qualification(admitted_rel
     assert bound.info.oracle_validation is OracleValidation.EXECUTED
     assert bound.info.quality_result.reviewed == 1 and bound.info.quality_result.issue_count == 0
     assert source.info.quality_result.issue_count == 1
+    projected = filtration(bound.declaration.model_dump(mode="json"))
+    assert projected["state"] == "complete" and projected["example_count"] == 1
+    assert projected["admitted_count"] == projected["population_count"] == 1
+    assert projected["excluded_count"] == 0
+    assert filtration(bound.declaration.model_dump(mode="json"), count_evidence(bound.declaration, 1, None)) == projected
+
+    unqualified = replace(bound, info=replace(bound.info, actor_census_input=None))
+    assert filtration(unqualified.declaration.model_dump(mode="json"))["example_count"] is None
 
 
 def test_old_pin_sample_cannot_qualify_filtered_native_population(admitted_release):
@@ -174,6 +184,19 @@ def test_old_pin_sample_cannot_qualify_filtered_native_population(admitted_relea
 
     with pytest.raises(ValueError, match="SAMPLE content review belongs to another filtered population"):
         OracleAdmittedReleaseReceipt.model_validate(record)
+
+
+@pytest.mark.parametrize(
+    "missing", ["actor_census_input", "grading_environment", "quality_result", "lexical_contamination"]
+)
+def test_available_claim_without_fresh_qualification_cannot_project_admitted_counts(admitted_release, missing):
+    source, receipt = admitted_release
+    bound = bind_derived_oversight(bind_oracle_admitted_release(source, receipt), receipt.sample, None)
+    declaration = bound.declaration.model_dump(mode="json")
+    declaration[missing] = None
+    projected = filtration(declaration)
+    assert projected["example_count"] is None and projected["admitted_count"] is None
+    assert projected["state"] == "pending"
 
 
 def test_shared_native_oracles_cannot_replace_missing_integrity_contracts(admitted_release):
@@ -300,6 +323,8 @@ def test_filtered_evaluation_retains_measured_overlap_without_training_remediati
     assert bound.info.lexical_contamination.contaminated_tasks == 1
     assert bound.info.lexical_contamination.receipt.release is None
     assert bound.info.lexical_contamination.receipt.dropped_tasks == 0
+    projected = filtration(bound.declaration.model_dump(mode="json"))
+    assert projected["state"] == "complete" and projected["example_count"] == 1
 
     record["intended_use"] = "train"
     with pytest.raises(ValueError, match="benchmark measurement does not certify a training release"):

@@ -24,10 +24,6 @@ from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sh
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
-from experiments.post_training.task_curation.admission_binding import (
-    require_content_result,
-    require_declaration_admission,
-)
 from experiments.post_training.task_curation.catalog_identity import (
     backend_survey_payload,
     canonical_assessment,
@@ -39,6 +35,10 @@ from experiments.post_training.task_curation.catalog_identity import (
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from infra.marina.apps.rl_data_catalog.historical_assessments import retain_prior_assessments
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID
+from infra.marina.apps.rl_data_catalog.server.admission import (
+    require_content_result,
+    require_declaration_admission,
+)
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL

@@ -262,7 +262,7 @@ function filtrationRows(source) {
   const zeroDrops = (source.contamination_status === 'NO ISSUES' && lexical?.contaminated_tasks === 0) || source.contamination_status === 'MEASURED, EVAL';
   return [
     ['Filtration', admission && filtrationChip(admission)],
-    ['Current admission state', {excluded: 'Excluded', static_retained: 'Admitted under no-oracle policy', static_blocked: 'No tasks remain after typed static exclusions', pending_oracle: 'Pending oracle filtration'}[admission?.state] || 'Pending qualified current-pin receipt'],
+    ['Current admission state', {complete: 'Admitted after full oracle filtration', excluded: 'Excluded', static_retained: 'Admitted under no-oracle policy', static_blocked: 'No tasks remain after typed static exclusions', pending_oracle: 'Pending oracle filtration'}[admission?.state] || 'Pending qualified current-pin receipt'],
     ['Recorded source status', source.status],
     ['Raw converted input measured for retention', measured ? lexical?.measured_tasks : dedup?.raw_count],
     ['Original population before oracle filtration', output?.original_count],
@@ -276,7 +276,7 @@ function filtrationRows(source) {
     ['Typed static blocker tasks excluded (unique)', counts?.static_blocked_tasks],
     ['Static blocker reason counts (may overlap)', counts?.static_reason_counts],
     ['Admitted EVAL tasks (excluded from TRAIN selection)', source.intended_use === 'eval' ? admission?.admitted_count : null],
-    ['Unexecutable on production backend dropped (by typed reason)', counts?.oracle_tasks === 0 ? 'Per-task executability run is not required under the pinned no-oracle policy; static exclusions remain applied' : admission?.state === 'excluded' ? 'No retained tasks; typed exclusions are recorded above' : 'Pending: no pin-bound per-task production-executability receipt is recorded'],
+    ['Unexecutable on production backend dropped (by typed reason)', admission?.state === 'complete' ? 'Recorded in the pinned oracle-filter receipt' : counts?.oracle_tasks === 0 ? 'Per-task executability run is not required under the pinned no-oracle policy; static exclusions remain applied' : admission?.state === 'excluded' ? 'No retained tasks; typed exclusions are recorded above' : 'Pending: no pin-bound per-task production-executability receipt is recorded'],
     ['Admitted after all filtration', admission?.admitted_count ?? 'Pending: full-population filtration and production executability are not established'],
     ...['policy', 'actorless_policy', 'oracle_inventory', 'static_audit'].map(key => {
       const evidence = counts?.[key];

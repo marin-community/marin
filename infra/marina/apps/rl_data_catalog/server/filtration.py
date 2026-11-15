@@ -5,8 +5,13 @@
 
 from typing import Any
 
-from finestore.rl.curation import OracleFiltrationEvidence
+from finestore.rl.curation import OracleFiltrationEvidence, OracleValidation, SourceDeclaration
 
+from .admission import (
+    require_content_result,
+    require_declaration_admission,
+    require_lexical_qualification,
+)
 from .source_counts import SourceCountEvidence
 
 
@@ -44,7 +49,33 @@ def filtration(declaration: dict[str, Any], counts: SourceCountEvidence | None =
             "source_status": declaration["status"],
             "reason": "Complete filtration retained no tasks; the source is excluded, with no admission claimed.",
         }
-    return counted_population(declaration, counts, pending)
+    if (
+        evidence.oracle_filter_version != 4
+        or declaration["status"] != "Available"
+        or declaration.get("oracle_validation") != OracleValidation.EXECUTED
+    ):
+        return pending
+    try:
+        qualified = SourceDeclaration.model_validate(declaration)
+        require_declaration_admission(qualified)
+        require_content_result(qualified, None, None)
+        if qualified.intended_use is None:
+            return pending
+        require_lexical_qualification(
+            qualified.lexical_contamination, release.repo, release.revision, qualified.intended_use
+        )
+    except ValueError:
+        return pending
+    # Header totals describe the current retained population; original exclusions stay in the receipt.
+    return {
+        "example_count": evidence.admitted_count,
+        "state": "complete",
+        "admitted_count": evidence.admitted_count,
+        "population_count": evidence.admitted_count,
+        "excluded_count": 0,
+        "source_status": declaration["status"],
+        "reason": "The current private release is qualified after full-population oracle filtration.",
+    }
 
 
 def counted_population(

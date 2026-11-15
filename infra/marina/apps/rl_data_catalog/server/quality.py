@@ -8,7 +8,6 @@ from enum import StrEnum
 from typing import Any
 
 from finestore.rl.curation import (
-    SAMPLE_MAX_MISSING_FRACTION,
     AssessmentItem,
     AssessmentPopulation,
     JudgmentStatus,
@@ -18,6 +17,8 @@ from finestore.rl.curation import (
     SourceQualityResult,
     Verdict,
 )
+
+SAMPLE_MAX_MISSING_FRACTION = 0.05
 
 
 class Quality(StrEnum):

@@ -30,7 +30,6 @@ from experiments.post_training.task_curation import calibforge_publish, retained
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.decontamination import require_private_release
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.remediation_binding import (
     PublicationReceipt,
@@ -53,6 +52,7 @@ from experiments.post_training.task_curation.retained_release import (
 )
 from experiments.post_training.task_curation.source import SourceInfo, SourceReference
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_source, prebuilt_task
+from infra.marina.apps.rl_data_catalog.server.admission import require_private_release
 from lib.taskcompendium.tests.decontamination_fixtures import decontamination_evidence
 
 

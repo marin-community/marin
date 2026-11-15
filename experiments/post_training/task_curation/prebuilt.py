@@ -59,10 +59,10 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
-from experiments.post_training.task_curation.decontamination import require_lexical_qualification
 from experiments.post_training.task_curation.environment_fidelity import missing_environment
 from experiments.post_training.task_curation.harbor_inspection import native_task_checksums
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference, TaskFormat
+from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
 PREBUILT_ADMISSION_VERSION = "2026.11.13.4"
 TASKS_FILENAME = "tasks.parquet"

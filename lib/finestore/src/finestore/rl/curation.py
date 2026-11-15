@@ -45,10 +45,6 @@ class JudgmentStatus(StrEnum):
 # this constant.
 MAX_UNAVAILABLE_JUDGMENT_SHARE: float = 0.02
 
-# SAMPLE content panels keep their fixed membership and report missing rows explicitly.
-# Whole-source FULL finality has separate coverage and waiver requirements.
-SAMPLE_MAX_MISSING_FRACTION = 0.05
-
 
 class AssessmentStatus(StrEnum):
     COMPLETE = "complete"

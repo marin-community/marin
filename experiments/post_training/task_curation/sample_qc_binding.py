@@ -5,13 +5,14 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import SAMPLE_MAX_MISSING_FRACTION, ContentEvidenceReference, IndependentQC
+from finestore.rl.curation import ContentEvidenceReference, IndependentQC
 from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.pipeline.models import ReviewRecord
 
 from experiments.post_training.task_curation.full_content_binding import clear_stale_full_content_result
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleQCReview
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
+from infra.marina.apps.rl_data_catalog.server.quality import SAMPLE_MAX_MISSING_FRACTION
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 
 
