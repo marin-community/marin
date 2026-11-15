@@ -19,6 +19,7 @@ from sqlalchemy.engine import Connection, Engine
 from .source_identity import canonical_source_id, original_source_id
 
 TOTAL_METRICS = ("denominator", "assigned", "subject_only", "out_of_scope", "insufficient_context", "skipped")
+INVARIANT_SOURCE_BATCH = 16
 
 
 @dataclass(frozen=True)
@@ -458,7 +459,57 @@ def coverage_document(
     }
 
 
+def invariant_document(
+    query: Callable[[str, dict[str, Any]], list[dict[str, Any]]], metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """Expose count evidence once, without fetching task text or repeating it for each domain."""
+    load_id = metadata["load_id"]
+    sources = query(
+        "SELECT source_id,alignment FROM curriculum_sources WHERE load_id=:load_id ORDER BY source_id",
+        {"load_id": load_id},
+    )
+    vectors = {row["source_id"]: {"statistics": [], "confidence_statistics": []} for row in sources}
+    # Keep the SQL gateway's response bounded when this projection is checked before publication.
+    for offset in range(0, len(sources), INVARIANT_SOURCE_BATCH):
+        params = {
+            "load_id": load_id,
+            "sources": json.dumps([row["source_id"] for row in sources[offset : offset + INVARIANT_SOURCE_BATCH]]),
+        }
+        for table, column, field in (
+            ("curriculum_statistics", "source_id", "statistics"),
+            ("curriculum_confidence", "scope_id", "confidence_statistics"),
+        ):
+            for row in query(
+                f"SELECT {column} AS source_id,jsonb_agg(jsonb_build_array(metric,subject_id,node_id,instances) "
+                f"ORDER BY metric,subject_id,node_id) AS statistics FROM {table} WHERE load_id=:load_id "
+                f"AND {column} IN (SELECT jsonb_array_elements_text(CAST(:sources AS JSONB))) GROUP BY {column}",
+                params,
+            ):
+                vectors[row["source_id"]][field] = row["statistics"]
+    return {
+        "release_id": metadata["release_id"],
+        "taxonomy": metadata["manifest"]["nodes"],
+        "views": {
+            use: coverage_document(query, metadata, CoverageQuery(use, "", metadata["release_id"]), "")
+            for use in ("all", "train", "eval")
+        },
+        "sources": [
+            {
+                "source_id": canonical_source_id(row["source_id"]),
+                "alignment": row["alignment"],
+                **vectors[row["source_id"]],
+            }
+            for row in sources
+        ],
+    }
+
+
 def register_curriculum_routes(api: FastAPI, engine: Engine) -> None:
+    @api.get("/curriculum/invariants")
+    def invariants(release: str = "") -> dict[str, Any]:
+        with engine.connect() as connection:
+            return invariant_document(partial(connection_rows, connection), loaded_release(connection, release))
+
     @api.get("/curriculum/releases")
     def releases() -> dict[str, Any]:
         with engine.connect() as connection:

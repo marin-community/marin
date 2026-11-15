@@ -4,9 +4,15 @@
 """Typed progress receipts and the portable preflight input contract."""
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel
+
+
+class BrowserScope(StrEnum):
+    REPRESENTATIVE = "representative"
+    FULL = "full"
 
 
 @dataclass(frozen=True)
@@ -40,12 +46,13 @@ class ReleaseFailure:
 
 @dataclass
 class ReleaseReceipt:
-    phase: Literal["preflight", "hosted"]
+    phase: Literal["preflight", "hosted", "postpublish"]
     revision: int | None
     started_at: str
     target: ReleaseTarget
     production_id: str
-    version: int = 1
+    version: int = 2
+    blocking: bool = True
     passed: bool = False
     gate: str = "arguments"
     source_revision: str | None = None
@@ -59,13 +66,15 @@ class ReleaseReceipt:
     evidence_after: dict[str, Any] | None = None
     expected_sources: dict[str, Any] | None = None
     browser: dict[str, Any] | None = None
+    api_invariants: dict[str, Any] | None = None
+    postpublish_job: dict[str, Any] | None = None
     error: ReleaseFailure | None = None
 
 
 class PreflightBaseline(BaseModel):
     """Required preflight fields for a later immutable hosted-revision check."""
 
-    version: Literal[1]
+    version: Literal[2]
     phase: Literal["preflight"]
     passed: Literal[True]
     source_revision: str
@@ -76,3 +85,4 @@ class PreflightBaseline(BaseModel):
     evidence_before: dict[str, Any]
     expected_sources: dict[str, Any]
     browser: dict[str, Any]
+    api_invariants: dict[str, Any]

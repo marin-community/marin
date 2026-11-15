@@ -11,6 +11,7 @@ import importlib
 import json
 import logging
 import subprocess
+import sys
 import threading
 import tomllib
 from collections.abc import Iterator
@@ -34,8 +35,9 @@ from .prepare_preview import (
     RELOCATED_SERVER_FILES,
     oracle_inventory_payload,
 )
-from .readability import readability_sweep
-from .release_browser import curriculum_sweep, evidence_sweep, source_sweep
+from .readability import readability_smoke, readability_sweep
+from .release_browser import curriculum_full_sweep, curriculum_sweep, evidence_smoke, evidence_sweep, source_sweep
+from .release_curriculum import curriculum_invariants
 from .release_evidence import (
     SqlQuery,
     catalog_state,
@@ -47,6 +49,7 @@ from .release_evidence import (
     verify_preservation,
 )
 from .release_receipts import (
+    BrowserScope,
     CommandResult,
     PreflightBaseline,
     ReleaseFailure,
@@ -63,6 +66,7 @@ from .server.curriculum import (
     area_parameters,
     area_response,
     coverage_document,
+    invariant_document,
     task_parameters,
     task_response,
 )
@@ -201,6 +205,7 @@ class CatalogReader:
                 "api/curriculum",
                 "api/curriculum/area",
                 "api/curriculum/tasks",
+                "api/curriculum/invariants",
             }:
                 release = params.get("release", "")
                 if release not in self.releases:
@@ -214,7 +219,9 @@ class CatalogReader:
                     params.get("node_id", ""),
                     params.get("scope", "all"),
                 )
-                if url.path == "api/curriculum":
+                if url.path == "api/curriculum/invariants":
+                    data = invariant_document(lambda sql, bound: self.query(sql, bound)["rows"], metadata)
+                elif url.path == "api/curriculum":
                     data = coverage_document(
                         lambda sql, bound: self.query(sql, bound)["rows"], metadata, filters, subject
                     )
@@ -253,6 +260,7 @@ def browser_checks(
     *,
     local: bool,
     stored_groups: list[dict[str, Any]],
+    scope: BrowserScope = BrowserScope.REPRESENTATIVE,
 ) -> dict[str, Any]:
     releases = reader.get("api/curriculum/releases")["releases"]
     inventory = reader.get("measurements/oracle-inventory.json")
@@ -314,9 +322,15 @@ def browser_checks(
             page.set_default_navigation_timeout(60000)
             page.on("pageerror", lambda error: errors.append(str(error)))
             sources = source_sweep(page, root, expected["sources"], shots)
-            curriculum = curriculum_sweep(page, root, releases, shots)
-            evidence = evidence_sweep(page, root, expected["sources"])
-            readability = readability_sweep(page, root, shots / "readability")
+            curriculum = (curriculum_full_sweep if scope is BrowserScope.FULL else curriculum_sweep)(
+                page, root, releases, shots
+            )
+            evidence = (evidence_sweep if scope is BrowserScope.FULL else evidence_smoke)(
+                page, root, expected["sources"]
+            )
+            readability = (readability_sweep if scope is BrowserScope.FULL else readability_smoke)(
+                page, root, shots / "readability"
+            )
             if readability["violations"]:
                 raise ValueError(
                     f"{readability['violations']} readability violations; see {shots}/readability/readability.json"
@@ -354,6 +368,41 @@ def app_details(service_url: str, app_id: str, session: requests.Session) -> dic
     return value
 
 
+def launch_postpublish(args: argparse.Namespace, artifacts: Path) -> dict[str, Any]:
+    """Detach the full audit after the blocking hosted receipt has passed."""
+    receipt = artifacts / "postpublish.json"
+    log = artifacts / "postpublish.log"
+    command = [
+        sys.executable,
+        "-m",
+        "infra.marina.apps.rl_data_catalog.release_check",
+        "--revision",
+        str(args.revision),
+        "--baseline",
+        str(args.baseline.resolve()),
+        "--production-version",
+        str(args.production_version),
+        "--service-url",
+        args.service_url,
+        "--app-origin",
+        args.app_origin,
+        "--full-browser-sweep",
+        "--receipt",
+        str(receipt),
+    ]
+    result: dict[str, Any] = {"blocking": False, "receipt": str(receipt), "log": str(log), "command": command}
+    try:
+        with log.open("x") as output:
+            process = subprocess.Popen(
+                command, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT, start_new_session=True
+            )
+        result["pid"] = process.pid
+    except OSError as error:
+        result["launch_error"] = str(error)
+        LOGGER.error("Non-blocking postpublish audit could not start: %s", error)
+    return result
+
+
 def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceipt) -> None:
     receipt.gate = "workspace-environment"
     check_workspace_imports()
@@ -378,42 +427,45 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         receipt.inputs = replace(inputs, oracle_inventory_sha256=hashlib.sha256(inventory_raw).hexdigest())
         receipt.package = check_package(package, head, count_raw, inventory_raw)
         run_command(["uv", "run", "--no-sync", "marina", "validate", str(package)], "package", artifacts, receipt)
-    lint_paths = git(
-        "ls-files", str(APP_SOURCE), "docs/references/rl-data-atlas.md", "docs/references/task-curation.md"
-    ).splitlines()
-    run_command(["./infra/pre-commit.py", *lint_paths], "lint", artifacts, receipt)
-    run_command(
-        [
-            "uv",
-            "run",
-            "--no-sync",
-            "pytest",
-            "infra/marina/tests/test_rl_data_catalog.py",
-            "experiments/post_training/task_curation/tests/test_oracle_admitted_release.py",
-            str(APP_SOURCE / "tests"),
-            "-q",
-        ],
-        "api-count-tests",
-        artifacts,
-        receipt,
-    )
-    run_command(
-        [
-            "uv",
-            "run",
-            "--no-sync",
-            "marina",
-            "journey",
-            "rl_data_catalog",
-            "--apps-dir",
-            str(ROOT / "infra/marina/apps"),
-            "--shots",
-            str(artifacts / "journeys"),
-        ],
-        "browser-journeys",
-        artifacts,
-        receipt,
-    )
+    if not args.full_browser_sweep:
+        lint_paths = git(
+            "ls-files", str(APP_SOURCE), "docs/references/rl-data-atlas.md", "docs/references/task-curation.md"
+        ).splitlines()
+        run_command(["./infra/pre-commit.py", *lint_paths], "lint", artifacts, receipt)
+        run_command(
+            [
+                "uv",
+                "run",
+                "--no-sync",
+                "pytest",
+                "infra/marina/tests/test_rl_data_catalog.py",
+                "experiments/post_training/task_curation/tests/test_oracle_admitted_release.py",
+                str(APP_SOURCE / "tests"),
+                "-q",
+            ],
+            "api-count-tests",
+            artifacts,
+            receipt,
+        )
+        run_command(
+            [
+                "uv",
+                "run",
+                "--no-sync",
+                "marina",
+                "journey",
+                "rl_data_catalog",
+                "--apps-dir",
+                str(ROOT / "infra/marina/apps"),
+                "-k",
+                "not full_browser",
+                "--shots",
+                str(artifacts / "journeys"),
+            ],
+            "browser-journeys",
+            artifacts,
+            receipt,
+        )
     with requests.Session() as session:
         receipt.gate = "production-version"
         production = app_details(args.service_url, PRODUCTION_APP_ID, session)
@@ -448,6 +500,8 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         receipt.production_version = args.production_version
         receipt.preview_base_version = details["current_version"]
         receipt.expected_sources = expected
+        receipt.gate = "curriculum-api-invariants"
+        receipt.api_invariants = curriculum_invariants(reader.get, reader.get("api/curriculum/releases")["releases"])
         stored_groups = stored_duplicate_groups(query, before["selected"]["load_id"])
         if baseline:
             verify_preservation(baseline.evidence_before, before, refresh_snapshot=args.refresh_snapshot)
@@ -462,14 +516,26 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
             with static_preview(package / "dist") as root:
                 receipt.gate = "browser-sweep"
                 receipt.browser = browser_checks(
-                    reader, root, expected, artifacts / "screenshots", local=True, stored_groups=stored_groups
+                    reader,
+                    root,
+                    expected,
+                    artifacts / "screenshots",
+                    local=True,
+                    stored_groups=stored_groups,
+                    scope=BrowserScope.REPRESENTATIVE,
                 )
         else:
             if baseline is None:
                 raise ValueError("Hosted checks require a preflight baseline")
             receipt.gate = "hosted-browser-sweep"
             receipt.browser = browser_checks(
-                reader, reader.root, expected, artifacts / "screenshots", local=False, stored_groups=stored_groups
+                reader,
+                reader.root,
+                expected,
+                artifacts / "screenshots",
+                local=False,
+                stored_groups=stored_groups,
+                scope=BrowserScope.FULL if args.full_browser_sweep else BrowserScope.REPRESENTATIVE,
             )
             if receipt.browser["inventory_sha256"] != baseline.browser["inventory_sha256"]:
                 raise ValueError("Hosted oracle inventory differs from the preflight input")
@@ -500,18 +566,26 @@ def main() -> None:
     )
     parser.add_argument("--service-url", default="https://marina.oa.dev")
     parser.add_argument("--app-origin", default="https://applets.marina.oa.dev")
+    parser.add_argument(
+        "--full-browser-sweep",
+        action="store_true",
+        help="Run the recorded non-blocking post-publish/nightly browser audit",
+    )
     parser.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
     if args.dist and (not args.source_counts or not args.oracle_inventory):
         parser.error("--dist requires --source-counts and --oracle-inventory")
     if args.revision and not args.baseline:
         parser.error("--revision requires --baseline")
+    if args.full_browser_sweep and not args.revision:
+        parser.error("--full-browser-sweep requires --revision and its successful preflight --baseline")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     artifacts = args.receipt.with_suffix("")
     artifacts.mkdir(parents=True)
     (artifacts / "screenshots").mkdir()
     receipt = ReleaseReceipt(
-        phase="preflight" if args.dist else "hosted",
+        phase="postpublish" if args.full_browser_sweep else "preflight" if args.dist else "hosted",
+        blocking=not args.full_browser_sweep,
         revision=args.revision,
         started_at=datetime.now(UTC).isoformat(),
         target=ReleaseTarget(PREVIEW_APP_ID, args.app_origin, args.service_url),
@@ -521,6 +595,8 @@ def main() -> None:
         try:
             run_checks(args, artifacts, receipt)
             receipt.passed = True
+            if args.revision and not args.full_browser_sweep:
+                receipt.postpublish_job = launch_postpublish(args, artifacts)
         except Exception as error:
             receipt.error = ReleaseFailure(receipt.gate, type(error).__name__, str(error))
             LOGGER.error("Release gate failed: %s", error)

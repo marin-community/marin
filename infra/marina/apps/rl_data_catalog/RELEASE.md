@@ -87,7 +87,7 @@ Playwright and disposable Postgres available for the installed-app journeys.
 
 ## Automated gates
 
-One checker invocation runs all these gates and exits nonzero on failure:
+Preflight and hosted invocations run these blocking gates and exit nonzero on failure:
 
 | Gate | What it proves |
 | --- | --- |
@@ -97,7 +97,8 @@ One checker invocation runs all these gates and exits nonzero on failure:
 | Runtime task accounting | Per-source populations partition into admission, exclusions and pending/unmeasured tasks; admitted tasks split into TRAIN and EVAL without conflating EVAL with TRAIN selection. |
 | Main table at 1440/390, light/dark | Every displayed Examples value matches its bound observation. Headers, cells and chips fit; no chip subtitles or page overflow; filters and Show everything work and persist. |
 | Header reconciliation | Shown + hidden QUICK/BAD + filtered + folded equals total tasks, and the same admitted subsets equal total admission. Quality totals use task populations. |
-| Curriculum sweep | Available selected/previous releases and TRAIN/EVAL/all views reconcile. Every domain's parents equal displayed children plus remainder, including search-hidden remainder, without overlapping text. |
+| Curriculum API invariants | Every selected/previous release × TRAIN/EVAL/all × exported confidence level × domain reconciles outcomes to its denominator and aggregate counts to source vectors. Display projections agree with the recorded cutoffs; every taxonomy node, including empty nodes, is present and capability labels differ from their subjects. Parents include their children plus remainder. |
+| Representative browser pass | One selected release, Use and measured domain per layout loads the confidence control and sampled-task list. One Evidence/Backends presentation and each authored page family pass geometry and readability checks, with screenshots. |
 | Catalog and archive preservation | Code-only releases retain selected catalog/curriculum pointers and source declarations. Every previously retained assessment and packet content checksum remains unchanged by immutable pipeline/task identity, even if an intended catalog refresh copies history to a new load ID. |
 | Production hold | Production's actual revision matches the explicit hold both before and after checking. |
 | Hosted revision | The post-release API, package provenance and oracle inventory match the preflight baseline; the same browser and preservation gates pass against the immutable revision URL. |
@@ -108,9 +109,9 @@ not load or mutate the live catalog. The post-release run verifies the actual
 hosted API. Within each run, read-only API responses are cached across layouts;
 catalog pointer checks bracket the sweep to reject a mixed selection.
 
-The single JSON receipt contains the checked cut, input hashes, expected source
+The version-2 JSON receipt contains the checked cut, input hashes, expected source
 projection, before/after catalog evidence, command results/log paths, rendered
-headers, task partitions, browser results and response hashes. It records
+headers, task partitions, API invariant coverage/timing, browser results and response hashes. It records
 `passed: false`, the failing gate and a nonzero exit on failure. Logs and screenshots
 live beside it in a directory named after the receipt without `.json`. Existing
 receipts and artifact directories are never overwritten; choose a new name for
@@ -176,7 +177,7 @@ those records must preserve their archived bytes. A filtered-out canonical sourc
 leaves its eligible group members unfolded; the checker rejects sibling folding
 without the canonical representative.
 
-The real-data evidence sweep selects a source for each observed combination of
+The non-blocking full evidence sweep selects a source for each observed combination of
 Quality, Result, provisional status, filtration state, actor safety, Use and
 backend measurement basis, review waiver/progress and difficulty measurement states. It opens both Evidence and Backends at all four
 layouts, checking field/table bounds and the Daytona verdict and operations link.
@@ -192,6 +193,34 @@ both invariants at 1440/390 in light/dark themes before every publication.
 Table header labels stay on one line, including unsortable headers. The geometry
 gate rejects text that fits its cell only by stacking letters vertically. Use
 labels also remain on one line.
+
+## Full post-publish or nightly browser audit
+
+After a successful hosted check, the checker starts the unchanged full curriculum,
+Evidence/Backends and readability walks in a detached local process. The hosted
+receipt records `postpublish_job` with its PID, command, log and receipt paths.
+This job does not delay release completion. Its receipt has `phase: postpublish`
+and `blocking: false`; a finding gives that job a nonzero exit without changing
+the successful hosted receipt. A launch failure is recorded in `launch_error`.
+Report any launch failure or audit finding to the coordinator, with the receipt
+and screenshots, and track the fix for the next release.
+
+To repeat the full audit after publication or from a nightly scheduler, use the
+same clean landed cut and successful version-2 preflight baseline:
+
+```bash
+uv run python -m infra.marina.apps.rl_data_catalog.release_check \
+  --revision "$REVISION" --baseline "$ARTIFACTS/preflight.json" \
+  --production-version "$PRODUCTION_HOLD" --full-browser-sweep \
+  --receipt "$ARTIFACTS/nightly-full.json"
+```
+
+The full audit retains every release/Use/domain/confidence browser case and every
+Evidence/Backends and readability presentation from the earlier blocking sweep.
+It skips repeated lint and unit/journey commands. API and preservation checks
+still run, and production remains held. Keep the clean worktree and credentials
+available until the recorded job finishes; inspect its receipt after completion.
+There is no new persistent service or scheduler configuration.
 
 ## Intended measurement refreshes
 
@@ -247,15 +276,16 @@ scored samples in the browser. Source is optional: examples are pooled across
 sources, each with its Source field. Lists contain stored samples, not a complete
 instance index. A stricter subject-only view filters the full subject sample pool,
 so samples are not lost merely because they were capability matches at a broader
-level. The canonical checker exercises all exported levels and task partitions
-at each layout, including the original cutoffs and historical populations.
+level. The blocking API check exercises all exported levels and task partitions, including
+the original cutoffs and historical populations. The representative browser pass
+checks the confidence control; the full browser walk runs after publication.
 
 ## Readability release gate
 
 The installed `test_rendered_contrast_readability_and_reflow` journey and the
-input-bound `browser_checks` both run the shared readability sweep. Any violation
-blocks release. It covers the source table, curriculum, source evidence, backends, assessments,
-archive and guide, plus source/evidence presentation states, filters and folded groups, curriculum domains/confidence levels, public instructions from a stored task example in each layout, source breakdowns, archive records, empty/error states, hover,
+input-bound `browser_checks` both run the representative readability pass. Any
+violation in that pass blocks release. It covers the source table, curriculum, source evidence, backends, assessments,
+archive and guide, plus representative source/evidence states, filters and folded groups, confidence levels and one measured curriculum domain, public instructions from a stored task example in each layout, source breakdowns, archive records, empty/error states, hover,
 active and keyboard focus. Layouts are 1440, 390 and 320 CSS px in both themes;
 page and dialog checks also apply 200% text size and WCAG text-spacing overrides.
 
@@ -275,7 +305,8 @@ uv run marina journey rl_data_catalog -k 'rendered_contrast or checker_measures'
 ```
 
 The focused command uses the installed app and disposable Postgres fixtures.
-Then run the full journey suite before `atlas-push`. The release checker repeats
+Run the installed journeys with `-k 'not full_browser'` for the blocking pass.
+The release checker repeats
 the gate against its pinned catalog projection and selected curriculum release
 through the existing `CatalogReader`; see the preflight commands above for
 `--source-counts`, `--oracle-inventory` and `--baseline`. Retain `readability/readability.json`,
@@ -291,7 +322,7 @@ receipt bound to the candidate's repository and revision. Adding a card must
 preserve the selected catalog release and its By source Examples and Quality.
 Remove the card when the catalog selects that candidate with a qualified
 current-pin admission receipt; preserve its earlier package and receipts as history.
-The checker's Evidence and readability sweeps read source IDs from the released
+The full post-publish Evidence and readability sweeps read source IDs from the released
 app's candidate manifest and check every card, including sources with the same
 Quality, Result or admission state as another source. Check the displayed
 candidate pin and filtered task count against its linked receipt. A private

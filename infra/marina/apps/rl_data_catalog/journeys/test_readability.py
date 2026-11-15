@@ -6,11 +6,21 @@
 import pytest
 from marina.journeys import Journey
 
-from infra.marina.apps.rl_data_catalog.readability import AUDIT, readability_sweep
+from infra.marina.apps.rl_data_catalog.readability import AUDIT, readability_smoke, readability_sweep
 
 
 @pytest.mark.timeout(600)
 def test_rendered_contrast_readability_and_reflow(journey: Journey, readability_catalog: None) -> None:
+    page = journey.page.context.new_page()
+    report = readability_smoke(
+        page, f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/", journey.shots / "readability-smoke"
+    )
+    page.close()
+    assert report["violations"] == 0
+
+
+@pytest.mark.timeout(600)
+def test_full_browser_contrast_readability_and_reflow(journey: Journey, readability_catalog: None) -> None:
     page = journey.page.context.new_page()
     report = readability_sweep(
         page, f"{journey.origin}/a/fb11c931-5861-4878-8bb5-a964d652b45f/", journey.shots / "readability"

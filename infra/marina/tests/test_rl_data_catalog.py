@@ -87,6 +87,7 @@ from infra.marina.apps.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.apps.rl_data_catalog.load_difficulty import load_measurements
 from infra.marina.apps.rl_data_catalog.load_identity import load_identity
 from infra.marina.apps.rl_data_catalog.prepare_preview import PREVIEW_APP_ID, PRODUCTION_APP_ID, prepare_preview
+from infra.marina.apps.rl_data_catalog.release_curriculum import check_curriculum_document
 from infra.marina.apps.rl_data_catalog.release_evidence import (
     catalog_state,
     projected_duplicate_inventory,
@@ -739,6 +740,13 @@ def test_curriculum_precomputed_population_samples_pagination_and_atomic_load(
         }
         assert source["assessment"]["admitted"]["grade"] == "good"
         first = client.get("/curriculum").json()
+        invariants = client.get("/curriculum/invariants").json()
+        checked = check_curriculum_document(invariants)
+        assert [(case["use"], case["denominator"]) for case in checked["cases"]] == [
+            ("all", 400),
+            ("train", 400),
+            ("eval", 0),
+        ]
         assert first["totals"] == {
             "denominator": 400,
             "assigned": 200,

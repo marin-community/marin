@@ -1,7 +1,12 @@
 # RL Data Atlas style
 
 Follow the canonical [release procedure](RELEASE.md) and its `release_check`
-entry point for every preview release.
+entry point for every preview release. Complete curriculum count/taxonomy checks
+run once through the API for every release, Use, confidence level and domain.
+A representative browser/readability pass and screenshots block publication;
+the full browser sweep runs afterward or nightly and records a separate,
+non-blocking receipt. Report its findings to the coordinator; see
+[full audit commands](RELEASE.md#full-post-publish-or-nightly-browser-audit).
 
 The main table's source cell contains only its source-name button and, where
 needed, the fold toggle. No origin/build subtitle, dataset link, overlap note or

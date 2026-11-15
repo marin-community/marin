@@ -13,6 +13,8 @@ from playwright.sync_api import Page, expect
 
 from .release_browser import LAYOUTS as RELEASE_LAYOUTS
 from .release_browser import evidence_cases, pending_release_ids
+from .release_curriculum import representative_domain
+from .release_receipts import BrowserScope
 
 AUDIT = Path(__file__).with_suffix(".js").read_text()
 CONTROLS = 'a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex="-1"])'
@@ -49,7 +51,9 @@ def inspect_state(page: Page, *, focus: bool = False) -> dict[str, Any]:
     return result
 
 
-def readability_layout(page: Page, root: str, shots: Path, theme: str, width: int) -> list[dict[str, Any]]:
+def readability_layout(
+    page: Page, root: str, shots: Path, theme: str, width: int, scope: BrowserScope = BrowserScope.FULL
+) -> list[dict[str, Any]]:
     """Capture content and interaction states at one viewport and system theme."""
     views = []
     page.emulate_media(color_scheme=theme, reduced_motion="reduce")
@@ -190,7 +194,8 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
             page.locator("#reviews a").first.click()
             expect(page.locator("#selected")).not_to_be_empty()
             capture("archive-record")
-    for index, candidate in enumerate(evidence_cases(sources, pending_ids)):
+    cases = evidence_cases(sources, pending_ids) if scope is BrowserScope.FULL else []
+    for index, candidate in enumerate(cases):
         if candidate["id"] == source["id"]:
             continue
         for view in ("source", "backends"):
@@ -208,6 +213,11 @@ def readability_layout(page: Page, root: str, shots: Path, theme: str, width: in
     capture("curriculum-notes")
     # Every domain exposes its nested heatmap nodes, source breakdown and pooled examples.
     domains = page.locator("#domain option").evaluate_all("es=>es.map(e=>e.value).filter(Boolean)")
+    if scope is BrowserScope.REPRESENTATIVE:
+        page.locator("#confidence").select_option("0")
+        data = page.evaluate("async()=> (await fetch('api/curriculum')).json()")
+        selected = representative_domain(data)
+        domains = [selected] if selected else []
     opened_task = False
     for domain in domains:
         page.locator("#domain").select_option(domain)
@@ -240,14 +250,28 @@ def readability_sweep(
     page: Page, root: str, shots: Path, *, layouts: Sequence[tuple[str, int]] = LAYOUTS
 ) -> dict[str, Any]:
     """Walk all page families and the interactive states that change rendered paint."""
+    return readability_report(page, root, shots, layouts, BrowserScope.FULL)
+
+
+def readability_smoke(
+    page: Page, root: str, shots: Path, *, layouts: Sequence[tuple[str, int]] = LAYOUTS
+) -> dict[str, Any]:
+    """Keep authored page families and a representative domain in each blocking layout."""
+    return readability_report(page, root, shots, layouts, BrowserScope.REPRESENTATIVE)
+
+
+def readability_report(
+    page: Page, root: str, shots: Path, layouts: Sequence[tuple[str, int]], scope: BrowserScope
+) -> dict[str, Any]:
     shots.mkdir(parents=True, exist_ok=True)
     views = []
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     for theme, width in layouts:
-        views.extend(readability_layout(page, root, shots, theme, width))
+        views.extend(readability_layout(page, root, shots, theme, width, scope))
     report = {
         "standard": "WCAG 2.2 AA + Atlas house rules",
+        "scope": scope.value,
         "views": views,
         "violations": sum(len(v["findings"]) for v in views),
         "errors": errors,

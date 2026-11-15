@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 
 from playwright.sync_api import Page, expect
 
+from .release_curriculum import count_projection, representative_domain
 from .release_evidence import admission_text, task_totals
 
 LAYOUTS = tuple((theme, width) for theme in ("light", "dark") for width in (1440, 390))
@@ -308,7 +309,7 @@ def check_map(page: Page) -> dict[str, Any]:
     return result
 
 
-def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shots: Path) -> list[dict[str, Any]]:
+def curriculum_full_sweep(page: Page, root: str, releases: list[dict[str, Any]], shots: Path) -> list[dict[str, Any]]:
     """Check available releases, uses and every live domain without fixed populations."""
     results = []
     for theme, width in LAYOUTS:
@@ -403,3 +404,50 @@ def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shot
         check_map(page)
         page.screenshot(path=str(shots / f"curriculum-{theme}-{width}.png"), full_page=True)
     return results
+
+
+def curriculum_sweep(page: Page, root: str, releases: list[dict[str, Any]], shots: Path) -> list[dict[str, Any]]:
+    """Check one real release, Use, domain, confidence control and sample list per layout."""
+    release = next((row for row in releases if row["selected"]), releases[0])
+    results = []
+    for theme, width in LAYOUTS:
+        page.emulate_media(color_scheme=theme)
+        page.set_viewport_size({"width": width, "height": 1000})
+        page.goto(root + "curriculum.html#" + urlencode({"release": release["release_id"], "intended_use": "all"}))
+        check_map(page)
+        data = page.evaluate(
+            """async()=> (await fetch('api/curriculum?' + new URLSearchParams({
+                release: document.querySelector('#release').value}))).json()"""
+        )
+        levels = data["confidence"]["levels"] if data.get("confidence") else [None]
+        for level in sorted({0, len(levels) - 1}, reverse=True):
+            page.locator("#confidence").select_option(str(level))
+            projected = count_projection(data, level)
+            expect(page.locator("#task-count")).to_have_text(f"{projected['totals']['denominator']:,}")
+            expect(page.locator("#capability-count")).to_have_text(f"{projected['totals']['assigned']:,}")
+            check_map(page)
+        domain = representative_domain(data)
+        if domain:
+            page.locator("#domain").select_option(domain)
+            expect(page.locator(".domain-card")).to_have_count(1)
+            expect(page.locator("#task-list")).not_to_have_attribute("aria-busy", "true", timeout=60000)
+            expect(page.locator("#task-message")).to_contain_text(
+                re.compile("sampled examples|No task examples|No stored sample examples")
+            )
+            subject = next(row for row in data["hierarchy"] if row["subject_id"] == domain and row["kind"] == "subject")
+            count = count_projection(data, 0)["areas"].get((domain, subject["node_id"]), 0)
+            expect(page.locator(".domain-count")).to_have_text(f"{count:,}")
+            page.locator("#source-breakdown").evaluate("e=>e.open=true")
+            assert sum(integers(value)[0] for value in page.locator("#area-sources b").all_inner_texts()) == count
+        result = check_map(page)
+        page.screenshot(path=str(shots / f"curriculum-{theme}-{width}.png"), full_page=True)
+        results.append(
+            {"theme": theme, "width": width, "release": release["release_id"], "use": "all", "domain": domain, **result}
+        )
+    return results
+
+
+def evidence_smoke(page: Page, root: str, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one Evidence and Backends presentation in the blocking geometry pass."""
+    source = next((row for row in sources if (row.get("assessment") or {}).get("pipeline_key")), sources[0])
+    return evidence_sweep(page, root, [source])

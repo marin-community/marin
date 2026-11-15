@@ -73,13 +73,14 @@ def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
     baseline.write_text(
         json.dumps(
             {
-                "version": 1,
+                "version": 2,
                 "source_revision": "a" * 40,
                 "preview_base_version": 1,
                 "package": {},
                 "evidence_before": {},
                 "expected_sources": {},
                 "browser": {},
+                "api_invariants": {},
                 "passed": True,
                 "phase": "preflight",
                 "production_version": 76,
@@ -144,3 +145,40 @@ def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
         assert result["error"]["gate"] == "production-version"
     else:
         assert result["error"]["gate"] == "workspace-environment"
+
+
+@pytest.mark.parametrize("full,failed", [(False, False), (True, False), (True, True)])
+def test_cli_records_nonblocking_audit_separately_from_hosted_success(tmp_path, monkeypatch, full, failed):
+    receipt_path = tmp_path / "receipt.json"
+    args = [
+        "release_check",
+        "--revision",
+        "20",
+        "--baseline",
+        str(tmp_path / "baseline.json"),
+        "--production-version",
+        "76",
+        "--receipt",
+        str(receipt_path),
+    ]
+    if full:
+        args.append("--full-browser-sweep")
+    monkeypatch.setattr(sys, "argv", args)
+
+    def checked(args, artifacts, receipt):
+        if failed:
+            receipt.gate = "hosted-browser-sweep"
+            raise ValueError("full audit finding")
+
+    monkeypatch.setattr(release_check, "run_checks", checked)
+    monkeypatch.setattr(
+        release_check, "launch_postpublish", lambda *args: {"blocking": False, "launch_error": "unavailable"}
+    )
+    with pytest.raises(SystemExit) as exit_code:
+        main()
+    assert exit_code.value.code == (1 if failed else 0)
+    recorded = json.loads(receipt_path.read_text())
+    assert recorded["passed"] is (not failed)
+    assert recorded["blocking"] is (not full)
+    assert recorded["phase"] == ("postpublish" if full else "hosted")
+    assert recorded["postpublish_job"] == (None if full else {"blocking": False, "launch_error": "unavailable"})
