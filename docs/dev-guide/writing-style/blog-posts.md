@@ -2,7 +2,7 @@
 
 Use this guide for public technical explainers and research notes. Consult the [blog exemplars](blog-exemplars.md) for examples of how Marin posts explain different kinds of work.
 
-Most posts will describe a small research or engineering result that might otherwise go unpublished. The goal is a useful, concise account of what we did and learned—not a press release, polished research paper, or narrative essay. Keep the length proportional to the substance.
+Give readers a concise account of what we did and learned. Keep the length proportional to the substance.
 
 ## Target Audience
 
@@ -49,7 +49,7 @@ Use straightforward, functional section headings such as "Background," "Approach
 - **Connect the result to the research question.** Name the prior result, observation, or constraint that prompted the work. Explain why the team chose the approaches it tested when the sources give a reason. Say what outcome would have counted as an improvement. When a follow-up answers a different question, explain what prompted it and how its comparison changed.
 - **Make comparisons meaningful.** Name the baseline and explain how it handles the part of the problem being changed. Explain the conceptual difference between approaches before quantifying their implementation differences. Describe what changed, how much the measured outcome improved, and under what conditions. Distinguish effects measured separately from those that weren't.
 - Build explanations from concepts to implementations. When introducing a technical technique, first establish the underlying computation, why it is needed, and what makes it expensive or difficult. Then explain how the implementation works and how it differs from the baseline. Don't begin with kernel-specific details, numerical accounting, or implementation comparisons before establishing what is being computed. Favor intuition before implementation detail.
-- Write for the reader, not the source material. Organize information in the order that helps readers understand the result, rather than the order it appears in experiment logs, code, or notes. Introduce concepts before relying on them, use clear and specific referents, and avoid unnecessary implementation identifiers. Include details that support the explanation or substantiate the results; link to source artifacts for exhaustive documentation.
+- Organize information in the order that helps readers understand the result. Introduce concepts before relying on them and use specific referents. Keep the details that support the explanation or evidence. Link to sources for the full implementation and experiment records.
 - Make examples do explanatory work. Choose examples that isolate the central idea, show enough intermediate steps to make the reasoning easy to follow, and explicitly connect the example to the general technique.
 - Don't introduce solutions to unexplained problems. If you're explaining how a technique avoids a numerical instability, computational cost, or other difficulty, first establish why that difficulty arises.
 - Make the links between ideas explicit. When two steps in an explanation depend on each other, say how. Give readers enough context to follow the reasoning without filling in a missing step themselves.
@@ -58,9 +58,34 @@ Use straightforward, functional section headings such as "Background," "Approach
 - **Be candid and precise.** Discuss negative results, limitations, and unresolved questions. Distinguish observations from interpretations. Don't invent motivations, causal explanations, experimental details, or broader implications.
 - **Avoid unnecessary rhetoric.** No promotional language, generic introductions, formulaic conclusions, or exaggerated significance. Don't turn modest findings into sweeping claims or drown readers in internal terminology.
 
-
-Prefer an informative, modest research note to an impressive-sounding blog post.
-
 Figures should always have captions.
 
-Before publishing, ask whether a strong ML engineer outside the subarea could follow the main argument without looking anything up, and whether the evidence supports the claims being made.
+## Review
+
+Apply the [general prose review](review-prose.md) and the checks below.
+
+### Background and comparison
+
+Read the title and opening. State the headline result and the question it
+answers in your own words. Before the results, check that the draft explains
+what prompted this particular comparison, why the team chose those approaches
+when the sources give a reason, what it measured, and what would count as an
+improvement. If a follow-up takes over the story, check that the draft explains
+what prompted it and which question it answers.
+
+Read the background through the first paragraph of the approach. Check that
+the reader can explain why the baseline does the work being changed and which
+property or constraint the new approach uses. If the background jumps from
+definitions or dimensions to the change, add the missing connection. Move
+benchmark-specific details to where they help explain the mechanism or result.
+
+### Section headings
+
+Read the section headings on their own as a table of contents. For each
+section, use the label that matches its purpose in the
+[structure above](#structure), such as “Background,” “Approach,”
+“Benchmark,” “Results,” or “Limitations.” Add a short qualifier when it
+helps readers choose a section, as in “Single-device benchmark.” Rewrite
+headings that describe a technique or state a finding as functional labels.
+For example, change “Shard the computation” to “Approach.” Keep the
+technical detail in the section itself.

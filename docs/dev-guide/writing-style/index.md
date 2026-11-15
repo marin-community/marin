@@ -11,8 +11,7 @@ For public communications, follow the [conventions](conventions.md).
 
 ## Read The Right File
 
-- Read [blog-posts.md](blog-posts.md) for public explainers and blog posts.
-- Read [research-note.md](research-note.md) for short research notes for the Marin blog.
+- Read [blog-posts.md](blog-posts.md) for public explainers and Research Notes. Use the [Research Note brief](research-note.md) to frame a short note.
 - Read [reports.md](reports.md) for technical reports aimed at peer researchers outside Marin.
 - Read [tutorials.md](tutorials.md) for learning-oriented documentation that introduces Marin.
 - Read [reference-docs.md](reference-docs.md) for precise usage docs aimed at readers who already know Marin.

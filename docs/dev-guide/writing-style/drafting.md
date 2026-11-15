@@ -6,9 +6,9 @@ Read this guide and the [guide for your format](index.md#read-the-right-file) be
 
 **Pick an audience.** Decide early who your target audience is. Typically the format guidance will supply a default choice.
 
-**Lead with the substance.** Establish the problem, result, or technical contribution early. Avoid generic introductions about the importance of AI or the broader research landscape.
+**Lead with the substance.** Establish the problem, result, or technical contribution early.
 
-**Explain why, not just what.** Describe the constraints, alternatives, and tradeoffs behind technical decisions. Where possible, explain why one approach succeeded or failed relative to another.
+**Explain why.** Describe the constraints, alternatives, and tradeoffs behind technical decisions. Where possible, explain why one approach succeeded or failed relative to another.
 
 **Be specific.** Use actual numbers, configurations, experimental results, and implementation details. Link to code, experiments, issues, and prior research. Don't replace technical details with high-level summaries.
 
@@ -20,19 +20,7 @@ Read this guide and the [guide for your format](index.md#read-the-right-file) be
 
 **Use straightforward language.** Prefer ordinary words and direct sentences. Technical jargon is appropriate when precise. Contractions, first-person language, and occasional informality are welcome. Don't force jokes, enthusiasm, or personality.
 
-**Respect individual voices** when editing human-authored prose.Different authors write differently. Preserve an author's terminology, emphasis, and natural phrasing. Don't impose a uniform house voice beyond clarity, precision, and directness.
-
-## Avoid
-
-- Corporate or promotional prose: "groundbreaking," "game-changing," "pushing the boundaries," "exciting milestone."
-- Generic filler: "In the rapidly evolving landscape of AI," "It's important to note," "Let's dive in."
-- Artificial rhetorical flourishes, especially repetitive "not just X, but Y" constructions.
-- Excessive enthusiasm, self-congratulation, or performative humility.
-- Overselling the generality or significance of narrow experimental results.
-- Vague conclusions that merely restate that the work was valuable.
-- Bulleted lists where a few coherent paragraphs would be clearer. Bulleted lists are sometimes correct though.
-- Excessive bolding, dramatic one-sentence paragraphs, and unnecessary transitions.
-- Inventing a tidy narrative around a messy research process.
+**Respect individual voices.** Preserve an author's terminology, emphasis, and natural phrasing. Focus edits on clarity, precision, and directness.
 
 ## When drafting or editing with an LLM
 
@@ -44,7 +32,7 @@ Prefer concise, natural prose over elaborate exposition. Remove repetition and f
 
 When editing an existing draft, retain the author's voice. Don't rewrite sentences merely to make them sound more polished or to adhere to the stylistic guidelines here.
 
-**The writing should feel like a researcher explaining their actual work, not an AI producing a research blog post.**
+Write in the voice of a researcher explaining their own work.
 
 ## Write in plain Technical English
 

@@ -85,7 +85,9 @@ the new article’s facts and claims in its own sources.
 ## Construct the outline
 
 Read Marin's [drafting guide](../../../docs/dev-guide/writing-style/drafting.md)
-and [blog guidance](../../../docs/dev-guide/writing-style/blog-posts.md).
+and [Research Note brief](../../../docs/dev-guide/writing-style/research-note.md).
+Use the [blog guidance](../../../docs/dev-guide/writing-style/blog-posts.md)
+for structure and figures.
 
 **Identify and frame the contribution before drafting.** For each candidate
 post, identify the main question, what the experiments actually establish, and
@@ -151,6 +153,7 @@ the draft.
 ## Review
 
 Apply the [prose review checklist](../../../docs/dev-guide/writing-style/review-prose.md)
+and [blog review checks](../../../docs/dev-guide/writing-style/blog-posts.md#review)
 to the draft and figures before the cold read. Check edits that change a
 technical claim against its source.
 

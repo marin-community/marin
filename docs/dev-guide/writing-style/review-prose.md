@@ -30,32 +30,6 @@ writing, see the [drafting guide](drafting.md).
 - Replace unsupported adjectives such as `robust` or `significant` with
   evidence. State specific unknowns and remove claims that are out of date.
 
-## Check Blog Background
-
-Read the title and opening. State the headline result and the question it
-answers in your own words. Before the results, check that the draft explains
-what prompted this particular comparison, why the team chose those approaches
-when the sources give a reason, what it measured, and what would count as an
-improvement. If a follow-up takes over the story, check that the draft explains
-what prompted it and which question it answers.
-
-Read the background through the first paragraph of the approach. Check that
-the reader can explain why the baseline does the work being changed and which
-property or constraint the new approach uses. If the background jumps from
-definitions or dimensions to the change, add the missing connection. Move
-benchmark-specific details to where they help explain the mechanism or result.
-
-## Check Blog Section Headings
-
-Read the section headings on their own as a table of contents. For each
-section, use the label that matches its purpose in the
-[blog guide](blog-posts.md#structure), such as “Background,” “Approach,”
-“Benchmark,” “Results,” or “Limitations.” Add a short qualifier when it
-helps readers choose a section, as in “Single-device benchmark.” Rewrite
-headings that describe a technique or state a finding as functional labels.
-For example, change “Shard the computation” to “Approach.” Keep the
-technical detail in the section itself.
-
 ## Cut Empty Sentences
 
 Delete a sentence when removing it loses no information. Common waste:
@@ -118,8 +92,13 @@ not run.` A measured comparison is fine when both sides matter.
 - Skip `landscape`, `ecosystem`, `interplay`, `tapestry`, `testament`, `delve`,
   `showcase`, `underscore`, and `foster`.
 - Avoid em-dash asides. Make the point a sentence or delete it.
-- Avoid bold labels, takeaway boxes, and decorative headings.
-- Cut hype, product-announcement language, AGI speculation, and decorative emoji.
+- Use headings and bold labels when they help readers navigate. Cut decorative
+  emphasis and takeaway boxes that repeat the prose.
+- Write continuous explanations as paragraphs. Use lists for items readers
+  need to scan individually.
+- Cut hype, self-praise, performative humility, product-announcement language,
+  AGI speculation, and decorative emoji. Remove phrases such as
+  `groundbreaking`, `game-changing`, and `pushing the boundaries`.
 
 ## Score Every Paragraph
 
