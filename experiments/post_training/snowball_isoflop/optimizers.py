@@ -66,35 +66,68 @@ def completed_trial_report(selected: Probe, optimizer: str, lr: float, trial_pha
     return report
 
 
+def trial_attempt_phase(trial_phase: str, attempt: int) -> str:
+    """Fresh probe identity for each stall retry of one LR candidate."""
+    return trial_phase if attempt == 0 else f"{trial_phase}-retry{attempt}"
+
+
+def run_lr_trials(
+    selected: Probe,
+    optimizer: str,
+    trial_phase: str,
+    prior_trial_phases: tuple[str, ...] = (),
+    max_stalls: int = 3,
+) -> tuple[list[dict], list[dict]]:
+    """Run one optimizer's LR candidates at the selected batch, with stall retries.
+
+    A watchdog stall is an infrastructure failure, not an experimental result:
+    each stalled candidate retries under a fresh identity up to ``max_stalls``
+    total attempts, and only then becomes a recorded exclusion. A memory limit
+    is deterministic at the trial geometry and excludes immediately. Returns
+    ``(completed_reports, exclusion_records)``.
+    """
+    reports: list[dict] = []
+    exclusions: list[dict] = []
+    for lr in lr_candidates(selected.size, optimizer):
+        reused = next(
+            (
+                report
+                for phase in prior_trial_phases
+                if (report := completed_trial_report(selected, optimizer, lr, phase)) is not None
+            ),
+            None,
+        )
+        if reused is not None:
+            reports.append(reused)
+            continue
+        attempts = []
+        report = None
+        for attempt in range(max_stalls):
+            probe = at_budget(
+                replace(selected, optimizer=optimizer, learning_rate=lr, seed=0),
+                3e18,
+                trial_attempt_phase(trial_phase, attempt),
+            )
+            report = run_probe(probe)
+            if report["status"] == "complete":
+                reports.append(report)
+                report = None
+                break
+            attempts.append({"phase": probe.cell.phase, "status": report["status"], "error": report.get("error")})
+            if report["status"] != "stall_limit":
+                break
+        if report is not None and report["status"] != "complete":
+            exclusions.append({"optimizer": optimizer, "learning_rate": lr, "attempts": attempts})
+    return reports, exclusions
+
+
 def sweep(size: int, selection_path: str, trial_phase: str = "D", prior_trial_phases: tuple[str, ...] = ()) -> dict:
     selected = selected_layout(size, selection_path)
     results = []
+    excluded = []
     winners = {}
     for optimizer in OPTIMIZERS:
-        reports = []
-        excluded = []
-        for lr in lr_candidates(size, optimizer):
-            reused = next(
-                (
-                    report
-                    for phase in prior_trial_phases
-                    if (report := completed_trial_report(selected, optimizer, lr, phase)) is not None
-                ),
-                None,
-            )
-            if reused is not None:
-                reports.append(reused)
-                continue
-            report = run_probe(
-                at_budget(replace(selected, optimizer=optimizer, learning_rate=lr, seed=0), 3e18, trial_phase)
-            )
-            if report["status"] == "complete":
-                reports.append(report)
-            else:
-                # A stalled or memory-limited LR candidate is a recorded
-                # observation, not a tree-fatal error: the sweep picks the LR
-                # winner among the candidates that ran.
-                excluded.append(report)
+        reports, exclusions = run_lr_trials(selected, optimizer, trial_phase, prior_trial_phases)
         if not reports:
             raise ValueError(f"Every LR candidate failed for {optimizer} on d{size}")
         # The primary metric is assistant-token micro cross entropy; preserve
@@ -103,29 +136,63 @@ def sweep(size: int, selection_path: str, trial_phase: str = "D", prior_trial_ph
         winners[optimizer] = {
             "probe": winner["probe"],
             "final_loss": final_loss(winner),
-            "excluded": [
-                {
-                    "learning_rate": report["probe"]["learning_rate"],
-                    "status": report["status"],
-                    "error": report.get("error"),
-                }
-                for report in excluded
-            ],
+            "excluded": exclusions,
         }
         results.extend(reports)
-    return {"size": size, "selection": selection_path, "trials": results, "winners": winners}
+        excluded.extend(exclusions)
+    result = {
+        "size": size,
+        "selection": selection_path,
+        "trials": results,
+        "excluded": excluded,
+        "winners": winners,
+    }
+    if excluded:
+        # Prominent flag: the LR sweep ran with unrunnable candidates, so the
+        # winners cover only the geometries that completed.
+        result["degenerate_lr_tuning"] = True
+    return result
 
 
 def q5_probes() -> tuple[Probe, ...]:
     probes = []
     for size in SIZES:
         tuning = read_json(f"{PREFIX}/{VERSION}/manager-D/completed-{size}.json")["result"]
-        if len(tuning["trials"]) != 6 or any(trial["status"] != "complete" for trial in tuning["trials"]):
+        if any(trial["status"] != "complete" for trial in tuning["trials"]):
             raise ValueError("Q5 requires equal completed LR tuning for both optimizers")
+        excluded = {(record["optimizer"], record["learning_rate"]) for record in tuning.get("excluded", [])}
+        if tuning.get("degenerate_lr_tuning"):
+            # Prominent degenerate flag: some LR candidates were unrunnable
+            # (three stall attempts each) and are absent from the sweep; the
+            # winners cover only the candidates that completed.
+            print(
+                f"WARNING d{size}: degenerate LR tuning - excluded candidates "
+                f"{sorted(excluded)}; winners cover runnable candidates only"
+            )
         for optimizer in OPTIMIZERS:
+            if optimizer not in tuning["winners"]:
+                raise ValueError(f"Q5 requires a winner for {optimizer} on d{size}")
+            accounted = {(optimizer, lr) for lr in lr_candidates(size, optimizer) if (optimizer, lr) not in excluded}
+            matched = {
+                (decoded.optimizer, decoded.learning_rate)
+                for trial in tuning["trials"]
+                if trial["status"] == "complete" and (decoded := draccus.decode(Probe, trial["probe"]))
+            }
+            if not accounted <= matched:
+                raise ValueError(f"Q5 accounting mismatch for {optimizer} on d{size}")
             selected = draccus.decode(Probe, tuning["winners"][optimizer]["probe"])
             probes.extend(at_budget(replace(selected, seed=seed), 1e19, "Q5") for seed in (0, 1, 2))
     return tuple(probes)
+
+
+def persist_sweep(size: int, result: dict, manager: StoragePath) -> dict:
+    """Write a completed sweep result where Q5's runner reads it, flagging degeneracy."""
+    (manager / f"completed-{size}.json").write_text(json.dumps({"result": result}, indent=2))
+    if result.get("degenerate_lr_tuning"):
+        (manager / "excluded-lr-candidates.json").write_text(
+            json.dumps({"sizes": [size], "excluded": result["excluded"]}, indent=2)
+        )
+    return result
 
 
 def main():
@@ -177,8 +244,10 @@ def main():
         )
         budgeted_map(
             {str(size): size for size in SIZES},
-            lambda size: sweep(
-                size, args.selection, args.trial_phase, tuple(filter(None, args.prior_trial_phases.split(",")))
+            lambda size: persist_sweep(
+                size,
+                sweep(size, args.selection, args.trial_phase, tuple(filter(None, args.prior_trial_phases.split(",")))),
+                manager,
             ),
             manager,
             args.h100_hour_limit,
