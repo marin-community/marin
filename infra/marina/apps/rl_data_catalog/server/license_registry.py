@@ -5,7 +5,7 @@
 
 LICENSE_BANS = r"""
 {
-  "version": "2026.11.15.4",
+  "version": "2026.11.15.5",
   "bans": [
     {
       "source_id": "ASDiv:asdiv",
@@ -134,22 +134,6 @@ LICENSE_BANS = r"""
       "license_ids": [
         "missing"
       ]
-    },
-    {
-      "source_id": "Evalchemy:ifbench",
-      "upstream_id": "allenai/IFBench_test",
-      "upstream_revision": "2e8a48de45ff3bf41242f927254ca81b59ca3ae2",
-      "classification": "missing",
-      "license_ids": [
-        "missing"
-      ],
-      "reason": "No license declaration in pinned upstream primary evidence.",
-      "evidence_urls": [
-        "https://huggingface.co/datasets/allenai/IFBench_test/resolve/2e8a48de45ff3bf41242f927254ca81b59ca3ae2/README.md"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574578+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
     },
     {
       "source_id": "Evalchemy:math500",

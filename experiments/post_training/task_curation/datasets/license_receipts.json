@@ -1242,5 +1242,67 @@
     ],
     "resolved_source": null,
     "wrapper_chain": []
+  },
+  "Evalchemy:ifbench": {
+    "source_id": "Evalchemy:ifbench",
+    "dataset_id": "allenai/IFBench_test",
+    "revision": "2e8a48de45ff3bf41242f927254ca81b59ca3ae2",
+    "resolved_at": "2026-11-15T20:37:33.877904+00:00",
+    "resolver_version": "atlas-license-v2",
+    "evidence": [
+      {
+        "url": "https://huggingface.co/datasets/allenai/IFBench_test/resolve/2e8a48de45ff3bf41242f927254ca81b59ca3ae2/README.md",
+        "kind": "dataset_card",
+        "sha256": "c50b4a9c37dcfb64092e83f13031852e1d24521125afc587e82a38805aa5c702",
+        "license_ids": [
+          "missing"
+        ],
+        "quoted_lines": [
+          "L1: ---",
+          "L2: dataset_info:",
+          "L3:   features:",
+          "L4:   - name: key",
+          "L5:     dtype: string",
+          "L6:   - name: prompt",
+          "L7:     dtype: string",
+          "L8:   - name: instruction_id_list",
+          "L9:     sequence: string",
+          "L10:   - name: kwargs",
+          "L11:     list:",
+          "L12:     - name: N"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/allenai/IFBench_test/resolve/2e8a48de45ff3bf41242f927254ca81b59ca3ae2/README.md",
+        "kind": "readme_license",
+        "sha256": "c50b4a9c37dcfb64092e83f13031852e1d24521125afc587e82a38805aa5c702",
+        "license_ids": [
+          "odc-by"
+        ],
+        "quoted_lines": [
+          "L111: This dataset is licensed under ODC-BY-1.0. It is intended for research and educational use in accordance with Ai2's [Responsible Use Guidelines](https://allenai.org/responsible-use). This dataset includes output data generated from third party models that are subject to separate terms governing their use. "
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      },
+      {
+        "url": "https://huggingface.co/datasets/allenai/IFBench_test/resolve/2e8a48de45ff3bf41242f927254ca81b59ca3ae2/README.md",
+        "kind": "readme_notice",
+        "sha256": "c50b4a9c37dcfb64092e83f13031852e1d24521125afc587e82a38805aa5c702",
+        "license_ids": [],
+        "quoted_lines": [
+          "(no license statement in this document)"
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    ],
+    "bundled_third_party": true,
+    "model_generated_outputs": false,
+    "decisions": [],
+    "resolved_source": null,
+    "wrapper_chain": []
   }
 }
