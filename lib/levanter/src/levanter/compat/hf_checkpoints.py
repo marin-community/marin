@@ -135,12 +135,7 @@ def build_generation_config(
     tokenizer: "PreTrainedTokenizerBase",
     eos_token_ids: list[int] | None,
 ) -> GenerationConfigDict | None:
-    """Build a validated generation_config override from explicit EOS token IDs.
-
-    ``save_pretrained`` preserves these ids and completes the rest of
-    ``generation_config.json`` (end-of-turn stop tokens from the chat template,
-    ``bos_token_id``, and sampling defaults) with
-    :func:`levanter.compat.hf_generation_config.export_generation_config`.
+    """Return a validated generation-config override for explicit EOS token IDs.
 
     Args:
         tokenizer: The tokenizer that will be saved with the checkpoint.

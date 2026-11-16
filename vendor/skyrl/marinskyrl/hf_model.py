@@ -39,7 +39,7 @@ class GenerationConfigTokenizer(Protocol):
     def __len__(self) -> int: ...
 
 
-def _token_ids(value: Any) -> list[int]:
+def _token_ids(value: int | list[int] | None) -> list[int]:
     if value is None:
         return []
     if isinstance(value, int):

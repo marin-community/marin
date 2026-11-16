@@ -42,7 +42,7 @@ def stop_token_ids(tokenizer: ExportTokenizer, chat_template: str | None) -> lis
     return sorted(ids)
 
 
-def _token_id_list(value: Any) -> list[int]:
+def _token_id_list(value: int | list[int] | None) -> list[int]:
     if value is None:
         return []
     if isinstance(value, int):
