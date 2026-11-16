@@ -249,13 +249,17 @@ SOURCES = (
             build_path="Task Trove",
             origin=SourceOrigin.TASKTROVE,
             family="math-answer",
-            tags=("agentic", "multi-turn"),
+            tags=("agentic", "multi-turn", "deprecated"),
             count=4096,
             notes=(
                 "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at "
                 "conversion. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; "
                 "155 references the production math-verify parser rejects are rejected at conversion; "
-                "contained grader controls 72/72 on the seeded sample; blinded review 7/7 attempted agree."
+                "contained grader controls 72/72 on the seeded sample; blinded review 7/7 attempted agree. "
+                "USER RULING 2026-11-16 (atlas-rulings/license-doubt-standard-dataset-level-20261115.md): "
+                "Deprecated in favor of the repaired TaskTrove:tasktrove-math_gym-qa retained pin "
+                "(open-athena/campaign-release-tasktrove-math-gym-qa-03ef831a-retained-2026.11.16.1-mathgym), "
+                "which contains this population member-for-member; trainable on explicit request only."
             ),
             recipe_qa_history=RecipeQAHistoricalNotes(
                 campaign="RL Data Atlas",

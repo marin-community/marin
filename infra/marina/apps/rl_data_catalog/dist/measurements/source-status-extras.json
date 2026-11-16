@@ -1,6 +1,20 @@
 {
   "pending": [
     {
+      "id": "POLARIS-Project:Polaris-Dataset-53K",
+      "name": "polaris-53k",
+      "display_name": "POLARIS-53K",
+      "status": "Pending",
+      "origin": "POLARIS-Project",
+      "upstream_dataset": "Polaris-Dataset-53K",
+      "upstream_url": null,
+      "notes": "Original deterministic DeepScaleR reward eda12fe22dd83aca59ec46a67147240dc483f62b; LLM fallback disabled.",
+      "stage": "Intake queued",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "reasons": []
+    },
+    {
       "id": "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL",
       "name": "nemotron-cascade-2-if-rl",
       "display_name": "Nemotron Cascade-2 RL data",

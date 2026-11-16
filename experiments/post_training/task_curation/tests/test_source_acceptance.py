@@ -180,3 +180,20 @@ def test_every_registered_source_declares_catalog_metadata():
     for source in all_sources().values():
         declaration = source.declaration
         assert declaration.id == source.info.id
+
+
+@pytest.mark.data_integration
+def test_nemotron_gym_math_v5_is_deprecated_in_favor_of_the_qa_repair():
+    """The user ruled math-v5 Deprecated in favor of the repaired math_gym-qa pin.
+
+    Deprecated stays trainable on explicit request: the tag carries no exclusion
+    claim, so the row resolves to SourceStatus.DEPRECATED and the default
+    training selections skip it.
+    """
+    from finestore.rl.status_taxonomy import SourceStatus
+
+    source = all_sources()["TaskTrove:laion__nemotron-gym-math-v5"]
+    assert source.status is SourceStatus.DEPRECATED
+    assert "deprecated" in source.info.tags
+    assert source.exclusion_claims == ()
+    assert "TaskTrove:tasktrove-math_gym-qa" in source.info.notes
