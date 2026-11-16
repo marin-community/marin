@@ -4,6 +4,7 @@
 """Original converted TaskSpecs cross the production trial and grading boundaries."""
 
 import asyncio
+import hashlib
 import json
 import inspect
 import shutil
@@ -100,17 +101,18 @@ async def test_declarative_task_spec_grades_original_actor_state_and_closes_cont
     ))
     environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS,
                                           docker_build=build, working_directory="/app")
-    check = b"from pathlib import Path\nprint(float(Path('collected.txt').read_text() == 'gold'))\n"
+    source_check = 'if [ "$(cat value)" = gold ]; then printf 1; else printf 0; fi > collected.txt'
     task = TaskSpec(
         id="declared-build-state", source=Source(dataset="fixture", revision="pin", row="0", importer_revision="1"),
         context=ConversationInput(events=(TextMessage(role="user", content="Replace value with gold."),)),
         answer_type=AnswerType.WORKSPACE_STATE, answer_format=PlainText(), environment_requirements=environment,
-        grader=ScriptGrader(argv=("python3", "/tests/check.py"), environment=environment, answer_path=None, timeout=None,
-                            collect=(VerifierCommand(argv=("bash", "-c", "cp value collected.txt"), cwd="/app"),),
-                            artifacts=(VerifierArtifact(source="/app/collected.txt", target="/app/collected.txt", kind=ArtifactKind.FILE),)),
-        resources=ResourceGroups(worker=(inline_resource("app/gold", b"gold"),), oracle=(inline_resource("solution/solve.sh", b"cp gold value\n"),), verifier=(inline_resource("check.py", check),)),
+        grader=ScriptGrader(argv=("cp", "/source-reward.txt", "/logs/verifier/reward.txt"), environment=environment, answer_path=None, timeout=None,
+                            collect=(VerifierCommand(argv=("bash", "-c", source_check), cwd="/app"),),
+                            artifacts=(VerifierArtifact(source="/app/collected.txt", target="/source-reward.txt", kind=ArtifactKind.FILE),),
+                            reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.txt", format=RewardFileFormat.NUMBER),))),
+        resources=ResourceGroups(worker=(inline_resource("app/gold", b"gold"),), oracle=(inline_resource("solution/solve.sh", b"cp gold value\n"),)),
         integrity_contract=RootDeliveryContract(dependency_state=SharedDependencyState.AGENT_MUTABLE,
-                           verifier_files=(DeliveredVerifierFile(name="check.py", mode=0o644, sha256=canonical_sha256("fixture")),),
+                           verifier_files=(DeliveredVerifierFile(name="state.sh", mode=0o755, sha256=hashlib.sha256(source_check.encode()).hexdigest()),),
                            undeclared_deadline=True),
     )
     directory = tmp_path / "task"
@@ -140,6 +142,13 @@ async def test_declarative_task_spec_grades_original_actor_state_and_closes_cont
     assert len(machines.machines) == 2 and all(machine.closed for machine in machines.machines)
     assert all(not context.exists() for context in contexts)
     assert TaskSpec.model_validate_json((directory / "task-spec.json").read_text()) == task
+    evidence = Path(trial.paths.verifier_dir) / "source-artifacts"
+    downloads = json.loads((evidence / "index.json").read_text())
+    assert len(downloads) == 1
+    archive = evidence / downloads[0]["file"]
+    assert hashlib.sha256(archive.read_bytes()).hexdigest() == downloads[0]["sha256"]
+    with tarfile.open(archive) as bundle:
+        assert float(bundle.extractfile("collected.txt").read()) == expected
 
 
 @dataclass

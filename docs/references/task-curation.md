@@ -2482,7 +2482,8 @@ Its NoP runs the same collect path against that machine after public preparation
 it does not substitute an empty grading machine for the task state.
 
 TaskSpec validation can explicitly select Daytona EVAL declarative provisioning.
-Export with `write_harbor_task(..., docker_build=\n+DockerBuildExecution.DECLARATIVE)` and run the Trial with
+Export with `write_harbor_task(..., docker_build=DockerBuildExecution.DECLARATIVE)`
+using the enum from `taskcompendium.models`, and run the Trial with
 `environment: {type: daytona, kwargs: {provisioning: declarative}}`.
 The Trial owns a temporary copy of each original Docker build context until its
 machines close. It preserves build bytes, file modes, timestamps and the image-default
@@ -2491,6 +2492,19 @@ selects a user; RST retains its original root actor. Mutable bases and downloads
 route records a direct build rather than claiming an immutable image pin.
 Other callers retain the unresolved-build rejection. State capture, other tool
 providers and shared grading without a supported contract remain execution blockers.
+
+Root-delivery conversion keeps the original native configuration privately at
+`source_archive/task.toml`. Its partial resource limits and declared build deadline
+remain source inputs during calibration. A missing verifier deadline remains
+`ScriptGrader.timeout=None`; the Trial still records its outer calibration budget.
+
+The original verifier writes its own reward, output and exit-code artifacts.
+Copy the reward to a separate input path before the fresh grader copies it to its
+FileReward output: FileReward clears its output paths before executing the command.
+Source-machine downloads used by root-delivery grading are archived under
+`verifier/source-artifacts/`, with a SHA-256 index, before temporary grading files
+are removed. This retains the full original verifier output and exit code alongside
+the structured verdict.
 
 Changes to TaskSpec provisioning require the dedicated LOCAL regression below
 on a privileged Linux CPU worker with delegated cgroup v2, loop devices and

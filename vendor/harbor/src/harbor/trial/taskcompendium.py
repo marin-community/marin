@@ -4,6 +4,7 @@
 """Execute original TaskSpecs within Harbor's trial lifecycle and verdict contract."""
 
 import asyncio
+import hashlib
 import json
 import sys
 import time
@@ -118,16 +119,19 @@ class _MeasuredMachine:
         verdicts: list[bytes],
         usage_path,
         initial: dict[str, int],
+        download_evidence_dir: UPath | None = None,
     ):
         self.machine, self.verdicts = machine, verdicts
         self.usage_path, self.initial = usage_path, initial
         self.started = time.monotonic()
         self.usage_written = False
+        self.download_evidence_dir = download_evidence_dir
+        self.download_evidence: list[dict] = []
 
     @classmethod
-    async def start(cls, machine: Machine, verdicts: list[bytes], usage_path):
+    async def start(cls, machine: Machine, verdicts: list[bytes], usage_path, download_evidence_dir: UPath | None = None):
         initial = await resource_counters(MachineResourceCounters(machine))
-        return cls(machine, verdicts, usage_path, initial)
+        return cls(machine, verdicts, usage_path, initial, download_evidence_dir)
 
     async def finish_usage(self) -> None:
         if self.usage_written:
@@ -158,6 +162,13 @@ class _MeasuredMachine:
 
     async def download(self, source: str, target: Path) -> None:
         await self.machine.download(source, target)
+        if self.download_evidence_dir is not None:
+            data = target.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            name = digest + (".tar" if source.endswith(".tar") else ".bin")
+            await _persist(self.download_evidence_dir / name, data)
+            self.download_evidence.append({"source": source, "file": name, "sha256": digest, "bytes": len(data)})
+            await _persist(self.download_evidence_dir / "index.json", json.dumps(self.download_evidence, indent=2) + "\n")
         if source == VERDICT_PATH:
             self.verdicts.append(target.read_bytes())
 
@@ -547,7 +558,11 @@ class TaskSpecTrial(Trial):
                 timeout_error=EnvironmentStartTimeoutError("TaskSpec actor setup timed out"),
             )
             self.machine = await _MeasuredMachine.start(
-                machine, self.verdicts, self.paths.agent_dir / "resource-usage.json"
+                machine, self.verdicts, self.paths.agent_dir / "resource-usage.json",
+                download_evidence_dir=(
+                    self.paths.verifier_dir / "source-artifacts"
+                    if isinstance(task.integrity_contract, RootDeliveryContract) else None
+                ),
             )
             self._owned.push_async_callback(self.machine.finish_usage)
         self.result.environment_setup.finished_at = self._now()

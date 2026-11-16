@@ -83,7 +83,7 @@ class LocalGradingMachine:
                     spec_path.write_text(render_spec(replace(spec, workspace=str(self.local("/app")))))
                 argv.extend(("--logs-dir", str(self.local("/logs/verifier"))))
         else:
-            assert Path(program).name in {"bash", "sh", "cat", "tar", "rm"}, command.argv
+            assert Path(program).name in {"bash", "sh", "cat", "tar", "rm", "cp"}, command.argv
             argv[0] = program
         process = await asyncio.create_subprocess_exec(
             *argv,

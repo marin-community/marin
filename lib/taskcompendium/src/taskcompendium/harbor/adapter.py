@@ -41,6 +41,10 @@ def source_task_configurations(task: TaskSpec) -> tuple[TaskResource, ...]:
         for resource in resources
         if resource.path == "task.toml"
     ]
+    if isinstance(task.integrity_contract, RootDeliveryContract):
+        configurations.extend(
+            resource for resource in task.resources.verifier if resource.path == ARCHIVED_SOURCE_CONFIG
+        )
     oracle = {resource.path: resource for resource in task.resources.oracle}
     if ARCHIVED_SOURCE_CONFIG in oracle:
         if ARCHIVED_SOURCE_PROVENANCE not in oracle:
@@ -66,6 +70,19 @@ def declared_execution_limits(task: TaskSpec) -> dict[str, int | float]:
                 raise ValueError(f"{task.id}: conflicting original {name} declarations")
             declared[name] = value
     return declared
+
+
+def declared_build_timeout(task: TaskSpec) -> float | None:
+    """Read an original native build deadline, rejecting conflicting declarations."""
+    deadlines = [
+        environment["build_timeout_sec"]
+        for resource in source_task_configurations(task)
+        for environment in (tomllib.loads(resource_bytes(resource).decode()).get("environment", {}),)
+        if "build_timeout_sec" in environment
+    ]
+    if deadlines and any(value != deadlines[0] for value in deadlines):
+        raise ValueError(f"{task.id}: conflicting original build deadlines")
+    return deadlines[0] if deadlines else None
 
 
 def unsupported_harbor_contract(
@@ -153,6 +170,7 @@ def write_harbor_task(
     if unsupported is not None:
         raise ValueError(f"{task.id}: {unsupported}")
     require_trial_budget(task, requirements)
+    build_timeout = declared_build_timeout(task)
     directory.mkdir(parents=True, exist_ok=False)
     (directory / "environment").mkdir()
     (directory / TASK_SPEC_FILE).write_text(task.model_dump_json() + "\n")
@@ -165,6 +183,7 @@ def write_harbor_task(
                     "cpus": requirements.cpus,
                     "memory_mb": requirements.memory_mb,
                     "storage_mb": requirements.storage_mb,
+                    **({"build_timeout_sec": build_timeout} if build_timeout is not None else {}),
                 },
                 "agent": {"timeout_sec": requirements.agent_timeout_sec},
                 "verifier": {"timeout_sec": requirements.verifier_timeout_sec, "environment_mode": "separate"},
