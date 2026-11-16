@@ -49,10 +49,10 @@ from levanter.grug._moe.sonic import (
 )
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
-    _aligned_group_sizes,
     _aligned_receiver_rows,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
+    _receiver_group_spans,
     _sort_activations,
 )
 
@@ -517,10 +517,9 @@ def _chunk_plans(routing: _ExpertRouting, layout: _ExpertLayout) -> tuple[_Chunk
             )
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
             active_group_sizes = active_all[experts]  # [Echunk]
-            # Each expert spans its aligned rows, and the last one also the buffer's unused rows.
-            spans = _aligned_group_sizes(active_group_sizes, layout.receiver_alignment)  # [Echunk]
-            spanned = jnp.sum(spans, dtype=jnp.int32)
-            physical_group_sizes = spans.at[-1].add(layout.receiver_rows - spanned)  # [Echunk]
+            physical_group_sizes = _receiver_group_spans(  # [Echunk]
+                active_group_sizes, receiver_rows=layout.receiver_rows, alignment=layout.receiver_alignment
+            )
             plans.append(_ChunkPlan(dispatch_params, return_params, physical_group_sizes, active_group_sizes))
     return tuple(plans)
 

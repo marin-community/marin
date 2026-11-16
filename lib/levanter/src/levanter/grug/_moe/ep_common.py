@@ -218,6 +218,18 @@ def _aligned_receiver_rows(capacity: int, experts: int, alignment: int) -> int:
     return -(-rows // alignment) * alignment
 
 
+def _receiver_group_spans(
+    active_group_sizes: Int[Array, "E"], *, receiver_rows: int, alignment: int
+) -> Int[Array, "E"]:
+    """Rows each expert spans in an aligned receiver buffer of ``receiver_rows`` rows.
+
+    An expert spans its received rows rounded up to ``alignment``, up to the next expert's start,
+    and the last expert also spans the buffer's unused rows.
+    """
+    spans = _aligned_group_sizes(active_group_sizes, alignment)
+    return spans.at[-1].add(receiver_rows - jnp.sum(spans, dtype=jnp.int32))
+
+
 def _expert_granular_a2a_params(
     all_group_sizes: Int[Array, "S E"],
     clipped_group_sizes: Int[Array, "S E"],

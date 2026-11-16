@@ -29,7 +29,7 @@ from levanter.grug._moe.common import (
     _scaled_capacity,
     _swiglu_gate_up_backward,
 )
-from levanter.grug._moe.ep_common import _aligned_receiver_rows, _combine_gather_sum
+from levanter.grug._moe.ep_common import _aligned_group_sizes, _aligned_receiver_rows, _combine_gather_sum
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
@@ -1657,10 +1657,6 @@ def _simulate_ragged_a2a(operands, outputs, params):
             outputs[dst][out_off[i] : out_off[i] + n] = operands[sender][in_off[i] : in_off[i] + n]
 
 
-def _round_up(n: int, multiple: int) -> int:
-    return -(-n // multiple) * multiple
-
-
 # The packed receiver layout, and an alignment that most expert groups here do not fill, so the
 # receiver buffer has gaps between experts.
 _RECEIVER_ALIGNMENTS = [pytest.param(1, id="packed"), pytest.param(4, id="aligned")]
@@ -1678,7 +1674,7 @@ def _expected_receiver_buffer(sorted_payload, starts, clipped, *, receiver, loca
             [sorted_payload[s][starts[s, g] : starts[s, g] + clipped[s, g]] for s in range(shards)]
         )
         expected[start : start + len(arrivals)] = arrivals
-        start = _round_up(start + len(arrivals), alignment)
+        start = _aligned_group_sizes(start + len(arrivals), alignment)
     return expected
 
 
