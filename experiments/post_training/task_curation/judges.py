@@ -215,7 +215,11 @@ class LocalJudgeEndpoint:
                 config.iris,
                 worker_resources=replace(
                     config.iris.worker_resources,
-                    target_cluster=self.accelerator.target_cluster,
+                    # The explicitly targeted root has already federated; its whole
+                    # job tree stays on that peer, and another cluster directive
+                    # from within it would request a second handoff.
+                    target_cluster=None,
+                    regions=None,
                     image=self.worker_image or config.iris.worker_resources.image,
                 ),
                 worker_environment=replace(
