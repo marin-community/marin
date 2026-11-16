@@ -68,6 +68,17 @@ def _e8m0_scales(amax: Float[Array, "..."]) -> UInt8[Array, "..."]:
     return jnp.clip(exponent, E8M0_MIN_EXPONENT, E8M0_MAX_EXPONENT).astype(jnp.uint8)
 
 
+def _quantize_blocks(blocks: Float[Array, "..."], axis: int) -> tuple[Float[Array, "..."], UInt8[Array, "..."]]:
+    """E4M3 data and E8M0 scale bytes of f32 ``blocks`` whose ``axis`` holds each block's 32 values."""
+    scales = _e8m0_scales(jnp.max(jnp.abs(blocks), axis=axis))
+    return saturating_cast_e4m3(blocks / jnp.expand_dims(e8m0_to_f32(scales), axis)), scales
+
+
+def _dequantize_blocks(blocks: Float[Array, "..."], scales: UInt8[Array, "..."], axis: int) -> Float[Array, "..."]:
+    """Exact f32 inverse of `_quantize_blocks`."""
+    return blocks.astype(jnp.float32) * jnp.expand_dims(e8m0_to_f32(scales), axis)
+
+
 def quantize_mxfp8(x: Float[Array, "... K"]) -> tuple[Float[Array, "... K"], UInt8[Array, "... K/32"]]:
     """Quantize along the last axis in blocks of 32. Returns E4M3 data and raw E8M0 scale bytes.
 
@@ -76,16 +87,15 @@ def quantize_mxfp8(x: Float[Array, "... K"]) -> tuple[Float[Array, "... K"], UIn
     k = x.shape[-1]
     assert k % MXFP8_BLOCK_SIZE == 0, f"last axis {k} is not a multiple of {MXFP8_BLOCK_SIZE}"
     blocks = x.astype(jnp.float32).reshape(*x.shape[:-1], k // MXFP8_BLOCK_SIZE, MXFP8_BLOCK_SIZE)
-    scales = _e8m0_scales(jnp.max(jnp.abs(blocks), axis=-1))
-    q = saturating_cast_e4m3(blocks / e8m0_to_f32(scales)[..., None])
+    q, scales = _quantize_blocks(blocks, axis=-1)
     return q.reshape(x.shape), scales
 
 
 def dequantize_mxfp8(q: Float[Array, "... K"], scales: UInt8[Array, "... K/32"]) -> Float[Array, "... K"]:
     """Exact f32 inverse of `quantize_mxfp8`'s encoding."""
     k = q.shape[-1]
-    blocks = q.astype(jnp.float32).reshape(*q.shape[:-1], k // MXFP8_BLOCK_SIZE, MXFP8_BLOCK_SIZE)
-    return (blocks * e8m0_to_f32(scales)[..., None]).reshape(q.shape)
+    blocks = q.reshape(*q.shape[:-1], k // MXFP8_BLOCK_SIZE, MXFP8_BLOCK_SIZE)
+    return _dequantize_blocks(blocks, scales, axis=-1).reshape(q.shape)
 
 
 def quantize_mxfp8_tokens(x: Float[Array, "T ..."]) -> tuple[Float[Array, "T ..."], UInt8[Array, "T/32 ..."]]:
@@ -97,16 +107,15 @@ def quantize_mxfp8_tokens(x: Float[Array, "T ..."]) -> tuple[Float[Array, "T ...
     t = x.shape[0]
     assert t % MXFP8_BLOCK_SIZE == 0, f"token axis {t} is not a multiple of {MXFP8_BLOCK_SIZE}"
     blocks = x.astype(jnp.float32).reshape(t // MXFP8_BLOCK_SIZE, MXFP8_BLOCK_SIZE, *x.shape[1:])
-    scales = _e8m0_scales(jnp.max(jnp.abs(blocks), axis=1))
-    q = saturating_cast_e4m3(blocks / e8m0_to_f32(scales)[:, None])
+    q, scales = _quantize_blocks(blocks, axis=1)
     return q.reshape(x.shape), scales
 
 
 def dequantize_mxfp8_tokens(q: Float[Array, "T ..."], scales: UInt8[Array, "T/32 ..."]) -> Float[Array, "T ..."]:
     """Exact f32 inverse of `quantize_mxfp8_tokens`'s encoding."""
     t = q.shape[0]
-    blocks = q.astype(jnp.float32).reshape(t // MXFP8_BLOCK_SIZE, MXFP8_BLOCK_SIZE, *q.shape[1:])
-    return (blocks * e8m0_to_f32(scales)[:, None]).reshape(q.shape)
+    blocks = q.reshape(t // MXFP8_BLOCK_SIZE, MXFP8_BLOCK_SIZE, *q.shape[1:])
+    return _dequantize_blocks(blocks, scales, axis=1).reshape(q.shape)
 
 
 def _swizzle_tiles(scales: UInt8[Array, "... R C"]) -> UInt8[Array, "... tiles 512"]:
@@ -152,10 +161,11 @@ def quantize_weights(weights: Float[Array, "E ..."], major: WeightMajor) -> tupl
     """Weights quantized along the GEMM's contraction axis in the layout ``major`` stores them in.
 
     Returns the E4M3 values in ``weights``' own layout and `build_sfb` scales over the logical
-    ``(N, K / 32)``. Quantizing in place matters inside the layer scan: a transposed copy makes
-    XLA's layout assignment transpose the whole stacked weight outside the loop. Only the scales,
-    1/32 of the bytes, are transposed for ``WeightMajor.N``.
+    ``(N, K / 32)``.
     """
+    # The values are quantized in place: inside the layer scan a transposed copy makes XLA's layout
+    # assignment transpose the whole stacked weight outside the loop. Only the scales, 1/32 of the
+    # bytes, are transposed for an N-major weight.
     if major == WeightMajor.K:
         values, scales = quantize_mxfp8(weights)  # [E, N, K], [E, N, K/32]
         return values, build_sfb(scales)
