@@ -399,7 +399,7 @@ def main() -> None:
     args = parser.parse_args()
     configure_coreweave_s3()
     plans = [ReleasePlan.model_validate(row) for row in json.loads(StoragePath(args.plans).read_text())]
-    plans = [p for p in plans if p.combined_drop_count and p.source_id not in args.exclude_source]
+    plans = [p for p in plans if p.source_id not in args.exclude_source]
     plans.sort(key=lambda plan: -plan.raw_count)
     raw_records = [] if args.raw_archives is None else json.loads(StoragePath(args.raw_archives).read_text())
     raw_inputs = [RawSourceArchive.model_validate(row) for row in raw_records]

@@ -3341,11 +3341,15 @@ Review the staged shards, then use the
 with that fresh staging root. The checked-in `datasets/lexical_measurement_receipts`
 directory contains references, not writable receipt bodies.
 
-Approved frozen combined plans are published with `remediation_publish`. Run
+Approved frozen combined plans are published with `remediation_publish`.
+The command publishes every supplied plan, including zero-drop plans that
+retain all converted tasks. `--exclude-source` explicitly omits a source. Run
 publication on CPU Iris workers in the artifacts' region, at production priority
 with a three-day timeout. The publisher reads the stored TaskSpecs, removes
-exactly the combined manifest IDs, and creates new private open-athena repositories
-through the existing TaskCompendium publisher. Existing repositories are refused.
+exactly the task IDs in each plan's combined drop manifest, and creates new private
+open-athena repositories through the existing TaskCompendium publisher. An existing
+destination without a matching completed publication receipt fails the command;
+completed per-source artifacts are preserved.
 Task JSON and runtime bytes remain unchanged; readback verifies every retained
 hash and the plan's count. Dataset cards and manifests carry the original pin,
 duplicate and lexical evidence, combined exclusions and counts. Public training

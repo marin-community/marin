@@ -3,6 +3,8 @@
 
 import hashlib
 import json
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -414,6 +416,98 @@ def test_resumed_publication_rechecks_license_and_remains_readable_by_retained_b
     )
     assert PublicationReceipt.model_validate(result).release == publication.release
     assert checked == [(publication.repo, publication.revision)]
+
+
+def test_cli_publishes_clean_population_with_unchanged_tasks(tmp_path, monkeypatch, frozen_population):
+    original, specs, rows = frozen_population
+    drops = tmp_path / "empty-drops.parquet"
+    pq.write_table(pa.table({"task_id": pa.array([], type=pa.string())}), drops)
+    plan = original.model_copy(
+        update={
+            "unique_count": 3,
+            "within_source_duplicates": 0,
+            "raw_lexical_count": 0,
+            "unique_lexical_count": 0,
+            "combined_drop_count": 0,
+            "retained_count": 3,
+            "multiplicities": {"1": 3},
+            "drop_manifest_uri": str(drops),
+            "combined_drop_manifest_uri": str(drops),
+        }
+    )
+    tasks = tmp_path / "published-tasks.parquet"
+    selected = filter_population(plan, str(specs), tasks, None)
+    lexical = decontamination_evidence(plan.source_dataset_id, plan.source_revision, 3).model_dump(mode="json")
+    lexical.update(receipt=None, converter_revision=plan.converter_revision)
+    publication = PublicationReceipt(
+        source_id=plan.source_id,
+        plan=plan,
+        repo="open-athena/clean-fixture",
+        revision="d" * 40,
+        url="https://huggingface.co/datasets/open-athena/clean-fixture/tree/" + "d" * 40,
+        private=True,
+        format="taskcompendium",
+        original_private_pin={"repo": plan.source_dataset_id, "revision": plan.source_revision},
+        tasks_parquet_sha256=file_sha256(StoragePath(str(tasks))),
+        retained_content_sha256=verify_retained(tasks, selected["hashes"]),
+        verified_retained_tasks=3,
+        specs_output_dir=str(specs),
+        evidence_url="https://example.test/clean-publication",
+        lexical=lexical,
+    )
+    evidence = tmp_path / "evidence"
+    output = evidence / hashlib.sha256(plan.source_id.encode()).hexdigest()[:20]
+    output.mkdir(parents=True)
+    (output / "result.json").write_text(publication.model_dump_json())
+    plans, licenses = tmp_path / "plans.json", tmp_path / "licenses"
+    licenses.mkdir()
+    plans.write_text(json.dumps([plan.model_dump(mode="json")]))
+    (licenses / "part-000.json").write_text(
+        json.dumps(
+            {
+                plan.source_id: (
+                    fixture_license(plan.source_id, plan.source_dataset_id, plan.source_revision).model_dump(mode="json")
+                )
+            }
+        )
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "remediation_publish",
+            "--plans",
+            str(plans),
+            "--license-receipts",
+            str(licenses),
+            "--evidence-root",
+            str(evidence),
+            "--version",
+            "fixture",
+            "--workers",
+            "1",
+        ],
+    )
+    # Keep the Hub I/O fakes in process while exercising the real publication path.
+    monkeypatch.setattr(remediation_publish, "ProcessPoolExecutor", ThreadPoolExecutor)
+    monkeypatch.setattr(remediation_publish, "hf_hub_download", lambda *args, **kwargs: str(tasks))
+    monkeypatch.setattr(
+        remediation_publish,
+        "HfApi",
+        lambda: SimpleNamespace(repo_info=lambda *args, **kwargs: SimpleNamespace(private=True)),
+    )
+    monkeypatch.setattr(
+        license_publication,
+        "resolve_license",
+        lambda target: fixture_license(target.source_id, target.dataset_id, target.revision),
+    )
+    remediation_publish.main()
+    (result,) = [PublicationReceipt.model_validate(row) for row in json.loads((evidence / "releases.json").read_text())]
+    assert result.verified_retained_tasks == 3
+    assert release_lexical_evidence(result).receipt.status.value == "clean"
+    assert [(row["id"], row["task_spec"], row["runtime"]) for row in pq.read_table(tasks).to_pylist()] == [
+        (row["id"], row["task_spec"], row["runtime"]) for row in rows
+    ]
 
 
 def test_flagged_external_input_requires_its_raw_snapshot_before_task_read(tmp_path, frozen_population):
