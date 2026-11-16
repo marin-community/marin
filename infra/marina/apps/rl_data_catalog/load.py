@@ -203,7 +203,11 @@ def load_catalog(
     if retired := {source.id for source in sources} & retired_admission_source_ids():
         raise ValueError(f"Retired sources remain in the selected catalog: {sorted(retired)}")
     for source in sources:
-        if filtration(source.declaration.model_dump(mode="json"))["state"] != "excluded":
+        # Available rows must pass full population admission; every other status
+        # publishes as metadata without admission or selectability.
+        if source.declaration.status == "Available" and filtration(source.declaration.model_dump(mode="json"))[
+            "state"
+        ] != "excluded":
             require_declaration_admission(source.declaration)
         if blocker := backend_support_blocker(
             next(row for row in backend_map.sources if row.source_id == source.id),
