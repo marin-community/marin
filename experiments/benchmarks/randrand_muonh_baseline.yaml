@@ -1,0 +1,18 @@
+# Historical MuonH Qwen3 130M sweep settings, using current Levanter.
+# Run with --recipe randrand_muon_hybrid to retain its model and seed.
+type: muonH
+learning_rate: 0.02
+adam_lr: 0.008
+weight_decay: 0.0
+momentum: 0.95
+nesterov: true
+backend_steps: 5
+coefficient_type: quintic
+beta1: 0.9
+beta2: 0.98
+epsilon: 1.0e-15
+muon_epsilon: 1.0e-5
+max_grad_norm: 1.0
+warmup: 1000
+lr_schedule: cosine
+min_lr_ratio: 0.0
