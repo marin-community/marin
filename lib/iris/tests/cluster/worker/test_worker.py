@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import logging
 import socket
 import subprocess as sp
 import threading
@@ -976,6 +977,7 @@ def test_egress_policy_selects_the_docker_network(
     assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
 
 
+@pytest.mark.requires_linux_loopback
 def test_allowlist_task_resolves_through_its_own_dns_filter_until_it_finishes(mock_bundle_store, mock_runtime, tmp_path):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", 0))
@@ -1202,8 +1204,9 @@ def _worker_with_log_sink(
 
 
 def test_start_publishes_worker_logs_before_controller_registration(
-    mock_bundle_store, mock_runtime, tmp_path, monkeypatch
+    mock_bundle_store, mock_runtime, tmp_path, monkeypatch, caplog
 ):
+    caplog.set_level(logging.INFO, logger="iris.cluster.worker.worker")
     sink = _RecordingLogClient()
 
     class _ControllerBoundary:
@@ -1241,11 +1244,12 @@ def test_start_publishes_worker_logs_before_controller_registration(
         threads=ThreadContainer(name="worker-log-test"),
     )
 
-    worker.start()
-    wait_for_condition(controller.registration_seen.is_set)
-
-    assert controller.worker_log_visible
-    worker.stop()
+    try:
+        worker.start()
+        wait_for_condition(controller.registration_seen.is_set)
+        assert controller.worker_log_visible
+    finally:
+        worker.stop()
 
 
 def test_handle_reconcile_publishes_worker_stat(mock_bundle_store, mock_runtime, tmp_path):
