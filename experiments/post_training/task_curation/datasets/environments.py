@@ -129,11 +129,20 @@ LEAN_KERNEL_GRADER_PACKAGES = replace(GRADER_PACKAGES, dockerfile=HERE / "lean/l
 
 TERMINUS_GRADER_PACKAGES = Environment(requirements=("openapi-schema-validator==0.6.3",))
 
+MULTISWE_REPORT_GRADER = Environment(
+    requirements=(
+        "multi-swe-bench @ https://files.pythonhosted.org/packages/48/ad/6b7cda600a50392c790b14ee420b9a3bb318a982a298c05f2d1c066a434f/multi_swe_bench-1.1.2.tar.gz#sha256=44944bc6608d7d9b8d4390f3ce0a3b2c69122ea6be6e35766c6fde2328f50392",
+    ),
+    dockerfile=HERE / "prime_intellect/multiswe/parser.Dockerfile",
+)
+"""The upstream Multi-SWE report dependency, isolated from the actor's mutable environment."""
+
 BUILDABLE_ENVIRONMENTS = (
     GRADER_PACKAGES,
     COMPILER_GRADER_PACKAGES,
     LEAN_GRADER_PACKAGES,
     LEAN_KERNEL_GRADER_PACKAGES,
     TERMINUS_GRADER_PACKAGES,
+    MULTISWE_REPORT_GRADER,
 )
 """Explicit environment registrations for the images build CLI."""

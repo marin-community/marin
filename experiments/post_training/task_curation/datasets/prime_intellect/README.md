@@ -87,8 +87,9 @@ retains member bytes, modes and mtimes. Completed captures resume only when
 their image/task binding and stored hashes still match. Failed attempts and
 partial archives stay preserved; a failure prevents a complete-source result.
 `capture-result.json` references the complete `captures.json` manifest and its
-hash. Preserve both with the intake evidence. The Multi-SWE TaskSpec converter
-and its private Hugging Face auxiliary-input binding remain pending.
+hash. Preserve both with the intake evidence. The private auxiliary input is frozen at
+`open-athena/atlas-multiswe-grading-artifacts-20261115-v1@acc1f291ad6ad293c095bd8cde868ab2715717a2`.
+The TaskSpec converter and execution qualification remain pending.
 
 Docker Hub resolution must be single-threaded and honor `Retry-After`, with
 exponential backoff capped at ten minutes. Anonymous registry `HEAD` version
@@ -99,3 +100,27 @@ The documented endpoint is
 anonymous registry negotiation or an already authorized Docker CLI sign-in.
 Keep safe response headers and retry timestamps beside the index, excluding
 authorization tokens. See [Docker's version-check procedure](https://docs.docker.com/docker-hub/usage/pulls/#view-pull-rate-and-limit).
+
+
+### Multi-SWE report parser
+
+`multiswe/data.py` and `multiswe/score.py` retain the source taskset's row restoration,
+instance construction, report generation and expected-test checks at
+`research-environments@b41d8759070715dc102000e06fba0d73ebce9955`. The source's
+Qiskit import shim is retained under `multiswe/_qiskit/`. The private grader
+uses `MULTISWE_REPORT_GRADER`, which pins the original `multi-swe-bench` 1.1.2
+source distribution by SHA-256 and compiles transitive dependencies with the
+standard environment builder. Build its registered environment by identity before
+planning conversion.
+
+`multiswe/host_grade.py` runs on the fresh grading machine after original
+`/home` harness execution on the actor's machine. It consumes the raw source row,
+cat output and exit code, and the harness stdout/stderr as separate artifacts.
+A successful nonempty cat output is passed unchanged to the original report
+parser; otherwise it uses the source's stdout/stderr fallback. It preserves
+UTF-8 and line endings, and reports missing required transport artifacts as
+errors. Harness exit status alone does not replace the source score.
+
+The host parser and its dependency image do not change the actor image or
+install Python in it. Parser probes supply no execution qualification; complete
+oracle, NoP, final-pin SAMPLE and admission receipts are still required.

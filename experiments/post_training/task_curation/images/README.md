@@ -64,7 +64,7 @@ generated package steps, or change the grader container. `ENV` persists into the
 image on purpose: it is how a fragment puts its toolchain on `PATH`.
 
 Each requirement is an exact `name==version` pin or a `name @ https://...`
-URL that names a commit; the build compiles them to a hash lock, so there is no
+URL pinned by a commit or a `#sha256=<64 hex digits>` fragment; the build compiles them to a hash lock, so there is no
 checked-in lock to regenerate. Each `files` entry names an https archive (zip or
 tar) by URL and SHA-256 and the member, a file or directory inside it, to place
 at the absolute path. The path is the same in a built image and in the worker,

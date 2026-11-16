@@ -18,6 +18,8 @@ PINNED_REQUIREMENT = re.compile(REQUIREMENT_NAME + r"==[^\s=;@]+")
 """An exact ``name==version`` pin, optionally with extras."""
 ARCHIVE_REQUIREMENT = re.compile(REQUIREMENT_NAME + r" @ https://\S*(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])\S*")
 """A direct URL requirement whose URL names the commit it archives."""
+HASHED_ARCHIVE_REQUIREMENT = re.compile(REQUIREMENT_NAME + r" @ https://[^\s#]+#sha256=[0-9a-f]{64}")
+"""A direct URL requirement pinned by its content digest."""
 SHA256 = re.compile(r"[0-9a-f]{64}")
 VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 APT_PACKAGE = re.compile(r"[a-z0-9][a-z0-9+.-]+")
@@ -89,7 +91,7 @@ class Environment:
     """What a grader machine must provide; the build resolves it and the pipeline decides where to run it.
 
     ``requirements`` are the direct Python requirements, each an exact ``name==version`` pin or a direct
-    URL requirement whose URL names a commit; the build compiles them to a hash lock. ``apt`` names
+    URL requirement pinned by a commit or a SHA-256 fragment; the build compiles them to a hash lock. ``apt`` names
     Debian packages. ``files`` places pinned archive members at absolute paths: the same path in a built
     image and in the worker, where bubblewrap binds each read-only, so a path cannot lie under the host
     system directories (``/usr``, ``/etc`` and the rest of ``SYSTEM_DIRECTORIES``), which are
@@ -119,11 +121,15 @@ class Environment:
         unpinned = [
             requirement
             for requirement in self.requirements
-            if PINNED_REQUIREMENT.fullmatch(requirement) is None and ARCHIVE_REQUIREMENT.fullmatch(requirement) is None
+            if not any(
+                pattern.fullmatch(requirement)
+                for pattern in (PINNED_REQUIREMENT, ARCHIVE_REQUIREMENT, HASHED_ARCHIVE_REQUIREMENT)
+            )
         ]
         if unpinned:
             raise ValueError(
-                f"Requirements must be exact name==version pins or name @ https://... URLs naming a commit: {unpinned}"
+                "Requirements must be exact name==version pins or HTTPS URLs pinned by a commit or SHA-256: "
+                f"{unpinned}"
             )
         invalid = [package for package in self.apt if APT_PACKAGE.fullmatch(package) is None]
         if invalid:

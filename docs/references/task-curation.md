@@ -1325,7 +1325,7 @@ local runtime unless its lock is built into an image.
 
 | Field | Meaning |
 |---|---|
-| `requirements` | Direct Python requirements, each an exact `name==version` pin or a `name @ https://...` URL naming a commit, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`, with transitive packages limited to releases before the `EXCLUDE_NEWER` cutoff in `images/build.py` so every build of an identity resolves the same lock. |
+| `requirements` | Direct Python requirements, each an exact `name==version` pin or a `name @ https://...` URL pinned by a commit or a `#sha256=<64 hex digits>` fragment, compiled at build time with `uv pip compile --generate-hashes` for Python 3.12 on `x86_64-unknown-linux-gnu`, with transitive packages limited to releases before the `EXCLUDE_NEWER` cutoff in `images/build.py` so every build of an identity resolves the same lock. |
 | `apt` | Debian package names. |
 | `files` | Absolute guest paths, each receiving a member (a file or directory) of an https archive pinned by URL and SHA-256. The path is the same in both placements and the worker binds it read-only, so it cannot lie under the host system directories such as `/usr` or inside another placed path. |
 | `env` | Environment variables for the grader in both placements. |
