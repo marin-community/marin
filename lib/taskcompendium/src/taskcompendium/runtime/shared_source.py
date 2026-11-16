@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import shutil
 import signal
@@ -105,19 +106,30 @@ def snapshot(workspace: Path, names: list[str]) -> dict[str, dict]:
     return {name: entry(workspace, name) for name in names}
 
 
-def materialize(common, workspace: Path, runner: dict, config: dict, tests: Path, timeout: float) -> None:
-    """Run the family's original test-restore logic with its original snippets."""
+def materialize(common, root: Path, workspace: Path, runner: dict, config: dict, tests: Path, timeout: float) -> None:
+    """Run the family's original test-restore logic with its original snippets.
+
+    Any temporary patch material lives inside the protected root and is removed
+    before the agent phase; the agent can neither read nor keep it.
+    """
     module = load_source_module(tests, NATIVE_SCRIPTS)
-    environment = {**os.environ, **module.ENV, runner["trusted_commit_key"]: config["base_commit"]}
-    if runner["family"] == "scale-swe":
-        common.checked(["sh", "-c", module.RESTORE], cwd=workspace, timeout=timeout, env=environment)
-        return
-    if not config["test_patch"].strip():
-        return
-    patch = Path("/tmp/taskcompendium-source-test.patch")
-    patch.write_text(config["test_patch"], encoding="utf-8")
-    environment["patch"] = str(patch)
-    common.checked(["sh", "-c", module.REVERT_TEST_FILES], cwd=workspace, timeout=timeout, env=environment)
+    # The original snippets read the shell variable $base, exactly as grade.py sets it.
+    environment = {**os.environ, **module.ENV, "base": config["base_commit"]}
+    patch = None
+    try:
+        if runner["family"] == "scale-swe":
+            common.checked(["sh", "-c", module.RESTORE], cwd=workspace, timeout=timeout, env=environment)
+            return
+        if not config["test_patch"].strip():
+            return
+        patch = root / "materialize.patch"
+        patch.write_text(config["test_patch"], encoding="utf-8")
+        patch.chmod(0o600)
+        environment["patch"] = str(patch)
+        common.checked(["sh", "-c", module.REVERT_TEST_FILES], cwd=workspace, timeout=timeout, env=environment)
+    finally:
+        if patch is not None:
+            common.remove_path(patch)
 
 
 def write_entries(root: Path, entries: dict[str, dict]) -> None:
@@ -137,19 +149,46 @@ def write_entries(root: Path, entries: dict[str, dict]) -> None:
         target.chmod(record["mode"])
 
 
-def restore_entries(common, workspace: Path, entries: dict[str, dict]) -> None:
+def repair_ancestors(common, workspace: Path, name: str, reference: dict[str, dict]) -> None:
+    """Make every ancestor of ``name`` a safe directory before removing or writing it.
+
+    An agent-replaced ancestor symlink must not redirect a restore or removal
+    outside the workspace. Ancestors the reference itself recorded as symlinks
+    are the image's own state and are kept after re-checking they stay inside.
+    """
+    workspace_resolved = workspace.resolve()
+    for parent in reversed((workspace / name).parents):
+        if parent == workspace or not parent.is_relative_to(workspace):
+            continue
+        relative = parent.relative_to(workspace).as_posix()
+        recorded = reference.get(relative)
+        if parent.is_symlink():
+            resolved = parent.resolve()
+            if recorded is not None and recorded["kind"] == "symlink" and resolved.is_relative_to(workspace_resolved):
+                continue
+            common.remove_path(parent)
+            parent.mkdir(parents=True, exist_ok=True)
+        elif parent.exists() and not parent.is_dir():
+            common.remove_path(parent)
+            parent.mkdir(parents=True, exist_ok=True)
+        elif not parent.exists():
+            parent.mkdir(parents=True, exist_ok=True)
+
+
+def restore_entries(common, workspace: Path, entries: dict[str, dict], reference: dict[str, dict]) -> None:
     """Recreate recorded workspace paths exactly, including modes and symlinks."""
     directories = [name for name, record in entries.items() if record["kind"] == "dir"]
     files = [name for name, record in entries.items() if record["kind"] != "dir"]
     for name in sorted(directories, key=lambda item: item.count("/")):
+        repair_ancestors(common, workspace, name, reference)
         target = workspace / name
         common.remove_path(target)
         target.mkdir(parents=True, exist_ok=True)
         target.chmod(entries[name]["mode"])
     for name in sorted(files, key=lambda item: item.count("/"), reverse=True):
+        repair_ancestors(common, workspace, name, reference)
         record = entries[name]
         target = workspace / name
-        target.parent.mkdir(parents=True, exist_ok=True)
         common.remove_path(target)
         if record["kind"] == "symlink":
             os.symlink(record["target"], target)
@@ -163,6 +202,7 @@ def remove_entries(common, workspace: Path, entries: dict[str, dict], keep: dict
     for name in sorted(entries, key=lambda item: item.count("/"), reverse=True):
         if name in keep:
             continue
+        repair_ancestors(common, workspace, name, keep)
         common.remove_path(workspace / name)
     for name in sorted(entries, key=lambda item: item.count("/")):
         if name in keep:
@@ -263,7 +303,7 @@ def bootstrap(input_path: Path) -> None:
 
     scope = capture_scope(workspace, runner, config)
     before = snapshot(workspace, scope)
-    materialize(common, workspace, runner, config, tests, spec["timeout"])
+    materialize(common, root, workspace, runner, config, tests, spec["timeout"])
     after_names = capture_scope(workspace, runner, config)
     after = snapshot(workspace, after_names)
     reference = {name: record for name, record in after.items() if record["kind"] != "dir"}
@@ -275,7 +315,7 @@ def bootstrap(input_path: Path) -> None:
     # files, modes and symlinks; only the frozen reference keeps restored bytes.
     keep = {name: record for name, record in before.items()}
     remove_entries(common, workspace, after, keep)
-    restore_entries(common, workspace, keep)
+    restore_entries(common, workspace, keep, keep)
 
     dependencies = [path for path in runner["dependency_paths"] if Path(path).exists()]
     home = os.environ.get("HOME", "/root")
@@ -316,12 +356,22 @@ def prepare_grading(contract: dict, payload: dict) -> None:
     )
     restore_git(common, root, workspace)
     reference = json.loads((root / "reference-paths.json").read_text())
-    scope = capture_scope(workspace, contract["native"], json.loads((root / "tests/config.json").read_text()))
+    runner, config = contract["native"], json.loads((root / "tests/config.json").read_text())
     # Agent-created files inside the declared capture scope cannot alter grading.
-    for name in scope:
+    for name in capture_scope(workspace, runner, config):
         if name not in reference:
+            repair_ancestors(common, workspace, name, reference)
             common.remove_path(workspace / name)
-    restore_entries(common, workspace, reference)
+    # A patch path may not exist yet; its ancestors still must not redirect the
+    # source's own patch application outside the workspace.
+    for key in runner["patch_config_keys"]:
+        for name in patch_paths(config[key]):
+            if PurePosixPath(name).is_absolute():
+                continue
+            repair_ancestors(common, workspace, name, reference)
+            if name not in reference:
+                common.remove_path(workspace / name)
+    restore_entries(common, workspace, reference, reference)
     restore_tests(common, contract, payload)
     common.checked(
         ["chown", "-R", f"{contract['grader_uid']}:{contract['agent_uid']}", str(workspace)], cwd=root, timeout=120
@@ -355,6 +405,8 @@ def grade(contract_path: Path) -> None:
             start_new_session=True,
         )
         try:
+            # timeout=None means the source declares no verifier deadline;
+            # wait like the source does under the same outer enforcement.
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
@@ -363,17 +415,54 @@ def grade(contract_path: Path) -> None:
             common.write_json(
                 reports / "verdict.json", {"status": "scored", "reward": 0, "detail": {"reason": "timeout"}}
             )
-            (reports / "reward.txt").write_text("0\n")
+            _write_canonical_reward(reports, 0, contract)
             return
     common.stop_agent_processes(contract["grader_uid"])
     reward_file = Path(contract["report_directory"]) / "reward.txt"
-    if not reward_file.is_file():
-        raise RuntimeError("Source scorer produced no reward file")
-    reward = float(reward_file.read_text().strip())
+    if code != 0:
+        # An aborted scorer cannot vouch for a reward its same-UID children may
+        # have written before dying; fail closed instead of trusting the file.
+        common.write_json(
+            reports / "verdict.json",
+            {"status": "scored", "reward": 0, "detail": {"exit_code": code, "reason": "scorer_aborted"}},
+        )
+        _write_canonical_reward(reports, 0, contract)
+        return
+    reward = parse_source_reward(reward_file)
+    if reward is None:
+        common.write_json(
+            reports / "verdict.json",
+            {
+                "status": "scored",
+                "reward": 0,
+                "detail": {"exit_code": code, "reason": "invalid_reward", "exists": reward_file.is_file()},
+            },
+        )
+        _write_canonical_reward(reports, 0, contract)
+        return
     common.write_json(
         reports / "verdict.json",
         {"status": "scored", "reward": reward, "detail": {"exit_code": code}},
     )
+    _write_canonical_reward(reports, reward, contract)
+
+
+def parse_source_reward(reward_file: Path) -> float | None:
+    """Validate the source scorer's reward file: regular, finite, in [0, 1]."""
+    if reward_file.is_symlink() or not reward_file.is_file():
+        return None
+    try:
+        reward = float(reward_file.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    # The declared reward domain of these source scorers is a finite [0, 1] float.
+    if not math.isfinite(reward) or reward < 0.0 or reward > 1.0:
+        return None
+    return reward
+
+
+def _write_canonical_reward(reports: Path, reward: float, contract: dict) -> None:
+    reward_file = reports / "reward.txt"
     reward_file.write_text(f"{reward}\n")
     os.chown(reward_file, 0, contract["grader_uid"])
     reward_file.chmod(0o640)

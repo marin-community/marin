@@ -225,17 +225,20 @@ def source_bootstrap_command(setup: str, contract: SharedIntegrityContract) -> s
         + "\n"
         + 'control_python="$(readlink -f "$(command -v python3 || command -v python)")"\n'
         + f'ln -sfn "$control_python" {BOOTSTRAP_DIRECTORY}/python\n'
-        + f'"$control_python" -I -S -c {shlex.quote(unpack)}\n'
-        + f'"$control_python" -I -S {BOOTSTRAP} bootstrap {BOOTSTRAP_INPUT}\n'
+        + f'"$control_python" -I -S -B -c {shlex.quote(unpack)}\n'
+        + f'"$control_python" -I -S -B {BOOTSTRAP} bootstrap {BOOTSTRAP_INPUT}\n'
         + f"rm {BOOTSTRAP_INPUT} /{SOURCE_ARCHIVE}\n"
     )
 
 
 def source_grader_script(contract: SharedIntegrityContract) -> bytes:
-    """Launch the pinned controller with the bootstrapped interpreter."""
+    """Launch the pinned controller with the bootstrapped interpreter.
+
+    ``-B`` keeps the protected root free of import bytecode caches.
+    """
     return (
         "#!/bin/bash\nset -euo pipefail\n"
-        f'exec "{BOOTSTRAP_DIRECTORY}/python" -I -S {contract.harness} grade '
+        f'exec "{BOOTSTRAP_DIRECTORY}/python" -I -S -B {contract.harness} grade '
         f"--contract {contract.protected_root}/contract.json\n"
     ).encode()
 
@@ -245,12 +248,15 @@ def harden_shared_source(
     *,
     profile: SourceGraderProfile,
     dependency_state: SharedDependencyState,
-    timeout: float,
 ) -> SharedIntegrityContract:
     """Rewrite one converted native package with a complete, versioned SHARED contract.
 
-    The caller must publish the package under a new dataset version and qualify
-    it with fresh oracle/NoP QA; this function never changes an already-published
+    The verifier deadline is the source's own declaration: a declared
+    ``verifier.timeout_sec`` passes through verbatim to the controller spec, and
+    an undeclared deadline is preserved as absent (the controller waits
+    unbounded under the same outer enforcement the source runs under). The
+    caller must publish the package under a new dataset version and qualify it
+    with fresh oracle/NoP QA; this function never changes an already-published
     task at runtime.
     """
     missing = [f"tests/{name}" for name in profile.private_files if f"tests/{name}" not in files]
@@ -262,13 +268,20 @@ def harden_shared_source(
     ]
     if unexpected:
         raise ValueError(f"Source package declares undeclared tests files: {sorted(unexpected)}")
+    task_config = tomlkit.parse(files["task.toml"].decode())
+    verifier_table = task_config.get("verifier")
+    declared_timeout = (
+        verifier_table.get("timeout_sec").value
+        if verifier_table is not None and "timeout_sec" in verifier_table
+        else None
+    )
     config = parse_source_config(files, profile)
     tests = {name.removeprefix("tests/"): data for name, data in files.items() if name.startswith("tests/")}
     contract = source_contract(profile, config, tests, dependency_state=dependency_state)
     payload = SourceBootstrapPayload(
         contract=contract,
         tests={name: data.hex() for name, data in tests.items()},
-        spec={"timeout": timeout},
+        spec={"timeout": declared_timeout},
     )
     if SOURCE_ARCHIVE in files:
         raise ValueError(f"Source task occupies protected bootstrap resource: {SOURCE_ARCHIVE}")
@@ -277,7 +290,6 @@ def harden_shared_source(
         del files[f"tests/{name}"]
     files["tests/test.sh"] = source_grader_script(contract)
 
-    task_config = tomlkit.parse(files["task.toml"].decode())
     environment = cast(Table, task_config.setdefault("environment", tomlkit.table()))
     setup_table = cast(Table, environment.setdefault("setup", tomlkit.table()))
     source_setup = str(setup_table.get("command", ""))
@@ -293,8 +305,9 @@ def harden_shared_source(
     agent["user"] = str(contract.agent_uid)
     verifier["user"] = "root"
     verifier["restart_environment"] = False
-    # The controller spec and the Harbor verifier enforce the same bound.
-    verifier["timeout_sec"] = timeout
+    if declared_timeout is not None:
+        # The source's own deadline, verbatim; the controller enforces the same bound.
+        verifier["timeout_sec"] = declared_timeout
     metadata["integrity_contract"] = contract.model_dump(mode="json", exclude_none=True)
     metadata["execution_policy"] = f"shared_agent_mutable_v{contract.version}"
     files["task.toml"] = tomlkit.dumps(task_config).encode()

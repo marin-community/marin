@@ -12,6 +12,7 @@ setup command, agent-phase edits as the agent UID, grading through the shipped
 ``tests/test.sh`` launcher.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -282,22 +283,27 @@ SCALE_TEST = (
     "def test_add():\n    assert add(1, 2) == 3\n\n\n"
     "def test_add_negative():\n    assert add(-1, -1) == -2\n"
 )
+# A later upstream commit changes the test expectations; the declared base still
+# holds the original bytes, so a silent no-op restore must fail the NoP grade.
+HEAD_TEST = SCALE_TEST.replace("assert add(1, 2) == 3", "assert add(1, 2) == -1").replace(
+    "assert add(-1, -1) == -2", "assert add(-1, -1) == 0"
+)
 FAKE_TEST = SCALE_TEST.replace("assert add(1, 2) == 3", "assert True").replace("assert add(-1, -1) == -2", "assert True")
 LEGO_TEST_PATCH = (
     "--- /dev/null\n"
-    "+++ b/tests/test_fixed.py\n"
+    "+++ b/tests/nested/test_fixed.py\n"
     "@@ -0,0 +1,6 @@\n"
     "+import sys, pathlib\n"
-    "+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
+    "+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))\n"
     "+from app import add\n"
     "+\n"
     "+def test_add_fixed():\n"
     "+    assert add(1, 2) == 3\n"
 )
-LEGO_TEST_CMD = "python -m pytest -rA tests/test_fixed.py"
+LEGO_TEST_CMD = "python -m pytest -rA tests/nested/test_fixed.py"
 
 SCALE_IDS = ["tests/test_app.py::test_add", "tests/test_app.py::test_add_negative"]
-LEGO_IDS = ["tests/test_fixed.py::test_add_fixed"]
+LEGO_IDS = ["tests/nested/test_fixed.py::test_add_fixed"]
 
 TEST_SH = b"#!/bin/sh\nset -eu\nmkdir -p /logs/verifier\npython /tests/grade.py\n"
 
@@ -334,14 +340,23 @@ def build_repo() -> str:
     link = tests / "link_to_app.py"
     link.symlink_to("../app.py")
     (WORKSPACE / "untracked_note.txt").write_text("untracked\n")
+    # A nested repository conftest inside the original restore scope.
+    package = WORKSPACE / "pkg"
+    package.mkdir()
+    (package / "conftest.py").write_text("NESTED_CONFTEST = 'base'\n")
     git("init", "-q")
     git("config", "user.email", "fixture@example.test")
     git("config", "user.name", "Fixture")
-    git("add", "app.py", "tests/test_app.py")
+    git("add", "app.py", "tests/test_app.py", "pkg/conftest.py")
     git("commit", "-qm", "base")
-    return subprocess.run(
+    base = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=WORKSPACE, capture_output=True, text=True, check=True
     ).stdout.strip()
+    # A later upstream commit moves HEAD's test bytes away from the declared base.
+    (tests / "test_app.py").write_text(HEAD_TEST)
+    git("add", "tests/test_app.py")
+    git("commit", "-qm", "upstream test change")
+    return base
 
 
 def package_files(family: str, base: str) -> tuple[dict[str, bytes], object]:
@@ -427,6 +442,23 @@ def payload_of(files: dict[str, bytes]) -> dict:
     return json.loads(zlib.decompress(files["setup_files/taskcompendium-source-input.zlib"]))
 
 
+def protected_tree_hash() -> str:
+    """Content-address the protected root so tests can prove it was untouched.
+
+    The grade-time controller copy of the original test script is mechanism
+    state, not protected material, and is excluded.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(PROTECTED.rglob("*")):
+        if path.relative_to(PROTECTED).as_posix() == "original-test.sh":
+            continue
+        digest.update(path.relative_to(PROTECTED).as_posix().encode())
+        if path.is_file() and not path.is_symlink():
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def apply_solution() -> None:
     # The fixture grades the unchanged workspace first; wait past the same-second
     # pyc-staleness window Python itself defines before the fixed source lands.
@@ -453,8 +485,11 @@ def cleanup() -> None:
 
 @pytest.fixture(scope="module")
 def shim() -> None:
+    # Model an agent-writable interpreter directory (as the source conda
+    # environments are group-writable in the real images).
     directory = Path(SHIM)
     directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o777)
     (directory / "python").symlink_to(sys.executable)
     yield
     shutil.rmtree(directory, ignore_errors=True)
@@ -466,7 +501,7 @@ def source_image(shim, request):
     cleanup()
     base = build_repo()
     files, profile = package_files(family, base)
-    harden_shared_source(files, profile=profile, dependency_state=SharedDependencyState.AGENT_MUTABLE, timeout=600.0)
+    harden_shared_source(files, profile=profile, dependency_state=SharedDependencyState.AGENT_MUTABLE)
     stage_and_bootstrap(files)
     yield SourceTask(family=family, files=files, base_commit=base)
     cleanup()
@@ -488,7 +523,18 @@ def test_bootstrap_preserves_the_exact_pre_bootstrap_state(source_image):
     assert stat.S_IMODE(scratch.stat().st_mode) == 0o600
     assert link.is_symlink() and os.readlink(link) == "../app.py"
     assert (WORKSPACE / "untracked_note.txt").read_text() == "untracked\n"
-    assert (tests / "test_app.py").read_text() == SCALE_TEST
+    # The agent-facing tree keeps HEAD's own test bytes, not the declared base.
+    assert (tests / "test_app.py").read_text() == HEAD_TEST
+    assert (WORKSPACE / "pkg/conftest.py").read_text() == "NESTED_CONFTEST = 'base'\n"
+
+
+@pytest.mark.parametrize("source_image", ["scale"], indirect=True)
+def test_restore_uses_the_declared_base_commit_not_head(source_image):
+    # HEAD's test bytes pass with the buggy app; only a real $base restoration
+    # keeps the NoP grade at zero.
+    verdict = run_grade(source_image.files)
+    assert verdict["reward"] == 0.0
+    assert (WORKSPACE / "tests/test_app.py").read_text() == SCALE_TEST
 
 
 @pytest.mark.parametrize("source_image", ["scale"], indirect=True)
@@ -537,12 +583,57 @@ def test_agent_created_patch_path_file_is_discarded(source_image):
         "\n"
         "def test_add_fixed():\n    assert True\n"
     )
-    program = f"import pathlib\npathlib.Path('/testbed/tests/test_fixed.py').write_text({fake!r})\n"
+    program = (
+        "import pathlib\n"
+        "pathlib.Path('/testbed/tests/nested').mkdir(parents=True)\n"
+        f"pathlib.Path('/testbed/tests/nested/test_fixed.py').write_text({fake!r})\n"
+    )
     result = run_as_agent(program)
     assert result.returncode == 0, result.stderr
     assert run_grade(source_image.files)["reward"] == 0.0
     # The frozen reference discarded the agent file and the patch recreated the real one.
-    assert "assert add(1, 2) == 3" in (WORKSPACE / "tests/test_fixed.py").read_text()
+    assert "assert add(1, 2) == 3" in (WORKSPACE / "tests/nested/test_fixed.py").read_text()
+
+
+@pytest.mark.parametrize("source_image", ["lego"], indirect=True)
+def test_hostile_nested_parent_symlink_cannot_redirect_patch_paths(source_image):
+    before = protected_tree_hash()
+    program = (
+        "import pathlib\n"
+        "nested = pathlib.Path('/testbed/tests/nested')\n"
+        "nested.mkdir(parents=True)\n"
+        "nested_rmdir = nested\n"
+        "import shutil\n"
+        "shutil.rmtree(nested_rmdir)\n"
+        "nested.symlink_to('/opt/taskcompendium-shared/tests')\n"
+    )
+    result = run_as_agent(program)
+    assert result.returncode == 0, result.stderr
+    assert run_grade(source_image.files)["reward"] == 0.0
+    # The patch path lands inside a repaired real directory, and the protected
+    # root the symlink pointed at is byte-identical afterwards.
+    assert not (WORKSPACE / "tests/nested").is_symlink()
+    assert "assert add(1, 2) == 3" in (WORKSPACE / "tests/nested/test_fixed.py").read_text()
+    assert protected_tree_hash() == before
+
+
+@pytest.mark.parametrize("source_image", ["scale"], indirect=True)
+def test_nested_parent_symlink_cannot_redirect_restore(source_image):
+    before = protected_tree_hash()
+    program = (
+        "import shutil, pathlib\n"
+        "pkg = pathlib.Path('/testbed/pkg')\n"
+        "shutil.rmtree(pkg)\n"
+        "pkg.symlink_to('/opt/taskcompendium-shared/reference')\n"
+    )
+    result = run_as_agent(program)
+    assert result.returncode == 0, result.stderr
+    assert run_grade(source_image.files)["reward"] == 0.0
+    # The captured nested file was restored inside the workspace, and the
+    # protected root the symlink pointed at is byte-identical afterwards.
+    assert not (WORKSPACE / "pkg").is_symlink()
+    assert (WORKSPACE / "pkg/conftest.py").read_text() == "NESTED_CONFTEST = 'base'\n"
+    assert protected_tree_hash() == before
 
 
 @pytest.mark.parametrize("source_image", ["scale", "lego"], indirect=True)
@@ -555,10 +646,11 @@ def test_agent_cannot_read_protected_material_or_forge_verdicts(source_image):
         "import os, pathlib\n"
         "pathlib.Path('/logs/verifier/reward.txt').write_text('1')\n"
         "for target in ('/opt/taskcompendium-shared/contract.json',"
-        " '/opt/taskcompendium-shared/tests/config.json'):\n"
+        " '/opt/taskcompendium-shared/tests/config.json',"
+        " '/opt/taskcompendium-shared/materialize.patch'):\n"
         "    try:\n"
         "        pathlib.Path(target).read_bytes()\n"
-        "    except PermissionError:\n"
+        "    except OSError:\n"
         "        pass\n"
         "    else:\n"
         "        raise SystemExit('agent read protected material: ' + target)\n"
@@ -584,6 +676,47 @@ def test_background_writer_cannot_fake_a_pass(source_image):
     result = run_as_agent(program)
     assert result.returncode == 0, result.stderr
     assert run_grade(source_image.files)["reward"] == 0.0
+
+
+@pytest.mark.parametrize("source_image", ["lego"], indirect=True)
+def test_aborted_scorer_cannot_forge_a_reward(source_image):
+    """A same-UID child that forges the reward and kills its process group fails closed."""
+    poison = (
+        "import os, pathlib, signal\n"
+        "pathlib.Path('/logs/verifier').mkdir(parents=True, exist_ok=True)\n"
+        "pathlib.Path('/logs/verifier/reward.txt').write_text('1')\n"
+        "os.killpg(os.getpgrp(), signal.SIGKILL)\n"
+    )
+    program = f"import pathlib\npathlib.Path('/testbed/conftest.py').write_text({poison!r})\n"
+    result = run_as_agent(program)
+    assert result.returncode == 0, result.stderr
+    verdict = run_grade(source_image.files)
+    assert verdict["reward"] == 0.0
+    assert verdict["detail"]["reason"] == "scorer_aborted"
+    assert float((REPORTS / "reward.txt").read_text()) == 0.0
+
+
+@pytest.mark.parametrize("source_image", ["scale"], indirect=True)
+def test_hijacked_scorer_interpreter_cannot_forge_a_reward(source_image):
+    """Replacing the scorer's interpreter binary still fails closed when it aborts."""
+    poison = (
+        "#!/bin/sh\n"
+        "mkdir -p /logs/verifier\n"
+        "echo 1 > /logs/verifier/reward.txt\n"
+        "kill -9 -\"$(cut -d ' ' -f5 /proc/self/stat)\"\n"
+    )
+    program = (
+        "import pathlib\n"
+        f"python = pathlib.Path('{SHIM}/python')\n"
+        "python.unlink()\n"
+        f"python.write_text({poison!r})\n"
+        "python.chmod(0o755)\n"
+    )
+    result = run_as_agent(program)
+    assert result.returncode == 0, result.stderr
+    verdict = run_grade(source_image.files)
+    assert verdict["reward"] == 0.0
+    assert verdict["detail"]["reason"] == "scorer_aborted"
 
 
 @pytest.mark.parametrize("source_image", ["scale"], indirect=True)

@@ -37,8 +37,6 @@ class SourceSharedRunner(BaseModel):
     capture_patterns: tuple[str, ...] = ()
     patch_config_keys: tuple[str, ...] = ()
     dependency_paths: tuple[str, ...] = ()
-    trusted_commit_key: str = "base_commit"
-    workspace_config_key: str = "workdir"
     shared_controller_sha256: str = ""
 
 
