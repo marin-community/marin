@@ -87,6 +87,12 @@ class MatchCensus(BaseModel):
     new: int
     conflicting: int
     dropped_advisories: int
+    overlapped: int = 0
+    """Candidates with a tracked counterpart at or above the drop floor.
+
+    A candidate folder with zero overlap is a parallel derivation, not a cleaned subset:
+    its absence proves nothing about the tracked tasks, so the lane emits no drop advisories.
+    """
 
 
 class ComparativeOutcome(StrEnum):

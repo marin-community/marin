@@ -227,6 +227,17 @@ class TestMatchCascade:
         assert advisory.candidate_source_id == CANDIDATE_SOURCE
         assert "advisory" in advisory.reason
 
+    def test_candidate_with_no_overlap_emits_no_advisories(self):
+        tracked = index([content("t1", "tracked task one about calendars " * 6)])
+        candidates = index([content("c1", "an unrelated candidate about bash pipelines " * 6)])
+        outcome = match_candidates(
+            tracked, candidates, tracked_source_id=TRACKED_SOURCE, candidate_source_id=CANDIDATE_SOURCE
+        )
+        assert outcome.census.overlapped == 0
+        assert outcome.advisories == []
+        assert outcome.census.dropped_advisories == 0
+        assert outcome.census.new == 1
+
     def test_census_counts_follow_receipts(self):
         tracked = index([content("t1", "one"), content("t2", "dropped by the candidate filter")])
         candidates = index(

@@ -134,6 +134,18 @@ def match_candidates(
     counts: dict[RepairMatchClass, int] = {match_class: 0 for match_class in RepairMatchClass}
     for receipt in receipts:
         counts[receipt.match_class] += 1
+    overlapped = (
+        counts[RepairMatchClass.IDENTICAL] + counts[RepairMatchClass.REPAIRED] + counts[RepairMatchClass.CONFLICTING]
+    )
+    if overlapped == 0 and tracked.raw_rows:
+        # A candidate with no counterpart is a parallel derivation, not a cleaned subset:
+        # absence from it is not evidence that the cleaner filtered these tasks out.
+        logger.warning(
+            "Candidate %s has no tracked counterpart; suppressing %d drop advisories",
+            candidate_source_id,
+            len(advisories),
+        )
+        advisories = []
     census = MatchCensus(
         candidate_source_id=candidate_source_id,
         tracked_source_id=tracked_source_id,
@@ -143,6 +155,7 @@ def match_candidates(
         new=counts[RepairMatchClass.NEW],
         conflicting=counts[RepairMatchClass.CONFLICTING],
         dropped_advisories=len(advisories),
+        overlapped=overlapped,
     )
     if duplicate_count:
         logger.info("Collapsed %d content-identical candidate rows", duplicate_count)
