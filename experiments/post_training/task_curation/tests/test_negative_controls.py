@@ -368,3 +368,59 @@ def test_actual_source_interruption_needs_one_identical_repeat_and_unsupported_o
     unsupported = collect("unsupported-outcomes")
     require_negative_control(unsupported)
     assert unsupported.annotation == "negative_control_verifier_error" and not unsupported.passed(None)
+
+
+@pytest.mark.parametrize("outcome", ["verifier_timeout", "native_scored"])
+def test_conclusive_nop_compares_channels_only_to_a_graded_source(tmp_path, outcome):
+    index = json.loads((FIXTURES / "index.json").read_text())["negative"]
+    anchors = json.loads((FIXTURES / "original-index.json").read_text())["negative"]
+    original = json.loads(gzip.decompress((FIXTURES / "negative.original-pass.json.gz").read_bytes()))
+    control = negative_control_from_archive(
+        ContentEvidenceReference(uri=str(retained_archive(tmp_path, "negative")), sha256=index["archive_sha256"]),
+        index["control_member"],
+        source_task_sha256=anchors["source_task_sha256"],
+        source_task_checksum=anchors["source_task_checksum"],
+        execution_requirements=ExecutionRequirements.model_validate(
+            original["original_pass_receipt"]["calibration"]["attempts"][-1]["execution_requirements"]
+        ),
+    )
+    entry = original["original_pass_receipt"]
+    trial = entry["calibration"]["attempts"][-1]
+    trial["verdict"] = None
+    result = trial["result"]
+    if outcome == "verifier_timeout":
+        result["exception_info"] = {
+            "exception_type": "VerifierTimeoutError",
+            "exception_message": "Source verifier timed out",
+        }
+        result["verifier_result"] = {"rewards": {}}
+        trial["native_grade"] = None
+        entry["exclusion_reason"] = OracleExclusionReason.VERIFIER_TIMEOUT
+    else:
+        result["verifier_result"] = {"rewards": {"reward": 1}}
+    trial["result_sha256"] = canonical_sha256(result)
+    if outcome == "native_scored":
+        trial["native_grade"] = {
+            "rewards": {"reward": 1},
+            "artifact_path": "verifier/reward.txt",
+            "artifact_sha256": "a" * 64,
+            "result_sha256": trial["result_sha256"],
+            "task_checksum": result["task_checksum"],
+        }
+    entry.update(
+        source_task_sha256=anchors["source_task_sha256"],
+        source_task_checksum=anchors["source_task_checksum"],
+        negative_control_applicability=NegativeControlApplicability.WORKSPACE,
+        negative_control=control.model_dump(mode="json"),
+        trials=[trial],
+    )
+    if outcome == "native_scored":
+        with pytest.raises(ValueError, match="different production grading contract"):
+            OracleTaskReceipt.model_validate(entry)
+        return
+    receipt = OracleTaskReceipt.model_validate(entry)
+    assert not receipt.passed
+    assert not receipt.calibration.attempts[-1].graded
+    assert receipt.exclusion_reason is OracleExclusionReason.VERIFIER_TIMEOUT
+    assert receipt.negative_control == control
+    assert receipt.negative_control.conclusive and receipt.negative_control.score == 0

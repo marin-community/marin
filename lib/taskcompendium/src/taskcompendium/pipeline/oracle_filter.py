@@ -798,6 +798,7 @@ class OracleExclusionReason(StrEnum):
     INFRASTRUCTURE = "resource_calibration:infrastructure"
     NO_ORACLE_LIVENESS = "no_oracle_liveness_missing_or_failed"
     SOURCE_ENV_INCOMPATIBLE_WITH_GRADER = "SOURCE_ENV_INCOMPATIBLE_WITH_GRADER"
+    SOURCE_VERIFIER_ERROR = "source_verifier_error"
     TOOL_PROVIDER_REQUIRED = "tool_provider_required"
     SHARED_EXECUTOR_REQUIRED = "shared_executor_required"
     ENVIRONMENT_BUILD_FAILED = "environment_build_failed"
@@ -903,10 +904,34 @@ def source_environment_incompatibility(
     )
 
 
+class SourceVerifierError(BaseModel):
+    """A reproduced pinned upstream parser exception, without an invented score."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal["multiswe_overlapping_test_results"]
+    source_task_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_task_checksum: str
+    runtime_sha256: str | None
+    consumed_task_checksum: str
+    result_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parser_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    log_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source: ContentEvidenceReference
+    archive: ContentEvidenceReference
+    fixture: ContentEvidenceReference
+    traceback: ContentEvidenceReference
+    reproduction: ContentEvidenceReference
+    decision: ContentEvidenceReference
+
+
 def oracle_failure_reason(
-    trial: OracleTrialReceipt, incompatibility: SourceEnvironmentIncompatibility | None
+    trial: OracleTrialReceipt,
+    incompatibility: SourceEnvironmentIncompatibility | None,
+    source_error: SourceVerifierError | None = None,
 ) -> OracleExclusionReason:
     """Preserve the measured final source outcome after any approved infrastructure phase."""
+    if source_error is not None:
+        return OracleExclusionReason.SOURCE_VERIFIER_ERROR
     if incompatibility is not None:
         return OracleExclusionReason.SOURCE_ENV_INCOMPATIBLE_WITH_GRADER
     if trial.failure_signal not in {FailureSignal.INFRASTRUCTURE, FailureSignal.NON_RESOURCE}:
@@ -1222,6 +1247,7 @@ class OracleTaskReceipt(BaseModel):
     executability_run: ExecutabilityRunReceipt | None = None
     exclusion_reason: OracleExclusionReason | None = None
     source_environment_incompatibility: SourceEnvironmentIncompatibility | None = None
+    source_verifier_error: SourceVerifierError | None = Field(default=None, exclude_if=lambda value: value is None)
     infrastructure_retries: tuple[InfrastructureRetryTransition, ...] = ()
 
     @model_validator(mode="after")
@@ -1241,7 +1267,7 @@ class OracleTaskReceipt(BaseModel):
         source = self.calibration.attempts[-1]
         if control.trial.verifier_execution_requirements != self.verifier_execution_requirements:
             raise ValueError("Negative control differs from the original verifier allocation")
-        if control.conclusive and (source.verdict is None) != (control.trial.verdict is None):
+        if control.conclusive and source.graded and (source.verdict is None) != (control.trial.verdict is None):
             raise ValueError("Negative control uses a different production grading contract")
         return self
 
@@ -1322,6 +1348,35 @@ class OracleTaskReceipt(BaseModel):
                 raise ValueError("Source environment evidence differs from the frozen pre-agent versions")
             if evidence.signature == "pytest-before-7/pytest-metadata-stashkey" and observation_hash is None:
                 raise ValueError("General pytest incompatibility evidence requires frozen pre-agent versions")
+        return self
+
+    @model_validator(mode="after")
+    def validate_source_verifier_error(self):
+        proof = self.source_verifier_error
+        if (self.exclusion_reason is OracleExclusionReason.SOURCE_VERIFIER_ERROR) != (proof is not None):
+            raise ValueError("Source verifier exclusions require their reproduced upstream exception evidence")
+        if proof is None:
+            return self
+        trial = self.calibration.attempts[-1]
+        exception = trial.result.get("exception_info") or {}
+        verdict = trial.verdict or {}
+        if (
+            not self.has_oracle
+            or self.calibration.oracle_kind != "original"
+            or trial.scored
+            or trial.oracle_exit_code != 0
+            or trial.failure_signal is not FailureSignal.INFRASTRUCTURE
+            or exception.get("exception_type") != "VerifierRuntimeError"
+            or verdict.get("status") != "infra_error"
+            or verdict.get("detail", {}).get("error") != "Grader did not write a reward file"
+            or proof.source_task_sha256 != self.source_task_sha256
+            or proof.source_task_checksum != self.source_task_checksum
+            or proof.runtime_sha256 != self.runtime_sha256
+            or proof.consumed_task_checksum != self.harbor_task_checksum
+            or proof.result_sha256 != trial.result_sha256
+            or (self.negative_control is not None and proof.archive != self.negative_control.archive)
+        ):
+            raise ValueError("Source verifier error differs from the failed original source trial")
         return self
 
     @model_validator(mode="after")
@@ -1431,7 +1486,7 @@ class OracleTaskReceipt(BaseModel):
             seen_results.update(results)
         if not self.calibration.passed:
             expected_reason = oracle_failure_reason(
-                self.calibration.attempts[-1], self.source_environment_incompatibility
+                self.calibration.attempts[-1], self.source_environment_incompatibility, self.source_verifier_error
             )
             if self.exclusion_reason is not expected_reason:
                 raise ValueError("Retry exclusion differs from its measured final source outcome")

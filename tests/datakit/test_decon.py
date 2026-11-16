@@ -6,13 +6,17 @@
 import gzip
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
+import dupekit
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from marin.datakit import decon
 from marin.datakit.decon import (
     EvalBloom,
     NGramConfig,
@@ -26,6 +30,7 @@ from marin.datakit.decon import (
     merge_eval_blooms,
 )
 from marin.datakit.normalize import NormalizedData
+from rigging.filesystem.storage_path import StoragePath
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +68,31 @@ def _as_source(input_dir: Path) -> NormalizedData:
         dup_output_dir=str(input_dir / "_dups_unused"),
         counters={},
     )
+
+
+def test_bloom_cold_cache_concurrent_loads_preserve_filter(tmp_path: Path, monkeypatch):
+    source = tmp_path / "source.bin"
+    bloom = dupekit.Bloom(1000, 1e-9)
+    for value in (19, 101, 1009):
+        bloom.add(value)
+    bloom.save(str(source))
+    expected = source.read_bytes()
+    monkeypatch.setattr(decon, "_BLOOM_CACHE_DIR", str(tmp_path / "cache"))
+    read_bytes = StoragePath.read_bytes
+    readers = Barrier(4)
+
+    def synchronized_read(path: StoragePath) -> bytes:
+        # Every caller must enter its cold fill before any download completes.
+        # This reproduces same-process Zephyr threads sharing a temporary path.
+        readers.wait(timeout=10)
+        return read_bytes(path)
+
+    monkeypatch.setattr(StoragePath, "read_bytes", synchronized_read)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pending = [pool.submit(decon._load_bloom, str(source)) for _ in range(4)]
+        results = [future.result(timeout=15) for future in pending]
+    assert [bytes(result.save_bytes()) for result in results] == [expected] * 4
+    assert all(value in result for result in results for value in (19, 101, 1009))
 
 
 @pytest.fixture

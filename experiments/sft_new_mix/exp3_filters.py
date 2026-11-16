@@ -123,10 +123,52 @@ def turns(text: str) -> list[Turn]:
 
 
 def with_turns(document: Document, before: list[Turn], after: list[Turn]) -> Document:
+    """Splice edited turn bodies back into the original rendered text.
+
+    Turn framing must keep matching MARIN_CHAT_TEMPLATE, which ends assistant
+    turns with <|eot_id|> and no newline, so framing bytes are preserved
+    verbatim and only changed turn bodies are replaced.
+    """
     if before == after:
         return document
-    text = BOS + "".join(f"{HEADER}{turn.role}{END_HEADER}\n{turn.content}{EOT}\n" for turn in after) + EOS
-    return replace(document, text=text)
+    return replace(document, text=splice_turn_bodies(document.text, before, after))
+
+
+def splice_turn_bodies(text: str, before: list[Turn], after: list[Turn]) -> str:
+    """Rebuild native text with edited turn bodies spliced into their framing.
+
+    Each after turn consumes the next unconsumed before turn of its own role
+    in order, so surviving turns keep their original relative position;
+    skipped turns were dropped or merged away and leave no trace. Every kept
+    turn keeps its own header, end-of-turn token and original separator, so
+    an assistant end-of-turn never gains a newline.
+    """
+    matches = list(MESSAGE.finditer(text))
+    if len(matches) != len(before) or [match[1] for match in matches] != [turn.role for turn in before]:
+        raise ValueError("Turn list does not match the native transcript")
+    ends = [match.end() for match in matches]
+    tail = text[ends[-1] :]
+    eos = ""
+    if tail.endswith(EOS):
+        eos, tail = EOS, tail[: -len(EOS)]
+    if tail.strip():
+        raise ValueError("Incomplete native chat transcript")
+    separators = [text[ends[j] : matches[j + 1].start()] for j in range(len(matches) - 1)] + [tail]
+    pieces = [text[: matches[0].start()]]
+    cursor = 0
+    for turn in after:
+        while cursor < len(before) and before[cursor].role != turn.role:
+            cursor += 1
+        if cursor >= len(before):
+            raise ValueError("Turn edits add turns, which native splicing cannot represent")
+        match = matches[cursor]
+        pieces.append(text[match.start() : match.start(2)])
+        pieces.append(turn.content)
+        pieces.append(text[match.end(2) : match.end()])
+        pieces.append(separators[cursor])
+        cursor += 1
+    pieces.append(eos)
+    return "".join(pieces)
 
 
 def unquote_opencode_prompt(content: str, question: str) -> str:

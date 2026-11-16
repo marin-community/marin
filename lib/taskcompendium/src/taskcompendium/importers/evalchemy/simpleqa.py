@@ -10,7 +10,6 @@ identity for paired comparisons independently of task IDs and sampled order.
 import ast
 import csv
 import random
-from collections.abc import Callable
 
 from rigging.filesystem.storage_path import StoragePath
 from verifyit.spec import JudgeSpec

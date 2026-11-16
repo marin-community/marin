@@ -1055,6 +1055,7 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("deletion_failure", [False, True])
 def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation(deletion_failure):
     entered = asyncio.Event()
@@ -1199,6 +1200,7 @@ def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_pat
     asyncio.run(scenario())
 
 
+@pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("primary_failure", [False, True])
 @pytest.mark.parametrize("cleanup_failure", ["timeout", "exit"])
 @pytest.mark.parametrize("deletion_failure", [False, True])
@@ -1207,6 +1209,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
 ):
     provider_error = OSError("Provider command failed")
     deletion_error = DaytonaConflictError("Sandbox state change in progress", status_code=409)
+
     class FailedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
             if "candidate-fail" in command_script(command) and primary_failure:
@@ -1484,6 +1487,7 @@ def test_daytona_rejects_add_inputs_before_building(tmp_path, instruction, image
     assert client.params is None
 
 
+@pytest.mark.requires_host_setsid
 @pytest.mark.parametrize("source_kind", ["registry", "dockerfile"])
 def test_declarative_build_starts_sandbox_from_image_without_snapshot(tmp_path, source_kind):
     context = tmp_path / "context"

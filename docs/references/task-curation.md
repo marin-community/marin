@@ -3982,6 +3982,26 @@ Qualification does not supply a workspace negative control or content review.
 Qualified tasks still use the full-population collector and its grading/network
 checks. Workspace tasks also require the [negative controls below](#workspace-oracle-negative-controls).
 
+### Pinned source verifier exceptions
+
+A proved exception in an unchanged upstream verifier can exclude a task without
+inventing a reward. `SourceVerifierError` binds the original source and consumed
+packet, final failed trial, parser and dependency-context fingerprint, copied
+log hash, complete reproduced traceback and explicit decision receipt. Supply
+JSONL records of `{"task_id": ..., "receipt": ...}` through
+`collect --source-verifier-errors source-errors.jsonl`.
+
+The currently approved case is Multi-SWE's pinned `multi_swe_bench` 1.1.2 parser
+raising `ValueError` when passed and failed test-name sets overlap. The collector
+checks the extracted scorer functions against the pinned upstream source and
+recollects copied logs from the original trial archive. It rejects altered
+parser or log bytes, unrelated exceptions, passing trials and resource failures.
+The source parser and its missing reward stay unchanged; the typed outcome is
+`source_verifier_error`. Other failures retain their existing outcome and do not qualify for this
+exclusion.
+Report the complete affected count and fraction after the run seals. Escalate
+this Multi-SWE case before admission if more than about one percent is affected.
+
 ### Workspace oracle negative controls
 
 New oracle admissions use oracle-filter wire version 4. Workspace-graded tasks
@@ -4003,7 +4023,11 @@ excluded from the oracle-filtered population. Without a physical nop receipt,
 a completed original oracle trial with a recorded exit code and valid score
 that fails the oracle success criteria keeps the original TaskSpec without
 requiring a passing allocation qualification. Infrastructure and incomplete outcomes do not qualify as scored
-failures.
+failures. Grading-channel parity compares the original trial's grade with the
+nop verdict only when the original trial actually produced a grade. An original
+verifier timeout or provider error without a grade
+keeps its measured nonpassing outcome when a later nop produces a verdict;
+source, runtime, consumed-packet and resource identities must still match.
 
 Run one control with `python -m harbor.cli.curation_control`, passing a JSON
 request on stdin with `trial` (the production `TrialConfig`), `source`

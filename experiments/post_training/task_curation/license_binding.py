@@ -9,6 +9,7 @@ receipt creates a new dataset revision plus an index bump for the next landing.
 """
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -75,13 +76,8 @@ def append_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message
         rewritten = {**documents[shard], key: receipt.model_dump(mode="json")}
         payload = json.dumps(rewritten, indent=2, sort_keys=True) + "\n"
         return commit_reference_documents(index_path, {shard: payload.encode()}, message=message)
-    part = (
-        max(
-            (int(name.removeprefix("part-").removesuffix(".json")) for name in documents if name.startswith("part-")),
-            default=-1,
-        )
-        + 1
-    )
+    numbered = [int(match.group(1)) for name in documents if (match := re.fullmatch(r"part-(\d+)\.json", name))]
+    part = max(numbered, default=-1) + 1
     return commit_reference_documents(index_path, {f"part-{part:03d}.json": row.encode()}, message=message)
 
 

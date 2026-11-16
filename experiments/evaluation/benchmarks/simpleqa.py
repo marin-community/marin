@@ -96,11 +96,15 @@ def simpleqa_verified_source(*, thinking: bool) -> RlDataSource[EvaluationCorpus
     gpt-4.1-2025-04-14; runs name their own judge, so scores are comparable only under the same judge.
     """
     benchmark = "SimpleQAVerifiedThinking" if thinking else "SimpleQAVerified"
+    name = "simpleqa-verified-thinking" if thinking else "simpleqa-verified"
     return RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:" + ("simpleqa-verified-thinking" if thinking else "simpleqa-verified"),
-            title=benchmark,
-            origin="Evalchemy",
+            id="Evalchemy:" + name,
+            upstream_dataset=name,
+            upstream_name=name,
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="judged-answer",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "llm-judge"),
             count=SIMPLEQA_VERIFIED_ROWS,

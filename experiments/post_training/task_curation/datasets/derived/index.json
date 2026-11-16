@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-curation-derived",
-  "revision": "14c156e3e684e970fec33cd74ac021923a1ef47b",
+  "revision": "5f76e0c007bbc272f16830bb03c7868ce7985582",
   "references": [
     {
       "repo": "open-athena/marin-curation-derived",
@@ -11,14 +11,14 @@
     {
       "repo": "open-athena/marin-curation-derived",
       "revision": "14c156e3e684e970fec33cd74ac021923a1ef47b",
-      "path": "full_content_results.json",
-      "sha256": "0f31c1765681b6679f4a18b4144871568ade1dc3c0d2cfffbb67122d5e4dfafb"
+      "path": "lean/numina_proofs.json",
+      "sha256": "100348ad7a6ab8769a16c29672a6f9d19c4489afe4b7a997bfda58de0275c1c6"
     },
     {
       "repo": "open-athena/marin-curation-derived",
-      "revision": "14c156e3e684e970fec33cd74ac021923a1ef47b",
-      "path": "lean/numina_proofs.json",
-      "sha256": "100348ad7a6ab8769a16c29672a6f9d19c4489afe4b7a997bfda58de0275c1c6"
+      "revision": "5f76e0c007bbc272f16830bb03c7868ce7985582",
+      "path": "full_content_results.json",
+      "sha256": "7bf069297ea2e70fcd77b5722ffac3eba63c6881087ebf6d973068d23b1efd59"
     }
   ]
 }
