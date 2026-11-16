@@ -79,7 +79,7 @@
   },
   "AllenAI:IF_multi_constraints_upto5": {
     "bundled_third_party": true,
-    "dataset_id": "allenai/IF_multi_constraints_upto5",
+    "dataset_id": "open-athena/allenai-if-multi-constraints-upto5-7bcdabaf-retained-20261116-b-v1",
     "decisions": [],
     "evidence": [
       {
@@ -133,10 +133,31 @@
       }
     ],
     "model_generated_outputs": false,
-    "resolved_at": "2026-11-15T18:24:34.224908+00:00",
+    "resolved_at": "2026-11-16T02:11:57.570373+00:00",
+    "resolved_source": {
+      "dataset_id": "allenai/IF_multi_constraints_upto5",
+      "declaration": {
+        "kind": "wrapper_source",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: allenai/IF_multi_constraints_upto5",
+          "L6:   revision: 2e3a77407b7fce69f95b248d64a884e3ae1c2423",
+          "L7:   url: https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/tree/2e3a77407b7fce69f95b248d64a884e3ae1c2423",
+          "L19: Source pin: `allenai/IF_multi_constraints_upto5@2e3a77407b7fce69f95b248d64a884e3ae1c2423`. Converter: `2026.11.15.1@38c85626de0dbf54023ff1938c7246e36b2556f8`."
+        ],
+        "restrictive_terms": false,
+        "sha256": "2ba082ffd329ea1fc9640d708cb1183e61cac3942d355a84d951bdef24bbb088",
+        "unidentified_third_party_terms": false,
+        "url": "https://huggingface.co/datasets/open-athena/allenai-if-multi-constraints-upto5-7bcdabaf-retained-20261116-b-v1/resolve/1b4076f63af29e34aee43e16781784890b1e9835/README.md"
+      },
+      "revision": "2e3a77407b7fce69f95b248d64a884e3ae1c2423",
+      "url": "https://huggingface.co/datasets/allenai/IF_multi_constraints_upto5/tree/2e3a77407b7fce69f95b248d64a884e3ae1c2423"
+    },
     "resolver_version": "atlas-license-v2",
-    "revision": "2e3a77407b7fce69f95b248d64a884e3ae1c2423",
-    "source_id": "AllenAI:IF_multi_constraints_upto5"
+    "revision": "1b4076f63af29e34aee43e16781784890b1e9835",
+    "source_id": "AllenAI:IF_multi_constraints_upto5",
+    "wrapper_chain": []
   },
   "AllenAI:rlvr_ifeval": {
     "bundled_third_party": true,

@@ -88,7 +88,6 @@ CASCADE_RETAINED_SUBSETS = ("multi-domain-RL", "MOPD")
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
 PENDING_MEASUREMENT_SOURCES = (
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
-    *ifbench.sources(),
     *lean_proofs.sources(),
     *lean_numina.sources(),
     *prime_swe.sources(),
@@ -131,6 +130,7 @@ def configured_sources() -> list[RlDataSource]:
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
+        *ifbench.sources(),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
