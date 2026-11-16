@@ -614,6 +614,7 @@ uv run --no-sync iris --cluster marin job run \
 Run the inner command without `--run` to inspect the queue size and pinned
 reviewer without reserving GPUs. A resume reuses reviewed batch receipts only
 when task/runtime contracts, rubric and reviewer identity match exactly.
+Each batch receipt stores those hashes, rubric and reviewer identity.
 Unavailable observations and unsuccessful attempts remain recorded.
 
 To retry unavailable or invalid reviews, keep the queue, queue SHA and
@@ -624,18 +625,22 @@ and cache-hit evidence before attributing them to replay (see
 [#11509](https://github.com/marin-community/marin/issues/11509)). A fresh versioned
 `--review-cache` namespace obtains new responses for those tasks while
 preserving the panel, reviewer and completed observations. Keep both immutable
-review artifacts and their batch attempts; select the qualifying result through
+review artifacts and their batch attempts. Each run writes a new campaign record
+with its immutable `review_artifact` path; batch receipts keep earlier request and
+response attempts. Select the qualifying result through
 `sample_qc_receipts` below. A fresh cache does not change the missing-review limit.
 
 A fixed SAMPLE panel qualifies with at least 95% conclusive reviewed rows:
 `SAMPLE_MAX_MISSING_FRACTION = 0.05` permits at most 5 missing rows of 100,
 with the same fractional limit for smaller panels. Unavailable and uncertain
-rows count as missing; issue rates use reviewed rows. Do not replace or resample
-missing tasks. Record their IDs, exact reasons, bounded attempts and hashed
+rows count as missing; issue rates use conclusive reviewed rows. Do not replace or resample
+missing tasks. V3 permits at most three review attempts per task per invocation.
+Record their IDs, exact reasons, bounded attempts and hashed
 deployment/batch receipts. Receipt generation retains missing observations and
 batch hashes and rejects panels above the tolerance. A qualifying SAMPLE Result
 is final for its sample with actual reviewed, unavailable and uncertain counts;
-`panel_coverage_complete` remains a truthful strict coverage field.
+`panel_coverage_complete` is true when every record has status `REVIEWED`;
+uncertain verdicts still count as missing for qualification.
 
 Export a selected Result for each source with:
 
