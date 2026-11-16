@@ -26,7 +26,6 @@ parameters over a cross-node ``data`` axis (FSDP), and ``--expert-axis 16`` spre
 import argparse
 import dataclasses
 import logging
-import statistics
 import time
 from pathlib import Path
 from typing import get_args
@@ -36,7 +35,6 @@ import jmp
 import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks import StepInfo
-from levanter.callbacks._metrics import aggregate_device_flops, compute_instant_throughput
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, XprofUploadConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -52,6 +50,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import multihost_broadcast_sync
 from rigging.log_setup import configure_logging
 
+from experiments.grug.snowball_synthetic.train import FIRST_TIMED_STEP, log_throughput_summary
 from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, RematMode
 from experiments.june_tpu_67b_a2b.moe.train import (
@@ -70,8 +69,6 @@ SNOWBALL_HIDDEN_DIM = 2560
 # The width heuristic would otherwise derive seq_len // 2 and give the medium preset a shorter window than Snowball's.
 SNOWBALL_SLIDING_WINDOW = 2048
 POOLED_WAVE_MOE_IMPL = "fixed_pooled_wave_all_to_all"
-# Steps 0 and 1 are excluded from the summary, as in the Snowball harness: step 0 compiles.
-FIRST_TIMED_STEP = 2
 
 
 def snowball_model(seq_len: int) -> GrugModelConfig:
@@ -209,24 +206,6 @@ def log_model_flops(flops_per_example: float, flops_summary: dict[str, float]) -
         flops_per_example,
         flops_summary[ATTENTION_FLOPS_PER_EXAMPLE_KEY],
         flops_summary[CAUSAL_ATTENTION_FLOPS_PER_EXAMPLE_KEY],
-    )
-
-
-def log_throughput_summary(
-    step_durations: list[float], batch_size: int, seq_len: int, flops_per_example: float, num_steps: int
-) -> None:
-    if jax.process_index() != 0:
-        return
-    median = statistics.median(step_durations)
-    throughput = compute_instant_throughput(batch_size, median, seq_len, flops_per_example, aggregate_device_flops())
-    logger.info(
-        "median step over steps %d-%d: %.3f s  %s tokens/s  %s model TFLOP/s  MFU %s%%",
-        FIRST_TIMED_STEP,
-        num_steps - 1,
-        median,
-        f"{throughput.tokens_per_second:,.0f}" if throughput.tokens_per_second is not None else "n/a",
-        f"{throughput.model_flops_per_second / 1e12:.1f}" if throughput.model_flops_per_second is not None else "n/a",
-        f"{throughput.mfu:.2f}" if throughput.mfu is not None else "n/a",
     )
 
 
