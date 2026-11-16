@@ -39,14 +39,16 @@ summarises the recipe's architecture, optimizer and data. Before writing anythin
 - **Is the area open?** Some areas, such as tokenizer and data changes, can be closed to hill-climbing; the front
   page says which.
 
-Iterate on the design until it fits in a short, unambiguous description. Optional: sketch the change as a
-default-off config flag in `model.py` and link it in your comment. The agent still implements from your
-description, so the description must stand on its own.
+Iterate on the design with your agent. You can submit it as a description, or link code: a pull request
+(`#NNNN`) or any http(s) URL to a branch, commit or file. The agent reads the links in your approved comment, and
+only those, then ports the code into `experiments/grug/fast_track/` behind one default-off flag (GPU path only). If
+your code builds on another PR, link that one too. Code written against the recipe's `model.py` ports most
+faithfully. Add a sentence or two on what the code does and why, so a port that drifts can be caught in step 3.
 
 ### 2. Post the idea on marin#9514
 
 One idea per comment, with a `Track:` line. Without one, the idea runs on `speedrun`. Say exactly what changes,
-where, at what size, and how new parameters are initialised and optimised; the agent implements what you write.
+where, at what size, and how new parameters are initialised and optimised, or link the code (step 1).
 
 ```
 Track: speedrun
