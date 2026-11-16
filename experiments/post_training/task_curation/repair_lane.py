@@ -12,6 +12,8 @@ oracle/NoP gates run, and publication is a separate ruled step.
 import argparse
 import json
 import logging
+import shutil
+import tempfile
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -114,15 +116,19 @@ def load_tracked_tasks(uris: tuple[str, ...]) -> dict[str, TaskSpec]:
     """Decode every pinned tracked TaskSpec, keyed by its ID for local joins only."""
     tasks: dict[str, TaskSpec] = {}
     for uri in uris:
-        with pq.ParquetFile(StoragePath(uri).open("rb")) as handle:
-            names = handle.schema_arrow.names
-            column = "lowered_task_spec" if "lowered_task_spec" in names else "task_spec"
-            for batch in handle.iter_batches(batch_size=256, columns=[column]):
-                for encoded in batch.column(column).to_pylist():
-                    task = TaskSpec.model_validate(json.loads(encoded))
-                    if task.id in tasks:
-                        raise ValueError(f"Duplicate tracked task ID: {task.id}")
-                    tasks[task.id] = task
+        with tempfile.TemporaryFile() as local:
+            with StoragePath(uri).open("rb") as remote:
+                shutil.copyfileobj(remote, local)
+            local.seek(0)
+            with pq.ParquetFile(local) as handle:
+                names = handle.schema_arrow.names
+                column = "lowered_task_spec" if "lowered_task_spec" in names else "task_spec"
+                for batch in handle.iter_batches(batch_size=256, columns=[column]):
+                    for encoded in batch.column(column).to_pylist():
+                        task = TaskSpec.model_validate(json.loads(encoded))
+                        if task.id in tasks:
+                            raise ValueError(f"Duplicate tracked task ID: {task.id}")
+                        tasks[task.id] = task
     if not tasks:
         raise ValueError("The tracked population is empty")
     logger.info("Loaded %d tracked tasks from %d parquet inputs", len(tasks), len(uris))
