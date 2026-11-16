@@ -99,7 +99,7 @@ PROFILES = MappingProxyType(
     {
         "one-rack": MochiProfile("checkpoints/mochi-rl-65k", ROLE_PLAN, MEGATRON, EXECUTION),
         "three-rack": MochiProfile(
-            name="checkpoints/mochi-three-rack",
+            output_name="checkpoints/mochi-three-rack",
             role_plan=replace(
                 ROLE_PLAN,
                 policy_num_nodes=16,
