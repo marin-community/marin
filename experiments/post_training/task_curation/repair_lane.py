@@ -16,9 +16,10 @@ import shutil
 import tempfile
 import time
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow.parquet as pq
 from marin.inference.openai_chat import OpenAIChatClient
@@ -43,7 +44,7 @@ from experiments.post_training.task_curation.repair_review import (
     ComparativePair,
     ComparativePairReviewer,
 )
-from experiments.post_training.task_curation.task_neighbors import PopulationIndex, content_rows
+from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent, content_rows
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, original_source_id
 
 logger = logging.getLogger(__name__)
@@ -117,17 +118,31 @@ class MatchedPairs:
     """Candidate task ID to tracked task ID; a local join key, never the match itself."""
 
 
-def load_tracked_tasks(
-    uris: tuple[str, ...], *, tracked_source_id: str, revision: str = "tracked-archive-preview"
-) -> dict[str, TaskSpec]:
-    """Decode every pinned tracked TaskSpec, keyed by its ID for local joins only.
+class TrackedPopulation(BaseModel):
+    """One tracked source's loaded population: a content index plus TaskSpecs when available.
 
-    Pinned inputs come in two shapes: complete TaskSpec JSON rows (``task_spec`` or
-    ``lowered_task_spec``), and TaskTrove task archives (``task_binary``), which are lowered
-    through the same preview conversion the candidate loader uses, so both sides hash
-    identically at the instruction, state, reference and grading-contract level.
+    Prepared content pins carry the matching rows but no TaskSpecs; a dry run can match
+    against them and reports that comparative review needs the source's configured
+    conversion for the tracked side.
+    """
+
+    source_id: str
+    shape: Literal["specs", "archives", "prepared"]
+    tasks: dict[str, TaskSpec]
+    index: Any
+
+
+def load_tracked_population(uris: tuple[str, ...], *, tracked_source_id: str) -> TrackedPopulation:
+    """Load one tracked source's pinned inputs in any supported shape.
+
+    Pinned inputs come in three shapes: complete TaskSpec JSON rows (``task_spec`` or
+    ``lowered_task_spec``), TaskTrove task archives (``task_binary``), lowered through the
+    same preview conversion the candidate loader uses so both sides hash identically, and
+    prepared content parquets (the census schema), which carry the match rows directly.
     """
     tasks: dict[str, TaskSpec] = {}
+    content_rows_loaded: list[TaskContent] = []
+    shapes: set[str] = set()
     for uri in uris:
         with tempfile.TemporaryFile() as local:
             with StoragePath(uri).open("rb") as remote:
@@ -135,39 +150,61 @@ def load_tracked_tasks(
             local.seek(0)
             with pq.ParquetFile(local) as handle:
                 names = handle.schema_arrow.names
-                if "lowered_task_spec" in names:
-                    column, archive = "lowered_task_spec", False
-                elif "task_spec" in names:
-                    column, archive = "task_spec", False
-                elif "task_binary" in names:
-                    column, archive = "task_binary", True
-                else:
-                    raise ValueError(f"Tracked input has no known task column: {uri}")
-                for batch in handle.iter_batches(batch_size=64, columns=[column]):
-                    for value in batch.column(column).to_pylist():
-                        if archive:
-                            task = preview_task(
-                                value,
-                                candidate_source_id=tracked_source_id,
-                                revision=revision,
-                            )
-                            if isinstance(task, ImportRejection):
-                                logger.warning("Tracked archive rejected in preview: %s", task.reason)
-                                continue
-                        else:
-                            task = TaskSpec.model_validate(json.loads(value))
+                if "lowered_task_spec" in names or "task_spec" in names:
+                    column = "lowered_task_spec" if "lowered_task_spec" in names else "task_spec"
+                    shapes.add("specs")
+                    for task in _spec_rows(handle, column):
                         if task.id in tasks:
                             raise ValueError(f"Duplicate tracked task ID: {task.id}")
                         tasks[task.id] = task
-    if not tasks:
+                elif "task_binary" in names:
+                    shapes.add("archives")
+                    for task in _archive_rows(handle, tracked_source_id):
+                        if task.id in tasks:
+                            raise ValueError(f"Duplicate tracked task ID: {task.id}")
+                        tasks[task.id] = task
+                elif {"task_id", "instruction_hash", "text", "state_hash", "tests_hash"} <= set(names):
+                    shapes.add("prepared")
+                    content_rows_loaded.extend(_content_rows(handle))
+                else:
+                    raise ValueError(f"Tracked input has no known task column: {uri}")
+    if len(shapes) > 1:
+        raise ValueError(f"Mixed tracked input shapes are not supported: {sorted(shapes)}")
+    if not tasks and not content_rows_loaded:
         raise ValueError("The tracked population is empty")
-    logger.info("Loaded %d tracked tasks from %d parquet inputs", len(tasks), len(uris))
-    return tasks
+    if tasks:
+        rows = list(content_rows(task.model_dump(mode="json") for task in tasks.values()))
+    else:
+        rows = content_rows_loaded
+    if not rows:
+        raise ValueError("The tracked population has no content rows")
+    index = PopulationIndex(rows, {uri: uri for uri in uris})
+    shape = next(iter(shapes))
+    logger.info("Loaded %d tracked tasks (%s) from %d parquet inputs", len(rows), shape, len(uris))
+    return TrackedPopulation(source_id=tracked_source_id, shape=shape, tasks=tasks, index=index)
 
 
-def tracked_index(tasks: dict[str, TaskSpec], uris: tuple[str, ...]) -> PopulationIndex:
-    rows = list(content_rows(task.model_dump(mode="json") for task in tasks.values()))
-    return PopulationIndex(rows, {uri: uri for uri in uris})
+def _spec_rows(handle: pq.ParquetFile, column: str) -> Iterator[TaskSpec]:
+    for batch in handle.iter_batches(batch_size=256, columns=[column]):
+        for encoded in batch.column(column).to_pylist():
+            yield TaskSpec.model_validate(json.loads(encoded))
+
+
+def _archive_rows(handle: pq.ParquetFile, tracked_source_id: str) -> Iterator[TaskSpec]:
+    for batch in handle.iter_batches(batch_size=64, columns=["task_binary"]):
+        for value in batch.column("task_binary").to_pylist():
+            row = value if isinstance(value, dict) else {"task_binary": value, "path": ""}
+            task = preview_task(row, candidate_source_id=tracked_source_id, revision="tracked-archive-preview")
+            if isinstance(task, ImportRejection):
+                logger.warning("Tracked archive rejected in preview: %s", task.reason)
+                continue
+            yield task
+
+
+def _content_rows(handle: pq.ParquetFile) -> Iterator[TaskContent]:
+    for batch in handle.iter_batches(batch_size=1024):
+        for row in batch.to_pylist():
+            yield TaskContent(**row)
 
 
 def candidate_index(population) -> PopulationIndex:
@@ -290,11 +327,10 @@ def dry_run(
     candidates = load_candidate_population(
         folders=folders, repo=repo, revision=candidate_revision, candidate_source_id=candidate_source_id
     )
-    tracked_tasks = load_tracked_tasks(tracked_uris, tracked_source_id=tracked_source_id)
-    tracked = tracked_index(tracked_tasks, tracked_uris)
+    tracked_population = load_tracked_population(tracked_uris, tracked_source_id=tracked_source_id)
     candidates_rows = candidate_index(candidates)
     outcome = match_candidates(
-        tracked,
+        tracked_population.index,
         candidates_rows,
         tracked_source_id=tracked_source_id,
         candidate_source_id=candidate_source_id,
@@ -306,10 +342,23 @@ def dry_run(
         census=outcome.census.model_dump(mode="json"),
         advisories=len(outcome.advisories),
     )
-    workload = matched_pairs(
-        outcome, tracked_tasks=tracked_tasks, candidate_tasks=[candidate.task for candidate in candidates.tasks]
+    if tracked_population.tasks:
+        workload = matched_pairs(
+            outcome,
+            tracked_tasks=tracked_population.tasks,
+            candidate_tasks=[candidate.task for candidate in candidates.tasks],
+        )
+    else:
+        # A prepared content pin carries no TaskSpecs; the dry run reports matching only.
+        workload = MatchedPairs(pairs=[], tracked_by_candidate={})
+    report = report.model_copy(
+        update={
+            "diagnostics": {
+                **match_diagnostics(outcome, tracked_population.index, candidates_rows),
+                "tracked_shape": tracked_population.shape,
+            }
+        }
     )
-    report = report.model_copy(update={"diagnostics": match_diagnostics(outcome, tracked, candidates_rows)})
     if not run or not workload.pairs:
         logger.info("Dry run without review: %d repaired pairs pending", len(workload.pairs))
         return report
