@@ -331,7 +331,7 @@ def dry_run(
     # Both sides are stripped symmetrically; identity hashes stay untouched, so only the
     # near-neighbor comparison sees the stripped text.
     tracked = PopulationIndex(
-        strip_template_sections_rows(tracked_population.index.raw_rows), tracked_population.index.inputs
+        strip_template_sections_rows(tracked_population.index.raw_rows), {uri: uri for uri in tracked_uris}
     )
     candidates_rows = PopulationIndex(
         strip_template_sections_rows(candidates_rows_raw), {candidates.source_id: candidates.source_id}
