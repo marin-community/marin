@@ -161,11 +161,12 @@ def financebench_spec(question: str, answer: str) -> JudgeSpec:
     )
 
 
-def simpleqa_spec(question: str, answer: str) -> JudgeSpec:
+def simpleqa_spec(question: str, answer: str, *, model: str | None = None) -> JudgeSpec:
+    """The SimpleQA classification spec; ``model`` re-pins the historical default judge."""
     return classification_spec(
         question,
         answer,
         SIMPLEQA_GRADER_TEMPLATE.replace("{target}", "{reference}").replace("{predicted_answer}", "{candidate}"),
         ("A", "B", "C"),
-        model=DEFAULT_JUDGE_MODEL,
+        model=model if model is not None else DEFAULT_JUDGE_MODEL,
     )

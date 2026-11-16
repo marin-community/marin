@@ -36,11 +36,13 @@ def read_simpleqa(file: StoragePath, _context: ConversionContext, *, mini: bool)
     yield from random.Random(0).sample(rows, 500) if mini else rows
 
 
-def convert_simpleqa(row: RawRow, _context: ConversionContext, *, benchmark: str) -> TaskSpec:
+def convert_simpleqa(
+    row: RawRow, _context: ConversionContext, *, benchmark: str, judge_model: str | None = None
+) -> TaskSpec:
     task = answer_task(
         row,
         prompt=row.data["question"],
-        spec=simpleqa_spec(row.data["question"], row.data["answer"]),
+        spec=simpleqa_spec(row.data["question"], row.data["answer"], model=judge_model),
         evidence=dict(row.data),
     )
     return task.model_copy(update={"tags": ("eval", "source:evalchemy", "benchmark:" + benchmark)})

@@ -20,6 +20,7 @@ from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, RawRow
 from verifyit.modes.extract import extract_boxed
+from verifyit.modes.grade_math import parses_reference
 
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
@@ -243,6 +244,9 @@ def convert_numina_math(row: RawRow, _context: ConversionContext) -> TaskSpec | 
         return unsupported(
             "unsupported_proof_contract", "The requested inequality proof is outside the answer comparator"
         )
+    if not parses_reference(expected):
+        # A boxed prose sentence is not a math target; the comparator would reject it as invalid_task.
+        return source_defect("invalid_reference", "The boxed conclusion is not a parseable math target")
     return math_answer_task(
         row, prompt=problem, answer=expected, evidence={"solution": solution, "source": row.data.get("source")}
     )

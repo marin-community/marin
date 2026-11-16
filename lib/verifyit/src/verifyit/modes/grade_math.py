@@ -87,6 +87,20 @@ def _parse(text: str) -> list:
     ) or _math_verify_parse(text, parsing_timeout=timeout, raise_on_error=True)
 
 
+def parses_reference(text: str) -> bool:
+    """Whether math-verify recovers an expression from ``text`` as an expected target.
+
+    The grader raises ``InvalidTask`` for a reference it cannot parse into an
+    expression, so conversion uses the same criterion: a deliberate probe that
+    turns any parser rejection into ``False`` — an unparseable reference is a
+    source-data defect, not a grading failure.
+    """
+    try:
+        return _is_expression(_parse(text))
+    except Exception:
+        return False
+
+
 def _as_list(value: Any) -> list:
     return value if isinstance(value, list) else [value]
 

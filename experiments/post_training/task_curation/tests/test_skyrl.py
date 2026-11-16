@@ -396,6 +396,18 @@ REJECTIONS = [
         ImportFailureKind.UNSUPPORTED,
         "unsupported_proof_contract",
     ),
+    (
+        "numina_math",
+        {
+            "problem": "Describe the geometric locus stated by the configuration.",
+            "solution": (
+                "The boxed conclusion: $\\boxed{The intersection points of the midlines of the triangle "
+                "formed by the centers of the excircles of a triangle lie on a single circle.}$"
+            ),
+        },
+        ImportFailureKind.SOURCE_DEFECT,
+        "invalid_reference",
+    ),
     ("hendrycks_math", {"solution": "The answer is 5."}, ImportFailureKind.UNSUPPORTED, "missing_final_answer"),
     ("gpqa", {"Incorrect Answer 3": " Neutron "}, ImportFailureKind.SOURCE_DEFECT, "duplicate_options"),
     (
