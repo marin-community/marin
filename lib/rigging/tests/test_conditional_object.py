@@ -244,3 +244,17 @@ def test_s3_conditional_object_reconciles_accepted_put_after_transport_failure(m
     assert version == '"v2"'
     client.put_object.assert_called_once()
     client.get_object.assert_called_once_with(Bucket="bucket", Key="HEAD")
+
+
+def test_an_s3_refusal_is_a_permission_error(monkeypatch):
+    denied = ClientError({"Error": {"Code": "AccessDenied", "Message": "Forbidden"}}, "GetObject")
+    client = MagicMock()
+    client.head_object.side_effect = denied
+    client.get_object.side_effect = denied
+    client.put_object.side_effect = denied
+    monkeypatch.setattr(S3ConditionalObject, "_client", staticmethod(lambda _path: client))
+    obj = S3ConditionalObject("s3://bucket/HEAD")
+
+    for call in (obj.version, obj.read, lambda: obj.write(b"x", expected_version=None)):
+        with pytest.raises(PermissionError, match="S3 refused access to s3://bucket/HEAD: AccessDenied"):
+            call()

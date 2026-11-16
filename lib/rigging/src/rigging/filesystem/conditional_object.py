@@ -38,6 +38,15 @@ _MAX_S3_WRITE_ATTEMPTS = 8
 _S3_WRITE_BACKOFF_INITIAL = 1.0
 _S3_WRITE_BACKOFF_MAXIMUM = 10 * 60.0
 _S3_MISSING_CODES = frozenset({"NotFound", "NoSuchKey", "404"})
+_S3_DENIED_CODES = frozenset({"AccessDenied", "Forbidden", "403"})
+
+
+def _denied(exc: ClientError, path: str) -> PermissionError | None:
+    """A ``PermissionError`` for an S3 refusal, so callers can handle it as the ``OSError`` it is; None otherwise."""
+    code = exc.response["Error"]["Code"]
+    return PermissionError(f"S3 refused access to {path}: {code}") if code in _S3_DENIED_CODES else None
+
+
 _S3_CONDITIONAL_READ_RETRY_CODES = frozenset({"PathStyleRequestNotAllowed"})
 
 
@@ -250,6 +259,8 @@ class S3ConditionalObject:
             except ClientError as exc:
                 if exc.response["Error"]["Code"] in _S3_MISSING_CODES:
                     return None
+                if denied := _denied(exc, self.path):
+                    raise denied from exc
                 raise
 
         response = retry_with_backoff(
@@ -273,6 +284,8 @@ class S3ConditionalObject:
             except ClientError as exc:
                 if exc.response["Error"]["Code"] in _S3_MISSING_CODES:
                     return None
+                if denied := _denied(exc, self.path):
+                    raise denied from exc
                 raise
             return VersionedBytes(data=response["Body"].read(), version=response["ETag"])
 
@@ -310,6 +323,8 @@ class S3ConditionalObject:
                     "412",
                 ):
                     raise ConditionalWriteError(f"conditional write failed for {self.path}") from exc
+                if denied := _denied(exc, self.path):
+                    raise denied from exc
                 if is_transient_s3_error(exc):
                     reconcile = True
                 raise
