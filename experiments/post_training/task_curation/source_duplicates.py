@@ -10,12 +10,18 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.source_fingerprints import DuplicateLabel, PairSimilarity, SourceFingerprint, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.backend_capabilities import converted_specs
 from experiments.post_training.task_curation.catalog_identity import canonical_identity_survey
 from experiments.post_training.task_curation.duplicate_review import review_pairs
+from experiments.post_training.task_curation.reference_data import (
+    DataReferenceIndex,
+    commit_reference_documents,
+    load_referenced_json,
+)
 from experiments.post_training.task_curation.source_fingerprints import (
     SourceStanding,
     candidate_pairs,
@@ -33,6 +39,34 @@ from experiments.post_training.task_curation.task_neighbors import SAMPLE_SIZE, 
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 logger = logging.getLogger(__name__)
+
+
+def load_acknowledgements(path: Path) -> dict[str, str]:
+    """Acknowledgements from a plain document or a committed reference pointer.
+
+    The registry lives in a private Hugging Face dataset; the committed file pins its
+    revision and every referenced file's SHA-256, and a plain document still works for
+    local runs.
+    """
+    document = json.loads(path.read_text())
+    try:
+        DataReferenceIndex.model_validate(document)
+    except ValidationError:
+        return document
+    resolved = load_referenced_json(path)
+    merged: dict[str, str] = {}
+    for entry in resolved.values():
+        for key, value in entry.items():
+            if key in merged:
+                raise ValueError(f"Duplicate acknowledgement pair across referenced documents: {key}")
+            merged[key] = value
+    return merged
+
+
+def publish_acknowledgements(pointer_path: Path, document: dict[str, str], *, message: str) -> str:
+    """Rewrite the referenced acknowledgements document and bump the committed pointer."""
+    payload = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    return commit_reference_documents(pointer_path, {"acknowledgements.json": payload.encode()}, message=message)
 
 
 def fingerprint_manifest(manifest: dict) -> SourceIdentitySurvey:
@@ -167,7 +201,7 @@ def main() -> None:
         if args.shingle_cache_bytes < 0:
             raise ValueError("Shingle cache size must be nonnegative")
         source = canonical_identity_survey(json.loads(args.fingerprints.read_text()))
-        acknowledgements = json.loads(args.acknowledgements.read_text()) if args.acknowledgements else {}
+        acknowledgements = load_acknowledgements(args.acknowledgements) if args.acknowledgements else {}
         labels = json.loads(args.labels.read_text()) if args.labels else []
         changed = set(args.changed_source)
         if args.changed_sources:

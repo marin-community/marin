@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 from finestore.rl.licenses import LicenseReceipt
 
-from experiments.post_training.task_curation import license_binding, reference_data
+from experiments.post_training.task_curation import license_binding, reference_data, source_duplicates
 from experiments.post_training.task_curation.receipt_shards import read_receipt_shards
 
 
@@ -91,6 +91,44 @@ def test_read_verifies_referenced_bytes(tmp_path: Path, hub: dict):
     hub["files"]["part-000.json"] = b'{"a": 2}\n'
     with pytest.raises(ValueError, match="bytes changed"):
         reference_data.load_referenced_json(index_path)
+
+
+def test_acknowledgements_resolve_from_a_committed_pointer(tmp_path: Path, hub: dict):
+    pointer = tmp_path / "acknowledgements.json"
+    document = {"a" * 64: "Advisory distinct; overlap_fraction=0.0", "b" * 64: "Duplicate; replace left"}
+    reference_data.create_reference_index(
+        pointer,
+        "open-athena/marin-source-duplicate-acknowledgements",
+        {"acknowledgements.json": json.dumps({}, indent=2).encode()},
+        message="Seed the pointer",
+    )
+    source_duplicates.publish_acknowledgements(pointer, document, message="Seed acknowledgements")
+    assert source_duplicates.load_acknowledgements(pointer) == document
+
+
+def test_acknowledgements_accept_a_plain_document(tmp_path: Path):
+    pointer = tmp_path / "acknowledgements.json"
+    document = {"c" * 64: "Advisory partial_overlap"}
+    pointer.write_text(json.dumps(document))
+    assert source_duplicates.load_acknowledgements(pointer) == document
+
+
+def test_acknowledgements_reject_duplicate_pairs_across_documents(tmp_path: Path, hub: dict):
+    pointer = tmp_path / "acknowledgements.json"
+    reference_data.create_reference_index(
+        pointer,
+        "open-athena/marin-source-duplicate-acknowledgements",
+        {"acknowledgements.json": json.dumps({}, indent=2).encode()},
+        message="Seed the pointer",
+    )
+    source_duplicates.publish_acknowledgements(pointer, {"a" * 64: "one"}, message="Seed")
+    reference_data.commit_reference_documents(
+        pointer,
+        {"extra.json": json.dumps({"a" * 64: "two"}, indent=2).encode()},
+        message="Add a colliding document",
+    )
+    with pytest.raises(ValueError, match="Duplicate acknowledgement pair"):
+        source_duplicates.load_acknowledgements(pointer)
 
 
 def test_load_referenced_document_reads_one_pinned_file(tmp_path: Path, hub: dict):
