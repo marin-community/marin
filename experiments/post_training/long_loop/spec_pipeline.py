@@ -332,9 +332,10 @@ def build_spec_graph(resolved: dict, version: str, *, through: str) -> ArtifactS
                 if item["category"] == "timing" and item["source"].endswith(".jsonl")
             ],
             sft_geometry=(
-                f"Spec {resolved['resolved_sha256']}: {recipe['stop_after_steps']} SFT updates "
+                f"Spec {resolved['resolved_sha256']}: configured maximum {recipe['stop_after_steps']} SFT updates "
                 f"at {recipe['model']['max_seq_len']} positions."
             ),
+            sft_selection=trained if resolved["sft_format"] == "sft_spec" and sft_pin is None else None,
         ),
         learned,
     )

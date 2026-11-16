@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Any
 
 import click
+import draccus
 import wandb
 import yaml
 from fray.types import ResourceConfig
+from levanter.training_budget import COMPLETION_FILE, TrainingBudgetConfig, read_training_completion
 from marin.evaluation.records import EvalRunRecord
 from marin.execution.artifact import RECORD_FILENAME
 from marin.execution.lazy import OUT, ArtifactStep, apply
@@ -424,6 +426,21 @@ def native_training_inputs(
     return inputs, coverage
 
 
+def time_limited_sft_input(output: str, trainer: dict) -> dict:
+    """Verify and archive the completion receipt matching the selected checkpoint."""
+    telemetry = trainer["native_telemetry_root"]
+    completion = read_training_completion(
+        telemetry_root=telemetry,
+        checkpoint_root=prefix_join(output, "checkpoints"),
+        maximum_updates=trainer["num_train_steps"],
+        budget=draccus.decode(TrainingBudgetConfig, trainer["training_budget"]),
+    )
+    selected = _read_document(prefix_join(output, "selected.json"))
+    if any(selected[key] != completion[key] for key in ("checkpoint", "completed_updates", "step")):
+        raise ValueError("Archived SFT selection differs from its completed training receipt")
+    return _input(prefix_join(telemetry, COMPLETION_FILE), "telemetry/sft/completion.json", "timing")
+
+
 def derive_archive_plan(
     *,
     output: str,
@@ -575,6 +592,8 @@ def derive_archive_plan(
     if (sft_telemetry is None) != (rl_telemetry is None):
         raise ValueError("Native training telemetry must be present for both SFT and RL")
     if sft_telemetry is not None and rl_telemetry is not None:
+        if shared_sft and sft.get("training_budget") is not None:
+            inputs.append(time_limited_sft_input(roots["sft"], sft))
         native_inputs, timing_coverage = native_training_inputs(
             sft_telemetry,
             rl_telemetry,

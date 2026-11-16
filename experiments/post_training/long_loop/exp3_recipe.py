@@ -98,6 +98,9 @@ def exp3_sft_spec(name: str, version: str, recipe: dict) -> SFTSpec:
         lookahead=recipe["packing_lookahead"],
     )
     trainer = draccus.decode(TrainerConfig, recipe["trainer"])
+    if trainer.training_budget is not None:
+        if trainer.training_budget.duration.total_seconds() != recipe["task_timeout_seconds"]:
+            raise ValueError("Exp3 training duration must match its unchanged hard execution deadline")
     if trainer.mp.param_dtype != jnp.float32 or trainer.mp.compute_dtype != jnp.bfloat16:
         raise ValueError("Exp3 requires retained FP32 parameters and BF16 computation")
     if not recipe["wandb_entity"] or not recipe["wandb_project"]:

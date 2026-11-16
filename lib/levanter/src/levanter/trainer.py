@@ -32,7 +32,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -92,6 +92,12 @@ from levanter.tracker.wandb import WandbConfig
 from rigging.training_journal import TrainingJournal, phase
 from levanter.tracker.json_logger import _to_jsonable
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
+from levanter.training_budget import (
+    TimeLimitedIterator,
+    TrainingBudgetConfig,
+    TrainingStopReason,
+    record_training_completion,
+)
 from levanter.utils import cloud_utils
 from levanter.utils.hardware_topology import hardware_topology_summary
 from levanter.utils.jax_utils import move_tree_to_memory_kind, zeros_like_tree
@@ -308,6 +314,10 @@ class Trainer:
         """
         self.hooks = TrainerHooks()
         self.config = config
+        if config.training_budget is not None and config.native_telemetry_root is None:
+            raise ValueError("Time-limited training requires an explicit native telemetry root")
+        self._completed_updates: int | None = None
+        self._training_stop_reason: TrainingStopReason | None = None
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
         self.loss_weight_fn = loss_weight_fn
@@ -443,6 +453,22 @@ class Trainer:
             ):
                 try:
                     self._checkpointer.wait_until_finished()
+                except Exception as e:
+                    problems.append(e)
+
+        if args[0] is None and not problems and self._completed_updates is not None:
+            budget = self.config.training_budget
+            if budget is not None:
+                assert self.config.native_telemetry_root is not None
+                try:
+                    record_training_completion(
+                        telemetry_root=self.config.native_telemetry_root,
+                        checkpoint=prefix_join(self.checkpoint_path, f"step-{self._completed_updates - 1}"),
+                        completed_updates=self._completed_updates,
+                        maximum_updates=self.num_train_steps,
+                        budget=budget,
+                        stop_reason=self._training_stop_reason,
+                    )
                 except Exception as e:
                     problems.append(e)
 
@@ -665,10 +691,16 @@ class Trainer:
             )
             info = StepInfo(state, 0.0, 0.0, _event_handler=self.hooks.emit_event)
             self.run_hooks(info, force=True)
+            self._completed_updates = int(info.state.step)
             return info
 
+        limited = (
+            TimeLimitedIterator(train_loader, self.config.training_budget)
+            if self.config.training_budget is not None
+            else None
+        )
         info: Optional[StepInfo[S]] = None
-        for info in self.training_steps(state, train_loader):
+        for info in self.training_steps(state, limited if limited is not None else train_loader):
             pass
 
         if info is None:
@@ -677,6 +709,8 @@ class Trainer:
             )
 
         self.run_hooks(info, force=True)
+        self._completed_updates = int(info.state.step)
+        self._training_stop_reason = limited.stop_reason if limited is not None else None
 
         return info
 
@@ -987,6 +1021,8 @@ class TrainerConfig:
     xla_dump_upload: XlaDumpUploadConfig = XlaDumpUploadConfig()
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig()
     """Optional deadlines for training-step and whole-process progress events."""
+    training_budget: TrainingBudgetConfig | None = None
+    """Execution duration and reserves; its absolute deadline is resolved before training."""
 
     log_jaxprs: bool = True
     """Whether to log the jaxpr of the training step. This is useful for debugging and understanding the model."""

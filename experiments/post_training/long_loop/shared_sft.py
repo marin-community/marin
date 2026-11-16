@@ -13,6 +13,7 @@ import draccus
 from fray.types import GpuConfig, ResourceConfig
 from iris.rpc.proto_display import priority_band_value
 from levanter.data.text.datasets import LmDataConfig
+from levanter.training_budget import TrainingBudgetConfig, read_training_completion
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.buckets import filesystem_for
@@ -161,21 +162,41 @@ def native_sft_step(name: str, version: str, recipe: dict) -> ArtifactStep:
             (StoragePath(config.output_path) / "guard-result.json").write_text(json.dumps(receipt, indent=2))
         else:
             run(config)
-        select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
+        budget = config.train_config.trainer.training_budget
+        if budget is None:
+            select_shared_sft(output=config.output_path, completed_updates=spec.num_train_steps)
+        else:
+            select_time_limited_sft(output=config.output_path, maximum_updates=spec.num_train_steps, budget=budget)
 
     return replace(trained, run=execute, build_config=build_config)
 
 
 def select_shared_sft(*, output: str, completed_updates: int) -> None:
     """Bind native zero-based checkpoint indices to the completed update count."""
+    selection = shared_sft_selection(output=output, completed_updates=completed_updates)
+    (StoragePath(output) / "selected.json").write_text(json.dumps(selection))
+
+
+def shared_sft_selection(*, output: str, completed_updates: int) -> dict:
+    """Return a selection only for a committed native checkpoint."""
     step = completed_updates - 1
     checkpoint = prefix_join(output, f"checkpoints/step-{step}")
     metadata = read_json(prefix_join(checkpoint, "metadata.json"))
     if metadata["step"] != step or metadata["is_temporary"]:
         raise ValueError("Shared SFT did not commit its final native checkpoint")
-    (StoragePath(output) / "selected.json").write_text(
-        json.dumps({"checkpoint": checkpoint, "step": step, "completed_updates": completed_updates, "format": "SFTSpec"})
+    return {"checkpoint": checkpoint, "step": step, "completed_updates": completed_updates, "format": "SFTSpec"}
+
+
+def select_time_limited_sft(*, output: str, maximum_updates: int, budget: TrainingBudgetConfig) -> None:
+    """Select the final committed update recorded by the time-limited trainer."""
+    completion = read_training_completion(
+        telemetry_root=prefix_join(output, "telemetry"),
+        checkpoint_root=prefix_join(output, "checkpoints"),
+        maximum_updates=maximum_updates,
+        budget=budget,
     )
+    selection = shared_sft_selection(output=output, completed_updates=completion["completed_updates"])
+    (StoragePath(output) / "selected.json").write_text(json.dumps({**selection, "training_completion": completion}))
 
 
 def export_shared_sft(*, output: str, trained: str, context_limit: int, source_revision: str) -> None:
