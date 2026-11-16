@@ -183,6 +183,7 @@ class LocalFiles:
 class LocalProcess:
     def __init__(self):
         self.processes = []
+        self.sessions = {}
 
     async def exec(self, command: str, cwd: str | None = None, env: dict[str, str] | None = None, timeout=None):
         process = await asyncio.create_subprocess_shell(
@@ -197,7 +198,29 @@ class LocalProcess:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
         return SimpleNamespace(exit_code=process.returncode, result=stdout.decode(errors="replace"))
 
+    async def create_session(self, name, request_timeout=None):
+        assert name not in self.sessions
+        self.sessions[name] = None
+
+    async def execute_session_command(self, name, request, timeout=None):
+        assert request.run_async and request.suppress_input_echo
+        self.sessions[name] = asyncio.create_task(self.exec(request.command))
+        return SimpleNamespace(cmd_id="command")
+
+    async def get_session_command(self, name, command_id, request_timeout=None):
+        assert command_id == "command"
+        task = self.sessions[name]
+        return SimpleNamespace(exit_code=task.result().exit_code if task.done() else None)
+
+    async def delete_session(self, name, request_timeout=None):
+        task = self.sessions.pop(name, None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def close(self):
+        for name in list(self.sessions):
+            await self.delete_session(name)
         for process in self.processes:
             if process.returncode is None:
                 try:
@@ -294,12 +317,19 @@ def test_snapshot_preflight_builds_without_starting_sandbox_and_reuses_image():
 
 
 @pytest.mark.parametrize("policy", [None, DaytonaNetworkPolicy(DaytonaNetworkMode.DOMAIN_ALLOW_LIST, "example.org")])
+<<<<<<< HEAD
 @pytest.mark.requires_host_setsid
 def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
+=======
+@pytest.mark.parametrize("command_polling", [False, True])
+def test_daytona_binary_command_and_files(tmp_path: Path, policy, command_polling) -> None:
+>>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
     async def scenario() -> None:
         client = LocalDaytona()
         workdir = tmp_path / "work"
-        machine = await DaytonaMachineFactory(lambda: client, network_policy=policy).create(
+        machine = await DaytonaMachineFactory(
+            lambda: client, network_policy=policy, command_polling=command_polling
+        ).create(
             MachineSpec(
                 source=RegistryImage("ubuntu:24.04"),
                 workdir=str(workdir),
@@ -346,6 +376,7 @@ def test_daytona_binary_command_and_files(tmp_path: Path, policy) -> None:
             await machine.close()
         assert client.deleted
         assert client.closed
+        assert not client.sandbox.process.sessions
 
     asyncio.run(scenario())
 
@@ -439,7 +470,10 @@ def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: flo
 
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 @pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
-def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(tmp_path, interruption):
+@pytest.mark.parametrize("command_polling", [False, True])
+def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(
+    tmp_path, interruption, command_polling
+):
     async def scenario():
         stopping, release_stop = asyncio.Event(), asyncio.Event()
 
@@ -460,7 +494,7 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
 
         client = LocalDaytona()
         client.sandbox.process = HeldStop()
-        machine = await DaytonaMachineFactory(lambda: client).create(
+        machine = await DaytonaMachineFactory(lambda: client, command_polling=command_polling).create(
             MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
         )
         child = None
@@ -493,7 +527,8 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
                 with pytest.raises(asyncio.CancelledError) as caught:
                     await pending
                 assert caught.value.args == ("agent deadline",)
-                assert caught.value is client.sandbox.process.cancellations[-1]
+                if not command_polling:
+                    assert caught.value is client.sandbox.process.cancellations[-1]
             stopped = await machine.run(
                 Command(
                     (
@@ -510,6 +545,7 @@ def test_daytona_command_interruption_stops_descendants_and_preserves_next_comma
             graded = await machine.run(Command(("sh", "-c", 'test "$(cat answer)" = 12 && printf 1.0')))
             assert (graded.exit_code, graded.stdout) == (0, b"1.0")
             assert not client.deleted and not client.closed
+            assert not client.sandbox.process.sessions
         finally:
             release_stop.set()
             await machine.close()
@@ -644,7 +680,62 @@ def test_daytona_provider_timeout_remains_an_infrastructure_error(tmp_path, comm
     asyncio.run(scenario())
 
 
+<<<<<<< HEAD
 @pytest.mark.requires_host_setsid
+=======
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_daytona_polling_status_failure_preserves_error_without_reexecuting(tmp_path, cleanup_fails):
+    provider_error = TimeoutError("Provider status request timed out")
+
+    class FailedStatus(LocalProcess):
+        fail = False
+        delete_failed = False
+        executions = 0
+
+        async def execute_session_command(self, *args, **kwargs):
+            self.executions += 1
+            return await super().execute_session_command(*args, **kwargs)
+
+        async def get_session_command(self, *args, **kwargs):
+            if self.fail:
+                raise provider_error
+            return await super().get_session_command(*args, **kwargs)
+
+        async def delete_session(self, *args, **kwargs):
+            if self.fail and cleanup_fails and not self.delete_failed:
+                self.delete_failed = True
+                raise RuntimeError("Provider session deletion failed")
+            await super().delete_session(*args, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        process = client.sandbox.process = FailedStatus()
+        machine = await DaytonaMachineFactory(lambda: client, command_polling=True).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        before = process.executions
+        process.fail = True
+        try:
+            with pytest.raises(TimeoutError) as caught:
+                await machine.run(Command(("printf", "do-not-replay")))
+            assert caught.value is provider_error
+            assert process.executions == before + 1
+            assert not process.sessions
+            if cleanup_fails:
+                assert client.deleted and client.closed
+                assert any("session cleanup failed" in note for note in provider_error.__notes__)
+            else:
+                assert not client.deleted
+                process.fail = False
+                result = await machine.run(Command(("printf", "following")))
+                assert (result.exit_code, result.stdout) == (0, b"following")
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+>>>>>>> bb60a34311 (Add opt-in Daytona command execution with status polling)
 def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation():
     entered = asyncio.Event()
 
