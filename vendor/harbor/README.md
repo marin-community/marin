@@ -12,9 +12,11 @@ explicitly.
 
 Tasks declare agent process variables in `[agent.env]`, including `HOME` for
 non-root agents. Run-level `agent.env` values override duplicate task values;
-environment and verifier settings remain separate. Pi stages endpoint variables
-and its context-budget extension in the agent's writable `/logs/agent` directory,
-so cleanup can remove provider-owned uploads after execution.
+environment and verifier settings remain separate. Per-step `agent.env` is
+unsupported and fails validation. Pi stages endpoint variables and its
+context-budget extension in private temporary directories owned by the agent,
+outside collected logs. Normal exits remove those directories; interrupted runs
+can leave temporary files inside the sandbox.
 
 It evaluates prebuilt Harbor tasks from local paths, Hugging Face repositories,
 or the Harbor registry. The `harbor` distribution provides both the `harbor` and

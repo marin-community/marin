@@ -1,9 +1,17 @@
 import tomllib
 from typing import Any
 
-from pydantic import Field
+import pytest
+from pydantic import Field, ValidationError
 
 from harbor.models.task.config import TaskConfig
+
+
+def test_rejects_ignored_step_agent_environment():
+    with pytest.raises(ValidationError, match="Per-step agent.env"):
+        TaskConfig.model_validate(
+            {"steps": [{"name": "first", "agent": {"env": {"HOME": "/step-home"}}}]}
+        )
 
 
 def test_model_dump_toml_orders_task_before_steps_and_sections():
