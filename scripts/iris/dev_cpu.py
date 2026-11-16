@@ -113,14 +113,20 @@ def current_pod(state: DevCpuState, *, timeout: int = POD_RESOLVE_TIMEOUT) -> Po
     return wait_for_running_pod(state.target, state.task_id, timeout=timeout)
 
 
-def session_summary(state: DevCpuState, pod: PodRef) -> str:
+def job_is_active(state: DevCpuState) -> bool:
+    """Ask the controller whether the box's holder job is still running."""
+    with controller_client(state.config_file) as client:
+        return is_job_active(client, state.job_id)
+
+
+def session_summary(state: DevCpuState, pod: PodRef | None) -> str:
     return "\n".join(
         [
             f"Session: {state.session_name}",
             f"Job: {state.job_id}",
             f"Config: {state.config_file}",
             f"Priority: {state.priority.value}",
-            f"Pod: {pod.pod_name} (namespace={pod.namespace}, container={pod.container})",
+            f"Pod: {pod.pod_name} (namespace={pod.namespace}, container={pod.container})" if pod else "Pod: none",
         ]
     )
 
@@ -139,6 +145,14 @@ class Context:
 
     def state(self) -> DevCpuState:
         return load_state(state_path(self.state_dir, self.session_name))
+
+
+def load_active_pod(obj: Context) -> tuple[DevCpuState, PodRef]:
+    """Resolve the box's pod only while its holder job is still active."""
+    state = obj.state()
+    if not job_is_active(state):
+        raise click.ClickException(f"Dev CPU box '{state.session_name}' has ended; release it")
+    return state, current_pod(state)
 
 
 @click.group()
@@ -232,16 +246,16 @@ def allocate(
 @click.pass_obj
 def exec_command(obj: Context, command: tuple[str, ...]) -> None:
     """Run one command in the box and exit with its status."""
-    state = obj.state()
-    raise SystemExit(run_logged(kubectl_exec_cmd(state.target, current_pod(state), command)).returncode)
+    state, pod = load_active_pod(obj)
+    raise SystemExit(run_logged(kubectl_exec_cmd(state.target, pod, command)).returncode)
 
 
 @cli.command("shell")
 @click.pass_obj
 def shell(obj: Context) -> None:
     """Open an interactive login shell in the box."""
-    state = obj.state()
-    run_logged(kubectl_connect_cmd(state.target, current_pod(state)), check=True)
+    state, pod = load_active_pod(obj)
+    run_logged(kubectl_connect_cmd(state.target, pod), check=True)
 
 
 @cli.command("cp-to")
@@ -250,8 +264,8 @@ def shell(obj: Context) -> None:
 @click.pass_obj
 def copy_to(obj: Context, local: str, remote: str) -> None:
     """Copy a local file or directory into the box."""
-    state = obj.state()
-    run_logged(kubectl_copy_to_cmd(state.target, current_pod(state), local, remote), check=True)
+    state, pod = load_active_pod(obj)
+    run_logged(kubectl_copy_to_cmd(state.target, pod, local, remote), check=True)
 
 
 @cli.command("cp-from")
@@ -260,8 +274,8 @@ def copy_to(obj: Context, local: str, remote: str) -> None:
 @click.pass_obj
 def copy_from(obj: Context, remote: str, local: str) -> None:
     """Copy a file or directory out of the box."""
-    state = obj.state()
-    run_logged(kubectl_copy_from_cmd(state.target, current_pod(state), remote, local), check=True)
+    state, pod = load_active_pod(obj)
+    run_logged(kubectl_copy_from_cmd(state.target, pod, remote, local), check=True)
 
 
 @cli.command("status")
@@ -269,9 +283,9 @@ def copy_from(obj: Context, remote: str, local: str) -> None:
 def status(obj: Context) -> None:
     """Show the session and whether its holder job is still active."""
     state = obj.state()
-    with controller_client(state.config_file) as client:
-        active = is_job_active(client, state.job_id)
-    print(session_summary(state, current_pod(state)))
+    active = job_is_active(state)
+    pod = current_pod(state) if active else None
+    print(session_summary(state, pod))
     print(f"Active: {active}")
 
 

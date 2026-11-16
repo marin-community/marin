@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+
+from click.testing import CliRunner
 from iris.cluster.types import ResourceSpec
 from iris.rpc import job_pb2
 
 from scripts.iris.coreweave_dev_pod import CoreweaveTarget, PodRef, Priority, state_path
-from scripts.iris.dev_cpu import DevCpuState, HolderJob, current_pod, load_state
+from scripts.iris.dev_cpu import DevCpuState, HolderJob, cli
 
 TARGET = CoreweaveTarget(namespace="iris", kubeconfig_path="/k/cfg", kube_context="cw")
 POD = PodRef(namespace="iris", pod_name="dev-cpu-pod", container="task")
@@ -39,7 +42,7 @@ def test_holder_job_submits_privileged_non_preemptible_cpu_task_with_lifetime():
     assert constraint.value.string_value == "false"
 
 
-def test_commands_resolve_the_task_pod_afresh_after_a_retry(tmp_path, monkeypatch):
+def test_status_reports_an_ended_box_without_resolving_a_pod(tmp_path, monkeypatch):
     state = DevCpuState(
         session_name="ingest-debug",
         config_file="/k/iris.yaml",
@@ -51,15 +54,18 @@ def test_commands_resolve_the_task_pod_afresh_after_a_retry(tmp_path, monkeypatc
     state_file = state_path(tmp_path, "ingest-debug")
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(state.to_json())
-
+    monkeypatch.setattr("scripts.iris.dev_cpu.load_state", lambda path: state)
+    monkeypatch.setattr("scripts.iris.dev_cpu.controller_client", lambda config_file: contextlib.nullcontext(object()))
+    monkeypatch.setattr("scripts.iris.dev_cpu.is_job_active", lambda client, job_id: False)
     resolved = []
-    monkeypatch.setattr(
-        "scripts.iris.dev_cpu.wait_for_running_pod",
-        lambda target, task_id, *, timeout: (resolved.append(task_id), POD)[1],
-    )
-    # Re-resolution reads the persisted task id, so a retried holder stays reachable.
-    assert current_pod(load_state(state_file)) == POD
-    assert resolved == ["task-9"]
+    monkeypatch.setattr("scripts.iris.dev_cpu.wait_for_running_pod", lambda *args, **kwargs: resolved.append(1))
+
+    result = CliRunner().invoke(cli, ["--name", "ingest-debug", "status"])
+
+    assert result.exit_code == 0
+    assert "Active: False" in result.output
+    assert "Pod: none" in result.output
+    assert resolved == []
 
 
 def test_recorded_state_round_trips_through_json():
