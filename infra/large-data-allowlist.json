@@ -4,8 +4,6 @@
   "experiments/datakit/hero_data_emb_paths.json": 37681,
   "experiments/datakit/hero_data_fusion_score_paths.json": 34469,
   "experiments/datakit/hero_data_paths.json": 388339,
-  "experiments/post_training/task_curation/datasets/lean/numina_proofs.json": 222276,
-  "experiments/post_training/task_curation/datasets/license_receipts/index.json": 1336,
   "experiments/post_training/task_curation/retired-inventory-only.json": 276,
   "experiments/post_training/task_curation/source_duplicate_acknowledgements.json": 491852,
   "experiments/post_training/task_curation/source_fingerprint_index.json": 278,

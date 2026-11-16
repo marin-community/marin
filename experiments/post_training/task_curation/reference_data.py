@@ -63,6 +63,28 @@ def load_referenced_json(index_path: Path) -> dict[str, Any]:
     return {path: json.loads(data) for path, data in read_referenced_documents(index_path).items()}
 
 
+def read_referenced_document(index_path: Path, path: str) -> bytes:
+    """Download one referenced document by its index path, verifying its bytes."""
+    index = read_reference_index(index_path)
+    reference = next((item for item in index.references if item.path == path), None)
+    if reference is None:
+        raise ValueError(f"Reference index does not list {path}: {index_path}")
+    downloaded = hf_hub_download(
+        repo_id=reference.repo,
+        repo_type="dataset",
+        revision=reference.revision,
+        filename=reference.path,
+    )
+    data = Path(downloaded).read_bytes()
+    if hashlib.sha256(data).hexdigest() != reference.sha256:
+        raise ValueError(f"Referenced dataset bytes changed: {reference.repo}@{reference.revision}:{reference.path}")
+    return data
+
+
+def load_referenced_document(index_path: Path, path: str) -> Any:
+    return json.loads(read_referenced_document(index_path, path))
+
+
 def _private_dataset(api: HfApi, repo: str) -> None:
     if not api.repo_info(repo_id=repo, repo_type="dataset").private:
         raise ValueError(f"Reference dataset must be private: {repo}")
@@ -147,5 +169,6 @@ def create_reference_index(index_path: Path, repo: str, documents: Mapping[str, 
             for path, data in sorted(documents.items())
         ],
     )
+    index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(index.model_dump_json(indent=2) + "\n")
     return commit.oid

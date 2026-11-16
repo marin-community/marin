@@ -29,10 +29,16 @@ def _receipt(source_id: str, dataset: str, revision: str) -> LicenseReceipt:
     )
 
 
+# Captured at import, before any fixture patches the reference layer.
+_REAL_LOAD_JSON = reference_data.load_referenced_json
+_REAL_LOAD_DOCUMENT = reference_data.load_referenced_document
+
+
 @pytest.fixture(autouse=True)
-def real_reference_layer(monkeypatch: pytest.MonkeyPatch):
+def real_reference_layer(monkeypatch: pytest.MonkeyPatch, isolated_license_registry: None):
     """These tests exercise the reference layer itself; undo the registry isolation."""
-    monkeypatch.setattr(license_binding, "load_referenced_json", reference_data.load_referenced_json)
+    monkeypatch.setattr(license_binding, "load_referenced_json", _REAL_LOAD_JSON)
+    monkeypatch.setattr(reference_data, "load_referenced_document", _REAL_LOAD_DOCUMENT)
 
 
 @pytest.fixture
@@ -85,6 +91,19 @@ def test_read_verifies_referenced_bytes(tmp_path: Path, hub: dict):
     hub["files"]["part-000.json"] = b'{"a": 2}\n'
     with pytest.raises(ValueError, match="bytes changed"):
         reference_data.load_referenced_json(index_path)
+
+
+def test_load_referenced_document_reads_one_pinned_file(tmp_path: Path, hub: dict):
+    index_path = tmp_path / "index.json"
+    reference_data.create_reference_index(
+        index_path,
+        "open-athena/example",
+        {"part-000.json": b'{"a": 1}\n', "other.json": b'{"b": 2}\n'},
+        message="Seed",
+    )
+    assert reference_data.load_referenced_document(index_path, "other.json") == {"b": 2}
+    with pytest.raises(ValueError, match="does not list"):
+        reference_data.load_referenced_document(index_path, "missing.json")
 
 
 def test_commit_reference_documents_upserts_one_shard_and_bumps_the_index(tmp_path: Path, hub: dict):

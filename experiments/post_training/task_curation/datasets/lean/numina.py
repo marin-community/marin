@@ -48,6 +48,7 @@ from experiments.post_training.task_curation.datasets.lean.proofs import (
     statement_contract,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
+from experiments.post_training.task_curation.reference_data import load_referenced_document
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 NUMINA_REVISION = "51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94"
@@ -90,7 +91,8 @@ EVAL_OVERLAP = frozenset(json.loads(EVAL_OVERLAP_FILE.read_text())["overlapping"
 an eval set changes."""
 
 PROOFS_FILE = Path(__file__).resolve().parent / "numina_proofs.json"
-PASSING_PROOFS = frozenset(json.loads(PROOFS_FILE.read_text())["passing"])
+DERIVED_INDEX = Path(__file__).resolve().parents[1] / "derived" / "index.json"
+PASSING_PROOFS = frozenset(load_referenced_document(DERIVED_INDEX, "lean/numina_proofs.json")["passing"])
 """Rows whose human proof, as the golden control submits it, compiles without ``sorry`` with the grader's
 toolchain, by ``proof_key``. ``check_statements.py numina --write-proofs`` writes the file; rerun it, and
 bump the recipe's ``version``, when the toolchain or the revision moves."""

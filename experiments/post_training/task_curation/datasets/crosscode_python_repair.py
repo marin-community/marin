@@ -3,7 +3,6 @@
 
 """Select the private CrossCode Python repair without inheriting qualification."""
 
-import json
 from pathlib import Path
 
 from finestore.rl.curation import DatasetRelease, OracleValidation, WithinSourceDedupEvidence
@@ -11,17 +10,19 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_prebuilt
+from experiments.post_training.task_curation.reference_data import load_referenced_document
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
 from experiments.post_training.task_curation.source_policy import CROSSCODE_EVAL_REASON
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
 
 SOURCE_ID = "TaskTrove:laion__exp_rpt_crosscodeeval-python-v2"
+DERIVED_INDEX = Path(__file__).with_name("derived") / "index.json"
 
 
 def bind_source(source: RlDataSource) -> RlDataSource:
     if source.info.id != SOURCE_ID or source.info.oracle_filtration is not None:
         return source
-    repair = json.loads(Path(__file__).with_suffix(".json").read_text())
+    repair = load_referenced_document(DERIVED_INDEX, "crosscode_python_repair.json")
     if source.current_release != DatasetRelease.model_validate(repair["original_release"]):
         raise ValueError("CrossCode Python repair belongs to another original source pin")
     actor = ActorCensusReceipt.model_validate(repair["actor_receipt"])
