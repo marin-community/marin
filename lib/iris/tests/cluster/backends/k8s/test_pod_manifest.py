@@ -744,7 +744,7 @@ def test_region_constraint_matches_backend_without_using_kubernetes_region_label
     assert "nodeSelector" not in pod["spec"]
 
 
-def test_preferred_region_does_not_reject_dispatch():
+def test_preferred_region_stays_out_of_the_node_selector():
     req = make_run_req("/my-job/task-0")
     add_eq_constraint(req, "region", "US-EAST-08A")
     req.constraints[0].mode = job_pb2.CONSTRAINT_MODE_PREFERRED

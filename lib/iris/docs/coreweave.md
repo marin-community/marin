@@ -185,8 +185,9 @@ annotations to keep those groups separate.
 
 Iris Pods use topology-aware flavors. The shared `cw-tas` ResourceFlavor's
 `iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
-Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
-in the same flavor as GPU gangs. The ClusterQueue's binding GPU and RDMA quotas
+Pods request the dedicated `iris-cpu` flavor where a cluster defines one, such
+as 08a, keeping their per-node CPU reservations separate from GPU gangs; other
+clusters use unconstrained TAS. The ClusterQueue's binding GPU and RDMA quotas
 are derived from the configured maximum GPU node count and per-node device
 count; CPU, memory, disk, and Pods retain non-binding sentinels. Accelerator
 quota pressure activates `preemption.withinClusterQueue: LowerPriority`, and TAS
