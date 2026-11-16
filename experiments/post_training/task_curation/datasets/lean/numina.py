@@ -92,7 +92,18 @@ an eval set changes."""
 
 PROOFS_FILE = Path(__file__).resolve().parent / "numina_proofs.json"
 DERIVED_INDEX = Path(__file__).resolve().parents[1] / "derived" / "index.json"
-PASSING_PROOFS = frozenset(load_referenced_document(DERIVED_INDEX, "lean/numina_proofs.json")["passing"])
+
+
+@cache
+def passing_proofs() -> frozenset[str]:
+    """The proven-passing proof keys, read from the referenced derived-data registry.
+
+    Lazy on purpose: the read touches a private Hugging Face dataset, so importing this
+    module must not. Unit isolation swaps the reader before any call.
+    """
+    return frozenset(load_referenced_document(DERIVED_INDEX, "lean/numina_proofs.json").get("passing", ()))
+
+
 """Rows whose human proof, as the golden control submits it, compiles without ``sorry`` with the grader's
 toolchain, by ``proof_key``. ``check_statements.py numina --write-proofs`` writes the file; rerun it, and
 bump the recipe's ``version``, when the toolchain or the revision moves."""
@@ -183,7 +194,7 @@ def row_contract(
     if UNUSABLE_STATEMENT.search(without_comments(statement)):
         return unsupported("unusable_statement", "The statement runs code, which the reference would run as root")
     contract = numina_contract(statement)
-    if not isinstance(contract, ImportRejection) and require_passing_proof and proof_key(data) not in PASSING_PROOFS:
+    if not isinstance(contract, ImportRejection) and require_passing_proof and proof_key(data) not in passing_proofs():
         return unsupported("proof_does_not_compile", "The human proof does not compile with the grader's toolchain")
     return contract
 

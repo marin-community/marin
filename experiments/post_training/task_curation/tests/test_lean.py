@@ -28,10 +28,10 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
 )
 from experiments.post_training.task_curation.datasets.lean.numina import (
     EVAL_OVERLAP,
-    PASSING_PROOFS,
     UNCOMPILABLE,
     human_proof,
     is_human_proof_row,
+    passing_proofs,
 )
 from experiments.post_training.task_curation.datasets.lean.numina import proof_key as numina_proof_key
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
@@ -328,8 +328,9 @@ def test_eval_overlap_matches_statements_that_differ_only_in_binder_names_and_sp
     assert ours != statement_key("theorem aime_2 (x y : Nat) (h1 : x = y) : x ^ 3 = y ^ 3 := by")
 
 
+@pytest.mark.data_integration
 def test_the_fixture_rows_used_as_golden_controls_have_passing_proofs():
-    assert all(numina_proof_key(row) in PASSING_PROOFS for row in NUMINA_ROWS)
+    assert all(numina_proof_key(row) in passing_proofs() for row in NUMINA_ROWS)
 
 
 def test_only_rows_with_a_human_statement_and_proof_are_selected():

@@ -93,5 +93,5 @@ def prime_inputs(
 
 def with_passing_proof(monkeypatch: Any, row: dict[str, Any]) -> dict[str, Any]:
     """``row``, with its human proof counted as passing for this test only."""
-    monkeypatch.setattr(numina, "PASSING_PROOFS", numina.PASSING_PROOFS | {numina.proof_key(row)})
+    monkeypatch.setattr(numina, "passing_proofs", lambda: frozenset({numina.proof_key(row)}))
     return row
