@@ -286,8 +286,9 @@ def match_diagnostics(
     """Sample evidence for a match report: strongest matches and instruction previews.
 
     A zero-overlap census is not interpretable without the texts behind it; the report
-    carries the strongest forward matches, the strongest tracked-side similarities and a
-    few normalized instruction previews from both populations.
+    carries the strongest forward matches, the strongest tracked-side similarities, a few
+    normalized instruction previews from both populations, and the complete stripped text
+    of the strongest pair.
     """
     forward = sorted(outcome.receipts, key=lambda receipt: receipt.similarity, reverse=True)[:10]
     reverse_top = sorted(outcome.reverse_best.items(), key=lambda item: item[1], reverse=True)[:10]
@@ -295,6 +296,18 @@ def match_diagnostics(
         label: [row.text[:sample_characters] for row in index.raw_rows[:3]]
         for label, index in (("tracked", tracked), ("candidate", candidates))
     }
+    strongest = forward[0] if forward else None
+    pair_sample = {}
+    if strongest is not None:
+        candidate = next((row for row in candidates.raw_rows if row.task_id == strongest.candidate_task_id), None)
+        original = next((row for row in tracked.raw_rows if row.task_id == strongest.tracked_task_id), None)
+        pair_sample = {
+            "candidate_task_id": strongest.candidate_task_id,
+            "tracked_task_id": strongest.tracked_task_id,
+            "similarity": strongest.similarity,
+            "candidate_text": candidate.text[:6000] if candidate else None,
+            "tracked_text": original.text[:6000] if original else None,
+        }
     return {
         "forward_top": [
             {
@@ -306,6 +319,7 @@ def match_diagnostics(
         ],
         "reverse_top": [{"tracked": task_id, "similarity": similarity} for task_id, similarity in reverse_top],
         "instruction_previews": previews,
+        "pair_sample": pair_sample,
     }
 
 
