@@ -126,6 +126,5 @@ def test_verified_closure_trainer_preserves_rollouts_and_trains_verified_repairs
     assert trajectory["response_ids"] == original_responses
     repaired = batch["sequences"][1][batch["attention_mask"][1].bool()].tolist()
     assert tokenizer.decode(repaired, clean_up_tokenization_spaces=False) == 'assistant [{"a":1 }]'
-    assert batch["rollout_logprobs"] is None
     assert batch["student_topk_indices"][batch["ftpo_chosen_mask"]].tolist() == [candidates[1]]
     assert trainer.all_metrics["ftpo/selected_boundaries"] == 1

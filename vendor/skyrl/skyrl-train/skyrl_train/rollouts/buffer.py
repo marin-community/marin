@@ -131,7 +131,7 @@ class GroupRewards:
 
 @dataclass(frozen=True)
 class RowFacts:
-    """Compact row values and channel geometry in one committed verdict."""
+    """Per-row lengths, baseline exclusions, stop reasons, and policy stamps."""
 
     stamped_loss_tokens: tuple[int, ...]
     spanning_policy_steps: tuple[bool, ...]
