@@ -70,6 +70,32 @@ def test_kth_largest_matches_top_k_bit_for_bit(kind, rows, columns):
         )
 
 
+@pytest.mark.parametrize(
+    ("radix_bits", "block", "num_warps"), [(1, 64, 1), (2, 128, 2), (4, 32, 4), (2, 512, 8), (4, 1024, 2)]
+)
+def test_kth_largest_launch_shapes_match_top_k(radix_bits, block, num_warps):
+    # Rows with ties, -0.0 and +0.0, -inf and repeated maxima; k at 1, at n and in between. A block shorter than the
+    # row makes each lane count several tiles, the last one padded; a longer one keeps the padded row in registers.
+    rows, columns = 8, 300
+    rng = np.random.default_rng(radix_bits)
+    x = np.round(rng.standard_normal((rows, columns)) * 2).astype(np.float32) / 2
+    x[1] = 1.5
+    x[2, ::3] = -0.0
+    x[2, 1::3] = 0.0
+    x[3, rng.random(columns) < 0.5] = -np.inf
+    x[4, :7] = x[4].max() + 1
+    k = rng.integers(1, columns + 1, rows).astype(np.int32)
+    k[0], k[1], k[4], k[5] = 1, columns, 7, columns - 1
+    want = _top_k_kth(x, k)
+    kernel = jax.jit(kth_largest, static_argnames=("radix_bits", "block", "num_warps", "interpret"))
+    got = kernel(
+        jnp.asarray(x), jnp.asarray(k), radix_bits=radix_bits, block=block, num_warps=num_warps, interpret=True
+    )
+    # lax.top_k may return either zero where -0.0 and +0.0 tie; the reference orders them as totalOrder does.
+    np.testing.assert_array_equal(np.asarray(got), want)
+    np.testing.assert_array_equal(_bits(got), _bits(kth_largest_reference(jnp.asarray(x), jnp.asarray(k))))
+
+
 @pytest.mark.parametrize("valid_fraction", [1.0, 0.7, 0.0])
 def test_qb_thresholds_on_amd_instinct_equal_top_k(monkeypatch, valid_fraction):
     # AMD Instinct takes the radix-select kernel (run here in the interpreter); every other device takes lax.top_k.
