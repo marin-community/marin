@@ -7,6 +7,8 @@ The test process never owns its output log or verdict. The trusted source parser
 runs in a fresh isolated root Python after all grading-UID processes are dead.
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import importlib.util

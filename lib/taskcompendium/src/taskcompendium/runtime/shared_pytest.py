@@ -7,6 +7,8 @@ Only the standard library is imported here. The published integrity contract
 configures paths, identities, plugins, test selection and audit evidence.
 """
 
+from __future__ import annotations
+
 import argparse
 import ast
 import hashlib

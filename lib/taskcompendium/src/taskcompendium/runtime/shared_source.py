@@ -24,6 +24,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 
 REPORT_FILES = ("verdict.json", "reward.txt", "reward.json", "test_output.log")
@@ -35,6 +36,8 @@ def shared_controller():
     spec = importlib.util.spec_from_file_location("shared_control", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    # dataclasses resolves lazy annotations through sys.modules.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -44,6 +47,7 @@ def load_source_module(tests: Path, name: str):
     spec = importlib.util.spec_from_file_location(name.removesuffix(".py"), tests / name)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
