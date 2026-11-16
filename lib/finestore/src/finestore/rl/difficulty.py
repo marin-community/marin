@@ -679,6 +679,7 @@ def _tally_attempts(measurement: DifficultyMeasurement, attempts: Sequence[Diffi
             assert attempt.reason is not None
             blocked_reasons.add(attempt.reason)
         if attempt.status == AttemptStatus.SCORED:
+            assert attempt.reward is not None
             scored[attempt.task_id] = attempt.reward
     return AttemptTally(
         scored=scored,
