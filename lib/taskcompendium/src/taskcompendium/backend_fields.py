@@ -110,6 +110,7 @@ SCRIPT_GRADER_FIELDS = {
     "artifacts": (Requirement.FILESYSTEM,),
     "answer_path": (Requirement.FILE_UPLOAD,),
     "conversation_path": (Requirement.FILE_UPLOAD,),
+    "reply_status_path": (Requirement.FILE_UPLOAD,),
     "reward": (),
     "timeout": (Requirement.COMMAND_TIMEOUT,),
     "empty_output": (),
