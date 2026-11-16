@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-curation-derived",
-  "revision": "5f76e0c007bbc272f16830bb03c7868ce7985582",
+  "revision": "69728388372faff7dafb10a162bc2dc61e21e602",
   "references": [
     {
       "repo": "open-athena/marin-curation-derived",
@@ -16,9 +16,9 @@
     },
     {
       "repo": "open-athena/marin-curation-derived",
-      "revision": "5f76e0c007bbc272f16830bb03c7868ce7985582",
+      "revision": "69728388372faff7dafb10a162bc2dc61e21e602",
       "path": "full_content_results.json",
-      "sha256": "7bf069297ea2e70fcd77b5722ffac3eba63c6881087ebf6d973068d23b1efd59"
+      "sha256": "8ce92b2fdab8de7ebe012acc99f7610cb55be16f7a900d2a13049190971cebc6"
     }
   ]
 }

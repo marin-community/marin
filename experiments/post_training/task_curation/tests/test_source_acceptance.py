@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import DatasetRelease, OversightEvidence, OversightLevel
+from finestore.rl.status_taxonomy import SourceStatus
 
 from experiments.post_training.task_curation import sources as source_catalog
 from experiments.post_training.task_curation.datasets import native_releases
@@ -190,8 +191,6 @@ def test_nemotron_gym_math_v5_is_deprecated_in_favor_of_the_qa_repair():
     claim, so the row resolves to SourceStatus.DEPRECATED and the default
     training selections skip it.
     """
-    from finestore.rl.status_taxonomy import SourceStatus
-
     source = all_sources()["TaskTrove:laion__nemotron-gym-math-v5"]
     assert source.status is SourceStatus.DEPRECATED
     assert "deprecated" in source.info.tags
