@@ -69,6 +69,7 @@ def delivery_commands(
     entrypoint: str = "test.sh",
     cwd: str | None = None,
     output_path: str | None = None,
+    exit_code_path: str | None = None,
 ) -> tuple[VerifierCommand, ...]:
     """Write the private verifier files and run the source's original entry script.
 
@@ -78,6 +79,13 @@ def delivery_commands(
     ``output_path`` redirects the entry script's stdout and stderr into that file
     (an absolute guest path) instead of the collect result, so the caller can
     declare the file as a copied artifact; the source's scoring bytes stay unchanged.
+    ``exit_code_path`` selects the native Harbor reward-file result mode: the
+    script runs unchanged even on failure, its exact exit code is persisted to
+    that file, and the collect command finishes 0 so the source's own reward
+    (trap-written even on a failing run) reaches the reward parser; a missing
+    or invalid reward file still fails through the caller's reward parsing.
+    Without ``exit_code_path`` the command keeps the strict behavior: a nonzero
+    script exit fails the collect command.
     """
     if entrypoint not in verifier.files:
         raise ValueError(f"Delivered verifier lacks its entry script: {entrypoint}")
@@ -96,15 +104,28 @@ def delivery_commands(
         )
     if output_path is not None and not PurePosixPath(output_path).is_absolute():
         raise ValueError(f"The delivery output path must be absolute: {output_path}")
+    if exit_code_path is not None and not PurePosixPath(exit_code_path).is_absolute():
+        raise ValueError(f"The delivery exit-code path must be absolute: {exit_code_path}")
     entry = "bash " + shlex.quote(str(PurePosixPath(DELIVERY_ROOT) / entrypoint))
     if output_path is not None:
         entry += " > " + shlex.quote(output_path) + " 2>&1"
+    if exit_code_path is not None:
+        # Native reward-file result mode: the source's exact exit code is
+        # persisted, the collect command finishes 0, and the source's own
+        # trap-written reward reaches the reward parser even on a failing run.
+        # The || assignment keeps the failing entry off `set -e`'s exit path.
+        entry += f" || status=$?; printf '%s\\n' \"${{status-0}}\" > {shlex.quote(exit_code_path)}; exit 0"
+    parents = {PurePosixPath(REWARD_PATH).parent}
+    if output_path is not None:
+        parents.add(PurePosixPath(output_path).parent)
+    if exit_code_path is not None:
+        parents.add(PurePosixPath(exit_code_path).parent)
     script = "\n".join(
         (
             "set -eu",
             f"mkdir -p {DELIVERY_ROOT}",
             *writes,
-            f"mkdir -p {PurePosixPath(output_path or REWARD_PATH).parent}",
+            *(f"mkdir -p {parent}" for parent in sorted(parents)),
             # The source's own script bytes run verbatim and write their own reward.
             entry,
         )

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import taskcompendium.harbor.root_delivery as root_delivery
 from taskcompendium.harbor.root_delivery import (
     MAX_DELIVERY_BYTES,
     QUIESCE_PROGRAM,
@@ -149,3 +150,41 @@ def test_delivery_output_path_redirects_the_entry_script_streams() -> None:
 def test_delivery_output_path_must_be_absolute() -> None:
     with pytest.raises(ValueError, match="absolute"):
         delivery_commands(delivered(), output_path="relative/output.txt")
+
+
+def test_native_reward_mode_persists_exit_code_and_lets_collect_finish(tmp_path, monkeypatch) -> None:
+    """A failing source run's trap-written reward still reaches the reward parser."""
+    fixture = Path("/tmp/root-delivery-native")
+    if fixture.exists():
+        shutil.rmtree(fixture)
+    (fixture / "logs" / "verifier").mkdir(parents=True)
+    # This host mounts /tests read-only; point the delivery root at the fixture.
+    monkeypatch.setattr(root_delivery, "DELIVERY_ROOT", "/tmp/root-delivery-native/tests")
+    monkeypatch.setattr(root_delivery, "REWARD_PATH", "/tmp/root-delivery-native/logs/verifier/reward.txt")
+    # The source script fails (pytest failures) but its trap writes reward 0.
+    source = DeliveredVerifier(
+        files={
+            "test.sh": b"#!/bin/bash\n" b"echo 0 > /tmp/root-delivery-native/logs/verifier/reward.txt\n" b"exit 3\n",
+            "test_state.py": VERIFIER_STATE,
+        }
+    )
+    (delivery,) = delivery_commands(
+        source,
+        output_path="/tmp/root-delivery-native/logs/verifier/test-output.txt",
+        exit_code_path="/tmp/root-delivery-native/logs/verifier/exit-code.txt",
+    )
+    result = subprocess.run(delivery.argv, cwd="/", capture_output=True, text=True, timeout=120)
+    # The collect command finishes 0 even though the source run exited 3.
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert (fixture / "logs/verifier/exit-code.txt").read_text().strip() == "3"
+    assert (fixture / "logs/verifier/reward.txt").read_text().strip() == "0"
+    assert (fixture / "logs/verifier/test-output.txt").exists()
+
+    # A missing reward still surfaces through the caller's reward parsing; the
+    # helper itself only guarantees the exit code and collect completion.
+    shutil.rmtree(fixture)
+
+
+def test_native_reward_mode_paths_must_be_absolute() -> None:
+    with pytest.raises(ValueError, match="exit-code path"):
+        delivery_commands(delivered(), exit_code_path="relative/exit.txt")
