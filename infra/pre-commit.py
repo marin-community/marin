@@ -176,28 +176,9 @@ def matches_pattern(file_path: pathlib.Path, patterns: list[str]) -> bool:
     return False
 
 
-def should_exclude(file_path: pathlib.Path) -> bool:
-    return matches_pattern(file_path, EXCLUDE_PATTERNS)
-
-
 def get_matching_files(
     patterns: list[str], all_files_list: list[pathlib.Path], exclude_patterns: list[str]
 ) -> list[pathlib.Path]:
-    matched = []
-    for file_path in all_files_list:
-        if should_exclude(file_path):
-            continue
-        if matches_pattern(file_path, exclude_patterns):
-            continue
-        if matches_pattern(file_path, patterns):
-            matched.append(file_path)
-    return matched
-
-
-def get_data_guard_files(
-    patterns: list[str], all_files_list: list[pathlib.Path], exclude_patterns: list[str]
-) -> list[pathlib.Path]:
-    """Like get_matching_files, but the global excludes do not hide files from this check."""
     matched = []
     for file_path in all_files_list:
         if matches_pattern(file_path, exclude_patterns):
@@ -359,10 +340,8 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
     return _record("Large files", 0)
 
 
-# Committed datasets balloon the checkout and the diff; the guard below keeps them out in
-# favor of references to private open-athena Hugging Face datasets. Sharding a dataset
-# across files or compressing it no longer evades the limit: every data file counts
-# against its own 100 KB, and a directory's committed data counts against 250 KB.
+# Committed data files have a 100 KB limit. Data directly inside one directory
+# has a 250 KB limit. Compressed files count toward both limits.
 LARGE_DATA_FILE_LIMIT = 100 * 1024
 LARGE_DATA_DIRECTORY_LIMIT = 250 * 1024
 DATA_FILE_SUFFIXES = frozenset(
@@ -456,7 +435,6 @@ def check_large_data(files: list[pathlib.Path], fix: bool) -> int:
         size = file_path.stat().st_size
         recorded = allowlist.get(relative)
         if recorded is not None:
-            # Allowlisted paths are grandfathered at their recorded size and may only shrink.
             if size > recorded:
                 failures.append(
                     f"  - {relative} grew to {size / 1024:.1f} KB (allowlisted at {recorded / 1024:.1f} KB;"
@@ -1004,10 +982,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
 class PrecommitConfig:
     patterns: list[str]
     checks: list[Callable[[list[pathlib.Path], bool], int]]
-    exclude_patterns: list[str] = field(default_factory=list)
-    # Check the globally excluded tree too (vendored code, generated assets, binary
-    # media): only the data guard needs files those patterns hide from other checks.
-    include_globally_excluded: bool = False
+    exclude_patterns: list[str] = field(default_factory=EXCLUDE_PATTERNS.copy)
 
 
 PRECOMMIT_CONFIGS = [
@@ -1037,7 +1012,7 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
+        exclude_patterns=[*EXCLUDE_PATTERNS, "lib/levanter/**", "lib/haliax/**", "lib/marin/**", "lib/**/vendor/**"],
         checks=[
             check_ruff,
             check_black,
@@ -1077,7 +1052,6 @@ PRECOMMIT_CONFIGS = [
         # evasion vectors), but not upstream code, pinned snapshots or binary media.
         patterns=["**/*"],
         checks=[check_large_data],
-        include_globally_excluded=True,
         exclude_patterns=[
             "vendor/**",
             "tests/snapshots/**",
@@ -1245,8 +1219,7 @@ def main(
     only_set = set(f"check_{o}" for o in only)
 
     for config in PRECOMMIT_CONFIGS:
-        select = get_data_guard_files if config.include_globally_excluded else get_matching_files
-        matched_files = select(config.patterns, all_files_list, config.exclude_patterns)
+        matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
         matched_files = [f for f in matched_files if f.exists()]
         if not matched_files:
             continue
