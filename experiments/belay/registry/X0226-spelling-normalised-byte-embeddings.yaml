@@ -148,6 +148,13 @@ trials:
   commit: f6779bb82f
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.4012
+  delta:
+  - -0.0094
+  steps: 39210
+  baseline: s7n-d1024 2.4106 (same commit, seed 0)
+  step_time_change: 0%
 - id: t009
   variant: spelling-normalised byte embeddings, 4-rung ladder
   rung: competitive-d1280
