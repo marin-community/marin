@@ -172,11 +172,11 @@ def build_run(
     execution: IrisSkyRLExecution | None = None,
     retention: SkyRLRetentionPolicy = RETENTION,
 ) -> ArtifactStep[SkyRLRun]:
-    """Build one RL artifact from already-bound model, tasks and native state.
+    """Build an RL training artifact from model, data and optional native checkpoint handles.
 
-    A supplied data_sha256 requires one task source; profiles with data_namespace
-    require a digest. The caller pins that source's identity to the checked bytes.
-    The resolved file is checked during configuration materialization.
+    A supplied data_sha256 requires one training-data artifact; profiles with
+    data_namespace require a digest. When the data changes, the caller must
+    supply a new source identity. The file is checked when the launch config is rendered.
     An execution override replaces the profile's placement and timeout settings.
     """
     if profile.data_namespace is not None and data_sha256 is None:
