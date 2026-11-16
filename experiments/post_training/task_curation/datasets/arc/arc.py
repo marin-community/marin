@@ -287,7 +287,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     build_path="Task Trove",
                     origin=SourceOrigin.TASKTROVE,
                     family="arc-agi",
-                    tags=("agentic"),
+                    tags=("agentic",),
                     count=10000,
                     notes="Direct grid answer against gold. Subsample; the inductive variant is stronger.",
                     task_format=TaskFormat.TASKCOMPENDIUM,
