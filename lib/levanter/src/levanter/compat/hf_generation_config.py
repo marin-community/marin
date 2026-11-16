@@ -5,7 +5,6 @@
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -14,17 +13,6 @@ GENERATION_CONFIG_FILENAME = "generation_config.json"
 END_OF_TURN_TOKENS = ("<|eot_id|>", "<|eom_id|>", "<|im_end|>", "<end_of_turn>")
 """Turn-boundary tokens added as stop tokens when the exported chat template emits them."""
 
-
-@dataclass(frozen=True)
-class SamplingDefaults:
-    """Default sampling parameters for exported checkpoints."""
-
-    temperature: float
-    top_p: float
-
-
-EXPORT_SAMPLING_DEFAULTS = SamplingDefaults(temperature=0.6, top_p=0.95)
-"""Sampling written into every export. Matches Marin's eval-policy reasoning-model defaults."""
 
 GenerationConfigDict = dict[str, Any]
 
@@ -67,12 +55,14 @@ def export_generation_config(
     *,
     chat_template: str | None,
     explicit: Mapping[str, Any] | None = None,
+    sampling_defaults: Mapping[str, Any] | None = None,
 ) -> GenerationConfigDict:
     """Complete preserved generation settings with export defaults and stop tokens.
 
-    Explicit fields win except for ``eos_token_id``, which is the union of the
-    explicit ids, the tokenizer EOS id, and turn-boundary tokens emitted by the
-    exported chat template. Greedy configs do not receive sampling fields.
+    Explicit fields win over caller-supplied sampling defaults. ``eos_token_id``
+    is the union of the explicit ids, the tokenizer EOS id, and turn-boundary
+    tokens emitted by the exported chat template. Greedy configs do not receive
+    sampling defaults.
 
     Raises:
         ValueError: If a stop token id is outside the tokenizer vocabulary.
@@ -88,9 +78,8 @@ def export_generation_config(
     if "bos_token_id" not in config and tokenizer.bos_token_id is not None:
         config["bos_token_id"] = tokenizer.bos_token_id
     if config.get("do_sample", True):
-        config.setdefault("do_sample", True)
-        config.setdefault("temperature", EXPORT_SAMPLING_DEFAULTS.temperature)
-        config.setdefault("top_p", EXPORT_SAMPLING_DEFAULTS.top_p)
+        for key, value in (sampling_defaults or {}).items():
+            config.setdefault(key, value)
     return config
 
 

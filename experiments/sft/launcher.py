@@ -90,6 +90,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
+from marin.export.generation_config import MARIN_GENERATION_CONFIG_DEFAULTS
 from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache
 from marin.processing.tokenize.tokenize import tokenize as run_tokenize
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
@@ -229,6 +230,7 @@ def _levanter_train_config(
         hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
         hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
+        hf_generation_config_defaults=dict(MARIN_GENERATION_CONFIG_DEFAULTS),
         z_loss_weight=0.0,
     )
 

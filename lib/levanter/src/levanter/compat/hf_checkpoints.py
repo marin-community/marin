@@ -1087,6 +1087,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         save_feature_extractor: bool = False,
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
+        generation_config_defaults: Mapping[str, Any] | None = None,
         chat_template: Optional[str] = None,
         field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
         **hf_upload_kwargs,
@@ -1110,7 +1111,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         If None, will save code for models that aren't in the HF repo.
         :param generation_config: explicit generation settings. Otherwise, preserves fields from
         the pinned reference checkpoint's generation config, when present. With a tokenizer, the
-        export adds inferred turn stops and sampling defaults.
+        export adds inferred turn stops.
+        :param generation_config_defaults: caller policy for generation fields missing from the explicit or
+        preserved generation config.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
         :param field_dtype_overrides: model attribute name (matched at any depth) to the dtype it is exported in,
@@ -1271,6 +1274,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                         self.tokenizer,
                         chat_template=shipped_template,
                         explicit=preserved_generation_config,
+                        sampling_defaults=generation_config_defaults,
                     )
                     logger.info("Writing %s: %s", GENERATION_CONFIG_FILENAME, completed)
                     write_generation_config(local_path, completed)
@@ -1427,6 +1431,7 @@ def save_hf_checkpoint_callback(
     upload_to_hf: Union[bool, str, RepoRef] = False,
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
+    generation_config_defaults: Mapping[str, Any] | None = None,
     chat_template: Optional[str] = None,
     field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
     **hf_upload_kwargs,
@@ -1460,6 +1465,7 @@ def save_hf_checkpoint_callback(
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=generation_config,
+            generation_config_defaults=generation_config_defaults,
             chat_template=chat_template,
             field_dtype_overrides=field_dtype_overrides,
             **my_upload_kwargs,

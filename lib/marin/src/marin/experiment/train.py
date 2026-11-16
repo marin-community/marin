@@ -42,6 +42,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
+from marin.export.generation_config import MARIN_GENERATION_CONFIG_DEFAULTS
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import (
     LevanterCheckpoint,
@@ -222,6 +223,7 @@ def train_lm(
             initialize_from_checkpoint_path=init_path,
             eval_harness=harness,
             eval_harness_steps=evals.every if evals is not None else None,
+            hf_generation_config_defaults=dict(MARIN_GENERATION_CONFIG_DEFAULTS),
             adapter=NoAdaptorConfig(),
         )
         return TrainLmOnPodConfig(

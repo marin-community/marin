@@ -210,9 +210,10 @@ ID 128009), while the tokenizer's `eos_token` remains the pre-training document
 boundary (e.g. `<|end_of_text|>`, ID 128001). The export's `eos_token_id` is the
 union of the tokenizer's EOS id and every end-of-turn token the exported chat
 template emits, so a Llama 3 header template yields `[128001, 128009]`. The
-export also sets the tokenizer's `bos_token_id` and the sampling defaults in
-`levanter.compat.hf_generation_config.EXPORT_SAMPLING_DEFAULTS`: `do_sample: true`,
-`temperature: 0.6`, `top_p: 0.95`. Pretraining exports get the same file.
+export also sets the tokenizer's `bos_token_id`. Callers can supply sampling
+defaults through `hf_generation_config_defaults`. Marin export flows use `do_sample: true`,
+`temperature: 0.6`, and `top_p: 0.95`. Standalone Levanter callers choose their
+own sampling defaults.
 
 Set `hf_generation_eos_token_ids` to add stop tokens that the chat template does
 not reveal:

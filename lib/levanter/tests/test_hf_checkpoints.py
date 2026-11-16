@@ -54,6 +54,8 @@ from levanter.testing.helpers import use_test_mesh
 from levanter.testing.tokenizer import llama3_style_chat_tokenizer
 from levanter.utils.byte_budget import HostByteBudget
 
+SAMPLING_DEFAULTS = {"do_sample": True, "temperature": 0.6, "top_p": 0.95}
+
 
 @skip_if_no_torch
 def test_conversion_to_jnp_bfloat16():
@@ -196,7 +198,12 @@ def test_export_preserves_reference_generation_config(
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
         converter.save_pretrained(
-            model, str(output), save_reference_code=False, generation_config=override, save_tokenizer=save_tokenizer
+            model,
+            str(output),
+            save_reference_code=False,
+            generation_config=override,
+            generation_config_defaults=SAMPLING_DEFAULTS,
+            save_tokenizer=save_tokenizer,
         )
     saved = json.loads((output / "generation_config.json").read_text())
     preserved = override if override is not None else (None if reference_kind == "missing" else original)
@@ -665,7 +672,13 @@ def test_save_pretrained_writes_complete_generation_config(local_gpt2_tokenizer_
 
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
-        converter.save_pretrained(model, str(tmp_path), save_reference_code=False, generation_config=explicit)
+        converter.save_pretrained(
+            model,
+            str(tmp_path),
+            save_reference_code=False,
+            generation_config=explicit,
+            generation_config_defaults=SAMPLING_DEFAULTS,
+        )
 
     assert json.loads((tmp_path / "generation_config.json").read_text()) == expected
 
