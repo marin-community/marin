@@ -139,6 +139,10 @@ def adapt_for_local(files: dict[str, bytes], workdir: str, pinned_reference: str
 
 limits_holder: dict = {}
 
+# Per-attempt tamper-probe observations, populated by qa_task and consumed by
+# the TamperAgent registered inside run_trial.
+probe_holder: dict = {}
+
 
 def _worker_limits():
     return limits_holder.get("value", {})
@@ -253,7 +257,11 @@ async def run_trial(config_path: Path) -> dict:
     """Run one production trial in-process and return its result summary."""
 
     class TamperAgent(BaseAgent):
-        """The QA's declared tamper probe, registered as a scripted agent."""
+        """The QA's declared tamper probe, registered as a scripted agent.
+
+        The agent writes the interpreter probe into the enclosing record via
+        the trial hook context; the probe dict is bound per attempt below.
+        """
 
         SUPPORTS_WINDOWS = False
 
@@ -269,6 +277,10 @@ async def run_trial(config_path: Path) -> dict:
 
         async def run(self, instruction, environment, context) -> None:
             # Runs with the published agent identity (the task's agent user).
+            probe = await environment.exec(
+                command="python -c 'import sys; print(sys.version_info[:3])'", timeout_sec=120
+            )
+            probe_holder["testbed_python"] = probe.stdout.strip()
             result = await environment.exec(command=f"bash -c {shlex.quote(TAMPER_SCRIPT)}", timeout_sec=900)
             if result.return_code != 0:
                 raise RuntimeError(f"tamper probe failed inside the agent phase: {result.stdout[-2000:]}")
@@ -333,6 +345,7 @@ def qa_task(root: Path, family: str, row: dict) -> dict:
         ("oracle", {"name": "oracle", "kwargs": {"resource_usage_filename": "resource-usage.json"}}),
         ("tamper", {"name": "tamper"}),
     ):
+        probe_holder.clear()
         attempt = root / "trials" / f"{family}-{name}-{phase}"
         attempt.mkdir(parents=True)
         config = trial_config(package, attempt / "jobs", agent, f"{family}-{name}-{phase}")
@@ -341,6 +354,8 @@ def qa_task(root: Path, family: str, row: dict) -> dict:
         summary = asyncio.run(
             asyncio.wait_for(_run_logged(config_path, attempt / "harbor.log"), timeout=ATTEMPT_TIMEOUT + 900)
         )
+        if phase == "tamper":
+            summary["testbed_python"] = probe_holder.get("testbed_python")
         record[phase] = summary
         LOGGER.info("[%s/%s] reward=%s", name, phase, summary["rewards"].get("reward"))
     return record
