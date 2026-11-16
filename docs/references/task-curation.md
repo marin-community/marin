@@ -3038,6 +3038,12 @@ text previews. The original compressed archive, TaskSpec and runtime stay
 unchanged. Original scoring files receive preview space before the adapter's
 controller copies.
 
+Each preview records `truncated`, `byte_count` and the full file's `sha256`;
+`resource_manifest.omitted_count` records files outside the preview count limit.
+For a fuller audit, `protected_source_verifier_resources(task)` in
+`taskcompendium.pipeline.review` returns the decoded original resources, whose
+complete bytes are available through `taskcompendium.runtime.resources.resource_bytes`.
+
 Historical revision 4 observations and reviewer identities remain valid and are
 not re-reviewed. When assembling or finalizing a revision 4 campaign, pass
 `--review-payload-revision 4` to `full_qc_shards assemble` or
@@ -3045,6 +3051,8 @@ not re-reviewed. When assembling or finalizing a revision 4 campaign, pass
 `local_reviewer(version, payload_revision="4")`; its requests retain the original
 revision 4 projection. New reviews default to revision 5 and its separate cache
 identity.
+Read the revision from the frozen review artifact's `reviewer.payload_revision`.
+The v2/v3 model profile and the review payload revision are independent pins.
 
 Revision 4 introduced separation of content quality from execution qualification:
 both supported revisions exclude
