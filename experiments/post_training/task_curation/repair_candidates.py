@@ -6,10 +6,10 @@
 A candidate folder (for example ``bugsinpy_v2`` + ``bugsinpy_v3``) ships Harbor task archives
 in ``tasks.parquet``. This loader unpacks each archive and lowers it to a TaskSpec for the
 repair lane's matching and comparative review. The lowering is a preview: it keeps the
-archive's own ``tests/test.sh`` grader terms when the archive can supply them and records a
-``NoGrader`` contract otherwise, so nothing is graded or admitted on this converter's word.
-Production admission of any replaced or added task runs the normal pipeline with a converter
-that owns its grader binding and controls.
+archive's own ``tests/test.sh`` verifier as grading terms under ``NoGrader``, so nothing is
+graded or admitted on this converter's word and every preview's grading contract carries the
+same caveat. Production admission of any replaced or added task runs the normal pipeline
+with a converter that owns its grader binding and controls.
 """
 
 import logging
@@ -59,8 +59,6 @@ class CandidateTask(BaseModel):
     source_task_id: str | None
     content_sha256: str | None
     task: TaskSpec
-    grader_terms_only: bool = False
-    """True when the preview kept the grader terms under ``NoGrader`` instead of a runnable one."""
 
 
 @dataclass(frozen=True)

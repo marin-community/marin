@@ -5,14 +5,15 @@
 
 For every matched pair whose content differs, one judge call sees the tracked original and
 the candidate side by side and returns a typed ``ComparativeVerdict``: which version is
-better and which ``Defect`` members the candidate fixes or introduces. The judge identity,
-rubric and sampling parameters are the FULL-QC reviewer's; only the rubric, tool schema and
-payload differ. Task IDs in the payload are labels; the pairing itself is content-matched.
+better and which ``Defect`` members the candidate fixes or introduces. The judge identity
+and sampling parameters are the FULL-QC reviewer's; the rubric, criteria, tool schema and
+payload are the repair lane's own. Task IDs in the payload are labels; the pairing itself is
+content-matched.
 """
 
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -108,13 +109,6 @@ def pair_request(pair: ComparativePair, spec: ReviewerSpec) -> dict[str, Any]:
     return {"custom_id": pair.candidate.id, "method": "POST", "url": "/v1/chat/completions", "body": body}
 
 
-def _semantic_payload(task: TaskSpec) -> dict[str, Any]:
-    payload = review_payload(task)
-    payload.pop("id", None)
-    payload.pop("source", None)
-    return payload
-
-
 class ComparativePairReviewer:
     """Review matched pairs through bounded direct chat calls, with reviewer-owned retries."""
 
@@ -144,7 +138,12 @@ class ComparativePairReviewer:
         )
 
     def review_pairs(self, pairs: Sequence[ComparativePair]) -> ComparativeBatchResult:
-        """Review every pair, retrying invalid or unavailable verdicts with larger budgets."""
+        """Review every pair, retrying invalid or unavailable verdicts with larger budgets.
+
+        This loop mirrors ``taskcompendium.pipeline.review._review_with_retries`` but cannot
+        reuse it: the shared helper builds ``ReviewVerdict`` bodies with its own rubric
+        plumbing, while pairs need the comparative payload and typed value below.
+        """
         if not pairs:
             return ComparativeBatchResult([], ComparativeUsage())
         candidate_ids = [pair.candidate.id for pair in pairs]
@@ -217,7 +216,3 @@ def _usage(output: RequestOutput) -> ComparativeUsage:
             prompt_tokens += usage.get("prompt_tokens") or 0
             completion_tokens += usage.get("completion_tokens") or 0
     return ComparativeUsage(prompt_tokens, completion_tokens)
-
-
-def pairs_by_candidate(pairs: Sequence[ComparativePair]) -> Mapping[str, ComparativePair]:
-    return {pair.candidate.id: pair for pair in pairs}

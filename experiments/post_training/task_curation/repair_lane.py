@@ -30,7 +30,7 @@ from taskcompendium.pipeline.repair import ComparativeOutcome, RepairMatchClass
 from experiments.post_training.task_curation.full_qc import LONG_REQUEST_TIMEOUT, ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.judges import LocalJudgeEndpoint, PinnedLocalJudgeEndpoint
 from experiments.post_training.task_curation.registry import read_registry_json
-from experiments.post_training.task_curation.repair_candidates import load_candidate_population
+from experiments.post_training.task_curation.repair_candidates import CANDIDATE_REPO, load_candidate_population
 from experiments.post_training.task_curation.repair_match import MatchOutcome, match_candidates
 from experiments.post_training.task_curation.repair_review import (
     ComparativeBatchResult,
@@ -80,11 +80,12 @@ def resolve_tracked_uris(source_id: str) -> tuple[str, ...]:
     return uris
 
 
-logger = logging.getLogger(__name__)
-
-
 class DryRunReport(BaseModel):
-    """The dry-run summary for one candidate folder against one tracked source."""
+    """The dry-run summary for one candidate folder against one tracked source.
+
+    Dry-run decisions are always pending: the oracle/NoP gates and publication are
+    separate ruled steps that a dry run never performs.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -94,7 +95,6 @@ class DryRunReport(BaseModel):
     census: dict[str, Any]
     advisories: int
     comparative: dict[str, Any] = Field(default_factory=dict)
-    decisions_pending: bool = True
     usage: dict[str, int] = Field(default_factory=dict)
     review_wall_seconds: float | None = None
     gpu_hours: float | None = None
@@ -160,7 +160,18 @@ def matched_pairs(
     return MatchedPairs(pairs=pairs, tracked_by_candidate=join)
 
 
-def review_pairs(pairs: list[ComparativePair], reviewer_version: ReviewerVersion) -> tuple[ComparativeBatchResult, Any]:
+@dataclass(frozen=True)
+class ReviewEvidence:
+    """Identity and cost observations from one served review pass."""
+
+    identity: dict[str, Any]
+    serving_jobs: tuple[str, ...]
+    wall_seconds: float
+
+
+def review_pairs(
+    pairs: list[ComparativePair], reviewer_version: ReviewerVersion
+) -> tuple[ComparativeBatchResult, ReviewEvidence]:
     """Serve the pinned FULL-QC judge and comparatively review every pair."""
     spec = local_reviewer(reviewer_version)
     endpoint = spec.endpoint
@@ -173,11 +184,9 @@ def review_pairs(pairs: list[ComparativePair], reviewer_version: ReviewerVersion
         reviewer = ComparativePairReviewer(client, spec, max_concurrent=32)
         started = time.monotonic()
         result = reviewer.review_pairs(pairs)
-        return result, {
-            "identity": spec.identity,
-            "serving_jobs": endpoint.job_ids,
-            "wall_seconds": time.monotonic() - started,
-        }
+        return result, ReviewEvidence(
+            identity=spec.identity, serving_jobs=tuple(endpoint.job_ids), wall_seconds=time.monotonic() - started
+        )
 
 
 def comparative_summary(result: ComparativeBatchResult) -> dict[str, Any]:
@@ -238,18 +247,17 @@ def dry_run(
         return report
     result, evidence = review_pairs(workload.pairs, reviewer_version)
     summary = comparative_summary(result)
-    wall_seconds = evidence["wall_seconds"]
     report = report.model_copy(
         update={
-            "comparative": {**summary, "judge": evidence["identity"]},
+            "comparative": {**summary, "judge": evidence.identity},
             "usage": {
                 "prompt_tokens": result.usage.prompt_tokens,
                 "completion_tokens": result.usage.completion_tokens,
             },
-            "review_wall_seconds": wall_seconds,
+            "review_wall_seconds": evidence.wall_seconds,
             # The serving job holds the GPU for its whole lifetime; four GB200s per job.
-            "gpu_hours": wall_seconds * 4 / 3600,
-            "serving_jobs": tuple(evidence["serving_jobs"]),
+            "gpu_hours": evidence.wall_seconds * 4 / 3600,
+            "serving_jobs": evidence.serving_jobs,
         }
     )
     return report
@@ -274,7 +282,7 @@ def main() -> None:
     parser.add_argument("--candidate-source-id", required=True)
     parser.add_argument("--candidate-revision", required=True)
     parser.add_argument("--folder", action="append", required=True)
-    parser.add_argument("--repo", default="FWeindel/validated-tasks")
+    parser.add_argument("--repo", default=CANDIDATE_REPO)
     parser.add_argument(
         "--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), default=ReviewerVersion.V3
     )

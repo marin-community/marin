@@ -28,7 +28,7 @@ class RepairMatchMethod(StrEnum):
     """Canonical content identity: normalized instruction, state and grading contract agree."""
 
     EQUIVALENT = "equivalent"
-    """Normalized instruction and state agree; the grading contract or reference differs."""
+    """Normalized instruction matches; the state, reference or grading contract differs."""
 
     NEIGHBOR = "neighbor"
     """Approximate nearest neighbor over normalized content at or above the repair threshold."""
@@ -125,7 +125,11 @@ class ComparativeReviewRecord(BaseModel):
 
 
 class RepairProvenance(StrEnum):
-    """Why a task is in the merged release, relative to the tracked source."""
+    """Why a task is in the merged release, relative to the tracked source.
+
+    The merge step that publishes the new PRIVATE tracked-source version stamps this on
+    every task; the Atlas renders it through the catalog snapshot's per-task provenance.
+    """
 
     ORIGINAL = "original"
     """The tracked task is retained unchanged (possibly re-confirmed by an identical candidate)."""
@@ -145,7 +149,11 @@ class RepairDecision(StrEnum):
 
 
 class ComparativeRepairReceipt(BaseModel):
-    """Typed per-task evidence for one matched-repaired pair's final decision."""
+    """Typed per-task evidence for one matched-repaired pair's final decision.
+
+    The merge step builds one receipt per reviewed pair once the oracle/NoP gates have run,
+    and the published release manifest references it as the task's replacement evidence.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

@@ -123,7 +123,7 @@ def match_candidates(
             tracked_task_sha256=row.instruction_hash,
             signal="absent_from_candidate",
             reason=f"Best candidate similarity {reverse_best.get(row.task_id, 0.0):.4f} is below the "
-            f"{CONFLICT_THRESHOLD} match threshold; the candidate's filter is advisory evidence only.",
+            f"{CONFLICT_THRESHOLD} drop floor; absence from a candidate subset is advisory evidence only.",
         )
         for row in tracked.raw_rows
         if row.task_id not in matched_tracked and reverse_best.get(row.task_id, 0.0) < CONFLICT_THRESHOLD
@@ -209,6 +209,7 @@ def _classify(
             reason=f"Similarity {similarity:.4f} falls between the match and conflict thresholds.",
         )
     return receipt(
+        tracked_task_id=None,
         method=RepairMatchMethod.NEIGHBOR,
         match_class=RepairMatchClass.NEW,
         reason=f"Best tracked similarity {similarity:.4f} is below the match threshold.",
