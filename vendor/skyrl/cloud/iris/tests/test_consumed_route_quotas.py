@@ -99,4 +99,3 @@ def test_rejected_agentic_groups_do_not_starve_nonagentic_leases():
         next_lease = await buffer.acquire_lease()
         assert {replacement.route, next_lease.route} == {"agentic", "non_agentic"}
     asyncio.run(exercise())
-
