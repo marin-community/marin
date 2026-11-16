@@ -24,7 +24,6 @@ from taskcompendium.pipeline.repair import (
 )
 
 from experiments.post_training.task_curation.task_neighbors import (
-    SIMILARITY_THRESHOLD,
     PopulationIndex,
     TaskContent,
 )
@@ -129,13 +128,23 @@ def _dedupe_candidates(candidates: PopulationIndex) -> tuple[list[TaskContent], 
 def match_candidates(
     tracked: PopulationIndex, candidates: PopulationIndex, *, tracked_source_id: str, candidate_source_id: str
 ) -> MatchOutcome:
-    """Classify every candidate against the tracked population and flag advisory drops."""
+    """Classify every candidate against the tracked population and flag advisory drops.
+
+    Under the standing mutual-best rule (atlas-rulings/repair-lane-mutual-best-match-20261116.md),
+    a nearest-neighbor match is repaired only when each task is the other's unique best
+    neighbor at similarity >= 0.5 after template stripping; non-mutual neighbors and several
+    candidates claiming one tracked task stay conflicting. Exact hash identity is its own
+    evidence and keeps its class.
+    """
     tracked_rows = _rows_by_id(tracked)
     candidate_rows = _rows_by_id(candidates)
     forward_rows, duplicate_count = _dedupe_candidates(candidates)
     forward = tracked.neighbors(forward_rows, candidates)
     reverse = candidates.neighbors(tracked.raw_rows, tracked)
     reverse_best: dict[str, float] = {neighbor.task_id: neighbor.similarity for neighbor in reverse}
+    reverse_partner: dict[str, str] = {
+        neighbor.task_id: neighbor.partner_task_id for neighbor in reverse if neighbor.partner_task_id
+    }
 
     claims: dict[str, list[str]] = defaultdict(list)
     provisional: dict[str, MatchReceipt] = {}
@@ -147,11 +156,14 @@ def match_candidates(
             partner,
             neighbor.similarity,
             neighbor.method,
+            mutual_best=bool(partner) and reverse_partner.get(partner.task_id) == candidate.task_id,
             tracked_source_id=tracked_source_id,
             candidate_source_id=candidate_source_id,
         )
         provisional[candidate.task_id] = receipt
-        if partner is not None and receipt.match_class is not RepairMatchClass.NEW:
+        if partner is not None and receipt.match_class in (RepairMatchClass.IDENTICAL, RepairMatchClass.REPAIRED):
+            # Only plausible matches compete for a tracked task; a non-mutual neighbor
+            # does not create a multi-claim conflict for the mutual one.
             claims[partner.task_id].append(candidate.task_id)
 
     receipts: list[MatchReceipt] = []
@@ -225,6 +237,7 @@ def _classify(
     similarity: float,
     method: str,
     *,
+    mutual_best: bool,
     tracked_source_id: str,
     candidate_source_id: str,
 ) -> MatchReceipt:
@@ -260,20 +273,21 @@ def _classify(
             match_class=RepairMatchClass.REPAIRED,
             reason="Exact instruction match with a differing grading contract or reference.",
         )
-    if partner is not None and similarity >= SIMILARITY_THRESHOLD:
+    if partner is not None and similarity >= CONFLICT_THRESHOLD:
+        if not mutual_best:
+            return receipt(
+                method=RepairMatchMethod.NEIGHBOR,
+                match_class=RepairMatchClass.CONFLICTING,
+                reason=f"Nearest tracked neighbor at similarity {similarity:.4f} (method {method}) is not "
+                "mutual: the tracked task's own best candidate differs.",
+            )
         return receipt(
             state_match=candidate.state_hash == partner.state_hash,
             reference_match=candidate.reference_hash == partner.reference_hash,
             tests_match=candidate.tests_hash == partner.tests_hash,
             method=RepairMatchMethod.NEIGHBOR,
             match_class=RepairMatchClass.REPAIRED,
-            reason=f"Nearest tracked neighbor at similarity {similarity:.4f} (method {method}).",
-        )
-    if partner is not None and similarity >= CONFLICT_THRESHOLD:
-        return receipt(
-            method=RepairMatchMethod.NEIGHBOR,
-            match_class=RepairMatchClass.CONFLICTING,
-            reason=f"Similarity {similarity:.4f} falls between the match and conflict thresholds.",
+            reason=f"Mutual best neighbor at similarity {similarity:.4f} (method {method}).",
         )
     return receipt(
         tracked_task_id=None,

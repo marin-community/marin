@@ -280,9 +280,12 @@ tracked source's pinned population:
 1. exact join on normalized instruction, state, reference and grading-contract hashes —
    `identical`;
 2. exact instruction with a differing contract or reference — `repaired`;
-3. approximate nearest neighbor over stripped text at similarity ≥ 0.9 — `repaired`;
-4. similarity in [0.5, 0.9) or several candidates claiming one tracked task — `conflicting`
-   (a manual ruling is required; nothing is replaced by itself);
+3. nearest neighbor over stripped text — `repaired` only when each task is the other's
+   unique best neighbor at similarity ≥ 0.5 (the standing mutual-best rule,
+   `atlas-rulings/repair-lane-mutual-best-match-20261116.md`; template setup sections are
+   stripped from both sides before the comparison);
+4. non-mutual nearest neighbors, or several candidates claiming one tracked task —
+   `conflicting` (a manual ruling is required; nothing is replaced by itself);
 5. below 0.5 — `new` (follows the normal admission pipeline);
 6. tracked tasks with no candidate at or above 0.5 become `dropped-by-candidate` advisories.
 

@@ -36,7 +36,6 @@ from experiments.post_training.task_curation.full_qc import ReviewerVersion, loc
 from experiments.post_training.task_curation.repair_lane import matched_pairs
 from experiments.post_training.task_curation.repair_match import (
     CONFLICT_THRESHOLD,
-    SIMILARITY_THRESHOLD,
     MatchOutcome,
     _classify,
     match_candidates,
@@ -44,9 +43,6 @@ from experiments.post_training.task_curation.repair_match import (
     strip_template_sections_rows,
 )
 from experiments.post_training.task_curation.repair_review import ComparativePair, ComparativePairReviewer
-from experiments.post_training.task_curation.task_neighbors import (
-    SIMILARITY_THRESHOLD as NEIGHBOR_THRESHOLD,
-)
 from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent, content_rows
 
 CANDIDATE_SOURCE = "candidate:test"
@@ -178,6 +174,23 @@ class TestMatchCascade:
         assert matched[RepairMatchClass.REPAIRED][0].method.value == "neighbor"
         assert outcome.advisories == []
 
+    def test_mutual_best_neighbor_is_repaired_and_non_mutual_conflicts(self):
+        base = " ".join(f"token{position}" for position in range(60))
+        near = base.replace("token30", "token30a")
+        farther = base.replace("token30", "token30a").replace("token7", "token7b")
+        tracked = index([content("t1", base)])
+        candidates = index([content("c1", near), content("c2", farther)])
+        outcome = match_candidates(
+            tracked, candidates, tracked_source_id=TRACKED_SOURCE, candidate_source_id=CANDIDATE_SOURCE
+        )
+        matched = by_class(outcome)
+        # Both candidates prefer t1, but t1's own best candidate is c1: only c1 is mutual.
+        repaired = {receipt.candidate_task_id for receipt in matched[RepairMatchClass.REPAIRED]}
+        conflicting = {receipt.candidate_task_id for receipt in matched[RepairMatchClass.CONFLICTING]}
+        assert repaired == {"c1"}
+        assert conflicting == {"c2"}
+        assert all("mutual" in receipt.reason.casefold() for receipt in matched[RepairMatchClass.REPAIRED])
+
     def test_two_candidates_on_one_tracked_task_conflict(self):
         tracked = index([content("t1", "text one")])
         candidates = index(
@@ -262,26 +275,38 @@ class TestMatchCascade:
 
 
 class TestMatchThresholdPolicy:
-    """Pin the approved similarity thresholds at the classification boundary."""
+    """Pin the standing mutual-best rule at the classification boundary."""
 
-    def test_similarity_band_pinned(self):
-        assert SIMILARITY_THRESHOLD is NEIGHBOR_THRESHOLD
+    def test_mutual_best_band_pinned(self):
         row = content("c1", "some candidate text")
         partner = content("t1", "some tracked text")
 
-        def classify(similarity: float):
+        def classify(similarity: float, *, mutual: bool):
             return _classify(
-                row, partner, similarity, "lsh", tracked_source_id=TRACKED_SOURCE, candidate_source_id=CANDIDATE_SOURCE
+                row,
+                partner,
+                similarity,
+                "lsh",
+                mutual_best=mutual,
+                tracked_source_id=TRACKED_SOURCE,
+                candidate_source_id=CANDIDATE_SOURCE,
             )
 
-        assert classify(CONFLICT_THRESHOLD).match_class is RepairMatchClass.CONFLICTING
-        assert classify(SIMILARITY_THRESHOLD - 0.01).match_class is RepairMatchClass.CONFLICTING
-        assert classify(SIMILARITY_THRESHOLD).match_class is RepairMatchClass.REPAIRED
+        assert classify(CONFLICT_THRESHOLD, mutual=True).match_class is RepairMatchClass.REPAIRED
+        assert classify(0.9, mutual=True).match_class is RepairMatchClass.REPAIRED
+        # The old one-way 0.9 tier is gone: non-mutual neighbors stay conflicting.
+        assert classify(0.9, mutual=False).match_class is RepairMatchClass.CONFLICTING
         unmatched = _classify(
-            row, None, 0.0, "lsh", tracked_source_id=TRACKED_SOURCE, candidate_source_id=CANDIDATE_SOURCE
+            row,
+            None,
+            0.0,
+            "lsh",
+            mutual_best=False,
+            tracked_source_id=TRACKED_SOURCE,
+            candidate_source_id=CANDIDATE_SOURCE,
         )
         assert unmatched.match_class is RepairMatchClass.NEW and unmatched.tracked_task_id is None
-        below = classify(CONFLICT_THRESHOLD - 0.01)
+        below = classify(CONFLICT_THRESHOLD - 0.01, mutual=True)
         assert below.match_class is RepairMatchClass.NEW
 
 
