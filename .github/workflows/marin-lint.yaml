@@ -20,6 +20,9 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v5
 
+    - name: Fetch main for the large-data guard
+      run: git fetch --depth=1 origin main
+
     - name: Install uv and Python
       uses: astral-sh/setup-uv@v7
       with:

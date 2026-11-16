@@ -110,6 +110,14 @@ def test_raising_an_allowlisted_size_fails_once_origin_main_has_the_allowlist(re
     assert precommit.check_large_data([path, precommit.LARGE_DATA_ALLOWLIST_PATH], fix=False) == 1
 
 
+def test_missing_origin_main_fails_the_guard_with_a_fetch_hint(repo: Path):
+    path = _write_data(repo, "datasets/legacy/results.json", 150)
+    _allowlist(repo, {"datasets/legacy/results.json": path.stat().st_size})
+    _git("update-ref", "-d", "refs/remotes/origin/main", cwd=repo)
+    with pytest.raises(RuntimeError, match="git fetch origin main"):
+        precommit.check_large_data([path, precommit.LARGE_DATA_ALLOWLIST_PATH], fix=False)
+
+
 def test_allowlisting_data_origin_main_never_had_fails_after_adoption(repo: Path):
     _allowlist(repo, {})
     _git("commit", "--quiet", "-m", "Adopt the allowlist", cwd=repo)
