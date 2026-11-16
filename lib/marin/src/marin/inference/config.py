@@ -75,17 +75,20 @@ class ServingGeometry:
     """Parallelism and GPU placement for one Iris serving instance.
 
     Attributes:
-        tensor_parallel_size: GPUs sharing each model replica within one task.
+        tensor_parallel_size: GPUs per model replica at each pipeline stage,
+            within one task.
         data_parallel_size: Total model replicas across all tasks. The session
             router has this many targets; four tasks with four ranks give 16.
         pipeline_parallel_size: Pipeline stages per model replica, each on a
-            separate task. With multiple stages, all DP ranks must fit per task.
+            separate task.
         gpus_per_task: GPUs allocated to each Iris task, on one worker host.
 
-    Local DP ranks are derived as GPUs per task divided by TP size. TP must evenly
-    divide GPUs per task; cross-task DP requires PP=1. ``task_count`` and ``total_gpus``
-    are derived from these inputs. ``RemoteInferenceConfig.instances`` repeats
-    this layout as independent servers.
+    Local DP ranks = GPUs per task / TP. Total GPUs = TP * DP * PP.
+    Task count = total GPUs / GPUs per task. TP must evenly divide GPUs per task,
+    and local DP must evenly divide global DP.
+
+    The current launcher requires all DP ranks on each stage's task when PP>1,
+    so cross-task DP requires PP=1.
     """
 
     tensor_parallel_size: int
@@ -513,7 +516,12 @@ class IrisConfig:
 
 @dataclass(frozen=True)
 class RemoteInferenceConfig:
-    """Model, engine, and Iris inputs for one remote inference context."""
+    """Model, engine, and Iris inputs for one remote inference context.
+
+    ``instances`` starts independent servers, each with the configured Iris
+    resources and geometry. Multi-task or routed geometry requires ``instances=1``
+    and ``broker=None``; only single-task geometry without a router can repeat.
+    """
 
     model: ServedModelConfig
     engine: InferenceEngineConfig
