@@ -43,6 +43,7 @@ Every experiment is compared to the official recipe unless its Track says otherw
    provisional; ask for `hero-mfu` too if the idea changes step time.
 
 5. **Merge.** Once an idea holds up on `speedrun`, `hero-mfu` and the `ladder`, a maintainer can merge it into the
-   official recipe, and later ideas are compared against the improved recipe.
+   official recipe. Depending on the magnitude of the change, further tests may be run first, such as larger
+   scaling ladder rungs. Later ideas are compared against the improved recipe.
 
 6. **If the implementation missed your intent, post a new idea** naming the old registry id and what to change.
