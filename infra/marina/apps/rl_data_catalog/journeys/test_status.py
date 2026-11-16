@@ -93,6 +93,23 @@ def seeded_extras(journey: Journey):
     return payload
 
 
+def test_default_view_hides_excluded_sources_and_counts_what_is_hidden(journey: Journey) -> None:
+    page = journey.page
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.goto(f"{journey.origin}/{APP_ROOT}/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    excluded_row = page.locator('tr[data-source-id="Marin:filtered-zero"]')
+    expect(excluded_row).to_have_count(0)
+    footer = page.locator("#visible-count")
+    expect(footer).to_contain_text("excluded sources hidden")
+    expect(page.locator("#task-reconciliation")).to_contain_text("hidden (excluded status)")
+
+    page.locator("#status").select_option("Excluded")
+    expect(excluded_row).to_have_count(1)
+    expect(footer).not_to_contain_text("excluded sources hidden")
+    page.screenshot(path=str(journey.shots / "default-view-excluded-filter.png"))
+
+
 def test_status_page_lists_every_status_with_clickable_reasons(journey: Journey, seeded_extras: dict) -> None:
     page = journey.page
     page.set_viewport_size({"width": 1440, "height": 1000})

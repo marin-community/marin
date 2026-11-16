@@ -880,7 +880,8 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
     expect(page.locator("#metric-quality")).to_have_text("20 / 60 / 30")
     expect(page.locator("#metric-quality-shown")).to_have_text("Shown 0 / 60 / 0")
     expect(page.locator("#task-reconciliation")).to_have_text(
-        "20 tasks hidden (QUICK/BAD); 10 admitted · 30 tasks folded (duplicates/subsets); 20 admitted"
+        "10 tasks hidden (excluded status); 0 admitted · 10 tasks hidden (QUICK/BAD); 10 admitted · "
+        "30 tasks folded (duplicates/subsets); 20 admitted"
     )
     expect(page.locator("#metric-examples-shown")).to_have_text(
         "Shown 30 tasks admitted (TRAIN 30 · EVAL 0) · 20 tasks pending oracle filtration · 10 tasks excluded"
@@ -888,14 +889,15 @@ def test_header_distinguishes_catalog_totals_from_displayed_rows(journey: Journe
     # Read the rendered counts; both populations must reconcile, not only the text labels.
     shown = [int(value) for value in re.findall(r"\d+", page.locator("#metric-sources").inner_text())]
     omitted = [int(value) for value in re.findall(r"\d+", page.locator("#task-reconciliation").inner_text())]
-    assert shown[1] + omitted[0] + omitted[2] == shown[0]
+    assert shown[1] + omitted[0] + omitted[2] + omitted[4] == shown[0]
     admitted_shown = int(re.findall(r"\d+", page.locator("#metric-examples-shown").inner_text())[0])
     admitted_total = int(re.findall(r"\d+", page.locator("#metric-examples").inner_text())[0])
-    assert admitted_shown + omitted[1] + omitted[3] == admitted_total
+    assert admitted_shown + omitted[1] + omitted[3] + omitted[5] == admitted_total
     page.locator("#difficulty-model").select_option("small")
     page.locator("#use").select_option("train")
     expect(page.locator("#task-reconciliation")).to_have_text(
-        "20 tasks hidden (QUICK/BAD); 10 admitted · 30 tasks filtered; 20 admitted"
+        "10 tasks hidden (excluded status); 0 admitted · 10 tasks hidden (QUICK/BAD); 10 admitted · "
+        "30 tasks filtered; 20 admitted"
     )
     page.locator("#show-everything").click()
     expect(page.locator("#difficulty-model")).to_have_value("all")

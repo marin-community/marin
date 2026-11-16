@@ -28,11 +28,19 @@ function value(row, key) {
   if (key === 'difficulty') return AtlasDifficulty.selected(row.difficulty, $('difficulty-model').value)?.solve_rate;
   return row[key];
 }
-function shownByDefault(row) { return row.quality !== 'QUICK' && row.result !== 'BAD'; }
+function excludedStatus(row) { return row.status === 'Excluded' || row.status === 'Not selectable'; }
+function statusOf(row) { return excludedStatus(row) ? 'Excluded' : row.status || 'Available'; }
+function shownByDefault(row) { return row.quality !== 'QUICK' && row.result !== 'BAD' && !excludedStatus(row); }
+function eligible(row) {
+  // Excluded rows stay out of the default view and come back with one Status-filter click.
+  if ($('status').value === 'Excluded') return excludedStatus(row);
+  return $('show-all').checked || shownByDefault(row);
+}
 function matchesFilters(row) {
   const search = $('search').value.trim().toLowerCase();
   if (state.origin !== 'all' && originOf(row) !== state.origin) return false;
   if ($('use').value !== 'all' && value(row, 'use') !== $('use').value) return false;
+  if ($('status').value !== 'all' && statusOf(row) !== $('status').value) return false;
   if ($('grader').value !== 'all' && (row.grader_type || 'pending') !== $('grader').value) return false;
   if ($('quality').value !== 'all' && row.quality !== $('quality').value) return false;
   if ($('result').value !== 'all' && resultKey(row) !== $('result').value) return false;
@@ -40,7 +48,7 @@ function matchesFilters(row) {
   return !search || text.includes(search);
 }
 function filtered() {
-  return state.sources.filter(row => ($('show-all').checked || shownByDefault(row)) && matchesFilters(row)).sort((a, b) => {
+  return state.sources.filter(row => eligible(row) && matchesFilters(row)).sort((a, b) => {
     const x = value(a, state.sort), y = value(b, state.sort);
     if (x === null || x === undefined) return y === null || y === undefined ? a.id.localeCompare(b.id) : 1;
     if (y === null || y === undefined) return -1;
@@ -93,12 +101,12 @@ function contaminationCell(row) {
   return cell;
 }
 function renderTabs() {
-  const eligible = state.sources.filter(row => $('show-all').checked || shownByDefault(row));
+  const eligibleSources = state.sources.filter(row => eligible(row));
   const origins = ['all', ...[...new Set(state.sources.map(originOf))].sort()];
   $('origin-tabs').replaceChildren(...origins.map(origin => {
     const tab = node('button', origin === 'all' ? 'Origin' : origin, `tab${state.origin === origin ? ' selected' : ''}`);
     tab.type = 'button'; tab.setAttribute('aria-pressed', String(state.origin === origin));
-    const tasks = eligible.filter(row => origin === 'all' || originOf(row) === origin);
+    const tasks = eligibleSources.filter(row => origin === 'all' || originOf(row) === origin);
     tab.append(node('span', `${number.format(taskCounts(tasks).population)} tasks`));
     tab.addEventListener('click', () => { state.origin = origin; update(); });
     return tab;
@@ -132,10 +140,14 @@ function render() {
   }));
   $('empty').hidden = displayed.length > 0;
   AtlasColumns.attach(document.querySelector('.source-table'), columns);
-  const hidden = state.sources.length - state.sources.filter(row => $('show-all').checked || shownByDefault(row)).length;
+  const hidden = state.sources.filter(row => !eligible(row));
+  const hiddenExcluded = hidden.filter(row => excludedStatus(row));
+  const hiddenQuality = hidden.filter(row => !excludedStatus(row));
   const folded = rows.length - displayed.length;
   $('visible-count').textContent = `${number.format(displayed.length)} displayed sources` +
-    (folded ? ` · ${number.format(folded)} duplicate/subset members folded` : '') + (hidden ? ` · ${number.format(hidden)} QUICK or BAD hidden` : '');
+    (folded ? ` · ${number.format(folded)} duplicate/subset members folded` : '') +
+    (hiddenQuality.length ? ` · ${number.format(hiddenQuality.length)} QUICK or BAD hidden` : '') +
+    (hiddenExcluded.length ? ` · ${number.format(hiddenExcluded.length)} excluded sources hidden` : '');
 }
 function sourceRow(row, others, canonical) {
     const tr = node('tr', undefined, canonical ? 'duplicate-member' : ''); tr.dataset.sourceId = row.id;
@@ -256,10 +268,17 @@ function metrics(displayed, rows) {
   $('metric-quality').textContent = qualityCounts(state.sources);
   $('metric-quality-shown').textContent = `Shown ${qualityCounts(displayed)}`;
   $('metric-date').textContent = day(state.syncedAt);
-  const hidden = state.sources.filter(row => !$('show-all').checked && !shownByDefault(row));
+  const hidden = state.sources.filter(row => !eligible(row));
+  const hiddenExcluded = hidden.filter(row => excludedStatus(row));
+  const hiddenQuality = hidden.filter(row => !excludedStatus(row));
   const filtered = state.sources.filter(row => !hidden.includes(row) && !matchesFilters(row));
   const folded = rows.filter(row => !displayed.includes(row));
-  const reasons = [[hidden, 'hidden (QUICK/BAD)'], [filtered, 'filtered'], [folded, 'folded (duplicates/subsets)']];
+  const reasons = [
+    [hiddenExcluded, 'hidden (excluded status)'],
+    [hiddenQuality, 'hidden (QUICK/BAD)'],
+    [filtered, 'filtered'],
+    [folded, 'folded (duplicates/subsets)'],
+  ];
   $('task-reconciliation').textContent = reasons.filter(([items]) => items.length).map(([items, reason]) => {
     const count = taskCounts(items);
     return `${number.format(count.population)} tasks ${reason}; ${number.format(count.admitted)} admitted`;
@@ -278,7 +297,7 @@ async function load() {
 }
 function viewUrl() {
   const params = new URLSearchParams();
-  for (const id of ['search', 'use', 'quality', 'result', 'grader', 'difficulty-model']) {
+  for (const id of ['search', 'status', 'use', 'quality', 'result', 'grader', 'difficulty-model']) {
     const item = $(id).value.trim();
     if (item && item !== 'all') params.set(id, item);
   }
@@ -292,7 +311,7 @@ function viewUrl() {
 function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
   $('filters').reset(); $('search').value = params.get('search') || '';
-  for (const id of ['use', 'quality', 'result', 'grader']) if (params.has(id)) $(id).value = params.get(id);
+  for (const id of ['status', 'use', 'quality', 'result', 'grader']) if (params.has(id)) $(id).value = params.get(id);
   if (AtlasDifficulty.solvers.includes(params.get('difficulty-model'))) $('difficulty-model').value = params.get('difficulty-model');
   $('show-all').checked = params.get('all') === '1';
   expandedGroups.clear();
@@ -306,7 +325,7 @@ function update(replace = false) {
   history[replace ? 'replaceState' : 'pushState'](null, '', viewUrl());
   render();
 }
-for (const id of ['use', 'quality', 'result', 'grader']) $(id).addEventListener('change', () => update());
+for (const id of ['status', 'use', 'quality', 'result', 'grader']) $(id).addEventListener('change', () => update());
 $('difficulty-model').addEventListener('change', () => {
   state.sort = $('difficulty-model').value === 'all' ? 'display_name' : 'difficulty';
   state.direction = state.sort === 'difficulty' ? -1 : 1;

@@ -81,7 +81,17 @@ def check_view(
 ) -> dict[str, Any]:
     """Check every rendered row and both independent task partitions."""
     rows = {row["id"]: row for row in sources}
-    hidden = [row for row in sources if not include_hidden and (row["quality"] == "QUICK" or row["result"] == "BAD")]
+
+    def hidden_status(row: dict[str, Any]) -> bool:
+        return row.get("status") in {"Excluded", "Not selectable"}
+
+    hidden = [
+        row
+        for row in sources
+        if not include_hidden and (row["quality"] == "QUICK" or row["result"] == "BAD" or hidden_status(row))
+    ]
+    hidden_excluded = [row for row in hidden if hidden_status(row)]
+    hidden_quality = [row for row in hidden if not hidden_status(row)]
     hidden_ids = {row["id"] for row in hidden}
     eligible = [row for row in sources if row["id"] not in hidden_ids and (use == "all" or row["intended_use"] == use)]
     eligible_ids = {row["id"] for row in eligible}
@@ -148,7 +158,7 @@ def check_view(
     folded = [row for row in eligible if row["id"] not in displayed_ids]
     expected_omitted = [
         value
-        for items in (hidden, filtered, folded)
+        for items in (hidden_excluded, hidden_quality, filtered, folded)
         if items
         for value in (task_totals(items).population, task_totals(items).admitted)
     ]
