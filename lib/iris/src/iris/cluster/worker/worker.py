@@ -912,7 +912,7 @@ class Worker:
             if desired.HasField("run"):
                 self._process_run_intent(attempt_uid, desired.run)
             else:
-                self._process_stop_intent(attempt_uid)
+                self._process_stop_intent(attempt_uid, desired.stop)
 
         # An attempt is desired if a DesiredAttempt's UID resolves to it.
         with self._lock:
@@ -1013,7 +1013,7 @@ class Worker:
         else:
             logger.info("Reconcile: attempt uid=%s unknown and no spec; will report MISSING", attempt_uid)
 
-    def _process_stop_intent(self, attempt_uid: AttemptUid) -> None:
+    def _process_stop_intent(self, attempt_uid: AttemptUid, reason: worker_pb2.Worker.StopReason) -> None:
         """Handle a single DesiredAttempt with intent=stop.
 
         Resolves the target attempt by ``attempt_uid``. Idempotent: silently
@@ -1024,7 +1024,7 @@ class Worker:
             if task is None:
                 return
 
-        logger.info("Reconcile: stopping attempt uid=%s (stop intent)", attempt_uid)
+        logger.info("Reconcile: stopping attempt uid=%s (%s)", attempt_uid, worker_pb2.Worker.StopReason.Name(reason))
         self._kill_async(task)
 
     def _build_observation(

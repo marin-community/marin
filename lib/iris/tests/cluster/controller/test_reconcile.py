@@ -401,7 +401,7 @@ def test_reconcile_worker_controller_terminal_with_terminal_attempt_emits_stop(t
 def test_reconcile_worker_stranded_terminal_with_live_attempt_emits_run(task_state):
     """A terminal task whose attempt is NOT yet terminal is a stranded attempt:
     re-poll (run, no spec) so the worker re-reports its real status or the
-    daemon synthesizes MISSING. Switching it to 'stop' would drop that recovery."""
+    daemon synthesizes MISSING."""
     row = _row(task_state, attempt_id=4, attempt_state=job_pb2.TASK_STATE_RUNNING)
     plan = _plan_for([row])
 
@@ -420,7 +420,7 @@ def test_reconcile_worker_stranded_terminal_with_live_attempt_emits_run(task_sta
     ],
 )
 def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected_reason):
-    row = _row(task_state, attempt_id=2)
+    row = _row(task_state, attempt_id=2, attempt_state=task_state)
     plan = _plan_for([row])
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
@@ -466,19 +466,16 @@ def test_reconcile_worker_pending_with_terminal_attempt_emits_stop():
 
 
 @pytest.mark.parametrize(
-    "attempt_state,expected_reason,holds_retry",
+    "attempt_state,expected_reason",
     [
-        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED, True),
         # A coscheduled-sibling requeue leaves the old attempt COSCHED_FAILED.
-        (job_pb2.TASK_STATE_COSCHED_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED, True),
-        # The controller drops reports for a nonterminal superseded attempt, so
-        # a hold on it would never release.
-        (job_pb2.TASK_STATE_RUNNING, worker_pb2.Worker.STOP_REASON_SUPERSEDED, False),
+        (job_pb2.TASK_STATE_COSCHED_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+        (job_pb2.TASK_STATE_RUNNING, worker_pb2.Worker.STOP_REASON_SUPERSEDED),
     ],
 )
-def test_reconcile_worker_stops_superseded_attempt(attempt_state, expected_reason, holds_retry):
-    """An old attempt stays in the plan as a 'stop' whatever the retry's task
-    state is. A retry ASSIGNED to the same worker waits for a terminal one."""
+def test_reconcile_worker_stops_superseded_attempt(attempt_state, expected_reason):
+    """An old attempt gets a 'stop' whatever the retry's task state is, and the
+    retry on the same worker is still dispatched."""
     old = _row(
         job_pb2.TASK_STATE_ASSIGNED,
         attempt_id=0,
@@ -491,7 +488,7 @@ def test_reconcile_worker_stops_superseded_attempt(attempt_state, expected_reaso
 
     by_uid = {d.attempt_uid: d for d in plan.request.desired}
     assert by_uid[old.attempt_uid].stop == expected_reason
-    assert (retry.attempt_uid not in by_uid) == holds_retry
+    assert by_uid[retry.attempt_uid].HasField("run")
 
 
 def test_reconcile_worker_holds_assigned_run_while_preemption_victim_occupies_worker():
@@ -568,7 +565,14 @@ def test_reconcile_worker_mixed_rows_per_axis():
     rows = [
         _row(job_pb2.TASK_STATE_ASSIGNED, task_id="a", attempt_id=1, job="j1", attempt_uid="aaaaaaaaaaaaaaaa"),
         _row(job_pb2.TASK_STATE_RUNNING, task_id="b", attempt_id=2, job="j2", attempt_uid="bbbbbbbbbbbbbbbb"),
-        _row(job_pb2.TASK_STATE_KILLED, task_id="c", attempt_id=3, job="j3", attempt_uid="cccccccccccccccc"),
+        _row(
+            job_pb2.TASK_STATE_KILLED,
+            task_id="c",
+            attempt_id=3,
+            job="j3",
+            attempt_uid="cccccccccccccccc",
+            attempt_state=job_pb2.TASK_STATE_KILLED,
+        ),
         _row(job_pb2.TASK_STATE_SUCCEEDED, task_id="d", attempt_id=4, job="j4", attempt_uid="dddddddddddddddd"),
     ]
     plan = _plan_for(rows, job_specs={_job_id("j1"): _spec("img-j1")})

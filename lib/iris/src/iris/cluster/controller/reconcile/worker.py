@@ -44,22 +44,29 @@ _STOP_REASON_BY_STATE: dict[int, worker_pb2.Worker.StopReason] = {
 def _stop_reason(row: "ReconcileRow") -> worker_pb2.Worker.StopReason | None:
     """Return the reason to stop this attempt, or ``None`` to leave it running."""
     # The attempt's own state decides: the task state can describe a newer
-    # attempt or a rollback to PENDING. A terminal attempt in a reconcile row is
-    # one the worker has not confirmed as gone, and only a 'stop' makes the
-    # worker send the terminal observation that finalizes it.
+    # attempt or a rollback to PENDING, and every controller-side termination
+    # writes the attempt state with the task state. A terminal attempt in a
+    # reconcile row is one the worker has not confirmed as gone, and only a
+    # 'stop' makes the worker send the terminal observation that finalizes it.
     if row.attempt_state in TERMINAL_TASK_STATES:
         return _STOP_REASON_BY_STATE.get(row.attempt_state, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED)
     if row.superseded:
         return worker_pb2.Worker.STOP_REASON_SUPERSEDED
-    if row.task_state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_PREEMPTED):
-        return _STOP_REASON_BY_STATE[row.task_state]
     return None
 
 
-def _holds_assigned_dispatch(row: "ReconcileRow") -> bool:
-    if row.attempt_state == job_pb2.TASK_STATE_PREEMPTED:
-        return True
-    return row.superseded and row.attempt_state in TERMINAL_TASK_STATES
+def _holds_preemption_victim(row: "ReconcileRow") -> bool:
+    """Whether this row is a preemption victim still occupying its worker.
+
+    The scheduler commits a preemptor ASSIGNED onto the worker its victim frees
+    before the victim's process is actually gone; the victim's attempt is
+    PREEMPTED but not yet finalized, so it stays worker-bound (reconcile rows are
+    the live, ``finished_at_ms IS NULL`` attempts). Covers both the budget-exhausted
+    victim (task PREEMPTED) and the retry/coscheduled-requeue victim (task rolled
+    back to PENDING) — both leave the attempt in PREEMPTED. It is the one signal
+    that a device is held by a process the preemptor must not race.
+    """
+    return row.attempt_state == job_pb2.TASK_STATE_PREEMPTED
 
 
 # ---------------------------------------------------------------------------
@@ -144,16 +151,14 @@ def _reconcile_worker(
 ) -> WorkerReconcilePlan:
     desired: list[worker_pb2.Worker.DesiredAttempt] = []
 
-    # The scheduler can commit a task ASSIGNED onto a worker before the process
-    # it replaces is gone: a preemptor onto its victim's worker, or a retry onto
-    # the worker of its own old attempt. While such an attempt still occupies
-    # this worker, withhold the ASSIGNED run-intents so the worker does not start
-    # a process against a live one (libtpu fixed-port crash loop). The terminal
-    # observation stamps ``finished_at_ms``, which drops the old attempt from the
-    # next snapshot — in the healthy case, a hold of one reconcile cycle. Only a
-    # terminal attempt holds: the controller drops a report for a nonterminal
-    # superseded attempt, so that attempt would hold the worker forever.
-    hold_assigned_dispatch = any(_holds_assigned_dispatch(row) for row in rows)
+    # A preemptor is committed ASSIGNED onto the worker its victim frees before
+    # the victim's process is actually gone. While a preemption victim still
+    # occupies this worker, withhold the ASSIGNED run-intents so the worker does
+    # not start the preemptor against the live victim (libtpu fixed-port crash
+    # loop). The victim's terminal observation stamps ``finished_at_ms``, which
+    # drops it from the next reconcile snapshot and lets the run-intent through —
+    # a hold of, in the healthy case, a single reconcile cycle.
+    hold_assigned_dispatch = any(_holds_preemption_victim(row) for row in rows)
 
     for row in rows:
         stop_reason = _stop_reason(row)
