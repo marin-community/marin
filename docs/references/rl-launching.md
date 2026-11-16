@@ -275,6 +275,13 @@ and masking counts. Join these records to learner batch dumps by UID to inspect
 source-specific advantages; constant-reward RLOO groups are zeroed in the learner
 rather than removed at buffer admission.
 
+Rollout workers run on the training driver's Ray node. Their combined CPU
+reservation (`num_workers * cpus_per_worker`) must fit that node. The driver
+checks this before it initializes model actors; free CPUs on other nodes cannot
+satisfy the pinned pool. Leave additional CPU capacity for the driver and model
+actors. `start_interval_seconds: 0` starts the workers together after model
+initialization; a positive value spaces their starts and tokenizer reads.
+
 The `wall_time_budget` callback stops after a completed update when `seconds`
 have elapsed since this process's first optimizer completion. Startup is
 excluded; subsequent evaluation and checkpoint work counts toward the budget.
