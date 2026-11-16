@@ -5,10 +5,13 @@
 
 import base64
 import hashlib
+import json
 import tomllib
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
-from taskcompendium.harbor.adapter import declared_execution_limits, source_task_configurations, write_harbor_task
+from taskcompendium.harbor.adapter import declared_execution_limits, source_task_configurations
 from taskcompendium.models import DockerBuildExecution, Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
@@ -17,6 +20,7 @@ from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.calibration_projection import calibrated_task_spec
 from experiments.post_training.task_curation.datasets.rst import DATASET, REVISION, VERSION, convert_rst
+from experiments.post_training.task_curation.task_spec_harbor import prepare
 
 
 @pytest.mark.parametrize("deadline", [900, None])
@@ -72,8 +76,14 @@ def test_rst_source_configuration_and_verifier_survive_calibrated_export(tmp_pat
         **({"verifier_timeout_sec": 900} if deadline is not None else {}),
     }
     shape = INITIAL_REQUIREMENTS.model_copy(update=limits)
-    packet = tmp_path / "task"
-    write_harbor_task(task, packet, shape, docker_build=DockerBuildExecution.DECLARATIVE)
+    cohort = tmp_path / "cohort.parquet"
+    pq.write_table(pa.Table.from_pylist([{"id": task.id, "task_spec": task.model_dump_json(), "runtime": "{}"}]), cohort)
+    export = tmp_path / "exported"
+    prepare(cohort, export, source_revision="a" * 40, docker_build=DockerBuildExecution.DECLARATIVE)
+    packet = export / "tasks" / task.id
+    task_map = json.loads((export / "task-map.json").read_text())
+    assert task_map[task.id]["task_path"] == str(packet.resolve())
+    assert task_map[task.id]["runtime_sha256"] == hashlib.sha256(b"{}").hexdigest()
     assert tomllib.loads((packet / "task.toml").read_text())["environment"]["build_timeout_sec"] == 1200
     calibrated = calibrated_task_spec(task, shape, None, (packet / "task.toml").read_bytes())
     assert tuple(resource_bytes(resource) for resource in source_task_configurations(calibrated)) == (config,)

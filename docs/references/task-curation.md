@@ -2485,7 +2485,8 @@ it does not substitute an empty grading machine for the task state.
 
 TaskSpec validation can explicitly select Daytona EVAL declarative provisioning.
 Export with `write_harbor_task(..., docker_build=DockerBuildExecution.DECLARATIVE)`
-using the enum from `taskcompendium.models`, and run the Trial with
+using the enum from `taskcompendium.models`, or pass `--docker-build declarative` to
+`task_spec_harbor` (the default is `reject`). Run the Trial with
 `environment: {type: daytona, kwargs: {provisioning: declarative}}`.
 The Trial owns a temporary copy of each original Docker build context until its
 machines close. It preserves build bytes, file modes, timestamps and the image-default

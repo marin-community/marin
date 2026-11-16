@@ -13,7 +13,7 @@ from taskcompendium.harbor.adapter import declared_execution_limits, write_harbo
 from taskcompendium.harbor.oracle import write_oracle_command
 from taskcompendium.harbor.protected_runtime import ExpectedRuntime, RuntimeRole, write_runtime_binding
 from taskcompendium.harbor.runtime import write_source_runtime
-from taskcompendium.models import ExecutionRequirements
+from taskcompendium.models import DockerBuildExecution, ExecutionRequirements
 from taskcompendium.pipeline.models import Controls
 from taskcompendium.pipeline.resource_calibration import INITIAL_REQUIREMENTS
 
@@ -25,6 +25,7 @@ def prepare(
     output: Path,
     *,
     source_revision: str,
+    docker_build: DockerBuildExecution = DockerBuildExecution.REJECT,
     controls: Controls | None = None,
     runtime_expectations: dict[RuntimeRole, ExpectedRuntime] | None = None,
 ) -> None:
@@ -44,7 +45,7 @@ def prepare(
                 directory = tasks / task.id
                 if directory.parent != tasks:
                     raise ValueError(f"Task ID is not a package directory name: {task.id}")
-                write_harbor_task(task, directory, shape)
+                write_harbor_task(task, directory, shape, docker_build=docker_build)
                 runtime = row_runtime(row)
                 if runtime is not None:
                     write_source_runtime(task, runtime, directory)
@@ -64,6 +65,13 @@ def main() -> None:
     parser.add_argument("--cohort", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source-revision", required=True, help="Pinned code revision declaring the controls")
+    parser.add_argument(
+        "--docker-build",
+        type=DockerBuildExecution,
+        choices=tuple(DockerBuildExecution),
+        default=DockerBuildExecution.REJECT,
+        help="Explicit permission to export original Docker contexts for a declarative executor",
+    )
     parser.add_argument("--controls", help="Declared Controls object as module:attribute")
     parser.add_argument("--runtime-expectations", type=Path, help="JSON mapping of source roles to expected runtimes")
     args = parser.parse_args()
@@ -82,6 +90,7 @@ def main() -> None:
         args.cohort,
         args.output,
         source_revision=args.source_revision,
+        docker_build=args.docker_build,
         controls=controls,
         runtime_expectations=expectations,
     )
