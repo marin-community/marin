@@ -8,10 +8,11 @@ from harbor.models.task.config import TaskConfig
 
 
 def test_rejects_ignored_step_agent_environment():
-    with pytest.raises(ValidationError, match="Per-step agent.env"):
+    with pytest.raises(ValidationError) as error:
         TaskConfig.model_validate(
             {"steps": [{"name": "first", "agent": {"env": {"HOME": "/step-home"}}}]}
         )
+    assert error.value.errors()[0]["loc"] == ("steps", 0, "agent")
 
 
 def test_model_dump_toml_orders_task_before_steps_and_sections():
