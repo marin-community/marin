@@ -65,6 +65,10 @@ NATIVE_CONTEXT_SAFETY_BUFFER = 0
 # Every non-GLM judge model a source declares must be one of these tiers.
 JUDGE_TIER_SERVING: Mapping[JudgeTier, tuple[Path, int]] = MappingProxyType(
     {
+        JudgeTier.LIGHT: (
+            Path("experiments/post_training/task_curation/judge_model_configs/openai-gpt-oss-120b-131k.yaml"),
+            2,
+        ),
         JudgeTier.MEDIUM: (
             Path("experiments/post_training/task_curation/judge_model_configs/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml"),
             8,
