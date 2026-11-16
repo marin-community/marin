@@ -293,27 +293,64 @@ def test_docker_build_metadata_is_restored_before_verified_offline_reuse(
 ):
     fixture = converted_registry_image
     configuration = json.loads(fixture.source_configuration)
-    # Modern skopeo OCI conversion also drops these legacy fields; the restore
-    # must tolerate their absence on the prepared side.
+    # Modern skopeo OCI conversion drops the legacy top-level fields and prunes
+    # the config object to its runtime-relevant entries; the identity restore
+    # must tolerate both on the prepared side.
     configuration.update(
         container="original-builder",
         docker_version="26.1.3",
         container_config={"Image": f"sha256:{'b' * 64}"},
         comment="built-by-docker",
     )
-    configuration["config"]["Image"] = f"sha256:{'a' * 64}"
+    configuration["config"].update(
+        {
+            "Image": f"sha256:{'a' * 64}",
+            "AttachStderr": False,
+            "Hostname": "builder",
+            "Labels": {"maintainer": "fixture"},
+            "Tty": False,
+        }
+    )
+    skopeo_pruned = {
+        key: value
+        for key, value in configuration.items()
+        if key not in ("container", "docker_version", "container_config", "comment")
+    }
+    skopeo_pruned["config"] = {
+        key: value
+        for key, value in configuration["config"].items()
+        if key in ("Cmd", "Env", "Entrypoint", "User", "WorkingDir") and value not in (None, "", [], {})
+    }
+    pruned_config = json.dumps(skopeo_pruned, indent=2).encode()
     original_config = json.dumps(configuration, indent=2).encode()
-    manifest = json.loads(fixture.manifests[fixture.source.reference.rsplit("@", 1)[1]])
-    manifest["config"].update(digest=f"sha256:{hashlib.sha256(original_config).hexdigest()}", size=len(original_config))
-    original_manifest = json.dumps(manifest).encode()
-    source_digest = f"sha256:{hashlib.sha256(original_manifest).hexdigest()}"
-    fixture.manifests[source_digest] = original_manifest
+    source_manifest = original_manifest_bytes(configuration, fixture).decode()
+    source_digest = f"sha256:{hashlib.sha256(source_manifest.encode()).hexdigest()}"
+    fixture.manifests[source_digest] = source_manifest.encode()
     source = RegistryImage(f"registry.invalid/task@{source_digest}")
     image_tool = subprocess.run
 
     def registry(args, **kwargs):
         if "inspect" in args and "--config" in args:
             return subprocess.CompletedProcess(args, 0, stdout=original_config, stderr=b"")
+        if "copy" in args:
+            destination = Path(args[-1].removeprefix("oci:").removesuffix(":image"))
+            shutil.copytree(fixture.image.layout, destination)
+            # Emulate the conversion: prune the config blob and repoint the manifest.
+            index = json.loads((destination / "index.json").read_bytes())
+            manifest_digest = index["manifests"][0]["digest"]
+            manifest = json.loads((destination / "blobs/sha256" / manifest_digest.removeprefix("sha256:")).read_bytes())
+            converted_config_digest = f"sha256:{hashlib.sha256(pruned_config).hexdigest()}"
+            (destination / "blobs/sha256" / converted_config_digest.removeprefix("sha256:")).write_bytes(pruned_config)
+            manifest["config"].update(digest=converted_config_digest, size=len(pruned_config))
+            converted_manifest = json.dumps(manifest).encode()
+            converted_digest = f"sha256:{hashlib.sha256(converted_manifest).hexdigest()}"
+            (destination / "blobs/sha256" / converted_digest.removeprefix("sha256:")).write_bytes(converted_manifest)
+            index["manifests"][0].update(digest=converted_digest, size=len(converted_manifest))
+            (destination / "index.json").write_text(json.dumps(index))
+            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+        if "inspect" in args:
+            manifest = fixture.manifests[args[-1].rsplit("@", 1)[1]]
+            return subprocess.CompletedProcess(args, 0, stdout=manifest, stderr=b"")
         return image_tool(args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", registry)
@@ -322,7 +359,9 @@ def test_docker_build_metadata_is_restored_before_verified_offline_reuse(
     blobs = prepared.layout / "blobs/sha256"
     selected = json.loads((blobs / prepared.manifest_digest.removeprefix("sha256:")).read_bytes())
     assert (blobs / selected["config"]["digest"].removeprefix("sha256:")).read_bytes() == original_config
-    assert [layer["digest"] for layer in selected["layers"]] == [layer["digest"] for layer in manifest["layers"]]
+    assert [layer["digest"] for layer in selected["layers"]] == [
+        layer["digest"] for layer in json.loads(fixture.manifests[source_digest])["layers"]
+    ]
     assert prepared_image_config(prepared) == configuration
 
     def unavailable(*_args, **_kwargs):
@@ -333,6 +372,14 @@ def test_docker_build_metadata_is_restored_before_verified_offline_reuse(
     assert reloaded.manifest_digest == prepared.manifest_digest
     assert reloaded.source == source
     assert prepared_image_workdir(reloaded) == "/data"
+
+
+def original_manifest_bytes(configuration, fixture):
+    """The pinned registry manifest: the fixture manifest with the full config."""
+    manifest = json.loads(fixture.manifests[fixture.source.reference.rsplit("@", 1)[1]])
+    digest = f"sha256:{hashlib.sha256(json.dumps(configuration, indent=2).encode()).hexdigest()}"
+    manifest["config"].update(digest=digest, size=len(json.dumps(configuration, indent=2).encode()))
+    return json.dumps(manifest).encode()
 
 
 @pytest.mark.parametrize(
@@ -482,7 +529,14 @@ def test_registry_conversion_requires_the_pinned_source_payload(tmp_path, conver
             if mismatch == "configuration_value":
                 configuration["config"]["WorkingDir"] = "/different"
             else:
-                configuration["config"]["AttachStdin"] = 0
+                # A runtime-relevant key: attach plumbing stays runtime-neutral.
+                configuration["config"].update(
+                    {
+                        "User": "nobody",
+                        "AttachStdin": 0,
+                    }
+                )
+                assert configuration["config"]["User"] == "nobody"
             raw = json.dumps(configuration).encode()
             digest = hashlib.sha256(raw).hexdigest()
             (blobs / digest).write_bytes(raw)

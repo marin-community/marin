@@ -24,6 +24,13 @@ OCI_TAG = "image"
 # Fields the registry keeps that skopeo's OCI conversion has dropped across
 # versions: build-provenance keys that never affect runtime behavior.
 DOCKER_BUILD_METADATA = frozenset({"container", "docker_version", "container_config", "comment"})
+# Image-config keys the container runtime never reads for a process launch
+# (the executor sets its own hostname, TTY and attach plumbing); skopeo's
+# conversion has pruned these too.
+RUNTIME_NEUTRAL_CONFIG_KEYS = frozenset(
+    {"AttachStderr", "AttachStdin", "AttachStdout", "Domainname", "Hostname", "Image",
+     "Labels", "OnBuild", "OpenStdin", "StdinOnce", "Tty"}
+)
 SHA256_PATTERN = r"sha256:[0-9a-f]{64}"
 Sha256Digest = Annotated[str, Field(pattern=f"^{SHA256_PATTERN}$")]
 
@@ -185,10 +192,21 @@ def _configuration_json(configuration: dict[str, Any]) -> str:
 
 
 def _configuration_without_build_metadata(configuration: dict[str, Any]) -> dict[str, Any]:
+    """Compare runtime-relevant identity only.
+
+    Registry configs keep build-provenance keys the OCI conversion has pruned
+    across skopeo versions (top-level legacy fields and runtime-neutral image
+    config entries). Empty and null values compare as absent, so a key the
+    conversion dropped cannot veto an otherwise identical runtime identity.
+    """
     comparable = {key: value for key, value in configuration.items() if key not in DOCKER_BUILD_METADATA}
     process = comparable.get("config")
     if process is not None:
-        comparable["config"] = {key: value for key, value in process.items() if key != "Image"}
+        comparable["config"] = {
+            key: value
+            for key, value in process.items()
+            if key not in RUNTIME_NEUTRAL_CONFIG_KEYS and value not in (None, "", [], {})
+        }
     return comparable
 
 
