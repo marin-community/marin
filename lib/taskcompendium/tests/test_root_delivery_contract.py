@@ -18,14 +18,18 @@ from taskcompendium.integrity import (
 )
 from taskcompendium.models import (
     AnswerType,
+    ArtifactKind,
+    CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
     NoGrader,
     PlainText,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
+    VerifierArtifact,
 )
 
 
@@ -72,7 +76,19 @@ def test_root_delivery_contract_declares_the_shared_boundary() -> None:
         context=ConversationInput(events=(TextMessage(role="user", content="Build the summary table."),)),
         answer_type=AnswerType.WORKSPACE_STATE,
         answer_format=PlainText(),
-        grader=NoGrader(reason="The delivered verifier runs in the agent's environment"),
+        # The agreed RST converter binds a ScriptGrader collecting the reward file.
+        grader=ScriptGrader(
+            argv=("python", "/tests/grade.py"),
+            environment=EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image="example.test/rst@sha256:" + "a" * 64,
+            ),
+            answer_path=None,
+            artifacts=(
+                VerifierArtifact(source="/logs/verifier/reward.txt", target="/reward.txt", kind=ArtifactKind.FILE),
+            ),
+            timeout=None,
+        ),
         environment_requirements=EnvironmentRequirements(),
         resources=ResourceGroups(),
         integrity_contract=contract,
@@ -82,3 +98,35 @@ def test_root_delivery_contract_declares_the_shared_boundary() -> None:
     assert assessment.declared is GradingEnvironmentMode.SHARED
     assert assessment.status.value == "matched"
     assert shared_integrity_issue(task) is None
+
+
+def test_root_delivery_contract_keeps_no_grader_tasks_shared() -> None:
+    contract = delivered_contract()
+    task = TaskSpec(
+        id="rst-native",
+        source=Source(
+            dataset="laion/rts-1k-rootless-apptainer", revision="pinned", row="tasks.parquet:1", importer_revision="1"
+        ),
+        context=ConversationInput(events=(TextMessage(role="user", content="Build the summary table."),)),
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="The delivered verifier runs in the agent's environment"),
+        environment_requirements=EnvironmentRequirements(),
+        resources=ResourceGroups(),
+        integrity_contract=contract,
+    )
+    assessment = assess_grading_environment(task)
+    assert assessment.required is GradingEnvironmentMode.SHARED
+    assert assessment.declared is GradingEnvironmentMode.SHARED
+    assert shared_integrity_issue(task) is None
+
+
+def test_script_grader_timeout_carries_undeclared_deadlines() -> None:
+    """None means the source declares no verifier deadline; the value must survive."""
+    env = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image="example.test/rst@sha256:" + "a" * 64,
+    )
+    assert ScriptGrader(argv=("python", "/tests/grade.py"), environment=env, timeout=900.0).timeout == 900.0
+    assert ScriptGrader(argv=("python", "/tests/grade.py"), environment=env, timeout=None).timeout is None
+    assert ScriptGrader(argv=("python", "/tests/grade.py"), environment=env).timeout == 600.0

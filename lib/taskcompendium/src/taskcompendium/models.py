@@ -653,7 +653,9 @@ class ScriptGrader(BaseModel):
     answer_path: str | None = "/app/answer.txt"
     conversation_path: str = "/tests/conversation.json"
     reward: Annotated[StdoutReward | ExitCodeReward | FileReward, Field(discriminator="kind")] = StdoutReward()
-    timeout: float = Field(default=600.0, gt=0)
+    # A source that declares no verifier deadline carries None: the grading
+    # command waits unbounded under the same outer enforcement the source uses.
+    timeout: float | None = Field(default=600.0, gt=0)
     empty_output: EmptyOutputPolicy = EmptyOutputPolicy.ZERO
     judge: JudgeSpec | None = None
 

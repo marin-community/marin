@@ -66,7 +66,12 @@ def quiesce_command() -> VerifierCommand:
 def delivery_commands(
     verifier: DeliveredVerifier, *, entrypoint: str = "test.sh", cwd: str | None = None
 ) -> tuple[VerifierCommand, ...]:
-    """Write the private verifier files and run the source's original entry script."""
+    """Write the private verifier files and run the source's original entry script.
+
+    The commands carry no deadline of their own: the grading layer applies the
+    resolved verifier deadline (a root-delivery contract with
+    ``undeclared_deadline`` grades unbounded through ``ScriptGrader.timeout = None``).
+    """
     if entrypoint not in verifier.files:
         raise ValueError(f"Delivered verifier lacks its entry script: {entrypoint}")
     if entrypoint not in verifier.executable_names:

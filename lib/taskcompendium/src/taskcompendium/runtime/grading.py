@@ -124,7 +124,7 @@ async def _run_checked(machine: Machine, command: Command, failure: str) -> None
         )
 
 
-async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float) -> bool:
+async def _download_artifact(machine: Machine, artifact: VerifierArtifact, target: Path, timeout: float | None) -> bool:
     """Download an artifact. Return false only when its missing-file policy permits omission."""
     result = await machine.run(
         Command(
@@ -289,7 +289,9 @@ def _reward_value(data: bytes, file_format: RewardFileFormat, key: str) -> tuple
     return reward, detail
 
 
-async def _file_reward(machine: Machine, reward: FileReward, timeout: float, diagnostics: dict[str, Any]) -> GradeResult:
+async def _file_reward(
+    machine: Machine, reward: FileReward, timeout: float | None, diagnostics: dict[str, Any]
+) -> GradeResult:
     for file in reward.files:
         result = await machine.run(
             Command(
@@ -327,7 +329,7 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
 
 
 async def _script_reward(
-    machine: Machine, grader: ScriptGrader, timeout: float, preparation_timeout: float | None
+    machine: Machine, grader: ScriptGrader, timeout: float | None, preparation_timeout: float | None
 ) -> GradeResult:
     if isinstance(grader.reward, FileReward):
         paths = tuple(file.path for file in grader.reward.files)
@@ -410,7 +412,7 @@ class _SandboxGrading:
     spec: Spec | None
     environment: EnvironmentRequirements
     workspace: str
-    limit: float
+    limit: float | None
     collect: tuple[VerifierCommand, ...]
     artifacts: tuple[VerifierArtifact, ...]
 
@@ -424,7 +426,14 @@ def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: floa
             grader, verifyit_spec(grader), grader.environment, grader_workspace(grader), limit, (), ()
         )
     elif isinstance(grader, ScriptGrader):
-        limit = grader.timeout if timeout is None else min(timeout, grader.timeout)
+        # A grader whose source declares no verifier deadline carries None and
+        # waits unbounded; the caller's outer bound still applies when present.
+        if grader.timeout is None:
+            limit = timeout
+        elif timeout is None:
+            limit = grader.timeout
+        else:
+            limit = min(timeout, grader.timeout)
         grading = _SandboxGrading(grader, None, grader.environment, grader.cwd, limit, grader.collect, grader.artifacts)
     else:
         raise TypeError(
@@ -643,7 +652,7 @@ async def _grade_on(
     environment: EnvironmentRequirements,
     spec: Spec | None,
     grader: VerifyitGrader | ScriptGrader,
-    timeout: float,
+    timeout: float | None,
     *,
     runtime_sha256: str | None,
     preparation_timeout: float | None,
@@ -664,6 +673,8 @@ async def _grade_on(
     # Setup provisions the declared environment; candidate files must replace its initial fixtures afterward.
     await _install_grading_archive(machine, submission_archive, preparation_timeout, user)
     if spec is not None:
+        # A verifyit grader always carries a concrete limit (GRADING_TIMEOUT fallback).
+        assert timeout is not None
         assert runtime_sha256 is not None
         return await _verifyit_reward(machine, spec, workspace, timeout, runtime_sha256)
     assert isinstance(grader, ScriptGrader)
