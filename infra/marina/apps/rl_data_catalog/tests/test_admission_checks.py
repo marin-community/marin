@@ -3,6 +3,7 @@
 
 """Admission requires declared environment artifacts and one runnable backend."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -143,13 +144,14 @@ def test_packaged_admission_imports_without_taskcompendium():
             "print('ok')",
         ]
     )
-    root = Path(__file__).parents[4]
+    root = Path(__file__).parents[5]
     result = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True,
         text=True,
         cwd=root,
         check=False,
+        env={name: value for name, value in os.environ.items() if name != "PYTHONPATH"},
     )
     assert result.returncode == 0, f"import probe failed: {result.stderr[-500:]}"
     assert "ok" in result.stdout
