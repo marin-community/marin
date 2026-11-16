@@ -34,6 +34,7 @@ from daytona import (
 from daytona_api_client_async import SnapshotState
 from shellbox.backends.daytona.connection import DaytonaConnection, DEFAULT_DAYTONA_API_URL
 from shellbox.backends.daytona.provider import ProviderWaitPolicy, retry_provider_call
+from shellbox.backends.daytona.provisioning import DaytonaProvisioning
 from harbor.agents.terminus_2.tmux_session import (
     TmuxCommandError,
     TmuxKeystrokeBatch,
@@ -798,7 +799,7 @@ def test_declarative_adapter_builds_the_sandbox_image_without_a_snapshot(tmp_pat
         override_cpus=2,
         override_memory_mb=2049,
         override_storage_mb=1025,
-        image_build="declarative",
+        provisioning=DaytonaProvisioning.DECLARATIVE,
         client_factory=lambda: client,
     )
 
