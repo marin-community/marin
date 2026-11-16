@@ -132,10 +132,16 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     failed_source = next(
         row for row in failed_catalog.sources(failed_catalog.current().snapshot_id) if row.id == source.id
     )
-    # The missing SAMPLE Result prevents publication; the selected prior evidence remains intact.
-    assert failed_catalog.current().snapshot_id == changed_catalog.current().snapshot_id
-    assert failed_source.assessment_key == changed_source.assessment_key
-    assert failed_source.latest_attempt_status == "complete"
+    # Failed assessment publishes unavailable metadata and preserves earlier snapshots.
+    assert failed_catalog.current().snapshot_id != changed_catalog.current().snapshot_id
+    assert failed_source.declaration.status != "Available"
+    assert failed_source.assessment_key is None
+    assert failed_source.latest_attempt_status == "failed"
+    assert failed_source.curation.admission_counts.admitted == 3
+    historical_source = next(
+        row for row in failed_catalog.sources(changed_catalog.current().snapshot_id) if row.id == source.id
+    )
+    assert historical_source.assessment_key == changed_source.assessment_key
     assert catalog.packet(key, items[0].task_id) == packet
 
     attempt = next(catalog.attempts(snapshot.snapshot_id))
