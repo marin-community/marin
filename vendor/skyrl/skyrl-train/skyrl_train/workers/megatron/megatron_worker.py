@@ -33,7 +33,7 @@ from skyrl_train.distributed.megatron.optimizer import (
     get_megatron_optimizer,
     get_megatron_optimizer_param_scheduler,
 )
-from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state
+from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state, make_prefetch_hook
 from skyrl_train.distributed.utils import init_worker_process_group_with_device
 from skyrl_train.mismatch_probe.modes import TRAINER_MODES
 from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_training_strategy
@@ -165,6 +165,8 @@ class MegatronWorker:
             expert_tensor_parallel_size=megatron_config.expert_tensor_parallel_size,
             bf16=bf16,
         )
+        if self.remote_hf_state is not None:
+            provider.register_pre_wrap_hook(make_prefetch_hook(bridge, self.remote_hf_state.store), prepend=True)
 
         for k, v in transformer_config_kwargs.items():
             setattr(provider, k, v)
@@ -511,10 +513,12 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         torch.distributed.barrier()
 
         if self.remote_hf_state is not None:
+            stats = self.remote_hf_state.store.read_stats
             logger.info(
-                "Loaded Megatron policy weights directly from {} (rank range bytes read: {})",
+                "Loaded Megatron policy weights directly from {} (rank range bytes read: {}; {})",
                 self.cfg.trainer.policy.model.source_uri,
-                self.remote_hf_state.store.bytes_read,
+                stats.bytes_read,
+                stats,
             )
 
         if self._rank == 0:
