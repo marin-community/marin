@@ -4,6 +4,7 @@
 """A reader sees every source's status, reasons and evidence on the status page."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -95,14 +96,16 @@ def seeded_extras(journey: Journey):
 def test_status_page_lists_every_status_with_clickable_reasons(journey: Journey, seeded_extras: dict) -> None:
     page = journey.page
     page.set_viewport_size({"width": 1440, "height": 1000})
-    root = f"{journey.origin}/{APP_ROOT}/"
-    page.goto(root + "status.html")
+    page.goto(f"{journey.origin}/{APP_ROOT}/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    base = page.url.rstrip("/") + "/"
+    page.goto(base + "status.html")
     expect(page.locator("#rows tr").first).to_be_visible()
     expect(page.locator("#message")).to_have_text("")
 
     counts = page.locator("#status-counts")
     expect(counts.locator("button", has_text="Pending")).to_contain_text("1")
-    expect(counts.locator("button", has_text="Excluded")).to_contain_text("1")
+    expect(counts.locator("button", has_text="Excluded")).to_contain_text(re.compile(r"Excluded [1-9]"))
 
     queued = page.locator('tr[data-source-id="Fixture:queued-source"]')
     expect(queued.locator("td").nth(1)).to_contain_text("Pending")

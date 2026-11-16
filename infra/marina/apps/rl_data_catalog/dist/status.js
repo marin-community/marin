@@ -185,7 +185,9 @@ window.addEventListener('DOMContentLoaded', () => {
     render();
   });
   $('clear-filters').addEventListener('click', () => {
-    state.search = state.status = state.reason = 'all';
+    state.search = '';
+    state.status = 'all';
+    state.reason = 'all';
     $('search').value = '';
     $('status-filter').value = 'all';
     $('reason-filter').value = 'all';
