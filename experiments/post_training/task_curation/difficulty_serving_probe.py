@@ -114,11 +114,15 @@ def probe_serving_endpoint(
 
 
 def judge_probe_request(definition: JudgeTierDefinition, temperature: float) -> dict:
-    """The tools/thinking probe request a judge tier must answer with its own rendering."""
+    """The thinking probe request a judge tier must answer with its own rendering.
+
+    Judge contracts never call tools, so the probe does not advertise any: vLLM
+    rejects tool-bearing chat requests when tool choice is disabled, and the
+    served judge must accept exactly the request shape the grading path sends.
+    """
     return {
         "model": definition.spec.model,
         "messages": PROBE_MESSAGES,
-        "tools": PROBE_TOOLS,
         "max_tokens": definition.spec.max_completion_tokens,
         "temperature": temperature,
         **(definition.spec.chat_template_kwargs or {}),
