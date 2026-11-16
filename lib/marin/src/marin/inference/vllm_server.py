@@ -816,11 +816,10 @@ def _router_data_parallel_size(extra_cli_args: Sequence[str]) -> int:
 
 
 class VllmEnvironment:
-    """Own native vLLM and its optional session router.
+    """Manage native vLLM and an optional router.
 
-    With ``wait_for_ready=False``, entering starts only the native process.
-    Call ``wait_until_ready()`` before reading the final ``server_url``.
-    Routing derives its global rank count from the final native arguments.
+    With ``wait_for_ready=False``, call ``wait_until_ready()`` before using ``server_url``.
+    Router rank count comes from the final native arguments.
     """
 
     def __init__(

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Own a released vLLM Router process without importing its Python package."""
+"""Manage the isolated vLLM Router process."""
 
 import contextlib
 import logging
@@ -60,10 +60,9 @@ def vllm_router(
     startup_timeout_seconds: float = 600,
     check_dependencies: Callable[[], None] = lambda: None,
 ) -> Iterator[RunningVllmRouter]:
-    """Route to all native ranks behind one vLLM HTTP root, without ``/v1``.
+    """Route global DP ranks behind one vLLM HTTP root (without ``/v1``).
 
     Yield after the worker and router are ready. The caller owns the worker.
-    Logs flow to the job and remain in the reported directory after shutdown.
     """
     if data_parallel_size < 1:
         raise ValueError("router data parallel size must be positive")

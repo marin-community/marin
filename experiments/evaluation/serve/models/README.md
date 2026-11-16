@@ -130,13 +130,10 @@ pinned vLLM version and model architecture and must be checked on the target har
 
 ## Session routing for native vLLM DP
 
-`marin-serve local` and `marin-serve iris` accept `--session-router`. Direct serving is the default.
-Each native DP rank holds its own KV cache.
-The router runs released `vllm-router==0.1.16` in an isolated `uvx` environment, outside Marin's
-Python dependencies. It uses consistent hashing, stable `X-Session-ID` headers and disabled HTTP
-retries. The router request timeout defaults to 14,400 seconds. Iris also has `--proxy-timeout`,
-which defaults to 600 seconds; a larger value raises the router timeout to match. Client SDK
-retries are separate.
+`marin-serve local` and `marin-serve iris` accept `--session-router`. Reuse `X-Session-ID`
+on later turns to keep the same DP rank and KV cache. Direct serving remains the default.
+
+Two local replicas:
 
 ```bash
 uv run marin-serve local Qwen/Qwen3-0.6B --launcher cuda \
@@ -144,7 +141,7 @@ uv run marin-serve local Qwen/Qwen3-0.6B --launcher cuda \
   --vllm-arg=--enable-prefix-caching
 ```
 
-For TP1/PP1/DP16, request four Iris tasks with four GPUs and four local DP ranks each:
+16 replicas on four 4-GPU Iris tasks:
 
 ```bash
 uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
@@ -154,34 +151,22 @@ uv run marin-serve iris Qwen/Qwen3-0.6B --cluster cw-us-east-08a --gpu GB200x4 \
   --vllm-arg=--enable-prefix-caching
 ```
 
-`--vllm-release` reads a JSON `VllmGpuRelease` object (`release_tag`,
-`source_commit`, `version`, `torch_backend`, `torch_version`, `wheels`). Each wheel has `architecture`,
-`sm_targets`, `url` and `sha256`. The existing promoted-wheel verifier checks the selected build.
-Normal serving runtime selection applies when the option is omitted.
+`--vllm-release` accepts [VllmGpuRelease](../../../../lib/marin/src/marin/external_dependencies.py)
+JSON; omitting it uses the normal runtime.
+The isolated `vllm-router==0.1.16` process uses vLLM's global internal DP frontend;
+external/hybrid balancing is unsupported. `/metrics` reports vLLM worker counters.
 
-Send the same `X-Session-ID` on later turns. The router selects a DP rank through the upstream
-`X-data-parallel-rank` dispatch header; the leader's internal vLLM load balancer must reach all
-ranks. The CLI uses this internal mode. External and hybrid vLLM load balancing are unsupported.
-Consistent hashing also applies to requests without a session header. They follow the
-[upstream key fallback](https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#consistent-hash),
-so identical request bodies can select the same busy rank. A changed body alone does not preserve
-conversation affinity.
+Without a session ID, [upstream hashing](https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#consistent-hash)
+applies; identical bodies can select the same busy rank.
 
-Marin waits for vLLM and the router before exposing the endpoint. Router 0.1.16 detects a client
-disconnect on the next upstream chunk; a stalled stream remains subject to the request timeout.
-The Iris endpoint's `/metrics`
-reads direct vLLM worker counters, including engine labels for native DP ranks. Router Prometheus
-metrics use a separate port, recorded in its command.
+HTTP retries are disabled; client SDK retries are separate. The router timeout is 14,400 seconds.
+Iris `--proxy-timeout` defaults to 600 seconds and raises the router timeout when larger.
+Streaming disconnects are detected on the next upstream chunk; stalled streams wait for timeout.
 
-Affinity holds while rank identities and availability stay stable. Repeated server errors can
-open a per-rank circuit breaker and remap later requests. A dead worker loses its in-memory
-KV cache. A router exit fails the serving lifecycle and unregisters the endpoint. Stop the affected
-job with `iris --cluster CLUSTER job cancel JOB`, confirm its tasks and pods are gone, then submit the same
-configuration. Existing Iris whole-task retries are separate from the router's disabled HTTP
-retries. Treat the resubmitted job as starting with an empty KV cache.
+Rank failures can remap sessions and lose cached prefixes. If a worker or router exits, cancel
+with `iris --cluster CLUSTER job cancel JOB`, wait for tasks to stop, then resubmit.
 
-For Python integrations, use `VllmEngineConfig(router=VllmRouterConfig(),
-release=promoted_release, ...)` and give `IrisConfig` this geometry:
+In Python, set `VllmEngineConfig(router=VllmRouterConfig())` and `IrisConfig.serving_geometry`:
 
 ```python
 ServingGeometry(
@@ -192,14 +177,5 @@ ServingGeometry(
 )
 ```
 
-This describes one serving instance: four Iris tasks, four local DP ranks per task, and 16
-router targets. The local rank count and task count are derived. Geometry supplies the model's
-TP size; omit `ServedModelConfig.tensor_parallel_size` or give the same value.
-Multiple tasks or a session router select a coordinated native group, which requires one
-instance and no broker. Single-task geometry without a router uses the local or brokered path;
-geometry supplies DP defaults there, and native argument overrides still take precedence.
-
-`VllmBackend.start()` returns a `VllmEnvironment`; call `wait_until_ready()`
-before consuming its routed `server_url`. Managed serving derives the router's global rank count
-from the final native arguments. The CLI's `--instances` broker path cannot be combined with
-session routing.
+This gives four tasks, four local ranks per task and 16 router targets. Omitted model TP uses
+geometry; explicit TP must match. Multi-task or routed geometry requires `instances=1`, `broker=None`.

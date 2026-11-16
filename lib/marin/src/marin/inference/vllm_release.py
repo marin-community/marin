@@ -14,7 +14,7 @@ from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel
 
 
 def load_vllm_gpu_release(path: Path | None) -> VllmGpuRelease | None:
-    """Read a per-deployment promoted-release pin without changing shared defaults."""
+    """Read a deployment's pinned vLLM GPU release."""
     return draccus.decode(VllmGpuRelease, json.loads(path.read_text())) if path is not None else None
 
 

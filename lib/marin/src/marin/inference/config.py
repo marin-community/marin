@@ -72,23 +72,19 @@ def validate_serving_geometry_args(args: tuple[str, ...]) -> None:
 
 @dataclass(frozen=True, kw_only=True)
 class ServingGeometry:
-    """Parallelism and GPU placement for one Iris serving instance.
+    """GPU layout for one Iris serving instance.
 
     Attributes:
-        tensor_parallel_size: GPUs per model replica at each pipeline stage,
-            within one task.
-        data_parallel_size: Total model replicas across all tasks. The session
-            router has this many targets; four tasks with four ranks give 16.
-        pipeline_parallel_size: Pipeline stages per model replica, each on a
-            separate task.
-        gpus_per_task: GPUs allocated to each Iris task, on one worker host.
+        tensor_parallel_size: GPUs per replica per pipeline stage, within one task.
+        data_parallel_size: Global replicas, also the router target count.
+        pipeline_parallel_size: Stages per replica, across tasks.
+        gpus_per_task: GPUs per Iris task, on one host.
 
-    Local DP ranks = GPUs per task / TP. Total GPUs = TP * DP * PP.
-    Task count = total GPUs / GPUs per task. TP must evenly divide GPUs per task,
-    and local DP must evenly divide global DP.
+    Local DP = GPUs/task / TP; total GPUs = TP * DP * PP;
+    tasks = total GPUs / GPUs/task. TP must divide GPUs/task;
+    local DP must divide global DP.
 
-    The current launcher requires all DP ranks on each stage's task when PP>1,
-    so cross-task DP requires PP=1.
+    With PP>1, the launcher requires all DP ranks on each stage's task.
     """
 
     tensor_parallel_size: int
@@ -259,9 +255,8 @@ class ServedModelConfig:
     configured ``tokenizer``. When ``tokenizer`` is omitted, it defaults to the
     original weights repository and may inherit its revision.
 
-    ``tensor_parallel_size`` defaults to Iris serving geometry when supplied,
-    otherwise it is inferred from the model and available chips. An explicit
-    value must agree with the geometry.
+    Omitted ``tensor_parallel_size`` uses geometry, or is inferred from the model
+    and chips. An explicit value must match geometry.
     """
 
     weights: str
@@ -307,10 +302,9 @@ class InferenceModelConfig:
 
 @dataclass(frozen=True, kw_only=True)
 class VllmRouterConfig:
-    """Released consistent-hash routing with no request retries.
+    """Consistent hashing with no HTTP retries.
 
-    Consistent hashing also applies to requests without a session ID. Those use
-    the upstream key fallback, so identical bodies can select the same busy rank:
+    Missing session IDs use the upstream fallback; identical bodies may hit a busy rank:
     https://github.com/vllm-project/router/blob/v0.1.16/docs/load_balancing/README.md#consistent-hash
     """
 
@@ -323,11 +317,11 @@ class VllmRouterConfig:
 
 @dataclass(frozen=True)
 class VllmEngineConfig:
-    """vLLM runtime settings and native argument overrides.
+    """vLLM runtime and native arguments.
 
-    For an Iris native group, ServingGeometry owns topology flags; ``extra_args``
-    may only set other options. Single-task serving without a router retains
-    native argument overrides. vLLM YAML ``--config`` files are unsupported.
+    Native groups reject topology flags in ``extra_args``; ServingGeometry owns them.
+    Single-task serving without a router allows native overrides.
+    vLLM YAML ``--config`` is unsupported.
     """
 
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
@@ -383,10 +377,7 @@ InferenceEngineConfig = VllmEngineConfig | LevanterEngineConfig
 
 
 def uses_native_vllm_group(geometry: ServingGeometry | None, engine: InferenceEngineConfig) -> bool:
-    """Use the coordinated launch for multiple tasks or routed geometry.
-
-    Single-task geometry without a router uses the local or brokered path.
-    """
+    """Coordinate multi-task or routed geometry; otherwise use local/brokered serving."""
     return geometry is not None and (
         geometry.task_count > 1 or (isinstance(engine, VllmEngineConfig) and engine.router is not None)
     )
@@ -469,12 +460,7 @@ class BrokerConfig:
 
 @dataclass(frozen=True)
 class IrisConfig:
-    """Iris placement and environment for one remote inference instance.
-
-    Geometry with multiple tasks or a session router uses a coordinated vLLM
-    group, which requires one instance and no broker. Single-task geometry
-    without a router uses the local or brokered serving path.
-    """
+    """Iris placement and environment for one serving instance."""
 
     worker_resources: ResourceConfig
     worker_environment: EnvironmentConfig
@@ -516,11 +502,11 @@ class IrisConfig:
 
 @dataclass(frozen=True)
 class RemoteInferenceConfig:
-    """Model, engine, and Iris inputs for one remote inference context.
+    """Remote serving; ``instances`` counts independent servers.
 
-    ``instances`` starts independent servers, each with the configured Iris
-    resources and geometry. Multi-task or routed geometry requires ``instances=1``
-    and ``broker=None``; only single-task geometry without a router can repeat.
+    Multi-task or routed geometry uses one coordinated vLLM group:
+    ``instances=1``, ``broker=None``. Single-task geometry without a router
+    allows local or brokered serving.
     """
 
     model: ServedModelConfig
