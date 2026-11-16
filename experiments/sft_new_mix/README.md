@@ -36,8 +36,54 @@ It retains NVIDIA attribution and the source's
 [CC BY-SA 4.0 license](https://creativecommons.org/licenses/by-sa/4.0/) terms;
 see the dataset card for attribution and provenance details.
 
-## Later training comparison
+## Frozen cache preparation
 
-Matched-token control and candidate training recipes in the `snowball_h100`
-style are later work. This directory currently defines sources only; it does
-not launch training or claim a completed matched-token comparison.
+The Exp3 preparation modules bind immutable input manifests, tokenizer bytes,
+source loss modes and per-transform retention receipts. `exp3_plan` and
+`exp3_build` prepare source ranges; `finalize_shards` applies admitted tool
+replacements and Atlas dispositions. `assemble_candidate` combines complete
+cohorts, and `publish_candidate` publishes a catalog, supervision sidecar,
+natural mixture schedule and native-consumer measurement job. Publication stays
+unqualified until the separate native consumer and release checker succeed.
+These modules do not submit GPU training.
+
+### Exact OpenCode question repair
+
+`opencode_questions` joins frozen token caches to the original `question` field
+from `nvidia/Nemotron-SFT-OpenCode-v1` revision
+`556d5237acff203f3e1a0be49428634c3606cda2`. Stage the large raw files through an
+Iris CPU job directly into regional S3. Preserve each source file's byte hash,
+row count and partitioned raw JSON records in the staging manifest.
+
+Run each phase with an immutable recipe and its SHA:
+
+```bash
+uv run python -m experiments.sft_new_mix.opencode_questions \
+  --recipe <recipe-uri> --recipe-sha256 <recipe-sha256>
+```
+
+The recipe selects `mode=index`, `bridge` or `repair`, an output prefix,
+worker count and jobs, plus hashes of the implementation files. Index jobs
+render each raw row through the frozen adapter and record its UUID, normalized
+ID, original question and complete native-content SHA. Bridge jobs cover every
+original cache row in contiguous ranges and bind it to the same partition's
+raw identities. Equivalent byte-identical raw documents may retain multiple
+UUIDs only when they agree on the question. Missing questions, ambiguous
+questions and unmatched fingerprints are counted as unjoined.
+
+Repair jobs follow the scripted and actual-tool-gate row ledgers back to that
+original bridge. Set `repair_enabled` explicitly on every job. Only a user
+message equal to the quoted original question plus zero to three trailing
+`<note>` blocks loses its wrapper and question-quote escaping, following
+[PR #11193](https://github.com/marin-community/marin/pull/11193). Note bytes,
+unrelated quoted subagent prompts and non-user messages remain unchanged.
+Unjoined rows retain their original tokens and masks. Changed rows receive
+fresh prediction-indexed assistant masks and must preserve the exact assistant
+target-token array. Every retained row is counted as changed, unchanged or
+unjoined; repair drops no documents.
+
+Each version writes new caches and receipts. Keep earlier releases intact.
+After repair, rebuild the affected Atlas populations and rerun the full
+candidate Atlas scan, application, assembly, publication, native consumer and
+release checker. Preserve the approved natural mixture schedule and runtime
+geometry independently of the changed prompt-token counts.

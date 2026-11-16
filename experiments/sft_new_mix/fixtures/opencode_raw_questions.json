@@ -1,0 +1,47 @@
+[
+  {
+    "category": "changed_2",
+    "content": "\"What are the key differences between using `async/await` and `.then()` for handling promises in JavaScript, and when should I prefer one approach over the other in terms of readability and error handling?\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>\n\n<note>\nCheck available skills and use them if relevant to the task above.\nRecursively read additional reference files from the skill directory using `cat` with `bash` tool if needed.\nYou do not need to be consise and answer in 3-4 sentences anymore - use all skills that are relevant to the task.\n</note>\"",
+    "question": "What are the key differences between using `async/await` and `.then()` for handling promises in JavaScript, and when should I prefer one approach over the other in terms of readability and error handling?",
+    "stable_row_id": "577ecffa-0a03-5808-b9a3-fcae3cbfeddc",
+    "partition": "agent_skills",
+    "revision": "556d5237acff203f3e1a0be49428634c3606cda2",
+    "expected": "What are the key differences between using `async/await` and `.then()` for handling promises in JavaScript, and when should I prefer one approach over the other in terms of readability and error handling?\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>\n\n<note>\nCheck available skills and use them if relevant to the task above.\nRecursively read additional reference files from the skill directory using `cat` with `bash` tool if needed.\nYou do not need to be consise and answer in 3-4 sentences anymore - use all skills that are relevant to the task.\n</note>"
+  },
+  {
+    "category": "changed_1",
+    "content": "\"I'm getting an \\\"IndexError: list index out of range\\\" when trying to access the third element in my list. Here's my code:\n\n```python\nnumbers = [1, 2]\nprint(numbers[2])\n```\n\nWhy am I getting this error and how can I fix it?\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>\"",
+    "question": "I'm getting an \"IndexError: list index out of range\" when trying to access the third element in my list. Here's my code:\n\n```python\nnumbers = [1, 2]\nprint(numbers[2])\n```\n\nWhy am I getting this error and how can I fix it?",
+    "stable_row_id": "7cbc3cc6-9d85-5c9b-851e-5e7588d85a9c",
+    "partition": "bash_only_tool",
+    "revision": "556d5237acff203f3e1a0be49428634c3606cda2",
+    "expected": "I'm getting an \"IndexError: list index out of range\" when trying to access the third element in my list. Here's my code:\n\n```python\nnumbers = [1, 2]\nprint(numbers[2])\n```\n\nWhy am I getting this error and how can I fix it?\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>"
+  },
+  {
+    "category": "changed_2",
+    "content": "\"I'm building a simple todo list app and I'm trying to decide on the best way to store the tasks. What are some different approaches I could take for storing and managing the todo items in my application? Should I use arrays, objects, or maybe something else entirely? I want to make sure I choose a method that will be easy to work with when I add features like marking tasks as complete or deleting them later.\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>\n\n<note>\nCheck available skills and use them if relevant to the task above.\nRecursively read additional reference files from the skill directory using `cat` with `bash` tool if needed.\nYou do not need to be consise and answer in 3-4 sentences anymore - use all skills that are relevant to the task.\n</note>\"",
+    "question": "I'm building a simple todo list app and I'm trying to decide on the best way to store the tasks. What are some different approaches I could take for storing and managing the todo items in my application? Should I use arrays, objects, or maybe something else entirely? I want to make sure I choose a method that will be easy to work with when I add features like marking tasks as complete or deleting them later.",
+    "stable_row_id": "2cb3237e-cc54-51d0-a4c9-14212c9be4a1",
+    "partition": "bash_only_tool_skills",
+    "revision": "556d5237acff203f3e1a0be49428634c3606cda2",
+    "expected": "I'm building a simple todo list app and I'm trying to decide on the best way to store the tasks. What are some different approaches I could take for storing and managing the todo items in my application? Should I use arrays, objects, or maybe something else entirely? I want to make sure I choose a method that will be easy to work with when I add features like marking tasks as complete or deleting them later.\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>\n\n<note>\nCheck available skills and use them if relevant to the task above.\nRecursively read additional reference files from the skill directory using `cat` with `bash` tool if needed.\nYou do not need to be consise and answer in 3-4 sentences anymore - use all skills that are relevant to the task.\n</note>"
+  },
+  {
+    "category": "changed_1",
+    "content": "\"What is the correct syntax for creating a new React component using hooks, and how do I properly initialize state with the useState hook?\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>\"",
+    "question": "What is the correct syntax for creating a new React component using hooks, and how do I properly initialize state with the useState hook?",
+    "stable_row_id": "ddfe8b3f-7a3b-587d-a8ac-ac3e9b939ae1",
+    "partition": "general",
+    "revision": "556d5237acff203f3e1a0be49428634c3606cda2",
+    "expected": "What is the correct syntax for creating a new React component using hooks, and how do I properly initialize state with the useState hook?\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>"
+  },
+  {
+    "category": "changed_2",
+    "content": "\"What are the key differences between using `async/await` and `.then()` for handling promises in JavaScript, and when should I prefer one approach over the other in terms of readability and error handling?\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>\n\n<note>\nYou should ask questions to the user and receive their feedback.\nYou must **always** ask the user one or more questions to clarify ambiguity in the task before writing any solution.\nThe questions you ask should be specific to the task at hand and should be asked in a way that is easy for the user to understand and respond.\nYour solution must adhere closely to the response from the user and any additional context they provide.\n</note>\"",
+    "question": "What are the key differences between using `async/await` and `.then()` for handling promises in JavaScript, and when should I prefer one approach over the other in terms of readability and error handling?",
+    "stable_row_id": "a97d4bf1-191c-5e39-bedc-b6987594e785",
+    "partition": "question_tool",
+    "revision": "556d5237acff203f3e1a0be49428634c3606cda2",
+    "expected": "What are the key differences between using `async/await` and `.then()` for handling promises in JavaScript, and when should I prefer one approach over the other in terms of readability and error handling?\n\n<note>\nRefer to the AGENTS.md instructions above and follow those instructions strictly.\n</note>\n\n<note>\nYou should ask questions to the user and receive their feedback.\nYou must **always** ask the user one or more questions to clarify ambiguity in the task before writing any solution.\nThe questions you ask should be specific to the task at hand and should be asked in a way that is easy for the user to understand and respond.\nYour solution must adhere closely to the response from the user and any additional context they provide.\n</note>"
+  }
+]
