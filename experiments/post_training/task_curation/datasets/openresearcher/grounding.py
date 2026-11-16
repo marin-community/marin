@@ -65,7 +65,9 @@ class GroundingJudge:
         messages = [{"role": "user", "content": prompt}]
         if structured:
             messages.insert(0, {"role": "system", "content": SYSTEM})
-        tokens = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
+        tokens = self.tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True, return_dict=False
+        )
         if len(tokens) > MAX_INPUT_TOKENS:
             raise GroundingBudgetExceeded(f"{name}: complete prompt exceeds the sealed input budget")
         request: dict[str, Any] = {

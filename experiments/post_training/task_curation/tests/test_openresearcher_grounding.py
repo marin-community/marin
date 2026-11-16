@@ -162,3 +162,22 @@ async def test_grounding_preserves_http_failure_response_before_aborting(tmp_pat
     assert observation["request"]["messages"][-1]["content"] == "Audit the evidence."
     assert "private-test-api-key" not in saved
     assert len(list(tmp_path.glob("*-http-error.json"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_grounding_counts_prompt_tokens_before_sending_oversized_packet(review_server, tmp_path):
+    async def retrieve(queries):
+        raise AssertionError("Oversized packet must not reach retrieval")
+
+    result = await screen_population(
+        [{"id": "oversized", "question": "evidence " * 28000, "answer": "Nina Calder"}],
+        JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture", default_model="fixture"),
+        grounding_tokenizer(),
+        retrieve,
+        StoragePath(str(tmp_path)),
+        1,
+    )
+    assert result[0]["status"] == "screened"
+    assert result[0]["keep"] is False
+    assert result[0]["reason"] == "complete_evidence_exceeds_sealed_context_budget"
+    assert review_server.requests == []
