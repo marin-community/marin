@@ -8,7 +8,7 @@ import pytest
 
 import jax.numpy as jnp
 
-from levanter.grug._moe.ep_common import _aligned_group_sizes, _aligned_receiver_rows, _receiver_group_spans
+from levanter.grug._moe.ep_common import _aligned_receiver_rows, _receiver_group_spans
 from levanter.grug._moe.mxfp8.layout import GROUP_PAD, aligned_dispatch_layout, wgrad_block_perm
 from levanter.grug._moe.mxfp8.quantize import (
     WeightMajor,
@@ -83,7 +83,7 @@ def test_aligned_dispatch_layout_keeps_each_experts_received_rows_and_zeroes_the
     assert layout.padded_rows == rows
     read = np.where(np.asarray(layout.source_valid)[:, None], aligned, 0)
     np.testing.assert_array_equal(read, expected)
-    groups = [*spans[:-1], _aligned_group_sizes(active[-1], GROUP_PAD)]
+    groups = [*spans[:-1], -(-active[-1] // GROUP_PAD) * GROUP_PAD]
     np.testing.assert_array_equal(np.asarray(layout.group_ends), np.cumsum(groups))
     np.testing.assert_array_equal(np.asarray(layout.padded_group_sizes), groups)
 
@@ -95,7 +95,7 @@ def test_wgrad_block_perm_matches_host_expert_chunk_order(active, capacity, rows
     # rows, whose tiles come after every expert's chunk.
     spans = _aligned_spans(active, capacity)
     total_tokens = sum(spans)
-    groups = [*spans[:-1], _aligned_group_sizes(active[-1], GROUP_PAD)]
+    groups = [*spans[:-1], -(-active[-1] // GROUP_PAD) * GROUP_PAD]
     token_blocks = total_tokens // 128
 
     expected = []
