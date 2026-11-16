@@ -346,8 +346,8 @@ def build_evaluation_batch(
         raise ValueError("max_concurrent must be at least 1")
     if spec.instances < 1:
         raise ValueError("instances must be at least 1")
-    if spec.instances > 1 and spec.model.serve.pipeline_parallel_size > 1:
-        raise ValueError("pipeline parallelism requires one serving instance")
+    if spec.instances > 1 and spec.model.serve.task_count > 1:
+        raise ValueError("a multi-task server requires one serving instance")
     model = spec.model
     source_model_config = ModelConfigRef.model_validate(asdict(model))
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
