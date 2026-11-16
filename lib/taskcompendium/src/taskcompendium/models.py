@@ -50,6 +50,13 @@ DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
 
+class DockerBuildExecution(StrEnum):
+    """How an exported task's unresolved Docker build context reaches an executor."""
+
+    REJECT = "reject"
+    DECLARATIVE = "declarative"
+
+
 class AnswerType(StrEnum):
     """The kind of result the task asks the model to produce."""
 

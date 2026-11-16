@@ -23,6 +23,8 @@ from taskcompendium.models import (
     ArtifactKind,
     CommandSemantics,
     ConversationInput,
+    DockerBuildContext,
+    DockerBuildExecution,
     EnvironmentRequirements,
     ExecutionRequirements,
     NoGrader,
@@ -34,6 +36,7 @@ from taskcompendium.models import (
     TextMessage,
     VerifierArtifact,
 )
+from taskcompendium.runtime.resources import inline_resource
 
 
 def delivered_contract(**overrides) -> RootDeliveryContract:
@@ -103,6 +106,11 @@ def test_root_delivery_contract_declares_the_shared_boundary() -> None:
     assert shared_integrity_issue(task) is None
 
 
+REQUIREMENTS = ExecutionRequirements(
+    cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=900.0, verifier_timeout_sec=900.0
+)
+
+
 def test_root_delivery_contract_keeps_no_grader_tasks_shared() -> None:
     contract = delivered_contract()
     task = TaskSpec(
@@ -163,10 +171,7 @@ def test_root_delivery_task_exports_through_the_harbor_adapter(tmp_path) -> None
         integrity_contract=contract,
     )
     assert unsupported_harbor_contract(task) is None
-    requirements = ExecutionRequirements(
-        cpus=1, memory_mb=2048, storage_mb=2048, agent_timeout_sec=900.0, verifier_timeout_sec=900.0
-    )
-    write_harbor_task(task, tmp_path / "packet", requirements)
+    write_harbor_task(task, tmp_path / "packet", REQUIREMENTS)
     exported = TaskSpec.model_validate_json((tmp_path / "packet" / "task-spec.json").read_text())
     assert exported.integrity_contract == contract
 
@@ -185,3 +190,57 @@ def test_root_delivery_task_exports_through_the_harbor_adapter(tmp_path) -> None
         }
     )
     assert unsupported_harbor_contract(demotion) == "task_spec_shared_executor_required"
+
+
+def test_declared_build_opt_in_exports_root_delivery_tasks_with_their_original_context(tmp_path) -> None:
+    """The DECLARATIVE enum: root-delivery tasks export their original Docker context."""
+    dockerfile = (
+        "FROM python:3.11-slim\nRUN apt-get update && apt-get install -y sqlite3 curl\n"
+        "RUN curl -fSL -o /app/db.sqlite https://example.test/db.sqlite\nWORKDIR /app\n"
+    )
+    context = DockerBuildContext(
+        files=(inline_resource("Dockerfile", dockerfile.encode()), inline_resource("metadata.toml", b"[meta]\n"))
+    )
+    contract = delivered_contract()
+    grader = ScriptGrader(
+        argv=("python", "/tests/grade.py"),
+        environment=EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            docker_build=context,
+        ),
+        answer_path=None,
+        artifacts=(VerifierArtifact(source="/logs/verifier/reward.txt", target="/reward.txt", kind=ArtifactKind.FILE),),
+        timeout=900.0,
+    )
+    task = TaskSpec(
+        id="rst-declared-build",
+        source=Source(
+            dataset="laion/rts-1k-rootless-apptainer", revision="pinned", row="tasks.parquet:3", importer_revision="1"
+        ),
+        context=ConversationInput(events=(TextMessage(role="user", content="Create the summary database."),)),
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=grader,
+        environment_requirements=EnvironmentRequirements(),
+        resources=ResourceGroups(),
+        integrity_contract=contract,
+    )
+    # Default: the unresolved build stays rejected, even with the contract.
+    assert unsupported_harbor_contract(task) == "task_spec_unresolved_build"
+    with pytest.raises(ValueError, match="task_spec_unresolved_build"):
+        write_harbor_task(task, tmp_path / "rejected", REQUIREMENTS)
+    # The explicit DECLARATIVE enum exports the original context as-is.
+    assert unsupported_harbor_contract(task, docker_build=DockerBuildExecution.DECLARATIVE) is None
+    write_harbor_task(task, tmp_path / "packet", REQUIREMENTS, docker_build=DockerBuildExecution.DECLARATIVE)
+    exported = TaskSpec.model_validate_json((tmp_path / "packet" / "task-spec.json").read_text())
+    assert exported.integrity_contract == contract
+    assert exported.grader.environment.docker_build == context
+
+    # Generic unsupported builds stay rejected even with the DECLARATIVE opt-in:
+    # permission comes from the explicit enum for the caller's own task, and the
+    # shared-executor gate still requires the delivery contract.
+    unbacked = task.model_copy(update={"integrity_contract": None})
+    assert (
+        unsupported_harbor_contract(unbacked, docker_build=DockerBuildExecution.DECLARATIVE)
+        == "task_spec_shared_executor_required"
+    )

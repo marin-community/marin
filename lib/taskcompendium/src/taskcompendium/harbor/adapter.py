@@ -16,6 +16,7 @@ from taskcompendium.harbor.execution import native_execution_limits
 from taskcompendium.integrity import RootDeliveryContract
 from taskcompendium.models import (
     AnswerType,
+    DockerBuildExecution,
     EnvironmentRequirements,
     ExecutionRequirements,
     NoGrader,
@@ -67,8 +68,16 @@ def declared_execution_limits(task: TaskSpec) -> dict[str, int | float]:
     return declared
 
 
-def unsupported_harbor_contract(task: TaskSpec) -> str | None:
-    """Describe contracts that require a different executor, without rewriting them."""
+def unsupported_harbor_contract(
+    task: TaskSpec, *, docker_build: DockerBuildExecution = DockerBuildExecution.REJECT
+) -> str | None:
+    """Describe contracts that require a different executor, without rewriting them.
+
+    ``docker_build`` is the explicit opt-in for the declarative factory route
+    (coordinator 457): DECLARATIVE lets a task with its original Docker context
+    export as-is for the EVAL declarative factory to provision the Dockerfile
+    directly. Generic unsupported builds stay rejected.
+    """
     if isinstance(task.grader, NoGrader):
         return "no_executable_task_spec_grader"
     if task.answer_type == AnswerType.STATE:
@@ -108,7 +117,8 @@ def unsupported_harbor_contract(task: TaskSpec) -> str | None:
     if task.grader.environment is not None:
         environments.append(task.grader.environment)
     if any(environment.docker_build is not None for environment in environments):
-        return "task_spec_unresolved_build"
+        if docker_build is not DockerBuildExecution.DECLARATIVE:
+            return "task_spec_unresolved_build"
     return None
 
 
@@ -125,13 +135,21 @@ def require_trial_budget(task: TaskSpec, requirements: ExecutionRequirements) ->
             raise ValueError(f"{task.id}: trial budget conflicts with original {name}")
 
 
-def write_harbor_task(task: TaskSpec, directory: Path, requirements: ExecutionRequirements) -> None:
+def write_harbor_task(
+    task: TaskSpec,
+    directory: Path,
+    requirements: ExecutionRequirements,
+    *,
+    docker_build: DockerBuildExecution = DockerBuildExecution.REJECT,
+) -> None:
     """Write a private TaskSpec payload and its trial budgets, preserving the task itself.
 
     ``requirements`` supplies a calibration shape when the original lacks one. Explicit
     requirements must match exactly. No environment, file delivery or grader is lowered.
+    ``docker_build=DECLARATIVE`` lets tasks with their original Docker context export
+    for the declarative factory route instead of the unresolved-build rejection.
     """
-    unsupported = unsupported_harbor_contract(task)
+    unsupported = unsupported_harbor_contract(task, docker_build=docker_build)
     if unsupported is not None:
         raise ValueError(f"{task.id}: {unsupported}")
     require_trial_budget(task, requirements)
