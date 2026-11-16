@@ -43,7 +43,8 @@ def full_content_matches_lineage(binding: FullContentResultBinding, lineage: Ret
     """Whether an archived whole-source Result is exactly the retained original's review."""
     return (
         binding.source_id == lineage.source_id
-        and (binding.input.dataset_id, binding.input.dataset_revision) == (
+        and (binding.input.dataset_id, binding.input.dataset_revision)
+        == (
             lineage.original_release.repo,
             lineage.original_release.revision,
         )
@@ -91,7 +92,10 @@ def clear_stale_full_content_result[ConfigT: CatalogConfig](source: RlDataSource
 
 
 def bind_full_content_result[ConfigT: CatalogConfig](
-    source: RlDataSource[ConfigT], binding: FullContentResultBinding | None, *, retained_lineage: RetainedLineageProof | None = None
+    source: RlDataSource[ConfigT],
+    binding: FullContentResultBinding | None,
+    *,
+    retained_lineage: RetainedLineageProof | None = None,
 ) -> RlDataSource[ConfigT]:
     """Attach a verified exact-input final Result while preserving execution evidence."""
     if binding is None:

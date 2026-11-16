@@ -38,7 +38,6 @@ from experiments.post_training.task_curation.full_content_binding import (
     full_content_matches_lineage,
 )
 from experiments.post_training.task_curation.full_content_receipts import full_content_result_binding
-from experiments.post_training.task_curation.source import SourceReference
 from experiments.post_training.task_curation.full_content_results import (
     FullContentResultBinding,
 )
@@ -47,7 +46,11 @@ from experiments.post_training.task_curation.full_qc_inputs import prepare_input
 from experiments.post_training.task_curation.full_qc_review import contract_batches, write_review_result
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel, SampleQCReview
-from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt, bind_sample_result, sample_matches_lineage
+from experiments.post_training.task_curation.sample_qc_binding import (
+    SampleQCReceipt,
+    bind_sample_result,
+)
+from experiments.post_training.task_curation.source import SourceReference
 from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from infra.marina.apps.rl_data_catalog.server.quality import quality, review_completeness

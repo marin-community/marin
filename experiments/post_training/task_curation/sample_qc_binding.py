@@ -5,7 +5,7 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import ActorCensusInput, ContentEvidenceReference, IndependentQC
+from finestore.rl.curation import ContentEvidenceReference, IndependentQC
 from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.pipeline.models import ReviewRecord
 
@@ -23,22 +23,18 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
 def sample_matches_lineage(receipt: "SampleQCReceipt", lineage: RetainedLineageProof) -> bool:
     """Whether an archived panel is exactly the retained release's byte-identical original panel."""
     panel = receipt.review.panel
-    return (
-        receipt.source_id == lineage.source_id
-        and (
-            panel.dataset_id,
-            panel.dataset_revision,
-            panel.converter_version,
-            panel.task_specs_sha256,
-            panel.retained_tasks,
-        )
-        == (
-            lineage.original_release.repo,
-            lineage.original_release.revision,
-            lineage.original_input.converter_version,
-            lineage.original_input.task_specs_sha256,
-            lineage.original_input.measured_tasks,
-        )
+    return receipt.source_id == lineage.source_id and (
+        panel.dataset_id,
+        panel.dataset_revision,
+        panel.converter_version,
+        panel.task_specs_sha256,
+        panel.retained_tasks,
+    ) == (
+        lineage.original_release.repo,
+        lineage.original_release.revision,
+        lineage.original_input.converter_version,
+        lineage.original_input.task_specs_sha256,
+        lineage.original_input.measured_tasks,
     )
 
 
@@ -81,7 +77,10 @@ def require_sample_qualification(receipt: SampleQCReceipt) -> None:
 
 
 def bind_sample_result[ConfigT: CatalogConfig](
-    source: RlDataSource[ConfigT], receipt: SampleQCReceipt | None, *, retained_lineage: RetainedLineageProof | None = None
+    source: RlDataSource[ConfigT],
+    receipt: SampleQCReceipt | None,
+    *,
+    retained_lineage: RetainedLineageProof | None = None,
 ) -> RlDataSource[ConfigT]:
     """Attach exact-input content evidence while preserving execution qualification."""
     if receipt is None:
