@@ -135,7 +135,7 @@ def test_package_grant_publication_declares_the_checked_wheel_pin(tmp_path, monk
     receipt = package_receipt(wheel, wheel_sha, metadata)
     monkeypatch.setattr(license_publication, "_fetch", lambda url, **kwargs: content)
     publication = license_publication.prepare_license_publication(receipt, tmp_path / "published", use="train")
-    assert publication.metadata["license"] == "Apache-2.0"
+    assert publication.metadata["license"] == "apache-2.0"
     assert publication.metadata["license_source"] == {"dataset_id": wheel, "revision": wheel_sha, "url": wheel_url}
     assert publication.metadata["license_evidence_urls"] == [receipt.evidence[0].url]
     assert publication.metadata["license_input"] == {"dataset_id": wheel, "revision": wheel_sha}

@@ -78,6 +78,8 @@ def _prepare_package_publication(receipt: LicenseReceipt, evidence: LicenseEvide
     if license_verdict(tuple(identifiers)) is not LicenseVerdict.ALLOWED:
         raise ValueError("Checked package grant supplies no publishable permissive license identifier")
     wheel_url, content = _package_wheel_url(receipt, evidence)
+    # HF's card schema accepts its own lowercase identifier spellings.
+    identifiers = [identifier.lower() for identifier in identifiers]
     metadata = {
         "license": identifiers[0] if len(identifiers) == 1 else identifiers,
         "license_source": {"dataset_id": receipt.dataset_id, "revision": receipt.revision, "url": wheel_url},
