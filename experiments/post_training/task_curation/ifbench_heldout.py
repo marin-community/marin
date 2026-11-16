@@ -241,7 +241,7 @@ def heldout_steps(
         version=version,
         artifact_type=LexicalMeasurements,
         deps=[marks, drops, bloom],
-        run=measure_marks,
+        run=measure_combined_marks,
         build_config=lambda ctx: ReportConfig(
             [ctx.artifact_path(marks)],
             ctx.artifact_path(drops),
@@ -275,6 +275,12 @@ def compare_original_drops(result: LexicalMeasurements) -> None:
         "all_original_drops_and_eval_ids_preserved": True,
     }
     (StoragePath(result.path) / "original-drop-comparison.json").write_text(json.dumps(comparison, indent=2) + "\n")
+
+
+def measure_combined_marks(config: ReportConfig) -> LexicalMeasurements:
+    result = measure_marks(config)
+    compare_original_drops(result)
+    return result
 
 
 def main() -> None:
@@ -324,7 +330,6 @@ def main() -> None:
             runtime.activate(context),
         ):
             result = run(report, max_concurrent=2)[0]
-        compare_original_drops(result)
         args.output.write_text(result.model_dump_json(indent=2) + "\n")
 
 

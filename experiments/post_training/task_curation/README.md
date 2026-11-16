@@ -82,7 +82,8 @@ release. `original-drop-comparison.json` verifies that all 14 original IFBench
 exclusions and their evaluation matches remain, and lists every newly flagged
 row. Preserve both reports and all matched evaluation IDs. In the report, `drop_manifests[source_id]` identifies a
 Parquet file: `id` is the excluded training-task ID and `matched_eval_ids` lists
-the causal test references as `ifbench-test:<original key>`. The retained private
+the causal evaluation references. New IFBench references use
+`ifbench-test:<original key>`; existing reference IDs keep their original form. The retained private
 pin still needs its final census, qualification, SAMPLE review and admission
 receipt before training use.
 
