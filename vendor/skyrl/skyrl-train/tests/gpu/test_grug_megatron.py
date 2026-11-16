@@ -169,7 +169,8 @@ def _config(model_path: str, *, world_size: int, pp: int, ep: int):
     cfg.trainer.policy.model.path = model_path
     cfg.trainer.critic.model.path = None
     cfg.trainer.strategy = "megatron"
-    cfg.trainer.flash_attn = False
+    # Grug BF16 uses FlashAttention; the Ray environment must select the same backend.
+    cfg.trainer.flash_attn = True
     cfg.trainer.bf16 = True
     cfg.trainer.gradient_checkpointing = True
     cfg.trainer.use_sample_packing = False
