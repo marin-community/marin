@@ -401,6 +401,34 @@ def test_daytona_output_count_ignores_provider_diagnostics(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(shutil.which("setsid") is None, reason="Daytona command execution needs setsid")
+@pytest.mark.parametrize("collection_timeout, succeeds", [(0.01, False), (1.0, True)])
+def test_daytona_output_collection_uses_its_own_deadline(collection_timeout: float, succeeds: bool):
+    class SlowFiles(LocalFiles):
+        async def download_file(self, source: str) -> bytes:
+            await asyncio.sleep(0.1)
+            return await super().download_file(source)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.fs = SlowFiles()
+        machine = await DaytonaMachineFactory(lambda: client, output_collection_timeout=collection_timeout).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir="")
+        )
+        try:
+            command = Command(("sh", "-c", "printf out; printf err >&2"))
+            if succeeds:
+                result = await machine.run(command)
+                assert (result.stdout, result.stderr) == (b"out", b"err")
+            else:
+                with pytest.raises(RuntimeError, match="Cannot collect Daytona command output"):
+                    await machine.run(command)
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.skipif(shutil.which("setsid") is None, reason="The command boundary needs a host setsid executable")
 @pytest.mark.parametrize("interruption", ["timeout", "cancel", "cancel_twice", "cancel_during_timeout_stop"])
 def test_daytona_command_interruption_stops_descendants_and_preserves_next_command(tmp_path, interruption):

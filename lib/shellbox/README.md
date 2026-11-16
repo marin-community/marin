@@ -278,6 +278,10 @@ The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `value`. Without a policy override, the factory uses `MachineSpec.network`.
 `MachineSpec.startup_timeout` bounds snapshot preparation and sandbox creation. Without
 this value, the factory uses its `create_timeout` setting.
+Daytona gives stdout and stderr collection a shared 60-second deadline after a
+command exits. `DaytonaMachineFactory(output_collection_timeout=...)` changes
+this deadline without changing the command timeout or cleanup timeouts. Harbor's
+Daytona environment accepts the same `output_collection_timeout` setting.
 The pinned Daytona SDK does not upload local `ADD` inputs. Dockerfiles with `ADD`
 require a prebuilt registry image.
 Other factories do not apply `MachineSpec.startup_timeout`. Callers enforce the

@@ -53,6 +53,7 @@ from shellbox.machine import (
 from shellbox.process_session import finish_owned, own_cleanup
 
 DEFAULT_SANDBOX_TTL_MINUTES = 360
+DEFAULT_OUTPUT_COLLECTION_TIMEOUT = 60
 logger = logging.getLogger(__name__)
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
@@ -149,10 +150,18 @@ class DaytonaNetworkPolicy:
 class DaytonaMachine:
     """One Daytona sandbox. Each command gets a fresh process and shared files."""
 
-    def __init__(self, sandbox: AsyncSandbox, spec: MachineSpec, resources: AsyncExitStack):
+    def __init__(
+        self,
+        sandbox: AsyncSandbox,
+        spec: MachineSpec,
+        resources: AsyncExitStack,
+        *,
+        output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
+    ):
         self.sandbox = sandbox
         self.spec = spec
         self.resources = resources
+        self.output_collection_timeout = output_collection_timeout
         self._closed = False
         self._sessions: set[DaytonaProcessSession] = set()
         self._acquisitions: set[asyncio.Task[None]] = set()
@@ -339,7 +348,7 @@ class DaytonaMachine:
                     env=environment,
                     timeout=math.ceil(command.timeout + 10) if command.timeout is not None else None,
                 )
-            async with asyncio.timeout(INTERRUPT_TIMEOUT):
+            async with asyncio.timeout(self.output_collection_timeout):
                 limit = command.output_limit_bytes
                 stdout, stdout_truncated = await self._read_output(stdout_path, limit)
                 stderr, stderr_truncated = await self._read_output(stderr_path, limit)
@@ -487,11 +496,13 @@ class DaytonaMachineFactory:
         *,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
+        output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         network_policy: DaytonaNetworkPolicy | None = None,
     ):
         self.client_factory = client_factory
         self.ttl_minutes = ttl_minutes
         self.create_timeout = create_timeout
+        self.output_collection_timeout = output_collection_timeout
         self.network_policy = network_policy
 
     def _clients(self) -> Callable[[], AsyncDaytona]:
@@ -572,7 +583,7 @@ class DaytonaMachineFactory:
             )
             if prepared.exit_code:
                 raise UnsupportedMachineSpec("Daytona task images require setsid for command timeout recovery")
-            machine = DaytonaMachine(sandbox, spec, lifetime)
+            machine = DaytonaMachine(sandbox, spec, lifetime, output_collection_timeout=self.output_collection_timeout)
             if spec.workdir:
                 result = await machine.run(Command(("mkdir", "-p", spec.workdir), cwd="/", env={"PATH": CONTROL_PATH}))
                 if result.exit_code:
