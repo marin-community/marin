@@ -131,8 +131,6 @@
     "OpenAI:gsm8k": "Lexical remediation queued",
     "ChilleD:svamp": "Lexical remediation queued",
     "CodeParrot:apps": "Lexical remediation queued",
-    "Gretel:gretel_text_to_sql": "Lexical remediation queued",
-    "Nemotron:openscience": "Lexical remediation queued",
     "TaskTrove:DCAgent__exp_rpt_curriculum-easy": "Lexical remediation queued",
     "TaskTrove:DCAgent__exp_rpt_curriculum-medium-v2": "Lexical remediation queued",
     "TaskTrove:DCAgent__exp_rpt_e2egit-v2": "Lexical remediation queued",
@@ -140,13 +138,10 @@
     "TaskTrove:DCAgent__exp_rpt_multifile-v3": "Lexical remediation queued",
     "TaskTrove:DCAgent__exp_rpt_stack-pytest-v2": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": "Lexical remediation queued",
-    "TaskTrove:laion__nemotron-gym-safety-v3": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": "Lexical remediation queued",
     "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2": "Lexical remediation queued",
     "TaskTrove:laion__wizardlm-orca-v4": "Lexical remediation queued",
-    "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4": "Lexical remediation queued",
-    "TaskTrove:laion__nemotron-gym-science-so-openq-v3": "Lexical remediation queued",
     "TaskTrove:laion__nemotron-gym-instruction-following-structured-v3": "Lexical remediation queued",
     "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4": "Lexical remediation queued",
     "TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2": "Lexical remediation queued",
@@ -182,9 +177,6 @@
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform": "Lexical remediation queued",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation": "Lexical remediation queued",
     "TaskTrove:swesmith-verifier-repaired-v5": "Lexical remediation queued",
-    "TaskTrove:tasktrove-safety-qa": "Lexical remediation queued",
-    "TaskTrove:tasktrove-knowledge-openqa-qa": "Lexical remediation queued",
-    "TaskTrove:tasktrove-science-openqa-qa": "Lexical remediation queued",
     "TaskTrove:DCAgent__exp_rle_adversarial-v6": "Lexical remediation queued",
     "TaskTrove:DCAgent__exp_rpt_nemotron-cpp": "Lexical remediation queued",
     "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": "Lexical remediation queued",
@@ -208,7 +200,6 @@
     "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3": "Lexical remediation queued",
     "TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4": "Lexical remediation queued",
     "TaskTrove:laion__nemotron-gym-cfbench-v4": "Lexical remediation queued",
-    "TaskTrove:laion__nemotron-gym-identity-following-v4": "Lexical remediation queued",
     "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5": "Lexical remediation queued",
     "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2": "Lexical remediation queued",
     "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4": "Lexical remediation queued",
@@ -280,56 +271,6 @@
       "status": "Pending",
       "origin": "CodeParrot",
       "upstream_dataset": "apps",
-      "upstream_url": null,
-      "notes": "",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "Gretel:gretel_text_to_sql",
-      "name": "gretel_text_to_sql",
-      "display_name": "gretel_text_to_sql",
-      "status": "Pending",
-      "origin": "Gretel",
-      "upstream_dataset": "gretel_text_to_sql",
-      "upstream_url": null,
-      "notes": "",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "Nemotron:openscience",
-      "name": "openscience",
-      "display_name": "openscience",
-      "status": "Pending",
-      "origin": "Nemotron",
-      "upstream_dataset": "openscience",
       "upstream_url": null,
       "notes": "",
       "stage": "Lexical remediation queued",
@@ -524,31 +465,6 @@
       ]
     },
     {
-      "id": "TaskTrove:laion__nemotron-gym-safety-v3",
-      "name": "tasktrove-safety",
-      "display_name": "laion__nemotron-gym-safety-v3",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__nemotron-gym-safety-v3",
-      "upstream_url": null,
-      "notes": "Judge-only against a two-line safety principle, no reference. Kept as rubric-only (tag no-reference): the principle is specific to each prompt (refuse the harmful ones, help with the benign ones). QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 44,127 exact duplicates collapse under the pipeline dedup key (44,939 published); MEDIUM judge e2e on the seeded sample through the production grading path, agreement 59/60 across the MEDIUM pair (one conservative 0.5 disagreement on this source).",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
       "id": "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2",
       "name": "tasktrove-stack_overflow",
       "display_name": "laion__stackexchange-overflow-sandboxes-verified-v2",
@@ -632,56 +548,6 @@
       "upstream_dataset": "laion__wizardlm-orca-v4",
       "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
       "notes": "Judge-only over Orca-style instructions, three-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission. Private QUICK release reuses the complete converted TaskSpecs. QC Result is informational; uncertain review coverage and judge execution issues remain explicit. Raw upstream conversion counts and drops remain in the pinned conversion manifest and rejection ledger.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4",
-      "name": "knowledge-openqa",
-      "display_name": "laion__nemotron-gym-knowledge-openqa-v4",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__nemotron-gym-knowledge-openqa-v4",
-      "upstream_url": null,
-      "notes": "Exact gate then reference-based judge. Reference answers are real; needs the judge in the new grader. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies; 43 exact duplicates collapse under the pipeline dedup key (122,314 published); MEDIUM judge e2e 30/30 on the seeded sample through the production grading path.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:laion__nemotron-gym-science-so-openq-v3",
-      "name": "science-openqa",
-      "display_name": "laion__nemotron-gym-science-so-openq-v3",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__nemotron-gym-science-so-openq-v3",
-      "upstream_url": null,
-      "notes": "Reference answer plus judge. Move the reference out of the criterion text into a data field at conversion. QA (RL Data Atlas): every row re-converted with zero fidelity discrepancies (no dedup collisions); HEAVY judge e2e 30/30 on the seeded sample through the GLM relay.",
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
@@ -1574,81 +1440,6 @@
       ]
     },
     {
-      "id": "TaskTrove:tasktrove-safety-qa",
-      "name": "safety-qa",
-      "display_name": "safety",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "tasktrove-safety-qa",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Judge-only against a per-prompt two-line safety principle. No endpoint is hard-coded in any task spec; the MEDIUM JUDGE_TIERS definition pins model and completion settings. Private release; conversation-only tasks import canonical task specs. The pinned cohort revision was downloaded back and every task hash re-validated.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:tasktrove-knowledge-openqa-qa",
-      "name": "knowledge-openqa-qa",
-      "display_name": "knowledge-openqa",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "tasktrove-knowledge-openqa-qa",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Exact gate then reference-based judge. No endpoint is hard-coded in any task spec; the MEDIUM JUDGE_TIERS definition pins model and completion settings. Private release; conversation-only tasks import canonical task specs. The pinned cohort revision was downloaded back and every task hash re-validated.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:tasktrove-science-openqa-qa",
-      "name": "science-openqa-qa",
-      "display_name": "science-openqa",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "tasktrove-science-openqa-qa",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Reference answer plus scientific-equivalence judge. The tier is chosen for the source (the archive demonstrably contains operator-algebra equivalence items a MEDIUM judge would mis-grade). No endpoint is hard-coded in any task spec; the HEAVY JUDGE_TIERS definition pins model and completion settings. Private release; conversation-only tasks import canonical task specs. The pinned cohort revision was downloaded back and every task hash re-validated.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
       "id": "TaskTrove:DCAgent__exp_rle_adversarial-v6",
       "name": "DCAgent__exp_rle_adversarial-v6",
       "display_name": "DCAgent/exp_rle_adversarial-v6",
@@ -2207,31 +1998,6 @@
       "upstream_dataset": "laion__nemotron-gym-cfbench-v4",
       "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
       "notes": "Deterministic gate before the judge uses 31 constraint ids outside the IFEval registry (tables, heading depth, numbered lists, unique words, ...); only 328 of 1,478 tasks are gate-able today. Port the gate checks before converting. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
-      "stage": "Lexical remediation queued",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "reasons": [
-        {
-          "reason": "lexical-remediation-required",
-          "evidence": {
-            "kind": "check-output",
-            "message": "Decontamination admission blocked: clean or remediated decontamination receipt is missing",
-            "uri": null,
-            "sha256": null,
-            "expected": null
-          }
-        }
-      ]
-    },
-    {
-      "id": "TaskTrove:laion__nemotron-gym-identity-following-v4",
-      "name": "laion__nemotron-gym-identity-following-v4",
-      "display_name": "laion/nemotron-gym-identity-following-v4",
-      "status": "Pending",
-      "origin": "TaskTrove",
-      "upstream_dataset": "laion__nemotron-gym-identity-following-v4",
-      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
-      "notes": "Persona is NVIDIA's; judge-only. Rewrite with our identity and deterministic name/language checks, or skip. Native Harbor package bytes are preserved in a private TaskCompendium QUICK release. QUICK supplies no oracle or admission claim. Native Dockerfile base tags and build downloads may remain mutable. Source defects remain recorded.",
       "stage": "Lexical remediation queued",
       "dataset_id": null,
       "dataset_revision": null,
