@@ -1967,14 +1967,15 @@ def test_ragged_all_to_all_with_aligned_receiver_rows_matches_the_packed_layout(
     backward transports read them, and the rows in the gaps reach nothing. Without drops both also
     match the dense MLP."""
     monkeypatch.setattr(jax.lax, "ragged_all_to_all", _emulated_ragged_all_to_all)
-    packed_selection = ep_ragged_all_to_all._select_expert_mlp
-    aligned_selections = []
+    selected = []
 
-    def aligned_selection(activation_fn, dtype):
-        packed = packed_selection(activation_fn, dtype)
-        assert type(packed) is ep_ragged_all_to_all._RaggedDotExpertMlp, packed
-        aligned_selections.append(packed)
-        return _AlignedRaggedDotExpertMlp(activation_fn, routing_weight_gradient=packed.routing_weight_gradient)
+    def select(expert_mlp_class):
+        # Both layouts run the portable expert MLP, whatever kernels this host could run.
+        def selection(activation_fn, dtype):
+            selected.append(expert_mlp_class)
+            return expert_mlp_class(activation_fn, routing_weight_gradient=_RoutingWeightGradient.EXACT)
+
+        return selection
 
     tokens, hidden, intermediate, num_experts, topk = 64, 8, 12, 16, 4
     with use_cpu_devices(8):
@@ -2036,11 +2037,13 @@ def test_ragged_all_to_all_with_aligned_receiver_rows_matches_the_packed_layout(
             return out, counts.dropped
 
         with jax.set_mesh(mesh):
+            packed_mlp = ep_ragged_all_to_all._RaggedDotExpertMlp
+            monkeypatch.setattr(ep_ragged_all_to_all, "_select_expert_mlp", select(packed_mlp))
             packed, packed_dropped = value_and_grads(ragged, ep_cotangent, *ep_operands)
-            monkeypatch.setattr(ep_ragged_all_to_all, "_select_expert_mlp", aligned_selection)
+            monkeypatch.setattr(ep_ragged_all_to_all, "_select_expert_mlp", select(_AlignedRaggedDotExpertMlp))
             aligned, aligned_dropped = value_and_grads(ragged, ep_cotangent, *ep_operands)
 
-    assert aligned_selections, "the aligned expert MLP never ran"
+    assert {packed_mlp, _AlignedRaggedDotExpertMlp} <= set(selected), "an expert MLP never ran"
     # Drops depend on the logical capacity alone, never on the receiver layout.
     assert int(packed_dropped) == int(aligned_dropped)
     drops = capacity_factor < 1
