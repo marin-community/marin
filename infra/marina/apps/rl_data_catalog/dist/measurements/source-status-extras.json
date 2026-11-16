@@ -330,7 +330,7 @@
     },
     "eval-only-benchmark": {
       "label": "Eval only",
-      "meaning": "The source is admitted for evaluation only; its training use is excluded by a recorded benchmark constraint.",
+      "meaning": "The source is admitted for evaluation only; its training use is excluded by a recorded benchmark rule.",
       "clears": "A user ruling that admits training use, recorded with the benchmark evidence."
     },
     "superseded-by-replacement": {

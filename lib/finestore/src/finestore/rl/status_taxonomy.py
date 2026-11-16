@@ -195,7 +195,7 @@ REASON_EXPLANATIONS: dict[ExclusionReason, ReasonExplanation] = {
     ),
     ExclusionReason.EVAL_ONLY_BENCHMARK: ReasonExplanation(
         label="Eval only",
-        meaning="The source is admitted for evaluation only; its training use is excluded by a recorded benchmark constraint.",
+        meaning="The source is admitted for evaluation only; its training use is excluded by a recorded benchmark rule.",
         clears="A user ruling that admits training use, recorded with the benchmark evidence.",
     ),
     ExclusionReason.SUPERSEDED_BY_REPLACEMENT: ReasonExplanation(

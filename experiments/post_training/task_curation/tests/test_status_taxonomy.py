@@ -9,17 +9,17 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import OversightEvidence, OversightLevel
+from finestore.rl.status_taxonomy import (
+    REASON_EXPLANATIONS,
+    ExclusionReason,
+    SourceStatus,
+)
 
 from experiments.post_training.task_curation import source_status
 from experiments.post_training.task_curation.exclusion_registry import MANUAL_EXCLUSION_CLAIMS, NEEDS_RULING_SOURCES
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.source import lexical_blocker_reason, population_blocker_reason
 from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources
-from finestore.rl.status_taxonomy import (
-    ExclusionReason,
-    REASON_EXPLANATIONS,
-    SourceStatus,
-)
 from infra.marina.apps.rl_data_catalog.server.licensing import source_license_ban
 
 APP_DIST = Path("infra/marina/apps/rl_data_catalog/dist")
@@ -73,9 +73,7 @@ LEXICAL_MESSAGES = {
     "Atlas admission requires a private open-athena TaskCompendium release": (
         ExclusionReason.LEXICAL_REMEDIATION_REQUIRED
     ),
-    "Atlas remediation requires the original private open-athena snapshot": (
-        ExclusionReason.LEXICAL_REMEDIATION_REQUIRED
-    ),
+    "Atlas remediation requires the original private open-athena snapshot": ExclusionReason.LEXICAL_REMEDIATION_REQUIRED,
 }
 
 

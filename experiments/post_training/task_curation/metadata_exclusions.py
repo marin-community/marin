@@ -70,7 +70,7 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
                 ExclusionReason.LICENSE_BAN,
                 "Ban registry 2026.11.16.1 at pin " + KERNELBOT_PIN + ": user rejected the required "
                 "model-license reciprocity condition for plain OpenMDW-1.1 releases; checker rule E1 "
-                "ESCALATE, LICENSE quote \"June 9 Researcher Reciprocity License\"; issue 11497.",
+                'ESCALATE, LICENSE quote "June 9 Researcher Reciprocity License"; issue 11497.',
                 uri="https://huggingface.co/datasets/GPUMODE/kernelbot-data/blob/" + KERNELBOT_PIN + "/LICENSE",
             ),
         ),
@@ -94,7 +94,8 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
                 "Checker receipt F1 FAIL at pin " + CYBENCH_PIN + ": the harness is Apache-2.0 but the "
                 "benchmark/project-sekai-ctf/sekaictf-2022 task content is CC BY-NC-SA 4.0 (quoted from "
                 "its LICENSE.content.md); issue 11497.",
-                uri="https://github.com/andyzorigin/cybench/blob/" + CYBENCH_PIN
+                uri="https://github.com/andyzorigin/cybench/blob/"
+                + CYBENCH_PIN
                 + "/benchmark/project-sekai-ctf/sekaictf-2022/LICENSE.content.md",
             ),
         ),
@@ -117,7 +118,8 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
                 ExclusionReason.LICENSE_MISSING,
                 "Checker receipt F2 FAIL at pin " + HAL_HARNESS_PIN + ": no LICENSE or COPYING file in "
                 "the pinned repository tree; issue 11497.",
-                uri="https://api.github.com/repos/princeton-pli/hal-harness/git/trees/" + HAL_HARNESS_PIN
+                uri="https://api.github.com/repos/princeton-pli/hal-harness/git/trees/"
+                + HAL_HARNESS_PIN
                 + "?recursive=1",
             ),
         ),
@@ -140,8 +142,7 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
                 ExclusionReason.LICENSE_BAN,
                 "Checker receipt F1 FAIL at pin " + MIROVERSE_PIN + ": dataset card declares "
                 "license cc-by-nc-4.0; issue 11497.",
-                uri="https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1/resolve/" + MIROVERSE_PIN
-                + "/README.md",
+                uri="https://huggingface.co/datasets/miromind-ai/MiroVerse-v0.1/resolve/" + MIROVERSE_PIN + "/README.md",
             ),
         ),
     ),

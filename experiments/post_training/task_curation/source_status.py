@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from finestore.rl.status_taxonomy import (
-    PendingStage,
     REASON_EXPLANATIONS,
+    PendingStage,
     SourceStatus,
 )
 
@@ -113,9 +113,7 @@ def metadata_rows() -> list[dict[str, Any]]:
 
 def reason_explanations() -> dict[str, dict[str, str]]:
     """The canonical reason explanations, rendered by the page, guide and docs."""
-    return {
-        reason.value: explanation.model_dump(mode="json") for reason, explanation in REASON_EXPLANATIONS.items()
-    }
+    return {reason.value: explanation.model_dump(mode="json") for reason, explanation in REASON_EXPLANATIONS.items()}
 
 
 def status_extras() -> dict[str, Any]:
