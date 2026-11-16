@@ -47,6 +47,7 @@ from taskcompendium.models import (
     JsonAnswer,
     MissingArtifactPolicy,
     PlainText,
+    ReplyStatus,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -446,6 +447,26 @@ async def test_script_grader_reads_extracted_answer_and_conversation_at_declared
             {"role": "assistant", "content": final},
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_captured_files_cannot_replace_host_reply_status():
+    path = "/app/answer_status.json"
+    grader = ScriptGrader(
+        argv=("jq", "if .truncated == true then 0 else 1 end", path),
+        environment=GRADER_ENVIRONMENT,
+        reply_status_path=path,
+    )
+    task = arithmetic_task(grader).model_copy(update={"output_paths": (path,)})
+    attempt = replace(
+        answered(task, "12"),
+        files={path: b'{"truncated":false}'},
+        reply_status=ReplyStatus(
+            origin="provider", finish_reason="length", truncated=True, provider_refusal=False, tool_events=()
+        ),
+    )
+    result = await grade_in_sandbox(task, attempt, FixtureImageFactory(), GRADER_MACHINE)
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.0), result
 
 
 NUMBER_FILE = (RewardFile(path=REWARD_TXT, format=RewardFileFormat.NUMBER),)

@@ -10,6 +10,8 @@ from uuid import uuid4
 import numpy as np
 from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import RolloutContractError
+from taskcompendium.chat import chat_reply_status
+from taskcompendium.models import ReplyStatus
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
 from verifyit.reasoning_markup import (
@@ -62,6 +64,7 @@ class ModelClientOutput(InferenceEngineOutput):
     generation_token_budgets: NotRequired[list[int | None]]
     reasoning_violations: NotRequired[list[ReasoningViolation | None]]
     reasoning_violation_tokens: NotRequired[list[int | None]]
+    reply_statuses: NotRequired[list[ReplyStatus | None]]
 
 
 class ModelClient(Protocol):
@@ -129,6 +132,7 @@ class _ChatResult:
     policy_steps: list[int] | None = None
     reasoning_violation: ReasoningViolation | None = None
     reasoning_violation_token: int | None = None
+    reply_status: ReplyStatus | None = None
 
 
 # Chat-template turn terminators that can differ from the tokenizer's EOS, e.g. Llama-style templates end
@@ -175,6 +179,7 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
         assistant_messages=[result.assistant_message for result in results],
         token_provenance=TokenProvenance.ENGINE,
         generation_token_budgets=[result.generation_token_budget for result in results],
+        reply_statuses=[result.reply_status for result in results],
     )
     if any(result.reasoning_violation is not None for result in results):
         output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
@@ -495,6 +500,7 @@ class DirectModelClient:
                 choice.get(CHOICE_POLICY_STEPS_KEY),
                 reasoning_violation,
                 reasoning_violation_token,
+                chat_reply_status(response),
             )
 
         results = await asyncio.gather(

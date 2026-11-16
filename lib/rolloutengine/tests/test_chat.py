@@ -3,19 +3,27 @@
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 import httpx
 import openai
 import pytest
+from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import PackageSpec
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
+    CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
+    FileReward,
     FunctionDefinition,
     NoGrader,
     ProviderRequirement,
+    RewardFile,
+    RewardFileFormat,
+    ScriptGrader,
     TextMessage,
 )
 
@@ -29,10 +37,11 @@ from rolloutengine.models import (
     GradedRolloutInterrupted,
     ModelRequest,
     RolloutFailure,
+    RolloutOperation,
     TokenUsage,
     TraceMode,
 )
-from rolloutengine.test_support import arithmetic_task, rollout_spec
+from rolloutengine.test_support import ReplayModel, arithmetic_task, machine_runtime, rollout_spec
 
 LOOKUP = FunctionDefinition(
     name="lookup",
@@ -74,6 +83,88 @@ class ChatServer:
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handle)),
         )
         return ChatModel(client, "chat-model", max_tokens=1024, extra_body=extra_body)
+
+
+class StatusGraderFactory(DockerMachineFactory):
+    """Run the fixture grader against ShellSim's filesystem instead of pulling an image."""
+
+    async def create(self, spec):
+        return await ShellSimMachineFactory().create(replace(spec, source=PackageSpec()))
+
+
+def status_graded_task():
+    command = (
+        'jq -s \'{reward: (if .[1][-1].content == "12" and .[0].truncated == false and '
+        ".[0].provider_refusal == false and (.[0].tool_events | length) == 0 "
+        "then 1 else 0 end), detail: .[0]}' "
+        "/app/answer_status.json /tests/conversation.json > /logs/verifier/reward.json"
+    )
+    return arithmetic_task(
+        grader=ScriptGrader(
+            argv=("sh", "-c", command),
+            environment=EnvironmentRequirements(
+                docker_image="fixture@sha256:" + "0" * 64,
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+            ),
+            answer_path=None,
+            reply_status_path="/app/answer_status.json",
+            reward=FileReward(files=(RewardFile(path="/logs/verifier/reward.json", format=RewardFileFormat.JSON),)),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "finish_reason,message_fields,response_fields,reward",
+    [
+        ("stop", {}, {}, 1.0),
+        ("length", {}, {}, 0.0),
+        ("stop", {"refusal": "Cannot answer"}, {}, 0.0),
+        (
+            "tool_calls",
+            {"tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]},
+            {},
+            0.0,
+        ),
+        ("stop", {"annotations": [{"type": "url_citation", "url": "https://example.test"}]}, {}, 0.0),
+        ("stop", {}, {"provider_metadata": {"events": [{"type": "web_search_call"}]}}, 0.0),
+    ],
+    ids=["complete", "truncated", "refusal", "tool-call", "message-annotations", "provider-tool-event"],
+)
+async def test_script_grader_receives_reply_status_from_chat_transport(
+    finish_reason, message_fields, response_fields, reward
+):
+    response = {**completion({"content": "12", **message_fields}, finish_reason=finish_reason), **response_fields}
+    model = ChatServer([response]).model()
+    runtime = rollout_spec(
+        status_graded_task(),
+        harness=EXACT_CHAT_HARNESS,
+        verifier_machine=machine_runtime(backend="docker"),
+        trace=TraceMode.MESSAGES,
+    )
+    try:
+        result = await RolloutEngine(
+            {"docker": StatusGraderFactory()}, {EXACT_CHAT_HARNESS: ExactChatHarness()}
+        ).run_task(runtime, model)
+    finally:
+        await model.client.close()
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, reward), result.grade
+    assert result.grade.detail["origin"] == "provider"
+    assert result.grade.detail["finish_reason"] == finish_reason
+    saved = json.loads(json.dumps(asdict(result.rollout)))
+    assert saved["conversations"][-1]["steps"][-1]["turn"]["reply_status"] == result.grade.detail
+
+
+async def test_required_reply_status_is_not_inferred_from_answer_text():
+    runtime = rollout_spec(
+        status_graded_task(), harness=EXACT_CHAT_HARNESS, verifier_machine=machine_runtime(backend="docker")
+    )
+    model = ReplayModel([{"role": "assistant", "content": "12"}])
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await RolloutEngine({"docker": StatusGraderFactory()}, {EXACT_CHAT_HARNESS: ExactChatHarness()}).run_task(
+            runtime, model.complete
+        )
+    assert caught.value.operation == RolloutOperation.GRADE
+    assert caught.value.grade.reward is None
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ from typing import Any
 
 import openai
 from openai.types.chat import ChatCompletion
+from taskcompendium.chat import chat_reply_status
 
 from rolloutengine.models import ModelRequest, ModelResponseError, ModelTurn, TokenUsage
 
@@ -103,4 +104,5 @@ class ChatModel:
             text=message["content"],
             metadata=metadata,
             usage=TokenUsage(usage.prompt_tokens, usage.completion_tokens),
+            reply_status=chat_reply_status(response.model_dump(mode="json")),
         )

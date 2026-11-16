@@ -15,7 +15,7 @@ import math
 import os
 import tarfile
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -458,6 +458,9 @@ def _grading_files(task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGra
     if isinstance(grading.grader, ScriptGrader):
         messages = conversation_messages(attempt.conversation.events)
         files.append(StagedFile(grading.grader.conversation_path, json.dumps(messages, allow_nan=False).encode()))
+        if grading.grader.reply_status_path is not None:
+            if attempt.reply_status is None:
+                raise ValueError("The script grader requires host-captured reply status")
         if grading.grader.judge is not None:
             files.append(StagedFile(JUDGE_SPEC_PATH, render_spec(grading.grader.judge).encode()))
     return files
@@ -591,6 +594,12 @@ async def _grade_staged(
             write_archive(archive_path, files, [])
             submission_archive = root / "submission.tar"
             write_archive(submission_archive, submissions, downloaded)
+            reply_status_archive = None
+            if isinstance(grading.grader, ScriptGrader) and grading.grader.reply_status_path is not None:
+                assert attempt.reply_status is not None
+                status = json.dumps(asdict(attempt.reply_status), allow_nan=False).encode()
+                reply_status_archive = root / "reply-status.tar"
+                write_archive(reply_status_archive, [StagedFile(grading.grader.reply_status_path, status)], [])
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(
                     prepare_machine_spec,
@@ -633,6 +642,7 @@ async def _grade_staged(
                     grading.grader,
                     grading.limit,
                     runtime_sha256=runtime_sha256,
+                    reply_status_archive=reply_status_archive,
                     preparation_timeout=machine_spec.startup_timeout,
                     user=setup_user(factory.backend),
                 )
@@ -655,6 +665,7 @@ async def _grade_on(
     timeout: float | None,
     *,
     runtime_sha256: str | None,
+    reply_status_archive: Path | None,
     preparation_timeout: float | None,
     user: str | None,
 ) -> GradeResult:
@@ -672,6 +683,9 @@ async def _grade_on(
         )
     # Setup provisions the declared environment; candidate files must replace its initial fixtures afterward.
     await _install_grading_archive(machine, submission_archive, preparation_timeout, user)
+    if reply_status_archive is not None:
+        # Provider evidence is host-owned, including when a captured output uses the same path.
+        await _install_grading_archive(machine, reply_status_archive, preparation_timeout, user)
     if spec is not None:
         # A verifyit grader always carries a concrete limit (GRADING_TIMEOUT fallback).
         assert timeout is not None

@@ -12,7 +12,7 @@ import os
 import tarfile
 from decimal import Decimal
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import httpx
@@ -409,7 +409,8 @@ def declared_oracle(task):
 
 
 @pytest.mark.asyncio
-async def test_candidate_preserves_tool_wire_history_across_turns(tmp_path, monkeypatch):
+@pytest.mark.parametrize("final_finish,refusal", [("stop", None), ("length", None), ("stop", "Cannot answer")])
+async def test_candidate_preserves_tool_wire_history_across_turns(tmp_path, monkeypatch, final_finish, refusal):
     task = exact_answer_task(
         RawRow("tool-replay", Source(dataset="fixture", revision="pin", row="0", importer_revision="1"), {}),
         prompt="Use the shell, then return 42.", answers=("42",), ignore_case=False,
@@ -421,8 +422,8 @@ async def test_candidate_preserves_tool_wire_history_across_turns(tmp_path, monk
 
     def response(request):
         requests.append(json.loads(request.content))
-        message = {"role": "assistant", "content": "42"}
-        finish = "stop"
+        message = {"role": "assistant", "content": "42", "refusal": refusal}
+        finish = final_finish
         if len(requests) == 1:
             message = {"role": "assistant", "content": "", "tool_calls": [{
                 "id": "shell-1", "type": "function", "function": {"name": "shell", "arguments": arguments},
@@ -453,6 +454,13 @@ async def test_candidate_preserves_tool_wire_history_across_turns(tmp_path, monk
     assert requests[1]["messages"][1]["tool_calls"][0]["function"]["arguments"] == arguments
     assert requests[1]["messages"][-1]["role"] == "tool"
     assert attempt.conversation.events[-1].content == "42"
+    assert asdict(attempt.reply_status) == {
+        "origin": "provider",
+        "finish_reason": final_finish,
+        "truncated": final_finish == "length",
+        "provider_refusal": refusal is not None,
+        "tool_events": (),
+    }
 
 
 @pytest.mark.asyncio

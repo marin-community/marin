@@ -582,6 +582,7 @@ A `VerifyitGrader` with an environment cannot grade a `native_action` answer.
 A `ScriptGrader` declares a command, collect commands, artifacts, an answer path, a conversation path, and a reward source.
 The verifier machine receives the extracted answer at `answer_path`.
 It receives the conversation as OpenAI-style chat-message JSON at `conversation_path`, by default `/tests/conversation.json`.
+An optional `reply_status_path` receives host-captured completion status after candidate files are installed, so candidate outputs cannot overwrite it. The JSON records origin, finish reason, truncation, provider refusal and tool-event JSON field paths. ChatModel and SkyRL direct chat capture it; Harbor and evaluation grading retries preserve it. A grader requiring status fails when it is missing. See the [ScriptGrader fields](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/README.md#what-is-a-grader) for the response fields counted as tool evidence.
 The verifier deadline controls the full grading phase.
 
 | Reward source | Result | Origin / reason |

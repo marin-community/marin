@@ -635,6 +635,17 @@ def verifyit_spec(grader: VerifyitGrader) -> Spec:
         raise ValueError(f"Invalid {grader.mode!r} verifier parameters: {error}") from error
 
 
+@dataclass(frozen=True)
+class ReplyStatus:
+    """Host-captured completion status, distinct from the model's answer text."""
+
+    origin: Literal["provider", "control"]
+    finish_reason: str | None
+    truncated: bool
+    provider_refusal: bool
+    tool_events: tuple[str, ...]
+
+
 class ScriptGrader(BaseModel):
     """A command run in a fresh machine built from ``environment``; ``reward`` says how it scores.
 
@@ -659,6 +670,7 @@ class ScriptGrader(BaseModel):
     artifacts: tuple[VerifierArtifact, ...] = ()
     answer_path: str | None = "/app/answer.txt"
     conversation_path: str = "/tests/conversation.json"
+    reply_status_path: str | None = Field(default=None, exclude_if=lambda value: value is None)
     reward: Annotated[StdoutReward | ExitCodeReward | FileReward, Field(discriminator="kind")] = StdoutReward()
     # A source that declares no verifier deadline carries None: the grading
     # command waits unbounded under the same outer enforcement the source uses.
@@ -673,6 +685,10 @@ class ScriptGrader(BaseModel):
             validate_judge_spec(self.judge)
         normalized_absolute_path(self.cwd)
         normalized_absolute_path(self.conversation_path)
+        if self.reply_status_path is not None:
+            normalized_absolute_path(self.reply_status_path)
+            if self.reply_status_path in {self.answer_path, self.conversation_path}:
+                raise ValueError("Reply status, answer and conversation paths must differ")
         if self.answer_path is not None:
             normalized_absolute_path(self.answer_path)
             if under_grader_root(self.answer_path):
@@ -767,6 +783,7 @@ class GradingAttempt:
     files: Mapping[str, bytes] = field(default_factory=dict)
     state: StateSubmission | None = None
     stop_reason: str | None = None
+    reply_status: ReplyStatus | None = None
 
 
 JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
@@ -1014,4 +1031,6 @@ class TaskSpec(BaseModel):
             installed = {f"/tests/{resource.path}" for resource in self.resources.verifier}
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
+            if self.grader.reply_status_path in installed:
+                raise ValueError("The reply status path collides with a verifier resource")
         return self

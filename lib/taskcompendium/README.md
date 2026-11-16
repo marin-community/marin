@@ -246,10 +246,15 @@ A `ScriptGrader` declares:
 | `artifacts` | Files and directories copied from the agent's machine into the grading machine, with exclusions and a missing-file policy. |
 | `answer_path` | Where the extracted answer is written (default `/app/answer.txt`): text as text, JSON as JSON, and a final action as the final assistant message's JSON. |
 | `conversation_path` | Where the conversation is written as OpenAI-style chat messages in JSON (default `/tests/conversation.json`). |
+| `reply_status_path` | Optional host-written JSON completion status; declaring it requires `GradingAttempt.reply_status`. |
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
 | `empty_output` | `ZERO` rejects an empty extracted answer; `GRADE` passes it to the script. |
 | `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
 | `timeout` | Deadline in seconds for each grading command (default 600). |
+
+`ScriptGrader.reply_status_path` opts into a host-written JSON status file. The `GradingAttempt.reply_status` value records whether evidence came from the provider or an explicit control, the provider finish reason, truncation and provider-refusal flags, and JSON field paths identifying tool events (for example, `response.choices[0].message.tool_calls`). Chat transports record nonempty `tool_calls`, `function_call`, and `annotations` fields, plus entries whose `type` is `tool_use`, `tool_result`, `function_call`, or `web_search_call`, throughout the provider response. Any nonempty annotations field counts as tool evidence, including in provider metadata. The model's workspace cannot supply this evidence. Missing required status raises a grading error instead of assuming a complete, tool-free response.
+
+RolloutEngine's ChatModel, Harbor's TaskSpecChatAgent, and SkyRL direct chat preserve this status through grading. The rollout record and evaluation grading retries retain it. A transport that does not capture reply status cannot run a grader that requires it; graders without reply_status_path keep their existing behavior.
 
 `StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
 

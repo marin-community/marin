@@ -80,6 +80,10 @@ def _generate(response_ids, finish_reason="tool_calls"):
 def test_the_chat_transport_records_each_reply_violation(response_ids, finish_reason, violation):
     output = _generate(response_ids, finish_reason)
     assert output.get(REASONING_VIOLATIONS_KEY, [None]) == [violation]
+    status = output["reply_statuses"][0]
+    assert status.finish_reason == finish_reason
+    assert status.truncated == (finish_reason == "length")
+    assert status.tool_events == ("response.choices[0].message.tool_calls",)
 
 
 def _step(violation):

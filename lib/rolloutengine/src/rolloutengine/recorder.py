@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 from shellbox.machine import Machine
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ReplyStatus, TaskSpec
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.harness.core import Harness, HarnessContext
@@ -218,6 +218,14 @@ class _Recorder:
         if conversation is not None and conversation.has_turn:
             return tuple(conversation.messages)
         return next((record.messages for record in reversed(self.earlier) if record.steps), None)
+
+    def graded_reply_status(self) -> ReplyStatus | None:
+        """Completion status of the same final model turn that supplies grading messages."""
+        conversation = self.conversation
+        if conversation is not None and conversation.has_turn:
+            step = conversation.pending or conversation.steps[-1]
+            return step.turn.reply_status
+        return next((record.steps[-1].turn.reply_status for record in reversed(self.earlier) if record.steps), None)
 
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()

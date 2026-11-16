@@ -138,6 +138,7 @@ class TaskSpecChatAgent(TaskSpecAgent):
                 self.attempt = GradingAttempt(
                     chat_conversation([*request.messages, turn.message]),
                     stop_reason=turn.stop_reason,
+                    reply_status=turn.reply_status,
                 )
                 return turn
 
@@ -158,8 +159,9 @@ class TaskSpecChatAgent(TaskSpecAgent):
                 trace=TraceMode.MESSAGES,
             )
             if rollout.conversations:
-                self.attempt = GradingAttempt(
-                    chat_conversation(list(rollout.conversations[-1].messages)),
+                self.attempt = replace(
+                    self.attempt,
+                    conversation=chat_conversation(list(rollout.conversations[-1].messages)),
                     stop_reason=rollout.stop_reason,
                 )
         assert self.attempt is not None

@@ -17,6 +17,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
+    ReplyStatus,
     ScriptGrader,
     VerifyitGrader,
     grades_with_judge,
@@ -67,6 +68,7 @@ async def _grade_rollout(
     resources: AsyncExitStack,
     *,
     stop_reason: str,
+    reply_status: ReplyStatus | None,
 ) -> GradeResult:
     """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns.
 
@@ -78,11 +80,13 @@ async def _grade_rollout(
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
     conversation = chat_conversation(list(messages))
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
-        attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
+        attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason, reply_status=reply_status)
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))
     if isinstance(grader, VerifyitGrader) and grader.environment is None:
-        return await asyncio.to_thread(grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason))
-    attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)
+        return await asyncio.to_thread(
+            grade_answer, task, GradingAttempt(conversation, stop_reason=stop_reason, reply_status=reply_status)
+        )
+    attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason, reply_status=reply_status)
     assert isinstance(grader, VerifyitGrader | ScriptGrader) and grader.environment is not None
     selection = spec.verifier_machine
     assert selection is not None
