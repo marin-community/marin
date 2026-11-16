@@ -232,10 +232,11 @@ def _load_bloom(bloom_path: str) -> dupekit.Bloom:
     local_path = os.path.join(_BLOOM_CACHE_DIR, hashlib.sha256(bloom_path.encode()).hexdigest())
     if not os.path.exists(local_path):
         os.makedirs(_BLOOM_CACHE_DIR, exist_ok=True)
-        partial_path = f"{local_path}.{os.getpid()}.partial"
-        with open(partial_path, "wb") as fh:
-            fh.write(StoragePath(bloom_path).read_bytes())
-        os.replace(partial_path, local_path)
+        with tempfile.TemporaryDirectory(dir=_BLOOM_CACHE_DIR, prefix="bloom-") as temporary_dir:
+            partial_path = os.path.join(temporary_dir, "filter.bin")
+            with open(partial_path, "wb") as fh:
+                fh.write(StoragePath(bloom_path).read_bytes())
+            os.replace(partial_path, local_path)
     return dupekit.Bloom.load(local_path)
 
 
