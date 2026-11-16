@@ -29,6 +29,10 @@
     .status-explanation .meaning { font-weight:600; }
     .status-evidence a { display:inline-block; margin-right:.75rem; overflow-wrap:anywhere; }
     .status-needs-ruling { margin:.5rem 0 0; }
+    /* Fixed layout with a floor: the reason chips define their own wrap, and narrow
+       viewports scroll the table instead of crushing Source and Last change. */
+    #status-table { table-layout:fixed; min-width:960px; }
+    #status-table td { overflow-wrap:anywhere; }
     /* Long reason options make the selects unbreakably wide on phones; give each
        filter its own row so the select tracks the form width, not its option text. */
     @media (max-width: 480px) {
@@ -52,7 +56,7 @@
       <button id="clear-filters" class="text-button" type="button">Reset</button>
     </form>
     <div class="table-scroller" tabindex="0" aria-label="Source status">
-      <table id="status-table" class="source-table"><caption class="sr-only">Every source with status, exclusion reasons and evidence, and last change</caption><thead><tr><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Reasons</th><th scope="col">Evidence</th><th scope="col">Last change</th></tr></thead><tbody id="rows"></tbody></table>
+      <table id="status-table" class="source-table"><caption class="sr-only">Every source with status, exclusion reasons and evidence, and last change</caption><colgroup><col style="width:26%"><col style="width:11%"><col style="width:42%"><col style="width:11%"><col style="width:10%"></colgroup><thead><tr><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Reasons</th><th scope="col">Evidence</th><th scope="col">Last change</th></tr></thead><tbody id="rows"></tbody></table>
       <div id="empty" class="empty" hidden><h2>No matching sources</h2><p>Try another search or reset the filters.</p></div>
     </div>
     <footer class="table-footer"><span id="visible-count"></span><span>Open a reason for what it means and what clears it</span></footer>

@@ -13,7 +13,9 @@ function label(reason) {
 }
 
 function reasonCell(claim) {
-  const holder = node('td', undefined, 'status-reasons');
+  // A plain div: the reasons cell is already a td, and nesting a td inside it makes the
+  // auto table layout explode (1724px reason column, 50px source column).
+  const holder = node('div', undefined, 'status-reasons');
   const details = node('details');
   const summary = node('summary', label(claim.reason), 'chip');
   summary.title = 'Open this reason for what it means and what clears it';

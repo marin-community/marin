@@ -123,6 +123,33 @@ def test_default_view_hides_excluded_sources_and_counts_what_is_hidden(journey: 
     page.screenshot(path=str(journey.shots / "default-view-excluded-filter.png"))
 
 
+def test_status_table_keeps_human_columns_and_rows(journey: Journey, seeded_extras: dict) -> None:
+    """Real rows keep readable columns: sources stay nameable and rows stay scannable.
+
+    The reasons cell is a plain container inside its td; a nested td lets the auto
+    table layout explode (1724px reasons, 50px source, 861px first row).
+    """
+    page = journey.page
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.goto(f"{journey.origin}/{APP_ROOT}/")
+    expect(page.locator("#rows tr").first).to_be_visible()
+    base = page.url.rstrip("/") + "/"
+    page.goto(base + "status.html")
+    expect(page.locator("#rows tr").first).to_be_visible()
+
+    assert page.locator("#rows td td").count() == 0
+    widths = page.evaluate(
+        "() => [...document.querySelectorAll('#status-table th')].map("
+        "th => Math.round(th.getBoundingClientRect().width))"
+    )
+    table = page.evaluate("() => Math.round(document.getElementById('status-table').getBoundingClientRect().width)")
+    first_row = page.evaluate("() => Math.round(document.querySelector('#rows tr').getBoundingClientRect().height)")
+    assert widths[0] >= 200, f"Source column too narrow: {widths}"
+    assert widths[4] >= 80, f"Last-change column too narrow: {widths}"
+    assert table <= 1500, f"status table is {table}px wide at a 1440px viewport"
+    assert first_row <= 320, f"first status row is {first_row}px tall"
+
+
 def test_status_page_lists_every_status_with_clickable_reasons(journey: Journey, seeded_extras: dict) -> None:
     page = journey.page
     page.set_viewport_size({"width": 1440, "height": 1000})
