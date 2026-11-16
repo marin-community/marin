@@ -127,7 +127,10 @@ def test_package_grant_publication_declares_the_checked_wheel_pin(tmp_path, monk
     wheel = "reasoning_gym-0.1.25-py3-none-any.whl"
     wheel_sha = "c" * 64
     wheel_url = f"https://files.pythonhosted.org/packages/42/21/deadbeef/{wheel}"
-    metadata = {"info": {"license_expression": "Apache-2.0"}, "urls": [{"filename": wheel, "digests": {"sha256": wheel_sha}, "url": wheel_url}]}
+    metadata = {
+        "info": {"license_expression": "Apache-2.0"},
+        "urls": [{"filename": wheel, "digests": {"sha256": wheel_sha}, "url": wheel_url}],
+    }
     content = json.dumps(metadata).encode()
     receipt = package_receipt(wheel, wheel_sha, metadata)
     monkeypatch.setattr(license_publication, "_fetch", lambda url, **kwargs: content)
