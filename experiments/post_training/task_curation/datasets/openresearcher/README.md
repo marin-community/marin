@@ -25,6 +25,12 @@ SHA inventory, checking document count, identity, uniqueness and text. Its
 receipt seals a manifest of the uploaded index files. Grounding checks every
 local index file against that manifest before starting a judge.
 
+Grounding retrieves complete original document bodies over a local JSON-line
+stream. Responses larger than the subprocess reader's buffer limit are drained
+in chunks without truncating documents; evidence is token-bounded only after
+the complete response arrives. EOF before the terminating newline and malformed
+JSON still fail the artifact.
+
 ## Ground the complete question population
 
 The `ground` entrypoint binds the source and index receipts, their SHA values,

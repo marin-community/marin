@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 
 import httpx
@@ -20,6 +21,7 @@ from experiments.post_training.task_curation.datasets.openresearcher.grounding i
     validate_technical_exclusions,
 )
 from experiments.post_training.task_curation.datasets.openresearcher.grounding_contract import GroundedRequirement
+from experiments.post_training.task_curation.datasets.openresearcher.grounding_pipeline import retrieval_response
 from experiments.post_training.task_curation.tests.review_server import JudgeReply
 
 
@@ -29,6 +31,26 @@ def grounding_tokenizer():
     tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
     tokenizer.chat_template = "{% for m in messages %}{{m['role']}}: {{m['content']}}{% endfor %}"
     return tokenizer
+
+
+@pytest.mark.asyncio
+async def test_grounding_retrieval_preserves_large_documents_and_response_boundaries():
+    first = {"documents": {"large": "corpus evidence " * (2 * 1024 * 1024)}, "searches": []}
+    second = {"documents": {"small": "The next response."}, "searches": []}
+    reader = asyncio.StreamReader(limit=16 * 1024 * 1024)
+    reader.feed_data((json.dumps(first) + "\n" + json.dumps(second) + "\n").encode())
+    reader.feed_eof()
+    assert await retrieval_response(reader) == first
+    assert await retrieval_response(reader) == second
+
+
+@pytest.mark.asyncio
+async def test_grounding_retrieval_rejects_truncated_response():
+    reader = asyncio.StreamReader(limit=16)
+    reader.feed_data(json.dumps({"documents": {"large": "incomplete evidence " * 20}}).encode())
+    reader.feed_eof()
+    with pytest.raises(asyncio.IncompleteReadError):
+        await retrieval_response(reader)
 
 
 @pytest.mark.asyncio

@@ -101,6 +101,17 @@ def local_index(index: BM25Index, directory: Path) -> None:
             raise ValueError(f"Staged index file differs from the sealed manifest: {relative}")
 
 
+async def retrieval_response(reader: asyncio.StreamReader) -> dict:
+    """Read a complete JSON response even when raw documents exceed the stream limit."""
+    payload = bytearray()
+    while True:
+        try:
+            payload.extend(await reader.readuntil(b"\n"))
+            return json.loads(payload)
+        except asyncio.LimitOverrunError as error:
+            payload.extend(await reader.readexactly(error.consumed))
+
+
 async def grounded_rows(
     config: GroundingConfig,
     rows: list[dict],
@@ -126,10 +137,7 @@ async def grounded_rows(
             assert process.stdin is not None and process.stdout is not None
             process.stdin.write((json.dumps(queries) + "\n").encode())
             await process.stdin.drain()
-            line = await process.stdout.readline()
-            if not line:
-                raise RuntimeError(f"Index retrieval process exited before a response: {await process.wait()}")
-            result = json.loads(line)
+            result = await retrieval_response(process.stdout)
             (output / "retrieval" / (canonical_sha256(queries) + ".json")).write_text(json.dumps(result))
             return result["documents"]
 
