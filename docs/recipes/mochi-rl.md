@@ -4,7 +4,8 @@
 [Ben's Long Loop recipe](https://github.com/marin-community/marin/tree/9248dd74d5464e75b3c686037c6ee55054292968/experiments/post_training/long_loop)
 on a completed schema-3 BF16 Mochi SFT export. It skips SFT and terminal HF
 export. The normal path samples, trains, evaluates held-out tasks, saves native
-checkpoints and selects a best checkpoint within an RL time budget.
+checkpoints and selects a best checkpoint when enough valid evaluations have
+completed, within an RL time budget.
 `--smoke` selects a shorter path without evaluation or best selection.
 Both entrypoint PRs stay draft while the Long and Quick Loops converge.
 
@@ -44,14 +45,21 @@ Mochi settings follow MA's workflow. The task families, graders and sampling
 within each route remain those of the input mixture.
 
 Evaluation and native checkpointing default to every two updates, following
-Ben's cadence. `--eval-interval` and `--checkpoint-interval` change them
-independently of the absolute `--max-steps` target. Normal training also evaluates
-and saves at the end. Best selection requires all 120 held-out tasks to have
-scores and a complete five-evaluation EMA window. Valid zero scores count;
+Ben's cadence. `--eval-interval` and `--checkpoint-interval` change their cadence
+without changing the absolute `--max-steps` target. Evaluations must fall on
+checkpoint steps for same-version recovery: the evaluation interval must be a
+multiple of the checkpoint interval, such as six and three. This keeps selection
+history from getting ahead of a recovery checkpoint. Normal training also
+evaluates and saves at the end.
+
+Best selection requires all 120 held-out tasks to have scores and a complete
+five-evaluation EMA window. Valid zero scores count;
 missing scores do not. A newly selected best is saved and protected from the
 two-checkpoint rolling prune policy. The selection record is
-`best_checkpoint.json` below the checkpoint root. A short or incomplete run can
-finish without an eligible best.
+`best_checkpoint.json` below the checkpoint root. At MA's measured collection
+and evaluation rates, the ten-hour budget may end before five complete
+evaluations, so no best is selected. Completed selection history is reused
+during same-version recovery.
 
 The RL-budget callback requests stopping at a completed update boundary after
 ten hours measured from the first optimizer completion. It includes subsequent
@@ -96,7 +104,10 @@ The privileged Harbor container profile requires Iris admin authorization.
 Keep inputs and native checkpoints for the full queue, run and recovery window.
 Output retention defaults to three days and two rolling checkpoints, plus any
 protected best; `--ttl-days` and `--checkpoint-count` change the output policy.
-Input retention remains the caller's responsibility.
+Input retention remains the caller's responsibility. One-rack trace capture keeps
+the existing limits of 64 MiB per step and 512 MiB per run. After a limit is
+reached, later traces are dropped and counted in
+`trajectory_retention/dropped_by_bounds`; training continues.
 
 ## Render a fresh normal run
 
@@ -165,8 +176,9 @@ recoverable version. The RL-budget clock restarts as described above.
 ```
 
 Smoke uses the same Pi, task routes, n=8 groups, MuonH and asynchronous path.
-It defaults to two groups and two rollout workers, with a one-hour RL budget
-after the first optimizer completion. It saves native checkpoints but disables
+It defaults to two groups and uses two rollout workers, with a one-hour RL budget
+after the first optimizer completion. `--batch-groups` changes the batch while
+smoke collection stays at two workers. It saves native checkpoints but disables
 held-out evaluation and best selection. The response cap stays at 16K unless
 explicitly overridden; the command selects the 1K smoke limit. A smoke can still
 take hours to collect its first mixed batch. It does not establish the normal
@@ -179,6 +191,8 @@ The one-rack Ben workload has CPU configuration coverage only. Earlier one-rack
 [#11321](https://github.com/marin-community/marin/pull/11321).
 MA's three-rack source `8b4710feb7d6` applied two fresh 64-group mixed updates at a
 102K cap and imported its native checkpoint at later source `3f4a411d3202`.
+Its held-out evaluation scored 69 of 120 tasks and was ineligible for best
+selection.
 Source `940be7913eb7` separately proved controlled near-262K backward and one
 fresh 32-group mixed update under a 262K cap, whose actual maximum length was
 42,380. Its evaluation and saving were disabled. The normal recipe here changes
