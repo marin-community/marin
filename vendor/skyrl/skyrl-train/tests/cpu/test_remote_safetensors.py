@@ -7,7 +7,6 @@ import skyrl_train.io.remote_safetensors as remote_safetensors
 import torch
 from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
 from safetensors.torch import save_file
-from skyrl_train.config.remote_read import RemoteReadMode
 from skyrl_train.distributed.megatron.remote_weight_tasks import prefetch_items_from_tasks
 from skyrl_train.io import io
 from skyrl_train.io.remote_safetensors import RemoteSafetensorsTensorStore
@@ -56,9 +55,12 @@ def _write_index(metadata_dir: Path, weight_map: dict[str, str]) -> None:
     (metadata_dir / HF_WEIGHT_INDEX_FILENAME).write_text(json.dumps({"weight_map": weight_map}))
 
 
-@pytest.mark.parametrize(("indexed", "expert_layout"), [(True, "stacked"), (False, "stacked"), (True, "split")])
+@pytest.mark.parametrize(
+    ("indexed", "expert_layout", "request_budget"),
+    [(True, "stacked", 3), (False, "stacked", 3), (True, "split", 6)],
+)
 def test_single_key_and_expert_slice_reads_fetch_only_requested_bytes(
-    tmp_path: Path, monkeypatch, indexed: bool, expert_layout: str
+    tmp_path: Path, monkeypatch, indexed: bool, expert_layout: str, request_budget: int
 ) -> None:
     shard = tmp_path / "model.safetensors"
     tensors = {f"layer.{index}.weight": torch.arange(8 + index, dtype=torch.float32) for index in range(3)}
@@ -87,65 +89,58 @@ def test_single_key_and_expert_slice_reads_fetch_only_requested_bytes(
         )
     else:
         metadata.mkdir()
-    results = {}
     local_filesystem_for = io.filesystem_and_path
-    for mode in RemoteReadMode:
-        filesystem = CountingFileSystem(shard.read_bytes(), shards)
-        monkeypatch.setattr(
-            io,
-            "filesystem_and_path",
-            lambda path: (
-                (filesystem, path.removeprefix("s3://")) if path.startswith("s3://") else local_filesystem_for(path)
-            ),
-        )
-        store = RemoteSafetensorsTensorStore(
-            "s3://bucket/policy",
-            metadata,
-            lazy_first_dim_patterns=(expert_key,),
-        )
-        tasks = [
-            _task({"left": "layer.2.weight", "right": "layer.0.weight"}),
-            _task("layer.1.weight"),
-            *[
-                _task(
-                    expert_key
-                    if expert_layout == "stacked"
-                    else f"model.layers.0.mlp.experts.{index}.down_proj.weight",
-                    str(index),
-                )
-                for index in (2, 0, 1)
-            ],
-            _task("unrequested.weight", owned=False),
-            _task("missing.weight"),
-        ]
-        if mode == RemoteReadMode.PREFETCH:
-            store.plan_prefetch(prefetch_items_from_tasks(tasks, store.lazy_first_dim_keys, int))
+    filesystem = CountingFileSystem(shard.read_bytes(), shards)
+    monkeypatch.setattr(
+        io,
+        "filesystem_and_path",
+        lambda path: (
+            (filesystem, path.removeprefix("s3://")) if path.startswith("s3://") else local_filesystem_for(path)
+        ),
+    )
+    store = RemoteSafetensorsTensorStore(
+        "s3://bucket/policy",
+        metadata,
+        lazy_first_dim_patterns=(expert_key,),
+    )
+    tasks = [
+        _task({"left": "layer.2.weight", "right": "layer.0.weight"}),
+        _task("layer.1.weight"),
+        *[
+            _task(
+                expert_key if expert_layout == "stacked" else f"model.layers.0.mlp.experts.{index}.down_proj.weight",
+                str(index),
+            )
+            for index in (2, 0, 1)
+        ],
+        _task("unrequested.weight", owned=False),
+        _task("missing.weight"),
+    ]
+    store.plan_prefetch(prefetch_items_from_tasks(tasks, store.lazy_first_dim_keys, int))
+    for index in (2, 0, 1):
+        key = f"layer.{index}.weight"
+        torch.testing.assert_close(store.load_tensors([key])[key], tensors[key])
+    if expert_layout == "stacked":
+        experts = store.load_tensors([expert_key])[expert_key]
         for index in (2, 0, 1):
-            key = f"layer.{index}.weight"
-            torch.testing.assert_close(store.load_tensors([key])[key], tensors[key])
-        if expert_layout == "stacked":
-            experts = store.load_tensors([expert_key])[expert_key]
-            for index in (2, 0, 1):
-                torch.testing.assert_close(experts[index], tensors[expert_key][index])
-        else:
-            expert_keys = [f"model.layers.0.mlp.experts.{expert}.down_proj.weight" for expert in (2, 0, 1)]
-            experts = store.load_tensors(expert_keys)
-            for key in expert_keys:
-                torch.testing.assert_close(experts[key], tensors[key], rtol=0, atol=0)
-        unrequested = tensors["unrequested.weight"]
-        expected_bytes = (
-            len(filesystem.payload) + sum(map(len, shards.values())) - unrequested.numel() * unrequested.element_size()
-        )
-        assert filesystem.opens == (2 if split_shards else 1)
-        assert filesystem.fetched_bytes == expected_bytes
-        assert not tuple(metadata.glob("*.safetensors"))
+            torch.testing.assert_close(experts[index], tensors[expert_key][index])
+    else:
+        expert_keys = [f"model.layers.0.mlp.experts.{expert}.down_proj.weight" for expert in (2, 0, 1)]
+        experts = store.load_tensors(expert_keys)
+        for key in expert_keys:
+            torch.testing.assert_close(experts[key], tensors[key], rtol=0, atol=0)
+    unrequested = tensors["unrequested.weight"]
+    expected_bytes = (
+        len(filesystem.payload) + sum(map(len, shards.values())) - unrequested.numel() * unrequested.element_size()
+    )
+    assert filesystem.opens == (2 if split_shards else 1)
+    assert filesystem.fetched_bytes == expected_bytes
+    assert not tuple(metadata.glob("*.safetensors"))
 
-        store.close()
-        assert all(handle.closed for handle in filesystem.handles)
-        if mode == RemoteReadMode.PREFETCH:
-            assert store.read_stats.prefetch_misses == store.read_stats.prefetch_unused == 0
-        results[mode] = filesystem.gets
-    assert results[RemoteReadMode.PREFETCH] < results[RemoteReadMode.PER_KEY]
+    store.close()
+    assert all(handle.closed for handle in filesystem.handles)
+    assert store.read_stats.prefetch_misses == store.read_stats.prefetch_unused == 0
+    assert filesystem.gets <= request_budget
 
 
 @pytest.mark.parametrize(

@@ -28,7 +28,7 @@ def test_fill_from_pre_invalidation_snapshot_is_refused():
     assert guard.may_store(6, "j")
 
 
-def test_invalidation_is_per_key():
+def test_invalidation_only_affects_its_key():
     guard: LazyFillGuard[str] = LazyFillGuard()
     guard.note_invalidated(5, ["j"])
     # A different key is unaffected — a busy neighbour's writes don't starve this fill.

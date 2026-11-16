@@ -63,7 +63,7 @@ def _split(rows: list[dict], rng: random.Random) -> list[pa.Table]:
 
 
 @pytest.mark.parametrize("seed", range(40))
-def test_merge_yields_the_newest_row_per_key_once_in_key_order(seed):
+def test_merge_yields_the_newest_row_for_each_key_once_in_key_order(seed):
     rng = random.Random(seed)
     runs = _random_runs(rng)
     newest: dict[tuple, tuple[tuple, int]] = {}
