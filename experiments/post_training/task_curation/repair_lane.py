@@ -38,7 +38,11 @@ from experiments.post_training.task_curation.repair_candidates import (
     load_candidate_population,
     preview_task,
 )
-from experiments.post_training.task_curation.repair_match import MatchOutcome, match_candidates
+from experiments.post_training.task_curation.repair_match import (
+    MatchOutcome,
+    match_candidates,
+    strip_template_sections_rows,
+)
 from experiments.post_training.task_curation.repair_review import (
     ComparativeBatchResult,
     ComparativePair,
@@ -207,13 +211,6 @@ def _content_rows(handle: pq.ParquetFile) -> Iterator[TaskContent]:
             yield TaskContent(**row)
 
 
-def candidate_index(population) -> PopulationIndex:
-    rows = list(content_rows(candidate.task.model_dump(mode="json") for candidate in population.tasks))
-    if not rows:
-        raise ValueError("The candidate population is empty")
-    return PopulationIndex(rows, {population.source_id: population.source_id})
-
-
 def matched_pairs(
     outcome: MatchOutcome, tracked_tasks: dict[str, TaskSpec], candidate_tasks: list[TaskSpec]
 ) -> MatchedPairs:
@@ -328,9 +325,19 @@ def dry_run(
         folders=folders, repo=repo, revision=candidate_revision, candidate_source_id=candidate_source_id
     )
     tracked_population = load_tracked_population(tracked_uris, tracked_source_id=tracked_source_id)
-    candidates_rows = candidate_index(candidates)
+    candidates_rows_raw = list(content_rows(candidate.task.model_dump(mode="json") for candidate in candidates.tasks))
+    if not candidates_rows_raw:
+        raise ValueError("The candidate population is empty")
+    # Both sides are stripped symmetrically; identity hashes stay untouched, so only the
+    # near-neighbor comparison sees the stripped text.
+    tracked = PopulationIndex(
+        strip_template_sections_rows(tracked_population.index.raw_rows), tracked_population.index.inputs
+    )
+    candidates_rows = PopulationIndex(
+        strip_template_sections_rows(candidates_rows_raw), {candidates.source_id: candidates.source_id}
+    )
     outcome = match_candidates(
-        tracked_population.index,
+        tracked,
         candidates_rows,
         tracked_source_id=tracked_source_id,
         candidate_source_id=candidate_source_id,
@@ -354,7 +361,7 @@ def dry_run(
     report = report.model_copy(
         update={
             "diagnostics": {
-                **match_diagnostics(outcome, tracked_population.index, candidates_rows),
+                **match_diagnostics(outcome, tracked, candidates_rows),
                 "tracked_shape": tracked_population.shape,
             }
         }

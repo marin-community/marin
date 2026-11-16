@@ -11,8 +11,9 @@ Tracked tasks the candidate leaves out become advisory drop flags.
 """
 
 import logging
+import re
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from taskcompendium.pipeline.repair import (
     CandidateDropAdvisory,
@@ -32,6 +33,57 @@ logger = logging.getLogger(__name__)
 
 CONFLICT_THRESHOLD = 0.5
 """At or above this similarity a candidate has some tracked counterpart; below it is NEW."""
+
+SETUP_SECTION_HEADER = re.compile(r"^#{1,6}\s+(?:environment\s+setup|setup)\b", re.IGNORECASE)
+"""A leading template section that packages setup instructions rather than task content."""
+
+HORIZONTAL_RULE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
+"""Markdown rule; the shared template terminator after an inlined setup section."""
+
+
+def strip_template_sections(text: str) -> str:
+    """Remove leading template setup sections from one instruction text.
+
+    Cross-conversion comparisons must not punish packaging differences: Atlas conversions
+    inline a setup preamble that repaired candidates moved into their files. A section
+    introduced by a setup header ends at the next markdown header or at a horizontal rule,
+    which the rule consumes. Only leading sections are removed, so a task legitimately
+    about setup keeps its content, and both sides of a pair are stripped symmetrically.
+    The conversation prefix (for example ``User:``) and blank lines before the first
+    markdown header are preserved.
+    """
+    lines = text.splitlines()
+    prefix_end = 0
+    while prefix_end < len(lines) and not lines[prefix_end].strip().startswith("#"):
+        prefix_end += 1
+    index = prefix_end
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not (stripped.startswith("#") and SETUP_SECTION_HEADER.match(stripped)):
+            break
+        index += 1
+        while index < len(lines):
+            inner = lines[index].strip()
+            if inner.startswith("#"):
+                break
+            if HORIZONTAL_RULE.match(inner):
+                index += 1
+                # A section's rule may be followed by blank lines before the next
+                # leading section or the task body.
+                while index < len(lines) and not lines[index].strip():
+                    index += 1
+                break
+            index += 1
+    return "\n".join(lines[:prefix_end] + lines[index:]).strip()
+
+
+def strip_template_sections_rows(rows: list[TaskContent]) -> list[TaskContent]:
+    """Apply the setup-section strip to both match sides, keeping every original hash.
+
+    Identity hashes stay untouched, so the exact joins classify on real content identity;
+    only the stripped text feeds the near-neighbor comparison.
+    """
+    return [replace(row, text=strip_template_sections(row.text)) for row in rows]
 
 
 @dataclass(frozen=True)

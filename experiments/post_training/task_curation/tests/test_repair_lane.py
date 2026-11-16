@@ -40,6 +40,8 @@ from experiments.post_training.task_curation.repair_match import (
     MatchOutcome,
     _classify,
     match_candidates,
+    strip_template_sections,
+    strip_template_sections_rows,
 )
 from experiments.post_training.task_curation.repair_review import ComparativePair, ComparativePairReviewer
 from experiments.post_training.task_curation.task_neighbors import SIMILARITY_THRESHOLD as NEIGHBOR_THRESHOLD
@@ -279,6 +281,48 @@ class TestMatchThresholdPolicy:
         assert unmatched.match_class is RepairMatchClass.NEW and unmatched.tracked_task_id is None
         below = classify(CONFLICT_THRESHOLD - 0.01)
         assert below.match_class is RepairMatchClass.NEW
+
+
+class TestTemplateSectionNormalization:
+    """The approved cross-conversion normalization: strip shared leading setup sections."""
+
+    SETUP_BLOCK = (
+        "## Environment Setup (run before starting)\n\n```bash\nbash /setup_files/setup_seeds.sh\n```\n\n---\n\n"
+    )
+    BODY = (
+        "# Terminal Automation Request\n\n## Goal\n"
+        "Normalize all input lines to lowercase and count them.\n\n## Capture\nSave stdout and stderr.\n"
+    )
+
+    def test_leading_setup_section_is_stripped(self):
+        stripped = strip_template_sections("User:\n" + self.SETUP_BLOCK + self.BODY)
+        assert stripped == "User:\n" + self.BODY.strip()
+
+    def test_body_without_setup_is_untouched(self):
+        assert strip_template_sections(self.BODY) == self.BODY.strip()
+
+    def test_midtext_setup_section_is_kept(self):
+        text = self.BODY + "\n## Setup\n\nRun the verifier script.\n"
+        assert "## Setup" in strip_template_sections(text)
+
+    def test_consecutive_leading_sections_strip(self):
+        text = "## Setup\n\nInstall packages.\n\n---\n\n" + self.SETUP_BLOCK + self.BODY
+        assert strip_template_sections(text) == self.BODY.strip()
+
+    def test_normalization_aligns_a_preamble_pair(self):
+        tracked = index(strip_template_sections_rows([content("t1", "User:\n" + self.SETUP_BLOCK + self.BODY)]))
+        candidates = index(strip_template_sections_rows([content("c1", "User:\n" + self.BODY)]))
+        outcome = match_candidates(
+            tracked, candidates, tracked_source_id=TRACKED_SOURCE, candidate_source_id=CANDIDATE_SOURCE
+        )
+        matched = by_class(outcome)
+        # Same stripped body and grading contract: the pair is content-identical.
+        assert len(matched[RepairMatchClass.IDENTICAL]) == 1, outcome.census
+
+    def test_normalization_preserves_original_hashes_for_exact_joins(self):
+        rows = strip_template_sections_rows([content("t1", self.SETUP_BLOCK + self.BODY)])
+        assert rows[0].instruction_hash == "i:t1"
+        assert rows[0].text == self.BODY.strip()
 
 
 class TestRepairDecision:
