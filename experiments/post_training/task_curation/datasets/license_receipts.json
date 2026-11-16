@@ -651,9 +651,9 @@
   },
   "Nemotron:Nemotron-Cascade-2-RL-data/multi-domain-RL": {
     "source_id": "Nemotron:Nemotron-Cascade-2-RL-data/multi-domain-RL",
-    "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
-    "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
-    "resolved_at": "2026-11-15T18:24:34.703329+00:00",
+    "dataset_id": "open-athena/nemotron-nemotron-cascade-2-rl-data-multi-domain-rl-ee15b18a-retained-20261116-b-v1",
+    "revision": "52522171b690b25e50faa954619ab56362c0d55a",
+    "resolved_at": "2026-11-16T00:19:15.419072+00:00",
     "resolver_version": "atlas-license-v2",
     "evidence": [
       {
@@ -708,13 +708,34 @@
     ],
     "bundled_third_party": false,
     "model_generated_outputs": true,
-    "decisions": []
+    "decisions": [],
+    "resolved_source": {
+      "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
+      "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/tree/05bbaf03bac608e804efc86c5f8bf99844f2d197",
+      "declaration": {
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-nemotron-cascade-2-rl-data-multi-domain-rl-ee15b18a-retained-20261116-b-v1/resolve/52522171b690b25e50faa954619ab56362c0d55a/README.md",
+        "kind": "wrapper_source",
+        "sha256": "a2557194088b17d8c20f69b9e4fd068d02ffd687d280c81cab8fd1ff55b0ed38",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: nvidia/Nemotron-Cascade-2-RL-data",
+          "L6:   revision: 05bbaf03bac608e804efc86c5f8bf99844f2d197",
+          "L7:   url: https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/tree/05bbaf03bac608e804efc86c5f8bf99844f2d197",
+          "L19: Source pin: `nvidia/Nemotron-Cascade-2-RL-data@05bbaf03bac608e804efc86c5f8bf99844f2d197`. Converter: `2026.11.15.1@38c85626de0dbf54023ff1938c7246e36b2556f8`."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    },
+    "wrapper_chain": []
   },
   "Nemotron:Nemotron-Cascade-2-RL-data/MOPD": {
     "source_id": "Nemotron:Nemotron-Cascade-2-RL-data/MOPD",
-    "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
-    "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
-    "resolved_at": "2026-11-15T18:24:34.703329+00:00",
+    "dataset_id": "open-athena/nemotron-nemotron-cascade-2-rl-data-mopd-d9411399-retained-20261116-b-v1",
+    "revision": "7ac886010b3706345337eed86330b484111cfbf8",
+    "resolved_at": "2026-11-16T00:19:15.408308+00:00",
     "resolver_version": "atlas-license-v2",
     "evidence": [
       {
@@ -769,7 +790,28 @@
     ],
     "bundled_third_party": false,
     "model_generated_outputs": true,
-    "decisions": []
+    "decisions": [],
+    "resolved_source": {
+      "dataset_id": "nvidia/Nemotron-Cascade-2-RL-data",
+      "revision": "05bbaf03bac608e804efc86c5f8bf99844f2d197",
+      "url": "https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/tree/05bbaf03bac608e804efc86c5f8bf99844f2d197",
+      "declaration": {
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-nemotron-cascade-2-rl-data-mopd-d9411399-retained-20261116-b-v1/resolve/7ac886010b3706345337eed86330b484111cfbf8/README.md",
+        "kind": "wrapper_source",
+        "sha256": "acfb7ddf543e70e6025f5916ec339ca17ec1d51c80164aded4c71abaa76896d9",
+        "license_ids": [],
+        "quoted_lines": [
+          "L4: license_source:",
+          "L5:   dataset_id: nvidia/Nemotron-Cascade-2-RL-data",
+          "L6:   revision: 05bbaf03bac608e804efc86c5f8bf99844f2d197",
+          "L7:   url: https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-RL-data/tree/05bbaf03bac608e804efc86c5f8bf99844f2d197",
+          "L19: Source pin: `nvidia/Nemotron-Cascade-2-RL-data@05bbaf03bac608e804efc86c5f8bf99844f2d197`. Converter: `2026.11.15.1@38c85626de0dbf54023ff1938c7246e36b2556f8`."
+        ],
+        "restrictive_terms": false,
+        "unidentified_third_party_terms": false
+      }
+    },
+    "wrapper_chain": []
   },
   "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL": {
     "source_id": "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL",

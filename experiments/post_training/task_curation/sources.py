@@ -83,9 +83,11 @@ from experiments.post_training.task_curation.source import RlDataSource, TaskFor
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup, read_dedup_receipts
 
+CASCADE_RETAINED_SUBSETS = ("multi-domain-RL", "MOPD")
+
 # Awaiting the intake measurements listed in docs/references/task-curation.md#pending-source-intake.
 PENDING_MEASUREMENT_SOURCES = (
-    *cascade.sources(),
+    *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *ifbench.sources(),
     *lean_proofs.sources(),
     *lean_numina.sources(),
@@ -128,6 +130,7 @@ def configured_sources() -> list[RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
+        *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *campaign_releases.sources(),
