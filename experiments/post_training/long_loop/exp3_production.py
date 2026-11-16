@@ -185,6 +185,8 @@ def production_sft_recipe(release: DataRelease) -> dict:
         mesh=mesh,
         use_explicit_mesh_axes=True,
         offload_opt_state=True,
+        loader_fetch_batch_size=4,
+        loader_max_buffered_batches=512,
         max_eval_batches=None,
         steps_per_eval=1000,
         jax_compilation_cache_dir=COMPILATION_CACHE,
@@ -197,7 +199,7 @@ def production_sft_recipe(release: DataRelease) -> dict:
             keep_last_temporary_checkpoints=3,
         ),
         progress_watchdog=ProgressWatchdogConfig(
-            startup_timeout=timedelta(minutes=45),
+            startup_timeout=timedelta(minutes=90),
             step_timeout=timedelta(minutes=10),
             process_timeout=timedelta(minutes=30),
             startup_grace_period=timedelta(0),

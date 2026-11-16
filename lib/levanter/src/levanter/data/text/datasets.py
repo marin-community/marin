@@ -5,7 +5,7 @@ import abc
 import dataclasses
 import functools
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import cached_property
@@ -960,9 +960,21 @@ class LmDataConfig:
             return weights.get(name, 0) > 0
         return any(w.get(name, 0) > 0 for _, w in weights)
 
-    def build_token_datasets(self, caches: Mapping[str, TreeCache[dict]], Pos: Axis, *, split: str):
+    def build_token_datasets(
+        self,
+        caches: Mapping[str, TreeCache[dict]],
+        Pos: Axis,
+        *,
+        split: str,
+        requested_names: Collection[str] | None = None,
+    ):
+        """Construct packed sources required by the requested output dataset names."""
         datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
         for name, component in self.components.items():
+            if requested_names is not None and not any(
+                requested == name or requested.startswith(f"{name}/") for requested in requested_names
+            ):
+                continue
             if split == "train" and not self._has_nonzero_weight(name):
                 continue
 
@@ -1273,7 +1285,9 @@ class LmDataConfig:
 
         if self.num_validation_sequences is not None:
             train_doc_caches = self.build_caches("train")
-            train_datasets = self.build_token_datasets(train_doc_caches, Pos, split="train")
+            train_datasets = self.build_token_datasets(
+                train_doc_caches, Pos, split="train", requested_names=self.num_validation_sequences
+            )
 
             for name, num_sequences in self.num_validation_sequences.items():
                 _, val_ds = _split_into_trainval_sets(

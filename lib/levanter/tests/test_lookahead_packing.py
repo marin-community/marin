@@ -7,7 +7,7 @@ import pytest
 from haliax import Axis
 
 from levanter.data.packing import lookahead_pack_documents, pack_documents
-from levanter.data.text.datasets import DatasetComponent, dataset_for_component
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig, dataset_for_component
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
 from levanter.store.cache import SerialCacheWriter, TreeCache, consolidate_shard_cache_ledgers
 from levanter.utils.thread_utils import blocking_wait
@@ -95,3 +95,54 @@ def test_lookahead_rejects_misaligned_token_and_supervision_rows(tmp_path):
         dataset_for_component(
             component, Axis("position", 10), writer.result(), eos_id=None, block_cross_document_attention=True
         )
+
+
+@pytest.mark.parametrize("shuffle", [False, True])
+def test_iid_validation_packs_only_reserved_sources_and_preserves_masks(tmp_path, shuffle):
+    exemplar = {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)}
+    components = {}
+    caches = {}
+    for name, lengths in {"sft/reserved": [6, 4, 3] * 4, "train-only": [12] * 3}.items():
+        path = str(tmp_path / name)
+        with SerialCacheWriter(path, exemplar) as writer:
+            writer.write_batch(
+                [
+                    {
+                        "input_ids": np.arange(100 * i + 1, 100 * i + n + 1, dtype=np.int32),
+                        "loss_weights": np.asarray([j % 2 if j < n - 1 else 0 for j in range(n)], dtype=np.float32),
+                    }
+                    for i, n in enumerate(lengths)
+                ]
+            )
+        caches[name] = writer.result()
+        components[name] = DatasetComponent(
+            cache_dir=path,
+            flat_cache=True,
+            pack=256,
+            packing_lookahead=3,
+            format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
+        )
+    config = LmDataConfig(
+        tokenizer="passthrough",
+        vocab_size=2048,
+        components=components,
+        num_validation_sequences={"sft/reserved": 2},
+        shuffle_before_trainval_split=shuffle,
+    )
+    # The unrelated source is valid at its training context but exceeds the
+    # evaluation context. It has no IID reservation and must not be packed there.
+    train_only = config.build_token_datasets(caches, Axis("position", 16), split="train")["train-only"]
+    assert len(train_only.as_sync_dataset()) == 3
+    Pos = Axis("position", 8)
+    reference = dataset_for_component(
+        components["sft/reserved"], Pos, caches["sft/reserved"], eos_id=None, block_cross_document_attention=False
+    )
+    if shuffle:
+        reference = reference.shuffle(jax.random.PRNGKey(0), perm_type="feistel")
+    length = len(reference.as_sync_dataset())
+    expected = blocking_wait(reference.get_batch([length - 2, length - 1]))
+    actual = config.validation_sets(Pos)["sft/reserved"].as_sync_dataset()
+    assert len(actual) == 2
+    for index, example in enumerate(expected):
+        np.testing.assert_array_equal(actual[index].tokens.array, example.tokens)
+        np.testing.assert_array_equal(actual[index].loss_weight.array, example.loss_weight)
