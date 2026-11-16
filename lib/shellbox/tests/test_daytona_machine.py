@@ -751,7 +751,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
 
     class BlockedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-fail" in command:
+            if "candidate-fail" in command_script(command):
                 raise OSError("Provider command failed")
             if "rm -rf /tmp/.shellbox-" in command:
                 entered.set()
@@ -851,8 +851,8 @@ def test_daytona_completion_between_probe_and_stop_preserves_the_machine(tmp_pat
 
     class CompletionDuringStop(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-finished" in command:
-                argv = shlex.split(shlex.split(command)[2].partition("export PATH; ")[2])
+            if "candidate-finished" in command_script(command):
+                argv = shlex.split(command_script(command))
                 index = argv.index("shellbox-command")
                 paths.extend(Path(path) for path in argv[index + 1 : index + 3])
                 await super().exec(command, **kwargs)
@@ -900,7 +900,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
 
     class FailedCleanup(LocalProcess):
         async def exec(self, command, **kwargs):
-            if "candidate-fail" in command and primary_failure:
+            if "candidate-fail" in command_script(command) and primary_failure:
                 raise provider_error
             if "rm -rf /tmp/.shellbox-" in command:
                 if cleanup_failure == "timeout":
@@ -947,6 +947,12 @@ def test_nonroot_tampering_cannot_authorize_root_commands(backend, tampering):
                 return SimpleNamespace(exit_code=result.exit_code, result=result.stdout.decode())
 
         class GuestFiles:
+            async def upload_file_stream(self, data, target):
+                result = await guest.run(
+                    Command(("/bin/sh", "-c", '/bin/cat > "$1"', "upload", target), stdin=data, user="root")
+                )
+                assert result.exit_code == 0
+
             async def download_file(self, source):
                 result = await docker("exec", "--user", "0", guest.name, "cat", source)
                 assert result.exit_code == 0
