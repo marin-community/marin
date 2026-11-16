@@ -29,10 +29,10 @@ from levanter.grug._moe.mxfp8.triton_quant import dual_quantize_padded
 _OUTPUTS = ("q_rows", "sfa", "q_tokens", "sf_wgrad")
 _BLOCK = 32
 _BF16_MAX = 3.3895313892515355e38
-# One expert chunk of the EP hero run on one GPU: 3 local experts over 302,336 rows.
-_HERO_CAPACITY = 302_336
-# Hero H, the width of both the tokens and the output cotangent.
-_HERO_HIDDEN = 3072
+# The receiver capacity and hidden size of one expert chunk of the 535B EP run on one GPU, with 3
+# local experts: the largest buffer the quantizer is used on.
+_LARGE_CAPACITY = 302_336
+_LARGE_HIDDEN = 3072
 
 
 def _requires_gpu():
@@ -169,7 +169,7 @@ _SMALL_CASES = [
     pytest.param(768, 128, (256, 256, 256), id="full-capacity-no-gaps"),
     pytest.param(1500, 384, (0, 1, 1200, 0), id="odd-width-empty-ends"),
     pytest.param(512, 512, (0, 0), id="no-received-rows"),
-    pytest.param(4096, 3072, (1, 2500, 37, 1000), id="hero-width-ragged"),
+    pytest.param(4096, 3072, (1, 2500, 37, 1000), id="large-width-ragged"),
 ]
 
 
@@ -188,6 +188,6 @@ def test_dual_quantize_padded_matches_reference_bitwise(capacity, hidden, active
         pytest.param((100_779, 100_779, 100_778), id="balanced-full"),
     ],
 )
-def test_dual_quantize_padded_matches_reference_bitwise_at_hero_chunk(active_sizes):
+def test_dual_quantize_padded_matches_reference_bitwise_at_large_chunk(active_sizes):
     _requires_gpu()
-    _check(_HERO_CAPACITY, _HERO_HIDDEN, active_sizes, seed=sum(active_sizes))
+    _check(_LARGE_CAPACITY, _LARGE_HIDDEN, active_sizes, seed=sum(active_sizes))

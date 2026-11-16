@@ -39,6 +39,8 @@ _F32_MANTISSA_MASK = (1 << _F32_MANTISSA_BITS) - 1
 # dimension a scale matrix tiles must be a multiple of the 128 rows.
 SF_TILE_ROWS = 128
 _TILE_COLS = 4
+# A tile's rows are stored in groups of this many, the row count of one swizzle atom.
+_ATOM_ROWS = 32
 SF_TILE_BYTES = SF_TILE_ROWS * _TILE_COLS
 
 
@@ -128,7 +130,7 @@ def _swizzle_tiles(scales: UInt8[Array, "... R C"]) -> UInt8[Array, "... tiles 5
     assert cols % _TILE_COLS == 0, f"scale columns {cols} are not a multiple of {_TILE_COLS}"
     tile_grid = (rows // SF_TILE_ROWS) * (cols // _TILE_COLS)
     tiles = scales.reshape(*lead, rows // SF_TILE_ROWS, SF_TILE_ROWS, cols // _TILE_COLS, _TILE_COLS)
-    tiles = jnp.swapaxes(tiles, -3, -2).reshape(*lead, tile_grid, SF_TILE_ROWS // 32, 32, _TILE_COLS)
+    tiles = jnp.swapaxes(tiles, -3, -2).reshape(*lead, tile_grid, SF_TILE_ROWS // _ATOM_ROWS, _ATOM_ROWS, _TILE_COLS)
     return jnp.swapaxes(tiles, -3, -2).reshape(*lead, tile_grid, SF_TILE_ROWS * _TILE_COLS)
 
 

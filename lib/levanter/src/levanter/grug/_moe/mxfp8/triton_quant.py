@@ -22,7 +22,8 @@ ascending order: lanes take ``e``, ``c`` and ``r``, warps take ``g``, and each t
 warp: a row block (32 columns) reduces 8 values in the thread and then across the 4 ``e`` lanes, and
 a token block (32 rows) reduces 8 values in the thread and then across the 4 ``r`` lanes. A
 ``[row blocks, 32, column blocks, 32]`` tile spreads each token block over warps and reduces it
-through shared memory: 1.46 ms against 1.09 ms at the hero chunk, both one tile per program.
+through shared memory: 1.46 ms against 1.09 ms at 302,336 rows and H = 3072, both one tile per
+program.
 
 The rules follow `quantize`: the scale is the E8M0 byte of ``amax * (1 / 448)`` rounded up to a
 power of two and clipped to ``[2^-126, 2^127]``, with no floor on the amax, and the data is
@@ -76,8 +77,8 @@ class _TileConfig(NamedTuple):
     """Most 64-column tiles one program walks; it takes the largest count that divides ``H / 64``."""
 
 
-# Best of a sweep over block_m, num_warps and tiles per program on one B200 at the hero chunk
-# (C = 302,336, H = 3072): 0.82 ms end to end, against 0.83 ms for 4 tiles per program, 1.17 ms for
+# Best of a sweep over block_m, num_warps and tiles per program on one B200 at 302,336 rows and
+# H = 3072: 0.82 ms end to end, against 0.83 ms for 4 tiles per program, 1.17 ms for
 # one, and 5.1 ms for the XLA composition.
 _DEFAULT_TILE = _TileConfig(block_m=128, num_warps=4, max_tiles_per_program=8)
 
