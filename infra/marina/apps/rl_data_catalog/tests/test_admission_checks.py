@@ -80,6 +80,11 @@ def test_verified_environment_artifacts_do_not_block_admission():
     assert population_admission_blocker(BINDING, 3, grading_evidence({})) is None
 
 
+def backend_verdicts(supports: dict[str, str]) -> dict[str, str]:
+    """The aggregate support labels one surveyed source carries per backend."""
+    return {name: FitSupport(support).value for name, support in supports.items()}
+
+
 @pytest.mark.parametrize("status", ["Available", "Not selectable", "Excluded"])
 @pytest.mark.parametrize(
     "supports,blocked",
@@ -91,7 +96,7 @@ def test_verified_environment_artifacts_do_not_block_admission():
     ],
 )
 def test_backend_support_admission(status, supports, blocked):
-    blocker = backend_support_blocker(source_map(supports), status)
+    blocker = backend_support_blocker(backend_verdicts(supports), status)
     if status != "Available" or not blocked:
         assert blocker is None
     else:
@@ -102,7 +107,7 @@ def test_backend_support_admission(status, supports, blocked):
 
 def test_backend_support_blocker_lists_every_backend_deterministically():
     blocker = backend_support_blocker(
-        source_map({"iris": FitSupport.UNSUPPORTED, "local": FitSupport.UNSUPPORTED}), "Available"
+        backend_verdicts({"iris": FitSupport.UNSUPPORTED, "local": FitSupport.UNSUPPORTED}), "Available"
     )
     assert blocker == ("no surveyed backend can run the source: iris=unsupported, local=unsupported")
 
@@ -111,7 +116,7 @@ def test_role_absent_everywhere_needs_no_backend_and_keeps_its_labels():
     """A source that declares no machine role on any backend is not blocked."""
     assert (
         backend_support_blocker(
-            source_map({name: FitSupport.ROLE_ABSENT for name in ("daytona", "gvisor", "iris", "local", "qemu")}),
+            backend_verdicts({name: FitSupport.ROLE_ABSENT for name in ("daytona", "gvisor", "iris", "local", "qemu")}),
             "Available",
         )
         is None
@@ -120,7 +125,7 @@ def test_role_absent_everywhere_needs_no_backend_and_keeps_its_labels():
 
 def test_empty_backend_map_stays_blocked():
     """An unassessed Available row with no survey cells is not exempted by the N/A rule."""
-    assert backend_support_blocker(source_map({}), "Available") is not None
+    assert backend_support_blocker({}, "Available") is not None
 
 
 def test_packaged_admission_imports_without_taskcompendium():

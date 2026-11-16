@@ -211,7 +211,10 @@ def load_catalog(
         ):
             require_declaration_admission(source.declaration)
         if blocker := backend_support_blocker(
-            next(row for row in backend_map.sources if row.source_id == source.id),
+            {
+                name: fit.support.value
+                for name, fit in next(row for row in backend_map.sources if row.source_id == source.id).backends.items()
+            },
             source.declaration.status,
         ):
             raise ValueError(f"Backend admission blocked: {source.id}: {blocker}")

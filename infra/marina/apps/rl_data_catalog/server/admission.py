@@ -8,9 +8,7 @@ The packaged app imports this module in Marina's base environment, which has no
 backend survey shape by its string labels.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
 
 from finestore.rl.curation import (
     ActorCensusInput,
@@ -27,9 +25,6 @@ from finestore.rl.curation import (
 from finestore.rl.licenses import require_license
 
 from .licensing import require_unbanned, source_license_ban
-
-if TYPE_CHECKING:
-    from taskcompendium.backend_requirements import BackendSourceMap
 
 MISSING_GRADER_REASON = "No executable grader is declared"
 
@@ -60,20 +55,21 @@ def population_admission_blocker(
     return None
 
 
-def backend_support_blocker(capabilities: BackendSourceMap, status: str | None) -> str | None:
+def backend_support_blocker(verdicts: Mapping[str, str], status: str | None) -> str | None:
     """Require one surveyed backend that can run the source before it is Available.
 
-    ``None`` for every non-Available status: exclusion and hold statuses never
-    need a runnable backend, and a survey row measured before this check may
-    keep its historical verdict. ``role_absent`` marks a population that
-    declares no environment for a role at all, so a source whose every backend
-    cell is ``role_absent`` needs no backend: that applicability outcome keeps
-    its N/A label instead of becoming a failure. ``not_applicable`` and
-    ``unsupported`` are real verdicts on declared roles and still block.
+    ``verdicts`` maps backend name to the survey's aggregate support label for
+    one source. ``None`` for every non-Available status: exclusion and hold
+    statuses never need a runnable backend, and a survey row measured before
+    this check may keep its historical verdict. ``role_absent`` marks a
+    population that declares no environment for a role at all, so a source
+    whose every backend cell is ``role_absent`` needs no backend: that
+    applicability outcome keeps its N/A label instead of becoming a failure.
+    ``not_applicable`` and ``unsupported`` are real verdicts on declared roles
+    and still block.
     """
     if status != "Available":
         return None
-    verdicts = {name: fit.support.value for name, fit in capabilities.backends.items()}
     if any(support in RUNNABLE_FIT for support in verdicts.values()):
         return None
     if verdicts and all(support == "role_absent" for support in verdicts.values()):
