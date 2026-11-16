@@ -25,7 +25,7 @@ import math
 import os
 import time
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
@@ -36,7 +36,12 @@ from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
 from skyrl_train.inline_harbor_client import collect_harbor
-from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY, trailing_validation_ema
+from marinskyrl.checkpoint_paths import (
+    BEST_CHECKPOINT_FILENAME,
+    POLICY_CHECKPOINT_SUBDIRECTORY,
+    ValidationObservation,
+    trailing_validation_ema,
+)
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
 from skyrl_train.inference_observability import (
@@ -332,18 +337,17 @@ class BestCheckpointCallback(TrainerCallback):
         raw_score = score
         if self.ema_window > 1:
             history_path = join_resource_path(root, "validation_selection_history.json")
-            history = []
+            history: list[ValidationObservation] = []
             if io.exists(history_path):
                 with io.open_file(history_path, "r") as stream:
-                    history = json.load(stream)
-            recorded = [row for row in history if row["step"] == state.global_step]
-            if recorded and recorded[0]["reward"] != raw_score:
+                    history = [ValidationObservation(**row) for row in json.load(stream)]
+            recorded = [row for row in history if row.step == state.global_step]
+            if recorded and recorded[0].reward != raw_score:
                 raise ValueError("Validation reward changed for an already recorded optimizer step")
-            history = [row for row in history if row["step"] != state.global_step]
-            history.append({"step": state.global_step, "reward": raw_score,
-                "attempted": attempted, "scored": scored})
+            history = [row for row in history if row.step != state.global_step]
+            history.append(ValidationObservation(state.global_step, raw_score, attempted, scored))
             io.makedirs(root, exist_ok=True)
-            io.write_bytes_atomic(history_path, json.dumps(history).encode())
+            io.write_bytes_atomic(history_path, json.dumps([asdict(row) for row in history]).encode())
             score = trailing_validation_ema(history, state.global_step, self.ema_window,
                                             interval=self.evaluation_interval)
             if score is None:

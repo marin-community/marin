@@ -5,15 +5,15 @@ import pytest
 from skyrl_train.callbacks.base import TrainerControl, TrainerState
 from skyrl_train.callbacks.builtin import BestCheckpointCallback
 
-from marinskyrl.checkpoint_paths import trailing_validation_ema
+from marinskyrl.checkpoint_paths import ValidationObservation, trailing_validation_ema
 
 
 def test_trailing_five_rewards_excludes_old_peak_and_requires_complete_window():
-    rows = [{"step": i, "reward": r} for i, r in enumerate([1, 0, 0, 0, 0, 1], 1)]
+    rows = [ValidationObservation(i, r, 2, 2) for i, r in enumerate([1, 0, 0, 0, 0, 1], 1)]
     weights = [(2 / 3) ** n for n in [4, 3, 2, 1, 0]]
     assert trailing_validation_ema(rows, 6, 5) == pytest.approx(1 / sum(weights))
     assert trailing_validation_ema(rows[:4], 4, 5) is None
-    assert trailing_validation_ema([r for r in rows if r["step"] != 3], 6, 5) is None
+    assert trailing_validation_ema([r for r in rows if r.step != 3], 6, 5) is None
 
 
 @pytest.mark.asyncio
@@ -48,6 +48,6 @@ async def test_best_callback_persists_window_and_restarts_without_changing_tie(t
 
 
 def test_five_observation_ema_at_two_step_cadence():
-    rows = [{"step": step, "reward": 0.5} for step in (2, 4, 6, 8, 10)]
+    rows = [ValidationObservation(step, 0.5, 2, 2) for step in (2, 4, 6, 8, 10)]
     assert trailing_validation_ema(rows, 10, 5, interval=2) == pytest.approx(0.5)
     assert trailing_validation_ema(rows[1:], 10, 5, interval=2) is None

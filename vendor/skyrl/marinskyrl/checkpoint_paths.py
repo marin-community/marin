@@ -2,6 +2,7 @@
 
 import json
 import math
+from dataclasses import dataclass
 
 from rigging.filesystem.storage_path import StoragePath
 from marinskyrl.resource_locator import join_resource_path
@@ -11,6 +12,14 @@ LATEST_CHECKPOINT_FILE = "latest_ckpt_global_step.txt"
 HF_EXPORT_REQUEST_FILENAME = "hf_export_request.json"
 BEST_CHECKPOINT_FILENAME = "best_checkpoint.json"
 POLICY_CHECKPOINT_SUBDIRECTORY = "policy"
+
+
+@dataclass(frozen=True)
+class ValidationObservation:
+    step: int
+    reward: float
+    attempted: int
+    scored: int
 
 
 def policy_export_path(export_root: str, global_step: int) -> str:
@@ -30,11 +39,13 @@ def selected_export_step(checkpoint_root: str, selection: str, latest_step: int)
     return int(best["step"])
 
 
-def trailing_validation_ema(history: list[dict], step: int, window: int, *, interval: int = 1) -> float | None:
+def trailing_validation_ema(
+    history: list[ValidationObservation], step: int, window: int, *, interval: int = 1
+) -> float | None:
     """Adjusted EMA over complete scheduled validation observations; alpha=2/(window+1)."""
     if window < 1 or interval < 1:
         raise ValueError("Validation EMA window must be positive")
-    by_step = {int(row["step"]): float(row["reward"]) for row in history}
+    by_step = {row.step: row.reward for row in history}
     steps = list(range(step - (window - 1) * interval, step + 1, interval))
     if steps[0] < 1 or any(s not in by_step for s in steps):
         return None

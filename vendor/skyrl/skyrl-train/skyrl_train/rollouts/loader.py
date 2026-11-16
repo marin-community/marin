@@ -129,7 +129,9 @@ class PromptLoader:
         self._scan_start = 0
 
     def next_prompt(self, live: Collection[str], route: str | None = None) -> dict | None:
-        """The next prompt whose uid is not in ``live``, or None when every uid is live.
+        """The next eligible prompt whose uid is not in ``live``.
+
+        When a route is requested, only its prompts are eligible. Return None when every eligible uid is live.
 
         Prompts awaiting regeneration come first, then up to two batches' worth of the prompt order's draws. If those
         draws find only live uids, a scan of the dataset from where the last scan stopped takes a free row, so an
