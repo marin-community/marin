@@ -948,6 +948,23 @@ class _ShardedJaggedArrayStore:
         self.shapes = None
         self.item_rank = 1
 
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+        shard_names, shard_batches = self._cache._group_indices_by_shard(indices)
+        output: list[np.ndarray | None] = [None] * len(indices)
+
+        async def read_shard(shard_index: int, batch: list[tuple[int, int]]) -> None:
+            store = await self._cache._shard_field_store_async(shard_names[shard_index], self._field)
+            rows = await store.get_batch([index for _, index in batch])
+            for (position, _), row in zip(batch, rows, strict=True):
+                output[position] = row
+
+        await asyncio.gather(*(read_shard(index, batch) for index, batch in shard_batches.items()))
+        rows = []
+        for row in output:
+            assert row is not None
+            rows.append(row)
+        return rows
+
     @property
     def num_rows(self) -> int:
         return self._cache.flat_field_num_rows(self._field)

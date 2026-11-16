@@ -9,7 +9,7 @@ from haliax import Axis
 from levanter.data.packing import lookahead_pack_documents, pack_documents
 from levanter.data.text.datasets import DatasetComponent, dataset_for_component
 from levanter.data.text.formats import PrebuiltLmDatasetFormat
-from levanter.store.cache import SerialCacheWriter
+from levanter.store.cache import SerialCacheWriter, TreeCache, consolidate_shard_cache_ledgers
 from levanter.utils.thread_utils import blocking_wait
 
 
@@ -28,17 +28,25 @@ def test_lookahead_fills_gaps_without_losing_documents_and_honors_segment_cap():
     np.testing.assert_array_equal(np.sort(np.concatenate(packed)), np.arange(1000))
 
 
-def test_prebuilt_lookahead_preserves_prediction_weights_and_seeded_random_access(tmp_path):
+@pytest.mark.parametrize("shards", [1, 2])
+def test_prebuilt_lookahead_preserves_prediction_weights_and_seeded_random_access(tmp_path, shards):
     # Chat, full-token replay, teacher-only relay, then chat. Weights already
     # index predictions, so neither packing nor the dataset may shift them again.
     tokens = [np.arange(100 + 10 * i, 100 + 10 * i + n, dtype=np.int32) for i, n in enumerate([6, 6, 4, 4])]
     weights = [
         np.asarray(w, dtype=np.float32) for w in ([0, 1, 0, 1, 1, 0], [1, 1, 1, 1, 1, 0], [0, 0, 1, 0], [0, 1, 1, 0])
     ]
-    with SerialCacheWriter(
-        str(tmp_path), {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)}
-    ) as writer:
-        writer.write_batch([{"input_ids": t, "loss_weights": w} for t, w in zip(tokens, weights, strict=True)])
+    exemplar = {"input_ids": np.zeros(0, dtype=np.int32), "loss_weights": np.zeros(0, dtype=np.float32)}
+    records = [{"input_ids": t, "loss_weights": w} for t, w in zip(tokens, weights, strict=True)]
+    paths = []
+    for shard in range(shards):
+        path = str(tmp_path) if shards == 1 else str(tmp_path / f"part-{shard}")
+        with SerialCacheWriter(path, exemplar) as writer:
+            writer.write_batch(records[shard * 4 // shards : (shard + 1) * 4 // shards])
+        paths.append(path)
+    if shards > 1:
+        consolidate_shard_cache_ledgers(paths, str(tmp_path), exemplar)
+    cache = TreeCache.load(str(tmp_path), exemplar)
     component = DatasetComponent(
         cache_dir=str(tmp_path),
         pack=256,
@@ -46,7 +54,7 @@ def test_prebuilt_lookahead_preserves_prediction_weights_and_seeded_random_acces
         format=PrebuiltLmDatasetFormat(loss_weights_key="loss_weights"),
     )
     dataset = dataset_for_component(
-        component, Axis("position", 10), writer.result(), eos_id=None, block_cross_document_attention=True
+        component, Axis("position", 10), cache, eos_id=None, block_cross_document_attention=True
     )
     assert blocking_wait(dataset.async_len()) == 2
     examples = blocking_wait(dataset.get_batch([1, 0, 1]))
