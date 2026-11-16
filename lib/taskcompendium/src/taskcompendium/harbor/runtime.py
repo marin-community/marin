@@ -10,7 +10,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shellbox.machine import NetworkPolicy
 
-from taskcompendium.harbor.adapter import declared_execution_limits, source_task_configurations
+from taskcompendium.harbor.adapter import (
+    declared_execution_limits,
+    source_task_configurations,
+)
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
@@ -110,7 +113,15 @@ class TaskNetworkPolicyReceipt(BaseModel):
 
 
 def network_policy_qualified(binding: TaskSpecRuntimeBinding | None, observed: TaskNetworkPolicyReceipt | None) -> bool:
-    """Match observed role policies to the preserved declaration and actual actor plan."""
+    """Match observed role policies to the preserved declaration and actual actor plan.
+
+    The recording factory writes ``verifier_effective`` exactly when the trial opens a
+    verifier machine, and every machine it opens carries the declared policy, so a
+    recorded observation always matches. An absent observation means grading never
+    opened a verifier machine — terminal grades and submission rejections score from
+    the candidate submission alone — so the declared verifier policy was vacuously
+    satisfied, not violated.
+    """
     actor = binding.network("task_machine") if binding else None
     verifier = binding.network("verifier_machine") if binding else None
     if observed is None:
@@ -120,7 +131,7 @@ def network_policy_qualified(binding: TaskSpecRuntimeBinding | None, observed: T
         and observed.actor_declared == actor
         and observed.verifier_declared == verifier
         and (actor is None or not observed.actor_required or observed.actor_effective == actor)
-        and (verifier is None or observed.verifier_effective == verifier)
+        and (verifier is None or observed.verifier_effective is None or observed.verifier_effective == verifier)
     )
 
 
