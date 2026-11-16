@@ -139,3 +139,26 @@ async def test_exhausted_grounding_truncations_remain_execution_failures(review_
     for attempt in range(3):
         observation = json.loads((tmp_path / f"observations/fixture/decompose-{attempt}.json").read_text())
         assert observation["response"]["choices"][0]["finish_reason"] == "length"
+
+
+@pytest.mark.asyncio
+async def test_grounding_preserves_http_failure_response_before_aborting(tmp_path):
+    error = {"error": {"message": "Invalid fixture request", "type": "invalid_request_error"}}
+    transport = httpx.MockTransport(lambda request: httpx.Response(400, json=error))
+    async with httpx.AsyncClient(transport=transport) as client:
+        judge = GroundingJudge(
+            JudgeConnection("http://fixture/v1", "private-test-api-key", default_model="fixture"),
+            client,
+            grounding_tokenizer(),
+            StoragePath(str(tmp_path)),
+        )
+        with pytest.raises(httpx.HTTPStatusError) as failure:
+            await judge.structured("ground-h1", "Audit the evidence.", GroundedRequirement)
+    assert failure.value.response.status_code == 400
+    saved = (tmp_path / "ground-h1-0-http-error.json").read_text()
+    observation = json.loads(saved)
+    assert observation["status_code"] == 400
+    assert json.loads(observation["response_body"]) == error
+    assert observation["request"]["messages"][-1]["content"] == "Audit the evidence."
+    assert "private-test-api-key" not in saved
+    assert len(list(tmp_path.glob("*-http-error.json"))) == 1

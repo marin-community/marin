@@ -83,6 +83,10 @@ class GroundingJudge:
             headers={"Authorization": "Bearer " + self.connection.api_key},
             json=request,
         )
+        if not response.is_success:
+            (self.observations / (name + "-http-error.json")).write_text(
+                json.dumps({"request": request, "status_code": response.status_code, "response_body": response.text})
+            )
         response.raise_for_status()
         result = response.json()
         (self.observations / (name + ".json")).write_text(
