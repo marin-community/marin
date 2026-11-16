@@ -5953,6 +5953,8 @@ test = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "tokenizers" },
+    { name = "transformers" },
 ]
 
 [package.metadata]
@@ -5969,6 +5971,8 @@ test = [
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
+    { name = "tokenizers" },
+    { name = "transformers", specifier = ">=5.10.0,<6.0" },
 ]
 
 [[package]]
