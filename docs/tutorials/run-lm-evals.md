@@ -32,8 +32,9 @@ inference, and submits evaluation workers. It cancels an evaluator before resumi
 its archive when inference is interrupted.
 
 The catalog fixes prompts, graders, shots, sampling, trials and context policies.
-Evalchemy protocols inherit the served model's temperature and seed unless the
-run explicitly overrides them, preserving the legacy launcher's request behavior.
+Evalchemy protocols send no temperature, so the served model's generation settings
+apply; set them per model in its serving config. Runs use seed 0 unless a seed is
+given. TPU vLLM rejects seeded sampling, so runs there are unseeded by default.
 Native likelihood tasks use completion logprobs. Generation protocols specify chat
 or raw completion transport. Instruct-model menus choose separately published chat
 variants where the original entrypoint used a chat template. HumanEval's standard
@@ -118,7 +119,7 @@ Harbor execution is independent of curated TaskSpec evaluation.
 
 - `--model-config`: a model catalog YAML instead of a registry model.
 - `--limit`: override the source-row cap for each selected corpus.
-- `--seed`: override the protocol's trial seed base.
+- `--seed`: override the run seed; trial seeds advance from it.
 - `--max-concurrent`: simultaneous evaluations sharing the candidate server.
 - `--instances`: candidate serving instances behind the inference broker.
 - `--run-id`: reuse an explicitly named launch when its resolved identities match.

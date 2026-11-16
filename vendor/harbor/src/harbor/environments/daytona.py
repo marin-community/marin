@@ -33,6 +33,7 @@ from harbor.environments.model_relay import (
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
 from shellbox.backends.daytona.machine import (
+    DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
     DEFAULT_SANDBOX_TTL_MINUTES,
     DaytonaImageBuild,
     DaytonaMachine,
@@ -101,6 +102,7 @@ class DaytonaEnvironment(BaseEnvironment):
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
         image_build: str = DaytonaImageBuild.SNAPSHOT,
+        output_collection_timeout: float = DEFAULT_OUTPUT_COLLECTION_TIMEOUT,
         model_endpoint: str | None = None,
         model_name: str | None = None,
         judge_access: JudgeAccess = JudgeAccess.VERIFIER,
@@ -131,6 +133,7 @@ class DaytonaEnvironment(BaseEnvironment):
             client_factory,
             ttl_minutes=ttl_minutes,
             create_timeout=create_timeout,
+            output_collection_timeout=output_collection_timeout,
             network_policy=policy,
             image_build=DaytonaImageBuild(image_build),
         )
