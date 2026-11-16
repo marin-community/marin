@@ -3,9 +3,8 @@
 
 """Versioned user decisions; Python packaging preserves this registry in hosted backends."""
 
-LICENSE_BANS = r"""
-{
-  "version": "2026.11.15.5",
+LICENSE_BANS = r"""{
+  "version": "2026.11.16.1",
   "bans": [
     {
       "source_id": "ASDiv:asdiv",
@@ -470,44 +469,6 @@ LICENSE_BANS = r"""
         "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
       ],
       "decided_at": "2026-11-15T17:27:51.574713+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "TaskTrove:smartie-calibforge-shared-v2",
-      "upstream_id": "unverified-origin:ae2f0359c549",
-      "upstream_revision": "bcfae8cd9d8a82338122945afdd843d46ca18b7e",
-      "classification": "unknown",
-      "license_ids": [
-        "apache-2.0",
-        "cc-by-4.0",
-        "mit",
-        "other"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574665+00:00",
-      "decision_by": "user via coordinator",
-      "issue_url": "https://github.com/marin-community/marin/issues/11497"
-    },
-    {
-      "source_id": "TaskTrove:smartie-swesmith-admitted",
-      "upstream_id": "unverified-origin:8d9c31294094",
-      "upstream_revision": "25cdd6a2737be2f500027ecd2c6dbb1fb96ae377",
-      "classification": "unknown",
-      "license_ids": [
-        "apache-2.0",
-        "cc-by-4.0",
-        "mit",
-        "other"
-      ],
-      "reason": "Applicable permissive origin grant and exact release lineage have not been established.",
-      "evidence_urls": [
-        "https://github.com/marin-community/marin/blob/b35a72d3335dcd03e5f711cb09c2436ebf374bfe/experiments/post_training/task_curation/sources.py"
-      ],
-      "decided_at": "2026-11-15T17:27:51.574667+00:00",
       "decision_by": "user via coordinator",
       "issue_url": "https://github.com/marin-community/marin/issues/11497"
     },
