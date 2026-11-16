@@ -47,6 +47,7 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
     rows = [
         {"id": "research", "question": "Synthetic research question?", "answer": "private A", "source_refs": "[]"},
         {"id": "benchmark", "question": "  Heldout\nQuestion? ", "answer": "private B", "source_refs": "[]"},
+        {"id": "budget", "question": "Synthetic complex question?", "answer": "private C", "source_refs": "[]"},
     ]
     for row in rows:
         row["source_refs"] = json.dumps([{"file": "seed_fixture/train.parquet", "row": 7, "qid": "fixture"}])
@@ -80,14 +81,14 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
             source_revision=DATASET_REVISION,
             stage_receipt_sha256=stage_sha,
             raw_trajectories=4,
-            unique_contracts=2,
-            unique_questions=2,
+            unique_contracts=3,
+            unique_questions=3,
             conflicting_answer_questions=0,
             invalid_rows=0,
             tasks_parquet_sha256=parquet_sha,
         ).model_dump(mode="json"),
     )
-    kept_sha = parquet("kept.parquet", rows)
+    kept_sha = parquet("kept.parquet", rows[:2])
     decisions_sha = parquet(
         "decisions.parquet",
         [
@@ -96,9 +97,10 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
                 "decision_json": json.dumps(
                     {
                         "id": row["id"],
-                        "keep": True,
+                        "keep": row["id"] != "budget",
                         "status": "screened",
                         "contract_sha256": CONTRACT_SHA256,
+                        "reason": "complete_requirements_exceed_sealed_budget" if row["id"] == "budget" else "pass",
                     }
                 ),
             }
@@ -114,9 +116,10 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
         index_manifest_sha256="c" * 64,
         model_revision=MODEL_REVISION,
         backend_identity_sha256=canonical_sha256({"backend": "synthetic"}),
-        input_questions=2,
+        input_questions=3,
         kept_questions=2,
-        dropped_questions=0,
+        dropped_questions=1,
+        drop_reason_counts={"complete_requirements_exceed_sealed_budget": 1},
         execution_failures=0,
         kept_parquet_sha256=kept_sha,
         decisions_parquet_sha256=decisions_sha,
@@ -166,11 +169,16 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
     )
     manifest = json.loads((output / "manifest.json").read_text())
     assert (manifest["input_rows"], manifest["converted_rows"], manifest["rejections"]) == (
-        2,
+        3,
         1,
-        {"grounding_drop": 0, "benchmark_heldout": 1},
+        {"grounding_drop": 1, "benchmark_heldout": 1},
     )
     assert result.result.outputs["tasks"] == str(output / "tasks.parquet")
+    _, changed_counts_sha = seal(
+        "grounding.json", grounded.model_copy(update={"drop_reason_counts": {}}).model_dump(mode="json")
+    )
+    with pytest.raises(ValueError, match="Grounding drop counts differ"):
+        retained_questions(replace(config, grounding_receipt_sha256=changed_counts_sha))
     # Even a freshly sealed parquet cannot change the source question's private answer.
     changed = [{**rows[0], "answer": "unreleased substitute"}, rows[1]]
     changed_sha = parquet("kept.parquet", changed)

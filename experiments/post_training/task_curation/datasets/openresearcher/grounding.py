@@ -8,7 +8,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar, cast
+from typing import Any, ClassVar, TypeVar, cast
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -48,6 +48,14 @@ logger = logging.getLogger(__name__)
 
 class GroundingBudgetExceeded(ValueError):
     """A complete evidence packet cannot fit the sealed screen's context budget."""
+
+    reason: ClassVar[str] = "complete_evidence_exceeds_sealed_context_budget"
+
+
+class GroundingRequirementsBudgetExceeded(GroundingBudgetExceeded):
+    """The complete decomposition exceeds the sealed requirement budget."""
+
+    reason: ClassVar[str] = "complete_requirements_exceed_sealed_budget"
 
 
 class GroundingCompletionIncomplete(ValueError):
@@ -107,8 +115,15 @@ class GroundingJudge:
         for attempt in range(PARSE_ATTEMPTS):
             try:
                 text = await self.complete(f"{name}-{attempt}", prompt, structured=True)
+                if schema is Decomposition:
+                    decoded = json.loads(text)
+                    requirements = decoded.get("requirements") if isinstance(decoded, dict) else None
+                    if isinstance(requirements, list) and len(requirements) > MAX_REQUIREMENTS:
+                        raise GroundingRequirementsBudgetExceeded(
+                            f"Complete decomposition has {len(requirements)} requirements; budget is {MAX_REQUIREMENTS}"
+                        )
                 return schema.model_validate_json(text)
-            except (ValidationError, GroundingCompletionIncomplete) as error:
+            except (ValidationError, json.JSONDecodeError, GroundingCompletionIncomplete) as error:
                 (self.observations / f"{name}-{attempt}-error.txt").write_text(str(error))
                 if attempt + 1 == PARSE_ATTEMPTS:
                     raise
@@ -215,7 +230,7 @@ async def screen_population(
                         "contract_sha256": CONTRACT_SHA256,
                         "keep": False,
                         "status": "screened",
-                        "reason": "complete_evidence_exceeds_sealed_context_budget",
+                        "reason": error.reason,
                         "detail": str(error),
                     }
                 except Exception as error:

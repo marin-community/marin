@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -166,6 +167,10 @@ def retained_questions(config: PreparationConfig) -> RetainedQuestions:
     ):
         raise ValueError("Grounding decisions do not cover every original question exactly once")
     expected = {key for key, decision in decisions_by_id.items() if decision["keep"]}
+    if grounded.drop_reason_counts != dict(
+        Counter(decision["reason"] for decision in decisions_by_id.values() if not decision["keep"])
+    ):
+        raise ValueError("Grounding drop counts differ from the sealed question decisions")
     if (
         len(kept) != grounded.kept_questions
         or len({row["id"] for row in kept}) != len(kept)

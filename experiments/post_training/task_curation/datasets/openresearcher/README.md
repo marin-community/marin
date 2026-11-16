@@ -39,6 +39,12 @@ reach the 4,096-token output limit or fail schema validation. Retries use the sa
 request and generation settings and preserve every response. Exhaustion fails
 the artifact.
 
+A complete JSON requirements array longer than eight receives an explicit budget
+drop before nested query validation. Malformed responses within that budget keep
+the same three-attempt retry and failure behavior. The final receipt reports
+`drop_reason_counts`; conversion checks these counts against the sealed
+question-level decisions.
+
 For each question, the screen enumerates required clues and reasoning hops,
 searches the approved index, and checks literal document quotations for every
 hop. A separate request to the same pinned judge receives the question and

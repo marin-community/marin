@@ -61,6 +61,7 @@ class GroundedQuestions(Artifact):
     input_questions: int
     kept_questions: int
     dropped_questions: int
+    drop_reason_counts: dict[str, int]
     execution_failures: int
     kept_parquet_sha256: str
     decisions_parquet_sha256: str
@@ -235,6 +236,7 @@ def ground_questions(config: GroundingConfig) -> GroundedQuestions:
         input_questions=len(rows),
         kept_questions=len(kept),
         dropped_questions=len(rows) - len(kept),
+        drop_reason_counts=dict(Counter(decision["reason"] for decision in decisions if not decision["keep"])),
         execution_failures=0,
         kept_parquet_sha256=file_sha256(target),
         decisions_parquet_sha256=file_sha256(decisions_path),

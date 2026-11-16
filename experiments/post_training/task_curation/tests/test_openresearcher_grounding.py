@@ -5,6 +5,7 @@ import json
 
 import httpx
 import pytest
+from pydantic import ValidationError
 from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
@@ -181,3 +182,46 @@ async def test_grounding_counts_prompt_tokens_before_sending_oversized_packet(re
     assert result[0]["keep"] is False
     assert result[0]["reason"] == "complete_evidence_exceeds_sealed_context_budget"
     assert review_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requirements_count", [1, 11])
+async def test_grounding_checks_requirement_budget_before_nested_query_validation(
+    review_server, tmp_path, requirements_count
+):
+    response = json.dumps(
+        {
+            "decomposable": True,
+            "requirements": [
+                {"id": f"h{index + 1}", "claim": "A required fact.", "queries": ["one", "two", "three", "four", "five"]}
+                for index in range(requirements_count)
+            ],
+        }
+    )
+    review_server.judge_replies = [JudgeReply(response) for _ in range(3)]
+
+    async def retrieve(queries):
+        raise AssertionError("Invalid or over-budget decomposition must not reach retrieval")
+
+    args = (
+        [{"id": "fixture", "question": "Who founded Cedar Press?", "answer": "Nina Calder"}],
+        JudgeConnection(f"http://127.0.0.1:{review_server.server_port}/v1", "fixture", default_model="fixture"),
+        grounding_tokenizer(),
+        retrieve,
+        StoragePath(str(tmp_path)),
+        1,
+    )
+    if requirements_count == 11:
+        result = await screen_population(*args)
+        assert result[0]["keep"] is False
+        assert result[0]["status"] == "screened"
+        assert result[0]["reason"] == "complete_requirements_exceed_sealed_budget"
+        assert len(review_server.requests) == 1
+    else:
+        with pytest.raises(ExceptionGroup) as failure:
+            await screen_population(*args)
+        assert isinstance(failure.value.exceptions[0], ValidationError)
+        assert len(review_server.requests) == 3
+        decision = json.loads((tmp_path / "decisions/fixture.json").read_text())
+        assert decision["status"] == "execution_failure"
+        assert "keep" not in decision
