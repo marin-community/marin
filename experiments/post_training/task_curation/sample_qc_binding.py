@@ -5,15 +5,41 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import ContentEvidenceReference, IndependentQC
+from finestore.rl.curation import ActorCensusInput, ContentEvidenceReference, IndependentQC
 from pydantic import BaseModel, ConfigDict, model_validator
 from taskcompendium.pipeline.models import ReviewRecord
 
-from experiments.post_training.task_curation.full_content_binding import clear_stale_full_content_result
+from experiments.post_training.task_curation.full_content_binding import (
+    RetainedLineageProof,
+    clear_stale_full_content_result,
+    lineage_note,
+)
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleQCReview
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
 from infra.marina.apps.rl_data_catalog.server.quality import SAMPLE_MAX_MISSING_FRACTION
 from infra.marina.apps.rl_data_catalog.server.source_identity import SourceId
+
+
+def sample_matches_lineage(receipt: "SampleQCReceipt", lineage: RetainedLineageProof) -> bool:
+    """Whether an archived panel is exactly the retained release's byte-identical original panel."""
+    panel = receipt.review.panel
+    return (
+        receipt.source_id == lineage.source_id
+        and (
+            panel.dataset_id,
+            panel.dataset_revision,
+            panel.converter_version,
+            panel.task_specs_sha256,
+            panel.retained_tasks,
+        )
+        == (
+            lineage.original_release.repo,
+            lineage.original_release.revision,
+            lineage.original_input.converter_version,
+            lineage.original_input.task_specs_sha256,
+            lineage.original_input.measured_tasks,
+        )
+    )
 
 
 class SampleMissingObservation(BaseModel):
@@ -55,12 +81,11 @@ def require_sample_qualification(receipt: SampleQCReceipt) -> None:
 
 
 def bind_sample_result[ConfigT: CatalogConfig](
-    source: RlDataSource[ConfigT], receipt: SampleQCReceipt | None
+    source: RlDataSource[ConfigT], receipt: SampleQCReceipt | None, *, retained_lineage: RetainedLineageProof | None = None
 ) -> RlDataSource[ConfigT]:
     """Attach exact-input content evidence while preserving execution qualification."""
-    source = clear_stale_full_content_result(source)
     if receipt is None:
-        return source
+        return clear_stale_full_content_result(source)
     panel = receipt.review.panel
     dataset, actor = source.dataset, source.info.actor_census_input
     if (
@@ -83,7 +108,16 @@ def bind_sample_result[ConfigT: CatalogConfig](
             panel.retained_tasks,
         )
     ):
+        if retained_lineage is not None and sample_matches_lineage(receipt, retained_lineage):
+            return replace(
+                source,
+                info=replace(
+                    source.info,
+                    notes=lineage_note(source.info.notes, retained_lineage, "Archived SAMPLE content panel"),
+                ),
+            )
         raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
+    source = clear_stale_full_content_result(source)
     if source.info.full_content_result_binding is not None:
         return source
     result = receipt.review.result

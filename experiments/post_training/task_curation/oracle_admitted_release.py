@@ -33,6 +33,7 @@ from taskcompendium.pipeline.oracle_filter import OracleExclusionReason, require
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.full_content_binding import (
+    RetainedLineageProof,
     bind_full_content_result,
     matches_full_content_input,
 )
@@ -251,19 +252,32 @@ def bind_selected_source_content(
     selected: RlDataSource,
     sample: SampleQCReceipt | None,
     full_content: FullContentResultBinding | None,
+    retained_lineage: RetainedLineageProof | None = None,
 ) -> RlDataSource:
-    """Attach current content after pin selection and validate archived original evidence."""
+    """Attach current content after pin selection and validate archived original evidence.
+
+    ``retained_lineage`` carries the byte-preserving subset proof: an archived
+    receipt pinned to the original population validates against it instead of
+    failing the post-retention pin, and its proof is recorded on the retained
+    declaration. Anything else still raises.
+    """
     dataset = selected.dataset
     if sample is not None and (
         dataset is None
         or (sample.review.panel.dataset_id, sample.review.panel.dataset_revision, sample.review.panel.converter_version)
         != (dataset.name, dataset.revision, selected.version)
     ):
-        bind_sample_result(original, sample)
+        if retained_lineage is not None:
+            selected = bind_sample_result(selected, sample, retained_lineage=retained_lineage)
+        else:
+            bind_sample_result(original, sample)
     else:
         selected = bind_sample_result(selected, sample)
     if full_content is not None and not matches_full_content_input(selected, full_content):
-        bind_full_content_result(original, full_content)
+        if retained_lineage is not None:
+            selected = bind_full_content_result(selected, full_content, retained_lineage=retained_lineage)
+        else:
+            bind_full_content_result(original, full_content)
     else:
         selected = bind_full_content_result(selected, full_content)
     return selected

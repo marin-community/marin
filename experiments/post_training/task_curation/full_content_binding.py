@@ -5,10 +5,51 @@
 
 from dataclasses import replace
 
-from finestore.rl.curation import IndependentQC
+from finestore.rl.curation import ActorCensusInput, DatasetRelease, IndependentQC
+from pydantic import BaseModel, ConfigDict
 
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
+
+
+class RetainedLineageProof(BaseModel):
+    """A zero-drop retained release whose population is byte-identical to its original.
+
+    Presence of this proof records the publication readback that verified every
+    retained task hash against the frozen original conversion, so archived
+    original-pin evidence stays valid for the retained source.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: str
+    original_release: DatasetRelease
+    original_input: ActorCensusInput
+    original_unique_count: int
+    retained_content_sha256: str
+
+
+def lineage_note(notes: str, lineage: RetainedLineageProof, label: str) -> str:
+    """Record a lineage-validated receipt on the retained declaration."""
+    return (
+        f"{label} validated against the original pin {lineage.original_release.repo}"
+        f"@{lineage.original_release.revision} through the zero-drop retained lineage; "
+        f"retained readback {lineage.retained_content_sha256[:12]} proves byte-identical "
+        "retained tasks. " + notes
+    ).strip()
+
+
+def full_content_matches_lineage(binding: FullContentResultBinding, lineage: RetainedLineageProof) -> bool:
+    """Whether an archived whole-source Result is exactly the retained original's review."""
+    return (
+        binding.source_id == lineage.source_id
+        and (binding.input.dataset_id, binding.input.dataset_revision) == (
+            lineage.original_release.repo,
+            lineage.original_release.revision,
+        )
+        and binding.input == lineage.original_input
+        and lineage.original_unique_count == binding.input.measured_tasks
+    )
 
 
 def matches_full_content_input(source: RlDataSource, binding: FullContentResultBinding) -> bool:
@@ -50,15 +91,25 @@ def clear_stale_full_content_result[ConfigT: CatalogConfig](source: RlDataSource
 
 
 def bind_full_content_result[ConfigT: CatalogConfig](
-    source: RlDataSource[ConfigT], binding: FullContentResultBinding | None
+    source: RlDataSource[ConfigT], binding: FullContentResultBinding | None, *, retained_lineage: RetainedLineageProof | None = None
 ) -> RlDataSource[ConfigT]:
     """Attach a verified exact-input final Result while preserving execution evidence."""
-    source = clear_stale_full_content_result(source)
-    binding = binding or source.info.full_content_result_binding
     if binding is None:
-        return source
+        source = clear_stale_full_content_result(source)
+        binding = source.info.full_content_result_binding
+        if binding is None:
+            return source
     if not matches_full_content_input(source, binding):
+        if retained_lineage is not None and full_content_matches_lineage(binding, retained_lineage):
+            return replace(
+                source,
+                info=replace(
+                    source.info,
+                    notes=lineage_note(source.info.notes, retained_lineage, "Archived whole-source Result"),
+                ),
+            )
         raise ValueError(f"Whole-source Result belongs to another current retained population: {source.info.id}")
+    source = clear_stale_full_content_result(source)
     result = binding.result
     return replace(
         source,

@@ -12,6 +12,7 @@ import pytest
 from finestore.rl.curation import (
     ActorCensusInput,
     ContentEvidenceReference,
+    DatasetRelease,
     OversightEvidence,
     OversightLevel,
     QualityResultFinalization,
@@ -31,8 +32,13 @@ from taskcompendium.pipeline.models import (
     ReviewVerdict,
 )
 
-from experiments.post_training.task_curation.full_content_binding import bind_full_content_result
+from experiments.post_training.task_curation.full_content_binding import (
+    RetainedLineageProof,
+    bind_full_content_result,
+    full_content_matches_lineage,
+)
 from experiments.post_training.task_curation.full_content_receipts import full_content_result_binding
+from experiments.post_training.task_curation.source import SourceReference
 from experiments.post_training.task_curation.full_content_results import (
     FullContentResultBinding,
 )
@@ -41,7 +47,7 @@ from experiments.post_training.task_curation.full_qc_inputs import prepare_input
 from experiments.post_training.task_curation.full_qc_review import contract_batches, write_review_result
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
 from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel, SampleQCReview
-from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt, bind_sample_result
+from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt, bind_sample_result, sample_matches_lineage
 from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from infra.marina.apps.rl_data_catalog.server.quality import quality, review_completeness
@@ -344,3 +350,78 @@ def test_final_binding_verifies_records_and_preserves_exact_retained_runtime(qc_
     changed_receipt = ContentEvidenceReference(uri=receipt.uri, sha256=file_sha256(receipt_path))
     with pytest.raises(ValueError, match="exact retained contract"):
         full_content_result_binding(changed_receipt, finalization, waiver, reviewer, actor_input, population)
+
+
+def retained_view(source):
+    """The same source re-pinned to a zero-drop retained release with its own census."""
+    release = SourceReference(
+        "open-athena/numbers-retained",
+        "b" * 40,
+        "https://huggingface.co/datasets/open-athena/numbers-retained/tree/" + "b" * 40,
+    )
+    config = replace(source.config, name="numbers-retained", version="2026.11.13.1", dataset=release)
+    actor = actor_census_input(release.name, release.revision, config.version, 201)
+    return replace(
+        source,
+        config=config,
+        info=replace(
+            source.info,
+            actor_census_input=actor,
+            within_source_dedup=deduplication_evidence(release.name, release.revision, config.version, 201),
+            quality_result=SourceQualityResult(reviewed=100, issue_count=0, issues=[], repair_recommendation="None"),
+        ),
+    )
+
+
+def retained_lineage(source):
+    actor = source.info.actor_census_input
+    return RetainedLineageProof(
+        source_id=source.info.id,
+        original_release=DatasetRelease(
+            repo=source.dataset.name,
+            revision=source.dataset.revision,
+            url=f"https://huggingface.co/datasets/{source.dataset.name}/tree/{source.dataset.revision}",
+        ),
+        original_input=actor,
+        original_unique_count=source.info.within_source_dedup.unique_count,
+        retained_content_sha256="f" * 64,
+    )
+
+
+def test_lineage_validated_original_panel_is_kept_and_recorded(content_source):
+    original, retained = content_source, retained_view(content_source)
+    lineage = retained_lineage(original)
+    carried = retained.info.quality_result
+    bound = bind_sample_result(retained, sample_receipt(original), retained_lineage=lineage)
+    assert "validated against the original pin" in bound.info.notes
+    assert lineage.retained_content_sha256[:12] in bound.info.notes
+    assert bound.info.quality_result == carried
+    assert bound.info.lexical_contamination == retained.info.lexical_contamination
+
+
+def test_lineage_mismatch_still_raises(content_source):
+    original, retained = content_source, retained_view(content_source)
+    moved = retained_lineage(original).model_copy(
+        update={
+            "original_release": DatasetRelease(
+                repo=original.dataset.name,
+                revision="c" * 40,
+                url=f"https://huggingface.co/datasets/{original.dataset.name}/tree/" + "c" * 40,
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="belongs to another current population"):
+        bind_sample_result(retained, sample_receipt(original), retained_lineage=moved)
+
+
+def test_lineage_validated_whole_source_result_is_kept_and_recorded(content_source):
+    original, retained = content_source, retained_view(content_source)
+    lineage = retained_lineage(original)
+    binding = whole_source_binding(original, QualityResultFinalization.COMPLETE)
+    carried = retained.info.quality_result
+    bound = bind_full_content_result(retained, binding, retained_lineage=lineage)
+    assert "validated against the original pin" in bound.info.notes
+    assert bound.info.quality_result == carried
+    assert full_content_matches_lineage(binding, lineage)
+    with pytest.raises(ValueError, match="belongs to another current retained population"):
+        bind_full_content_result(retained, binding)

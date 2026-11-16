@@ -81,7 +81,7 @@ from experiments.post_training.task_curation.oracle_admitted_release import (
 from experiments.post_training.task_curation.oracle_release import bind_oracle_filtered_release
 from experiments.post_training.task_curation.oversight_binding import bind_derived_oversight
 from experiments.post_training.task_curation.registry import read_registry_json
-from experiments.post_training.task_curation.remediation_binding import bind_retained_release
+from experiments.post_training.task_curation.remediation_binding import bind_retained_release, retained_lineage
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
 from experiments.post_training.task_curation.source import RlDataSource, TaskFormat
 from experiments.post_training.task_curation.source_policy import GRANDFATHERED_MARINSKYRL_SOURCES
@@ -197,9 +197,18 @@ def all_sources() -> dict[str, RlDataSource]:
         sources[source_id] = bind_oracle_admitted_release(sources[source_id], receipt)
     sources = {source_id: crosscode_python_repair.bind_source(source) for source_id, source in sources.items()}
     samples, full_content = sample_qc_receipts(), full_content_result_bindings()
+    lineages = {
+        source_id: retained_lineage(receipt)
+        for source_id, receipt in retained_release_receipts().items()
+        if source_id in sources
+    }
     selected = {
         source_id: bind_selected_source_content(
-            originals[source_id], source, samples.get(source_id), full_content.get(source_id)
+            originals[source_id],
+            source,
+            samples.get(source_id),
+            full_content.get(source_id),
+            retained_lineage=lineages.get(source_id),
         )
         for source_id, source in sources.items()
     }

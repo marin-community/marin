@@ -49,6 +49,7 @@ from experiments.post_training.task_curation.remediation_binding import (
     bind_retained_release,
     measured_intake_source,
     release_lexical_evidence,
+    retained_lineage,
 )
 from experiments.post_training.task_curation.remediation_publish import (
     RawSourceArchive,
@@ -818,3 +819,37 @@ def test_retained_admission_rejects_missing_grader_or_empty_population(tmp_path,
             replace(invocation, mode=SourceProcessingMode.QUICK, output_path=str(tmp_path / "quick"))
         )
         assert "final" not in quick.result.outputs
+
+
+def zero_drop_receipt(receipt):
+    """The fixture receipt re-published with every task retained and nothing dropped."""
+    plan = receipt.publication.plan.model_copy(
+        update={
+            "unique_count": 3,
+            "within_source_duplicates": 0,
+            "raw_lexical_count": 0,
+            "unique_lexical_count": 0,
+            "combined_drop_count": 0,
+            "retained_count": 3,
+        }
+    )
+    lexical = receipt.publication.lexical.model_copy(update={"contaminated_tasks": 0, "measured_tasks": 3})
+    publication = receipt.publication.model_copy(update={"plan": plan, "verified_retained_tasks": 3, "lexical": lexical})
+    dedup = receipt.retained_dedup.model_copy(update={"raw_count": 3, "unique_count": 3})
+    actor = receipt.actor.model_copy(
+        update={"input": receipt.actor.input.model_copy(update={"measured_tasks": 3, "task_specs_sha256": "1" * 64})}
+    )
+    return receipt.model_copy(update={"publication": publication, "actor": actor, "retained_dedup": dedup})
+
+
+def test_lineage_proof_requires_a_zero_drop_readback(retained_receipt):
+    _, receipt = retained_receipt
+    assert retained_lineage(receipt) is None
+    lineage = retained_lineage(zero_drop_receipt(receipt))
+    assert lineage is not None
+    assert lineage.source_id == receipt.source_id
+    assert lineage.original_release.repo == receipt.publication.plan.source_dataset_id
+    assert lineage.original_release.revision == receipt.publication.plan.source_revision
+    assert lineage.original_input == receipt.original_info.actor_census_input
+    assert lineage.original_unique_count == receipt.original_info.within_source_dedup.unique_count
+    assert lineage.retained_content_sha256 == receipt.publication.retained_content_sha256

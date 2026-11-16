@@ -25,6 +25,7 @@ from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
+from experiments.post_training.task_curation.full_content_binding import RetainedLineageProof
 from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.remediation_publish import ReleasePlan
@@ -203,6 +204,34 @@ def release_lexical_evidence(publication: PublicationReceipt) -> LexicalContamin
     )
     return LexicalContaminationEvidence.model_validate(
         {**publication.lexical.model_dump(mode="json"), "receipt": receipt}
+    )
+
+
+def retained_lineage(receipt: RetainedReleaseReceipt) -> RetainedLineageProof | None:
+    """The byte-preserving subset proof for a zero-drop retained release, else None.
+
+    The publication readback verified every retained task hash against the frozen
+    original conversion; a release that dropped nothing therefore carries the
+    original population byte-for-byte, and its archived original-pin evidence
+    stays valid. Releases with any drop (duplicate or lexical) return None:
+    their archived evidence describes a different population.
+    """
+    plan, publication = receipt.publication.plan, receipt.publication
+    if plan.combined_drop_count != 0 or publication.verified_retained_tasks != plan.raw_count:
+        return None
+    actor, dedup = receipt.original_info.actor_census_input, receipt.original_info.within_source_dedup
+    if actor is None or dedup is None:
+        return None
+    return RetainedLineageProof(
+        source_id=receipt.source_id,
+        original_release=DatasetRelease(
+            repo=plan.source_dataset_id,
+            revision=plan.source_revision,
+            url=f"https://huggingface.co/datasets/{plan.source_dataset_id}/tree/{plan.source_revision}",
+        ),
+        original_input=actor,
+        original_unique_count=dedup.unique_count,
+        retained_content_sha256=publication.retained_content_sha256,
     )
 
 
