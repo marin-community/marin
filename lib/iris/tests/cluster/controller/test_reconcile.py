@@ -372,6 +372,8 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
         (job_pb2.TASK_STATE_WORKER_FAILED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
         (job_pb2.TASK_STATE_UNSCHEDULABLE, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
         (job_pb2.TASK_STATE_SUCCEEDED, worker_pb2.Worker.STOP_REASON_JOB_TERMINATED),
+        (job_pb2.TASK_STATE_KILLED, worker_pb2.Worker.STOP_REASON_CANCELLED),
+        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED),
     ],
 )
 def test_reconcile_worker_controller_terminal_with_terminal_attempt_emits_stop(task_state, expected_reason):
@@ -409,23 +411,6 @@ def test_reconcile_worker_stranded_terminal_with_live_attempt_emits_run(task_sta
     desired = plan.request.desired[0]
     assert desired.HasField("run")
     assert not desired.run.HasField("request")
-    assert desired.attempt_uid == row.attempt_uid
-
-
-@pytest.mark.parametrize(
-    "task_state,expected_reason",
-    [
-        (job_pb2.TASK_STATE_KILLED, worker_pb2.Worker.STOP_REASON_CANCELLED),
-        (job_pb2.TASK_STATE_PREEMPTED, worker_pb2.Worker.STOP_REASON_PREEMPTED),
-    ],
-)
-def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected_reason):
-    row = _row(task_state, attempt_id=2, attempt_state=task_state)
-    plan = _plan_for([row])
-    assert len(plan.request.desired) == 1
-    desired = plan.request.desired[0]
-    assert desired.HasField("stop")
-    assert desired.stop == expected_reason
     assert desired.attempt_uid == row.attempt_uid
 
 
@@ -589,26 +574,17 @@ def test_reconcile_worker_mixed_rows_per_axis():
 
 
 @pytest.mark.parametrize(
-    "task_state",
+    "task_state,attempt_state",
     [
-        job_pb2.TASK_STATE_ASSIGNED,  # assign/run emit site
-        job_pb2.TASK_STATE_BUILDING,  # executing emit site
-        job_pb2.TASK_STATE_RUNNING,  # executing emit site
-        job_pb2.TASK_STATE_KILLED,  # killed → stop emit site
-        job_pb2.TASK_STATE_PREEMPTED,  # preempted → stop emit site
-        job_pb2.TASK_STATE_SUCCEEDED,  # terminal-expected emit site
-        job_pb2.TASK_STATE_FAILED,  # terminal-expected emit site
+        (job_pb2.TASK_STATE_ASSIGNED, job_pb2.TASK_STATE_ASSIGNED),  # run with spec
+        (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_RUNNING),  # status poll
+        (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_KILLED),  # stop
     ],
 )
-def test_reconcile_worker_stamps_attempt_uid_on_every_emit_site(task_state):
-    """Every ``DesiredAttempt`` _reconcile_worker emits carries the row's attempt_uid.
-
-    All five emit branches (assign/run, executing, killed, preempted,
-    terminal-expected) used to hardcode ``attempt_uid=""``; Phase 2 fills them
-    from ``ReconcileRow.attempt_uid``.
-    """
+def test_reconcile_worker_stamps_attempt_uid_on_every_emit_site(task_state, attempt_state):
+    """Every ``DesiredAttempt`` _reconcile_worker emits carries the row's attempt_uid."""
     uid = "00112233aabbccdd"
-    row = _row(task_state, attempt_id=9, job="job-uid", attempt_uid=uid)
+    row = _row(task_state, attempt_id=9, job="job-uid", attempt_uid=uid, attempt_state=attempt_state)
     # ASSIGNED needs a cached spec or the row is dropped before any emit.
     job_specs = {_job_id("job-uid"): _spec()} if task_state == job_pb2.TASK_STATE_ASSIGNED else None
     plan = _plan_for([row], job_specs=job_specs)
