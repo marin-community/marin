@@ -1,121 +1,185 @@
-# Run Mochi RL at 65K context
+# Run Mochi RL with the Long Loop workload
 
-`experiments.post_training.mochi_rl.launch` starts RL directly from a completed
-schema-3 BF16 SFT export, or continues a native RL checkpoint. It constructs one
-training artifact. The context limit is 65,536 attended tokens across the prompt,
-responses and tool observations; masked padding does not count.
+`experiments.post_training.mochi_rl.launch` runs the RL portion of
+[Ben's Long Loop recipe](https://github.com/marin-community/marin/tree/9248dd74d5464e75b3c686037c6ee55054292968/experiments/post_training/long_loop)
+on a completed schema-3 BF16 Mochi SFT export. It skips SFT and terminal HF
+export. The normal path samples, trains, evaluates held-out tasks, saves native
+checkpoints and selects a best checkpoint within an RL time budget.
+`--smoke` selects a shorter path without evaluation or best selection.
+Both entrypoint PRs stay draft while the Long and Quick Loops converge.
 
-The allocation is 15 four-GPU GB200 hosts in `cw-us-east-08a`, at production
-priority: 48 trainer GPUs with TP1/PP12/CP4/EP4 and one 12-GPU inference engine
-with TP1/PP1/DP12/EP12. Iris keeps this 15-host GB200 gang in one NVLink domain.
-The role planner checks counts and parallelism; other layouts need their own
-placement check.
-Each host requests 120 CPUs, 900 GiB RAM and 2 TiB disk. Loading uses an 8 GiB
-buffer and four requests per inference worker. This example pins
-Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4 on GB200. The reused full-model proof
-belongs to [source c2081d90bf8b](https://github.com/marin-community/marin/tree/c2081d90bf8b79005a8b3d60320b51128658131f).
-Newer loop, MuonH and weight-publication changes have only small-scale coverage. Compilation mode 3
-remains enabled. CUDA graphs use `NONE` because graph replay failed after weight
-publication with DP12/EP12 `allgather_reducescatter`. The cause and full-model
-performance cost remain unmeasured.
+## One-rack profile
 
-The recipe uses eight-response RLOO-N groups, with two prompts
-per update, the reasoning-marker penalty and error masking. It selects Hero
-MuonH with `expert_normalization: all_experts`, FP32 masters and pinned CPU
-momentum. Supply ordinary mixed-task Parquet artifacts; no length probe is added.
-Each response turn can generate up to 8,192 tokens, with at most four turns.
-Use `--max-new-tokens 1024` for a short smoke within the same context window.
+Check out [draft #11321](https://github.com/marin-community/marin/pull/11321)
+and select `--profile one-rack`. It requests 15 four-GPU GB200 hosts in one
+mandatory NVLink domain: 48 trainer GPUs at TP1/PP12/CP4/EP4 and one 12-GPU
+inference engine at TP1/PP1/DP12/EP12. Hosts request 120 CPUs, `900GB` RAM and
+`2TB` disk, at production priority. The existing loader uses an 8-GiB buffer
+and four concurrent requests per inference worker. The inference sequence cap
+stays at 16; this workload has no new one-rack GPU memory-fit result.
 
-## Prerequisites and inputs
+The runtime keeps Torch 2.14.1/CUDA 13.2, TE 2.21 and FA4. Compilation mode 3
+stays enabled. CUDA graphs use `NONE` after DP12/EP12 graph replay failed during
+weight publication; the performance cost remains unmeasured.
+[#11307](https://github.com/marin-community/marin/pull/11307) has merged. The draft
+uses a pinned integration of the existing route-quota, selection, budget,
+Pi-deadline, sandbox, storage and physical-placement repairs; their landing
+owners retain the shared changes. It does not refresh package versions.
 
-Planning, Hero MuonH, Harbor harness binding and
-[native checkpoint support](../references/rl-launching.md#native-checkpoint-inputs)
-are on main. The draft also includes the
-[qualified GPU runtime #11307](https://github.com/marin-community/marin/pull/11307)
-and [turn-terminator fix #11232](https://github.com/marin-community/marin/pull/11232)
-while they remain unmerged. [Draft #11321](https://github.com/marin-community/marin/pull/11321)
-pins the combined revision. Check out its head for the one-rack example.
-It stays in draft while a shared design for the short and long training loops is discussed.
+## Normal workload and time limits
 
-Provide Iris and regional S3 credentials, W&B access, and `DAYTONA_RL_API_KEY`
-and `DAYTONA_EVAL_API_KEY`. Supply HF credentials if any selected input requires
-Hub access. Harbor tasks use the configured privileged container profile, which
-requires Iris admin authorization. See [RL launching](../references/rl-launching.md).
+Both profiles use Pi 0.87.0/MCP 7.0.0, high thinking, 128 turns and a default
+16,384-token response cap. Pi's context and compaction limits follow the chosen
+profile and response cap. Training uses Hero MuonH with `all_experts`
+normalization, eight samples per prompt group, TIS with splicing, router replay
+and asynchronous collection with staleness three. Constant-reward groups stay
+in the consumed batch and receive zero learner advantages.
 
-Choose a completed schema-3 BF16 SFT export with its portable-model manifest,
-and the tokenizer revision used by that export. By default, the tokenizer is
-loaded from the model export; `--tokenizer-uri` selects a separate artifact. Select
-ordinary mixed-task Parquet data compatible with this recipe, including its
-Harbor harness mapping. The model, tokenizer and tasks must remain available
-through the planned run and recovery window. Adoption does not extend storage
-retention. Give each changed input set a new immutable `INPUT_VERSION`.
+The normal batch is 32 groups, split equally between SWE and the combined
+reasoning/science route. This follows MA's completed three-rack batch; using it
+on one rack is a configuration choice, not a new runtime qualification.
+`--batch-groups` accepts an even count and keeps eight samples per group and
+equal route quotas. The task families, graders and sampling within each route
+remain those of the input mixture.
 
-Replace the placeholders below with those artifact locations and identities:
+Evaluation and native checkpointing default to every two updates, following
+Ben's cadence. `--eval-interval` and `--checkpoint-interval` change them
+independently of the absolute `--max-steps` target. Normal training also evaluates
+and saves at the end. Best selection requires all 120 held-out tasks to have
+scores and a complete five-evaluation EMA window. Valid zero scores count;
+missing scores do not. A newly selected best is saved and protected from the
+two-checkpoint rolling prune policy. The selection record is
+`best_checkpoint.json` below the checkpoint root. A short or incomplete run can
+finish without an eligible best.
+
+The RL-budget callback requests stopping at a completed update boundary after
+ten hours measured from the first optimizer completion. It includes subsequent
+collection, evaluation and checkpoint work. Startup and collection before that
+first update are excluded. The clock restarts in a new process, including after
+recovery; the callback's 30-minute drain margin is reported, not enforced.
+Budget persistence is unchanged.
+
+The separate Iris GPU-job limit defaults to 48 hours, leaving room for loading
+and finalization. The coordinator allows at least 48 further hours for queueing
+and setup. `--job-timeout-hours` changes the GPU-job limit. Reaching that limit
+ends the attempt without an automatic retry.
+
+## Inputs, task images and credentials
+
+Provide retained model, training and held-out artifact directories and the model's
+pinned tokenizer revision. The tokenizer defaults to the model export;
+`--tokenizer-uri` selects a separate pinned location. Choose a new immutable
+`INPUT_VERSION` whenever any input changes. Adoption records identities but does
+not copy inputs or extend their retention.
+
+The training artifact must preserve Ben's SWE and six reasoning/science source
+families: Eurus, Nemotron, OpenScience, reasoning_gym, Snowball and TaskTrove.
+Keep their original TaskSpecs, graders and source labels. The reference population
+has 8,025 SWE and 100,000 nonagentic tasks. The held-out population has 80 Nemotron,
+20 structure-closure and 20 SWE tasks. Consumed quotas apply to the two routes;
+they do not require equal counts from each nonagentic family.
+
+SWE tasks need their original locked task images with Pi/MCP installed and the
+qualified directory permissions for instruction-required package setup. Use
+existing [task preparation](../references/task-curation.md) and
+[RL launching](../references/rl-launching.md) procedures; this entrypoint does
+not build images. The recipe uses the qualified 4-GiB sandbox allowance,
+10,800-second task/model/Pi HTTP limits, 14,400-second attempt limit and
+18,000-second admission wait. The verifier limit stays at 900 seconds.
+These settings preserve the original graders and agent setup responsibility.
+
+Configure Iris and regional S3 access, `DAYTONA_RL_API_KEY`,
+`DAYTONA_EVAL_API_KEY`, `DAYTONA_TARGET=us`, `TOGETHER_API_KEY`, and W&B login or
+`WANDB_API_KEY`. Supply HF credentials if an input needs private Hub access.
+The privileged Harbor container profile requires Iris admin authorization.
+Keep inputs and native checkpoints for the full queue, run and recovery window.
+Output retention defaults to three days and two rolling checkpoints, plus any
+protected best; `--ttl-days` and `--checkpoint-count` change the output policy.
+Input retention remains the caller's responsibility.
+
+## Render a fresh normal run
+
+Set the placeholders to retained artifacts and a training-file SHA-256 from its
+immutable manifest or a complete hash of that file. These commands render the
+configuration and check that digest without submitting a GPU job:
 
 ```bash
 export MARIN_PREFIX=s3://marin-us-east-08a
 MODEL='s3://<regional-bucket>/<retained-schema-3-export>'
-TASKS='s3://<regional-bucket>/<retained-mixed-task-directory>'
-INPUT_VERSION='<immutable-input-version>'
+TASKS='s3://<regional-bucket>/<retained-training-directory>'
+HOLDOUTS='s3://<regional-bucket>/<retained-heldout-directory>'
+TRAIN_SHA256='<train.parquet-sha256>'
 TOKENIZER_REVISION='<tokenizer-commit>'
+INPUT_VERSION='<immutable-input-version>'
+FRESH_VERSION='<new-normal-version>'
+RESUME_VERSION='<new-continuation-version>'
 SMOKE_VERSION='<new-smoke-version>'
-CONTINUATION_VERSION='<new-continuation-version>'
-```
-
-## Fresh start and continuation
-
-Start with two updates. Build the graph and write its source launch configuration
-without submitting. These commands use a frozen CPU environment for local
-configuration rendering; GPU dependencies come from the submitted job's image:
-
-```bash
 LAUNCH=(uv run --frozen --all-packages --extra cpu --extra dedup python -m experiments.post_training.mochi_rl.launch)
-COMMON=(--profile one-rack --model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
-        --data-uri "$TASKS" --input-version "$INPUT_VERSION")
-"${LAUNCH[@]}" "${COMMON[@]}" \
-  --version "$SMOKE_VERSION" --max-steps 2 --config-output mochi-launch.yaml
+BASE=(--model-uri "$MODEL" --tokenizer-revision "$TOKENIZER_REVISION"
+      --input-version "$INPUT_VERSION" --data-uri "$TASKS" --data-sha256 "$TRAIN_SHA256")
+"${LAUNCH[@]}" "${BASE[@]}" --profile one-rack \
+  --validation-data-uri "$HOLDOUTS" --version "$FRESH_VERSION" \
+  --max-steps 10000 --config-output mochi-normal.yaml
 ```
 
-Inspect the model/data locators, role allocation, context budget and checkpoint
-paths, then add `--run` to submit the same graph. The checkpoint callback saves
-at training end, so this smoke produces `global_step_2` when it completes. Starting from the SFT export
-without `--resume-uri` under a new output version starts fresh MuonH state. Repeating an interrupted run with the same version recovers
-its latest completed native checkpoint when one exists.
+`train.parquet` and `validation.parquet` are the default file names. Use
+`--data-file` and `--validation-data-file` for different names. The one-rack
+profile can also bind several `--data-uri` inputs without a checksum; a checksum
+requires one training artifact. Repeat `--validation-data-uri` for held-out
+artifacts whose combined population matches the 120-task gate.
 
-To continue from a completed checkpoint under a new output version, set `NATIVE` to the exact
-completed native checkpoint directory, such as your run's
-`checkpoints/global_step_2`, then run:
+Inspect the source YAML's input identities, Pi limits, route quotas, allocation,
+callbacks and checkpoint root, then add `--run` to the same command to submit.
+A fresh SFT start has fresh MuonH state. Use a new output version for the new
+workload; the old four-turn recipe has a different artifact fingerprint.
+
+## Native continuation and recovery
+
+Set `NATIVE` to a completed native directory at TP1/PP12/CP4/EP4, containing model,
+optimizer, trainer and data state, such as `checkpoint_root/global_step_2`:
 
 ```bash
-"${LAUNCH[@]}" "${COMMON[@]}" \
-  --version "$CONTINUATION_VERSION" --max-steps 5 --resume-uri "$NATIVE" \
-  --config-output mochi-resume.yaml
+NATIVE='<completed-native-checkpoint-directory>'
+"${LAUNCH[@]}" "${BASE[@]}" --profile one-rack \
+  --validation-data-uri "$HOLDOUTS" --version "$RESUME_VERSION" \
+  --resume-uri "$NATIVE" --max-steps 10000 --config-output mochi-resume.yaml
 ```
 
-Inspect it, then add `--run`. `--max-steps` is the absolute stopping step, so it
-must exceed the restored step. Native continuation restores model, optimizer,
-scheduler and trainer counters. The first native import under a new continuation version starts the selected
-data from the beginning. Recovery of that version restores its saved data state. It writes new checkpoints
-under the new output version. Recover an interrupted continuation by repeating
-its command with the same version and inputs, including `--resume-uri`.
-See [native checkpoint recovery](../references/rl-launching.md#native-checkpoint-inputs)
-for selection and failure behavior. Keep the model, tokenizer, data and topology
-compatible.
-Find checkpoints under `artifacts.checkpoint_root` in the preview YAML, then
-append `/global_step_N` for the completed step.
+`--max-steps` is the absolute optimizer-step target. The first import into a new
+output version restores native model/optimizer/counters and starts the selected
+data stream from its beginning. Repeating that continuation's command and
+version recovers its own latest completed checkpoint and saved data state; the
+supplied checkpoint is used only when that version has no completed progress.
+Keep the inputs and topology compatible. See
+[native checkpoint recovery](../references/rl-launching.md#native-checkpoint-inputs)
+for failure behavior. Best-selection history and cadence stay fixed within a
+recoverable version. The RL-budget clock restarts as described above.
 
-The GPU job defaults to a 24-hour limit. Set `--job-timeout-hours` for a longer
-run. The coordinator timeout is at least 48 hours longer than the GPU job limit
-to allow for queueing and setup. If the GPU job reaches its limit, the attempt
-ends without an automatic retry; recover from the latest completed checkpoint
-as above. Keep inputs and checkpoints until training and any planned recovery
-are complete.
+## Explicit smoke
 
-Outputs use your user namespace. Recovery checkpoints and traces default to
-the regional three-day TTL, with two rolling checkpoints. `--ttl-days` and
-`--checkpoint-count` change that policy. Terminal HF export is disabled. Repeat
-`--data-uri` for more task artifacts; `--data-file` defaults to `train.parquet`.
-`--tokenizer-uri` selects a separate pinned tokenizer artifact. Python callers pass `profile=PROFILES["one-rack"]` and bound model/data artifacts
-to `build_run`. The profile holds typed role, Megatron, recipe and execution settings. The reused GPU evidence covers the one-rack layout at its pinned
-source. [#11321](https://github.com/marin-community/marin/pull/11321) records that
-source and the CPU checks; those checks do not qualify other layouts.
+```bash
+"${LAUNCH[@]}" "${BASE[@]}" --profile one-rack --smoke \
+  --version "$SMOKE_VERSION" --max-steps 2 --max-new-tokens 1024 \
+  --job-timeout-hours 6 --config-output mochi-smoke.yaml
+```
+
+Smoke uses the same Pi, task routes, n=8 groups, MuonH and asynchronous path.
+It defaults to two groups and two rollout workers, with a one-hour RL budget
+after the first optimizer completion. It saves native checkpoints but disables
+held-out evaluation and best selection. The response cap stays at 16K unless
+explicitly overridden; the command selects the 1K smoke limit. A smoke can still
+take hours to collect its first mixed batch. It does not establish the normal
+run's 120-score/five-evaluation selection or ten-hour completion.
+
+## Runtime evidence
+
+The one-rack Ben workload has CPU configuration coverage only. Earlier one-rack
+535B evidence belongs to the older source and workload linked in
+[#11321](https://github.com/marin-community/marin/pull/11321).
+MA's three-rack source `8b4710feb7d6` applied two fresh 64-group mixed updates at a
+102K cap and imported its native checkpoint at later source `3f4a411d3202`.
+Source `940be7913eb7` separately proved controlled near-262K backward and one
+fresh 32-group mixed update under a 262K cap, whose actual maximum length was
+42,380. Its evaluation and saving were disabled. The normal recipe here changes
+cadence and profile context limits; eligible best selection, sustained completion
+and live recovery are not established by those earlier results.

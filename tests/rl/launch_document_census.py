@@ -50,10 +50,13 @@ def _probe_step(artifact_root: Path, **settings: Any) -> ArtifactStep[SkyRLRun]:
     )
 
 
-def _mochi_step(artifact_root: Path, resume: bool, profile: str, response_tokens: int) -> ArtifactStep[SkyRLRun]:
+def _mochi_step(
+    artifact_root: Path, resume: bool, profile: str, response_tokens: int, smoke: bool
+) -> ArtifactStep[SkyRLRun]:
     artifact_root.mkdir(parents=True, exist_ok=True)
     data = artifact_root / "train.parquet"
     data.write_bytes(b"pinned mixed tasks")
+    (artifact_root / "validation.parquet").write_bytes(b"pinned held-out tasks")
     return inspect.unwrap(mochi.main.callback)(
         profile=profile,
         model_uri=str(artifact_root / "model"),
@@ -71,6 +74,8 @@ def _mochi_step(artifact_root: Path, resume: bool, profile: str, response_tokens
         checkpoint_count=2,
         ttl_days=3,
         config_output=None,
+        smoke=smoke,
+        validation_data_uri=() if smoke else (str(artifact_root),),
     )
 
 
@@ -125,9 +130,9 @@ def launch_builders(
         settings=("context_budget.request_window_tokens=256", "context_budget.max_new_tokens_per_turn=128"),
     )
     builders["canary/seed-identity"] = partial(canary.build_run, preset="dry", version=VERSION, seed=18)
-    for profile, resume, response_tokens in product(mochi.PROFILES, (False, True), (8192, 1024)):
-        builders[f"mochi/{profile}/resume={resume}/response={response_tokens}"] = partial(
-            _mochi_step, artifact_root, resume, profile, response_tokens
+    for profile, resume, response_tokens, smoke in product(mochi.PROFILES, (False, True), (16384, 1024), (False, True)):
+        builders[f"mochi/{profile}/resume={resume}/response={response_tokens}/smoke={smoke}"] = partial(
+            _mochi_step, artifact_root, resume, profile, response_tokens, smoke
         )
     builders["inventory/train"] = partial(_inventory_step, artifact_root)
     for stage in ("train", "resume"):
