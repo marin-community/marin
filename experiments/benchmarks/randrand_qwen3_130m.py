@@ -25,6 +25,8 @@ from levanter.optim.randrand_muon_hybrid import RandRANDMuonHybridConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
+SEQUENCE_LENGTH = 4096
+
 
 class Recipe(StrEnum):
     PR6301 = "pr6301"
@@ -64,7 +66,7 @@ def optimizer_config(recipe: Recipe) -> RandRANDConfig:
 def model_config(recipe: Recipe) -> Qwen3Config:
     """Construct the historical size with an explicit normalization choice."""
     return Qwen3Config(
-        max_seq_len=4096,
+        max_seq_len=SEQUENCE_LENGTH,
         hidden_dim=512,
         intermediate_dim=1792,
         num_layers=6,
@@ -110,7 +112,7 @@ def build_config(
     )
     return TrainLmConfig(
         model=model_config(recipe),
-        train_seq_len=4096,
+        train_seq_len=SEQUENCE_LENGTH,
         data=data,
         data_seed=42,
         optimizer=optimizer_config(recipe) if optimizer is None else optimizer,

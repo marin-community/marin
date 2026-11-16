@@ -720,7 +720,7 @@ this Marin recipe deliberately uses model seed 0 to match the completed
 `pr6301` comparison. The notebook's fixed 32-batch validation loss is not
 Marin Paloma BPB, and the local loss is not a predicted Marin result.
 
-| Route | Optimizer | Peak LR | Adam betas | WD |
+| Route | Optimizer | Base peak LR (before matrix boost) | Adam betas | WD |
 |---|---|---|---|---|
 | Body matrices | Spectral RandRAND | 0.0045 | (0.95, 0.99) | 0.0303 |
 | Embedding | AdamW | 0.6 | (0.9, 0.98) | 0 |
