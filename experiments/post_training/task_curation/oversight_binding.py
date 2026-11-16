@@ -16,7 +16,11 @@ from dataclasses import replace
 
 from finestore.rl.curation import OversightEvidence, OversightLevel
 
-from experiments.post_training.task_curation.full_content_binding import matches_full_content_input
+from experiments.post_training.task_curation.full_content_binding import (
+    RetainedLineageProof,
+    full_content_matches_lineage,
+    matches_full_content_input,
+)
 from experiments.post_training.task_curation.full_content_results import FullContentResultBinding
 from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
 from experiments.post_training.task_curation.source import CatalogConfig, RlDataSource
@@ -41,9 +45,19 @@ def derived_oversight_level(
     source: RlDataSource,
     sample: SampleQCReceipt | None,
     full_content: FullContentResultBinding | None,
+    retained_lineage: RetainedLineageProof | None = None,
 ) -> OversightLevel:
-    """The oversight level the current-pin evidence supports, strongest first."""
-    if full_content is not None and matches_full_content_input(source, full_content):
+    """The oversight level the current-pin evidence supports, strongest first.
+
+    A byte-preserving retained lineage keeps its original-population review
+    valid: an archived whole-source Result that matches the lineage's original
+    pin derives FULL for the retained source, exactly as a current-pin Result
+    would.
+    """
+    if full_content is not None and (
+        matches_full_content_input(source, full_content)
+        or (retained_lineage is not None and full_content_matches_lineage(full_content, retained_lineage))
+    ):
         return OversightLevel.FULL
     if sample is not None:
         if covers_whole_population(sample):
@@ -56,6 +70,7 @@ def bind_derived_oversight[ConfigT: CatalogConfig](
     source: RlDataSource[ConfigT],
     sample: SampleQCReceipt | None,
     full_content: FullContentResultBinding | None,
+    retained_lineage: RetainedLineageProof | None = None,
 ) -> RlDataSource[ConfigT]:
     """Attach the evidence-derived oversight level, refusing a contradicting declaration.
 
@@ -63,7 +78,7 @@ def bind_derived_oversight[ConfigT: CatalogConfig](
     declarations set one any more, but a binding or a test fixture may) must agree
     with the evidence, or ingestion fails with a clear message.
     """
-    level = derived_oversight_level(source, sample, full_content)
+    level = derived_oversight_level(source, sample, full_content, retained_lineage)
     declared = source.info.oversight
     if declared is not None and declared.level is not OversightLevel.NONE and declared.level is not level:
         raise ValueError(

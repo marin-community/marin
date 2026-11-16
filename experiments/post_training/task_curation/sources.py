@@ -219,7 +219,12 @@ def all_sources() -> dict[str, RlDataSource]:
     }
     receipts = derived_contract_receipts()
     selected = {
-        source_id: bind_derived_oversight(source, samples.get(source.info.id), full_content.get(source.info.id))
+        source_id: bind_derived_oversight(
+            source,
+            samples.get(source.info.id),
+            full_content.get(source.info.id),
+            lineages.get(source.info.id),
+        )
         for source_id, source in selected.items()
     }
     return {

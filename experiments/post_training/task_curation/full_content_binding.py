@@ -105,11 +105,20 @@ def bind_full_content_result[ConfigT: CatalogConfig](
             return source
     if not matches_full_content_input(source, binding):
         if retained_lineage is not None and full_content_matches_lineage(binding, retained_lineage):
+            result = binding.result
             return replace(
                 source,
                 info=replace(
                     source.info,
-                    notes=lineage_note(source.info.notes, retained_lineage, "Archived whole-source Result"),
+                    quality_result=result,
+                    quality_result_finalization=binding.finalization,
+                    quality_result_waiver=binding.waiver,
+                    independent_qc=IndependentQC(
+                        verdict=result.verdict,
+                        method=lineage_note("", retained_lineage, "Archived whole-source Result"),
+                        reviewed=result.reviewed + result.uncertain_count,
+                        evidence_url=binding.review_receipt.uri,
+                    ),
                 ),
             )
         raise ValueError(f"Whole-source Result belongs to another current retained population: {source.info.id}")

@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, Revie
 from experiments.post_training.task_curation.full_qc_inputs import prepare_inputs
 from experiments.post_training.task_curation.full_qc_review import contract_batches, write_review_result
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
+from experiments.post_training.task_curation.oversight_binding import derived_oversight_level
 from experiments.post_training.task_curation.sample_qc_artifacts import SamplePanel, SampleQCReview
 from experiments.post_training.task_curation.sample_qc_binding import (
     SampleQCReceipt,
@@ -391,15 +392,23 @@ def retained_lineage(source):
     )
 
 
-def test_lineage_validated_original_panel_is_kept_and_recorded(content_source):
+def test_lineage_validated_original_panel_is_bound_and_recorded(content_source):
     original, retained = content_source, retained_view(content_source)
     lineage = retained_lineage(original)
-    carried = retained.info.quality_result
-    bound = bind_sample_result(retained, sample_receipt(original), retained_lineage=lineage)
-    assert "validated against the original pin" in bound.info.notes
-    assert lineage.retained_content_sha256[:12] in bound.info.notes
-    assert bound.info.quality_result == carried
-    assert bound.info.lexical_contamination == retained.info.lexical_contamination
+    receipt = sample_receipt(original)
+    bound = bind_sample_result(retained, receipt, retained_lineage=lineage)
+    assert "validated against the original pin" in bound.info.independent_qc.method
+    assert lineage.retained_content_sha256[:12] in bound.info.independent_qc.method
+    assert bound.info.quality_result == receipt.review.result
+    assert bound.info.independent_qc.evidence_url == receipt.review.path
+
+
+def test_lineage_derives_full_from_an_archived_whole_source_result(content_source):
+    original, retained = content_source, retained_view(content_source)
+    lineage = retained_lineage(original)
+    binding = whole_source_binding(original, QualityResultFinalization.COMPLETE)
+    assert derived_oversight_level(retained, None, binding, lineage) is OversightLevel.FULL
+    assert derived_oversight_level(retained, None, binding) is OversightLevel.QUICK
 
 
 def test_lineage_mismatch_still_raises(content_source):
@@ -417,14 +426,15 @@ def test_lineage_mismatch_still_raises(content_source):
         bind_sample_result(retained, sample_receipt(original), retained_lineage=moved)
 
 
-def test_lineage_validated_whole_source_result_is_kept_and_recorded(content_source):
+def test_lineage_validated_whole_source_result_is_bound_and_recorded(content_source):
     original, retained = content_source, retained_view(content_source)
     lineage = retained_lineage(original)
     binding = whole_source_binding(original, QualityResultFinalization.COMPLETE)
-    carried = retained.info.quality_result
     bound = bind_full_content_result(retained, binding, retained_lineage=lineage)
-    assert "validated against the original pin" in bound.info.notes
-    assert bound.info.quality_result == carried
+    assert "validated against the original pin" in bound.info.independent_qc.method
+    assert bound.info.quality_result == binding.result
+    assert bound.info.quality_result_finalization is QualityResultFinalization.COMPLETE
+    assert bound.info.independent_qc.evidence_url == binding.review_receipt.uri
     assert full_content_matches_lineage(binding, lineage)
     with pytest.raises(ValueError, match="belongs to another current retained population"):
         bind_full_content_result(retained, binding)

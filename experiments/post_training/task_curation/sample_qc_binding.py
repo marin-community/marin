@@ -108,11 +108,18 @@ def bind_sample_result[ConfigT: CatalogConfig](
         )
     ):
         if retained_lineage is not None and sample_matches_lineage(receipt, retained_lineage):
+            result = receipt.review.result
             return replace(
                 source,
                 info=replace(
                     source.info,
-                    notes=lineage_note(source.info.notes, retained_lineage, "Archived SAMPLE content panel"),
+                    quality_result=result,
+                    independent_qc=IndependentQC(
+                        verdict=result.verdict,
+                        method=lineage_note("", retained_lineage, "Archived SAMPLE content panel"),
+                        reviewed=result.reviewed,
+                        evidence_url=receipt.review.path,
+                    ),
                 ),
             )
         raise ValueError(f"Sample Result belongs to another current population: {source.info.id}")
