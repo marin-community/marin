@@ -69,6 +69,19 @@ OpenThoughts-Agent Jupiter launcher also uses `DC_AGENT_SECRET_ENV` to identify
 its private secrets file. That is a launcher-specific setting, not an Iris
 requirement. See the source Jupiter runbook below for that workflow.
 
+## Agents that run as another user
+
+Keep an installed agent's home in the task's `[agent.env]`, alongside its
+`[agent] user`. Harbor merges these values with the run's agent environment;
+run values win. They reach agent processes without changing the verifier's
+environment. An agent trying to create `/root/.pi` despite a declared task home
+indicates that this declaration did not reach the agent.
+
+Pi stages its endpoint variables and context-budget extension under
+`/logs/agent`. The agent can remove provider-owned uploads there. A root-owned
+file in the sticky shared `/tmp` can be read by the agent yet fail its cleanup
+with `Operation not permitted`.
+
 ## Snapshot preflight and reclamation
 
 Shellbox identifies snapshots for all launchers. One snapshot
