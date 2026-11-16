@@ -4,7 +4,7 @@
 """Build the NuminaMath-LEAN auto-informalization duplicate and split manifest.
 
 Exact copies share a source UUID or both normalized statements. Strong near-matches require at least
-``NEAR_THRESHOLD`` Jaccard similarity in both informal and formal five-token shingles. Exact copies
+``NEAR_THRESHOLD`` Jaccard similarity in both informal and formal five-token n-grams. Exact copies
 keep one preferred row; near-match variants remain, but their connected component stays in one split.
 
 Run against the pinned NuminaMath parquet::
@@ -25,16 +25,16 @@ import pyarrow.parquet as pq
 
 from experiments.post_training.task_curation.datasets.lean.similarity import (
     jaccard,
+    ngrams,
     normalized_text,
     row_key,
-    shingles,
     statement_key,
-    statement_shingles,
+    statement_ngrams,
 )
 
 NEAR_THRESHOLD = 0.9
-RARE_SHINGLES = 8
-MAX_SHINGLE_FREQUENCY = 128
+RARE_NGRAMS = 8
+MAX_NGRAM_FREQUENCY = 128
 EVAL_MODULUS = 20
 SPLIT_SALT = "numina-autoinformalization-v1"
 GROUND_TRUTH_RANK = {"complete": 0, "with_sorry": 1, "statement": 2}
@@ -90,9 +90,9 @@ def candidate_pairs(grams: Sequence[frozenset[tuple[str, ...]]]) -> set[tuple[in
             postings[gram].append(index)
     pairs = set()
     for left, row in enumerate(grams):
-        selected = sorted(row, key=lambda gram: (frequency[gram], gram))[:RARE_SHINGLES]
+        selected = sorted(row, key=lambda gram: (frequency[gram], gram))[:RARE_NGRAMS]
         for gram in selected:
-            if frequency[gram] > MAX_SHINGLE_FREQUENCY:
+            if frequency[gram] > MAX_NGRAM_FREQUENCY:
                 continue
             pairs.update((left, right) for right in postings[gram] if left < right)
     return pairs
@@ -148,8 +148,8 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
     row_keys = [key for key in keys if key is not None]
     formal_keys = [statement_key(row["formal_statement"]) for row in selected]
     informal_keys = [normalized_text(row["problem"]) for row in selected]
-    informal_grams = [shingles(row["problem"]) for row in selected]
-    formal_grams = [statement_shingles(row["formal_statement"]) for row in selected]
+    informal_grams = [ngrams(row["problem"]) for row in selected]
+    formal_grams = [statement_ngrams(row["formal_statement"]) for row in selected]
 
     exact = exact_edges(selected, formal_keys, informal_keys)
     exact_components = Components(len(selected))
@@ -209,9 +209,9 @@ def build_manifest(rows: Iterable[dict[str, Any]], input_record: Mapping[str, st
         "input": dict(input_record or {}),
         "settings": {
             "near_threshold": NEAR_THRESHOLD,
-            "shingle_size": 5,
-            "rare_shingles": RARE_SHINGLES,
-            "max_shingle_frequency": MAX_SHINGLE_FREQUENCY,
+            "ngram_size": 5,
+            "rare_ngrams": RARE_NGRAMS,
+            "max_ngram_frequency": MAX_NGRAM_FREQUENCY,
             "eval_modulus": EVAL_MODULUS,
             "split_salt": SPLIT_SALT,
         },

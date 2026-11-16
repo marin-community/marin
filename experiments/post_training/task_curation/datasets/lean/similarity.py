@@ -11,7 +11,7 @@ from typing import Any
 
 from experiments.post_training.task_curation.datasets.lean.lean_grade import TARGET_NAME, without_comments
 
-SHINGLE_SIZE = 5
+NGRAM_SIZE = 5
 DECLARATION = re.compile(rf"^[ \t]*(?:theorem|lemma)\s+(?P<name>{TARGET_NAME.pattern})", re.MULTILINE)
 PROOF_START = re.compile(r"(?s)^(?P<type>.*?):=")
 BINDER_NAMES = re.compile(r"[({\[⦃]\s*(?P<names>[^:()\[\]{}⦃⦄]+?)\s*:")
@@ -52,15 +52,15 @@ def normalized_text(text: str) -> str:
     return " ".join(TEXT_TOKEN.findall(LATEX_LAYOUT.sub(" ", normalized)))
 
 
-def shingles(text: str, *, formal: bool = False) -> frozenset[tuple[str, ...]]:
-    """Return five-token shingles from normalized prose or a normalized Lean theorem type."""
+def ngrams(text: str, *, formal: bool = False) -> frozenset[tuple[str, ...]]:
+    """Return five-token n-grams from normalized prose or a normalized Lean theorem type."""
     tokens = LEAN_TOKEN.findall(text) if formal else normalized_text(text).split()
-    return frozenset(zip(*(tokens[index:] for index in range(SHINGLE_SIZE)), strict=False))
+    return frozenset(zip(*(tokens[index:] for index in range(NGRAM_SIZE)), strict=False))
 
 
-def statement_shingles(declaration: str) -> frozenset[tuple[str, ...]]:
+def statement_ngrams(declaration: str) -> frozenset[tuple[str, ...]]:
     key = statement_key(declaration)
-    return shingles(key, formal=True) if key is not None else frozenset()
+    return ngrams(key, formal=True) if key is not None else frozenset()
 
 
 def jaccard(left: frozenset, right: frozenset) -> float:

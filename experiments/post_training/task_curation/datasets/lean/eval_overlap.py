@@ -5,7 +5,7 @@
 
 A row overlaps an eval problem when their theorem statements are the same text once comments,
 whitespace and binder names are removed, or when their informal problems share at least ``THRESHOLD`` of their
-five-token shingles (Jaccard similarity). The second test catches the same competition problem stated
+five-token n-grams (Jaccard similarity). The second test catches the same competition problem stated
 differently in Lean. Its threshold is low on purpose: between 0.2 and 0.5 about half the matches are the
 same problem reworded and the rest are other problems on the same template, which costs a few training
 rows. It cannot see an eval problem without informal text (miniF2F leaves some theorems without a
@@ -33,7 +33,7 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     is_human_statement_row,
 )
 from experiments.post_training.task_curation.datasets.lean.proofs import PROOFNET_VERIFIED_REVISION
-from experiments.post_training.task_curation.datasets.lean.similarity import DECLARATION, shingles, statement_key
+from experiments.post_training.task_curation.datasets.lean.similarity import DECLARATION, ngrams, statement_key
 
 MINIF2F_REVISION = "f0a20e14c1eeccd859d51bb4c2b3ee487889c303"
 PUTNAMBENCH_REVISION = "f423c173cef31a61fc3e69cbe606c8bc31fcb229"
@@ -87,20 +87,20 @@ def eval_problems(minif2f: list[Path], proofnet: Path, putnam: Path) -> list[dic
 
 def overlaps(rows: list[dict], problems: list[dict]) -> list[dict]:
     """Every (row, eval problem) pair with the same statement or similar informal text."""
-    by_statement, by_shingle, grams = defaultdict(set), defaultdict(set), []
+    by_statement, by_ngram, grams = defaultdict(set), defaultdict(set), []
     for index, problem in enumerate(problems):
         if key := statement_key(problem["formal"]):
             by_statement[key].add(index)
-        grams.append(shingles(problem["informal"]))
+        grams.append(ngrams(problem["informal"]))
         for gram in grams[-1]:
-            by_shingle[gram].add(index)
+            by_ngram[gram].add(index)
     found = []
     for row in rows:
         same = by_statement.get(statement_key(row["formal_statement"]) or "", set())
-        own = shingles(row["problem"] or "")
+        own = ngrams(row["problem"] or "")
         shared = defaultdict(int)
         for gram in own:
-            for index in by_shingle.get(gram, ()):
+            for index in by_ngram.get(gram, ()):
                 shared[index] += 1
         similar = {index: count / (len(own) + len(grams[index]) - count) for index, count in shared.items()}
         for index in sorted(same | {index for index, value in similar.items() if value >= THRESHOLD}):
