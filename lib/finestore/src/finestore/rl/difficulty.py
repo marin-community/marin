@@ -69,8 +69,6 @@ PROTOCOLS = MappingProxyType(
         )
     }
 )
-SOLVER_MODELS = PROTOCOLS[PROTOCOL_ID].models
-SOLVER_THINKING = PROTOCOLS[PROTOCOL_ID].thinking
 
 
 class MeasurementStatus(StrEnum):

@@ -302,10 +302,4 @@ DIFFICULTY_GAP_EXCLUSION_REASONS: dict[str, ExclusionReason] = {
     "JUDGE_API_UNQUALIFIED": ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
     "INVALID_REFERENCE": ExclusionReason.INVALID_REFERENCE,
 }
-"""Map the SOURCE-owned gaps that carry an exclusion reason to that reason.
-
-Keyed by DifficultyGap member NAME (not value) so the two enums stay
-decoupled: status_taxonomy must not import difficulty, which reaches this
-module through curation. PIPELINE-owned gaps never exclude a source, and
-SOURCE-owned gaps without an entry here exclude through their own receipt.
-"""
+"""Map SOURCE-owned DifficultyGap member names to exclusion reasons."""
