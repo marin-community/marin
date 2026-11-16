@@ -183,8 +183,12 @@ METADATA_EXCLUSIONS: tuple[MetadataExclusion, ...] = (
         claims=(
             _claim(
                 ExclusionReason.NOT_RL_TASK_DATA,
-                "Upstream has no RL task data; harness/trajectories only (CANDIDATES STATE.md note).",
-                uri="https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
+                "Upstream has no RL task data; harness/trajectories only. CANDIDATES STATE.md "
+                "(new-rl-data-ingest): no RL task data to ingest. The code is an Apache-2.0 GUI "
+                "agent harness, not a task set. Its trajectories are unlicensed (ROADMAP: "
+                "licensing 'will be documented') and are mostly closed-model outputs, so they "
+                "carry provider output terms. Don't train on them.",
+                uri="https://github.com/Tongyi-MAI/OpenGCUA",
             ),
             _claim(
                 ExclusionReason.LICENSE_BAN,
