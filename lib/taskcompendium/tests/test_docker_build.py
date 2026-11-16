@@ -19,10 +19,14 @@ class SelectedFactory:
 
 
 def test_declared_context_preserves_build_bytes_metadata_and_rejects_drift(tmp_path):
-    build = DockerBuildContext(files=(
-        inline_resource("Dockerfile", b"FROM ubuntu:24.04\nCOPY input /input\n"),
-        inline_resource("input", b"\x00original\xff").model_copy(update={"mode": "0755", "mtime_ns": 1234567890000000000}),
-    ))
+    build = DockerBuildContext(
+        files=(
+            inline_resource("Dockerfile", b"FROM ubuntu:24.04\nCOPY input /input\n"),
+            inline_resource("input", b"\x00original\xff").model_copy(
+                update={"mode": "0755", "mtime_ns": 1234567890000000000}
+            ),
+        )
+    )
     source = materialize_docker_build(build, tmp_path / "context")
     environment = EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_build=build)
     factory = SelectedFactory()

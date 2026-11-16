@@ -31,8 +31,11 @@ from shellbox.machine import (
     MachineFactory,
     MachineSpec,
     NetworkPolicy,
+    ProcessMachine,
+    ProcessSession,
     ResourceLimit,
     ResourceLimitExceeded,
+    UnsupportedMachineSpec,
 )
 from taskcompendium.grading import parse_grade_result
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome, verdict_bytes
@@ -148,6 +151,11 @@ class _MeasuredMachine:
     async def upload(self, source: Path, target: str) -> None:
         await self.machine.upload(source, target)
 
+    async def open_process(self, command: Command) -> ProcessSession:
+        if not isinstance(self.machine, ProcessMachine):
+            raise UnsupportedMachineSpec("The wrapped machine does not support persistent processes")
+        return await self.machine.open_process(command)
+
     async def download(self, source: str, target: Path) -> None:
         await self.machine.download(source, target)
         if source == VERDICT_PATH:
@@ -170,6 +178,11 @@ class _CleanupTrackedMachine:
 
     async def upload(self, source: Path, target: str) -> None:
         await self.machine.upload(source, target)
+
+    async def open_process(self, command: Command) -> ProcessSession:
+        if not isinstance(self.machine, ProcessMachine):
+            raise UnsupportedMachineSpec("The wrapped machine does not support persistent processes")
+        return await self.machine.open_process(command)
 
     async def download(self, source: str, target: Path) -> None:
         await self.machine.download(source, target)
