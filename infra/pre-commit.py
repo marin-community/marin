@@ -407,10 +407,13 @@ def _check_changed_files(files: list[pathlib.Path], allowlist: dict[str, int]) -
         change_bytes += max(0, size - (base_size or 0))
         recorded = allowlist.get(relative)
         if recorded is not None:
-            if size > recorded:
+            # The entry must match the file in the same change: lowering the entry
+            # with the file is the only way to shrink, and a stale entry cannot
+            # authorize growth later.
+            if size != recorded:
                 failures.append(
-                    f"  - {relative} grew to {size / 1024:.1f} KB (allowlisted at {recorded / 1024:.1f} KB;"
-                    f" the allowlist only shrinks)"
+                    f"  - {relative} is {size / 1024:.1f} KB but its allowlist entry records"
+                    f" {recorded / 1024:.1f} KB; set the entry to the committed size"
                 )
             continue
         if size > LARGE_DATA_FILE_LIMIT:
@@ -425,7 +428,7 @@ def _check_changed_files(files: list[pathlib.Path], allowlist: dict[str, int]) -
 
 
 def _check_allowlist_pins(allowlist: dict[str, int]) -> list[str]:
-    """Every allowlist entry must name data at BASE_REF and record exactly its committed size."""
+    """After adoption, entries may only shrink and must match their file's size."""
     result = run_cmd(
         ["git", "cat-file", "-p", f"{BASE_REF}:{LARGE_DATA_ALLOWLIST_PATH.relative_to(ROOT_DIR).as_posix()}"]
     )
@@ -437,15 +440,23 @@ def _check_allowlist_pins(allowlist: dict[str, int]) -> list[str]:
     for path, size in allowlist.items():
         base_size = base_document.get(path)
         if base_size is None:
-            if _git_blob_size(BASE_REF, path) is None:
-                failures.append(
-                    f"  - allowlist entry {path} names data that does not exist on {BASE_REF};"
-                    " commit the reference instead"
-                )
-        elif size != int(base_size):
             failures.append(
-                f"  - allowlist entry {path} records {size / 1024:.1f} KB but {BASE_REF} holds"
-                f" {int(base_size) / 1024:.1f} KB; set the entry to the committed size"
+                f"  - allowlist entry {path} is new; after adoption an entry must name data that"
+                f" {BASE_REF} already has, so publish the data instead"
+            )
+            continue
+        if size > int(base_size):
+            failures.append(
+                f"  - allowlist entry {path} grew from {int(base_size) / 1024:.1f} KB to"
+                f" {size / 1024:.1f} KB (the allowlist only shrinks)"
+            )
+        file_path = ROOT_DIR / path
+        if not file_path.exists():
+            failures.append(f"  - allowlist entry {path} names a file that no longer exists; delete the entry")
+        elif file_path.stat().st_size != size:
+            failures.append(
+                f"  - allowlist entry {path} records {size / 1024:.1f} KB but the file holds"
+                f" {file_path.stat().st_size / 1024:.1f} KB; set the entry to the committed size"
             )
     return failures
 

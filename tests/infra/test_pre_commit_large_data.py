@@ -131,6 +131,40 @@ def test_adoption_mode_accepts_entries_for_data_origin_main_lacks(repo: Path):
     assert precommit.check_large_data([path, precommit.LARGE_DATA_ALLOWLIST_PATH], fix=False) == 0
 
 
+def test_shrinking_an_allowlisted_file_lowers_its_entry_after_adoption(repo: Path):
+    path = _write_data(repo, "datasets/legacy/results.json", 150)
+    _allowlist(repo, {"datasets/legacy/results.json": path.stat().st_size})
+    _git("commit", "--quiet", "-m", "Adopt the allowlist", cwd=repo)
+    _git("update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
+    path.write_bytes(b"x" * (50 * 1024))
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    _allowlist(repo, {"datasets/legacy/results.json": path.stat().st_size})
+    assert precommit.check_large_data([path, precommit.LARGE_DATA_ALLOWLIST_PATH], fix=False) == 0
+
+
+def test_a_new_entry_after_adoption_fails_even_for_data_origin_main_has(repo: Path):
+    # datasets/small.json exists on origin/main at a few bytes; a new entry
+    # cannot authorize growing it.
+    _allowlist(repo, {})
+    _git("commit", "--quiet", "-m", "Adopt the allowlist", cwd=repo)
+    _git("update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
+    grown = repo / "datasets" / "small.json"
+    grown.write_bytes(b"x" * (300 * 1024))
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    _allowlist(repo, {"datasets/small.json": grown.stat().st_size})
+    assert precommit.check_large_data([grown, precommit.LARGE_DATA_ALLOWLIST_PATH], fix=False) == 1
+
+
+def test_deleting_an_allowlisted_file_requires_deleting_its_entry(repo: Path):
+    path = _write_data(repo, "datasets/legacy/results.json", 150)
+    _allowlist(repo, {"datasets/legacy/results.json": path.stat().st_size})
+    _git("commit", "--quiet", "-m", "Adopt the allowlist", cwd=repo)
+    _git("update-ref", "refs/remotes/origin/main", "HEAD", cwd=repo)
+    path.unlink()
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    assert precommit.check_large_data([precommit.LARGE_DATA_ALLOWLIST_PATH], fix=False) == 1
+
+
 def test_non_data_and_config_files_are_ignored(repo: Path):
     source = repo / "code.py"
     source.write_text("value = 1\n")

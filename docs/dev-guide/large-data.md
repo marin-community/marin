@@ -36,7 +36,8 @@ forms and credentials — and verify the downloaded bytes against `sha256`.
 ## The Allowlist
 
 `infra/large-data-allowlist.json` records the data files that predate the guard
-and must stay in the repository. Once `origin/main` carries the allowlist, every
-entry must record exactly the file's committed size there, and a new entry must
-name data that `origin/main` already has. To move an allowlisted file out,
-publish it as above and delete its entry.
+and must stay in the repository. Once `origin/main` carries the allowlist, an
+entry may only shrink (never grow), must record exactly the file's committed
+size, and must name a file that still exists; new entries are rejected, so a
+dataset that was not adopted must be published as above. To move an allowlisted
+file out, publish it as above and delete its entry.
