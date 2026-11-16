@@ -302,6 +302,7 @@ def curate(source: RlDataSource[ResearchDataset], options: PipelineOptions) -> A
     if options.mode is not SourceProcessingMode.QUICK:
         raise ValueError("Prepare QUICK first, then qualify and review its frozen private release")
     assert source.config is not None
+    source_licenses(source.config.preparation)
     return ArtifactStep(
         name="rl-data/openresearcher/converted",
         version=VERSION,
@@ -312,7 +313,6 @@ def curate(source: RlDataSource[ResearchDataset], options: PipelineOptions) -> A
 
 
 def source(config: PreparationConfig) -> RlDataSource[ResearchDataset]:
-    receipts = source_licenses(config)
     return RlDataSource(
         info=SourceInfo(
             origin=SourceOrigin.OPENRESEARCHER,
@@ -322,7 +322,6 @@ def source(config: PreparationConfig) -> RlDataSource[ResearchDataset]:
             family="offline-search",
             tags=("license:mit", "corpus-license:odc-by"),
             task_format=TaskFormat.TASKCOMPENDIUM,
-            license_receipt=receipts[SOURCE_ID],
         ),
         config=ResearchDataset(config),
         pipeline=curate,

@@ -38,6 +38,7 @@ from experiments.post_training.task_curation.datasets.lean import numina as lean
 from experiments.post_training.task_curation.datasets.lean import proofs as lean_proofs
 from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
+from experiments.post_training.task_curation.datasets.openresearcher import recipe as openresearcher
 from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
 from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
 from experiments.post_training.task_curation.datasets.prime_intellect import swe as prime_swe
@@ -94,6 +95,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *prime_swe.sources(),
     *prime_multiswe.sources(),
     *rst.sources(),
+    *openresearcher.sources(),
 )
 
 

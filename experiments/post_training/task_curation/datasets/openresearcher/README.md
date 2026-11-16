@@ -75,6 +75,12 @@ reviewer contract from the shared
 
 ## Continue through admission
 
+[`recipe.sources()`](recipe.py) declares the frozen preparation inputs in the
+pending source inventory. Constructing this declaration performs no regional
+reads. `curate` checks the dataset and corpus license receipts before creating
+the QUICK artifact graph; `prepare` rechecks both before reading question data.
+Pending registration leaves the source unavailable for Atlas training selection.
+
 The versioned `openresearcher-bm25:v1` provider exposes `search` and
 `get_document`. Search returns five hits with 512-token snippets. Its state
 pins the implementation, corpus, tokenizer and index manifest. The gold

@@ -11,7 +11,10 @@ import pytest
 from taskcompendium.harbor.adapter import TASK_SPEC_FILE
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.openresearcher import OpenResearcherState
+from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
+from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.datasets.openresearcher.assets import (
     CORPUS,
     CORPUS_REVISION,
@@ -26,11 +29,13 @@ from experiments.post_training.task_curation.datasets.openresearcher.grounding_p
 )
 from experiments.post_training.task_curation.datasets.openresearcher.prepare import (
     PreparationConfig,
+    curate,
     prepare,
     retained_questions,
+    source,
 )
 from experiments.post_training.task_curation.datasets.openresearcher.questions import QuestionPool
-from experiments.post_training.task_curation.tests.license_fixtures import fixture_license
+from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 
 
 def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_path):
@@ -158,6 +163,24 @@ def test_retained_population_excludes_benchmarks_and_rejects_rewritten_gold(tmp_
     retained = retained_questions(config)
     assert retained.rows == [rows[0]]
     assert [row["id"] for row in retained.heldout_exclusions] == ["benchmark"]
+    bad_licenses = json.loads((tmp_path / "license-receipts.json").read_text())
+    bad_licenses["OpenResearcher:OpenResearcher-Corpus"]["revision"] = "0" * 40
+    bad_stage = tmp_path / "stale-corpus-license"
+    bad_stage.mkdir()
+    _, bad_licenses_sha = seal("stale-corpus-license/license-receipts.json", bad_licenses)
+    stage = json.loads((tmp_path / "stage.json").read_text())
+    bad_stage_path, bad_stage_sha = seal(
+        "stale-corpus-license/stage.json",
+        {**stage, "path": str(bad_stage), "license_receipts_sha256": bad_licenses_sha},
+    )
+    blocked_config = replace(config, stage_receipt=bad_stage_path, stage_receipt_sha256=bad_stage_sha)
+    # A valid dataset license cannot authorize graph creation with a stale corpus grant.
+    with pytest.raises(ValueError, match="another source revision: OpenResearcher:OpenResearcher-Corpus"):
+        curate(
+            with_license(source(blocked_config)),
+            PipelineOptions(mode=SourceProcessingMode.QUICK, runtime=CampaignRuntime()),
+        )
+    assert not (tmp_path / "converted").exists()
     result = prepare(config)
     output = tmp_path / "converted"
     exported = pq.read_table(output / "tasks.parquet").to_pylist()
