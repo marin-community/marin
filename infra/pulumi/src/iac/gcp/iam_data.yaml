@@ -893,8 +893,6 @@ custom_roles:
 owned_service_accounts:
 - account_id: pulumi-ci
   display_name: Pulumi CI preview (read-only)
-- account_id: contractor
-  display_name: Contractor Iris access
 project_grants:
 - role: projects/hai-gcp-models/roles/RayWorker
   members:
@@ -1686,11 +1684,6 @@ service_accounts:
   - role: roles/iam.workloadIdentityUser
     members:
     - principal://iam.googleapis.com/projects/748532799086/locations/global/workloadIdentityPools/github-pool/subject/repo:marin-community/marin:ref:refs/heads/main
-- email: contractor@hai-gcp-models.iam.gserviceaccount.com
-  grants:
-  - role: roles/iam.serviceAccountTokenCreator
-    members:
-    - principal: human-076
 - email: iris-controller@hai-gcp-models.iam.gserviceaccount.com
   grants:
   - role: roles/iam.serviceAccountTokenCreator
@@ -1756,6 +1749,9 @@ service_accounts:
     - principal: human-060
     - principal: human-026
     - principal: human-003
+    - principal: human-075
+    - principal: human-007
+    - principal: human-082
   - role: roles/iam.serviceAccountUser
     members:
     - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
@@ -1819,6 +1815,7 @@ service_accounts:
     - principal: human-060
     - principal: human-026
     - principal: human-003
+    - principal: human-082
 - email: iris-worker@hai-gcp-models.iam.gserviceaccount.com
   grants:
   - role: roles/iam.serviceAccountTokenCreator

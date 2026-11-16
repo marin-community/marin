@@ -4,6 +4,7 @@
 """The eval statistics engine: intervals under attrition, panel aggregates, and result selection."""
 
 import math
+from dataclasses import replace
 
 import pytest
 from marin.evaluation.eval_measurements import (
@@ -410,7 +411,60 @@ def test_newest_declared_protocol_excludes_legacy_metrics_for_the_column():
     selection = select([legacy, declared], SelectionRequest())
 
     assert selection.cells["m"]["drop"].run_id == "declared"
-    assert selection.rejections[0].reason == "metric exact_match differs from declared f1"
+    assert {rejection.run_id for rejection in selection.rejections} == {"legacy"}
+
+
+@pytest.mark.parametrize(
+    "identity,shots,metric,kind,admitted",
+    [
+        (None, 5, "accuracy", MetricKind.BINARY, True),
+        (None, None, "accuracy", MetricKind.BINARY, True),
+        (None, 0, "accuracy", MetricKind.BINARY, False),
+        (None, 5, "normalized_accuracy", MetricKind.BINARY, False),
+        (None, 5, "accuracy", MetricKind.CONTINUOUS, False),
+        ("previous-corpus", 5, "accuracy", MetricKind.BINARY, False),
+        ("current-corpus", 5, "accuracy", MetricKind.BINARY, True),
+    ],
+)
+def test_historical_comparisons_preserve_known_protocol_differences(identity, shots, metric, kind, admitted):
+    current = replace(
+        _measurement(
+            model="native", run_id="native", declared=True, protocol_metric="accuracy", created_at="2026-11-05T00:00:00Z"
+        ),
+        protocol_identity="current-corpus",
+        num_fewshot=5,
+    )
+    previous = replace(
+        current,
+        model="historical",
+        run_id="historical",
+        created_at="2026-10-01T00:00:00Z",
+        protocol_identity=identity,
+        num_fewshot=shots,
+        protocol_metric=metric,
+        protocol_kind=kind,
+    )
+    selection = select([previous, current], SelectionRequest())
+    assert ("historical" in selection.cells) is admitted
+    assert selection.cells["native"]["gsm8k"].run_id == "native"
+    assert bool(selection.rejections) is not admitted
+
+
+def test_newer_unknown_corpus_does_not_merge_distinct_known_protocols():
+    measurements = [
+        replace(
+            _measurement(model=name, run_id=name, declared=True, protocol_metric="accuracy", created_at=date),
+            protocol_identity=identity,
+        )
+        for name, identity, date in (
+            ("old", "corpus-a", "2026-11-01T00:00:00Z"),
+            ("current", "corpus-b", "2026-11-02T00:00:00Z"),
+            ("unknown", None, "2026-11-03T00:00:00Z"),
+        )
+    ]
+    selection = select(measurements, SelectionRequest())
+    assert set(selection.cells) == {"current", "unknown"}
+    assert {rejection.run_id for rejection in selection.rejections} == {"old"}
 
 
 def test_selection_rejects_failed_runs_but_keeps_them_explainable():
@@ -945,6 +999,23 @@ def test_publication_metric_projects_score_and_coverage_without_changing_record(
     assert measurement.coverage.n_scored == 4
     assert measurement.coverage.n_attempted == 5
     assert measurement.coverage.errors == {"ungraded": 1}
+    assert record.model_dump() == original
+
+
+def test_historical_mrcr_normalization_preserves_continuous_uncertainty():
+    record = _record(
+        eval_name="mrcr",
+        metrics={"mrcr": {"mrcr_accuracy": 0.5, "mrcr_accuracy_stderr": 0.1, "sample_len": 4}},
+        coverage={"mrcr": TaskCoverage(n_benchmark=4, n_attempted=4, n_scored=4)},
+    )
+    original = record.model_dump()
+    measurement = measurement_from_record(record)
+    assert measurement is not None
+    assert (measurement.metric, measurement.value, measurement.kind) == ("accuracy", 0.5, MetricKind.CONTINUOUS)
+    assert measurement.n_correct is None
+    assert measurement.recorded_stderr == 0.1
+    interval = measurement_interval(measurement)
+    assert 0.3 < interval.low < interval.high < 0.7
     assert record.model_dump() == original
 
 

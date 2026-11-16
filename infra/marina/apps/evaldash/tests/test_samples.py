@@ -5,6 +5,7 @@ import json
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from evaldash.samples import fetch_artifact, fetch_samples, list_sample_tasks
 from finestore.eval import (
     SAMPLES_MERGE_KEY,
@@ -63,7 +64,8 @@ def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
     assert [row.doc_id for row in page.rows] == ["incorrect"]
 
 
-def test_sample_reader_uses_the_declared_primary_metric(tmp_path) -> None:
+@pytest.mark.parametrize("declared", ["f1", "f1,none"])
+def test_sample_reader_uses_the_declared_primary_metric(tmp_path, declared) -> None:
     fs, root = url_to_fs(str(tmp_path))
     sample = EvalSample(
         task="drop",
@@ -74,7 +76,7 @@ def test_sample_reader_uses_the_declared_primary_metric(tmp_path) -> None:
     )
     write_sample_parquet(fs, f"{root}/samples_drop_20260719.parquet", [sample])
 
-    page = fetch_samples(str(tmp_path), "drop", offset=0, limit=1, correct="all", primary_metric_name="f1")
+    page = fetch_samples(str(tmp_path), "drop", offset=0, limit=1, correct="all", primary_metric_name=declared)
 
     assert page.primary_metric == "f1,none"
 

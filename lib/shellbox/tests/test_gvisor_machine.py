@@ -9,11 +9,13 @@ import os
 import subprocess
 import tarfile
 
+import pytest
 from shellbox.backends.docker.machine import DockerCommandResult
 from shellbox.backends.gvisor.machine import GvisorMachineFactory
 from shellbox.machine import DockerImage, MachineSpec
 
 
+@pytest.mark.requires_host_setsid
 def test_gvisor_transfers_binary_files_and_directory_contents_through_exec(tmp_path, monkeypatch):
     async def docker(*args, stdin=b"", **kwargs):
         if args[0] in {"run", "rm"}:

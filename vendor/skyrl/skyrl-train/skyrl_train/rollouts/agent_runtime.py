@@ -14,10 +14,11 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig
-from harbor.host_capabilities import DaytonaConnection, HostCapabilities
+from harbor.host_capabilities import HostCapabilities
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
+from shellbox.backends.daytona.connection import DaytonaConnection
 from marinskyrl.harbor_environments import (
     HarborTaskBinding,
     apply_task_binding,

@@ -74,7 +74,15 @@ fi
 # Keep the development linker name in this environment, outside uv's package cache.
 ln -sf "$CUDA_HOME/lib/libcudart.so.13" "$environment/lib/libcudart.so"
 ln -sf "$CUDA_HOME/lib/libnvrtc.so.13" "$environment/lib/libnvrtc.so"
-"$python" -c "import flash_attn, flash_attn_2_cuda"
+"$python" - <<'PY'
+import platform
+
+# Check the attention package selected by the locked profile before starting Ray.
+if platform.machine() == "aarch64":
+    from flash_attn.cute.interface import flash_attn_varlen_func
+else:
+    from flash_attn_interface import flash_attn_varlen_func
+PY
 if [[ "$profile" == megatron || "$profile" == megatron-export ]]; then
   "$python" -c "import transformer_engine.common; from megatron.bridge import AutoBridge"
 fi

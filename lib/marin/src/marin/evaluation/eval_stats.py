@@ -33,7 +33,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from marin.evaluation.metric_selection import base_metric
+from marin.evaluation.metric_selection import canonical_metric_name
 from marin.evaluation.records import MetricKind, RepeatAggregate, RunStatus
 
 ALPHA = 0.05
@@ -224,6 +224,7 @@ class Measurement:
     declared: bool = False
     protocol_metric: str | None = None
     protocol_kind: MetricKind | None = None
+    protocol_identity: str | None = None
 
 
 # --------------------------------------------------------------------------------------------------
@@ -528,6 +529,8 @@ class MetricProtocol:
 
     metric: str
     kind: MetricKind
+    identity: str | None = None
+    num_fewshot: int | None = None
 
 
 @dataclass(frozen=True)
@@ -542,27 +545,51 @@ class LegacyMetric:
 def effective_protocol(measurement: Measurement) -> MetricProtocol:
     """Resolve a measurement's declared protocol or its legacy inferred protocol."""
     if measurement.declared and measurement.protocol_metric is not None and measurement.protocol_kind is not None:
-        return MetricProtocol(metric=measurement.protocol_metric, kind=measurement.protocol_kind)
-    return MetricProtocol(metric=base_metric(measurement.metric), kind=measurement.kind)
+        return MetricProtocol(
+            metric=canonical_metric_name(measurement.protocol_metric, measurement.benchmark),
+            kind=measurement.protocol_kind,
+            identity=measurement.protocol_identity,
+            num_fewshot=measurement.num_fewshot,
+        )
+    return MetricProtocol(
+        metric=canonical_metric_name(measurement.metric, measurement.benchmark),
+        kind=measurement.kind,
+        num_fewshot=measurement.num_fewshot,
+    )
 
 
 def declared_protocols(measurements: Iterable[Measurement]) -> Mapping[str, MetricProtocol]:
-    """Return each benchmark's protocol from its newest declared measurement."""
+    """Prefer the newest identified corpus; unknown identities cannot erase its constraints."""
     newest: dict[str, Measurement] = {}
     for measurement in measurements:
         current = newest.get(measurement.benchmark)
-        if measurement.declared and (current is None or measurement.created_at > current.created_at):
+        if measurement.declared and (
+            current is None
+            or (measurement.protocol_identity is not None, measurement.created_at)
+            > (current.protocol_identity is not None, current.created_at)
+        ):
             newest[measurement.benchmark] = measurement
     return {
-        benchmark: MetricProtocol(metric=measurement.protocol_metric, kind=measurement.protocol_kind)
+        benchmark: effective_protocol(measurement)
         for benchmark, measurement in newest.items()
         if measurement.protocol_metric is not None and measurement.protocol_kind is not None
     }
 
 
 def matches_protocol(measurement: Measurement, protocol: MetricProtocol) -> bool:
-    """Whether a measurement uses a benchmark column's declared protocol."""
-    return effective_protocol(measurement) == protocol
+    """Admit historical scores by metric and shots when their corpus identity is unknown."""
+    observed = effective_protocol(measurement)
+    if (observed.metric, observed.kind) != (protocol.metric, protocol.kind):
+        return False
+    if (
+        observed.num_fewshot is not None
+        and protocol.num_fewshot is not None
+        and observed.num_fewshot != protocol.num_fewshot
+    ):
+        return False
+    # Historical Evalchemy records predate corpus identities. Preserve their comparisons without
+    # weakening the identity check between two runs that both declare their corpus.
+    return observed.identity is None or protocol.identity is None or observed.identity == protocol.identity
 
 
 def _admission_reason(measurement: Measurement, request: SelectionRequest) -> str | None:
@@ -618,7 +645,7 @@ def select(
         if measurement.benchmark in protocols:
             continue
         current = legacy_metrics.get(measurement.benchmark)
-        candidate = LegacyMetric(measurement.created_at, measurement.run_id, base_metric(measurement.metric))
+        candidate = LegacyMetric(measurement.created_at, measurement.run_id, effective_protocol(measurement).metric)
         if current is None or (candidate.created_at, candidate.run_id) > (current.created_at, current.run_id):
             legacy_metrics[measurement.benchmark] = candidate
     chosen: dict[str, dict[str, Measurement]] = {}
@@ -633,11 +660,18 @@ def select(
         metric = effective.metric
         kind = effective.kind
         if protocol is not None and not matches_protocol(measurement, protocol):
-            reason = (
-                f"metric {metric} differs from declared {protocol.metric}"
-                if metric != protocol.metric
-                else f"metric kind {kind.value} differs from declared {protocol.kind.value}"
-            )
+            if metric != protocol.metric:
+                reason = f"metric {metric} differs from declared {protocol.metric}"
+            elif kind != protocol.kind:
+                reason = f"metric kind {kind.value} differs from declared {protocol.kind.value}"
+            elif (
+                effective.identity is not None
+                and protocol.identity is not None
+                and effective.identity != protocol.identity
+            ):
+                reason = "corpus identity differs from declared protocol"
+            else:
+                reason = f"few-shot count {effective.num_fewshot} differs from declared {protocol.num_fewshot}"
             rejections.append(
                 Rejection(
                     model=measurement.model,

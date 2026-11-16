@@ -342,6 +342,14 @@ def test_api_compare_spans_cohorts_when_all_cohorts_are_selected(client):
     versions = {cell["version"] for row in comparison["rows"] for cell in row["cells"].values()}
     assert versions >= {"2026.07.20", "2026.07.21"}
 
+    panel = client.get("/panel", params={"cohort": "all"}).json()
+    panel_cells = {row["model"]: row["cells"] for row in panel["rows"]}
+    assert "mmlu" in comparison["shared"]
+    mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
+    for model in ("snowball", "qwen3-8b"):
+        assert mmlu["cells"][model]["run_id"] == panel_cells[model]["mmlu"]["run_id"]
+    assert {cell["version"] for cell in mmlu["cells"].values()} == {"2026.07.20", "2026.07.21"}
+
 
 def test_api_selects_unversioned_records_by_name(client):
     assert "unversioned" in client.get("/meta").json()["versions"]

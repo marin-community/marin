@@ -60,7 +60,9 @@ def test_source_labels_grade_empty_and_exact_candidates_through_judge(
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     judge_server.reply = reply
     spec = spec_builder("How much revenue?", "$7")
-    connection = JudgeConnection(f"http://127.0.0.1:{judge_server.server_port}/v1", "fixture-key")
+    connection = JudgeConnection(
+        f"http://127.0.0.1:{judge_server.server_port}/v1", "fixture-key", default_model="fixture-judge"
+    )
     for candidate in ("", "$7"):
         verdict = grade_judge_candidate(spec, candidate, connection=connection)
         assert verdict.status is Status.SCORED
@@ -69,7 +71,7 @@ def test_source_labels_grade_empty_and_exact_candidates_through_judge(
             name: float(name == metric) for name in ("accuracy", "incorrect", "not_attempted", "judge_failed")
         }
     assert len(judge_server.requests) == 2
-    assert {request["model"] for request in judge_server.requests} == {spec.model}
+    assert {request["model"] for request in judge_server.requests} == {spec.model or connection.default_model}
     prompt = judge_server.requests[-1]["messages"][-1]["content"]
     assert "How much revenue?" in prompt
     assert "$7" in prompt

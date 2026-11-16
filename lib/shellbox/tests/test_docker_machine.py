@@ -442,6 +442,7 @@ def test_docker_stop_disposes_a_live_or_unverified_process_group(monkeypatch, pr
 
 @pytest.mark.parametrize("exit_code,prefix", [(126, b"\x00\xffstart error\r\n"), (127, b"\x00\xffstart error")])
 @pytest.mark.parametrize("output_limit", [0, 1024])
+@pytest.mark.requires_host_setsid
 def test_docker_exec_start_failure_preserves_output_and_the_next_command(monkeypatch, exit_code, prefix, output_limit):
     create_process = asyncio.create_subprocess_exec
     script = (

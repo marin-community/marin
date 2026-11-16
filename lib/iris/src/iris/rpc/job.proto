@@ -302,6 +302,9 @@ message TaskAttempt {
   // container's own reason. Empty unless the attempt failed.
   string terminal_reason = 13;
   TaskOutputArchive output_archive = 14;
+  // Topology domains selected by the scheduler, keyed by node label. Empty
+  // until assigned or when the backend does not expose topology metadata.
+  map<string, string> topology = 15;
 }
 
 message ResourceUsage {
@@ -571,11 +574,13 @@ message ConstraintList {
   repeated Constraint constraints = 1;
 }
 
-// Coscheduling configuration for multi-host jobs.
-// When set, all tasks in the job must be scheduled atomically onto workers
-// that share the same value for the specified group_by attribute.
+// Admit and retry a multi-host job together at the requested topology level.
 message CoschedulingConfig {
   string group_by = 1;  // Attribute key to group workers by (e.g., "tpu-name")
+  // Partition task ordinals into groups, each confined to one group_by domain.
+  // Empty keeps the existing whole-job or platform-defined sliced placement.
+  // Groups share the job's atomic admission and retry lifecycle.
+  repeated int32 group_sizes = 2;
 }
 
 // ============================================================================

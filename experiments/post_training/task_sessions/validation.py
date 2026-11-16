@@ -27,7 +27,8 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from rigging.filesystem.storage_path import prefix_join
-from skyrlrecipe import SkyRLRecipe
+from skyrlrecipe import ContextBudget, RecipePatch, sections
+from skyrlrecipe.declared import CheckpointCallback, InferenceStatsCallback
 from zephyr.writers import write_parquet_file
 
 from experiments.post_training.cat_count_canary.data import TRAIN_FILENAME, VALIDATION_FILENAME, cat_count_record
@@ -105,36 +106,37 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
         group_size=GROUP_SIZE,
         micro_train_batch_size=MICRO_BATCH_SIZE,
     )
-    config["context_budget"] = {
-        "request_window_tokens": 1024,
-        "max_new_tokens_per_turn": 128,
-        "max_turns": 2,
-    }
-    trainer = config["trainer"]
-    trainer.update(
-        {
-            "max_steps": steps,
-            "update_epochs_per_batch": 1,
-            "step_wise_training": mode == "step",
-            "eval_before_train": False,
-            "eval_interval": -1,
-            "ckpt_interval": steps,
-            "resume_mode": "none",
-            "logger": "console",
-            "project_name": "marin-task-session-validation",
-        }
+    config = config.merge(
+        RecipePatch(
+            context_budget=ContextBudget(request_window_tokens=1024, max_new_tokens_per_turn=128, max_turns=2),
+            trainer=sections.Trainer(
+                max_steps=steps,
+                update_epochs_per_batch=1,
+                step_wise_training=mode == "step",
+                eval_before_train=False,
+                eval_interval=-1,
+                ckpt_interval=steps,
+                resume_mode="none",
+                logger="console",
+                project_name="marin-task-session-validation",
+                # Keep checkpoint and token evidence. Omit evaluation and database registration.
+                callbacks=(
+                    CheckpointCallback(type="checkpoint", save_steps=steps),
+                    InferenceStatsCallback(
+                        type="inference_stats", log_every_steps=1, log_to_console=True, log_to_tracker=True
+                    ),
+                ),
+            ),
+            generator=sections.Generator(
+                trajectory_retention=sections.TrajectoryRetention(
+                    sample_count_per_step=BATCH_SIZE,
+                    max_bytes_per_step=RETENTION_BYTES_PER_STEP,
+                    max_bytes_per_run=RETENTION_BYTES_PER_RUN,
+                    required=True,
+                )
+            ),
+        )
     )
-    # Keep checkpoint and token evidence. Omit evaluation and database registration.
-    trainer["callbacks"] = [
-        {"type": "checkpoint", "save_steps": steps},
-        {"type": "inference_stats", "log_every_steps": 1, "log_to_console": True, "log_to_tracker": True},
-    ]
-    config["generator"]["trajectory_retention"] = {
-        "sample_count_per_step": BATCH_SIZE,
-        "max_bytes_per_step": RETENTION_BYTES_PER_STEP,
-        "max_bytes_per_run": RETENTION_BYTES_PER_RUN,
-        "required": True,
-    }
     rows = BATCH_SIZE * steps
     data_identity = fingerprint_hash(
         canonical_json(
@@ -155,13 +157,14 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
     model = MODELS[DEFAULT_MODEL].step
     download = model.build_config(StepContext.for_fingerprint(model.runtime_args, model.deps))
     adopted_model = ArtifactStep.adopt(model.name, model.version, QWEN_SOURCE, kind=model.artifact_type)
-    identity_config = {**config, "trainer": {**config["trainer"], "seed": SEED, "max_ckpts_to_keep": 1}}
+    document = config.to_skyrl()
+    identity_config = {**document, "trainer": {**document["trainer"], "seed": SEED, "max_ckpts_to_keep": 1}}
     recipe_fingerprint = fingerprint_hash(canonical_json({"config": identity_config, "data": data_identity}))
     run = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(f"{RUN_NAME}/{mode}/{recipe_fingerprint}"),
             version=version,
-            config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config).to_skyrl(), sort_keys=False),
+            config_yaml=yaml.safe_dump(document, sort_keys=False),
             model=ArtifactHfModel(
                 step=adopted_model,
                 relative_path="",
