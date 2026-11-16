@@ -27,7 +27,10 @@ def bind_disposition(identifier: str, stage: DropStage, reason: str, shards: dic
 
 
 def propagate_lexical_duplicates(duplicate_of: dict[str, str], lexical_ids: set[str], shards: dict, rows: dict) -> int:
-    """Keep decontamination effective when exact-deduplication is rolled back."""
+    """Keep decontamination effective when exact-deduplication is rolled back.
+
+    Returns the number of rows that received a new lexical-drop disposition.
+    """
     count = 0
     for identifier, kept in duplicate_of.items():
         if kept not in lexical_ids:

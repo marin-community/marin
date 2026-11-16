@@ -25,9 +25,9 @@ from experiments.sft_new_mix.exp3_build import build_config, configure_storage, 
 from experiments.sft_new_mix.exp3_filters import MAX_TOKENS, Decision, Document, Stage, apply_stage
 from experiments.sft_new_mix.job_manifests import read_job_manifest, stage_job_manifest
 from experiments.sft_new_mix.loss_modes import LossMode, prediction_weights
+from experiments.sft_new_mix.run_tool_payloads import JOB_MANIFEST_WRITE_WORKERS
 
 BATCH_ROWS = 128
-JOB_MANIFEST_WRITE_WORKERS = 16
 
 
 class DropStage(StrEnum):

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reversible, source-aware scripted filters for the November 15 SFT candidate."""
+"""Reversible, source-aware scripted filters for the SFT candidate pipeline."""
 
 import json
 import re
@@ -142,6 +142,7 @@ def unquote_opencode_prompt(content: str, question: str) -> str:
 
 
 def source_exclusion(source: str) -> str:
+    """Return "" to keep the source, or the exclusion reason code that drops it."""
     if source.startswith("nemotron_sft_v3/multilingual_v1/"):
         return "multilingual_v1"
     if source == "nemotron_sft_v3/math_v2/medium":
@@ -194,7 +195,10 @@ def protected_path(path: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def replay_reason(text: str) -> str:
-    """Heuristic gates; thresholds require calibration before publication."""
+    """Heuristic gates; thresholds require calibration before publication.
+
+    Returns "" to keep the row, or the reason code that drops it.
+    """
     stripped = text.removeprefix(BOS).lstrip()
     if stripped.startswith(("This trajectory ", "# Repository Context")):
         return "embedded_trajectory_or_patch"
