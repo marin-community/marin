@@ -1,0 +1,7 @@
+{
+  "url": "https://github.com/PrimeIntellect-ai/research-environments/blob/b41d8759070715dc102000e06fba0d73ebce9955/environments/swe/multiswe/multiswe/taskset.py",
+  "sha256": "e9709befcbba78af2092cf489866b0dda183a28b02ad15e18da1477de67a8f1b",
+  "license": "Apache-2.0",
+  "copyright": "Prime Intellect",
+  "license_file": "experiments/post_training/task_curation/datasets/prime_intellect/LICENSE"
+}

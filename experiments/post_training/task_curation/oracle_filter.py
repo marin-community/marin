@@ -59,6 +59,7 @@ from taskcompendium.pipeline.oracle_filter import (
     PriorPhaseFailureReceipt,
     ResourceCalibrationReceipt,
     SourcePytestEnvironment,
+    SourceVerifierError,
     VerifierResourceProfile,
     initial_verifier_requirements,
     initialized_verifier_requirements,
@@ -95,6 +96,7 @@ from experiments.post_training.task_curation.prior_phase_failures import (
     bind_prior_phase_failures,
     require_prior_phase_failure,
 )
+from experiments.post_training.task_curation.source_verifier_errors import require_source_verifier_error
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 HARBOR_PROJECT = PROJECT_ROOT / "vendor/harbor"
@@ -440,6 +442,7 @@ def filter_cohort(
     legacy_role_qualification_evidence: LegacyRoleQualificationEvidence | None = None,
     additional_trial_inputs: tuple[Path, ...] = (),
     legacy_producer_1485_qualification_evidence: LegacyProducer1485QualificationEvidence | None = None,
+    source_verifier_errors: Path | None = None,
 ) -> OracleFilterReceipt:
     """Filter exact converted bytes; missing tasks, stale maps and incomplete populations fail closed."""
     for path in (
@@ -490,6 +493,16 @@ def filter_cohort(
                     raise ValueError("Native success policy evidence bytes changed")
                 checked_evidence.add(key)
             policies[task_id] = policy
+    source_errors = {}
+    if source_verifier_errors is not None:
+        for line in source_verifier_errors.read_text().splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            task_id = record["task_id"]
+            if task_id in source_errors or task_id not in mappings:
+                raise ValueError(f"Duplicate or unknown source-verifier exception: {task_id}")
+            source_errors[task_id] = SourceVerifierError.model_validate(record["receipt"])
     trials = collect_trials(jobs, additional_inputs=additional_trial_inputs)
     controls = {}
     if executability_runs is not None:
@@ -692,10 +705,13 @@ def filter_cohort(
                     or policy.input_cohort_sha256 != cohort_hash
                 ):
                     raise ValueError(f"Native success policy differs from the frozen source contract: {task.id}")
+                source_error = source_errors.get(task.id)
+                if source_error is not None:
+                    require_source_verifier_error(row_task(original_row), final, source_error)
                 if oracle_passed or (not oracle and control is not None and control.passed and control.trial == final):
                     reason = None
                 else:
-                    reason = oracle_failure_reason(final, incompatibility)
+                    reason = oracle_failure_reason(final, incompatibility, source_error)
                 if reason is None and not trial_network_qualified(task, row_runtime(row), final):
                     reason = OracleExclusionReason.NETWORK_POLICY_UNSUPPORTED
                 if (
@@ -733,6 +749,7 @@ def filter_cohort(
                     executability_run=control,
                     exclusion_reason=reason,
                     source_environment_incompatibility=incompatibility,
+                    source_verifier_error=source_error,
                     infrastructure_retries=history,
                 )
                 entries[task.id] = entry
@@ -1505,6 +1522,7 @@ def main() -> None:
     collect.add_argument("--native-success-policies", type=Path)
     collect.add_argument("--negative-control-policy", type=Path, required=True, help="global standing policy JSON")
     collect.add_argument("--negative-controls", type=Path)
+    collect.add_argument("--source-verifier-errors", type=Path, help="proved pinned upstream parser exception JSONL")
     collect.add_argument("--legacy-role-qualification-evidence", type=Path)
     collect.add_argument("--legacy-producer-1485-qualification-evidence", type=Path)
     calibrate = commands.add_parser("calibrate")
@@ -1641,6 +1659,7 @@ def main() -> None:
             if args.legacy_producer_1485_qualification_evidence is not None
             else None
         ),
+        source_verifier_errors=args.source_verifier_errors,
     )
 
 
