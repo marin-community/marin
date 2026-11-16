@@ -28,8 +28,19 @@ DOCKER_BUILD_METADATA = frozenset({"container", "docker_version", "container_con
 # (the executor sets its own hostname, TTY and attach plumbing); skopeo's
 # conversion has pruned these too.
 RUNTIME_NEUTRAL_CONFIG_KEYS = frozenset(
-    {"AttachStderr", "AttachStdin", "AttachStdout", "Domainname", "Hostname", "Image",
-     "Labels", "OnBuild", "OpenStdin", "StdinOnce", "Tty"}
+    {
+        "AttachStderr",
+        "AttachStdin",
+        "AttachStdout",
+        "Domainname",
+        "Hostname",
+        "Image",
+        "Labels",
+        "OnBuild",
+        "OpenStdin",
+        "StdinOnce",
+        "Tty",
+    }
 )
 SHA256_PATTERN = r"sha256:[0-9a-f]{64}"
 Sha256Digest = Annotated[str, Field(pattern=f"^{SHA256_PATTERN}$")]

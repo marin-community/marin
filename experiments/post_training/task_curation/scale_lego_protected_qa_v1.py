@@ -45,7 +45,7 @@ LOGGER = logging.getLogger("scale-lego-protected-qa")
 
 MAP_URI = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.15.1/swe-image-bindings-v1/scale-lego-qa-sample-map-v1.json"
 MAP_SHA256 = "cba0d4b8043a549d1b9b581508a658d1c27def4fc9da382f37dfb530a54d27db"
-OUTPUT = "s3://marin-us-east-02a/marin/rl-data/atlas/shared-grader-adapters/2026.11.15.1/scale-lego-protected-qa-v1"
+OUTPUT_ROOT = "s3://marin-us-east-02a/marin/rl-data/atlas/shared-grader-adapters/2026.11.15.1"
 ATTEMPT_TIMEOUT = 4 * 3600.0
 HARBOR_PROJECT = Path("vendor/harbor")
 PROFILES = {"scale": SCALE_SWE_PROFILE, "lego": SWE_LEGO_PROFILE}
@@ -315,6 +315,8 @@ def qa_task(root: Path, limits: dict, family: str, row: dict) -> dict:
 
 
 def main() -> None:
+    run = os.environ.get("QA_RUN_NAME", "local")
+    output = f"{OUTPUT_ROOT}/{run}"
     root = Path(os.environ["IRIS_OUTPUT_DIR"]) / "scale-lego-protected-qa-v1"
     root.mkdir(parents=True)
     mapping = read_sample_map(root)
@@ -324,6 +326,7 @@ def main() -> None:
         json.dumps(
             {
                 "git_revision": revision,
+                "run": run,
                 "adapter_landing": "47c99fc4229a76e61a8c91c8f97119e478fb721",
                 "taskset_revision": swe_module.TASKSET_REVISION,
                 "harbor_lock_sha256": (
@@ -359,7 +362,7 @@ def main() -> None:
     archive = root.parent / "scale-lego-protected-qa-v1.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:
         bundle.add(root, arcname=root.name)
-    copy(str(archive), OUTPUT + "/evidence.tar.gz", no_clobber=True)
+    copy(str(archive), output + "/evidence.tar.gz", no_clobber=True)
     LOGGER.info("verdicts: %s", json.dumps(verdicts, indent=2))
     failed = [task for task, verdict in verdicts.items() if not all(verdict.values())]
     if failed:
