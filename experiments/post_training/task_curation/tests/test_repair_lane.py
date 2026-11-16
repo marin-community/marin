@@ -44,8 +44,10 @@ from experiments.post_training.task_curation.repair_match import (
     strip_template_sections_rows,
 )
 from experiments.post_training.task_curation.repair_review import ComparativePair, ComparativePairReviewer
-from experiments.post_training.task_curation.task_neighbors import SIMILARITY_THRESHOLD as NEIGHBOR_THRESHOLD
-from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent
+from experiments.post_training.task_curation.task_neighbors import (
+    SIMILARITY_THRESHOLD as NEIGHBOR_THRESHOLD,
+)
+from experiments.post_training.task_curation.task_neighbors import PopulationIndex, TaskContent, content_rows
 
 CANDIDATE_SOURCE = "candidate:test"
 TRACKED_SOURCE = "tracked:test"
@@ -542,10 +544,25 @@ class TestMatchedPairWorkload:
         assert [workload_pair.candidate.id for workload_pair in workload.pairs] == ["c-repair"]
         assert workload.tracked_by_candidate == {"c-repair": "t-repair"}
 
-    def test_missing_task_specs_fail_loudly(self):
-        with pytest.raises(ValueError, match="missing task"):
-            matched_pairs(
-                outcome_with([receipt("c-repair", "t-repair", RepairMatchClass.REPAIRED)]),
-                {},
-                [spec("c-repair", "instruction")],
-            )
+    def test_missing_tracked_specs_count_as_unresolved(self):
+        workload = matched_pairs(
+            outcome_with([receipt("c-repair", "t-repair", RepairMatchClass.REPAIRED)]),
+            {},
+            [spec("c-repair", "instruction")],
+        )
+        assert workload.pairs == [] and workload.unresolved == 1
+
+    def test_content_joined_specs_resolve_prepared_pins(self):
+        tracked_spec = spec("t-spec-id", "original instruction")
+        instruction_hash = next(iter(content_rows([tracked_spec.model_dump(mode="json")]))).instruction_hash
+        tracked_row = content("t-prepared-id", "unused text", instruction=instruction_hash)
+        workload = matched_pairs(
+            outcome_with([receipt("c-repair", "t-prepared-id", RepairMatchClass.REPAIRED)]),
+            {},
+            [spec("c-repair", "candidate instruction")],
+            tracked_rows=[tracked_row],
+            tracked_specs_by_instruction={instruction_hash: tracked_spec},
+        )
+        assert [workload_pair.candidate.id for workload_pair in workload.pairs] == ["c-repair"]
+        assert workload.pairs[0].original.id == "t-spec-id"
+        assert workload.unresolved == 0

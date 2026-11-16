@@ -105,21 +105,13 @@ class DryRunReport(BaseModel):
     candidate_revision: str
     census: dict[str, Any]
     advisories: int
+    unresolved_pairs: int = 0
     comparative: dict[str, Any] = Field(default_factory=dict)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, int] = Field(default_factory=dict)
     review_wall_seconds: float | None = None
     gpu_hours: float | None = None
     serving_jobs: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class MatchedPairs:
-    """Content-matched pairs whose content differs, ready for comparative review."""
-
-    pairs: list[ComparativePair]
-    tracked_by_candidate: dict[str, str]
-    """Candidate task ID to tracked task ID; a local join key, never the match itself."""
 
 
 class TrackedPopulation(BaseModel):
@@ -134,6 +126,38 @@ class TrackedPopulation(BaseModel):
     shape: Literal["specs", "archives", "prepared"]
     tasks: dict[str, TaskSpec]
     index: Any
+
+
+def load_tracked_specs(uris: tuple[str, ...]) -> dict[str, TaskSpec]:
+    """Load the tracked source's own conversion, keyed by normalized instruction hash.
+
+    The specs pin carries full TaskSpecs for a source whose configured population pin is a
+    prepared content parquet; the content join keeps matching on the current pin while the
+    review sees the conversion the Atlas actually serves.
+    """
+    specs: dict[str, TaskSpec] = {}
+    for uri in uris:
+        for task in _read_spec_rows(uri):
+            row = next(content_rows([task.model_dump(mode="json")]))
+            specs.setdefault(row.instruction_hash, task)
+    if not specs:
+        raise ValueError("The tracked specs pin is empty")
+    logger.info("Loaded %d tracked TaskSpecs from %d specs inputs", len(specs), len(uris))
+    return specs
+
+
+def _read_spec_rows(uri: str) -> Iterator[TaskSpec]:
+    with tempfile.TemporaryFile() as local:
+        with StoragePath(uri).open("rb") as remote:
+            shutil.copyfileobj(remote, local)
+        local.seek(0)
+        with pq.ParquetFile(local) as handle:
+            names = handle.schema_arrow.names
+            if "lowered_task_spec" in names or "task_spec" in names:
+                column = "lowered_task_spec" if "lowered_task_spec" in names else "task_spec"
+                yield from _spec_rows(handle, column)
+            else:
+                raise ValueError(f"Tracked specs input has no task-spec column: {uri}")
 
 
 def load_tracked_population(uris: tuple[str, ...], *, tracked_source_id: str) -> TrackedPopulation:
@@ -211,23 +235,53 @@ def _content_rows(handle: pq.ParquetFile) -> Iterator[TaskContent]:
             yield TaskContent(**row)
 
 
+@dataclass(frozen=True)
+class MatchedPairs:
+    """Content-matched pairs whose content differs, ready for comparative review."""
+
+    pairs: list[ComparativePair]
+    tracked_by_candidate: dict[str, str]
+    """Candidate task ID to tracked task ID; a local join key, never the match itself."""
+    unresolved: int = 0
+    """Repaired pairs whose tracked TaskSpec the specs pin does not carry."""
+
+
 def matched_pairs(
-    outcome: MatchOutcome, tracked_tasks: dict[str, TaskSpec], candidate_tasks: list[TaskSpec]
+    outcome: MatchOutcome,
+    tracked_tasks: dict[str, TaskSpec],
+    candidate_tasks: list[TaskSpec],
+    *,
+    tracked_rows: list[TaskContent] | None = None,
+    tracked_specs_by_instruction: dict[str, TaskSpec] | None = None,
 ) -> MatchedPairs:
-    """Build the review workload: every REPAIRED pair with both sides' TaskSpecs."""
+    """Build the review workload: every REPAIRED pair with both sides' TaskSpecs.
+
+    ``tracked_tasks`` supplies the TaskSpecs directly when the tracked pin is a conversion;
+    otherwise ``tracked_specs_by_instruction`` joins them by content hash through
+    ``tracked_rows``, so a prepared content pin still reviews against its own conversion.
+    """
     candidate_by_id = {task.id: task for task in candidate_tasks}
+    rows_by_id = {row.task_id: row for row in tracked_rows or []}
     join: dict[str, str] = {}
     pairs: list[ComparativePair] = []
+    unresolved = 0
     for receipt in outcome.receipts:
         if receipt.match_class is not RepairMatchClass.REPAIRED or receipt.tracked_task_id is None:
             continue
         candidate = candidate_by_id.get(receipt.candidate_task_id)
+        if candidate is None:
+            raise ValueError(f"Match receipt references a missing candidate task: {receipt.candidate_task_id}")
         original = tracked_tasks.get(receipt.tracked_task_id)
-        if candidate is None or original is None:
-            raise ValueError(f"Match receipt references a missing task: {receipt.candidate_task_id}")
+        if original is None and tracked_specs_by_instruction is not None:
+            row = rows_by_id.get(receipt.tracked_task_id)
+            if row is not None:
+                original = tracked_specs_by_instruction.get(row.instruction_hash)
+        if original is None:
+            unresolved += 1
+            continue
         join[candidate.id] = original.id
         pairs.append(ComparativePair(candidate=candidate, original=original))
-    return MatchedPairs(pairs=pairs, tracked_by_candidate=join)
+    return MatchedPairs(pairs=pairs, tracked_by_candidate=join, unresolved=unresolved)
 
 
 @dataclass(frozen=True)
@@ -327,6 +381,7 @@ def dry_run(
     *,
     tracked_source_id: str,
     tracked_uris: tuple[str, ...],
+    tracked_spec_uris: tuple[str, ...] = (),
     candidate_source_id: str,
     candidate_revision: str,
     folders: tuple[str, ...],
@@ -339,6 +394,7 @@ def dry_run(
         folders=folders, repo=repo, revision=candidate_revision, candidate_source_id=candidate_source_id
     )
     tracked_population = load_tracked_population(tracked_uris, tracked_source_id=tracked_source_id)
+    tracked_specs = load_tracked_specs(tracked_spec_uris) if tracked_spec_uris else {}
     candidates_rows_raw = list(content_rows(candidate.task.model_dump(mode="json") for candidate in candidates.tasks))
     if not candidates_rows_raw:
         raise ValueError("The candidate population is empty")
@@ -363,21 +419,20 @@ def dry_run(
         census=outcome.census.model_dump(mode="json"),
         advisories=len(outcome.advisories),
     )
-    if tracked_population.tasks:
-        workload = matched_pairs(
-            outcome,
-            tracked_tasks=tracked_population.tasks,
-            candidate_tasks=[candidate.task for candidate in candidates.tasks],
-        )
-    else:
-        # A prepared content pin carries no TaskSpecs; the dry run reports matching only.
-        workload = MatchedPairs(pairs=[], tracked_by_candidate={})
+    workload = matched_pairs(
+        outcome,
+        tracked_tasks=tracked_population.tasks,
+        candidate_tasks=[candidate.task for candidate in candidates.tasks],
+        tracked_rows=tracked_population.index.raw_rows if tracked_specs else None,
+        tracked_specs_by_instruction=tracked_specs or None,
+    )
     report = report.model_copy(
         update={
+            "unresolved_pairs": workload.unresolved,
             "diagnostics": {
                 **match_diagnostics(outcome, tracked, candidates_rows),
                 "tracked_shape": tracked_population.shape,
-            }
+            },
         }
     )
     if not run or not workload.pairs:
@@ -417,6 +472,11 @@ def main() -> None:
         action="append",
         help="Pinned tracked task-spec parquet URIs; resolved from the registry when omitted",
     )
+    parser.add_argument(
+        "--tracked-specs",
+        action="append",
+        help="Full-TaskSpec parquet URIs for the tracked conversion, content-joined for review",
+    )
     parser.add_argument("--candidate-source-id", required=True)
     parser.add_argument("--candidate-revision", required=True)
     parser.add_argument("--folder", action="append", required=True)
@@ -433,6 +493,7 @@ def main() -> None:
     report = dry_run(
         tracked_source_id=args.tracked_source_id,
         tracked_uris=tracked_uris,
+        tracked_spec_uris=tuple(args.tracked_specs or ()),
         candidate_source_id=args.candidate_source_id,
         candidate_revision=args.candidate_revision,
         folders=tuple(args.folder),
