@@ -3024,7 +3024,7 @@ list does not advertise `glm-5.3`. A provider that cannot accept temperature may
 `temperature=None` to retain its API default; zero is disallowed.
 
 The spec pins base rubric `task-quality-v2`, its SHA-256 content hash, and review
-payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
+payload revision `5` for new reviews. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
 hash is computed from that text. Bump `REVIEW_PAYLOAD_REVISION` when changing the
 task evidence projected into the request. Quality review appends per-source
@@ -3032,7 +3032,22 @@ task evidence projected into the request. Quality review appends per-source
 request and quality manifest. Assessments use and retain their separate full
 assessment rubric text.
 
-Revision 4 separates content quality from execution qualification: it excludes
+Revision 5 decodes original verifier files from protected
+`taskcompendium-source-input` archives into bounded private `source_verifier`
+text previews. The original compressed archive, TaskSpec and runtime stay
+unchanged. Original scoring files receive preview space before the adapter's
+controller copies.
+
+Historical revision 4 observations and reviewer identities remain valid and are
+not re-reviewed. When assembling or finalizing a revision 4 campaign, pass
+`--review-payload-revision 4` to `full_qc_shards assemble` or
+`full_content_receipts`. Programmatic callers use
+`local_reviewer(version, payload_revision="4")`; its requests retain the original
+revision 4 projection. New reviews default to revision 5 and its separate cache
+identity.
+
+Revision 4 introduced separation of content quality from execution qualification:
+both supported revisions exclude
 top-level `execution_requirements`, actor/grader `packages_lock` artifact paths,
 and deployment-runtime rubric text. Its semantic task ID hashes the same
 projection, so calibration-only changes reuse exact requests. Full task and

@@ -16,7 +16,11 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
-from taskcompendium.pipeline.reviewer_spec import ReviewerSpec
+from taskcompendium.pipeline.reviewer_spec import (
+    REVIEW_PAYLOAD_REVISION,
+    SUPPORTED_REVIEW_PAYLOAD_REVISIONS,
+    ReviewerSpec,
+)
 
 from experiments.post_training.task_curation.census_binding import receipt_from_census
 from experiments.post_training.task_curation.full_content_results import (
@@ -142,6 +146,9 @@ def main() -> None:
     parser.add_argument("--review-receipt-sha256", required=True)
     parser.add_argument("--actor-census", required=True)
     parser.add_argument("--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), required=True)
+    parser.add_argument(
+        "--review-payload-revision", choices=sorted(SUPPORTED_REVIEW_PAYLOAD_REVISIONS), default=REVIEW_PAYLOAD_REVISION
+    )
     parser.add_argument("--prompt-budget", type=int, required=True)
     parser.add_argument(
         "--finalization", type=QualityResultFinalization, choices=list(QualityResultFinalization), required=True
@@ -160,7 +167,7 @@ def main() -> None:
         args.finalization,
         ContentEvidenceReference(uri=args.waiver, sha256=args.waiver_sha256) if args.waiver is not None else None,
         replace(
-            local_reviewer(args.reviewer_version),
+            local_reviewer(args.reviewer_version, payload_revision=args.review_payload_revision),
             prompt_budget=args.prompt_budget,
             retry_prompt_budget=args.prompt_budget,
         ),

@@ -6,6 +6,7 @@
 import hashlib
 import json
 import re
+import zlib
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
@@ -14,8 +15,9 @@ from typing import Any, Protocol
 
 from zephyr import counters
 
+from taskcompendium.harbor.shared_source import SOURCE_ARCHIVE, SourceBootstrapPayload
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import NoGrader, ScriptGrader, TaskResource, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import (
@@ -32,8 +34,13 @@ from taskcompendium.pipeline.review_requests import (
     batch_output,
     typed_batch_records,
 )
-from taskcompendium.pipeline.reviewer_spec import BASE_RUBRIC, ReviewerSpec
-from taskcompendium.runtime.resources import resource_bytes
+from taskcompendium.pipeline.reviewer_spec import (
+    BASE_RUBRIC,
+    REVIEW_PAYLOAD_REVISION,
+    SUPPORTED_REVIEW_PAYLOAD_REVISIONS,
+    ReviewerSpec,
+)
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 TOOL_NAME = "review_task"
 CHAT_ENDPOINT = "/v1/chat/completions"
@@ -42,6 +49,7 @@ RESOURCE_PREFIX_CHARACTERS = 100
 PRIVATE_REASONING_PREVIEW_CHARACTERS = 512
 TOTAL_RESOURCE_PREVIEW_CHARACTERS = 32768
 MAX_RESOURCE_PREVIEWS = 256
+MAX_PROTECTED_REVIEW_BYTES = 256 * 1024 * 1024
 
 
 def private_evidence_summary(value: Any, evidence: str, preview_characters: int = 0) -> dict[str, Any]:
@@ -263,17 +271,37 @@ def project_source_contract(parameters: dict[str, Any], payload: dict[str, Any])
     )
 
 
-def review_payload(task: TaskSpec) -> dict[str, Any]:
+def protected_source_verifier_resources(task: TaskSpec) -> tuple[TaskResource, ...]:
+    """Decode the original source scorer only for private reviewer evidence."""
+    if task.integrity_contract is None or task.integrity_contract.id != "shared-source":
+        return ()
+    (archive,) = (resource for resource in task.resources.verifier if resource.path == SOURCE_ARCHIVE)
+    decoder = zlib.decompressobj()
+    data = decoder.decompress(resource_bytes(archive), MAX_PROTECTED_REVIEW_BYTES + 1)
+    if len(data) > MAX_PROTECTED_REVIEW_BYTES or not decoder.eof or decoder.unused_data:
+        raise ValueError("Protected source reviewer archive is incomplete or exceeds its decoded byte limit")
+    source = SourceBootstrapPayload.model_validate_json(data)
+    if source.contract != task.integrity_contract:
+        raise ValueError("Protected source reviewer archive differs from the published integrity contract")
+    names = sorted(source.tests, key=lambda name: (name == "config.json", name))
+    return tuple(inline_resource(f"tests/{name}", bytes.fromhex(source.tests[name])) for name in names)
+
+
+def review_payload(task: TaskSpec, *, payload_revision: str = REVIEW_PAYLOAD_REVISION) -> dict[str, Any]:
     """Expose bounded readable fixture evidence without duplicating encoded bytes."""
+    if payload_revision not in SUPPORTED_REVIEW_PAYLOAD_REVISIONS:
+        raise ValueError(f"Unsupported review payload revision: {payload_revision}")
     payload = task.model_dump(mode="json", exclude={"execution_requirements", "verifier_execution_requirements"})
     remaining = TOTAL_RESOURCE_PREVIEW_CHARACTERS
     previews = []
+    source_verifier = protected_source_verifier_resources(task) if payload_revision == "5" else ()
     resources = [
         (role, resource)
         for role, group in (
             ("all", task.resources.all),
             ("worker", task.resources.worker),
             ("oracle", task.resources.oracle),
+            ("source_verifier", source_verifier),
             ("verifier", task.resources.verifier),
         )
         for resource in group
@@ -348,6 +376,11 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
         "Missing preview text is not a task defect. Do not certify unseen cases; use reference_status=unknown "
         "if agreement depends on omitted content."
     )
+    if source_verifier:
+        payload["resource_preview_policy"] += (
+            " source_verifier is the original grader text decoded from the protected "
+            "taskcompendium-source-input archive for this review only; the archive and TaskSpec remain unchanged."
+        )
     return payload
 
 
@@ -426,14 +459,18 @@ def completion_body(
         + f"\nArea rubric: {rubric.id}@{rubric.version}\nArea criteria:\n"
         + "\n".join(f"- {criterion}" for criterion in rubric.criteria)
     )
-    content = json.dumps(review_payload(task), ensure_ascii=False)
+    content = json.dumps(review_payload(task, payload_revision=spec.payload_revision), ensure_ascii=False)
     if original is not None:
         instructions += (
             "\nCompare the candidate with the original. Reject changes to intent, facts, language, schema, "
             "or constraints. Assess the candidate and return its task_id."
         )
         content = json.dumps(
-            {"original": review_payload(original), "candidate": review_payload(task)}, ensure_ascii=False
+            {
+                "original": review_payload(original, payload_revision=spec.payload_revision),
+                "candidate": review_payload(task, payload_revision=spec.payload_revision),
+            },
+            ensure_ascii=False,
         )
     if rubric.environment_inventory is not None:
         instructions += (
@@ -655,7 +692,7 @@ def review_request(
 ) -> dict[str, Any]:
     """Build the exact provider request without submitting or caching it."""
     if reviewer.query_cache_root is not None:
-        payload = review_payload(task)
+        payload = review_payload(task, payload_revision=reviewer.spec.payload_revision)
         payload.pop("id")
         payload.pop("source")
         semantic_id = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()

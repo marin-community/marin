@@ -395,8 +395,9 @@ def test_shard_replenishes_batches_before_slow_tail_finishes_and_preserves_cache
     "current_root,resume_roots",
     [("/fixture/retired", ()), ("/fixture/replacement", ("/fixture/retired",))],
 )
+@pytest.mark.parametrize("payload_revision", ["4", "5"])
 def test_completed_primary_shard_resumes_without_loading_model_or_retrying_invalid_reviews(
-    qc_inputs, tmp_path, monkeypatch, current_root, resume_roots
+    qc_inputs, tmp_path, monkeypatch, current_root, resume_roots, payload_revision
 ):
     config, _ = qc_inputs
     inputs = prepare_inputs(config)
@@ -405,7 +406,7 @@ def test_completed_primary_shard_resumes_without_loading_model_or_retrying_inval
             output_path=inputs.path, result_type=result_type_name(type(inputs)), result=inputs.result_payload()
         )
     )
-    spec = local_reviewer(ReviewerVersion.V2)
+    spec = local_reviewer(ReviewerVersion.V2, payload_revision=payload_revision)
 
     class PinnedReviewService(ReviewService):
         @property
@@ -446,6 +447,7 @@ def test_completed_primary_shard_resumes_without_loading_model_or_retrying_inval
     monkeypatch.setattr(judges, "remote_inference", reject_model_load)
     args = SimpleNamespace(
         reviewer_version=ReviewerVersion.V2,
+        review_payload_revision=payload_revision,
         shard_index=0,
         shard_count=1,
         max_passes=3,

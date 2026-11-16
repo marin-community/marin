@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 SAMPLE_SIZE = 100
 SAMPLE_SEED = 0
-PINNED_REVIEWER_SHA256 = "a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea"
+PINNED_REVIEWER_SHA256 = "0a00cdd8682fe13ae169d724cb630c73ebab9be1dab3b4d6d971eca04fa0e308"
+SAMPLE_REVIEWER_SHA256_BY_PAYLOAD_REVISION = {
+    "4": "a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea",
+    "5": PINNED_REVIEWER_SHA256,
+}
 
 
 class SamplePanel(BaseModel):

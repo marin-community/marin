@@ -15,7 +15,16 @@ from taskcompendium.pipeline.review import ChatReviewer
 
 from experiments.post_training.task_curation import full_qc, judges
 from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, ReviewerVersion, local_reviewer
+from experiments.post_training.task_curation.sample_qc_artifacts import PINNED_REVIEWER_SHA256
 from experiments.post_training.task_curation.tests.prebuilt_fixtures import prebuilt_task
+
+
+def test_v3_historical_payload_keeps_its_exact_qualified_identity():
+    historical = local_reviewer(ReviewerVersion.V3, payload_revision="4")
+    assert historical.cache_revision == "a3e17ee0607a1bf59bdbb8e0b9bffda2e8788390aaf41c7ab73c20b68325c9ea"
+    current = local_reviewer(ReviewerVersion.V3)
+    assert current.cache_revision == PINNED_REVIEWER_SHA256
+    assert {**historical.identity, "payload_revision": "5"} == current.identity
 
 
 def test_v3_generates_separately_from_v2_and_reuses_its_own_valid_cache(review_server, tmp_path):

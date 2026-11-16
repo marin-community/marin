@@ -191,12 +191,13 @@ def test_sample_filter_proof_must_cover_unselected_retained_tasks(sample_panel, 
             assert result.sample.oracle_filter_receipt == reference
 
 
+@pytest.mark.parametrize("payload_revision", ["4", "5"])
 def test_sample_review_keeps_full_population_identity_and_reuses_exact_panel_evidence(
-    sample_panel, review_server, tmp_path
+    sample_panel, review_server, tmp_path, payload_revision
 ):
     reviewer = ChatReviewer(
         OpenAIChatClient(f"http://127.0.0.1:{review_server.server_port}/v1", "unused", timeout=2),
-        local_reviewer(ReviewerVersion.V3),
+        local_reviewer(ReviewerVersion.V3, payload_revision=payload_revision),
         query_cache_root=str(tmp_path / "cache"),
     )
     output = str(tmp_path / "reviews")

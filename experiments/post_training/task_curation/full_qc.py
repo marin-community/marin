@@ -26,7 +26,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.models import ReviewRubric
 from taskcompendium.pipeline.query_cache import CachedRequests
 from taskcompendium.pipeline.review import ChatReviewer, ReviewBatchResult
-from taskcompendium.pipeline.reviewer_spec import JudgeTier, ReviewerSpec
+from taskcompendium.pipeline.reviewer_spec import REVIEW_PAYLOAD_REVISION, JudgeTier, ReviewerSpec
 
 from experiments.post_training.task_curation.full_qc_review import load_inputs, review_inputs
 from experiments.post_training.task_curation.judges import (
@@ -119,7 +119,7 @@ def _local_endpoint(model_config: Path, context_window_tokens: int) -> LocalJudg
     )
 
 
-def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
+def local_reviewer(version: ReviewerVersion, *, payload_revision: str = REVIEW_PAYLOAD_REVISION) -> ReviewerSpec:
     if version is ReviewerVersion.V3:
         pin = LocalJudgeModel(
             model_identity="zai-org/GLM-5.3",
@@ -144,7 +144,7 @@ def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
             retry_prompt_budget=512000,
             base_rubric_version="task-quality-v2",
             base_rubric_sha256="af7ae2a33e3f73d17f27907d930beae35453a22b63ef6f28138c50a8d65131eb",
-            payload_revision="4",
+            payload_revision=payload_revision,
         )
     if version is not ReviewerVersion.V2:
         raise ValueError(f"Unknown FULL-QC reviewer version: {version}")
@@ -152,6 +152,7 @@ def local_reviewer(version: ReviewerVersion) -> ReviewerSpec:
     assert definition.qa_reviewer is not None and definition.model_revision is not None
     return replace(
         definition.qa_reviewer,
+        payload_revision=payload_revision,
         model_revision=definition.model_revision,
         endpoint=_local_endpoint(MODEL_CONFIG, definition.context_window_tokens),
         precision="native-fp8-e4m3;kv-cache-fp8-e4m3",

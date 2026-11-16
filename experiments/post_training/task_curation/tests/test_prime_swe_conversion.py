@@ -11,6 +11,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.models import Source, TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import RawRow
+from taskcompendium.pipeline.review import review_payload
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.datasets.prime_intellect import swe
@@ -70,6 +71,20 @@ def test_conversion_uses_frozen_image_and_preserves_private_source_scorer(family
     assert bytes.fromhex(private["tests"]["native_scripts.py"]) == (swe.HERE / "native_scripts.py").read_bytes()
     config = json.loads(bytes.fromhex(private["tests"]["config.json"]))
     assert config["test_ids"] == ["tests/test_fix.py::test_fix"]
+    original_task = task.model_dump_json()
+    projected = review_payload(task)
+    grader_text = {
+        resource["path"]: resource["text"]
+        for resource in projected["resources"]
+        if resource["role"] == "source_verifier"
+    }
+    grader = "scale_grade.py" if family == "scale" else "lego_grade.py"
+    assert grader_text["tests/grade.py"] == (swe.HERE / grader).read_text()
+    assert grader_text["tests/native_scripts.py"] == (swe.HERE / "native_scripts.py").read_text()
+    assert "tests/test_fix.py::test_fix" in grader_text["tests/config.json"]
+    historical = review_payload(task, payload_revision="4")
+    assert not any(resource["role"] == "source_verifier" for resource in historical["resources"])
+    assert task.model_dump_json() == original_task
     assert private["spec"]["timeout"] is None
     assert task.context.events[0].content.endswith(swe.SOLVER_SYSTEM_PROMPT + "\n\n" + data["problem_statement"])
     solution = {resource.path: resource_bytes(resource) for resource in task.resources.oracle}

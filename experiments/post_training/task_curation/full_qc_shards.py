@@ -17,6 +17,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.pipeline.reviewer_spec import REVIEW_PAYLOAD_REVISION, SUPPORTED_REVIEW_PAYLOAD_REVISIONS
 
 from experiments.post_training.task_curation.full_qc import (
     REVIEW_REQUEST_TIMEOUTS,
@@ -63,7 +64,7 @@ def read_shard(path: StoragePath) -> FullQCReviewShard:
 
 
 def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
-    spec = local_reviewer(args.reviewer_version)
+    spec = local_reviewer(args.reviewer_version, payload_revision=args.review_payload_revision)
     endpoint = spec.endpoint
     assert isinstance(endpoint, (LocalJudgeEndpoint, PinnedLocalJudgeEndpoint))
     current_root = iris_ctx().job_id
@@ -138,7 +139,7 @@ def review_work(work: list[ShardWork], args: argparse.Namespace) -> None:
 
 def assemble_work(work: list[ShardWork], args: argparse.Namespace) -> None:
     campaign = StoragePath(args.campaign_output) / "attempts" / uuid4().hex
-    spec = local_reviewer(args.reviewer_version)
+    spec = local_reviewer(args.reviewer_version, payload_revision=args.review_payload_revision)
     for row in work:
         pointers = [
             StoragePath(row.shard_output_path) / f"{index:03}" / "latest.json" for index in range(args.shard_count)
@@ -188,6 +189,11 @@ def main() -> None:
         command = commands.add_parser(name)
         command.add_argument("--work", required=True)
         command.add_argument("--reviewer-version", type=ReviewerVersion, choices=list(ReviewerVersion), required=True)
+        command.add_argument(
+            "--review-payload-revision",
+            choices=sorted(SUPPORTED_REVIEW_PAYLOAD_REVISIONS),
+            default=REVIEW_PAYLOAD_REVISION,
+        )
         command.add_argument("--shard-count", required=True, type=int)
         command.add_argument("--campaign-output", required=True)
         command.add_argument("--run", action="store_true")
