@@ -127,6 +127,7 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
             and d.pod_uid is None
             and d.node_name is None
             and d.terminal_reason is None
+            and d.topology is None
         ):
             continue
         params.append(
@@ -142,6 +143,7 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
                 "b_pod_uid": d.pod_uid,
                 "b_node_name": d.node_name,
                 "b_terminal_reason": d.terminal_reason,
+                "b_topology": d.topology,
             }
         )
     if not params:
@@ -160,6 +162,7 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
             pod_uid=func.coalesce(bindparam("b_pod_uid"), c.pod_uid),
             node_name=func.coalesce(bindparam("b_node_name"), c.node_name),
             terminal_reason=func.coalesce(bindparam("b_terminal_reason"), c.terminal_reason),
+            topology_json=func.coalesce(bindparam("b_topology", type_=c.topology_json.type), c.topology_json),
         ),
         params,
     )

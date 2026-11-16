@@ -87,8 +87,18 @@ run_check() {
   check_logs+=("$workdir/check-$name.log")
 }
 
-run_check flash-attention "$python" -c "import flash_attn, flash_attn_2_cuda"
-run_check megatron "$python" -c "import transformer_engine.common; from megatron.bridge import AutoBridge"
+run_check flash-attention "$python" -c '
+import platform
+
+# Check the attention package selected by the locked profile before starting Ray.
+if platform.machine() == "aarch64":
+    from flash_attn.cute.interface import flash_attn_varlen_func
+else:
+    from flash_attn_interface import flash_attn_varlen_func
+'
+if [[ "$profile" == megatron || "$profile" == megatron-export ]]; then
+  run_check megatron "$python" -c "import transformer_engine.common; from megatron.bridge import AutoBridge"
+fi
 if [[ "$profile" == *-export ]]; then
   run_check export "$python" -c "import ray, torch; from skyrl_train.checkpoint_exporter import CheckpointExporter"
 else

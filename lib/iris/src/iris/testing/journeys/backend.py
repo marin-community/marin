@@ -41,6 +41,7 @@ class ScriptedObservation:
     error: str = ""
     exit_code: int | None = None
     attempt_id: int | None = None
+    topology: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +51,7 @@ class BackendEvent:
     attempt_id: int
     state: int | None = None
     backend_id: str = DEFAULT_BACKEND_ID
+    group_sizes: tuple[int, ...] = ()
 
 
 class ScriptedTaskBackend:
@@ -125,8 +127,19 @@ class ScriptedTaskBackend:
 
         updates: list[TaskUpdate] = []
         newly_launched = {(run.task_id, run.attempt_id) for run in request.tasks_to_run}
+        group_sizes = {
+            (run.task_id, run.attempt_id): tuple(run.coscheduling.group_sizes) for run in request.tasks_to_run
+        }
         for task_id, attempt_id in sorted(newly_launched - self._desired.keys()):
-            self.events.append(BackendEvent("launched", task_id, attempt_id, backend_id=self.descriptor.backend_id))
+            self.events.append(
+                BackendEvent(
+                    "launched",
+                    task_id,
+                    attempt_id,
+                    backend_id=self.descriptor.backend_id,
+                    group_sizes=group_sizes[(task_id, attempt_id)],
+                )
+            )
             queued = self._pop_observation(task_id)
             if queued is None:
                 queued = ScriptedObservation(job_pb2.TASK_STATE_RUNNING)
@@ -166,6 +179,7 @@ class ScriptedTaskBackend:
             new_state=observation.state,
             error=observation.error or None,
             exit_code=observation.exit_code,
+            topology=observation.topology,
         )
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
