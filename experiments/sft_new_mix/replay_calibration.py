@@ -6,16 +6,15 @@
 import argparse
 import hashlib
 import json
-import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 from levanter.store.jagged_array import JaggedArrayStore
-from rigging.filesystem.cluster_config import StoreType, data_buckets
-from rigging.filesystem.s3_compat import configure_coreweave_s3, s3_credentials
 from rigging.filesystem.storage_path import prefix_join
 from tokenizers import Tokenizer
+
+from experiments.sft_new_mix.exp3_build import configure_storage
 
 HEAD_TOKENS = 4096
 TAIL_TOKENS = 2048
@@ -93,9 +92,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20261115)
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
-    configure_coreweave_s3()
-    os.environ["AWS_ACCESS_KEY_ID"], os.environ["AWS_SECRET_ACCESS_KEY"] = s3_credentials(StoreType.COREWEAVE)
-    os.environ["AWS_REGION"] = os.environ["AWS_DEFAULT_REGION"] = data_buckets()["marin-us-east-02a"].signing_region
+    configure_storage()
     args.output.mkdir(parents=True, exist_ok=False)
     manifest_bytes = args.manifest.read_bytes()
     frame = sample_frame(json.loads(manifest_bytes), args.count, args.seed)

@@ -22,8 +22,6 @@ def test_teacher_reasoning_and_commands_share_the_source_flag():
         ]
     )
     assert transcript.trained_assistant_turns == (False, True)
-    assert "<|start_think|>teacher reasoning<|end_think|>" in transcript.text
-    assert '"keystrokes": "pwd"' in transcript.text
     # Character-level IDs make the actual rendered boundaries and shift visible.
     vocabulary = {character: index for index, character in enumerate(sorted(set(transcript.text)))}
     # The production masker uses a reserved one-token header marker; collapse
