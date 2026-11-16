@@ -89,6 +89,19 @@ def test_system_turn_merge_and_drop_splice_into_original_framing():
     ]
 
 
+def test_turn_edits_keep_role_order_when_a_turn_is_dropped_between_roles():
+    text = render(("system", ""), ("user", "Task A"), ("system", "Keep this after Task A"), ("assistant", "Answer"))
+    result = apply("chat", text, Stage.SYSTEM_TURNS)
+    expected = render(("user", "Task A"), ("system", "Keep this after Task A"), ("assistant", "Answer"))
+    assert result.document.text == expected
+    assert [(turn.role, turn.content) for turn in turns(result.document.text)] == [
+        ("user", "Task A"),
+        ("system", "Keep this after Task A"),
+        ("assistant", "Answer"),
+    ]
+    assert_no_assistant_post_eot_newline(result.document.text)
+
+
 def test_system_cleanup_preserves_task_and_relabels_only_all_spanless_think():
     text = render(
         ("system", "Reasoning: /think"), ("system", ""), ("system", "Be precise."), ("user", "2+2?"), ("assistant", "4")

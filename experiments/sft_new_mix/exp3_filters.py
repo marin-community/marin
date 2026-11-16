@@ -6,7 +6,7 @@
 import json
 import re
 import zlib
-from collections import Counter, defaultdict, deque
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -137,16 +137,15 @@ def with_turns(document: Document, before: list[Turn], after: list[Turn]) -> Doc
 def splice_turn_bodies(text: str, before: list[Turn], after: list[Turn]) -> str:
     """Rebuild native text with edited turn bodies spliced into their framing.
 
-    Each kept turn keeps its own header, end-of-turn token and original
-    separator, so removed and merged-away turns leave no trace and an
-    assistant end-of-turn never gains a newline.
+    Each after turn consumes the next unconsumed before turn of its own role
+    in order, so surviving turns keep their original relative position;
+    skipped turns were dropped or merged away and leave no trace. Every kept
+    turn keeps its own header, end-of-turn token and original separator, so
+    an assistant end-of-turn never gains a newline.
     """
     matches = list(MESSAGE.finditer(text))
     if len(matches) != len(before) or [match[1] for match in matches] != [turn.role for turn in before]:
         raise ValueError("Turn list does not match the native transcript")
-    pending: dict[str, deque[Turn]] = defaultdict(deque)
-    for turn in after:
-        pending[turn.role].append(turn)
     ends = [match.end() for match in matches]
     tail = text[ends[-1] :]
     eos = ""
@@ -156,17 +155,18 @@ def splice_turn_bodies(text: str, before: list[Turn], after: list[Turn]) -> str:
         raise ValueError("Incomplete native chat transcript")
     separators = [text[ends[j] : matches[j + 1].start()] for j in range(len(matches) - 1)] + [tail]
     pieces = [text[: matches[0].start()]]
-    for j, match in enumerate(matches):
-        queue = pending[match[1]]
-        if not queue:
-            continue
-        turn = queue.popleft()
+    cursor = 0
+    for turn in after:
+        while cursor < len(before) and before[cursor].role != turn.role:
+            cursor += 1
+        if cursor >= len(before):
+            raise ValueError("Turn edits add turns, which native splicing cannot represent")
+        match = matches[cursor]
         pieces.append(text[match.start() : match.start(2)])
         pieces.append(turn.content)
         pieces.append(text[match.end(2) : match.end()])
-        pieces.append(separators[j])
-    if any(pending.values()):
-        raise ValueError("Turn edits add turns, which native splicing cannot represent")
+        pieces.append(separators[cursor])
+        cursor += 1
     pieces.append(eos)
     return "".join(pieces)
 
