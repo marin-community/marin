@@ -117,7 +117,7 @@ def test_unreachable_pin_is_a_normal_escalation_record_not_cli_failure(monkeypat
         license_check.main, ["EleutherAI/lambada_openai@900124bf3b8235c6daf21033af9948b3f07346c4"]
     )
     assert result.exit_code == 0, result.output
-    row = json.loads(result.output.splitlines()[0])
+    row = json.loads(result.stdout.splitlines()[0])
     assert (row["verdict"], row["rule_id"]) == ("ESCALATE", "E4")
     assert "Pinned metadata is unreachable" in row["quote"]
     assert licensing.license_bans() == before
