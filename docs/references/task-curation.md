@@ -65,9 +65,22 @@ existing data-license additions; Data Belay imports that same table.
 | E4 | ESCALATE | Parser error or unreachable/invalid pin |
 
 Underlying OSS repository licenses and generated outputs alone are not doubt
-criteria. Resolver hints `bundled_third_party` and `model_generated_outputs`
-remain evidence metadata; they do not override PASS. Dependency folders such as
-`node_modules`, `vendor` and virtual environments are not task-license roots.
+criteria. The doubt bar is dataset-level and applies to new and existing sources
+alike: a permissive dataset-level license at the pinned revision passes.
+Explicit NC/ND/research-only or model-training restrictions anywhere in the
+pinned source (including bundled task content), a missing or unknown dataset
+license, outputs under unidentified or training-restricting third-party terms,
+and lineage that cannot be traced to a permissive dataset-level grant are doubt.
+Doubt means ban: a doubted source is banned and recorded in the #11497 registry,
+and no evaluation-only exception exists. Resolver hints `bundled_third_party`
+and `model_generated_outputs` remain evidence metadata; they do not override
+PASS. Model-generated outputs from a named teacher whose license allows training
+use are not doubt; record the teacher and its license evidence in the receipt.
+Our own repackaged containers carry their upstream's license: an aggregate
+container card listing several licenses, or a revision-bookkeeping mismatch in
+our own metadata, is not doubt. Marin's own converted and structure datasets are
+released under OpenMDW 1.1. Dependency folders such as `node_modules`, `vendor`
+and virtual environments are not task-license roots.
 
 Receipts retain evidence URLs, SHA-256, quoted statements, resolution time and
 resolver version. `--catalog` checks every current Atlas pin; `--input-manifest`
@@ -93,8 +106,9 @@ remain intact.
 
 ## Current admission policy
 
-These rules include the admission display policy for Atlas preview revision 19 (2026-11-15). When a
-later section of this reference conflicts with them, this section is current.
+Synced to preview revision 20 (2026-11-16). These rules include the admission
+display policy for Atlas preview revision 20. When a later section of this
+reference conflicts with them, this section is current.
 
 **Examples.** Atlas Examples is the admitted count after filtration. The Atlas
 has no separate oracle column. Every header count is in tasks. Admission totals
@@ -221,10 +235,12 @@ capability and offers five confidence levels as display filters (see
 across sources, each with its Source.
 
 **Quality.** Result is GOOD when at least 90% of reviewed tasks are clean, BAD
-when at least 50% have issues, and SOME_ISSUES otherwise. QC never rejects a task
-or a source. A FULL review may be finalized under a pinned waiver when at most 1%
-of retained tasks are unreviewed. LLM judges run at temperature 0.7 through the
-production judge service.
+when at least 50% have issues, and SOME_ISSUES otherwise. QC never rejects a
+task or a source by itself: a BAD-quality source can be admitted as-is with its
+weakness documented, as with Terminal-Pivot's original weak grader. A FULL
+review may be finalized under a pinned waiver when at most 1% of retained tasks
+are unreviewed. LLM judges run at temperature 0.7 through the production judge
+service.
 
 **Jobs.** Use three-day job timeouts and an explicit `--target-cluster` in the
 data's region. Infrastructure failures are re-driven and never count as task failures.
@@ -238,7 +254,8 @@ atlas-push --test "<affected test command>" --who "<session id>" --what "<change
 ```
 
 The script takes a machine-wide lock, fetches and rebases onto
-`origin/atlas-env-audit`, runs lint and your affected tests on the rebased head,
+`origin/atlas-env-audit`, runs the docs check, catalog tests and fingerprint
+pre-push checks, then lint and your affected tests on the rebased head,
 pushes without force and verifies the remote. A failure stops the push; resolve
 rebase conflicts and rerun. Advisory review remains required for non-trivial
 changes. Report the landed SHA to the coordinator. Never force-push or push to
@@ -888,9 +905,14 @@ Harbor packages are checked for their executable verifier and environment rather
 their `NoGrader` transport wrapper as an absent grader. A population with no executable grader
 is retired into the historical ledger; aliases, previous snapshots and artifacts remain available.
 Atlas also refuses a new load of an Available source that would display SAMPLE or FULL
-without a computed Result. Executed grader controls alone do not supply a content-quality
-Result. Excluded and Not selectable metadata remains unavailable and keeps its recorded
-quality fields, including a missing Result.
+without a computed Result. The content-Result and population-admission
+requirements apply only to Available rows; Excluded and Not selectable metadata
+remains unavailable and keeps its recorded quality fields, including a missing
+Result. Executed grader controls alone do not supply a content-quality
+Result. A campaign that reviewed its sources in SAMPLE or FULL mode with passed
+or validated controls owes each reviewed source a computed Result even when the
+source ends Excluded or Not selectable; a failed campaign that reviewed must
+still not move the selected catalog pointer.
 
 `admission_inventory` scans current populations through their actor-census bindings and freezes
 seed-zero panels of at most 100 tasks. It records the stored-byte scan digest independently from
@@ -2551,7 +2573,7 @@ uv run python -m experiments.post_training.task_curation.oracle_filter calibrate
 
 # DAYTONA EVAL: original image/Dockerfile, direct provisioning without named snapshots.
 # Map DAYTONA_EVAL_API_KEY to DAYTONA_API_KEY only in this validation process.
-# Set concurrency from the eval account's available sandbox quota.
+# Cap concurrency at the eval account's measured capacity (64 concurrent sandboxes).
 uv run python -m experiments.post_training.task_curation.oracle_filter calibrate \
   --cohort /path/to/converted/tasks.parquet --task-map /path/to/task-map.json \
   --output-dir /path/to/oracle-eval-v1 --environment daytona --concurrency 2 \
@@ -2586,7 +2608,14 @@ Result paths and bytes and retains source-deadline exclusions alongside them,
 without creating aliases.
 
 DAYTONA normally runs about 128 concurrent sandboxes in the RL organization
-when the cohort's snapshot identities fit the cap. The `iris-sandbox` environment
+when the cohort's snapshot identities fit the cap. Sources that need a real
+root executor run on the Daytona EVAL account with explicit declarative
+provisioning: each Trial builds the task image from the package's own
+Dockerfile and the route creates no named snapshots. Cap its concurrency at the
+eval account's measured capacity, 64 concurrent sandboxes. Baked images are not
+published for this route (organization decision); where an internal image must
+still be pulled, such as on `rno2a`, an organization GHCR pull secret is a
+temporary bridge, not a standing grant. The `iris-sandbox` environment
 uses prepared image references from `shellbox-images.json` and submits exactly
 one sandbox container and replica per Iris job. It takes `cluster`, `pool`,
 `priority` (`batch` by default, or `production`) and `ttl` in seconds. A TTL of
@@ -2794,6 +2823,10 @@ the relay does not attest an immutable checkpoint. Connection fails if its model
 list does not advertise `glm-5.3`. A provider that cannot accept temperature may use
 `temperature=None` to retain its API default; zero is disallowed.
 
+When a hosted provider's worker quota is exhausted, workers fail over in a
+fixed order: Ortet first, then Together. The order is campaign-wide; a worker
+does not pick its own provider.
+
 The spec pins base rubric `task-quality-v2`, its SHA-256 content hash, and review
 payload revision `4`. To change the base rubric, edit `BASE_RUBRIC` and bump
 `BASE_RUBRIC_VERSION` in `taskcompendium.pipeline.reviewer_spec`; the content
@@ -2831,6 +2864,14 @@ See [final whole-source Results](https://github.com/marin-community/marin/blob/a
 for offline evidence verification and transport. SAMPLE finality follows the
 95% conclusive-review threshold above. Content finality supplies neither execution
 qualification nor permission to publish a remediated dataset.
+
+Completed reviews from earlier FULL campaigns are grandfathered: they count as
+FULL reviews for exactly the matching tasks, recorded with the original reviewer
+identity and a grandfathering marker in each source's FULL binding/receipt, and
+they are never relabeled as current-reviewer output. Old invalid or truncated
+rows are not grandfathered and still need review. Raw or processed duplicates
+with identical content reuse the grandfathered review. New reviews write the
+shared content-addressed review cache at commit time.
 
 Quality manifests and assessment model metadata record the complete spec identity.
 The request-cache namespace includes every spec field, including deployment and

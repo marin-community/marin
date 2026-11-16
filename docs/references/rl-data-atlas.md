@@ -2,7 +2,8 @@
 
 [RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
 reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
-This reference was synced with Atlas v9.3 preview revision 19 and the stage-0 license gate (2026-11-15); the
+This reference is synced to preview revision 20 (2026-11-16), including the
+stage-0 license gate; the
 admission rules are in [Current admission policy](task-curation.md#current-admission-policy).
 Every source passes the [stage-0 license gate](task-curation.md#stage-0-binding-license-gate)
 before ingestion; banned sources never appear in admitted counts.
@@ -57,7 +58,9 @@ Exactly 10% issues is Good; exactly 50% is Bad. Store the reviewed and issue
 counts, issue rate, issue evidence and repair recommendation. Unavailable and
 uncertain judgments remain explicit coverage diagnostics. Mechanical exclusions
 and zero retained tasks do not invent quality observations. QC never rejects
-sources or tasks. These opinions describe the inspected sample.
+sources or tasks, and a BAD Result does not block admission by itself: a source
+with a documented weakness can be admitted as-is. These opinions describe the
+inspected sample.
 
 Large packets retain the task and answer contract, with bounded previews of long
 text, collections and stage audits. Previews record original sizes and selected
@@ -124,7 +127,11 @@ coverage remains false when observations are unavailable. Above 5%, SAMPLE remai
 FULL finality is unchanged: an incomplete required whole-source review stays
 provisional unless a verified `accepted_incomplete` whole-source waiver accounts
 for its unreviewed tasks and exact reasons. `accepted_incomplete` applies only to
-FULL. The Quality label alone never makes Result provisional. These
+FULL. Completed reviews from earlier FULL campaigns are grandfathered: they
+count as FULL reviews for exactly the matching tasks, recorded with the original
+reviewer identity and a grandfathering marker, never relabeled as
+current-reviewer output; old invalid or truncated rows still need review. The
+Quality label alone never makes Result provisional. These
 counts follow the selected Result's review panel, not the execution campaign's
 processing mode or the source's entire population when only a sample is required.
 
@@ -541,10 +548,15 @@ The `No executable grader is declared` assessment reason blocks admission. Other
 boundary assessments remain visible without being relabeled as missing graders.
 Native Harbor packages must pass package validation during import and grading
 census. QUICK conversion can run before admission evidence exists. Publication,
-metadata refresh and Atlas loading reject Available SAMPLE/FULL entries without a
-computed content Result before changing the selected snapshot. Excluded and Not
-selectable entries remain unavailable and preserve their recorded quality fields,
-including a missing Result.
+metadata refresh and Atlas loading reject SAMPLE/FULL entries without a computed
+content Result before changing the selected snapshot. The requirement follows
+declared status for declared oversight: only Available rows need it, and
+Excluded and Not selectable entries remain unavailable and preserve their
+recorded quality fields, including a missing Result. A campaign that reviewed
+its sources in SAMPLE or FULL mode with passed or validated controls owes each
+reviewed source a computed Result even when the source ends Excluded or Not
+selectable; a failed campaign that reviewed must still not move the selected
+pointer.
 
 The offline `daytona_census` command measures registered converters' TaskSpec
 outputs before admission gates and records admission rejections separately.
@@ -682,7 +694,11 @@ Catalog titles, counts and assessment
 evidence can change while reusing an unchanged population's fingerprint.
 
 The `Atlas source overlap` workflow detects added or changed declarations and
-requires their fingerprints. Generated CI input surveys are staged in private
+requires their fingerprints. Every changed source needs a current fingerprint in
+the same landing. A re-pin — including a card-only license move that leaves task
+content unchanged — must refresh the source's fingerprint in the same landing,
+with a full-input continuity proof binding the new pin to the consumed inputs.
+Generated CI input surveys are staged in private
 object storage under the run/attempt prefix; the code bundle carries only their
 SHA-256 manifest. The worker downloads and verifies those bytes before scanning,
 keeping input data outside Iris's workspace-bundle size limit.

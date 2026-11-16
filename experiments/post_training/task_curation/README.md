@@ -17,6 +17,8 @@ Run the [stage-0 license checker](../../../docs/references/task-curation.md#stag
 (`python -m experiments.post_training.task_curation.license_check`) before any
 conversion and pass its receipts to the driver with `--license-receipts`.
 
+Synced to preview revision 20 (2026-11-16).
+
 Do not declare oversight levels, grader types or task-shape tags (agentic,
 multi-turn and similar) on a source. A late-stage ingestion step derives them from
 the final TaskSpecs and QA records, and a contradicting declaration fails
@@ -501,6 +503,15 @@ or establish FULL quality.
 artifacts record `qualification_status=pending`, so complete content coverage
 does not establish execution admission. Qualification and repairs use the
 [full-population oracle procedure](../../../docs/references/task-curation.md#full-population-oracle-filter).
+
+Completed reviews from earlier FULL campaigns are grandfathered: they count as
+FULL reviews for exactly the matching tasks, recorded with the original reviewer
+identity and a grandfathering marker, and never relabeled as current-reviewer
+output. Old invalid or truncated rows are not grandfathered and still need
+review. Raw or processed duplicates with identical content reuse the
+grandfathered review; new reviews write the shared content-addressed cache at
+commit time. Hosted reviewer and judge workers fail over by a fixed order when
+a provider's quota is exhausted: Ortet first, then Together.
 
 Choose `--reviewer-version v3` for future FULL-QC source starts. The ongoing
 48-worker campaign, Gym repair and Prism finalization remain on their frozen v2

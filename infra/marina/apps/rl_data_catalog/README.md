@@ -8,6 +8,8 @@ the full browser sweep runs afterward or nightly and records a separate,
 non-blocking receipt. Report its findings to the coordinator; see
 [full audit commands](RELEASE.md#full-post-publish-or-nightly-browser-audit).
 
+Synced to preview revision 20 (2026-11-16).
+
 The main table's source cell contains only its source-name button and, where
 needed, the fold toggle. No origin/build subtitle, dataset link, overlap note or
 other secondary text belongs in that cell. Put those details in Evidence or the
