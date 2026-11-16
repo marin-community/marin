@@ -1678,7 +1678,9 @@ def _expected_receiver_buffer(sorted_payload, starts, clipped, *, receiver, loca
     return expected
 
 
-def _simulated_dispatch(sorted_payload, starts, clipped, dispatch_params, *, local_experts, capacity, alignment):
+def _dispatch_and_check_receivers(
+    sorted_payload, starts, clipped, dispatch_params, *, local_experts, capacity, alignment
+):
     """Each shard's receiver buffer after a simulated dispatch, checked row for row against
     `_expected_receiver_buffer`."""
     shards, _, hidden = sorted_payload.shape
@@ -1741,7 +1743,7 @@ def test_expert_granular_a2a_params_roundtrip_with_drops(alignment):
         for s in range(shards)
     ]
 
-    received = _simulated_dispatch(
+    received = _dispatch_and_check_receivers(
         sorted_payload,
         starts,
         clipped,
@@ -1790,7 +1792,7 @@ def test_expert_granular_a2a_params_stay_inside_the_aligned_receiver_at_worst_ca
         for s in range(shards)
     ]
 
-    received = _simulated_dispatch(
+    received = _dispatch_and_check_receivers(
         sorted_payload,
         starts,
         clipped,

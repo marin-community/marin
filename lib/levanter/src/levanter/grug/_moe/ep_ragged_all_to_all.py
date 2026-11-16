@@ -155,9 +155,10 @@ class _ExpertMlp(Protocol):
 class _RaggedDotExpertMlp:
     """Portable expert MLP over XLA's `ragged_dot`, including static trailing rows.
 
-    `ragged_dot` covers the whole static buffer, so the rows past the active count are zeroed on
-    the way in and on the way out. The output mask also zeroes their cotangent rows, which keeps
-    them out of the weight gradients.
+    It takes a packed receiver buffer, so the rows that were not received are the rows past the
+    active count. `ragged_dot` covers the whole static buffer, so those rows are zeroed on the way
+    in and on the way out. The output mask also zeroes their cotangent rows, which keeps them out
+    of the weight gradients.
     """
 
     activation_fn: Callable[[jax.Array], jax.Array]
