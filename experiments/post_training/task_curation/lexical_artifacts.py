@@ -5,7 +5,7 @@
 
 from typing import Any, Literal
 
-from marin.datakit.decon import AllSourceDropSets, DeconAttributes
+from marin.datakit.decon import AllSourceDropSets, DeconAttributes, EvalBloom
 from marin.execution.artifact import Artifact
 from pydantic import Field, field_validator
 
@@ -32,6 +32,10 @@ class SourceTextPopulation(Artifact):
 
 class LexicalDropSets(Artifact):
     attributes: AllSourceDropSets
+
+
+class EvalReferenceBloom(Artifact, EvalBloom):
+    """A lazy artifact whose payload also supports the Datakit Bloom merger."""
 
 
 class SourceLexicalMarks(Artifact):

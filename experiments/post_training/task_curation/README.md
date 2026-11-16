@@ -46,6 +46,46 @@ downloads. Tests that inspect the complete private registry use the
 source-overlap ranking fixture contains two small contracts rather than an
 archived production population.
 
+## Supplementary full IFBench held-out check
+
+`ifbench_heldout` checks IFBench training tasks against every user prompt in
+`allenai/IFBench_test@2e8a48de45ff3bf41242f927254ca81b59ca3ae2` (300 tasks).
+It reads the exact-pin receipt from `datasets/license_receipts.json` and requires
+a passing binding license check before acquisition. The reference
+preserves the benchmark keys and exact `prompt` strings used by the native
+evaluator. Grader data and generated answers are excluded.
+
+Run on a CPU Iris job in the input bucket's region. Supply the same frozen
+`SourceTextPopulation` inventory used by the original shared Atlas scan whose
+exclusions will be combined with this measurement, with its SHA-256. The current
+273-source inventory is pinned by SHA-256
+`2839557034d0f6126e91a43a5b8ec9f4fed645f3c904f13bf99848ab7e65bec0`
+and was used by shared report `33c2822241770463e486@2026.11.15.203`.
+The pipeline seals a full-test Bloom, merges it with the SHA-pinned original
+`_combined_fixed_3a94b52b` Bloom using the maintained Datakit merger, and rebuilds
+source/global document-frequency filters for the complete cohort. Both Blooms
+use the original sizing and false-positive rate. It marks and reports only
+IFBench training tasks against the merged reference. It uses the unchanged Atlas feature and frequency-filter policy.
+An older Bloom's frequency filters cannot substitute for this calculation.
+
+```bash
+python -m experiments.post_training.task_curation.ifbench_heldout \
+  --populations frozen-populations.json --populations-sha256 SHA256 \
+  --artifact-root s3://REGIONAL-BUCKET/marin \
+  --artifact-version NEW-VERSION --max-workers 4 \
+  --output supplementary-report.json --run
+```
+
+Omit `--run` to validate the license and inventory and print the artifact plan.
+The merged report supplies the combined exclusions for the retained training
+release. `original-drop-comparison.json` verifies that all 14 original IFBench
+exclusions and their evaluation matches remain, and lists every newly flagged
+row. Preserve both reports and all matched evaluation IDs. In the report, `drop_manifests[source_id]` identifies a
+Parquet file: `id` is the excluded training-task ID and `matched_eval_ids` lists
+the causal test references as `ifbench-test:<original key>`. The retained private
+pin still needs its final census, qualification, SAMPLE review and admission
+receipt before training use.
+
 ## Final task selection
 
 Pass `--selection RECIPE.json` to a FULL campaign to append a
