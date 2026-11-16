@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 import requests
 from fray.types import ResourceConfig, create_environment
+from iris.client.context_state import reset_context, set_context
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from marin.inference import iris_vllm
@@ -323,9 +324,11 @@ def test_iris_serving_dispatches_and_reports_all_native_ranks(
         timeout_hours=0,
         port_name=None,
     )
+    context_token = set_context(None)
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/router/0")))
     try:
         run_iris_service(service)
     finally:
         set_job_info(None)
+        reset_context(context_token)
     assert int(registered_metadata["data_parallel_size"]) == rank_count
