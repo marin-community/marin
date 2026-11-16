@@ -1002,6 +1002,17 @@ def test_exec_with_running_pod_returns_command_output(provider, k8s):
     assert not resp.error
 
 
+def test_exec_pod_lookup_failure_returns_exec_error(provider, k8s):
+    k8s.inject_failure("get_json", KubectlError("api unavailable"))
+
+    resp = provider.exec_in_container(
+        TaskTarget(task_id="/job/0", attempt_id=0, worker_id=None, address=None),
+        worker_pb2.Worker.ExecInContainerRequest(task_id="/job/0", command=["echo", "hello"]),
+    )
+
+    assert "api unavailable" in resp.error
+
+
 def test_profile_threads_via_kubectl_exec(provider, k8s):
     """profile_task with threads type calls py-spy dump via kubectl exec."""
     pod_name = _pod_name(JobName.from_wire("/job/0"), 0)

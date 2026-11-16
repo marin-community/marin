@@ -2881,18 +2881,18 @@ class K8sTaskProvider:
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in a running task pod via kubectl exec."""
         command = list(request.command)
-        pod_name = self._live_pod_name(target)
-        pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
-        phase = pod.get("status", {}).get("phase", "unknown") if pod is not None else "missing"
-        if phase != _POD_PHASE_RUNNING:
-            return worker_pb2.Worker.ExecInContainerResponse(
-                error=(
-                    f"Task {target.task_id} attempt {target.attempt_id} has no live container "
-                    f"(pod {pod_name}: {phase})"
-                )
-            )
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
+            pod_name = self._live_pod_name(target)
+            pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+            phase = pod.get("status", {}).get("phase", "unknown") if pod is not None else "missing"
+            if phase != _POD_PHASE_RUNNING:
+                return worker_pb2.Worker.ExecInContainerResponse(
+                    error=(
+                        f"Task {target.task_id} attempt {target.attempt_id} has no live container "
+                        f"(pod {pod_name}: {phase})"
+                    )
+                )
             result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
             return worker_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
