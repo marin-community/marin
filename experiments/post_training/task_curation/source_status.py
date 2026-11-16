@@ -159,9 +159,19 @@ def reason_explanations() -> dict[str, dict[str, str]]:
 
 
 def status_extras() -> dict[str, Any]:
-    """The full static extras artifact for the status page."""
+    """The full static extras artifact for the status page.
+
+    ``pending`` lists only the unconfigured intake queue: configured sources —
+    including the remediation-queued rows — arrive through the served catalog,
+    and the page overlays their stage from ``stages`` so no row is ever
+    composed twice. ``remediation_queue`` is the worker-facing copy of the
+    lexical remediation queue with each row's claims.
+    """
+    remediation = remediation_rows()
     return {
-        "pending": [*pending_rows(), *remediation_rows()],
+        "pending": pending_rows(),
+        "stages": {row["id"]: row["stage"] for row in remediation if row["stage"]},
+        "remediation_queue": remediation,
         "metadata_exclusions": metadata_rows(),
         "reason_explanations": reason_explanations(),
     }

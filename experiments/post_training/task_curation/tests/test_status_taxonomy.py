@@ -5,6 +5,7 @@
 
 import ast
 import json
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
@@ -164,6 +165,31 @@ def test_pending_rows_cover_the_intake_queue():
     for row in rows:
         assert row["status"] == SourceStatus.PENDING
         assert row["stage"] in {stage.value for stage in source_status.PendingStage}
+
+
+@pytest.mark.data_integration
+@pytest.mark.data_integration
+def test_status_page_composition_has_unique_ids():
+    """The served catalog plus the extras compose exactly one row per source ID."""
+    extras = source_status.status_extras()
+    catalog = {source.info.id: source for source in all_sources().values()}
+    queued = [*extras["pending"], *extras["metadata_exclusions"]]
+    by_id = {source_id: source.status.value for source_id, source in catalog.items()}
+    for item in queued:
+        assert item["id"] not in by_id, f"Extras row duplicates a catalog source: {item['id']}"
+        by_id[item["id"]] = item["status"]
+    assert len(by_id) == len(catalog) + len(queued)
+
+    def catalog_count(status: SourceStatus) -> int:
+        return sum(1 for source in catalog.values() if source.status is status)
+
+    statuses = Counter(by_id.values())
+    assert statuses["Available"] == catalog_count(SourceStatus.AVAILABLE)
+    assert statuses["Pending"] == catalog_count(SourceStatus.PENDING) + len(extras["pending"])
+    assert statuses["Excluded"] == catalog_count(SourceStatus.EXCLUDED) + len(extras["metadata_exclusions"])
+    assert "Deprecated" not in statuses or statuses["Deprecated"] == catalog_count(SourceStatus.DEPRECATED)
+    for source_id in extras["stages"]:
+        assert source_id in catalog, f"Stage overlay targets a non-catalog source: {source_id}"
 
 
 @pytest.mark.data_integration

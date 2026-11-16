@@ -138,21 +138,31 @@ async function load() {
   for (const [value, entry] of Object.entries(state.explanations)) {
     reasonFilter.append(new Option(entry.label, value));
   }
+  const stages = extras.stages || {};
   const main = (catalog.sources || []).map(declaration => ({
     id: declaration.id,
     display_name: declaration.display_name,
     name: declaration.name,
     status: declaration.status,
+    stage: stages[declaration.id] || declaration.stage || null,
     reasons: declaration.exclusion_claims || [],
     notes: declaration.notes,
     receipt: catalog.snapshot_id ? `catalog snapshot ${catalog.snapshot_id}` : null,
     generated_at: declaration.updated_at,
   }));
-  state.rows = [
-    ...main,
-    ...(extras.pending || []),
-    ...(extras.metadata_exclusions || []),
-  ];
+  const queued = [...(extras.pending || []), ...(extras.metadata_exclusions || [])];
+  // Every source ID appears exactly once: the served catalog row wins, and an
+  // extras row for the same ID only donates its stage.
+  const byId = new Map(main.map(item => [item.id, item]));
+  for (const item of queued) {
+    const known = byId.get(item.id);
+    if (known) {
+      known.stage = known.stage || item.stage || null;
+      continue;
+    }
+    byId.set(item.id, item);
+  }
+  state.rows = [...byId.values()];
   const generated = Math.max(
     0,
     ...state.rows.map(item => (item.generated_at ? Date.parse(item.generated_at) : 0))
@@ -166,7 +176,6 @@ async function load() {
   needsRuling(state.rows);
   $('message').textContent = '';
 }
-
 window.addEventListener('DOMContentLoaded', () => {
   load().catch(error => {
     $('message').textContent = error.message;
